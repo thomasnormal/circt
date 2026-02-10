@@ -239,7 +239,8 @@ These two modes are mutually exclusive and validated natively before dispatch.
   `formal_global_propagate_bmc_run_smtlib`,
   `formal_global_propagate_bmc_assume_known_inputs`.
 - cover native-prequalify toggle:
-  `native_global_filter_prequalify`.
+  `native_global_filter_prequalify`,
+  `native_global_filter_prequalify_only`.
 `run` also forwards cover native global-filter path options:
 - `native_global_filter_prequalify_pair_file`
 - `native_global_filter_probe_mutant`
@@ -430,6 +431,9 @@ Prequalify mode:
   (`test_id=-` prequalified rows), and
 - dispatches `run_mutation_cover.sh` with `--reuse-pair-file` set to that
   generated file.
+To run prequalification without launching dynamic tests, use:
+- `--native-global-filter-prequalify-only`
+  (emits pair-file + prequalify summary to stdout, no script dispatch).
 
 Current scope limits:
 - supports built-in filters only (not `--formal-global-propagate-cmd`),

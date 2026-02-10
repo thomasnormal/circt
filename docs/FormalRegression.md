@@ -152,7 +152,8 @@ dispatch.
   `formal_global_propagate_bmc_run_smtlib`,
   `formal_global_propagate_bmc_assume_known_inputs`.
 - cover native-prequalify toggle:
-  `native_global_filter_prequalify`.
+  `native_global_filter_prequalify`,
+  `native_global_filter_prequalify_only`.
 `circt-mut run` also forwards cover native global-filter path options:
 - `native_global_filter_prequalify_pair_file`
 - `native_global_filter_probe_mutant`
@@ -551,6 +552,9 @@ Execution controls:
     mutation from `--mutations-file` or `--generate-mutations`, emits reuse-compatible
     `pair_qualification.tsv` rows (`test_id=-`), and dispatches
     `run_mutation_cover.sh` with `--reuse-pair-file`.
+  - `--native-global-filter-prequalify-only` runs the same native batch
+    classification but skips test dispatch and prints prequalification summary
+    counters (`prequalify_*`) to stdout.
   - native prequalification rejects explicit `--reuse-pair-file`, and does not
     support `--formal-global-propagate-cmd`.
   - unresolved tool paths fail fast in `circt-mut` with direct diagnostics

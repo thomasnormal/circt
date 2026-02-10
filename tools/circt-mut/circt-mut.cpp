@@ -443,6 +443,7 @@ struct CoverRewriteResult {
   std::string nativeGlobalFilterProbeMutant;
   std::string nativeGlobalFilterProbeLog;
   bool nativeGlobalFilterPrequalify = false;
+  bool nativeGlobalFilterPrequalifyOnly = false;
   std::string nativeGlobalFilterPrequalifyPairFile;
 };
 
@@ -478,6 +479,7 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
   std::string nativeGlobalFilterProbeMutant;
   std::string nativeGlobalFilterProbeLog;
   bool nativeGlobalFilterPrequalify = false;
+  bool nativeGlobalFilterPrequalifyOnly = false;
   std::string nativeGlobalFilterPrequalifyPairFile;
   for (size_t i = 0; i < args.size(); ++i) {
     StringRef arg = args[i];
@@ -624,6 +626,11 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     }
     if (arg == "--native-global-filter-prequalify") {
       nativeGlobalFilterPrequalify = true;
+      continue;
+    }
+    if (arg == "--native-global-filter-prequalify-only") {
+      nativeGlobalFilterPrequalify = true;
+      nativeGlobalFilterPrequalifyOnly = true;
       continue;
     }
     if (arg == "--native-global-filter-prequalify-pair-file" ||
@@ -1013,6 +1020,7 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
   result.nativeGlobalFilterProbeMutant = nativeGlobalFilterProbeMutant;
   result.nativeGlobalFilterProbeLog = nativeGlobalFilterProbeLog;
   result.nativeGlobalFilterPrequalify = nativeGlobalFilterPrequalify;
+  result.nativeGlobalFilterPrequalifyOnly = nativeGlobalFilterPrequalifyOnly;
   result.nativeGlobalFilterPrequalifyPairFile =
       nativeGlobalFilterPrequalifyPairFile;
   result.ok = true;
@@ -2112,7 +2120,14 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
     return 1;
   }
 
+  uint64_t prequalifyTotalMutants = 0;
+  uint64_t prequalifyNotPropagatedMutants = 0;
+  uint64_t prequalifyPropagatedMutants = 0;
+  uint64_t prequalifyCreateMutatedErrorMutants = 0;
+  uint64_t prequalifyProbeErrorMutants = 0;
+
   for (const MutationRow &row : rows) {
+    ++prequalifyTotalMutants;
     std::string mutationRoot = joinPath2(prequalifyRoot, row.id);
     std::error_code rowEC = sys::fs::create_directories(mutationRoot);
     if (rowEC) {
@@ -2154,9 +2169,11 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
     if (!runArgvToLog(createCmd, createLog, /*timeoutSeconds=*/0, createRC,
                       createError)) {
       note += ";native_prequalify_create_mutated_exec_error=1";
+      ++prequalifyCreateMutatedErrorMutants;
     } else if (createRC != 0) {
       propagateRC = createRC;
       note += ";native_prequalify_create_mutated_error=1";
+      ++prequalifyCreateMutatedErrorMutants;
     } else {
       CoverGlobalFilterProbeConfig probeCfg = cfg.probeCfg;
       probeCfg.mutantDesign = mutantDesign;
@@ -2169,13 +2186,16 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
         propagation = "not_propagated";
         propagateRC = outcome.finalRC;
         note = "global_filter_not_propagated;native_prequalify=1";
+        ++prequalifyNotPropagatedMutants;
       } else if (outcome.classification == "propagated") {
         propagation = "propagated";
         propagateRC = outcome.finalRC;
+        ++prequalifyPropagatedMutants;
       } else {
         propagation = "propagated";
         propagateRC = outcome.finalRC;
         note += ";native_prequalify_probe_error=1";
+        ++prequalifyProbeErrorMutants;
       }
     }
 
@@ -2183,6 +2203,20 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
             << "\t-1\t" << propagateRC << "\t" << note << "\n";
   }
   pairOut.close();
+
+  if (rewrite.nativeGlobalFilterPrequalifyOnly) {
+    outs() << "prequalify_pair_file\t" << cfg.pairFile << "\n";
+    outs() << "prequalify_total_mutants\t" << prequalifyTotalMutants << "\n";
+    outs() << "prequalify_not_propagated_mutants\t"
+           << prequalifyNotPropagatedMutants << "\n";
+    outs() << "prequalify_propagated_mutants\t" << prequalifyPropagatedMutants
+           << "\n";
+    outs() << "prequalify_create_mutated_error_mutants\t"
+           << prequalifyCreateMutatedErrorMutants << "\n";
+    outs() << "prequalify_probe_error_mutants\t" << prequalifyProbeErrorMutants
+           << "\n";
+    return 0;
+  }
 
   auto scriptPath = resolveScriptPath(argv0, "run_mutation_cover.sh");
   if (!scriptPath) {
@@ -3895,6 +3929,12 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
                                          "native_global_filter_prequalify",
                                          "--native-global-filter-prequalify",
                                          "cover", error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    if (!appendOptionalConfigBoolFlagArg(
+            args, cfg.cover, "native_global_filter_prequalify_only",
+            "--native-global-filter-prequalify-only", "cover", error)) {
       errs() << error << "\n";
       return 1;
     }
