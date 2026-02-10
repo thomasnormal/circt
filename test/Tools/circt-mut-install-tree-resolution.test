@@ -4,7 +4,7 @@
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho INSTALL_TREE_COVER \"$@\"\n' > %t/prefix/share/circt/utils/run_mutation_cover.sh
 // RUN: chmod +x %t/prefix/share/circt/utils/run_mutation_cover.sh
 //
-// RUN: %t/prefix/bin/circt-mut cover --alpha beta > %t/out.txt
+// RUN: %t/prefix/bin/circt-mut cover --mutations-file %t/mutations.txt --alpha beta > %t/out.txt
 // RUN: FileCheck %s < %t/out.txt
 //
-// CHECK: INSTALL_TREE_COVER --alpha beta
+// CHECK: INSTALL_TREE_COVER --mutations-file [[MFILE:.*mutations.txt]] --alpha beta

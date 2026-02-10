@@ -388,6 +388,22 @@ It also runs native global-filter preflight checks:
 - validates `--formal-global-propagate-circt-chain` mode values
 - auto-injects LEC/BMC built-in tools for chain mode when omitted
 - rejects conflicting non-chain global filter mode combinations early.
+For runtime debugging of formal relevance decisions without launching a full
+test campaign, `circt-mut cover` now also supports a native single-mutant probe:
+
+```sh
+circt-mut cover \
+  --design /path/to/orig.il \
+  --native-global-filter-probe-mutant /path/to/mutant.il \
+  --native-global-filter-probe-log /tmp/global-filter-probe.log \
+  --formal-global-propagate-circt-chain bmc-then-lec \
+  --formal-global-propagate-circt-lec auto \
+  --formal-global-propagate-circt-bmc auto
+```
+
+Probe mode reports `classification` (`not_propagated` or `propagated`) plus
+`global_filter_rc` and `global_filter_log`. It currently supports built-in
+circt-lec/circt-bmc/chain modes (not `--formal-global-propagate-cmd`).
 Cover mutation source consistency is now also validated natively:
 - exactly one of `--mutations-file` or `--generate-mutations` must be set
 - conflicting or missing source configuration fails fast.

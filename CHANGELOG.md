@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 851 - February 10, 2026
+
+### Native Global-Filter Probe in `circt-mut cover`
+
+1. Added a native runtime probe path in `tools/circt-mut/circt-mut.cpp`:
+   - `circt-mut cover --native-global-filter-probe-mutant <mutant.il>`
+   - optional `--native-global-filter-probe-log <path>`
+2. Probe mode executes built-in global formal classification directly for a
+   single mutant pair (without launching mutation tests):
+   - circt-lec
+   - differential circt-bmc
+   - chained modes (`lec-then-bmc`, `bmc-then-lec`, `consensus`, `auto`)
+   - timeout policy parity with cover script (`--formal-global-propagate-timeout-seconds`
+     as default for per-engine timeouts unless explicitly overridden)
+3. Output is normalized for tooling:
+   - `classification` (`not_propagated` or `propagated`)
+   - `global_filter_rc`
+   - `global_filter_log`
+4. Probe mode is intentionally restricted to built-in filters; it rejects
+   `--formal-global-propagate-cmd` to keep semantics deterministic while native
+   runtime orchestration is being expanded.
+
+### Tests and Documentation
+
+- Added regression tests:
+  - `test/Tools/circt-mut-cover-native-global-filter-probe-lec.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-probe-bmc.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-probe-chain.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-probe-cmd-unsupported.test`
+- Updated compatibility-forwarding tests to satisfy current cover source
+  preflight requirements:
+  - `test/Tools/circt-mut-forward-cover.test`
+  - `test/Tools/circt-mut-install-tree-resolution.test`
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-native-global-filter-probe-*.test`: PASS (4/4)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-*.test`: PASS (29/29)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (123/123)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-native-probe --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 850 - February 10, 2026
 
 ### Matrix Lane Error Taxonomy (`run_mutation_matrix.sh`)

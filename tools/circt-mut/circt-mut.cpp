@@ -439,6 +439,9 @@ struct CoverRewriteResult {
   bool ok = false;
   std::string error;
   SmallVector<std::string, 32> rewrittenArgs;
+  bool nativeGlobalFilterProbe = false;
+  std::string nativeGlobalFilterProbeMutant;
+  std::string nativeGlobalFilterProbeLog;
 };
 
 static CoverRewriteResult rewriteCoverArgs(const char *argv0,
@@ -467,6 +470,9 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
   bool hasGlobalFilterBMC = false;
   bool hasGlobalFilterChain = false;
   std::string globalFilterChainMode;
+  bool nativeGlobalFilterProbe = false;
+  std::string nativeGlobalFilterProbeMutant;
+  std::string nativeGlobalFilterProbeLog;
   for (size_t i = 0; i < args.size(); ++i) {
     StringRef arg = args[i];
     auto valueFromArg = [&]() -> StringRef {
@@ -577,6 +583,37 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     if (arg == "--mutations-yosys" || arg.starts_with("--mutations-yosys=")) {
       if (!resolveWithRequiredValue("--mutations-yosys"))
         return result;
+      continue;
+    }
+    if (arg == "--native-global-filter-probe-mutant" ||
+        arg.starts_with("--native-global-filter-probe-mutant=")) {
+      nativeGlobalFilterProbe = true;
+      size_t eqPos = arg.find('=');
+      if (eqPos != StringRef::npos) {
+        nativeGlobalFilterProbeMutant = arg.substr(eqPos + 1).str();
+      } else if (i + 1 < args.size()) {
+        nativeGlobalFilterProbeMutant = args[++i].str();
+      }
+      if (nativeGlobalFilterProbeMutant.empty()) {
+        result.error =
+            "circt-mut cover: missing value for --native-global-filter-probe-mutant.";
+        return result;
+      }
+      continue;
+    }
+    if (arg == "--native-global-filter-probe-log" ||
+        arg.starts_with("--native-global-filter-probe-log=")) {
+      size_t eqPos = arg.find('=');
+      if (eqPos != StringRef::npos) {
+        nativeGlobalFilterProbeLog = arg.substr(eqPos + 1).str();
+      } else if (i + 1 < args.size()) {
+        nativeGlobalFilterProbeLog = args[++i].str();
+      }
+      if (nativeGlobalFilterProbeLog.empty()) {
+        result.error =
+            "circt-mut cover: missing value for --native-global-filter-probe-log.";
+        return result;
+      }
       continue;
     }
     if (arg == "--mutations-file" || arg.starts_with("--mutations-file="))
@@ -882,14 +919,676 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                    "install coreutils timeout or set PATH.";
     return result;
   }
-  if (!wantsHelp && !hasMutationsFile && !hasGenerateMutations) {
+  if (!wantsHelp && !nativeGlobalFilterProbe && !hasMutationsFile &&
+      !hasGenerateMutations) {
     result.error = "circt-mut cover: requires either --mutations-file or "
                    "--generate-mutations.";
     return result;
   }
+  if (nativeGlobalFilterProbe && hasGlobalFilterCmd) {
+    result.error =
+        "circt-mut cover: --native-global-filter-probe-mutant does not support "
+        "--formal-global-propagate-cmd; use built-in circt-lec/circt-bmc/chain "
+        "global filters.";
+    return result;
+  }
+  if (nativeGlobalFilterProbe && !hasGlobalFilterLEC && !hasGlobalFilterBMC &&
+      !hasGlobalFilterChain) {
+    result.error =
+        "circt-mut cover: --native-global-filter-probe-mutant requires "
+        "a built-in global filter mode (--formal-global-propagate-circt-lec, "
+        "--formal-global-propagate-circt-bmc, or "
+        "--formal-global-propagate-circt-chain).";
+    return result;
+  }
 
+  result.nativeGlobalFilterProbe = nativeGlobalFilterProbe;
+  result.nativeGlobalFilterProbeMutant = nativeGlobalFilterProbeMutant;
+  result.nativeGlobalFilterProbeLog = nativeGlobalFilterProbeLog;
   result.ok = true;
   return result;
+}
+
+struct ProbeRawResult {
+  std::string state;
+  int rc = -1;
+};
+
+struct CoverGlobalFilterProbeConfig {
+  std::string design;
+  std::string mutantDesign;
+  std::string logFile;
+  std::string globalFilterLEC;
+  std::string globalFilterBMC;
+  std::string globalFilterChain;
+  std::string globalFilterLECToolArgs;
+  std::string globalFilterBmcToolArgs;
+  std::string globalFilterZ3;
+  std::string globalFilterBMCZ3;
+  std::string globalFilterC1 = "top";
+  std::string globalFilterC2 = "top";
+  std::string globalFilterBMCModule = "top";
+  bool globalFilterAssumeKnownInputs = false;
+  bool globalFilterAcceptXpropOnly = false;
+  bool globalFilterBMCRunSmtlib = false;
+  bool globalFilterBMCAssumeKnownInputs = false;
+  uint64_t globalFilterLECTimeoutSeconds = 0;
+  uint64_t globalFilterBMCTimeoutSeconds = 0;
+  uint64_t globalFilterBMCBound = 20;
+  uint64_t globalFilterBMCIgnoreAssertsUntil = 0;
+};
+
+static std::string shellQuote(StringRef value) {
+  std::string quoted;
+  quoted.reserve(value.size() + 8);
+  quoted.push_back('\'');
+  for (char c : value) {
+    if (c == '\'')
+      quoted += "'\"'\"'";
+    else
+      quoted.push_back(c);
+  }
+  quoted.push_back('\'');
+  return quoted;
+}
+
+static bool isTimeoutExitCode(int rc) {
+  return rc == 124 || rc == 137 || rc == 143;
+}
+
+static bool ensureParentDirForFile(StringRef path, std::string &error) {
+  SmallString<256> parent(path);
+  sys::path::remove_filename(parent);
+  if (parent.empty())
+    return true;
+  std::error_code ec = sys::fs::create_directories(parent);
+  if (ec) {
+    error = (Twine("circt-mut cover: failed to create directory for ") + path +
+             ": " + ec.message())
+                .str();
+    return false;
+  }
+  return true;
+}
+
+static bool runArgvToLog(ArrayRef<std::string> argv, StringRef logPath,
+                         uint64_t timeoutSeconds, int &rc,
+                         std::string &error) {
+  std::string cmd;
+  if (timeoutSeconds > 0) {
+    cmd += "timeout --signal=TERM --kill-after=5 ";
+    cmd += std::to_string(timeoutSeconds);
+    cmd += " ";
+  }
+  for (const std::string &arg : argv) {
+    cmd += shellQuote(arg);
+    cmd.push_back(' ');
+  }
+  cmd += ">";
+  cmd += shellQuote(logPath);
+  cmd += " 2>&1";
+
+  SmallVector<StringRef, 8> shArgs;
+  shArgs.push_back("env");
+  shArgs.push_back("bash");
+  shArgs.push_back("-lc");
+  shArgs.push_back(cmd);
+  std::string errMsg;
+  rc = sys::ExecuteAndWait("/usr/bin/env", shArgs, /*Env=*/std::nullopt,
+                           /*Redirects=*/{},
+                           /*SecondsToWait=*/0, /*MemoryLimit=*/0, &errMsg);
+  if (!errMsg.empty()) {
+    error = (Twine("circt-mut cover: execution error: ") + errMsg).str();
+    return false;
+  }
+  return true;
+}
+
+static std::string readTextFileOrEmpty(StringRef path) {
+  auto bufferOrErr = MemoryBuffer::getFile(path);
+  if (!bufferOrErr)
+    return std::string();
+  return std::string(bufferOrErr.get()->getBuffer());
+}
+
+static std::string extractLastLecResultToken(StringRef text) {
+  std::string token;
+  SmallVector<StringRef, 128> lines;
+  text.split(lines, '\n', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (StringRef line : lines) {
+    if (line.contains("LEC_RESULT=EQ"))
+      token = "eq";
+    else if (line.contains("LEC_RESULT=NEQ"))
+      token = "neq";
+    else if (line.contains("LEC_RESULT=UNKNOWN"))
+      token = "unknown";
+  }
+  return token;
+}
+
+static std::string extractLastBMCResultToken(StringRef text) {
+  std::string token;
+  SmallVector<StringRef, 128> lines;
+  text.split(lines, '\n', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (StringRef line : lines) {
+    if (line.contains("BMC_RESULT=SAT"))
+      token = "sat";
+    else if (line.contains("BMC_RESULT=UNSAT"))
+      token = "unsat";
+    else if (line.contains("BMC_RESULT=UNKNOWN"))
+      token = "unknown";
+  }
+  return token;
+}
+
+static void appendSplitArgs(StringRef raw, SmallVectorImpl<std::string> &out) {
+  if (raw.empty())
+    return;
+  SmallVector<StringRef, 16> parts;
+  raw.split(parts, ' ', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (StringRef part : parts) {
+    StringRef trimmed = part.trim();
+    if (!trimmed.empty())
+      out.push_back(trimmed.str());
+  }
+}
+
+static ProbeRawResult
+runCoverGlobalFilterLECRaw(const CoverGlobalFilterProbeConfig &cfg,
+                           StringRef logPath, std::string &error) {
+  ProbeRawResult result;
+  if (cfg.globalFilterLEC.empty()) {
+    result.state = "error";
+    result.rc = -1;
+    return result;
+  }
+  SmallVector<std::string, 16> cmd;
+  cmd.push_back(cfg.globalFilterLEC);
+  cmd.push_back("--run-smtlib");
+  if (!cfg.globalFilterZ3.empty())
+    cmd.push_back((Twine("--z3-path=") + cfg.globalFilterZ3).str());
+  if (cfg.globalFilterAssumeKnownInputs)
+    cmd.push_back("--assume-known-inputs");
+  if (cfg.globalFilterAcceptXpropOnly)
+    cmd.push_back("--accept-xprop-only");
+  appendSplitArgs(cfg.globalFilterLECToolArgs, cmd);
+  cmd.push_back((Twine("-c1=") + cfg.globalFilterC1).str());
+  cmd.push_back((Twine("-c2=") + cfg.globalFilterC2).str());
+  cmd.push_back(cfg.design);
+  cmd.push_back(cfg.mutantDesign);
+
+  int rc = -1;
+  if (!runArgvToLog(cmd, logPath, cfg.globalFilterLECTimeoutSeconds, rc, error))
+    return ProbeRawResult{"error", rc};
+  std::string logText = readTextFileOrEmpty(logPath);
+  std::string token = extractLastLecResultToken(logText);
+  if (!token.empty())
+    return ProbeRawResult{token, rc};
+  if (isTimeoutExitCode(rc))
+    return ProbeRawResult{"timeout", rc};
+  return ProbeRawResult{"error", rc};
+}
+
+static ProbeRawResult
+runCoverGlobalFilterBMCRaw(const CoverGlobalFilterProbeConfig &cfg,
+                           StringRef logPath, std::string &error) {
+  ProbeRawResult result;
+  if (cfg.globalFilterBMC.empty()) {
+    result.state = "error";
+    result.rc = -1;
+    return result;
+  }
+
+  SmallString<256> origLog(logPath);
+  origLog += ".orig";
+  SmallString<256> mutantLog(logPath);
+  mutantLog += ".mutant";
+
+  SmallVector<std::string, 16> commonCmd;
+  commonCmd.push_back(cfg.globalFilterBMC);
+  commonCmd.push_back("-b");
+  commonCmd.push_back(std::to_string(cfg.globalFilterBMCBound));
+  commonCmd.push_back((Twine("--module=") + cfg.globalFilterBMCModule).str());
+  commonCmd.push_back((Twine("--ignore-asserts-until=") +
+                       Twine(cfg.globalFilterBMCIgnoreAssertsUntil))
+                          .str());
+  if (cfg.globalFilterBMCRunSmtlib)
+    commonCmd.push_back("--run-smtlib");
+  if (!cfg.globalFilterBMCZ3.empty())
+    commonCmd.push_back((Twine("--z3-path=") + cfg.globalFilterBMCZ3).str());
+  if (cfg.globalFilterBMCAssumeKnownInputs)
+    commonCmd.push_back("--assume-known-inputs");
+  appendSplitArgs(cfg.globalFilterBmcToolArgs, commonCmd);
+
+  SmallVector<std::string, 20> origCmd(commonCmd.begin(), commonCmd.end());
+  origCmd.push_back(cfg.design);
+  int origRC = -1;
+  if (!runArgvToLog(origCmd, origLog, cfg.globalFilterBMCTimeoutSeconds, origRC,
+                    error))
+    return ProbeRawResult{"error", origRC};
+
+  SmallVector<std::string, 20> mutantCmd(commonCmd.begin(), commonCmd.end());
+  mutantCmd.push_back(cfg.mutantDesign);
+  int mutantRC = -1;
+  if (!runArgvToLog(mutantCmd, mutantLog, cfg.globalFilterBMCTimeoutSeconds,
+                    mutantRC, error))
+    return ProbeRawResult{"error", mutantRC};
+
+  std::string origText = readTextFileOrEmpty(origLog);
+  std::string mutantText = readTextFileOrEmpty(mutantLog);
+  {
+    std::error_code ec;
+    raw_fd_ostream merged(logPath, ec, sys::fs::OF_Text);
+    if (ec) {
+      error = (Twine("circt-mut cover: failed to write probe log: ") + logPath +
+               ": " + ec.message())
+                  .str();
+      return ProbeRawResult{"error", -1};
+    }
+    merged << "# bmc_probe_orig_rc=" << origRC << "\n";
+    merged << origText << "\n";
+    merged << "# bmc_probe_mutant_rc=" << mutantRC << "\n";
+    merged << mutantText << "\n";
+  }
+
+  std::string origResult = extractLastBMCResultToken(origText);
+  std::string mutantResult = extractLastBMCResultToken(mutantText);
+
+  int finalRC = mutantRC;
+  if (finalRC == 0)
+    finalRC = origRC;
+
+  if (origResult.empty() && isTimeoutExitCode(origRC))
+    return ProbeRawResult{"timeout", finalRC};
+  if (mutantResult.empty() && isTimeoutExitCode(mutantRC))
+    return ProbeRawResult{"timeout", finalRC};
+  if (origResult == "unknown" || mutantResult == "unknown")
+    return ProbeRawResult{"unknown", finalRC};
+  if (origResult.empty() || mutantResult.empty())
+    return ProbeRawResult{"error", finalRC};
+  if (origResult == mutantResult)
+    return ProbeRawResult{"equal", finalRC};
+  return ProbeRawResult{"different", finalRC};
+}
+
+static std::string classifyChainConsensusLike(StringRef lecState,
+                                              StringRef bmcState) {
+  if (lecState == "eq" && bmcState == "equal")
+    return "not_propagated";
+  if (lecState == "neq" || lecState == "unknown" || lecState == "timeout" ||
+      bmcState == "different" || bmcState == "unknown" ||
+      bmcState == "timeout")
+    return "propagated";
+  if (lecState == "error" && bmcState == "equal")
+    return "propagated";
+  if (bmcState == "error" && lecState == "eq")
+    return "propagated";
+  return "error";
+}
+
+static bool parseCoverGlobalFilterProbeConfig(
+    const CoverRewriteResult &rewrite, CoverGlobalFilterProbeConfig &cfg,
+    std::string &error) {
+  cfg.mutantDesign = rewrite.nativeGlobalFilterProbeMutant;
+  cfg.logFile = rewrite.nativeGlobalFilterProbeLog.empty()
+                    ? "global_filter_probe.log"
+                    : rewrite.nativeGlobalFilterProbeLog;
+
+  auto parseUIntValue = [&](StringRef value, StringRef flag, uint64_t &out,
+                            uint64_t defaultValue) -> bool {
+    if (value.empty()) {
+      out = defaultValue;
+      return true;
+    }
+    if (value.getAsInteger(10, out)) {
+      error = (Twine("circt-mut cover: invalid value for ") + flag + ": " +
+               value + " (expected integer).")
+                  .str();
+      return false;
+    }
+    return true;
+  };
+
+  ArrayRef<std::string> args = rewrite.rewrittenArgs;
+  uint64_t globalTimeoutSeconds = 0;
+  bool hasGlobalTimeoutSeconds = false;
+  bool hasLECTimeoutOverride = false;
+  bool hasBMCTimeoutOverride = false;
+  for (size_t i = 0; i < args.size(); ++i) {
+    StringRef arg = args[i];
+    auto consumeValue = [&](StringRef optName,
+                            std::string &outValue) -> bool {
+      std::string withEq = (optName + "=").str();
+      if (arg.starts_with(withEq)) {
+        outValue = arg.substr(withEq.size()).str();
+        return true;
+      }
+      if (arg == optName) {
+        if (i + 1 >= args.size()) {
+          error = (Twine("circt-mut cover: missing value for ") + optName).str();
+          return false;
+        }
+        outValue = args[++i];
+        return true;
+      }
+      return true;
+    };
+
+    if (arg == "--design" || arg.starts_with("--design=")) {
+      if (!consumeValue("--design", cfg.design))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-circt-lec" ||
+        arg.starts_with("--formal-global-propagate-circt-lec=")) {
+      if (!consumeValue("--formal-global-propagate-circt-lec",
+                        cfg.globalFilterLEC))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-circt-bmc" ||
+        arg.starts_with("--formal-global-propagate-circt-bmc=")) {
+      if (!consumeValue("--formal-global-propagate-circt-bmc",
+                        cfg.globalFilterBMC))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-circt-chain" ||
+        arg.starts_with("--formal-global-propagate-circt-chain=")) {
+      if (!consumeValue("--formal-global-propagate-circt-chain",
+                        cfg.globalFilterChain))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-circt-lec-args" ||
+        arg.starts_with("--formal-global-propagate-circt-lec-args=")) {
+      if (!consumeValue("--formal-global-propagate-circt-lec-args",
+                        cfg.globalFilterLECToolArgs))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-circt-bmc-args" ||
+        arg.starts_with("--formal-global-propagate-circt-bmc-args=")) {
+      if (!consumeValue("--formal-global-propagate-circt-bmc-args",
+                        cfg.globalFilterBmcToolArgs))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-z3" ||
+        arg.starts_with("--formal-global-propagate-z3=")) {
+      if (!consumeValue("--formal-global-propagate-z3", cfg.globalFilterZ3))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-bmc-z3" ||
+        arg.starts_with("--formal-global-propagate-bmc-z3=")) {
+      if (!consumeValue("--formal-global-propagate-bmc-z3",
+                        cfg.globalFilterBMCZ3))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-c1" ||
+        arg.starts_with("--formal-global-propagate-c1=")) {
+      if (!consumeValue("--formal-global-propagate-c1", cfg.globalFilterC1))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-c2" ||
+        arg.starts_with("--formal-global-propagate-c2=")) {
+      if (!consumeValue("--formal-global-propagate-c2", cfg.globalFilterC2))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-timeout-seconds" ||
+        arg.starts_with("--formal-global-propagate-timeout-seconds=")) {
+      std::string raw;
+      if (!consumeValue("--formal-global-propagate-timeout-seconds", raw))
+        return false;
+      uint64_t parsed = 0;
+      if (!parseUIntValue(raw, "--formal-global-propagate-timeout-seconds",
+                          parsed, 0))
+        return false;
+      globalTimeoutSeconds = parsed;
+      hasGlobalTimeoutSeconds = true;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-lec-timeout-seconds" ||
+        arg.starts_with("--formal-global-propagate-lec-timeout-seconds=")) {
+      std::string raw;
+      if (!consumeValue("--formal-global-propagate-lec-timeout-seconds", raw))
+        return false;
+      if (!parseUIntValue(raw, "--formal-global-propagate-lec-timeout-seconds",
+                          cfg.globalFilterLECTimeoutSeconds, 0))
+        return false;
+      hasLECTimeoutOverride = true;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-bmc-timeout-seconds" ||
+        arg.starts_with("--formal-global-propagate-bmc-timeout-seconds=")) {
+      std::string raw;
+      if (!consumeValue("--formal-global-propagate-bmc-timeout-seconds", raw))
+        return false;
+      if (!parseUIntValue(raw, "--formal-global-propagate-bmc-timeout-seconds",
+                          cfg.globalFilterBMCTimeoutSeconds, 0))
+        return false;
+      hasBMCTimeoutOverride = true;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-bmc-bound" ||
+        arg.starts_with("--formal-global-propagate-bmc-bound=")) {
+      std::string raw;
+      if (!consumeValue("--formal-global-propagate-bmc-bound", raw))
+        return false;
+      if (!parseUIntValue(raw, "--formal-global-propagate-bmc-bound",
+                          cfg.globalFilterBMCBound, 20))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-bmc-module" ||
+        arg.starts_with("--formal-global-propagate-bmc-module=")) {
+      if (!consumeValue("--formal-global-propagate-bmc-module",
+                        cfg.globalFilterBMCModule))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-bmc-ignore-asserts-until" ||
+        arg.starts_with("--formal-global-propagate-bmc-ignore-asserts-until=")) {
+      std::string raw;
+      if (!consumeValue("--formal-global-propagate-bmc-ignore-asserts-until",
+                        raw))
+        return false;
+      if (!parseUIntValue(raw,
+                          "--formal-global-propagate-bmc-ignore-asserts-until",
+                          cfg.globalFilterBMCIgnoreAssertsUntil, 0))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-assume-known-inputs") {
+      cfg.globalFilterAssumeKnownInputs = true;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-accept-xprop-only") {
+      cfg.globalFilterAcceptXpropOnly = true;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-bmc-run-smtlib") {
+      cfg.globalFilterBMCRunSmtlib = true;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-bmc-assume-known-inputs") {
+      cfg.globalFilterBMCAssumeKnownInputs = true;
+      continue;
+    }
+  }
+
+  if (cfg.design.empty()) {
+    error = "circt-mut cover: --native-global-filter-probe-mutant requires "
+            "--design.";
+    return false;
+  }
+  if (cfg.globalFilterChain.empty()) {
+    if (cfg.globalFilterLEC.empty() && cfg.globalFilterBMC.empty()) {
+      error = "circt-mut cover: no built-in global filter configured for probe.";
+      return false;
+    }
+  } else if (cfg.globalFilterChain != "lec-then-bmc" &&
+             cfg.globalFilterChain != "bmc-then-lec" &&
+             cfg.globalFilterChain != "consensus" &&
+             cfg.globalFilterChain != "auto") {
+    error = (Twine("circt-mut cover: invalid chain mode for probe: ") +
+             cfg.globalFilterChain)
+                .str();
+    return false;
+  }
+  if (hasGlobalTimeoutSeconds && !hasLECTimeoutOverride)
+    cfg.globalFilterLECTimeoutSeconds = globalTimeoutSeconds;
+  if (hasGlobalTimeoutSeconds && !hasBMCTimeoutOverride)
+    cfg.globalFilterBMCTimeoutSeconds = globalTimeoutSeconds;
+  return true;
+}
+
+static int runNativeCoverGlobalFilterProbe(const CoverRewriteResult &rewrite) {
+  CoverGlobalFilterProbeConfig cfg;
+  std::string error;
+  if (!parseCoverGlobalFilterProbeConfig(rewrite, cfg, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  if (!ensureParentDirForFile(cfg.logFile, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  std::string classification;
+  int finalRC = -1;
+
+  auto classifyLEC = [&](StringRef state) {
+    if (state == "eq")
+      classification = "not_propagated";
+    else if (state == "neq" || state == "unknown" || state == "timeout")
+      classification = "propagated";
+    else
+      classification = "error";
+  };
+  auto classifyBMC = [&](StringRef state) {
+    if (state == "equal")
+      classification = "not_propagated";
+    else if (state == "different" || state == "unknown" || state == "timeout")
+      classification = "propagated";
+    else
+      classification = "error";
+  };
+
+  if (!cfg.globalFilterChain.empty()) {
+    if (cfg.globalFilterLEC.empty() || cfg.globalFilterBMC.empty()) {
+      errs() << "circt-mut cover: probe chain mode requires both "
+                "--formal-global-propagate-circt-lec and "
+                "--formal-global-propagate-circt-bmc.\n";
+      return 1;
+    }
+    ProbeRawResult lecRaw =
+        runCoverGlobalFilterLECRaw(cfg, cfg.logFile + ".lec", error);
+    if (!error.empty()) {
+      errs() << error << "\n";
+      return 1;
+    }
+    ProbeRawResult bmcRaw =
+        runCoverGlobalFilterBMCRaw(cfg, cfg.logFile + ".bmc", error);
+    if (!error.empty()) {
+      errs() << error << "\n";
+      return 1;
+    }
+    finalRC = bmcRaw.rc;
+    if (finalRC == 0)
+      finalRC = lecRaw.rc;
+
+    if (cfg.globalFilterChain == "lec-then-bmc") {
+      if (lecRaw.state == "eq")
+        classification = "not_propagated";
+      else if (lecRaw.state == "neq")
+        classification = "propagated";
+      else if (lecRaw.state == "error") {
+        if (bmcRaw.state == "equal" || bmcRaw.state == "different" ||
+            bmcRaw.state == "unknown" || bmcRaw.state == "timeout")
+          classification = "propagated";
+        else
+          classification = "error";
+      } else if (bmcRaw.state == "equal")
+        classification = "not_propagated";
+      else if (bmcRaw.state == "different" || bmcRaw.state == "unknown" ||
+               bmcRaw.state == "timeout")
+        classification = "propagated";
+      else
+        classification = "error";
+    } else if (cfg.globalFilterChain == "bmc-then-lec") {
+      if (bmcRaw.state == "equal")
+        classification = "not_propagated";
+      else if (bmcRaw.state == "different")
+        classification = "propagated";
+      else if (bmcRaw.state == "error") {
+        if (lecRaw.state == "eq" || lecRaw.state == "neq" ||
+            lecRaw.state == "unknown" || lecRaw.state == "timeout")
+          classification = "propagated";
+        else
+          classification = "error";
+      } else if (lecRaw.state == "eq")
+        classification = "not_propagated";
+      else if (lecRaw.state == "neq" || lecRaw.state == "unknown" ||
+               lecRaw.state == "timeout")
+        classification = "propagated";
+      else
+        classification = "error";
+    } else {
+      classification = classifyChainConsensusLike(lecRaw.state, bmcRaw.state);
+    }
+
+    std::error_code ec;
+    raw_fd_ostream out(cfg.logFile, ec, sys::fs::OF_Text);
+    if (ec) {
+      errs() << "circt-mut cover: failed to write probe log: " << cfg.logFile
+             << ": " << ec.message() << "\n";
+      return 1;
+    }
+    out << "# chain_mode=" << cfg.globalFilterChain << " lec_state="
+        << lecRaw.state << " lec_rc=" << lecRaw.rc << "\n";
+    out << readTextFileOrEmpty(cfg.logFile + ".lec");
+    out << "\n# chain_bmc_state=" << bmcRaw.state << " bmc_rc=" << bmcRaw.rc
+        << "\n";
+    out << readTextFileOrEmpty(cfg.logFile + ".bmc");
+    out << "\n";
+    sys::fs::remove(cfg.logFile + ".lec");
+    sys::fs::remove(cfg.logFile + ".bmc");
+    sys::fs::remove(cfg.logFile + ".bmc.orig");
+    sys::fs::remove(cfg.logFile + ".bmc.mutant");
+  } else if (!cfg.globalFilterLEC.empty()) {
+    ProbeRawResult lecRaw = runCoverGlobalFilterLECRaw(cfg, cfg.logFile, error);
+    if (!error.empty()) {
+      errs() << error << "\n";
+      return 1;
+    }
+    classifyLEC(lecRaw.state);
+    finalRC = lecRaw.rc;
+  } else if (!cfg.globalFilterBMC.empty()) {
+    ProbeRawResult bmcRaw = runCoverGlobalFilterBMCRaw(cfg, cfg.logFile, error);
+    if (!error.empty()) {
+      errs() << error << "\n";
+      return 1;
+    }
+    classifyBMC(bmcRaw.state);
+    finalRC = bmcRaw.rc;
+    sys::fs::remove(cfg.logFile + ".orig");
+    sys::fs::remove(cfg.logFile + ".mutant");
+  } else {
+    errs() << "circt-mut cover: no built-in global filter configured for "
+              "native probe.\n";
+    return 1;
+  }
+
+  outs() << "classification\t" << classification << "\n";
+  outs() << "global_filter_rc\t" << finalRC << "\n";
+  outs() << "global_filter_log\t" << cfg.logFile << "\n";
+  return classification == "error" ? 1 : 0;
 }
 
 struct MatrixRewriteResult {
@@ -1917,6 +2616,8 @@ static int runCoverFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
     errs() << rewrite.error << "\n";
     return 1;
   }
+  if (rewrite.nativeGlobalFilterProbe)
+    return runNativeCoverGlobalFilterProbe(rewrite);
 
   auto scriptPath = resolveScriptPath(argv0, "run_mutation_cover.sh");
   if (!scriptPath) {

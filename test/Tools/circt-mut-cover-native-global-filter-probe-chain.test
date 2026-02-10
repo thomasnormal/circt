@@ -1,0 +1,15 @@
+// RUN: rm -rf %t && mkdir -p %t/bin
+// RUN: ln -s "$(command -v circt-mut)" %t/bin/circt-mut
+// RUN: printf 'module top; endmodule\n' > %t/orig.il
+// RUN: printf 'module top; endmodule\n' > %t/mut.il
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho BMC_RESULT=UNKNOWN\n' > %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-bmc.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho LEC_RESULT=EQ\n' > %t/fake-lec.sh
+// RUN: chmod +x %t/fake-lec.sh
+// RUN: PATH=%t/bin:/usr/bin:/bin circt-mut cover --design %t/orig.il --native-global-filter-probe-mutant %t/mut.il --native-global-filter-probe-log %t/probe.log --formal-global-propagate-circt-lec %t/fake-lec.sh --formal-global-propagate-circt-bmc %t/fake-bmc.sh --formal-global-propagate-circt-chain bmc-then-lec > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+// RUN: grep -q 'chain_mode=bmc-then-lec' %t/probe.log
+//
+// CHECK: classification{{[[:space:]]+}}not_propagated
+// CHECK: global_filter_log{{[[:space:]]+}}[[LOG:.*probe.log]]
+
