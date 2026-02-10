@@ -132,6 +132,21 @@ Options:
   --fail-on-new-e2e-mode-diff-missing-in-e2e-strict
                          Fail when OpenTitan E2E mode-diff missing_in_e2e_strict
                          count increases vs baseline
+  --fail-on-new-lec-mode-diff-strict-only-fail
+                         Fail when OpenTitan LEC mode-diff strict_only_fail
+                         count increases vs baseline
+  --fail-on-new-lec-mode-diff-status-diff
+                         Fail when OpenTitan LEC mode-diff status_diff
+                         count increases vs baseline
+  --fail-on-new-lec-mode-diff-strict-only-pass
+                         Fail when OpenTitan LEC mode-diff strict_only_pass
+                         count increases vs baseline
+  --fail-on-new-lec-mode-diff-missing-in-lec
+                         Fail when OpenTitan LEC mode-diff missing_in_lec
+                         count increases vs baseline
+  --fail-on-new-lec-mode-diff-missing-in-lec-strict
+                         Fail when OpenTitan LEC mode-diff missing_in_lec_strict
+                         count increases vs baseline
   --fail-on-new-opentitan-lec-strict-xprop-counter KEY
                          Fail when OpenTitan strict LEC summary counter KEY
                          increases vs baseline (repeatable)
@@ -505,6 +520,8 @@ Options:
   --with-opentitan       Run OpenTitan LEC script
   --with-opentitan-lec-strict
                          Run strict OpenTitan LEC lane (LEC_X_OPTIMISTIC=0)
+                         and synthesize `opentitan/LEC_MODE_DIFF` when
+                         combined with `--with-opentitan`
   --with-opentitan-e2e   Run OpenTitan non-smoke E2E parity lane
   --with-opentitan-e2e-strict
                          Run strict OpenTitan non-smoke E2E audit lane
@@ -1811,6 +1828,11 @@ FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=0
 FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E=0
 FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT=0
+FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_FAIL=0
+FAIL_ON_NEW_LEC_MODE_DIFF_STATUS_DIFF=0
+FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_PASS=0
+FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC=0
+FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC_STRICT=0
 declare -a FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS=()
 declare -a FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES=()
 declare -a FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES=()
@@ -2162,6 +2184,16 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E=1; shift ;;
     --fail-on-new-e2e-mode-diff-missing-in-e2e-strict)
       FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT=1; shift ;;
+    --fail-on-new-lec-mode-diff-strict-only-fail)
+      FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_FAIL=1; shift ;;
+    --fail-on-new-lec-mode-diff-status-diff)
+      FAIL_ON_NEW_LEC_MODE_DIFF_STATUS_DIFF=1; shift ;;
+    --fail-on-new-lec-mode-diff-strict-only-pass)
+      FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_PASS=1; shift ;;
+    --fail-on-new-lec-mode-diff-missing-in-lec)
+      FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC=1; shift ;;
+    --fail-on-new-lec-mode-diff-missing-in-lec-strict)
+      FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC_STRICT=1; shift ;;
     --fail-on-new-opentitan-lec-strict-xprop-counter)
       FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS+=("$2"); shift 2 ;;
     --fail-on-new-opentitan-lec-strict-xprop-counter-prefix)
@@ -4154,6 +4186,11 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=1
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E=1
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT=1
+  FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_FAIL=1
+  FAIL_ON_NEW_LEC_MODE_DIFF_STATUS_DIFF=1
+  FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_PASS=1
+  FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC=1
+  FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC_STRICT=1
   if [[ "$STRICT_GATE_NO_DROP_REMARKS" == "1" ]]; then
     FAIL_ON_ANY_BMC_DROP_REMARKS=1
     FAIL_ON_ANY_LEC_DROP_REMARKS=1
@@ -7103,6 +7140,13 @@ if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRI
     exit 1
   fi
 fi
+if [[ "$WITH_OPENTITAN" == "1" && "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && \
+   lane_enabled "opentitan/LEC_MODE_DIFF"; then
+  if [[ -z "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
+    echo "opentitan/LEC_MODE_DIFF requires explicit filter: set --opentitan-lec-impl-filter" >&2
+    exit 1
+  fi
+fi
 if [[ "$WITH_OPENTITAN_E2E" == "1" ]] && lane_enabled "opentitan/E2E"; then
   if [[ -z "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
     echo "opentitan/E2E requires explicit filter: set --opentitan-e2e-impl-filter" >&2
@@ -8921,6 +8965,184 @@ if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]]; then
     "$OUT_DIR/opentitan-lec-strict-drop-remark-reasons.tsv"
 fi
 
+# OpenTitan LEC mode-diff synthesis (default vs strict)
+if [[ "$WITH_OPENTITAN" == "1" && "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && \
+   lane_enabled "opentitan/LEC_MODE_DIFF"; then
+  opentitan_lec_default_case_results="$OUT_DIR/opentitan-lec-results.txt"
+  opentitan_lec_strict_case_results="$OUT_DIR/opentitan-lec-strict-results.txt"
+  opentitan_lec_mode_diff_tsv="$OUT_DIR/opentitan-lec-mode-diff.tsv"
+  opentitan_lec_mode_diff_results="$OUT_DIR/opentitan-lec-mode-diff-results.txt"
+  opentitan_lec_mode_diff_metrics_tsv="$OUT_DIR/opentitan-lec-mode-diff-metrics.tsv"
+  if [[ -s "$opentitan_lec_default_case_results" && -s "$opentitan_lec_strict_case_results" ]]; then
+    opentitan_lec_mode_diff_counts="$(
+      OPENTITAN_LEC_DEFAULT_CASE_RESULTS="$opentitan_lec_default_case_results" \
+      OPENTITAN_LEC_STRICT_CASE_RESULTS="$opentitan_lec_strict_case_results" \
+      OPENTITAN_LEC_MODE_DIFF_TSV="$opentitan_lec_mode_diff_tsv" \
+      OPENTITAN_LEC_MODE_DIFF_RESULTS="$opentitan_lec_mode_diff_results" \
+      OPENTITAN_LEC_MODE_DIFF_METRICS_TSV="$opentitan_lec_mode_diff_metrics_tsv" \
+      python3 - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+default_path = Path(os.environ["OPENTITAN_LEC_DEFAULT_CASE_RESULTS"])
+strict_path = Path(os.environ["OPENTITAN_LEC_STRICT_CASE_RESULTS"])
+diff_tsv_path = Path(os.environ["OPENTITAN_LEC_MODE_DIFF_TSV"])
+diff_results_path = Path(os.environ["OPENTITAN_LEC_MODE_DIFF_RESULTS"])
+metrics_tsv_path = Path(os.environ["OPENTITAN_LEC_MODE_DIFF_METRICS_TSV"])
+
+
+def load_rows(path: Path):
+  rows = {}
+  with path.open() as f:
+    for line in f:
+      line = line.rstrip("\n")
+      if not line:
+        continue
+      parts = line.split("\t")
+      if len(parts) < 3:
+        continue
+      status = parts[0].strip().upper()
+      base = parts[1].strip()
+      detail = parts[2].strip()
+      if not base:
+        continue
+      rows[base] = {
+          "status": status or "UNKNOWN",
+          "detail": detail,
+      }
+  return rows
+
+
+default_rows = load_rows(default_path)
+strict_rows = load_rows(strict_path)
+bases = sorted(set(default_rows.keys()) | set(strict_rows.keys()))
+classification_keys = [
+    "same_status",
+    "strict_only_fail",
+    "strict_only_pass",
+    "status_diff",
+    "missing_in_lec",
+    "missing_in_lec_strict",
+]
+classification_counts = {k: 0 for k in classification_keys}
+
+with diff_tsv_path.open("w", newline="") as f:
+  writer = csv.writer(f, delimiter="\t")
+  writer.writerow(
+      [
+          "status",
+          "base",
+          "classification",
+          "status_lec",
+          "status_lec_strict",
+          "detail_lec",
+          "detail_lec_strict",
+      ]
+  )
+  fail_count = 0
+  for base in bases:
+    lec = default_rows.get(base, {"status": "MISSING", "detail": ""})
+    strict = strict_rows.get(base, {"status": "MISSING", "detail": ""})
+    status_lec = lec["status"]
+    status_strict = strict["status"]
+    detail_lec = lec["detail"]
+    detail_strict = strict["detail"]
+    if status_lec == status_strict and status_lec != "MISSING":
+      classification = "same_status"
+      status = "PASS"
+    elif status_lec == "MISSING":
+      classification = "missing_in_lec"
+      status = "FAIL"
+    elif status_strict == "MISSING":
+      classification = "missing_in_lec_strict"
+      status = "FAIL"
+    elif status_lec == "PASS" and status_strict != "PASS":
+      classification = "strict_only_fail"
+      status = "FAIL"
+    elif status_lec != "PASS" and status_strict == "PASS":
+      classification = "strict_only_pass"
+      status = "FAIL"
+    else:
+      classification = "status_diff"
+      status = "FAIL"
+    classification_counts[classification] += 1
+    writer.writerow(
+        [
+            status,
+            base,
+            classification,
+            status_lec,
+            status_strict,
+            detail_lec,
+            detail_strict,
+        ]
+    )
+    if status == "FAIL":
+      fail_count += 1
+
+with diff_results_path.open("w") as f:
+  with diff_tsv_path.open() as src:
+    reader = csv.DictReader(src, delimiter="\t")
+    for row in reader:
+      if row.get("status", "").upper() != "FAIL":
+        continue
+      base = (row.get("base") or "").strip()
+      classification = (row.get("classification") or "").strip()
+      status_lec = (row.get("status_lec") or "").strip()
+      status_strict = (row.get("status_lec_strict") or "").strip()
+      detail = (
+          f"{classification};lec={status_lec};lec_strict={status_strict}"
+      )
+      f.write(f"FAIL\t{base}\t{detail}\topentitan\tLEC_MODE_DIFF\n")
+
+with metrics_tsv_path.open("w", newline="") as f:
+  writer = csv.writer(f, delimiter="\t")
+  writer.writerow(["metric", "value"])
+  writer.writerow(["total_cases", len(bases)])
+  writer.writerow(["pass_cases", len(bases) - fail_count])
+  writer.writerow(["fail_cases", fail_count])
+  for key in classification_keys:
+    writer.writerow([key, classification_counts[key]])
+
+print(
+    "\t".join(
+        [
+            str(len(bases)),
+            str(len(bases) - fail_count),
+            str(fail_count),
+            str(classification_counts["same_status"]),
+            str(classification_counts["strict_only_fail"]),
+            str(classification_counts["strict_only_pass"]),
+            str(classification_counts["status_diff"]),
+            str(classification_counts["missing_in_lec"]),
+            str(classification_counts["missing_in_lec_strict"]),
+        ]
+    )
+)
+PY
+)"
+    IFS=$'\t' read -r \
+      opentitan_lec_mode_diff_total \
+      opentitan_lec_mode_diff_pass \
+      opentitan_lec_mode_diff_fail \
+      opentitan_lec_mode_diff_same_status \
+      opentitan_lec_mode_diff_strict_only_fail \
+      opentitan_lec_mode_diff_strict_only_pass \
+      opentitan_lec_mode_diff_status_diff \
+      opentitan_lec_mode_diff_missing_in_lec \
+      opentitan_lec_mode_diff_missing_in_lec_strict <<< "$opentitan_lec_mode_diff_counts"
+    if [[ -n "$opentitan_lec_mode_diff_total" && -n "$opentitan_lec_mode_diff_pass" && -n "$opentitan_lec_mode_diff_fail" ]]; then
+      opentitan_lec_mode_diff_summary="total=${opentitan_lec_mode_diff_total} pass=${opentitan_lec_mode_diff_pass} fail=${opentitan_lec_mode_diff_fail} xfail=0 xpass=0 error=0 skip=0 same_status=${opentitan_lec_mode_diff_same_status:-0} strict_only_fail=${opentitan_lec_mode_diff_strict_only_fail:-0} strict_only_pass=${opentitan_lec_mode_diff_strict_only_pass:-0} status_diff=${opentitan_lec_mode_diff_status_diff:-0} missing_in_lec=${opentitan_lec_mode_diff_missing_in_lec:-0} missing_in_lec_strict=${opentitan_lec_mode_diff_missing_in_lec_strict:-0}"
+      record_result_with_summary "opentitan" "LEC_MODE_DIFF" \
+        "$opentitan_lec_mode_diff_total" \
+        "$opentitan_lec_mode_diff_pass" \
+        "$opentitan_lec_mode_diff_fail" 0 0 0 0 \
+        "$opentitan_lec_mode_diff_summary"
+    fi
+  fi
+fi
+
 run_opentitan_e2e_lane() {
   local lane_id="$1"
   local mode_name="$2"
@@ -9870,6 +10092,7 @@ result_sources = [
     ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
     ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
     ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
+    ("opentitan", "LEC_MODE_DIFF", out_dir / "opentitan-lec-mode-diff-results.txt"),
     ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
     ("opentitan", "E2E_STRICT", out_dir / "opentitan-e2e-strict-results.txt"),
     ("opentitan", "E2E_MODE_DIFF", out_dir / "opentitan-e2e-mode-diff-results.txt"),
@@ -10448,6 +10671,7 @@ result_sources = [
     ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
     ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
     ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
+    ("opentitan", "LEC_MODE_DIFF", out_dir / "opentitan-lec-mode-diff-results.txt"),
     ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
     ("opentitan", "E2E_STRICT", out_dir / "opentitan-e2e-strict-results.txt"),
     ("opentitan", "E2E_MODE_DIFF", out_dir / "opentitan-e2e-mode-diff-results.txt"),
@@ -10698,6 +10922,7 @@ def collect_failure_cases(out_dir: Path, summary_rows):
         ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
         ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
         ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
+        ("opentitan", "LEC_MODE_DIFF", out_dir / "opentitan-lec-mode-diff-results.txt"),
         ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
         ("opentitan", "E2E_STRICT", out_dir / "opentitan-e2e-strict-results.txt"),
         ("opentitan", "E2E_MODE_DIFF", out_dir / "opentitan-e2e-mode-diff-results.txt"),
@@ -11097,6 +11322,11 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT" == "1" || \
+      "$FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_FAIL" == "1" || \
+      "$FAIL_ON_NEW_LEC_MODE_DIFF_STATUS_DIFF" == "1" || \
+      "$FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_PASS" == "1" || \
+      "$FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC" == "1" || \
+      "$FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC_STRICT" == "1" || \
       -n "$OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV" || \
       -n "$OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES_CSV" || \
       -n "$OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV" ]]; then
@@ -11135,6 +11365,11 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS" \
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E="$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E" \
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT="$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT" \
+  FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_FAIL="$FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_FAIL" \
+  FAIL_ON_NEW_LEC_MODE_DIFF_STATUS_DIFF="$FAIL_ON_NEW_LEC_MODE_DIFF_STATUS_DIFF" \
+  FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_PASS="$FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_PASS" \
+  FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC="$FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC" \
+  FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC_STRICT="$FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC_STRICT" \
   OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS="$OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV" \
   OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES="$OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES_CSV" \
   OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES="$OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV" \
@@ -11210,6 +11445,7 @@ def collect_failure_cases(out_dir: Path, summary_rows):
         ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
         ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
         ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
+        ("opentitan", "LEC_MODE_DIFF", out_dir / "opentitan-lec-mode-diff-results.txt"),
         ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
         ("opentitan", "E2E_STRICT", out_dir / "opentitan-e2e-strict-results.txt"),
         ("opentitan", "E2E_MODE_DIFF", out_dir / "opentitan-e2e-mode-diff-results.txt"),
@@ -11515,6 +11751,21 @@ fail_on_new_e2e_mode_diff_missing_in_e2e = (
 )
 fail_on_new_e2e_mode_diff_missing_in_e2e_strict = (
     os.environ.get("FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT", "0") == "1"
+)
+fail_on_new_lec_mode_diff_strict_only_fail = (
+    os.environ.get("FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_FAIL", "0") == "1"
+)
+fail_on_new_lec_mode_diff_status_diff = (
+    os.environ.get("FAIL_ON_NEW_LEC_MODE_DIFF_STATUS_DIFF", "0") == "1"
+)
+fail_on_new_lec_mode_diff_strict_only_pass = (
+    os.environ.get("FAIL_ON_NEW_LEC_MODE_DIFF_STRICT_ONLY_PASS", "0") == "1"
+)
+fail_on_new_lec_mode_diff_missing_in_lec = (
+    os.environ.get("FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC", "0") == "1"
+)
+fail_on_new_lec_mode_diff_missing_in_lec_strict = (
+    os.environ.get("FAIL_ON_NEW_LEC_MODE_DIFF_MISSING_IN_LEC_STRICT", "0") == "1"
 )
 opentitan_lec_strict_xprop_counter_keys = [
     token.strip()
@@ -12184,6 +12435,84 @@ for key, current_row in summary.items():
                 if current_missing_in_e2e_strict > baseline_missing_in_e2e_strict:
                     gate_errors.append(
                         f"{suite} {mode}: missing_in_e2e_strict increased ({baseline_missing_in_e2e_strict} -> {current_missing_in_e2e_strict}, window={baseline_window})"
+                    )
+    if suite == "opentitan" and mode == "LEC_MODE_DIFF":
+        current_counts = parse_result_summary(current_row.get("summary", ""))
+        if fail_on_new_lec_mode_diff_strict_only_fail:
+            baseline_strict_only_fail_values = []
+            for counts in parsed_counts:
+                if "strict_only_fail" in counts:
+                    baseline_strict_only_fail_values.append(
+                        int(counts["strict_only_fail"])
+                    )
+            if baseline_strict_only_fail_values:
+                baseline_strict_only_fail = min(baseline_strict_only_fail_values)
+                current_strict_only_fail = int(
+                    current_counts.get("strict_only_fail", 0)
+                )
+                if current_strict_only_fail > baseline_strict_only_fail:
+                    gate_errors.append(
+                        f"{suite} {mode}: strict_only_fail increased ({baseline_strict_only_fail} -> {current_strict_only_fail}, window={baseline_window})"
+                    )
+        if fail_on_new_lec_mode_diff_status_diff:
+            baseline_status_diff_values = []
+            for counts in parsed_counts:
+                if "status_diff" in counts:
+                    baseline_status_diff_values.append(int(counts["status_diff"]))
+            if baseline_status_diff_values:
+                baseline_status_diff = min(baseline_status_diff_values)
+                current_status_diff = int(current_counts.get("status_diff", 0))
+                if current_status_diff > baseline_status_diff:
+                    gate_errors.append(
+                        f"{suite} {mode}: status_diff increased ({baseline_status_diff} -> {current_status_diff}, window={baseline_window})"
+                    )
+        if fail_on_new_lec_mode_diff_strict_only_pass:
+            baseline_strict_only_pass_values = []
+            for counts in parsed_counts:
+                if "strict_only_pass" in counts:
+                    baseline_strict_only_pass_values.append(
+                        int(counts["strict_only_pass"])
+                    )
+            if baseline_strict_only_pass_values:
+                baseline_strict_only_pass = min(baseline_strict_only_pass_values)
+                current_strict_only_pass = int(
+                    current_counts.get("strict_only_pass", 0)
+                )
+                if current_strict_only_pass > baseline_strict_only_pass:
+                    gate_errors.append(
+                        f"{suite} {mode}: strict_only_pass increased ({baseline_strict_only_pass} -> {current_strict_only_pass}, window={baseline_window})"
+                    )
+        if fail_on_new_lec_mode_diff_missing_in_lec:
+            baseline_missing_in_lec_values = []
+            for counts in parsed_counts:
+                if "missing_in_lec" in counts:
+                    baseline_missing_in_lec_values.append(
+                        int(counts["missing_in_lec"])
+                    )
+            if baseline_missing_in_lec_values:
+                baseline_missing_in_lec = min(baseline_missing_in_lec_values)
+                current_missing_in_lec = int(current_counts.get("missing_in_lec", 0))
+                if current_missing_in_lec > baseline_missing_in_lec:
+                    gate_errors.append(
+                        f"{suite} {mode}: missing_in_lec increased ({baseline_missing_in_lec} -> {current_missing_in_lec}, window={baseline_window})"
+                    )
+        if fail_on_new_lec_mode_diff_missing_in_lec_strict:
+            baseline_missing_in_lec_strict_values = []
+            for counts in parsed_counts:
+                if "missing_in_lec_strict" in counts:
+                    baseline_missing_in_lec_strict_values.append(
+                        int(counts["missing_in_lec_strict"])
+                    )
+            if baseline_missing_in_lec_strict_values:
+                baseline_missing_in_lec_strict = min(
+                    baseline_missing_in_lec_strict_values
+                )
+                current_missing_in_lec_strict = int(
+                    current_counts.get("missing_in_lec_strict", 0)
+                )
+                if current_missing_in_lec_strict > baseline_missing_in_lec_strict:
+                    gate_errors.append(
+                        f"{suite} {mode}: missing_in_lec_strict increased ({baseline_missing_in_lec_strict} -> {current_missing_in_lec_strict}, window={baseline_window})"
                     )
     if suite == "opentitan" and mode == "LEC_STRICT" and opentitan_lec_strict_xprop_counter_keys:
         current_counts = parse_result_summary(current_row.get("summary", ""))

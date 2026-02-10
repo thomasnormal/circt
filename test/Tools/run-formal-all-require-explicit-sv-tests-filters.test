@@ -11,6 +11,7 @@
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ylec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^yosys/tests/sva/LEC$"' 2>&1 | FileCheck %s --check-prefix=YLEC
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-otlec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/LEC$"' 2>&1 | FileCheck %s --check-prefix=OTLEC
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-otlec-strict --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-lec-strict --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/LEC_STRICT$"' 2>&1 | FileCheck %s --check-prefix=OTLECSTRICT
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-otlec-diff --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --with-opentitan-lec-strict --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/LEC_MODE_DIFF$"' 2>&1 | FileCheck %s --check-prefix=OTLECDIFF
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ote2e --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-e2e --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/E2E$"' 2>&1 | FileCheck %s --check-prefix=OTE2E
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ote2e-strict --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-e2e-strict --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/E2E_STRICT$"' 2>&1 | FileCheck %s --check-prefix=OTE2ESTRICT
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ote2e-diff --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/E2E_MODE_DIFF$"' 2>&1 | FileCheck %s --check-prefix=OTE2EDIFF
@@ -24,6 +25,7 @@
 // YLEC: yosys/tests/sva/LEC requires explicit filter: set --yosys-lec-test-filter
 // OTLEC: opentitan/LEC requires explicit filter: set --opentitan-lec-impl-filter
 // OTLECSTRICT: opentitan/LEC_STRICT requires explicit filter: set --opentitan-lec-impl-filter
+// OTLECDIFF: opentitan/LEC_MODE_DIFF requires explicit filter: set --opentitan-lec-impl-filter
 // OTE2E: opentitan/E2E requires explicit filter: set --opentitan-e2e-impl-filter
 // OTE2ESTRICT: opentitan/E2E_STRICT requires explicit filter: set --opentitan-e2e-impl-filter
 // OTE2EDIFF: opentitan/E2E_MODE_DIFF requires explicit filter: set --opentitan-e2e-impl-filter
