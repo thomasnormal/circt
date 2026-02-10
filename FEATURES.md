@@ -15,7 +15,7 @@ repository (1,036 tests across 15 IEEE chapters).
 |------|----------|------|------|------|-------|
 | Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
 | Elaboration | 1028 | 1021+ | 7 | **99.3%+** | 2 multi-assign detection, 5 crash/timeout (tagged union, SVA); stream_unpack FIXED, queue ops FIXED |
-| Simulation (full) | 858 | 858 | 0 | **100%** | 912 total, 54 xfail (should-fail tests); 0 fail, 0 xpass, 0 timeout, 0 compile_fail |
+| Simulation (full) | 858 | 858 | 0 | **100%** | 912 total, 8 xfail (UVM VIF signal propagation); 0 fail, 0 xpass, 0 timeout, 0 compile_fail |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
 
@@ -32,11 +32,11 @@ repository (1,036 tests across 15 IEEE chapters).
 ### Simulation: 0 Failures, 0 Unexpected Passes, 0 Timeouts
 
 912 tests found, 696 eligible, 696 PASS+XFAIL, 0 FAIL, 0 XPASS, 0 TIMEOUT.
-All tests properly categorized in `utils/sv-tests-sim-expect.txt` (173 entries):
-- 6 `skip` (should-fail tests circt-verilog doesn't detect, utility files)
+All tests properly categorized in `utils/sv-tests-sim-expect.txt` (176 entries):
+- 7 `skip` (should-fail tests circt-verilog doesn't detect, utility files)
 - 46 `compile-only` (class-only definitions, SVA UVM tests, event sequence controls)
-- 54 `xfail` (Ch18 constraint tests that timeout in 120s UVM simulation)
-- 4 `pass` (UVM tests now passing)
+- 8 `xfail` (all UVM VIF signal propagation issues)
+- 115 `pass` (Ch18 constraints, random stability, UVM phases, inline constraints, foreach/array-reduction constraints, rand_mode, resource_db all working)
 
 ### What's Needed for True 100%
 
@@ -58,7 +58,7 @@ All tests properly categorized in `utils/sv-tests-sim-expect.txt` (173 entries):
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 211 | 211 | 0 | All pass; assoc array deep copy, call stack restoration, runtime vtable override, UVM phase sequencing, constraint solver (dist, soft, guards, inheritance, compound), per-object RNG, parametric coverage sampling, VIF clock propagation |
+| circt-sim | 221 | 221 | 0 | All pass; randomize(null) check-only mode, randomize(var_list) argument filtering, stream unpack interpreter handler, inline soft constraint override, assoc array deep copy, call stack restoration, runtime vtable override, UVM phase sequencing, constraint solver (dist, soft, guards, inheritance, compound, inline, foreach, array-reduction), per-object RNG, parametric coverage sampling, VIF clock propagation |
 | MooreToCore | 124 | 122 | 2 | All pass; 2 XFAIL (array-locator-func-call, interface-timing-after-inlining) |
 | ImportVerilog | 268 | 268 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past, covergroup iff-no-parens |
 
@@ -99,6 +99,8 @@ to commercial simulators like Cadence Xcelium.
 | `randomize()` (basic) | WORKS | `__moore_randomize_basic()` fills object memory with random bytes |
 | `randomize()` (with dist) | WORKS | `__moore_randomize_with_dist()` implements weighted distribution constraints |
 | `randomize()` (with ranges) | WORKS | `__moore_randomize_with_ranges()` generates uniform random within range pairs |
+| `randomize(null)` check-only | WORKS | IEEE 18.11.1: check-only mode returns 1 if constraints satisfiable without modifying state |
+| `randomize(var_list)` filtering | WORKS | IEEE 18.11: argument list controls which variables are randomized; unlisted rand variables treated as state |
 | Interface ports | WORKS | Generic interface ports resolved from connection site (IEEE 1800-2017 §25.5) |
 | Short-circuit evaluation | WORKS | `&&`, `\|\|`, `->` only evaluate RHS when needed (IEEE 1800-2017 §11.4.7); uses `moore.conditional` in procedural contexts |
 | ClockVar support | MISSING | Needed by some testbenches |
@@ -226,3 +228,12 @@ Multi-`--top` infrastructure exists in circt-sim (shared scheduler, shared confi
 | Per-process RNG for random stability | Replaced global `std::rand/urandom` with per-process `std::mt19937` (IEEE 1800-2017 §18.13); `__moore_class_get/set_randstate` for save/restore |
 | Coverpoint iff guard lowering | Added `iff_conditions` to `CovergroupSampleOp` with `AttrSizedOperandSegments`; conditional branch in MooreToCore to skip sample when iff evaluates false |
 | Call stack restoration fix | Three bugs: innermost-first frame processing, `waitConditionSavedBlock` derivation from outermost frame's callOp, `outermostCallOp` fallback for non-wait_condition suspensions |
+| `randomize(null)` check-only mode | IEEE 18.11.1: returns 1 if constraints are satisfiable without modifying object state; skip randomization and post_randomize |
+| `randomize(var_list)` argument filtering | IEEE 18.11: only randomize specified variables; unlisted rand variables hold current state during constraint solving |
+| Stream unpack interpreter handler | Handle `moore.stream_unpack` in interpreter for runtime streaming unpack operations |
+| Foreach iterative constraints (18.5.8.1) | Constraint solver handles `foreach` over arrays with per-element constraints |
+| Array reduction constraints (18.5.8.2) | Constraint solver supports `sum`, `product`, `and`, `or`, `xor` array reduction in constraints |
+| Inline constraint range extraction (18.7) | Extract range constraints from `randomize() with { ... }` inline constraint blocks |
+| Static rand_mode across instances (18.8) | `rand_mode(0/1)` correctly persists across all instances of a class |
+| Inline variable control (18.11) | Both inline constraint checker and variable control tests now passing |
+| UVM resource_db read_by_name | `uvm_resource_db::read_by_name` intercepted for UVM resource lookup |
