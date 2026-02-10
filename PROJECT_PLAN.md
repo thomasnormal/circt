@@ -1127,3 +1127,42 @@ See CHANGELOG.md on recent progress.
     drift detection is now case-aware, but still tied to warning-pattern
     detection (`"will be dropped during lowering"`) rather than first-class
     lowering provenance tags emitted directly by the frontend/lowering passes.
+15. Case-reason dropped-syntax provenance landed (February 10, 2026):
+    - BMC runners now optionally emit normalized drop reasons per case via
+      `BMC_DROP_REMARK_REASONS_OUT` in addition to case IDs:
+      `sv-tests`, `verilator-verification`, `yosys/tests/sva`.
+    - Reasons are normalized in-runner to reduce path/line-number churn
+      (location prefix stripping, whitespace collapse, number normalization).
+    - `run_formal_all.sh` now captures these artifacts into lane-local
+      `*-drop-remark-reasons.tsv` files and persists baseline tuples in
+      `bmc_drop_remark_case_reason_ids`.
+    - new strict-gate option:
+      `--fail-on-new-bmc-drop-remark-case-reasons`
+      (enabled by `--strict-gate`) fails on growth in dropped-syntax
+      case+reason tuples.
+16. Remaining no-drop limitation after case-reason gate:
+    reason extraction is still log-derived; final target remains first-class
+    frontend/lowering provenance tags (structured reason/category/op/path)
+    emitted directly from lowering instead of warning-text parsing.
+17. LEC no-drop parity hardening landed (February 10, 2026):
+    - LEC runners now export optional dropped-syntax artifacts in all three
+      lanes via:
+      `LEC_DROP_REMARK_CASES_OUT` and `LEC_DROP_REMARK_REASONS_OUT`
+      (`sv-tests`, `verilator-verification`, `yosys/tests/sva`).
+    - LEC lane logs now emit:
+      `* LEC dropped-syntax summary: drop_remark_cases=...`.
+18. Formal strict-gate LEC governance landed:
+    - `run_formal_all.sh` now records `lec_drop_remark_cases` in summary
+      telemetry for non-OpenTitan LEC lanes and persists:
+      `lec_drop_remark_case_ids`,
+      `lec_drop_remark_case_reason_ids` in baselines.
+    - New strict-gate knobs:
+      `--fail-on-new-lec-drop-remark-cases`,
+      `--fail-on-new-lec-drop-remark-case-ids`,
+      `--fail-on-new-lec-drop-remark-case-reasons`
+      (enabled by `--strict-gate`).
+19. Current no-drop limitation after LEC parity:
+    - OpenTitan LEC lanes are still governed via strict X-prop counters/keys,
+      not drop-remark case/reason artifacts.
+    - Both BMC and LEC reason telemetry remain warning-pattern/log-derived
+      rather than first-class lowering provenance tags.
