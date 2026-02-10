@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 859 - February 10, 2026
+
+### Native Matrix Global-Filter Prequalification in `circt-mut`
+
+1. Added native matrix prequalification mode:
+   - `circt-mut matrix --native-global-filter-prequalify`
+2. This mode now executes native per-lane global formal prequalification
+   before dispatching matrix lanes:
+   - runs `circt-mut cover --native-global-filter-prequalify-only` per lane,
+   - writes lane-local reuse pair files
+     (`<out-dir>/<lane_id>/native_global_filter_prequalify.tsv`),
+   - rewrites lane manifest to
+     `<out-dir>/native_global_filter_prequalify_lanes.tsv` with
+     `reuse_pair_file` injected, then
+   - dispatches `run_mutation_matrix.sh` using the rewritten lanes file.
+3. Current scope and guards:
+   - supports built-in global filters (`circt-lec`/`circt-bmc`/chain),
+   - rejects `global_propagate_cmd` lanes in native matrix prequalify mode,
+   - rejects pre-existing lane/default reuse-pair input to avoid
+     compatibility ambiguities.
+4. This is the first native migration step for matrix lane prequalification
+   loops and establishes reuse-file handoff parity with native cover
+   prequalification.
+
+### Tests and Documentation
+
+- Added regression tests:
+  - `test/Tools/circt-mut-matrix-native-global-filter-prequalify.test`
+  - `test/Tools/circt-mut-matrix-native-global-filter-prequalify-reuse-conflict.test`
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-global-filter-prequalify*.test test/Tools/circt-mut-matrix-*.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-native-prequalify --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 858 - February 10, 2026
 
 ### BMC Semantic-Closure Hardening: SCF Registration + UVM Path Resolution

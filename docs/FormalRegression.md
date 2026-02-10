@@ -416,6 +416,7 @@ certitude_run \
 circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
+  --native-global-filter-prequalify \
   --default-mutations-yosys yosys \
   --default-formal-global-propagate-circt-lec \
   --default-formal-global-propagate-circt-bmc \
@@ -580,6 +581,13 @@ Execution controls:
     natively (`--default-formal-global-propagate-circt-lec`,
     `--default-formal-global-propagate-circt-bmc`,
     `--default-formal-global-propagate-circt-chain`) before script dispatch.
+  - `--native-global-filter-prequalify` now performs native per-lane global
+    formal prequalification before matrix dispatch (using cover native
+    prequalify-only under the hood), writes per-lane reuse pair files, and
+    dispatches `run_mutation_matrix.sh` with a rewritten lanes manifest.
+  - native matrix prequalification currently supports built-in global filter
+    modes only (not lane/default `global_propagate_cmd`) and rejects
+    pre-existing lane/default reuse-pair input.
   - default generated-mutation Yosys option is now pre-resolved natively:
     `--default-mutations-yosys`.
   - default generated-mutation seed is now configurable/validated natively:

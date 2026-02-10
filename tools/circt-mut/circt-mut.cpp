@@ -2325,6 +2325,7 @@ struct MatrixRewriteResult {
   bool ok = false;
   std::string error;
   SmallVector<std::string, 32> rewrittenArgs;
+  bool nativeGlobalFilterPrequalify = false;
 };
 
 struct MatrixLanePreflightDefaults {
@@ -2855,6 +2856,10 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
   std::string lanesTSVPath;
   for (size_t i = 0; i < args.size(); ++i) {
     StringRef arg = args[i];
+    if (arg == "--native-global-filter-prequalify") {
+      result.nativeGlobalFilterPrequalify = true;
+      continue;
+    }
     auto valueFromArg = [&]() -> StringRef {
       size_t eqPos = arg.find('=');
       if (eqPos != StringRef::npos)
@@ -3365,11 +3370,589 @@ static int runCoverFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
   return dispatchToScript(*scriptPath, rewrittenArgsRef);
 }
 
+namespace {
+enum MatrixLaneColumn : size_t {
+  ColLaneID = 0,
+  ColDesign = 1,
+  ColMutationsFile = 2,
+  ColTestsManifest = 3,
+  ColGenerateCount = 7,
+  ColMutationsTop = 8,
+  ColMutationsSeed = 9,
+  ColMutationsYosys = 10,
+  ColReusePairFile = 11,
+  ColMutationsModes = 13,
+  ColGlobalPropagateCmd = 14,
+  ColGlobalPropagateCirctLEC = 15,
+  ColGlobalPropagateCirctBMC = 16,
+  ColGlobalPropagateBMCArgs = 17,
+  ColGlobalPropagateBMCBound = 18,
+  ColGlobalPropagateBMCModule = 19,
+  ColGlobalPropagateBMCRunSMTLib = 20,
+  ColGlobalPropagateBMCZ3 = 21,
+  ColGlobalPropagateBMCAssumeKnownInputs = 22,
+  ColGlobalPropagateBMCIgnoreAssertsUntil = 23,
+  ColGlobalPropagateCirctLECArgs = 24,
+  ColGlobalPropagateC1 = 25,
+  ColGlobalPropagateC2 = 26,
+  ColGlobalPropagateZ3 = 27,
+  ColGlobalPropagateAssumeKnownInputs = 28,
+  ColGlobalPropagateAcceptXpropOnly = 29,
+  ColMutationsCfg = 30,
+  ColMutationsSelect = 31,
+  ColMutationsProfiles = 32,
+  ColMutationsModeCounts = 33,
+  ColGlobalPropagateCirctChain = 34,
+  ColGlobalPropagateTimeoutSeconds = 42,
+  ColGlobalPropagateLECTimeoutSeconds = 43,
+  ColGlobalPropagateBMCTimeoutSeconds = 44,
+  ColMutationsModeWeights = 45
+};
+
+struct MatrixNativePrequalifyConfig {
+  std::string lanesTSVPath;
+  std::string outDir = "mutation-matrix-results";
+  std::string createMutatedScript;
+  std::string jobsPerLane = "1";
+  std::string reuseCacheDir;
+  std::string reuseCacheMode;
+  std::string defaultReusePairFile;
+  std::string defaultMutationsModes;
+  std::string defaultMutationsModeCounts;
+  std::string defaultMutationsModeWeights;
+  std::string defaultMutationsProfiles;
+  std::string defaultMutationsCfg;
+  std::string defaultMutationsSelect;
+  std::string defaultMutationsSeed;
+  std::string defaultMutationsYosys;
+  std::string defaultGlobalFilterCmd;
+  std::string defaultGlobalFilterCirctLEC;
+  std::string defaultGlobalFilterCirctBMC;
+  std::string defaultGlobalFilterCirctChain;
+  std::string defaultGlobalFilterCirctLECArgs;
+  std::string defaultGlobalFilterC1;
+  std::string defaultGlobalFilterC2;
+  std::string defaultGlobalFilterZ3;
+  std::string defaultGlobalFilterBMCArgs;
+  std::string defaultGlobalFilterBMCBound;
+  std::string defaultGlobalFilterBMCModule;
+  std::string defaultGlobalFilterBMCZ3;
+  std::string defaultGlobalFilterBMCIgnoreAssertsUntil;
+  std::string defaultGlobalFilterTimeoutSeconds;
+  std::string defaultGlobalFilterLECTimeoutSeconds;
+  std::string defaultGlobalFilterBMCTimeoutSeconds;
+  bool defaultGlobalFilterAssumeKnownInputs = false;
+  bool defaultGlobalFilterAcceptXpropOnly = false;
+  bool defaultGlobalFilterBMCRunSMTLib = false;
+  bool defaultGlobalFilterBMCAssumeKnownInputs = false;
+};
+} // namespace
+
+static std::optional<std::string>
+getLastOptionValue(ArrayRef<std::string> args, StringRef flag) {
+  std::optional<std::string> value;
+  std::string prefix = (flag + "=").str();
+  for (size_t i = 0; i < args.size(); ++i) {
+    StringRef arg = args[i];
+    if (arg == flag) {
+      if (i + 1 < args.size())
+        value = args[++i];
+      continue;
+    }
+    if (arg.starts_with(prefix))
+      value = arg.substr(prefix.size()).str();
+  }
+  return value;
+}
+
+static bool hasOptionFlag(ArrayRef<std::string> args, StringRef flag) {
+  for (StringRef arg : args)
+    if (arg == flag)
+      return true;
+  return false;
+}
+
+static bool parseMatrixNativePrequalifyConfig(ArrayRef<std::string> args,
+                                              MatrixNativePrequalifyConfig &cfg,
+                                              std::string &error) {
+  auto readValue = [&](StringRef flag, std::string &out) {
+    if (auto value = getLastOptionValue(args, flag))
+      out = *value;
+  };
+  readValue("--lanes-tsv", cfg.lanesTSVPath);
+  readValue("--out-dir", cfg.outDir);
+  readValue("--create-mutated-script", cfg.createMutatedScript);
+  readValue("--jobs-per-lane", cfg.jobsPerLane);
+  readValue("--reuse-cache-dir", cfg.reuseCacheDir);
+  readValue("--reuse-cache-mode", cfg.reuseCacheMode);
+  readValue("--default-reuse-pair-file", cfg.defaultReusePairFile);
+  readValue("--default-mutations-modes", cfg.defaultMutationsModes);
+  readValue("--default-mutations-mode-counts", cfg.defaultMutationsModeCounts);
+  readValue("--default-mutations-mode-weights",
+            cfg.defaultMutationsModeWeights);
+  readValue("--default-mutations-profiles", cfg.defaultMutationsProfiles);
+  readValue("--default-mutations-cfg", cfg.defaultMutationsCfg);
+  readValue("--default-mutations-select", cfg.defaultMutationsSelect);
+  readValue("--default-mutations-seed", cfg.defaultMutationsSeed);
+  readValue("--default-mutations-yosys", cfg.defaultMutationsYosys);
+  readValue("--default-formal-global-propagate-cmd",
+            cfg.defaultGlobalFilterCmd);
+  readValue("--default-formal-global-propagate-circt-lec",
+            cfg.defaultGlobalFilterCirctLEC);
+  readValue("--default-formal-global-propagate-circt-bmc",
+            cfg.defaultGlobalFilterCirctBMC);
+  readValue("--default-formal-global-propagate-circt-chain",
+            cfg.defaultGlobalFilterCirctChain);
+  readValue("--default-formal-global-propagate-circt-lec-args",
+            cfg.defaultGlobalFilterCirctLECArgs);
+  readValue("--default-formal-global-propagate-c1", cfg.defaultGlobalFilterC1);
+  readValue("--default-formal-global-propagate-c2", cfg.defaultGlobalFilterC2);
+  readValue("--default-formal-global-propagate-z3", cfg.defaultGlobalFilterZ3);
+  readValue("--default-formal-global-propagate-circt-bmc-args",
+            cfg.defaultGlobalFilterBMCArgs);
+  readValue("--default-formal-global-propagate-bmc-bound",
+            cfg.defaultGlobalFilterBMCBound);
+  readValue("--default-formal-global-propagate-bmc-module",
+            cfg.defaultGlobalFilterBMCModule);
+  readValue("--default-formal-global-propagate-bmc-z3",
+            cfg.defaultGlobalFilterBMCZ3);
+  readValue("--default-formal-global-propagate-bmc-ignore-asserts-until",
+            cfg.defaultGlobalFilterBMCIgnoreAssertsUntil);
+  readValue("--default-formal-global-propagate-timeout-seconds",
+            cfg.defaultGlobalFilterTimeoutSeconds);
+  readValue("--default-formal-global-propagate-lec-timeout-seconds",
+            cfg.defaultGlobalFilterLECTimeoutSeconds);
+  readValue("--default-formal-global-propagate-bmc-timeout-seconds",
+            cfg.defaultGlobalFilterBMCTimeoutSeconds);
+
+  cfg.defaultGlobalFilterAssumeKnownInputs = hasOptionFlag(
+      args, "--default-formal-global-propagate-assume-known-inputs");
+  cfg.defaultGlobalFilterAcceptXpropOnly = hasOptionFlag(
+      args, "--default-formal-global-propagate-accept-xprop-only");
+  cfg.defaultGlobalFilterBMCRunSMTLib = hasOptionFlag(
+      args, "--default-formal-global-propagate-bmc-run-smtlib");
+  cfg.defaultGlobalFilterBMCAssumeKnownInputs = hasOptionFlag(
+      args, "--default-formal-global-propagate-bmc-assume-known-inputs");
+
+  if (cfg.lanesTSVPath.empty()) {
+    error = "circt-mut matrix: missing --lanes-tsv for native prequalification.";
+    return false;
+  }
+  return true;
+}
+
+static bool parseLaneBoolWithDefault(StringRef rawValue, bool defaultValue,
+                                     bool &out, std::string &error,
+                                     StringRef fieldName, StringRef laneID) {
+  StringRef value = rawValue.trim().lower();
+  if (value.empty() || value == "-") {
+    out = defaultValue;
+    return true;
+  }
+  if (value == "1" || value == "true" || value == "yes") {
+    out = true;
+    return true;
+  }
+  if (value == "0" || value == "false" || value == "no") {
+    out = false;
+    return true;
+  }
+  error = (Twine("circt-mut matrix: invalid lane boolean override for ") +
+           fieldName + " in lane " + laneID +
+           " (expected 1|0|true|false|yes|no|-).")
+              .str();
+  return false;
+}
+
+static int runNativeMatrixGlobalFilterPrequalify(
+    const char *argv0, const MatrixRewriteResult &rewrite,
+    SmallVectorImpl<std::string> &dispatchArgs) {
+  MatrixNativePrequalifyConfig cfg;
+  std::string error;
+  if (!parseMatrixNativePrequalifyConfig(rewrite.rewrittenArgs, cfg, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  std::string mainExec =
+      sys::fs::getMainExecutable(argv0, reinterpret_cast<void *>(&printHelp));
+  if (mainExec.empty()) {
+    errs() << "circt-mut matrix: unable to locate circt-mut executable for "
+              "native prequalification.\n";
+    return 1;
+  }
+
+  auto lanesBufferOrErr = MemoryBuffer::getFile(cfg.lanesTSVPath);
+  if (!lanesBufferOrErr) {
+    errs() << "circt-mut matrix: unable to read --lanes-tsv: "
+           << cfg.lanesTSVPath << "\n";
+    return 1;
+  }
+
+  std::error_code mkdirEC = sys::fs::create_directories(cfg.outDir);
+  if (mkdirEC) {
+    errs() << "circt-mut matrix: failed to create --out-dir: " << cfg.outDir
+           << ": " << mkdirEC.message() << "\n";
+    return 1;
+  }
+
+  auto trimmedColumn = [](const std::vector<std::string> &cols,
+                          size_t index) -> StringRef {
+    if (index >= cols.size())
+      return StringRef();
+    return StringRef(cols[index]).trim();
+  };
+  auto effectiveColumn = [&](const std::vector<std::string> &cols, size_t index,
+                             StringRef defaultValue) -> std::string {
+    StringRef v = trimmedColumn(cols, index);
+    if (!v.empty() && v != "-")
+      return v.str();
+    return defaultValue.str();
+  };
+
+  SmallVector<StringRef, 256> rawLines;
+  lanesBufferOrErr.get()->getBuffer().split(rawLines, '\n', /*MaxSplit=*/-1,
+                                            /*KeepEmpty=*/true);
+  std::vector<std::string> rewrittenLines;
+  rewrittenLines.reserve(rawLines.size());
+  uint64_t prequalifiedLaneCount = 0;
+
+  for (size_t lineNo = 0; lineNo < rawLines.size(); ++lineNo) {
+    StringRef rawLine = rawLines[lineNo];
+    StringRef line = rawLine;
+    if (line.ends_with("\r"))
+      line = line.drop_back();
+    if (line.empty() || line.starts_with("#")) {
+      rewrittenLines.push_back(line.str());
+      continue;
+    }
+
+    SmallVector<StringRef, 64> splitCols;
+    line.split(splitCols, '\t', /*MaxSplit=*/-1, /*KeepEmpty=*/true);
+    std::vector<std::string> cols;
+    cols.reserve(splitCols.size());
+    for (StringRef col : splitCols)
+      cols.push_back(col.str());
+    if (cols.size() < 4) {
+      errs() << "circt-mut matrix: malformed lane in --lanes-tsv at line "
+             << (lineNo + 1) << " (expected at least 4 columns).\n";
+      return 1;
+    }
+
+    std::string laneID = trimmedColumn(cols, ColLaneID).str();
+    if (laneID.empty()) {
+      errs() << "circt-mut matrix: missing lane_id in --lanes-tsv at line "
+             << (lineNo + 1) << ".\n";
+      return 1;
+    }
+
+    std::string laneDesign = trimmedColumn(cols, ColDesign).str();
+    std::string laneTestsManifest = trimmedColumn(cols, ColTestsManifest).str();
+    std::string laneGlobalCmd = effectiveColumn(cols, ColGlobalPropagateCmd,
+                                                cfg.defaultGlobalFilterCmd);
+    std::string laneGlobalLEC =
+        effectiveColumn(cols, ColGlobalPropagateCirctLEC,
+                        cfg.defaultGlobalFilterCirctLEC);
+    std::string laneGlobalBMC =
+        effectiveColumn(cols, ColGlobalPropagateCirctBMC,
+                        cfg.defaultGlobalFilterCirctBMC);
+    std::string laneGlobalChain =
+        effectiveColumn(cols, ColGlobalPropagateCirctChain,
+                        cfg.defaultGlobalFilterCirctChain);
+    bool hasGlobalFilterMode = !laneGlobalCmd.empty() || !laneGlobalLEC.empty() ||
+                               !laneGlobalBMC.empty() ||
+                               !laneGlobalChain.empty();
+    if (!hasGlobalFilterMode) {
+      rewrittenLines.push_back(line.str());
+      continue;
+    }
+
+    if (!laneGlobalCmd.empty()) {
+      errs() << "circt-mut matrix: --native-global-filter-prequalify supports "
+                "only built-in global filters; lane "
+             << laneID
+             << " uses global_propagate_cmd.\n";
+      return 1;
+    }
+
+    std::string existingReusePair =
+        effectiveColumn(cols, ColReusePairFile, cfg.defaultReusePairFile);
+    if (!existingReusePair.empty()) {
+      errs() << "circt-mut matrix: --native-global-filter-prequalify does not "
+                "support pre-existing reuse pair input for lane "
+             << laneID << ".\n";
+      return 1;
+    }
+
+    std::string laneWorkDir = joinPath2(cfg.outDir, laneID);
+    std::string lanePairFile =
+        joinPath2(laneWorkDir, "native_global_filter_prequalify.tsv");
+    std::string lanePrequalifyLog =
+        joinPath2(laneWorkDir, "native_global_filter_prequalify.log");
+    std::error_code laneDirEC = sys::fs::create_directories(laneWorkDir);
+    if (laneDirEC) {
+      errs() << "circt-mut matrix: failed to create lane work dir for native "
+                "prequalification: "
+             << laneWorkDir << ": " << laneDirEC.message() << "\n";
+      return 1;
+    }
+
+    SmallVector<std::string, 64> coverCmd;
+    coverCmd.push_back(mainExec);
+    coverCmd.push_back("cover");
+    coverCmd.push_back("--design");
+    coverCmd.push_back(laneDesign);
+    coverCmd.push_back("--tests-manifest");
+    coverCmd.push_back(laneTestsManifest);
+    coverCmd.push_back("--native-global-filter-prequalify-only");
+    coverCmd.push_back("--native-global-filter-prequalify-pair-file");
+    coverCmd.push_back(lanePairFile);
+    coverCmd.push_back("--work-dir");
+    coverCmd.push_back(laneWorkDir);
+
+    if (!cfg.createMutatedScript.empty()) {
+      coverCmd.push_back("--create-mutated-script");
+      coverCmd.push_back(cfg.createMutatedScript);
+    }
+    if (!cfg.jobsPerLane.empty()) {
+      coverCmd.push_back("--jobs");
+      coverCmd.push_back(cfg.jobsPerLane);
+    }
+    if (!cfg.reuseCacheDir.empty()) {
+      coverCmd.push_back("--reuse-cache-dir");
+      coverCmd.push_back(cfg.reuseCacheDir);
+      if (!cfg.reuseCacheMode.empty()) {
+        coverCmd.push_back("--reuse-cache-mode");
+        coverCmd.push_back(cfg.reuseCacheMode);
+      }
+    }
+
+    std::string laneMutationsFile = trimmedColumn(cols, ColMutationsFile).str();
+    std::string laneGenerateCount =
+        effectiveColumn(cols, ColGenerateCount, "");
+    bool generatedLane =
+        laneMutationsFile.empty() || laneMutationsFile == "-";
+    if (!generatedLane) {
+      coverCmd.push_back("--mutations-file");
+      coverCmd.push_back(laneMutationsFile);
+    } else {
+      if (laneGenerateCount.empty() || laneGenerateCount == "-") {
+        errs() << "circt-mut matrix: --native-global-filter-prequalify lane "
+                "requires mutation source for lane " << laneID << ".\n";
+        return 1;
+      }
+      coverCmd.push_back("--generate-mutations");
+      coverCmd.push_back(laneGenerateCount);
+
+      auto maybeAddArg = [&](StringRef flag, std::string value) {
+        if (value.empty())
+          return;
+        coverCmd.push_back(flag.str());
+        coverCmd.push_back(value);
+      };
+      maybeAddArg("--mutations-top",
+                  effectiveColumn(cols, ColMutationsTop, ""));
+      maybeAddArg("--mutations-seed",
+                  effectiveColumn(cols, ColMutationsSeed,
+                                  cfg.defaultMutationsSeed));
+      maybeAddArg("--mutations-yosys",
+                  effectiveColumn(cols, ColMutationsYosys,
+                                  cfg.defaultMutationsYosys));
+      maybeAddArg("--mutations-modes",
+                  effectiveColumn(cols, ColMutationsModes,
+                                  cfg.defaultMutationsModes));
+      maybeAddArg("--mutations-mode-counts",
+                  effectiveColumn(cols, ColMutationsModeCounts,
+                                  cfg.defaultMutationsModeCounts));
+      maybeAddArg("--mutations-mode-weights",
+                  effectiveColumn(cols, ColMutationsModeWeights,
+                                  cfg.defaultMutationsModeWeights));
+      maybeAddArg("--mutations-profiles",
+                  effectiveColumn(cols, ColMutationsProfiles,
+                                  cfg.defaultMutationsProfiles));
+      maybeAddArg("--mutations-cfg",
+                  effectiveColumn(cols, ColMutationsCfg, cfg.defaultMutationsCfg));
+      maybeAddArg("--mutations-select",
+                  effectiveColumn(cols, ColMutationsSelect,
+                                  cfg.defaultMutationsSelect));
+    }
+
+    auto maybeAddArg = [&](StringRef flag, std::string value) {
+      if (value.empty())
+        return;
+      coverCmd.push_back(flag.str());
+      coverCmd.push_back(value);
+    };
+    maybeAddArg("--formal-global-propagate-circt-chain", laneGlobalChain);
+    maybeAddArg("--formal-global-propagate-circt-lec", laneGlobalLEC);
+    maybeAddArg("--formal-global-propagate-circt-bmc", laneGlobalBMC);
+    maybeAddArg("--formal-global-propagate-circt-lec-args",
+                effectiveColumn(cols, ColGlobalPropagateCirctLECArgs,
+                                cfg.defaultGlobalFilterCirctLECArgs));
+    maybeAddArg("--formal-global-propagate-c1",
+                effectiveColumn(cols, ColGlobalPropagateC1,
+                                cfg.defaultGlobalFilterC1));
+    maybeAddArg("--formal-global-propagate-c2",
+                effectiveColumn(cols, ColGlobalPropagateC2,
+                                cfg.defaultGlobalFilterC2));
+    maybeAddArg("--formal-global-propagate-z3",
+                effectiveColumn(cols, ColGlobalPropagateZ3,
+                                cfg.defaultGlobalFilterZ3));
+    maybeAddArg("--formal-global-propagate-circt-bmc-args",
+                effectiveColumn(cols, ColGlobalPropagateBMCArgs,
+                                cfg.defaultGlobalFilterBMCArgs));
+    maybeAddArg("--formal-global-propagate-bmc-bound",
+                effectiveColumn(cols, ColGlobalPropagateBMCBound,
+                                cfg.defaultGlobalFilterBMCBound));
+    maybeAddArg("--formal-global-propagate-bmc-module",
+                effectiveColumn(cols, ColGlobalPropagateBMCModule,
+                                cfg.defaultGlobalFilterBMCModule));
+    maybeAddArg("--formal-global-propagate-bmc-z3",
+                effectiveColumn(cols, ColGlobalPropagateBMCZ3,
+                                cfg.defaultGlobalFilterBMCZ3));
+    maybeAddArg("--formal-global-propagate-bmc-ignore-asserts-until",
+                effectiveColumn(cols, ColGlobalPropagateBMCIgnoreAssertsUntil,
+                                cfg.defaultGlobalFilterBMCIgnoreAssertsUntil));
+    maybeAddArg("--formal-global-propagate-timeout-seconds",
+                effectiveColumn(cols, ColGlobalPropagateTimeoutSeconds,
+                                cfg.defaultGlobalFilterTimeoutSeconds));
+    maybeAddArg("--formal-global-propagate-lec-timeout-seconds",
+                effectiveColumn(cols, ColGlobalPropagateLECTimeoutSeconds,
+                                cfg.defaultGlobalFilterLECTimeoutSeconds));
+    maybeAddArg("--formal-global-propagate-bmc-timeout-seconds",
+                effectiveColumn(cols, ColGlobalPropagateBMCTimeoutSeconds,
+                                cfg.defaultGlobalFilterBMCTimeoutSeconds));
+
+    bool assumeKnown = false;
+    bool acceptXpropOnly = false;
+    bool bmcRunSMTLib = false;
+    bool bmcAssumeKnown = false;
+    if (!parseLaneBoolWithDefault(
+            trimmedColumn(cols, ColGlobalPropagateAssumeKnownInputs),
+            cfg.defaultGlobalFilterAssumeKnownInputs, assumeKnown, error,
+            "global_propagate_assume_known_inputs", laneID) ||
+        !parseLaneBoolWithDefault(
+            trimmedColumn(cols, ColGlobalPropagateAcceptXpropOnly),
+            cfg.defaultGlobalFilterAcceptXpropOnly, acceptXpropOnly, error,
+            "global_propagate_accept_xprop_only", laneID) ||
+        !parseLaneBoolWithDefault(
+            trimmedColumn(cols, ColGlobalPropagateBMCRunSMTLib),
+            cfg.defaultGlobalFilterBMCRunSMTLib, bmcRunSMTLib, error,
+            "global_propagate_bmc_run_smtlib", laneID) ||
+        !parseLaneBoolWithDefault(
+            trimmedColumn(cols, ColGlobalPropagateBMCAssumeKnownInputs),
+            cfg.defaultGlobalFilterBMCAssumeKnownInputs, bmcAssumeKnown, error,
+            "global_propagate_bmc_assume_known_inputs", laneID)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    if (assumeKnown)
+      coverCmd.push_back("--formal-global-propagate-assume-known-inputs");
+    if (acceptXpropOnly)
+      coverCmd.push_back("--formal-global-propagate-accept-xprop-only");
+    if (bmcRunSMTLib)
+      coverCmd.push_back("--formal-global-propagate-bmc-run-smtlib");
+    if (bmcAssumeKnown)
+      coverCmd.push_back("--formal-global-propagate-bmc-assume-known-inputs");
+
+    int prequalifyRC = -1;
+    std::string runError;
+    if (!runArgvToLog(coverCmd, lanePrequalifyLog, /*timeoutSeconds=*/0,
+                      prequalifyRC, runError)) {
+      errs() << "circt-mut matrix: failed native prequalification execution for "
+                "lane "
+             << laneID << ": " << runError << "\n";
+      return 1;
+    }
+    if (prequalifyRC != 0) {
+      errs() << "circt-mut matrix: native prequalification failed for lane "
+             << laneID << " (exit=" << prequalifyRC
+             << "), see log: " << lanePrequalifyLog << "\n";
+      return 1;
+    }
+
+    if (cols.size() <= ColReusePairFile)
+      cols.resize(ColReusePairFile + 1);
+    cols[ColReusePairFile] = lanePairFile;
+
+    std::string outLine;
+    raw_string_ostream lineOS(outLine);
+    for (size_t i = 0; i < cols.size(); ++i) {
+      if (i > 0)
+        lineOS << '\t';
+      lineOS << cols[i];
+    }
+    lineOS.flush();
+    rewrittenLines.push_back(std::move(outLine));
+    ++prequalifiedLaneCount;
+  }
+
+  std::string rewrittenLanesPath =
+      joinPath2(cfg.outDir, "native_global_filter_prequalify_lanes.tsv");
+  if (!ensureParentDirForFile(rewrittenLanesPath, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+  std::error_code lanesOutEC;
+  raw_fd_ostream lanesOut(rewrittenLanesPath, lanesOutEC, sys::fs::OF_Text);
+  if (lanesOutEC) {
+    errs() << "circt-mut matrix: failed to write native prequalified lanes "
+              "manifest: "
+           << rewrittenLanesPath << ": " << lanesOutEC.message() << "\n";
+    return 1;
+  }
+  for (size_t i = 0; i < rewrittenLines.size(); ++i) {
+    lanesOut << rewrittenLines[i];
+    if (i + 1 < rewrittenLines.size())
+      lanesOut << '\n';
+  }
+  lanesOut.close();
+
+  dispatchArgs.clear();
+  bool replacedLanesArg = false;
+  for (size_t i = 0; i < rewrite.rewrittenArgs.size(); ++i) {
+    StringRef arg = rewrite.rewrittenArgs[i];
+    if (arg == "--lanes-tsv") {
+      dispatchArgs.push_back("--lanes-tsv");
+      dispatchArgs.push_back(rewrittenLanesPath);
+      if (i + 1 < rewrite.rewrittenArgs.size())
+        ++i;
+      replacedLanesArg = true;
+      continue;
+    }
+    if (arg.starts_with("--lanes-tsv=")) {
+      dispatchArgs.push_back("--lanes-tsv");
+      dispatchArgs.push_back(rewrittenLanesPath);
+      replacedLanesArg = true;
+      continue;
+    }
+    dispatchArgs.push_back(arg.str());
+  }
+  if (!replacedLanesArg) {
+    dispatchArgs.push_back("--lanes-tsv");
+    dispatchArgs.push_back(rewrittenLanesPath);
+  }
+
+  outs() << "native_matrix_prequalify_lanes_tsv\t" << rewrittenLanesPath
+         << "\n";
+  outs() << "native_matrix_prequalify_lanes\t" << prequalifiedLaneCount << "\n";
+  return 0;
+}
+
 static int runMatrixFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
   MatrixRewriteResult rewrite = rewriteMatrixArgs(argv0, forwardedArgs);
   if (!rewrite.ok) {
     errs() << rewrite.error << "\n";
     return 1;
+  }
+
+  SmallVector<std::string, 32> dispatchArgsStorage;
+  ArrayRef<std::string> dispatchArgs = rewrite.rewrittenArgs;
+  if (rewrite.nativeGlobalFilterPrequalify) {
+    if (runNativeMatrixGlobalFilterPrequalify(argv0, rewrite,
+                                              dispatchArgsStorage) != 0)
+      return 1;
+    dispatchArgs = dispatchArgsStorage;
   }
 
   auto scriptPath = resolveScriptPath(argv0, "run_mutation_matrix.sh");
@@ -3381,7 +3964,7 @@ static int runMatrixFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
   }
 
   SmallVector<StringRef, 32> rewrittenArgsRef;
-  for (const std::string &arg : rewrite.rewrittenArgs)
+  for (const std::string &arg : dispatchArgs)
     rewrittenArgsRef.push_back(arg);
   return dispatchToScript(*scriptPath, rewrittenArgsRef);
 }
