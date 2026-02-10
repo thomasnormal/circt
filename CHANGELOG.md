@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 966 - February 10, 2026
+
+### `circt-mut report`: Native History Bootstrap Workflow
+
+1. Extended report CLI in `tools/circt-mut/circt-mut.cpp` with:
+   - `--history FILE`
+   - `--history-bootstrap`
+2. `--history` is now a shorthand that wires:
+   - compare against latest history snapshot
+   - trend analysis history source
+   - append-history destination
+   into a single caller-provided path.
+3. Added bootstrap mode behavior for missing history files:
+   - when `--history-bootstrap` is set and history file is absent,
+     compare/trend gate evaluation is marked `bootstrap_skipped` and report
+     still appends the current snapshot to initialize history.
+   - bootstrap state is surfaced via:
+     - `history.bootstrap`
+     - `history.bootstrap_active`
+     - `history.bootstrap.compare*` / `history.bootstrap.trend*`
+4. This closes first-run CI usability gaps for strict policy workflows that
+   require trend/compare history, while preserving strict behavior when
+   bootstrap is not requested.
+5. Added/updated regression tests:
+   - new: `test/Tools/circt-mut-report-history-bootstrap.test`
+   - new: `test/Tools/circt-mut-report-history-missing-error.test`
+   - updated: `test/Tools/circt-mut-report-help.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-history-bootstrap.test test/Tools/circt-mut-report-history-missing-error.test`: PASS (3/3)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (42/42)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (161/161)
+- Filtered external cadence:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-history-bootstrap-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --sv-tests-uvm-bmc-semantics-tag-regex '.*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - Snapshot:
+    - `sv-tests` BMC/LEC: PASS (`0 selected`, `1028 skipped`)
+    - `verilator-verification` BMC/LEC: PASS (`17/17`)
+    - `yosys/tests/sva` BMC: FAIL (`2` fail), LEC: PASS (`14/14`)
+    - `opentitan` LEC: PASS (`1/1`)
+    - AVIP compile: PASS except `axi4Lite_avip` and `uart_avip` (FAIL)
+
 ## Iteration 965 - February 10, 2026
 
 ### run_formal_all: LEC Diagnostic Taxonomy Drift Gate
