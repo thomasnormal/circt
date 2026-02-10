@@ -72,6 +72,12 @@ Options:
                          Fail when new LEC diagnostic counter keys
                          (`lec_diag_*_cases`) appear vs baseline for any
                          `LEC*` lane
+  --fail-on-new-lec-diag-path-fallback-cases
+                         Fail when `lec_diag_path_fallback_cases` increases
+                         vs baseline for any `LEC*` lane
+  --fail-on-any-lec-diag-path-fallback-cases
+                         Fail when any `LEC*` lane reports
+                         `lec_diag_path_fallback_cases > 0`
   --fail-on-new-bmc-backend-parity-mismatch-cases
                          Fail when BMC backend-parity mismatch case count
                          increases vs baseline
@@ -465,15 +471,19 @@ Options:
                          semantics BMC lane
   --verilator-bmc-test-filter REGEX
                          Base-name regex filter passed to verilator BMC runner
+                         (required when verilator-verification/BMC lane runs)
   --verilator-lec-test-filter REGEX
                          Base-name regex filter passed to verilator LEC runner
+                         (required when verilator-verification/LEC lane runs)
   --yosys-bmc-test-filter REGEX
                          Base-name regex filter passed to yosys SVA BMC runner
+                         (required when yosys/tests/sva/BMC lane runs)
   --yosys-lec-test-filter REGEX
                          Base-name regex filter passed to yosys SVA LEC runner
+                         (required when yosys/tests/sva/LEC lane runs)
   --require-explicit-sv-tests-filters
-                         Deprecated no-op (explicit sv-tests filters are now
-                         always required for selected sv-tests lanes)
+                         Deprecated no-op (explicit lane filters are now
+                         always required for selected non-OpenTitan BMC/LEC lanes)
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in
                          non-sv-tests BMC suite runs (sv-tests BMC lanes
                          already force SMT-LIB mode for semantic parity)
@@ -1773,6 +1783,8 @@ LEC_DROP_REMARK_PATTERN="${LEC_DROP_REMARK_PATTERN:-will be dropped during lower
 declare -a FAIL_ON_NEW_LEC_COUNTER_KEYS=()
 declare -a FAIL_ON_NEW_LEC_COUNTER_PREFIXES=()
 FAIL_ON_NEW_LEC_DIAG_KEYS=0
+FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES=0
+FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES=0
 FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
@@ -2102,6 +2114,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_COUNTER_PREFIXES+=("$2"); shift 2 ;;
     --fail-on-new-lec-diag-keys)
       FAIL_ON_NEW_LEC_DIAG_KEYS=1; shift ;;
+    --fail-on-new-lec-diag-path-fallback-cases)
+      FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES=1; shift ;;
+    --fail-on-any-lec-diag-path-fallback-cases)
+      FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES=1; shift ;;
     --fail-on-new-bmc-backend-parity-mismatch-cases)
       FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1; shift ;;
     --fail-on-new-bmc-ir-check-fingerprint-cases)
@@ -4082,6 +4098,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS=1
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=1
   FAIL_ON_NEW_LEC_DIAG_KEYS=1
+  FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES=1
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1
@@ -6999,6 +7016,30 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
     exit 1
   fi
 fi
+if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
+  if [[ -z "$VERILATOR_BMC_TEST_FILTER" ]]; then
+    echo "verilator-verification/BMC requires explicit filter: set --verilator-bmc-test-filter" >&2
+    exit 1
+  fi
+fi
+if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
+  if [[ -z "$VERILATOR_LEC_TEST_FILTER" ]]; then
+    echo "verilator-verification/LEC requires explicit filter: set --verilator-lec-test-filter" >&2
+    exit 1
+  fi
+fi
+if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
+  if [[ -z "$YOSYS_BMC_TEST_FILTER" ]]; then
+    echo "yosys/tests/sva/BMC requires explicit filter: set --yosys-bmc-test-filter" >&2
+    exit 1
+  fi
+fi
+if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
+  if [[ -z "$YOSYS_LEC_TEST_FILTER" ]]; then
+    echo "yosys/tests/sva/LEC requires explicit filter: set --yosys-lec-test-filter" >&2
+    exit 1
+  fi
+fi
 
 extract_kv() {
   local line="$1"
@@ -7089,16 +7130,31 @@ with path.open(encoding="utf-8") as f:
         case_path = parts[2].strip() if len(parts) > 2 else ""
         explicit_diag = parts[5].strip() if len(parts) > 5 else ""
         maybe_diag = explicit_diag
+        used_path_fallback = False
         if not maybe_diag and "#" in case_path:
             maybe_diag = case_path.rsplit("#", 1)[1].strip()
+            used_path_fallback = True
         if re.fullmatch(r"[A-Z0-9_]+", maybe_diag):
             diag = normalize(maybe_diag)
             counts[f"lec_diag_{diag}_cases"] += 1
             counts[f"lec_status_{status}_diag_{diag}_cases"] += 1
+            if explicit_diag:
+                counts["lec_diag_explicit_cases"] += 1
+            elif used_path_fallback:
+                counts["lec_diag_path_fallback_cases"] += 1
+        else:
+            counts["lec_diag_missing_cases"] += 1
 
 if rows <= 0:
     print("")
     raise SystemExit(0)
+
+for counter_key in (
+    "lec_diag_explicit_cases",
+    "lec_diag_path_fallback_cases",
+    "lec_diag_missing_cases",
+):
+    counts[counter_key] += 0
 
 parts = [f"{key}={counts[key]}" for key in sorted(counts)]
 print(" ".join(parts))
@@ -10941,6 +10997,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_DIAG_KEYS" == "1" || \
+      "$FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES" == "1" || \
+      "$FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES" == "1" || \
       "$FAIL_ON_ANY_LEC_DROP_REMARKS" == "1" || \
       -n "$LEC_COUNTER_KEYS_CSV" || \
       -n "$LEC_COUNTER_PREFIXES_CSV" || \
@@ -10974,6 +11032,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" \
   FAIL_ON_NEW_LEC_DIAG_KEYS="$FAIL_ON_NEW_LEC_DIAG_KEYS" \
+  FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES="$FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES" \
+  FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES="$FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES" \
   FAIL_ON_ANY_LEC_DROP_REMARKS="$FAIL_ON_ANY_LEC_DROP_REMARKS" \
   LEC_COUNTER_KEYS="$LEC_COUNTER_KEYS_CSV" \
   LEC_COUNTER_PREFIXES="$LEC_COUNTER_PREFIXES_CSV" \
@@ -11306,6 +11366,12 @@ fail_on_new_lec_drop_remark_case_reasons = (
 )
 fail_on_new_lec_diag_keys = (
     os.environ.get("FAIL_ON_NEW_LEC_DIAG_KEYS", "0") == "1"
+)
+fail_on_new_lec_diag_path_fallback_cases = (
+    os.environ.get("FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES", "0") == "1"
+)
+fail_on_any_lec_diag_path_fallback_cases = (
+    os.environ.get("FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES", "0") == "1"
 )
 fail_on_any_lec_drop_remarks = (
     os.environ.get("FAIL_ON_ANY_LEC_DROP_REMARKS", "0") == "1"
@@ -11831,9 +11897,19 @@ for key, current_row in summary.items():
                 len(current_lec_drop_remark_cases.get(key, set())),
             )
         )
+        current_diag_path_fallback = int(
+            current_counts.get("lec_diag_path_fallback_cases", 0)
+        )
         if fail_on_any_lec_drop_remarks and current_drop_remark > 0:
             gate_errors.append(
                 f"{suite} {mode}: lec_drop_remark_cases must be zero (current={current_drop_remark})"
+            )
+        if (
+            fail_on_any_lec_diag_path_fallback_cases
+            and current_diag_path_fallback > 0
+        ):
+            gate_errors.append(
+                f"{suite} {mode}: lec_diag_path_fallback_cases must be zero (current={current_diag_path_fallback})"
             )
         if fail_on_new_lec_drop_remark_cases:
             baseline_drop_remark_values = []
@@ -11847,6 +11923,21 @@ for key, current_row in summary.items():
                 if current_drop_remark > baseline_drop_remark:
                     gate_errors.append(
                         f"{suite} {mode}: lec_drop_remark_cases increased ({baseline_drop_remark} -> {current_drop_remark}, window={baseline_window})"
+                    )
+        if fail_on_new_lec_diag_path_fallback_cases:
+            baseline_diag_path_fallback_values = []
+            for counts in parsed_counts:
+                if "lec_diag_path_fallback_cases" in counts:
+                    baseline_diag_path_fallback_values.append(
+                        int(counts["lec_diag_path_fallback_cases"])
+                    )
+            if baseline_diag_path_fallback_values:
+                baseline_diag_path_fallback = min(
+                    baseline_diag_path_fallback_values
+                )
+                if current_diag_path_fallback > baseline_diag_path_fallback:
+                    gate_errors.append(
+                        f"{suite} {mode}: lec_diag_path_fallback_cases increased ({baseline_diag_path_fallback} -> {current_diag_path_fallback}, window={baseline_window})"
                     )
         if fail_on_new_lec_diag_keys:
             baseline_diag_keys = set()

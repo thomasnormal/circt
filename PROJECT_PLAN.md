@@ -183,6 +183,10 @@ See CHANGELOG.md on recent progress.
   - Strict-gate now supports dedicated LEC diag-taxonomy drift checks via
     `--fail-on-new-lec-diag-keys`; global `--strict-gate` enables it with a
     baseline-aware safeguard for legacy baseline rows.
+  - Strict-gate now also tracks diag provenance fallback drift via
+    `--fail-on-new-lec-diag-path-fallback-cases` (enabled by `--strict-gate`)
+    and optional absolute zero gate
+    `--fail-on-any-lec-diag-path-fallback-cases`.
   - Remaining diagnostics gap: keep phasing out `#DIAG` path-tag fallback in
     favor of fully explicit per-case diag fields for all producers/fixtures.
   - Keep optional absolute no-drop gates available for closure runs:
@@ -196,6 +200,8 @@ See CHANGELOG.md on recent progress.
 - DevEx/CI:
   - Promote lane-state inspector to required pre-resume CI gate.
   - Add per-lane historical trend dashboards and automatic anomaly detection.
+  - Enforce explicit caller-owned lane filters for non-OpenTitan BMC/LEC runs
+    in `run_formal_all.sh`; use `.*` when full-lane sweeps are intentional.
 
 ### BMC Semantic Closure Plan (Next Execution Track)
 1. Target semantics to close:
