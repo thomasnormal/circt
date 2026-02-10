@@ -1,0 +1,12 @@
+// RUN: rm -rf %t/verilator %t/bin
+// RUN: mkdir -p %t/verilator/tests/asserts %t/bin
+// RUN: printf 'module top;\nendmodule\n' > %t/verilator/tests/asserts/error_diag.sv
+// RUN: printf '#!/bin/sh\nexit 1\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\ncat \"${@: -1}\"\n' > %t/bin/circt-opt
+// RUN: printf '#!/bin/sh\necho \"LEC_RESULT=EQ\"\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-lec
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec TEST_FILTER='error_diag' OUT=%t/results.tsv %S/../../utils/run_verilator_verification_circt_lec.sh %t/verilator | FileCheck %s --check-prefix=SUMMARY
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+//
+// SUMMARY: verilator-verification LEC summary: total=1 pass=0 fail=0 error=1 skip=0
+// RESULTS: ERROR{{[[:space:]]+}}error_diag{{[[:space:]]+}}{{.*}}error_diag.sv{{[[:space:]]+}}verilator-verification{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_VERILOG_ERROR

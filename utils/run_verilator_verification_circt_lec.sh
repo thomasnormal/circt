@@ -178,6 +178,22 @@ extract_lec_diag() {
   fi
 }
 
+extract_lec_result_tag() {
+  local lec_text="$1"
+  if [[ "$lec_text" =~ LEC_RESULT=([A-Z0-9_]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if grep -Fq "c1 == c2" <<<"$lec_text"; then
+    printf 'EQ\n'
+    return 0
+  fi
+  if grep -Fq "c1 != c2" <<<"$lec_text"; then
+    printf 'NEQ\n'
+    return 0
+  fi
+}
+
 for suite in "${suites[@]}"; do
   if [[ ! -d "$suite" ]]; then
     echo "suite not found: $suite" >&2
@@ -223,7 +239,7 @@ for suite in "${suites[@]}"; do
 
     if ! "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
       record_drop_remark_case "$base" "$sv" "$verilog_log"
-      printf "ERROR\t%s\t%s\tverilator-verification\tLEC\t\n" "$base" "$sv" >> "$results_tmp"
+      printf "ERROR\t%s\t%s\tverilator-verification\tLEC\tCIRCT_VERILOG_ERROR\n" "$base" "$sv" >> "$results_tmp"
       error=$((error + 1))
       save_logs
       continue
@@ -240,7 +256,7 @@ for suite in "${suites[@]}"; do
     opt_cmd+=("$mlir")
 
     if ! "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
-      printf "ERROR\t%s\t%s\tverilator-verification\tLEC\t\n" "$base" "$sv" >> "$results_tmp"
+      printf "ERROR\t%s\t%s\tverilator-verification\tLEC\tCIRCT_OPT_ERROR\n" "$base" "$sv" >> "$results_tmp"
       error=$((error + 1))
       save_logs
       continue
@@ -280,13 +296,34 @@ for suite in "${suites[@]}"; do
         result="ERROR"
       fi
     else
-      if grep -q "c1 == c2" <<<"$lec_out"; then
+      if grep -q "LEC_RESULT=EQ" <<<"$lec_combined"; then
         result="PASS"
-      elif grep -q "c1 != c2" <<<"$lec_out"; then
+      elif grep -q "LEC_RESULT=NEQ" <<<"$lec_combined"; then
+        result="FAIL"
+      elif grep -q "c1 == c2" <<<"$lec_combined"; then
+        result="PASS"
+      elif grep -q "c1 != c2" <<<"$lec_combined"; then
         result="FAIL"
       else
         result="ERROR"
       fi
+    fi
+
+    if [[ -z "$lec_diag" ]]; then
+      lec_diag="$(extract_lec_result_tag "$lec_combined")"
+    fi
+    if [[ -z "$lec_diag" ]]; then
+      case "$result" in
+        PASS) lec_diag="EQ" ;;
+        FAIL) lec_diag="NEQ" ;;
+        *)
+          if [[ "$lec_status" -eq 124 || "$lec_status" -eq 137 ]]; then
+            lec_diag="TIMEOUT"
+          else
+            lec_diag="ERROR"
+          fi
+          ;;
+      esac
     fi
 
     case "$result" in

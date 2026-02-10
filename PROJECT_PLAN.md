@@ -199,8 +199,14 @@ See CHANGELOG.md on recent progress.
   - Strict-gate now also tracks missing explicit LEC diag rows via
     `--fail-on-new-lec-diag-missing-cases` (enabled by `--strict-gate`) and
     optional absolute zero gate `--fail-on-any-lec-diag-missing-cases`.
+  - Non-OpenTitan LEC producers (`sv-tests`, `verilator-verification`,
+    `yosys/tests/sva`) now emit explicit diag tokens for all emitted rows
+    (`EQ`/`NEQ`/`TIMEOUT`/`ERROR`, parse-only `LEC_NOT_RUN`, and compile-step
+    error tokens), eliminating avoidable missing-diag rows in these lanes.
   - Remaining diagnostics gap: keep phasing out `#DIAG` path-tag fallback in
-    favor of fully explicit per-case diag fields for all producers/fixtures.
+    favor of fully explicit per-case diag fields for all
+    producers/fixtures (remaining concentration: compatibility fixtures and
+    OpenTitan path-tag consumers).
   - Keep optional absolute no-drop gates available for closure runs:
     `--fail-on-any-bmc-drop-remarks`, `--fail-on-any-lec-drop-remarks`.
   - Syntax-tree completeness gaps to close next:

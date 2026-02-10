@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 973 - February 10, 2026
+
+### LEC Producer Hardening: Eliminate Avoidable Missing `diag` Rows
+
+1. Hardened non-OpenTitan LEC producer scripts to always emit explicit
+   diagnostics per row:
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. Added explicit fallback behavior when `LEC_DIAG=...` is absent:
+   - derive from `LEC_RESULT=...` when present
+   - fallback to textual equality markers (`c1 == c2` / `c1 != c2`)
+   - final status fallback (`EQ`/`NEQ`/`TIMEOUT`/`ERROR`)
+3. Added explicit diagnostics for non-LEC-execution/error paths:
+   - parse-only `sv-tests` LEC rows now emit `LEC_NOT_RUN`
+   - compile failures now emit `CIRCT_VERILOG_ERROR` or `CIRCT_OPT_ERROR`
+4. Removed implicit default filter behavior in
+   `utils/run_sv_tests_circt_lec.sh`; callers must set `TAG_REGEX` or
+   `TEST_FILTER` explicitly (matching formal caller-owned filter policy).
+5. Added regression coverage:
+   - `test/Tools/run-sv-tests-circt-lec-diag-fallback.test`
+   - `test/Tools/run-sv-tests-circt-lec-not-run-diag.test`
+   - `test/Tools/run-verilator-verification-circt-lec-diag-fallback.test`
+   - `test/Tools/run-verilator-verification-circt-lec-error-diag.test`
+   - `test/Tools/run-yosys-sva-circt-lec-diag-fallback.test`
+   - `test/Tools/run-yosys-sva-circt-lec-error-diag.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_sv_tests_circt_lec.sh utils/run_verilator_verification_circt_lec.sh utils/run_yosys_sva_circt_lec.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-sv-tests-lec-*.test test/Tools/run-sv-tests-circt-lec-*.test test/Tools/run-verilator-verification-circt-lec-*.test test/Tools/run-yosys-sva-circt-lec-*.test`: PASS (11/12, 1 unsupported by feature guard)
+- `build/bin/llvm-lit -sv --max-failures=5 test/Tools/run-formal-all-*.test`: PASS (73/73)
+- Filtered external LEC smoke:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-diag-explicit-20260210b --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/LEC$' --sv-tests-lec-test-filter '16\\.12--property-iff$' --verilator-lec-test-filter 'assert_fell' --yosys-lec-test-filter 'basic02' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+  - Result: PASS; each active lane reported `lec_diag_missing_cases=0` and `lec_diag_explicit_cases=1`.
+
 ## Iteration 972 - February 10, 2026
 
 ### `circt-mut report`: Lane-Aware Prequalify Drift Gate Hardening
