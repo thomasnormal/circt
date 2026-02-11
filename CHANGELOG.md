@@ -1,5 +1,100 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1104 - February 11, 2026
+
+### `circt-mut` External Formal Summary Schema-Version Contract Hardening
+
+1. Extended `summary.tsv` aggregation in `tools/circt-mut/circt-mut.cpp` with
+   schema-version telemetry:
+   - `external_formal.summary_tsv_schema_version_rows`
+   - `external_formal.summary_tsv_schema_version_invalid_rows`
+   - `external_formal.summary_tsv_schema_version_min`
+   - `external_formal.summary_tsv_schema_version_max`
+2. Backward-compatible parsing behavior:
+   - if `schema_version` column is absent, parsed rows are treated as
+     schema version `1`
+   - if `schema_version` is present, rows with non-numeric values are rejected
+     and counted as version-invalid parse errors.
+3. Strengthened strict summary profile gates in
+   `formal-regression-matrix-external-formal-summary-guard`:
+   - requires `external_formal.summary_tsv_schema_version_invalid_rows == 0`
+   - requires `external_formal.summary_tsv_schema_version_min >= 1`
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-summary-guard-schema-version-invalid-fail.test`
+   - updated strict-summary pass checks:
+     - `test/Tools/circt-mut-report-policy-matrix-external-formal-summary-guard-pass.test`
+     - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-summary-pass.test`
+     - `test/Tools/circt-mut-run-with-report-cli-policy-mode-strict-formal-summary.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused strict-summary slice:
+  - `llvm-lit -sv -j 1` on:
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-pass.test`
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-fail.test`
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-inconsistent-rows-fail.test`
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-schema-version-invalid-fail.test`
+    - `circt-mut-report-cli-policy-mode-strict-formal-summary-pass.test`
+    - `circt-mut-run-with-report-cli-policy-mode-strict-formal-summary.test`
+  - PASS (6/6)
+- Full mutation suite:
+  - `llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (325/325 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-summary-version-contract ...`
+  - summary snapshot emitted at:
+    - `/tmp/formal-all-summary-version-contract/summary.tsv`
+  - snapshot status:
+    - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile
+      `ahb/apb/axi4/i2s/i3c/jtag`
+    - FAIL: `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC,
+      `opentitan` LEC, AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+  - runner exited non-zero with trailing script parse error:
+    - `utils/run_formal_all.sh: line 9842: syntax error near unexpected token 'fi'`
+
+
+## Iteration 1106 - February 11, 2026
+
+### Formal Runner Hardening: Retry `Permission denied` Wrapper Launches
+
+1. Extended LEC runner retry predicates in all three runner scripts to reuse the
+   fallback-copy retry path for wrapper launch errors containing
+   `failed to run command ... Permission denied` (in addition to `Text file busy`):
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. This targets transient executable relink/permission races that previously
+   surfaced as `runner_command_permission_denied` and inflated infra error
+   counters.
+3. Added regression coverage for both verilog and opt stages in all three
+   runners:
+   - `test/Tools/run-sv-tests-lec-verilog-permission-denied-retry.test`
+   - `test/Tools/run-sv-tests-lec-opt-permission-denied-retry.test`
+   - `test/Tools/run-verilator-verification-circt-lec-verilog-permission-denied-retry.test`
+   - `test/Tools/run-verilator-verification-circt-lec-opt-permission-denied-retry.test`
+   - `test/Tools/run-yosys-sva-circt-lec-verilog-permission-denied-retry.test`
+   - `test/Tools/run-yosys-sva-circt-lec-opt-permission-denied-retry.test`
+
+### Tests and Validation
+
+- `bash -n`:
+  - `utils/run_sv_tests_circt_lec.sh`
+  - `utils/run_verilator_verification_circt_lec.sh`
+  - `utils/run_yosys_sva_circt_lec.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - six new permission-denied retry tests
+  - six existing text-file-busy retry tests (regression guard)
+  - PASS (12/12)
+- External filtered cadence smokes with explicit `build-test/bin` toolchain:
+  - `sv-tests/LEC` (`16.15--property-iff-uvm`):
+    - before this change: `error=1` with runner-command infra reason
+    - after this change: `pass=1 error=0` on the same filtered case
+  - `verilator-verification/LEC` (`assert_changed`):
+    - still `error=1`, but now classified as non-wrapper `ERROR` path
+      (`lec_diag_error_cases=1`), indicating infra runner launch noise reduction.
+
 ## Iteration 1105 - February 11, 2026
 
 ### Formal Governance: LEC `runner_command_*` Aggregate Case-Count Budget Gates

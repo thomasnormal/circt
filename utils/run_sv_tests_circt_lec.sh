@@ -528,7 +528,7 @@ top_module=${top_module}
       :
     else
       verilog_status=$?
-      if grep -Eiq "failed to run command .*text file busy" "$verilog_log"; then
+      if grep -Eiq "failed to run command .*(text file busy|permission denied)" "$verilog_log"; then
         sleep "$CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS"
         fallback_verilog="$tmpdir/${base}.circt-verilog.retry.bin"
         if cp -f "$CIRCT_VERILOG" "$fallback_verilog" 2>/dev/null; then
@@ -576,7 +576,7 @@ top_module=${top_module}
     :
   else
     opt_status=$?
-    if grep -Eiq "failed to run command .*text file busy" "$opt_log"; then
+    if grep -Eiq "failed to run command .*(text file busy|permission denied)" "$opt_log"; then
       sleep "$CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS"
       fallback_opt="$tmpdir/${base}.circt-opt.retry.bin"
       if cp -f "$CIRCT_OPT" "$fallback_opt" 2>/dev/null; then
