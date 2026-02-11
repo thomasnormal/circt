@@ -3789,6 +3789,22 @@ getLastOptionValue(ArrayRef<std::string> args, StringRef flag) {
   return value;
 }
 
+static std::vector<std::string> getOptionValues(ArrayRef<std::string> args,
+                                                StringRef flag) {
+  std::vector<std::string> values;
+  std::string prefix = (flag + "=").str();
+  for (size_t i = 0; i < args.size(); ++i) {
+    StringRef arg = args[i];
+    if (arg == flag) {
+      if (i + 1 < args.size() && !StringRef(args[i + 1]).starts_with("--"))
+        values.push_back(args[i + 1]);
+    }
+    if (arg.starts_with(prefix))
+      values.push_back(arg.substr(prefix.size()).str());
+  }
+  return values;
+}
+
 static bool hasOptionFlag(ArrayRef<std::string> args, StringRef flag) {
   for (StringRef arg : args)
     if (arg == flag)
@@ -4905,27 +4921,27 @@ static int runNativeMatrixDispatch(const char *argv0,
     }
   }
   bool bufferedMode = matrixJobs > 1 || cfg.laneSchedulePolicy == "cache-aware";
-  std::optional<Regex> includeLaneRegex;
-  std::optional<Regex> excludeLaneRegex;
-  if (auto v = getLastOptionValue(args, "--include-lane-regex")) {
-    Regex r(*v);
+  std::vector<Regex> includeLaneRegexes;
+  std::vector<Regex> excludeLaneRegexes;
+  for (const auto &v : getOptionValues(args, "--include-lane-regex")) {
+    Regex r(v);
     std::string regexError;
     if (!r.isValid(regexError)) {
-      errs() << "circt-mut matrix: invalid --include-lane-regex: " << *v
+      errs() << "circt-mut matrix: invalid --include-lane-regex: " << v
              << " (" << regexError << ")\n";
       return 1;
     }
-    includeLaneRegex = std::move(r);
+    includeLaneRegexes.push_back(std::move(r));
   }
-  if (auto v = getLastOptionValue(args, "--exclude-lane-regex")) {
-    Regex r(*v);
+  for (const auto &v : getOptionValues(args, "--exclude-lane-regex")) {
+    Regex r(v);
     std::string regexError;
     if (!r.isValid(regexError)) {
-      errs() << "circt-mut matrix: invalid --exclude-lane-regex: " << *v
+      errs() << "circt-mut matrix: invalid --exclude-lane-regex: " << v
              << " (" << regexError << ")\n";
       return 1;
     }
-    excludeLaneRegex = std::move(r);
+    excludeLaneRegexes.push_back(std::move(r));
   }
   StringMap<uint64_t> gateCounts;
   std::vector<std::string> bufferedRows;
@@ -5008,9 +5024,12 @@ static int runNativeMatrixDispatch(const char *argv0,
              << (lineNo + 1) << ".\n";
       return 1;
     }
-    if (includeLaneRegex && !includeLaneRegex->match(laneID))
+    if (!includeLaneRegexes.empty() &&
+        llvm::none_of(includeLaneRegexes,
+                      [&](const Regex &regex) { return regex.match(laneID); }))
       continue;
-    if (excludeLaneRegex && excludeLaneRegex->match(laneID))
+    if (llvm::any_of(excludeLaneRegexes,
+                     [&](const Regex &regex) { return regex.match(laneID); }))
       continue;
 
     ++laneTotal;
