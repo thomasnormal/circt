@@ -1,0 +1,12 @@
+// RUN: rm -rf %t/sv-tests
+// RUN: mkdir -p %t/sv-tests/tests %t/bin
+// RUN: printf ':tags: 16.9\n:type: simulation\n:top_module: top\nmodule top;\n  logic clk;\n  assert property (@(posedge clk) 1);\nendmodule\n' > %t/sv-tests/tests/frontend_timeout_case.sv
+// RUN: printf '#!/bin/sh\nsleep 5\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\necho \"BMC_RESULT=UNSAT\"\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-bmc
+// RUN: env CIRCT_TIMEOUT_SECS=1 CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc TEST_FILTER='frontend_timeout_case' OUT=%t/results.tsv %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s --check-prefix=SUMMARY
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+//
+// SUMMARY: sv-tests SVA summary: total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 unknown=0 timeout=1
+// RESULTS: TIMEOUT{{[[:space:]]+}}frontend_timeout_case{{[[:space:]]+}}{{.*}}frontend_timeout_case.sv

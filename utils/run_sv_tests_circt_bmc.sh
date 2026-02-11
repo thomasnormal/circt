@@ -505,11 +505,20 @@ top_module=${top_module}
   fi
 
   if [[ "$cache_hit" != "1" ]]; then
-    if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+    if run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+      verilog_status=0
+    else
+      verilog_status=$?
       record_drop_remark_case "$base" "$sv" "$verilog_log"
       if [[ "$force_xfail" == "1" ]]; then
         result="XFAIL"
         xfail=$((xfail + 1))
+      elif [[ "$verilog_status" -eq 124 || "$verilog_status" -eq 137 ]]; then
+        # Classify frontend timeouts explicitly so summary timeout/error counters
+        # reflect performance regressions instead of generic command failures.
+        result="TIMEOUT"
+        timeout=$((timeout + 1))
+        error=$((error + 1))
       # Treat expected compile failures as PASS for negative compilation/parsing
       # tests. Simulation-negative tests are expected to compile and are handled
       # via SAT/UNSAT classification below.
