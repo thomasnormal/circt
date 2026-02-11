@@ -5,6 +5,7 @@
 // RUN: circt-mut report --project-dir %t/proj --mode cover --compare baseline.tsv > %t/out.txt
 // RUN: FileCheck %s < %t/out.txt
 //
+// CHECK: policy.profile_source{{[[:space:]]}}config
 // CHECK: policy.profile_count{{[[:space:]]}}1
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-basic
 // CHECK: compare.gate_status{{[[:space:]]}}pass
