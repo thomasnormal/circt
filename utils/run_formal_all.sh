@@ -7514,6 +7514,18 @@ def classify_error_bucket(diag: str, reason_key: str) -> str:
         return "semantic_diag_missing"
     return "semantic_other"
 
+def classify_semantic_diag_subbucket(diag: str, reason_key: str) -> str:
+    # Keep the legacy aggregate semantic bucket and add reason-family detail
+    # counters for parser/import, lowering/pipeline, and solver/result stages.
+    haystack = f"{diag} {reason_key}"
+    if re.search(r"(parse|parser|import|syntax|elaborat|slang)", haystack):
+        return "semantic_diag_parser"
+    if re.search(r"(lower|pipeline|dialect|convert|conversion|legaliz|canonical)", haystack):
+        return "semantic_diag_lowering"
+    if re.search(r"(solver|smt|z3|sat|unsat|model|bitblast|cnf|neq|unknown)", haystack):
+        return "semantic_diag_solver"
+    return "semantic_diag_error"
+
 counts = defaultdict(int)
 rows = 0
 with path.open(encoding="utf-8") as f:
@@ -7567,7 +7579,13 @@ with path.open(encoding="utf-8") as f:
                     counts["lec_runner_command_cases"] += 1
                 counts[f"lec_error_bucket_{classify_error_bucket(diag, reason_key)}_cases"] += 1
             if status == "error" and diag not in {"circt_opt_error", "circt_verilog_error"}:
-                counts[f"lec_error_bucket_{classify_error_bucket(diag, '')}_cases"] += 1
+                reason_key = normalize(reason_token) if reason_token else ""
+                error_bucket = classify_error_bucket(diag, reason_key)
+                counts[f"lec_error_bucket_{error_bucket}_cases"] += 1
+                if error_bucket == "semantic_diag_error":
+                    semantic_subbucket = classify_semantic_diag_subbucket(diag, reason_key)
+                    if semantic_subbucket != "semantic_diag_error":
+                        counts[f"lec_error_bucket_{semantic_subbucket}_cases"] += 1
             if explicit_diag:
                 counts["lec_diag_explicit_cases"] += 1
             elif used_path_fallback:

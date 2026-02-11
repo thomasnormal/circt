@@ -264,6 +264,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-summary-v1-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-guard-yosys|\n";
+  os << "                           formal-regression-matrix-external-formal-semantic-diag-family-guard|\n";
   os << "                           formal-regression-matrix-provenance-guard|\n";
   os << "                           formal-regression-matrix-provenance-strict|\n";
   os << "                           formal-regression-matrix-native-lifecycle-strict|\n";
@@ -8908,6 +8909,20 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      0.0);
     return true;
   }
+  if (profile ==
+      "formal-regression-matrix-external-formal-semantic-diag-family-guard") {
+    for (StringRef key : {
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_parser_cases",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_lowering_cases",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_solver_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_parser_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_lowering_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_solver_cases",
+         }) {
+      appendUniqueRule(opts.failIfValueGtRules, key, 0.0);
+    }
+    return true;
+  }
   if (profile == "formal-regression-matrix-provenance-guard") {
     appendMatrixPrequalifyProvenanceColumnPresenceRules(opts);
     appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
@@ -9076,6 +9091,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-summary-v1-guard|"
            "formal-regression-matrix-external-formal-semantic-guard|"
            "formal-regression-matrix-external-formal-semantic-guard-yosys|"
+           "formal-regression-matrix-external-formal-semantic-diag-family-guard|"
            "formal-regression-matrix-provenance-guard|"
            "formal-regression-matrix-provenance-strict|"
            "formal-regression-matrix-native-lifecycle-strict|"
@@ -11899,7 +11915,8 @@ static int runNativeReport(const ReportOptions &opts) {
   rows.emplace_back("policy.mode_is_native_strict",
                     (appliedPolicyMode == "native-strict" ||
                      appliedPolicyMode == "native-strict-formal" ||
-                     appliedPolicyMode == "native-strict-formal-summary")
+                     appliedPolicyMode == "native-strict-formal-summary" ||
+                     appliedPolicyMode == "native-strict-formal-summary-v1")
                         ? "1"
                         : "0");
   rows.emplace_back("policy.mode_source", appliedPolicyModeSource);
@@ -12249,22 +12266,37 @@ static int runNativeReport(const ReportOptions &opts) {
     StringMap<std::string> currentValues;
     for (const auto &row : rows)
       currentValues[row.first] = row.second;
+    auto defaultZeroExternalFormalCounter = [&](StringRef key)
+        -> std::optional<double> {
+      if (key.starts_with("external_formal.summary_counter.") ||
+          key.starts_with("external_formal.summary_counter_by_suite_mode."))
+        return 0.0;
+      return std::nullopt;
+    };
     auto evaluateValueRule = [&](const DeltaGateRule &rule,
                                  bool isUpperBound) -> bool {
       auto it = currentValues.find(rule.key);
+      double value = 0.0;
       if (it == currentValues.end()) {
+        if (auto fallback = defaultZeroExternalFormalCounter(rule.key)) {
+          value = *fallback;
+          rows.emplace_back(rule.key, formatDouble2(value));
+          currentValues[rule.key] = formatDouble2(value);
+        } else {
         errs() << "circt-mut report: current numeric key missing for value gate "
                   "rule key '"
                << rule.key << "'\n";
         return false;
+        }
+      } else {
+        auto parsed = parseOptionalDouble(it->second);
+        if (!parsed) {
+          errs() << "circt-mut report: current value for gate rule key '"
+                 << rule.key << "' is not numeric: '" << it->second << "'\n";
+          return false;
+        }
+        value = *parsed;
       }
-      auto parsed = parseOptionalDouble(it->second);
-      if (!parsed) {
-        errs() << "circt-mut report: current value for gate rule key '" << rule.key
-               << "' is not numeric: '" << it->second << "'\n";
-        return false;
-      }
-      double value = *parsed;
       if ((isUpperBound && value > rule.threshold) ||
           (!isUpperBound && value < rule.threshold)) {
         failures.push_back((Twine(rule.key) + " value=" + formatDouble2(value) +
