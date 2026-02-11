@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1003 - February 11, 2026
+
+### `circt-mut init`: Matrix Native Toggle Defaults for Campaign Bootstrap
+
+1. Extended `circt-mut init` in `tools/circt-mut/circt-mut.cpp` with
+   matrix-native template controls:
+   - `--matrix-native-dispatch BOOL` (default: `false`)
+   - `--matrix-native-global-filter-prequalify BOOL` (default: `false`)
+2. Generated `circt-mut.toml` now includes explicit `[matrix]` defaults:
+   - `native_matrix_dispatch = true|false`
+   - `native_global_filter_prequalify = true|false`
+   This provides stable, reviewable bootstrap defaults for CI/wrapper
+   integration instead of requiring out-of-band CLI patching.
+3. Added strict CLI validation for both new init options
+   (`1|0|true|false|yes|no|on|off`).
+4. Added/updated regression coverage:
+   - `test/Tools/circt-mut-init-basic.test`
+   - `test/Tools/circt-mut-init-help.test`
+   - `test/Tools/circt-mut-init-matrix-native-override.test`
+   - `test/Tools/circt-mut-init-matrix-native-invalid.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-init-*.test test/Tools/circt-mut-run-matrix-config-native-*.test test/Tools/circt-mut-matrix-native-dispatch-*.test`: PASS (18/18)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (214/214)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-init-matrix-native-defaults-20260211 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter 'aes'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1002 - February 11, 2026
 
 ### `circt-mut run`: Matrix Config On-Ramp for Native Dispatch/Prequalify

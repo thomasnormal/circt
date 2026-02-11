@@ -1,0 +1,5 @@
+// RUN: not circt-mut init --matrix-native-dispatch maybe 2>&1 | FileCheck %s --check-prefix=DISPATCH
+// RUN: not circt-mut init --matrix-native-global-filter-prequalify maybe 2>&1 | FileCheck %s --check-prefix=PREQUAL
+//
+// DISPATCH: circt-mut init: invalid --matrix-native-dispatch value: maybe (expected 1|0|true|false|yes|no|on|off)
+// PREQUAL: circt-mut init: invalid --matrix-native-global-filter-prequalify value: maybe (expected 1|0|true|false|yes|no|on|off)

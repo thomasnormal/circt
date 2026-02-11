@@ -19,6 +19,8 @@
 // CFG: formal_global_propagate_circt_chain = "auto"
 // CFG: [matrix]
 // CFG: lanes_tsv = "lanes.tsv"
+// CFG: native_matrix_dispatch = false
+// CFG: native_global_filter_prequalify = false
 // CFG: default_formal_global_propagate_circt_chain = "auto"
 // CFG: [report]
 // CFG: policy_mode = "smoke"

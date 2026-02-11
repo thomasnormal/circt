@@ -6,6 +6,8 @@
 // CHECK: --mutations-file FILE
 // CHECK: --tests-manifest FILE
 // CHECK: --lanes-tsv FILE
+// CHECK: --matrix-native-dispatch BOOL
+// CHECK: --matrix-native-global-filter-prequalify BOOL
 // CHECK: --report-policy-mode MODE
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --force
