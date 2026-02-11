@@ -7496,6 +7496,22 @@ def classify_error_bucket(diag: str, reason_key: str) -> str:
         if reason_key == "no_diag":
             return "tool_no_diag"
         return "tool_pipeline"
+    if reason_key.startswith("runner_command_"):
+        return "infra_runner_command"
+    if reason_key == "command_timeout":
+        return "infra_timeout"
+    if reason_key == "command_oom":
+        return "infra_oom"
+    if reason_key == "no_diag":
+        return "tool_no_diag"
+    if diag in {"uvm_path_missing"}:
+        return "infra_config"
+    if diag in {"error", "circt_lec_error", "smoke_only_error"}:
+        return "semantic_diag_error"
+    if diag in {"neq", "unknown"}:
+        return "semantic_result_tag"
+    if not diag:
+        return "semantic_diag_missing"
     return "semantic_other"
 
 counts = defaultdict(int)
@@ -11785,6 +11801,22 @@ def classify_lec_error_bucket(diag: str, reason: str) -> str:
         if reason == "no_diag":
             return "tool_no_diag"
         return "tool_pipeline"
+    if reason.startswith("runner_command_"):
+        return "infra_runner_command"
+    if reason == "command_timeout":
+        return "infra_timeout"
+    if reason == "command_oom":
+        return "infra_oom"
+    if reason == "no_diag":
+        return "tool_no_diag"
+    if diag in {"UVM_PATH_MISSING"}:
+        return "infra_config"
+    if diag in {"ERROR", "CIRCT_LEC_ERROR", "SMOKE_ONLY_ERROR"}:
+        return "semantic_diag_error"
+    if diag in {"NEQ", "UNKNOWN"}:
+        return "semantic_result_tag"
+    if not diag:
+        return "semantic_diag_missing"
     return "semantic_other"
 
 def collect_lec_error_bucket_case_ids(out_dir: Path):
@@ -12726,6 +12758,22 @@ def classify_lec_error_bucket(diag: str, reason: str) -> str:
         if reason == "no_diag":
             return "tool_no_diag"
         return "tool_pipeline"
+    if reason.startswith("runner_command_"):
+        return "infra_runner_command"
+    if reason == "command_timeout":
+        return "infra_timeout"
+    if reason == "command_oom":
+        return "infra_oom"
+    if reason == "no_diag":
+        return "tool_no_diag"
+    if diag in {"UVM_PATH_MISSING"}:
+        return "infra_config"
+    if diag in {"ERROR", "CIRCT_LEC_ERROR", "SMOKE_ONLY_ERROR"}:
+        return "semantic_diag_error"
+    if diag in {"NEQ", "UNKNOWN"}:
+        return "semantic_result_tag"
+    if not diag:
+        return "semantic_diag_missing"
     return "semantic_other"
 
 def collect_lec_error_bucket_case_ids(out_dir: Path):
