@@ -265,6 +265,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-semantic-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-guard-yosys|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-guard|\n";
+  os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|\n";
   os << "                           formal-regression-matrix-provenance-guard|\n";
   os << "                           formal-regression-matrix-provenance-strict|\n";
   os << "                           formal-regression-matrix-native-lifecycle-strict|\n";
@@ -8923,6 +8924,20 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     }
     return true;
   }
+  if (profile ==
+      "formal-regression-matrix-external-formal-semantic-diag-family-trend-guard") {
+    for (StringRef key : {
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_parser_cases",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_lowering_cases",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_solver_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_parser_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_lowering_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_solver_cases",
+         }) {
+      appendUniqueRule(opts.failIfTrendDeltaGtRules, key, 0.0);
+    }
+    return applyComposite("formal-regression-matrix-trend-history-quality");
+  }
   if (profile == "formal-regression-matrix-provenance-guard") {
     appendMatrixPrequalifyProvenanceColumnPresenceRules(opts);
     appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
@@ -9092,6 +9107,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-semantic-guard|"
            "formal-regression-matrix-external-formal-semantic-guard-yosys|"
            "formal-regression-matrix-external-formal-semantic-diag-family-guard|"
+           "formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|"
            "formal-regression-matrix-provenance-guard|"
            "formal-regression-matrix-provenance-strict|"
            "formal-regression-matrix-native-lifecycle-strict|"
@@ -12333,16 +12349,29 @@ static int runNativeReport(const ReportOptions &opts) {
       rows.emplace_back("trend.gate_reason", "missing_history_bootstrap");
     } else {
     SmallVector<std::string, 8> failures;
+    auto defaultZeroExternalFormalTrendDelta = [&](StringRef key)
+        -> std::optional<double> {
+      if (key.starts_with("external_formal.summary_counter.") ||
+          key.starts_with("external_formal.summary_counter_by_suite_mode."))
+        return 0.0;
+      return std::nullopt;
+    };
     auto evaluateTrendRule = [&](const DeltaGateRule &rule,
                                  bool isUpperBound) -> bool {
       auto it = trendDeltas.find(rule.key);
+      double delta = 0.0;
       if (it == trendDeltas.end()) {
+        if (auto fallback = defaultZeroExternalFormalTrendDelta(rule.key)) {
+          delta = *fallback;
+        } else {
         errs() << "circt-mut report: trend delta missing for gate rule key '"
                << rule.key
                << "' (run with --trend-history and numeric history values)\n";
         return false;
+        }
+      } else {
+        delta = it->second;
       }
-      double delta = it->second;
       if ((isUpperBound && delta > rule.threshold) ||
           (!isUpperBound && delta < rule.threshold)) {
         failures.push_back((Twine(rule.key) + " trend_delta=" +

@@ -9,6 +9,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+)
+
+1. Added trend-aware mutation governance for semantic-diag subfamilies:
+   - new `circt-mut` profile:
+     - `formal-regression-matrix-external-formal-semantic-diag-family-trend-guard`
+   - gates no-regression trend deltas for parser/lowering/solver counters in:
+     - `verilator_verification/LEC`
+     - `yosys_tests_sva/LEC`
+2. Stability hardening:
+   - missing `external_formal.summary_counter*` trend keys now evaluate as
+     `0.0` deltas in trend-gate checks, preventing false policy failures when
+     scoped lanes are intentionally filtered-empty.
+3. Remaining limitations:
+   - trend policy currently enforces zero-growth only; no configurable
+     per-subfamily budget/tolerance envelope yet.
+   - trend keys still rely on summary counter naming contracts rather than a
+     versioned semantic schema for external formal artifacts.
+4. Next long-term features:
+   - add budgeted trend profiles (e.g. parser/lowering/solver-specific limits)
+     for staged regression admission.
+   - add profile variants that couple trend gates with strict case-ID and
+     case+reason drift gates for per-subfamily closure.
+   - emit explicit schema/version rows for external-formal summary counters and
+     make mutation gating depend on schema compatibility.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 22:05)
 
 1. Extended LEC semantic-diag subfamily drift governance from case IDs to

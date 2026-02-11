@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1122 - February 11, 2026
+
+### Mutation Governance: Semantic-Diag Family Trend Guard Profile
+
+1. Added a new `circt-mut report` policy profile:
+   - `formal-regression-matrix-external-formal-semantic-diag-family-trend-guard`
+2. The profile adds zero-growth trend gates (`delta <= 0`) for
+   parser/lowering/solver semantic-diag counters in:
+   - `verilator_verification/LEC`
+   - `yosys_tests_sva/LEC`
+3. The profile composes with:
+   - `formal-regression-matrix-trend-history-quality`
+   so missing/invalid trend history still fails fast.
+4. Hardened trend-gate evaluation to default missing
+   `external_formal.summary_counter*` keys to `0.0` deltas, avoiding brittle
+   failures when a scoped lane is filtered-empty.
+5. Added focused regression tests:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-trend-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-trend-guard-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/circt-mut-report-help.test`
+  - `build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-trend-guard-pass.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-trend-guard-fail.test`
+  - `build-test/test/Tools/circt-mut-report-cli-policy-mode-native-nightly-pass.test`
+  - `build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-nightly.test`
+  - PASS (6/6)
+
 ## Iteration 1121 - February 11, 2026
 
 ### Formal Governance: LEC Semantic-Diag Subfamily Case+Reason Drift Gate
