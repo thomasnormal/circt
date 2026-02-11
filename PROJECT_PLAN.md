@@ -132,6 +132,12 @@ See CHANGELOG.md on recent progress.
   (`formal-regression-matrix-composite-trend-{nightly,strict}`) that compose
   lane-trend, runtime-trend, and lane-drift checks for long-run matrix
   regression tracking.
+- Latest mutation-governance milestone (current): policy-mode enums are now
+  extended to `smoke|nightly|strict|trend-nightly|trend-strict` across
+  `circt-mut init`, `circt-mut run`, and `circt-mut report`, including
+  stop-on-fail composite trend bundles
+  (`formal-regression-matrix-composite-stop-on-fail-trend-{nightly,strict}`)
+  so config/CLI governance remains orthogonal when trend windows are enabled.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
@@ -142,8 +148,8 @@ See CHANGELOG.md on recent progress.
     (`formal-regression-matrix-nightly|strict`) with dedicated lane-drift
     bundles (`formal-regression-matrix-lane-drift-nightly|strict`) and
     runtime bundles (`formal-regression-matrix-runtime-smoke|nightly|strict|trend`).
-    Policy-mode smoke/nightly mapping now auto-couples guard + runtime
-    profiles, but native matrix lane scheduling is only partially migrated:
+    Policy-mode now supports smoke/nightly/strict/trend-* with composite
+    profile mapping, but native matrix lane scheduling is only partially migrated:
     `--native-matrix-dispatch` now exists as an opt-in scaffold, but lane-job
     parallelism and lane-level gate override parity are still script-backed.
   - Wire the composite matrix policy bundles into CI defaults for

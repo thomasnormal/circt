@@ -15,6 +15,8 @@
 // CHECK: --trend-window
 // CHECK: --policy-profile
 // CHECK: --policy-mode
+// CHECK: trend-nightly
+// CHECK: trend-strict
 // CHECK: --policy-stop-on-fail
 // CHECK: formal-regression-matrix-guard
 // CHECK: formal-regression-matrix-trend-guard
@@ -45,6 +47,8 @@
 // CHECK: formal-regression-matrix-composite-stop-on-fail-smoke
 // CHECK: formal-regression-matrix-composite-stop-on-fail-nightly
 // CHECK: formal-regression-matrix-composite-stop-on-fail-strict
+// CHECK: formal-regression-matrix-composite-stop-on-fail-trend-nightly
+// CHECK: formal-regression-matrix-composite-stop-on-fail-trend-strict
 // CHECK: --append-history
 // CHECK: --fail-if-value-gt
 // CHECK: --fail-if-value-lt

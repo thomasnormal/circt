@@ -118,7 +118,8 @@ static void printInitHelp(raw_ostream &os) {
   os << "                           generated config (default: false)\n";
   os << "  --report-policy-mode MODE\n";
   os << "                           Report policy mode for generated config\n";
-  os << "                           (smoke|nightly|strict, default: smoke)\n";
+  os << "                           (smoke|nightly|strict|trend-nightly|trend-strict,\n";
+  os << "                            default: smoke)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           Enable stop-on-fail report guard profile in\n";
   os << "                           generated config (default: true)\n";
@@ -170,7 +171,8 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --report-policy-profile NAME\n";
   os << "                           Repeatable post-run report policy profile\n";
   os << "  --report-policy-mode MODE\n";
-  os << "                           smoke|nightly|strict (maps to report policy profile)\n";
+  os << "                           smoke|nightly|strict|trend-nightly|trend-strict\n";
+  os << "                           (maps to report policy profile)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
   os << "  --report-fail-on-prequalify-drift\n";
@@ -197,7 +199,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --trend-history FILE     Compute trend summary from history TSV\n";
   os << "  --trend-window N         Use latest N history runs for trends (0=all)\n";
   os << "  --policy-profile NAME    Apply built-in report policy profile\n";
-  os << "  --policy-mode MODE       smoke|nightly|strict (maps to report policy profile)\n";
+  os << "  --policy-mode MODE       smoke|nightly|strict|trend-nightly|trend-strict\n";
+  os << "                           (maps to report policy profile)\n";
   os << "  --policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
   os << "                           formal-regression-basic|formal-regression-trend|\n";
@@ -231,7 +234,9 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-composite-trend-strict|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-smoke|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-nightly|\n";
-  os << "                           formal-regression-matrix-composite-stop-on-fail-strict\n";
+  os << "                           formal-regression-matrix-composite-stop-on-fail-strict|\n";
+  os << "                           formal-regression-matrix-composite-stop-on-fail-trend-nightly|\n";
+  os << "                           formal-regression-matrix-composite-stop-on-fail-trend-strict\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
   os << "  --fail-if-value-gt RULE  Fail if current numeric value exceeds threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
@@ -5584,6 +5589,8 @@ static std::string resolveProjectFilePath(StringRef projectDir, StringRef file) 
   return std::string(fullPath.str());
 }
 
+static bool isMatrixPolicyMode(StringRef mode);
+
 static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
   InitParseResult result;
 
@@ -5717,10 +5724,10 @@ static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
       if (!v)
         return result;
       std::string mode = v->trim().lower();
-      if (mode != "smoke" && mode != "nightly" && mode != "strict") {
+      if (!isMatrixPolicyMode(mode)) {
         result.error =
             (Twine("circt-mut init: invalid --report-policy-mode value: ") +
-             *v + " (expected smoke|nightly|strict)")
+             *v + " (expected smoke|nightly|strict|trend-nightly|trend-strict)")
                 .str();
         return result;
       }
@@ -6320,10 +6327,10 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       if (!v)
         return result;
       std::string mode = StringRef(*v).trim().lower();
-      if (mode != "smoke" && mode != "nightly" && mode != "strict") {
+      if (!isMatrixPolicyMode(mode)) {
         result.error = (Twine("circt-mut run: invalid --report-policy-mode "
                               "value: ") +
-                        *v + " (expected smoke|nightly|strict)")
+                        *v + " (expected smoke|nightly|strict|trend-nightly|trend-strict)")
                            .str();
         return result;
       }
@@ -7377,6 +7384,11 @@ static bool appendUniqueRule(SmallVectorImpl<DeltaGateRule> &rules, StringRef ke
   return true;
 }
 
+static bool isMatrixPolicyMode(StringRef mode) {
+  return mode == "smoke" || mode == "nightly" || mode == "strict" ||
+         mode == "trend-nightly" || mode == "trend-strict";
+}
+
 static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                                            SmallVectorImpl<std::string> &out,
                                            std::string &error,
@@ -7394,9 +7406,17 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-strict"
                         : "formal-regression-matrix-composite-strict";
+  } else if (mode == "trend-nightly") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-trend-nightly"
+                        : "formal-regression-matrix-composite-trend-nightly";
+  } else if (mode == "trend-strict") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-trend-strict"
+                        : "formal-regression-matrix-composite-trend-strict";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
-             "' (expected smoke|nightly|strict)")
+             "' (expected smoke|nightly|strict|trend-nightly|trend-strict)")
                 .str();
     return false;
   }
@@ -7852,6 +7872,20 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return applyComposite("formal-regression-matrix-stop-on-fail-strict") &&
            applyComposite("formal-regression-matrix-runtime-strict");
   }
+  if (profile ==
+      "formal-regression-matrix-composite-stop-on-fail-trend-nightly") {
+    return applyComposite("formal-regression-matrix-stop-on-fail-trend") &&
+           applyComposite("formal-regression-matrix-lane-trend-nightly") &&
+           applyComposite("formal-regression-matrix-runtime-trend") &&
+           applyComposite("formal-regression-matrix-lane-drift-nightly");
+  }
+  if (profile ==
+      "formal-regression-matrix-composite-stop-on-fail-trend-strict") {
+    return applyComposite("formal-regression-matrix-stop-on-fail-trend") &&
+           applyComposite("formal-regression-matrix-lane-trend-strict") &&
+           applyComposite("formal-regression-matrix-runtime-trend") &&
+           applyComposite("formal-regression-matrix-lane-drift-strict");
+  }
   error = (Twine("circt-mut report: unknown --policy-profile value: ") + profile +
            " (expected formal-regression-basic|formal-regression-trend|"
            "formal-regression-matrix-basic|formal-regression-matrix-trend|"
@@ -7883,7 +7917,9 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-composite-trend-strict|"
            "formal-regression-matrix-composite-stop-on-fail-smoke|"
            "formal-regression-matrix-composite-stop-on-fail-nightly|"
-           "formal-regression-matrix-composite-stop-on-fail-strict)")
+           "formal-regression-matrix-composite-stop-on-fail-strict|"
+           "formal-regression-matrix-composite-stop-on-fail-trend-nightly|"
+           "formal-regression-matrix-composite-stop-on-fail-trend-strict)")
               .str();
   return false;
 }
@@ -9875,10 +9911,10 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       if (!v)
         return result;
       std::string mode = StringRef(*v).trim().lower();
-      if (mode != "smoke" && mode != "nightly" && mode != "strict") {
+      if (!isMatrixPolicyMode(mode)) {
         result.error =
             (Twine("circt-mut report: invalid --policy-mode value: ") + *v +
-             " (expected smoke|nightly|strict)")
+             " (expected smoke|nightly|strict|trend-nightly|trend-strict)")
                 .str();
         return result;
       }
@@ -10254,11 +10290,11 @@ static int runNativeReport(const ReportOptions &opts) {
                            "requires --mode matrix or --mode all\n");
           return 1;
         }
-        if (!hasCLIPolicyMode && mode != "smoke" && mode != "nightly" &&
-            mode != "strict") {
+        if (!hasCLIPolicyMode && !isMatrixPolicyMode(mode)) {
           errs() << "circt-mut report: invalid [report] key 'policy_mode' "
                     "value '"
-                 << mode << "' (expected smoke|nightly|strict)\n";
+                 << mode
+                 << "' (expected smoke|nightly|strict|trend-nightly|trend-strict)\n";
           return 1;
         }
         std::string modeError;

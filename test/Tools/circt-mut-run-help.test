@@ -25,6 +25,8 @@
 // CHECK: --report-no-history-bootstrap
 // CHECK: --report-policy-profile NAME
 // CHECK: --report-policy-mode MODE
+// CHECK: trend-nightly
+// CHECK: trend-strict
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --report-fail-on-prequalify-drift
 // CHECK: --report-no-fail-on-prequalify-drift

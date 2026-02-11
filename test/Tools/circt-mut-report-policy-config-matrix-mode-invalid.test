@@ -4,4 +4,4 @@
 // RUN: printf '[report]\npolicy_mode = "weird"\n' > %t/proj/circt-mut.toml
 // RUN: not circt-mut report --project-dir %t/proj --mode matrix 2>&1 | FileCheck %s
 //
-// CHECK: circt-mut report: invalid [report] key 'policy_mode' value 'weird' (expected smoke|nightly|strict)
+// CHECK: circt-mut report: invalid [report] key 'policy_mode' value 'weird' (expected smoke|nightly|strict|trend-nightly|trend-strict)
