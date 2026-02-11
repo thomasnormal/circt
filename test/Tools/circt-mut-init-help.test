@@ -6,4 +6,6 @@
 // CHECK: --mutations-file FILE
 // CHECK: --tests-manifest FILE
 // CHECK: --lanes-tsv FILE
+// CHECK: --report-policy-mode MODE
+// CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --force

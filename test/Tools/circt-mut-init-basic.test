@@ -21,6 +21,8 @@
 // CFG: lanes_tsv = "lanes.tsv"
 // CFG: default_formal_global_propagate_circt_chain = "auto"
 // CFG: [report]
+// CFG: policy_mode = "smoke"
+// CFG: policy_stop_on_fail = true
 // CFG: append_history = "out/report-history.tsv"
 // CFG: history_max_runs = 200
 // CFG: history_bootstrap = true
