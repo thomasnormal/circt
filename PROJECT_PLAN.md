@@ -9,6 +9,26 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 18:52)
+
+1. Added LEC timeout strict-gate control in `run_formal_all.sh`:
+   - `--fail-on-new-lec-timeout-cases`
+2. Strict-gate parity improvement:
+   - this mirrors existing BMC timeout drift checks and now fails when
+     `lec_timeout_cases` grows vs baseline window.
+   - compatibility preserved for legacy summary counters via fallback to
+     `lec_status_timeout_cases` when needed.
+3. LEC case-summary normalization:
+   - `summarize_lec_case_file()` now emits explicit `lec_timeout_cases`
+     aggregate in addition to status-scoped counters.
+4. New regression locks:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout.test`
+   - help surface updated in `test/Tools/run-formal-all-help.test`
+5. External sanity (live suite):
+   - `/home/thomas-ahle/yosys/tests/sva` filtered BMC+LEC
+     (`basic00|basic01`) passed with explicit timeout controls
+     (`--bmc-timeout-secs 120 --lec-timeout-secs 120`).
+
 ### Formal Closure Snapshot Update (February 11, 2026, 17:05)
 
 1. Verilator sampled-value closure:
