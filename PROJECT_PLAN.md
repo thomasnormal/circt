@@ -65,6 +65,22 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - known profile: `2 tests, failures=0, xfail=0`
    - xprop profile: `2 tests, failures=0, xfail=2`
 
+### Formal Closure Snapshot Update (February 11, 2026, 18:08)
+
+1. LEC runner diagnostics hardened for silent `circt-opt` failures:
+   - `run_sv_tests_circt_lec.sh`
+   - `run_verilator_verification_circt_lec.sh`
+   - `run_yosys_sva_circt_lec.sh`
+   now emit:
+   - `error: circt-opt failed without diagnostics for case '<base>'`
+2. New regression lock:
+   - `test/Tools/run-sv-tests-lec-silent-opt-diagnostic.test`
+3. Focused external sv-tests repro with explicit build-test tools:
+   - `16.11--sequence-subroutine-uvm`: `CIRCT_OPT_ERROR` (now with fallback diag)
+   - `16.13--sequence-multiclock-uvm`: `CIRCT_OPT_ERROR` (now with fallback diag)
+   - this confirms the next LEC semantic blocker is still
+     `strip-llhd-interface-signals` pass behavior on UVM-heavy sequence cases.
+
 ### Formal Closure Snapshot (February 11, 2026, 16:22)
 
 1. sv-tests focused semantic closure (SMT-LIB lane mode, explicit build-test tools):
@@ -95,6 +111,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
      non-empty slices less ergonomic than sv-tests lanes.
    - mixed 4-state/2-state expectations still leak into targeted external lanes
 2. LEC hardening limits still open:
+   - `strip-llhd-interface-signals` currently fails silently on some UVM-heavy
+     sv-tests sequence forms; diagnostics are now explicit, but pass-level
+     semantic closure is still pending.
    - maintain strict no-waiver X-prop governance while improving diagnostics depth
    - keep cross-suite drop-remark accounting deterministic in strict gates
 3. Mutation generation limits still open:

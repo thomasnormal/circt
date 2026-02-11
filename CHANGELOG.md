@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1070 - February 11, 2026
+
+### LEC Runner Hardening: Explicit Fallback For Silent `circt-opt` Failures
+
+1. Hardened LEC suite runners to emit actionable diagnostics when `circt-opt`
+   exits non-zero without writing stderr:
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. New fallback diagnostic format:
+   - `error: circt-opt failed without diagnostics for case '<base>'`
+   - persisted in both runner stderr and per-case `*.circt-opt.log`.
+3. Added regression lock:
+   - `test/Tools/run-sv-tests-lec-silent-opt-diagnostic.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-sv-tests-lec-silent-opt-diagnostic.test`
+  - `build-test/test/Tools/run-sv-tests-lec-z3-validation.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-error-diag.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-error-diag.test`
+  - PASS (6/6)
+- External focused repro (`/home/thomas-ahle/sv-tests`, explicit build-test tools):
+  - `16.11--sequence-subroutine-uvm`: fallback diagnostic + `CIRCT_OPT_ERROR`
+  - `16.13--sequence-multiclock-uvm`: fallback diagnostic + `CIRCT_OPT_ERROR`
+  - summary: `total=2 pass=0 fail=0 error=2`
+
 ## Iteration 1069 - February 11, 2026
 
 ### `circt-mut report`: Strict Trend Core-Key Full-History Count Gate

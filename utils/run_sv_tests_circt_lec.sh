@@ -359,6 +359,10 @@ while IFS= read -r -d '' sv; do
   opt_cmd+=("$mlir")
 
   if ! run_limited "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
+    if [[ ! -s "$opt_log" ]]; then
+      printf "error: circt-opt failed without diagnostics for case '%s'\n" \
+        "$base" | tee -a "$opt_log" >&2
+    fi
     printf "ERROR\t%s\t%s\tsv-tests\tLEC\tCIRCT_OPT_ERROR\n" "$base" "$sv" >> "$results_tmp"
     error=$((error + 1))
     save_logs

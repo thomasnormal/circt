@@ -219,6 +219,10 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
   opt_args+=("$mlir")
 
   if ! run_limited "$CIRCT_OPT" "${opt_args[@]}" > "$opt_mlir" 2> "$opt_log"; then
+    if [[ ! -s "$opt_log" ]]; then
+      printf "error: circt-opt failed without diagnostics for case '%s'\n" \
+        "$base" | tee -a "$opt_log" >&2
+    fi
     printf "ERROR\t%s\t%s\tyosys/tests/sva\tLEC\tCIRCT_OPT_ERROR\n" "$base" "$sv" >> "$results_tmp"
     error=$((error + 1))
     save_logs
