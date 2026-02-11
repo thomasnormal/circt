@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1029 - February 11, 2026
+
+### `circt-mut matrix`: Lane-Level Prequalify Artifact Traceability
+
+1. Extended native matrix prequalify summary ingestion in
+   `tools/circt-mut/circt-mut.cpp` to retain lane artifact path fields from
+   `native_matrix_prequalify_summary.tsv`:
+   - `pair_file`
+   - `log_file`
+2. Extended matrix results annotation to emit per-lane traceability columns:
+   - `prequalify_pair_file`
+   - `prequalify_log_file`
+3. Preserved deterministic defaults for missing/unmatched summary rows:
+   - `prequalify_pair_file = -`
+   - `prequalify_log_file = -`
+4. Updated regression coverage:
+   - `test/Tools/circt-mut-matrix-native-global-filter-prequalify-results-annotate.test`
+   - `test/Tools/circt-mut-matrix-native-dispatch-conflict.test`
+   to pin new header/row behavior.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused matrix prequalify annotation slice:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-global-filter-prequalify*.test test/Tools/circt-mut-matrix-native-dispatch-conflict.test`: PASS (5/5)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (258/258)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-prequalify-traceability ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1028 - February 11, 2026
 
 ### `circt-mut matrix`: Native Lane-Filter Telemetry Counters

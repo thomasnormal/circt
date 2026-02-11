@@ -154,6 +154,11 @@ See CHANGELOG.md on recent progress.
   `native_matrix_dispatch_filtered_exclude`) so CI/report consumers can
   attribute lane-selection drops to include/exclude filters without parsing
   rewritten lane manifests.
+- Latest mutation-governance milestone (current): matrix results annotation now
+  carries lane-level prequalification traceability paths
+  (`prequalify_pair_file`, `prequalify_log_file`) alongside numeric
+  prequalification counters, enabling report/triage tooling to map per-lane
+  metrics back to concrete prequalification artifacts without separate joins.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

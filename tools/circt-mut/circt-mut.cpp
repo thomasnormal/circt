@@ -4518,6 +4518,8 @@ static int runNativeMatrixGlobalFilterPrequalify(
 
 struct MatrixPrequalifyLaneMetrics {
   bool hasSummary = false;
+  std::string pairFile;
+  std::string logFile;
   uint64_t totalMutants = 0;
   uint64_t notPropagatedMutants = 0;
   uint64_t propagatedMutants = 0;
@@ -4569,10 +4571,12 @@ static bool loadMatrixPrequalifyLaneMetrics(
     return true;
   };
   size_t laneIDCol = 0, hasSummaryCol = 0, totalCol = 0, notPropCol = 0,
-         propCol = 0, createErrCol = 0, probeErrCol = 0,
+         propCol = 0, createErrCol = 0, probeErrCol = 0, pairFileCol = 0,
+         logFileCol = 0,
          cmdTokenNotPropCol = 0, cmdTokenPropCol = 0, cmdRCNotPropCol = 0,
          cmdRCPropCol = 0, cmdTimeoutPropCol = 0, cmdErrCol = 0;
   if (!requireCol("lane_id", laneIDCol) || !requireCol("has_summary", hasSummaryCol) ||
+      !requireCol("pair_file", pairFileCol) || !requireCol("log_file", logFileCol) ||
       !requireCol("prequalify_total_mutants", totalCol) ||
       !requireCol("prequalify_not_propagated_mutants", notPropCol) ||
       !requireCol("prequalify_propagated_mutants", propCol) ||
@@ -4632,6 +4636,10 @@ static bool loadMatrixPrequalifyLaneMetrics(
                   .str();
       return false;
     }
+    StringRef pairFileValue = getField(fields, pairFileCol);
+    StringRef logFileValue = getField(fields, logFileCol);
+    row.pairFile = pairFileValue.empty() ? "-" : pairFileValue.str();
+    row.logFile = logFileValue.empty() ? "-" : logFileValue.str();
     if (!parseUInt(getField(fields, totalCol), row.totalMutants,
                    "prequalify_total_mutants", lineNo + 1) ||
         !parseUInt(getField(fields, notPropCol), row.notPropagatedMutants,
@@ -4713,6 +4721,8 @@ static bool annotateMatrixResultsWithPrequalifyMetrics(
   }
   size_t laneIDCol = laneIDIt->second;
   size_t prequalifyPresentCol = ensureCol("prequalify_summary_present");
+  size_t prequalifyPairFileCol = ensureCol("prequalify_pair_file");
+  size_t prequalifyLogFileCol = ensureCol("prequalify_log_file");
   size_t totalCol = ensureCol("prequalify_total_mutants");
   size_t notPropCol = ensureCol("prequalify_not_propagated_mutants");
   size_t propCol = ensureCol("prequalify_propagated_mutants");
@@ -4732,6 +4742,8 @@ static bool annotateMatrixResultsWithPrequalifyMetrics(
                               const MatrixPrequalifyLaneMetrics *metrics) {
     if (metrics) {
       row[prequalifyPresentCol] = metrics->hasSummary ? "1" : "0";
+      row[prequalifyPairFileCol] = metrics->pairFile;
+      row[prequalifyLogFileCol] = metrics->logFile;
       row[totalCol] =
           metrics->hasSummary ? toString(metrics->totalMutants) : std::string("-");
       row[notPropCol] = toString(metrics->notPropagatedMutants);
@@ -4750,6 +4762,8 @@ static bool annotateMatrixResultsWithPrequalifyMetrics(
       return;
     }
     row[prequalifyPresentCol] = "0";
+    row[prequalifyPairFileCol] = "-";
+    row[prequalifyLogFileCol] = "-";
     row[totalCol] = "-";
     row[notPropCol] = "0";
     row[propCol] = "0";

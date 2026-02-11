@@ -18,6 +18,6 @@
 // LOG-DAG: native_matrix_prequalify_results_annotated_lanes{{[[:space:]]+}}1
 // LOG-DAG: native_matrix_prequalify_results_missing_lanes{{[[:space:]]+}}1
 //
-// RESULTS: lane_id{{[[:space:]]}}status{{[[:space:]]}}coverage_percent{{[[:space:]]}}gate_status{{[[:space:]]}}prequalify_summary_present{{[[:space:]]}}prequalify_total_mutants{{[[:space:]]}}prequalify_not_propagated_mutants{{[[:space:]]}}prequalify_propagated_mutants
-// RESULTS: lane1{{[[:space:]]}}PASS{{[[:space:]]}}10.0{{[[:space:]]}}PASS{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}0{{[[:space:]]}}2
-// RESULTS: lane_extra{{[[:space:]]}}PASS{{[[:space:]]}}20.0{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}-{{[[:space:]]}}0{{[[:space:]]}}0
+// RESULTS: lane_id{{[[:space:]]}}status{{[[:space:]]}}coverage_percent{{[[:space:]]}}gate_status{{[[:space:]]}}prequalify_summary_present{{[[:space:]]}}prequalify_pair_file{{[[:space:]]}}prequalify_log_file{{[[:space:]]}}prequalify_total_mutants{{[[:space:]]}}prequalify_not_propagated_mutants{{[[:space:]]}}prequalify_propagated_mutants
+// RESULTS: lane1{{[[:space:]]}}PASS{{[[:space:]]}}10.0{{[[:space:]]}}PASS{{[[:space:]]}}1{{[[:space:]]}}{{.*}}native_global_filter_prequalify.tsv{{[[:space:]]}}{{.*}}native_global_filter_prequalify.log{{[[:space:]]}}2{{[[:space:]]}}0{{[[:space:]]}}2
+// RESULTS: lane_extra{{[[:space:]]}}PASS{{[[:space:]]}}20.0{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}-{{[[:space:]]}}-{{[[:space:]]}}-{{[[:space:]]}}0{{[[:space:]]}}0
