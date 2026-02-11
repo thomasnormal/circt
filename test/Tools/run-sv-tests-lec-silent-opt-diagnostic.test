@@ -1,0 +1,14 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests %t/bin %t/logs
+// RUN: printf ':tags: smoke\nmodule top; endmodule\n' > %t/sv-tests/tests/silent-opt-case.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho \"module {}\"\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 1\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-lec
+// RUN: env TAG_REGEX='smoke' TEST_FILTER='silent-opt-case' LEC_SMOKE_ONLY=1 CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec KEEP_LOGS_DIR=%t/logs OUT=%t/results.tsv /usr/bin/bash %S/../../utils/run_sv_tests_circt_lec.sh %t/sv-tests 2> %t/stderr.txt
+// RUN: FileCheck %s --check-prefix=STDERR < %t/stderr.txt
+// RUN: FileCheck %s --check-prefix=RESULT < %t/results.tsv
+// RUN: FileCheck %s --check-prefix=OPTLOG < %t/logs/silent-opt-case.circt-opt.log
+//
+// STDERR: error: circt-opt failed without diagnostics for case 'silent-opt-case'
+// RESULT: ERROR{{.*}}silent-opt-case{{.*}}CIRCT_OPT_ERROR
+// OPTLOG: error: circt-opt failed without diagnostics for case 'silent-opt-case'
