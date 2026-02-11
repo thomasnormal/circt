@@ -487,6 +487,12 @@ See CHANGELOG.md on recent progress.
   trend-nightly contract), eliminating a policy-selection bypass where
   `formal-regression-matrix-lane-trend-strict` could run with only 2 history
   runs while strict composite profiles required 3.
+- Latest mutation-governance milestone (current): strict trend policy now has
+  explicit missing-history diagnostics/gating for matrix core keys:
+  - `trend.matrix_core_numeric_keys_missing_history`
+  - `trend.matrix_core_numeric_keys_missing_history_list`
+  with strict gate `missing_history == 0`, making history sparsity failures
+  directly actionable in CI logs (not only via aggregate percentages/counts).
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

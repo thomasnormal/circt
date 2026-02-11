@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1073 - February 11, 2026
+
+### `circt-mut report`: Strict Missing-History Diagnostics For Core Trend Keys
+
+1. Extended trend aggregation in `tools/circt-mut/circt-mut.cpp` with explicit
+   matrix core-key history diagnostics:
+   - `trend.matrix_core_numeric_keys_missing_history`
+   - `trend.matrix_core_numeric_keys_missing_history_list`
+2. Hardened strict trend-history policy by adding:
+   - `trend.matrix_core_numeric_keys_missing_history <= 0`
+   so strict governance fails directly on missing core-key history rather than
+   only via count/percentage derived thresholds.
+3. Updated regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-core-key-coverage-fail.test`
+     now checks:
+     - missing-history gate failure
+     - missing-history key list (`matrix.runtime_ns_sum`)
+   - `test/Tools/circt-mut-report-trend-history-basic.test`
+     now checks zero-missing diagnostics for cover-mode trend snapshots.
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-trend-strict.test`
+     now checks strict native-trend pass emits zero-missing diagnostics.
+4. Strict direct lane-trend profile alignment:
+   - `formal-regression-matrix-lane-trend-strict` now reuses strict
+     history-quality gating (3-run contract), with dedicated regression:
+   - `test/Tools/circt-mut-report-policy-matrix-lane-trend-strict-history-quality-fail.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused strict trend slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-report-trend-history-basic.test build-test/test/Tools/circt-mut-report-policy-matrix-lane-trend-strict-history-quality-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-lane-trend-strict-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-history-quality-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-core-key-coverage-fail.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-trend-strict.test`: PASS (6/6)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter 'circt-mut-.*\\.test' build-test/test/Tools`: PASS (307/307)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-trend-missing-history-gate ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC (`assert_fell` ERROR), `opentitan` LEC (`missing_results=1`), AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1072 - February 11, 2026
 
 ### LEC Pass Hardening: Non-Silent `strip-llhd-interface-signals` Failures

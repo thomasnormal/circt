@@ -7698,6 +7698,8 @@ static void appendTrendHistoryQualityRules(ReportOptions &opts,
 
 static void appendTrendHistoryQualityStrictRules(ReportOptions &opts) {
   appendTrendHistoryQualityRules(opts, 3.0);
+  appendUniqueRule(opts.failIfValueGtRules,
+                   "trend.matrix_core_numeric_keys_missing_history", 0.0);
   appendUniqueRule(opts.failIfValueLtRules,
                    "trend.matrix_core_numeric_keys_full_history", 5.0);
   appendUniqueRule(opts.failIfValueLtRules,
@@ -8842,6 +8844,7 @@ static void appendTrendRows(
       "matrix.runtime_ns_max", "matrix.runtime_ns_sum"};
   uint64_t matrixCoreCurrent = 0;
   uint64_t matrixCoreFullHistory = 0;
+  std::string matrixCoreMissingHistoryList;
   for (StringRef coreKey : matrixTrendCoreKeys) {
     auto itCurrent = llvm::find_if(numericCurrentRows, [&](const auto &row) {
       return StringRef(row.first) == coreKey;
@@ -8850,13 +8853,26 @@ static void appendTrendRows(
       continue;
     ++matrixCoreCurrent;
     auto itSamples = keySampleCounts.find(coreKey);
-    if (itSamples != keySampleCounts.end() && itSamples->second == selected.size())
+    if (itSamples != keySampleCounts.end() && itSamples->second == selected.size()) {
       ++matrixCoreFullHistory;
+    } else {
+      if (!matrixCoreMissingHistoryList.empty())
+        matrixCoreMissingHistoryList.append(",");
+      matrixCoreMissingHistoryList.append(coreKey.str());
+    }
   }
+  uint64_t matrixCoreMissingHistory =
+      matrixCoreCurrent - matrixCoreFullHistory;
   rows.emplace_back("trend.matrix_core_numeric_keys_current",
                     std::to_string(matrixCoreCurrent));
   rows.emplace_back("trend.matrix_core_numeric_keys_full_history",
                     std::to_string(matrixCoreFullHistory));
+  rows.emplace_back("trend.matrix_core_numeric_keys_missing_history",
+                    std::to_string(matrixCoreMissingHistory));
+  rows.emplace_back("trend.matrix_core_numeric_keys_missing_history_list",
+                    matrixCoreMissingHistoryList.empty()
+                        ? std::string("-")
+                        : matrixCoreMissingHistoryList);
   rows.emplace_back(
       "trend.matrix_core_numeric_keys_full_history_pct",
       matrixCoreCurrent != 0
