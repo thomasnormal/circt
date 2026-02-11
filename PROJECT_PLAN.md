@@ -9,6 +9,32 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 22:55)
+
+1. Added reason-level telemetry for LEC `CIRCT_OPT_ERROR` in runner outputs:
+   - `run_sv_tests_circt_lec.sh`
+   - `run_verilator_verification_circt_lec.sh`
+   - `run_yosys_sva_circt_lec.sh`
+2. Added reason-key summarization and governance in `run_formal_all.sh`:
+   - summary keys:
+     - `lec_circt_opt_error_reason_<token>_cases`
+   - new gate:
+     - `--fail-on-new-lec-circt-opt-error-reason-keys`
+   - enabled by default under `--strict-gate`.
+3. Added regression locks for reason-key drift and runner extraction behavior.
+4. Why this is high leverage:
+   - shifts LEC `CIRCT_OPT_ERROR` tracking from opaque aggregate errors to
+     structured reason-family drift, improving prioritization and long-term
+     closure planning.
+5. Remaining limitations and next features:
+   - reason tokens are still first-line heuristics from logs; we should migrate
+     toward explicit machine-stable categories emitted by `circt-opt`/pipeline
+     stages (or sidecar metadata) to avoid normalization churn.
+   - duplicate cache/reason helper code across runner scripts remains technical
+     debt; shared helper extraction should be next for maintainability.
+   - formal summary should add top-K reason/case joins per lane for faster
+     triage at scale.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 22:35)
 
 1. Added strict governance for LEC `CIRCT_OPT_ERROR` identity drift in

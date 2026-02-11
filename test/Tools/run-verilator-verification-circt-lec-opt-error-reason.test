@@ -1,0 +1,13 @@
+// RUN: rm -rf %t/verilator %t/bin
+// RUN: mkdir -p %t/verilator/tests/asserts %t/bin
+// RUN: printf 'module top;\nendmodule\n' > %t/verilator/tests/asserts/opt_reason.sv
+// RUN: printf '#!/bin/sh\necho \"module @top {}\"\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\necho \"error: pipeline failed during lowering\" >&2\nexit 1\n' > %t/bin/circt-opt
+// RUN: printf '#!/bin/sh\necho \"LEC_RESULT=EQ\"\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-lec
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec TEST_FILTER='opt_reason' OUT=%t/results.tsv %S/../../utils/run_verilator_verification_circt_lec.sh %t/verilator > %t/out.log
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out.log
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+//
+// SUMMARY: verilator-verification LEC summary: total=1 pass=0 fail=0 error=1 skip=0
+// RESULTS: ERROR{{[[:space:]]+}}opt_reason{{[[:space:]]+}}{{.*}}opt_reason.sv{{[[:space:]]+}}verilator-verification{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_OPT_ERROR{{[[:space:]]+}}pipeline_failed_during_lowering

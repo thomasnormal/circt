@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1094 - February 11, 2026
+
+### Formal Governance: LEC `CIRCT_OPT_ERROR` Reason-Key Drift
+
+1. Extended LEC runners to emit `CIRCT_OPT_ERROR` reason fingerprints (column 7):
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. Extended `run_formal_all.sh` LEC summarization:
+   - adds per-lane counters:
+     - `lec_circt_opt_error_reason_<token>_cases`
+3. Added strict-gate option:
+   - `--fail-on-new-lec-circt-opt-error-reason-keys`
+   - enabled by default under `--strict-gate` (legacy-safe baseline behavior).
+4. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-reason-keys.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-reason-keys-defaults.test`
+   - `test/Tools/run-verilator-verification-circt-lec-opt-error-reason.test`
+   - `test/Tools/run-yosys-sva-circt-lec-opt-error-reason.test`
+   - updated:
+     - `test/Tools/run-sv-tests-lec-silent-opt-diagnostic.test`
+     - `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-reason-keys.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-reason-keys-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-ids-defaults.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - `build-test/test/Tools/run-sv-tests-lec-silent-opt-diagnostic.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-opt-error-reason.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-opt-error-reason.test`
+  - PASS (8/8)
+- Focused external formal cadence:
+  - `run_formal_all` filtered LEC lanes (`verilator`/`yosys`) now emit
+    `lec_circt_opt_error_reason_*_cases` in lane summary.
+  - sampled `assert_changed`/`basic00` remain `CIRCT_OPT_ERROR` in this
+    workspace snapshot.
+
 ## Iteration 1093 - February 11, 2026
 
 ### Formal Governance: LEC `CIRCT_OPT_ERROR` Case-ID Drift Gate

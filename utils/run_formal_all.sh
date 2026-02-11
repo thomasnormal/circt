@@ -49,6 +49,10 @@ Options:
   --fail-on-new-lec-circt-opt-error-case-ids
                          Fail when LEC `CIRCT_OPT_ERROR` case IDs increase vs
                          baseline
+  --fail-on-new-lec-circt-opt-error-reason-keys
+                         Fail when new LEC `CIRCT_OPT_ERROR` reason counter
+                         keys (`lec_circt_opt_error_reason_*_cases`) appear vs
+                         baseline
   --fail-on-new-lec-timeout-class-cases
                          Fail when LEC timeout class-case counts increase vs
                          baseline (`lec_timeout_class_{solver_budget,
@@ -1838,6 +1842,7 @@ FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS=0
 FAIL_ON_NEW_LEC_TIMEOUT_CASES=0
 FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS=0
 FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_IDS=0
+FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS=0
 FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASES=0
@@ -2195,6 +2200,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS=1; shift ;;
     --fail-on-new-lec-circt-opt-error-case-ids)
       FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_IDS=1; shift ;;
+    --fail-on-new-lec-circt-opt-error-reason-keys)
+      FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS=1; shift ;;
     --fail-on-new-lec-timeout-class-cases)
       FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1; shift ;;
     --fail-on-new-bmc-unknown-cases)
@@ -4284,6 +4291,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_TIMEOUT_CASES=1
   FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS=1
   FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_IDS=1
+  FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS=1
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1
@@ -7396,9 +7404,10 @@ with path.open(encoding="utf-8") as f:
         if not parts:
             continue
         status = normalize(parts[0].strip())
+        reason_token = parts[6].strip() if len(parts) > 6 else ""
         timeout_class_override = ""
-        if len(parts) > 6:
-            timeout_class_override = normalize_timeout_class(parts[6].strip())
+        if reason_token:
+            timeout_class_override = normalize_timeout_class(reason_token)
         rows += 1
         counts["lec_cases"] += 1
         counts[f"lec_status_{status}_cases"] += 1
@@ -7422,6 +7431,9 @@ with path.open(encoding="utf-8") as f:
                     else classify_timeout_diag(maybe_diag)
                 )
                 counts[f"lec_timeout_class_{timeout_class}_cases"] += 1
+            if status == "error" and diag == "circt_opt_error":
+                reason_key = normalize(reason_token) if reason_token else "missing"
+                counts[f"lec_circt_opt_error_reason_{reason_key}_cases"] += 1
             if explicit_diag:
                 counts["lec_diag_explicit_cases"] += 1
             elif used_path_fallback:
@@ -11701,6 +11713,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_IDS" == "1" || \
+      "$FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" == "1" || \
@@ -11751,6 +11764,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_TIMEOUT_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CASES" \
   FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS="$FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS" \
   FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_IDS="$FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_IDS" \
+  FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS="$FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS" \
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES="$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" \
@@ -12232,6 +12246,9 @@ fail_on_new_lec_timeout_case_ids = (
 )
 fail_on_new_lec_circt_opt_error_case_ids = (
     os.environ.get("FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_IDS", "0") == "1"
+)
+fail_on_new_lec_circt_opt_error_reason_keys = (
+    os.environ.get("FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS", "0") == "1"
 )
 fail_on_new_lec_timeout_class_cases = (
     os.environ.get("FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES", "0") == "1"
@@ -13083,6 +13100,35 @@ for key, current_row in summary.items():
                         sample += ", ..."
                     gate_errors.append(
                         f"{suite} {mode}: new LEC timeout diagnostic keys observed (baseline={len(baseline_timeout_diag_keys)} current={len(current_timeout_diag_keys)}, window={baseline_window}): {sample}"
+                    )
+        if fail_on_new_lec_circt_opt_error_reason_keys:
+            baseline_opt_reason_keys = set()
+            for counts in parsed_counts:
+                for counter_key in counts.keys():
+                    if (
+                        counter_key.startswith("lec_circt_opt_error_reason_")
+                        and counter_key.endswith("_cases")
+                    ):
+                        baseline_opt_reason_keys.add(counter_key)
+            should_enforce_opt_reason_key_drift = (
+                bool(baseline_opt_reason_keys) or not strict_gate
+            )
+            if should_enforce_opt_reason_key_drift:
+                current_opt_reason_keys = {
+                    counter_key
+                    for counter_key in current_counts.keys()
+                    if counter_key.startswith("lec_circt_opt_error_reason_")
+                    and counter_key.endswith("_cases")
+                }
+                new_opt_reason_keys = sorted(
+                    current_opt_reason_keys - baseline_opt_reason_keys
+                )
+                if new_opt_reason_keys:
+                    sample = ", ".join(new_opt_reason_keys[:3])
+                    if len(new_opt_reason_keys) > 3:
+                        sample += ", ..."
+                    gate_errors.append(
+                        f"{suite} {mode}: new LEC CIRCT_OPT_ERROR reason keys observed (baseline={len(baseline_opt_reason_keys)} current={len(current_opt_reason_keys)}, window={baseline_window}): {sample}"
                     )
         if lec_counter_keys:
             for counter_key in lec_counter_keys:
