@@ -49,11 +49,13 @@
 // CHECK: formal-regression-matrix-composite-smoke
 // CHECK: formal-regression-matrix-composite-nightly
 // CHECK: formal-regression-matrix-composite-strict
+// CHECK: formal-regression-matrix-composite-native-strict
 // CHECK: formal-regression-matrix-composite-trend-nightly
 // CHECK: formal-regression-matrix-composite-trend-strict
 // CHECK: formal-regression-matrix-composite-stop-on-fail-smoke
 // CHECK: formal-regression-matrix-composite-stop-on-fail-nightly
 // CHECK: formal-regression-matrix-composite-stop-on-fail-strict
+// CHECK: formal-regression-matrix-composite-stop-on-fail-native-strict
 // CHECK: formal-regression-matrix-composite-stop-on-fail-trend-nightly
 // CHECK: formal-regression-matrix-composite-stop-on-fail-trend-strict
 // CHECK: --append-history
