@@ -81,6 +81,20 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - this confirms the next LEC semantic blocker is still
      `strip-llhd-interface-signals` pass behavior on UVM-heavy sequence cases.
 
+### Formal Closure Snapshot Update (February 11, 2026, 18:14)
+
+1. `strip-llhd-interface-signals` pass now emits non-silent context on failure:
+   - `StripLLHDInterfaceSignals.cpp` `runOnOperation()` emits explicit
+     op-local errors before `signalPassFailure()`.
+   - strict comb-loop regression now also checks:
+     `failed to lower llhd.combinational for LEC`
+     (`test/Tools/circt-lec/lec-strict-llhd-comb-loop.mlir`).
+2. Focused external sv-tests repro (`16.11--sequence-subroutine-uvm`):
+   - `circt-opt` per-case log now reports:
+     `error: expected llhd.signal in hw.module for LEC`
+   - runner classification remains `CIRCT_OPT_ERROR` (as expected), but
+     root-cause diagnostics are now pass-local and actionable.
+
 ### Formal Closure Snapshot (February 11, 2026, 16:22)
 
 1. sv-tests focused semantic closure (SMT-LIB lane mode, explicit build-test tools):
@@ -111,9 +125,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
      non-empty slices less ergonomic than sv-tests lanes.
    - mixed 4-state/2-state expectations still leak into targeted external lanes
 2. LEC hardening limits still open:
-   - `strip-llhd-interface-signals` currently fails silently on some UVM-heavy
-     sv-tests sequence forms; diagnostics are now explicit, but pass-level
-     semantic closure is still pending.
+   - `strip-llhd-interface-signals` diagnostics are no longer silent, but some
+     UVM-heavy sv-tests sequence forms still fail with
+     `expected llhd.signal in hw.module for LEC` and need semantic/pass
+     closure rather than runner-side handling.
    - maintain strict no-waiver X-prop governance while improving diagnostics depth
    - keep cross-suite drop-remark accounting deterministic in strict gates
 3. Mutation generation limits still open:
