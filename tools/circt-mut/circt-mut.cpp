@@ -10556,12 +10556,21 @@ static int runNativeReport(const ReportOptions &opts) {
         it != cfg.matrix.end() && !it->second.empty())
       matrixOutDir = resolveRelativeTo(opts.projectDir, it->second);
     if (compareFile.empty() && compareHistoryLatestFile.empty()) {
-      if (auto it = cfg.report.find("compare");
-          it != cfg.report.end() && !it->second.empty())
-        compareFile = it->second;
-      else if (auto it = cfg.report.find("compare_history_latest");
-               it != cfg.report.end() && !it->second.empty())
-        compareHistoryLatestFile = it->second;
+      auto compareIt = cfg.report.find("compare");
+      auto compareHistoryIt = cfg.report.find("compare_history_latest");
+      bool hasConfigCompare =
+          compareIt != cfg.report.end() && !compareIt->second.empty();
+      bool hasConfigCompareHistory =
+          compareHistoryIt != cfg.report.end() && !compareHistoryIt->second.empty();
+      if (hasConfigCompare && hasConfigCompareHistory) {
+        errs() << "circt-mut report: [report] keys 'compare' and "
+                  "'compare_history_latest' are mutually exclusive\n";
+        return 1;
+      }
+      if (hasConfigCompare)
+        compareFile = compareIt->second;
+      else if (hasConfigCompareHistory)
+        compareHistoryLatestFile = compareHistoryIt->second;
     }
     if (appendHistoryFile.empty()) {
       if (auto it = cfg.report.find("append_history");
