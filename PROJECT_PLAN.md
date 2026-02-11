@@ -124,8 +124,10 @@ See CHANGELOG.md on recent progress.
 - Mutation/report governance closure (next long-term mutation tranche):
   - Composite matrix policy bundles are now available
     (`formal-regression-matrix-nightly|strict`) with dedicated lane-drift
-    bundles (`formal-regression-matrix-lane-drift-nightly|strict`), but
-    native matrix lane scheduling is only partially migrated:
+    bundles (`formal-regression-matrix-lane-drift-nightly|strict`) and
+    runtime bundles (`formal-regression-matrix-runtime-smoke|nightly|trend`).
+    Policy-mode smoke/nightly mapping now auto-couples guard + runtime
+    profiles, but native matrix lane scheduling is only partially migrated:
     `--native-matrix-dispatch` now exists as an opt-in scaffold, but lane-job
     parallelism and lane-level gate override parity are still script-backed.
   - Wire the composite matrix policy bundles into CI defaults for
