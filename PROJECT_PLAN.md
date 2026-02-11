@@ -9,6 +9,24 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 21:00)
+
+1. Hardened LEC runner wrapper-launch retries for `Permission denied` in
+   addition to `Text file busy` across `sv-tests`, `verilator`, and `yosys`
+   LEC runners.
+2. Concrete observed impact:
+   - filtered `sv-tests/LEC` (`16.15--property-iff-uvm`) moved from
+     runner-command infra error to clean pass with explicit `build-test/bin`
+     toolchain.
+3. Remaining limitations and next long-term targets:
+   - `verilator` filtered LEC sample still fails via non-wrapper `ERROR`
+     classification; semantic/lowering diagnostics remain the next closure
+     area.
+   - runner-command infra governance is now broad, but we still need
+     lane-specific budget policies (for example, allow/deny by suite and trend).
+   - continue BMC multiclock + sequence-subroutine semantic bucket closure and
+     mutation-priority integration using formal reason-family deltas.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 20:50)
 
 1. Added explicit LEC infra budget governance for runner-command failures:
@@ -1120,6 +1138,17 @@ See CHANGELOG.md on recent progress.
     - `external_formal.summary_tsv_inconsistent_rows`
   - strict summary guard now requires zero inconsistent rows
   so malformed `total` vs status-count tuples fail policy deterministically.
+- Latest mutation-governance milestone (current): strict summary governance now
+  has a backward-compatible schema-version contract:
+  - new metrics:
+    - `external_formal.summary_tsv_schema_version_rows`
+    - `external_formal.summary_tsv_schema_version_invalid_rows`
+    - `external_formal.summary_tsv_schema_version_min`
+    - `external_formal.summary_tsv_schema_version_max`
+  - parsing defaults to schema version `1` when `schema_version` column is
+    absent; when present, non-numeric values are rejected and policy-gated.
+  This allows future versioned summary evolution without regressing current
+  runner outputs.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
