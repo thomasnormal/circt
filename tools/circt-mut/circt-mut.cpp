@@ -10565,6 +10565,11 @@ static int runNativeReport(const ReportOptions &opts) {
           it != cfg.report.end() && !it->second.empty())
         historyFile = it->second;
     }
+    if (trendHistoryFile.empty()) {
+      if (auto it = cfg.report.find("trend_history");
+          it != cfg.report.end() && !it->second.empty())
+        trendHistoryFile = it->second;
+    }
     if (trendWindowRuns == 0) {
       if (auto it = cfg.report.find("trend_window");
           it != cfg.report.end() && !it->second.empty()) {
