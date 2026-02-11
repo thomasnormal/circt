@@ -64,6 +64,7 @@
 // CHECK: formal-regression-matrix-external-formal-nonempty-filter-contract-v1
 // CHECK: formal-regression-matrix-external-formal-sv-tests-bmc-min-total-v1
 // CHECK: formal-regression-matrix-external-formal-filtered-lane-min-total-violation-v1
+// CHECK: formal-regression-matrix-external-formal-bmc-timeout-stage-trend-guard-v1
 // CHECK: formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1
 // CHECK: formal-regression-matrix-external-formal-compile-mode-budget-v1
 // CHECK: formal-regression-matrix-external-formal-compile-mode-budget-debt-v1
@@ -92,6 +93,7 @@
 // CHECK: formal-regression-matrix-composite-native-strict-formal-trend-v7
 // CHECK: formal-regression-matrix-composite-native-strict-formal-trend-v8
 // CHECK: formal-regression-matrix-composite-native-strict-formal-trend-v9
+// CHECK: formal-regression-matrix-composite-native-strict-formal-trend-v10
 // CHECK: formal-regression-matrix-composite-trend-nightly
 // CHECK: formal-regression-matrix-composite-trend-strict
 // CHECK: formal-regression-matrix-composite-stop-on-fail-smoke
@@ -107,6 +109,7 @@
 // CHECK: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v7
 // CHECK: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v8
 // CHECK: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v9
+// CHECK: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v10
 // CHECK: formal-regression-matrix-composite-stop-on-fail-trend-nightly
 // CHECK: formal-regression-matrix-composite-stop-on-fail-trend-strict
 // CHECK: --append-history
