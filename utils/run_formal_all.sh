@@ -7873,11 +7873,13 @@ PY
 
 summarize_bmc_case_file() {
   local case_file="$1"
+  local timeout_reason_file="${2:-}"
   if [[ ! -s "$case_file" ]]; then
     echo ""
     return 0
   fi
-  BMC_CASE_FILE="$case_file" python3 - <<'PY'
+  local base_summary
+  base_summary="$(BMC_CASE_FILE="$case_file" python3 - <<'PY'
 import os
 from pathlib import Path
 
@@ -7923,6 +7925,76 @@ print(
     f"bmc_unknown_cases={unknown_cases}"
 )
 PY
+)"
+  local timeout_stage_summary=""
+  if [[ -n "$timeout_reason_file" && -s "$timeout_reason_file" ]]; then
+    timeout_stage_summary="$(
+      BMC_TIMEOUT_REASON_FILE="$timeout_reason_file" \
+      python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["BMC_TIMEOUT_REASON_FILE"])
+if not path.exists():
+    print("bmc_timeout_stage_frontend_cases=0 bmc_timeout_stage_solver_cases=0 bmc_timeout_stage_unknown_cases=0")
+    raise SystemExit(0)
+
+frontend = 0
+solver = 0
+unknown = 0
+
+with path.open(encoding="utf-8") as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        parts = line.split("\t")
+        reason = parts[2].strip() if len(parts) > 2 else ""
+        if reason == "frontend_command_timeout":
+            frontend += 1
+        elif reason == "solver_command_timeout":
+            solver += 1
+        else:
+            unknown += 1
+
+print(
+    f"bmc_timeout_stage_frontend_cases={frontend} "
+    f"bmc_timeout_stage_solver_cases={solver} "
+    f"bmc_timeout_stage_unknown_cases={unknown}"
+)
+PY
+    )"
+  else
+    timeout_stage_summary="$(
+      BMC_CASE_FILE="$case_file" python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["BMC_CASE_FILE"])
+if not path.exists():
+    print("bmc_timeout_stage_frontend_cases=0 bmc_timeout_stage_solver_cases=0 bmc_timeout_stage_unknown_cases=0")
+    raise SystemExit(0)
+
+timeout_cases = 0
+with path.open(encoding="utf-8") as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        parts = line.split("\t")
+        status = parts[0].strip().upper() if parts else ""
+        if status == "TIMEOUT":
+            timeout_cases += 1
+
+print(
+    f"bmc_timeout_stage_frontend_cases=0 "
+    f"bmc_timeout_stage_solver_cases=0 "
+    f"bmc_timeout_stage_unknown_cases={timeout_cases}"
+)
+PY
+    )"
+  fi
+  echo "${base_summary} ${timeout_stage_summary}"
 }
 
 summarize_bmc_semantic_bucket_file() {
@@ -9067,10 +9139,12 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     sv_bmc_check_attribution_file="$OUT_DIR/sv-tests-bmc-check-attribution.tsv"
     sv_bmc_drop_remark_cases_file="$OUT_DIR/sv-tests-bmc-drop-remark-cases.tsv"
     sv_bmc_drop_remark_reasons_file="$OUT_DIR/sv-tests-bmc-drop-remark-reasons.tsv"
+    sv_bmc_timeout_reasons_file="$OUT_DIR/sv-tests-bmc-timeout-reasons.tsv"
     : > "$sv_bmc_provenance_file"
     : > "$sv_bmc_check_attribution_file"
     : > "$sv_bmc_drop_remark_cases_file"
     : > "$sv_bmc_drop_remark_reasons_file"
+    : > "$sv_bmc_timeout_reasons_file"
     # sv-tests semantic closure currently relies on SMT-LIB execution to avoid
     # known JIT/Z3-LLVM backend divergence on local-var/disable-iff cases.
     run_suite sv-tests-bmc \
@@ -9084,6 +9158,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_check_attribution_file" \
       BMC_DROP_REMARK_CASES_OUT="$sv_bmc_drop_remark_cases_file" \
       BMC_DROP_REMARK_REASONS_OUT="$sv_bmc_drop_remark_reasons_file" \
+      BMC_TIMEOUT_REASON_CASES_OUT="$sv_bmc_timeout_reasons_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
@@ -9106,7 +9181,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       if [[ -n "$bmc_drop_summary" ]]; then
         summary="${summary} ${bmc_drop_summary}"
       fi
-      bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/sv-tests-bmc-results.txt")"
+      bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/sv-tests-bmc-results.txt" "$sv_bmc_timeout_reasons_file")"
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
       fi
@@ -9170,10 +9245,12 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
     sv_bmc_uvm_semantics_check_attribution_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-check-attribution.tsv"
     sv_bmc_uvm_semantics_drop_remark_cases_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-drop-remark-cases.tsv"
     sv_bmc_uvm_semantics_drop_remark_reasons_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-drop-remark-reasons.tsv"
+    sv_bmc_uvm_semantics_timeout_reasons_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-timeout-reasons.tsv"
     : > "$sv_bmc_uvm_semantics_provenance_file"
     : > "$sv_bmc_uvm_semantics_check_attribution_file"
     : > "$sv_bmc_uvm_semantics_drop_remark_cases_file"
     : > "$sv_bmc_uvm_semantics_drop_remark_reasons_file"
+    : > "$sv_bmc_uvm_semantics_timeout_reasons_file"
     # Keep the semantic-closure lane aligned with sv-tests/BMC backend policy.
     run_suite sv-tests-bmc-uvm-semantics \
       env "${FORMAL_BMC_TIMEOUT_ENV[@]}" \
@@ -9186,6 +9263,7 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_uvm_semantics_check_attribution_file" \
       BMC_DROP_REMARK_CASES_OUT="$sv_bmc_uvm_semantics_drop_remark_cases_file" \
       BMC_DROP_REMARK_REASONS_OUT="$sv_bmc_uvm_semantics_drop_remark_reasons_file" \
+      BMC_TIMEOUT_REASON_CASES_OUT="$sv_bmc_uvm_semantics_timeout_reasons_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK=1 \
@@ -9209,7 +9287,7 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       if [[ -n "$bmc_drop_summary" ]]; then
         summary="${summary} ${bmc_drop_summary}"
       fi
-      bmc_case_summary="$(summarize_bmc_case_file "$sv_bmc_uvm_semantics_results_file")"
+      bmc_case_summary="$(summarize_bmc_case_file "$sv_bmc_uvm_semantics_results_file" "$sv_bmc_uvm_semantics_timeout_reasons_file")"
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
       fi
@@ -9296,10 +9374,12 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
     verilator_bmc_check_attribution_file="$OUT_DIR/verilator-bmc-check-attribution.tsv"
     verilator_bmc_drop_remark_cases_file="$OUT_DIR/verilator-bmc-drop-remark-cases.tsv"
     verilator_bmc_drop_remark_reasons_file="$OUT_DIR/verilator-bmc-drop-remark-reasons.tsv"
+    verilator_bmc_timeout_reasons_file="$OUT_DIR/verilator-bmc-timeout-reasons.tsv"
     : > "$verilator_bmc_provenance_file"
     : > "$verilator_bmc_check_attribution_file"
     : > "$verilator_bmc_drop_remark_cases_file"
     : > "$verilator_bmc_drop_remark_reasons_file"
+    : > "$verilator_bmc_timeout_reasons_file"
     run_suite verilator-bmc \
       env "${FORMAL_BMC_TIMEOUT_ENV[@]}" \
       OUT="$OUT_DIR/verilator-bmc-results.txt" \
@@ -9311,6 +9391,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       BMC_CHECK_ATTRIBUTION_OUT="$verilator_bmc_check_attribution_file" \
       BMC_DROP_REMARK_CASES_OUT="$verilator_bmc_drop_remark_cases_file" \
       BMC_DROP_REMARK_REASONS_OUT="$verilator_bmc_drop_remark_reasons_file" \
+      BMC_TIMEOUT_REASON_CASES_OUT="$verilator_bmc_timeout_reasons_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$VERILATOR_BMC_SEMANTIC_TAG_MAP_FILE" \
       XFAILS="$VERILATOR_BMC_XFAILS" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
@@ -9333,7 +9414,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       if [[ -n "$bmc_drop_summary" ]]; then
         summary="${summary} ${bmc_drop_summary}"
       fi
-      bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/verilator-bmc-results.txt")"
+      bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/verilator-bmc-results.txt" "$verilator_bmc_timeout_reasons_file")"
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
       fi
@@ -9411,10 +9492,12 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     yosys_bmc_check_attribution_file="$OUT_DIR/yosys-bmc-check-attribution.tsv"
     yosys_bmc_drop_remark_cases_file="$OUT_DIR/yosys-bmc-drop-remark-cases.tsv"
     yosys_bmc_drop_remark_reasons_file="$OUT_DIR/yosys-bmc-drop-remark-reasons.tsv"
+    yosys_bmc_timeout_reasons_file="$OUT_DIR/yosys-bmc-timeout-reasons.tsv"
     : > "$yosys_bmc_provenance_file"
     : > "$yosys_bmc_check_attribution_file"
     : > "$yosys_bmc_drop_remark_cases_file"
     : > "$yosys_bmc_drop_remark_reasons_file"
+    : > "$yosys_bmc_timeout_reasons_file"
     # NOTE: Do not pass BMC_ASSUME_KNOWN_INPUTS here; the yosys script defaults
     # it to 1 because yosys SVA tests are 2-state and need --assume-known-inputs
     # to avoid spurious X-driven counterexamples.  Only forward an explicit
@@ -9430,6 +9513,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       BMC_CHECK_ATTRIBUTION_OUT="$yosys_bmc_check_attribution_file"
       BMC_DROP_REMARK_CASES_OUT="$yosys_bmc_drop_remark_cases_file"
       BMC_DROP_REMARK_REASONS_OUT="$yosys_bmc_drop_remark_reasons_file"
+      BMC_TIMEOUT_REASON_CASES_OUT="$yosys_bmc_timeout_reasons_file"
       BMC_SEMANTIC_TAG_MAP_FILE="$YOSYS_BMC_SEMANTIC_TAG_MAP_FILE"
       TEST_FILTER="$YOSYS_BMC_TEST_FILTER"
       Z3_BIN="$Z3_BIN")
@@ -9468,7 +9552,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       if [[ -n "$bmc_drop_summary" ]]; then
         summary="${summary} ${bmc_drop_summary}"
       fi
-      bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/yosys-bmc-results.txt")"
+      bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/yosys-bmc-results.txt" "$yosys_bmc_timeout_reasons_file")"
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
       fi

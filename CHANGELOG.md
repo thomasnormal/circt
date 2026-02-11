@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1141 - February 11, 2026
+
+### BMC Timeout Taxonomy: Stage-Attributed Counters in Formal Summaries
+
+1. Extended `run_sv_tests_circt_bmc.sh` with timeout reason emission:
+   - new optional artifact output:
+     - `BMC_TIMEOUT_REASON_CASES_OUT`
+   - emits per-timeout case reasons:
+     - `frontend_command_timeout`
+     - `solver_command_timeout`
+2. Extended `run_formal_all.sh` BMC summary synthesis:
+   - `summarize_bmc_case_file` now consumes timeout reason artifacts and emits:
+     - `bmc_timeout_stage_frontend_cases`
+     - `bmc_timeout_stage_solver_cases`
+     - `bmc_timeout_stage_unknown_cases`
+   - wired through BMC lanes:
+     - `sv-tests/BMC`
+     - `sv-tests-uvm/BMC_SEMANTICS`
+     - `verilator-verification/BMC`
+     - `yosys/tests/sva/BMC`
+3. Added regressions:
+   - `test/Tools/run-sv-tests-bmc-timeout-stage-reasons.test`
+   - `test/Tools/run-formal-all-bmc-timeout-stage-summary.test`
+4. Validation:
+   - focused lit slice (timeout stage + adjacent timeout/summary tests): PASS (5/5)
+   - real targeted run:
+     - `utils/run_formal_all.sh --include-lane-regex '^sv-tests/BMC$' --bmc-timeout-secs 1 ...`
+     - summary includes:
+       - `bmc_timeout_cases=1`
+       - `bmc_timeout_stage_frontend_cases=1`
+       - `bmc_timeout_stage_solver_cases=0`
+       - `bmc_timeout_stage_unknown_cases=0`
+
 ## Iteration 1140 - February 11, 2026
 
 ### Mutation Governance: Staged Compile-Budget Profiles + v8 Strict Composites

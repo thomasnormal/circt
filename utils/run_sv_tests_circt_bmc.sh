@@ -40,6 +40,7 @@ BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
 BMC_DROP_REMARK_CASES_OUT="${BMC_DROP_REMARK_CASES_OUT:-}"
 BMC_DROP_REMARK_REASONS_OUT="${BMC_DROP_REMARK_REASONS_OUT:-}"
+BMC_TIMEOUT_REASON_CASES_OUT="${BMC_TIMEOUT_REASON_CASES_OUT:-}"
 BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS - it's emitted before LTLToCore and LowerClockedAssertLike passes
@@ -170,6 +171,10 @@ trap cleanup EXIT
 
 results_tmp="$tmpdir/results.txt"
 touch "$results_tmp"
+if [[ -n "$BMC_TIMEOUT_REASON_CASES_OUT" ]]; then
+  mkdir -p "$(dirname "$BMC_TIMEOUT_REASON_CASES_OUT")"
+  : > "$BMC_TIMEOUT_REASON_CASES_OUT"
+fi
 
 pass=0
 fail=0
@@ -189,6 +194,7 @@ declare -A expect_mode
 declare -A semantic_tags_by_case
 declare -A drop_remark_seen_cases
 declare -A drop_remark_seen_case_reasons
+declare -A timeout_reason_seen_case_reasons
 
 load_semantic_tag_map() {
   if [[ -z "$BMC_SEMANTIC_TAG_MAP_FILE" || ! -f "$BMC_SEMANTIC_TAG_MAP_FILE" ]]; then
@@ -270,6 +276,22 @@ record_drop_remark_case() {
   if [[ -n "$BMC_DROP_REMARK_CASES_OUT" ]]; then
     printf "%s\t%s\n" "$case_id" "$case_path" >> "$BMC_DROP_REMARK_CASES_OUT"
   fi
+}
+
+record_timeout_reason_case() {
+  local case_id="$1"
+  local case_path="$2"
+  local reason="$3"
+  if [[ -z "$BMC_TIMEOUT_REASON_CASES_OUT" || -z "$reason" ]]; then
+    return
+  fi
+  local reason_key="${case_id}|${reason}"
+  if [[ -n "${timeout_reason_seen_case_reasons["$reason_key"]+x}" ]]; then
+    return
+  fi
+  timeout_reason_seen_case_reasons["$reason_key"]=1
+  mkdir -p "$(dirname "$BMC_TIMEOUT_REASON_CASES_OUT")"
+  printf "%s\t%s\t%s\n" "$case_id" "$case_path" "$reason" >> "$BMC_TIMEOUT_REASON_CASES_OUT"
 }
 
 load_semantic_tag_map
@@ -504,6 +526,8 @@ top_module=${top_module}
     fi
   fi
 
+  frontend_timeout_reason=""
+  bmc_timeout_reason=""
   if [[ "$cache_hit" != "1" ]]; then
     if run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
       verilog_status=0
@@ -517,6 +541,7 @@ top_module=${top_module}
         # Classify frontend timeouts explicitly so summary timeout/error counters
         # reflect performance regressions instead of generic command failures.
         result="TIMEOUT"
+        frontend_timeout_reason="frontend_command_timeout"
         timeout=$((timeout + 1))
         error=$((error + 1))
       # Treat expected compile failures as PASS for negative compilation/parsing
@@ -530,6 +555,9 @@ top_module=${top_module}
         error=$((error + 1))
       fi
       emit_result_row "$result" "$base" "$sv"
+      if [[ "$result" == "TIMEOUT" ]]; then
+        record_timeout_reason_case "$base" "$sv" "$frontend_timeout_reason"
+      fi
       continue
     fi
     record_drop_remark_case "$base" "$sv" "$verilog_log"
@@ -641,6 +669,7 @@ top_module=${top_module}
   if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
     if [[ "$bmc_status" -eq 124 || "$bmc_status" -eq 137 ]]; then
       result="TIMEOUT"
+      bmc_timeout_reason="solver_command_timeout"
     elif [[ "$bmc_status" -eq 0 ]]; then
       result="PASS"
     else
@@ -649,6 +678,7 @@ top_module=${top_module}
   else
     if [[ "$bmc_status" -eq 124 || "$bmc_status" -eq 137 ]]; then
       result="TIMEOUT"
+      bmc_timeout_reason="solver_command_timeout"
     elif grep -q "BMC_RESULT=UNKNOWN" <<<"$out"; then
       result="UNKNOWN"
     elif [[ "$check_mode" == "cover" ]]; then
@@ -740,6 +770,9 @@ top_module=${top_module}
   fi
 
   emit_result_row "$result" "$base" "$sv"
+  if [[ "$result" == "TIMEOUT" ]]; then
+    record_timeout_reason_case "$base" "$sv" "$bmc_timeout_reason"
+  fi
   if [[ -n "$KEEP_LOGS_DIR" ]]; then
     mkdir -p "$KEEP_LOGS_DIR"
     cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true

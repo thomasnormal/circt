@@ -1,0 +1,13 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: \"${OUT:?}\"\nmkdir -p \"$(dirname \"$OUT\")\"\nprintf \"TIMEOUT\\tfrontend_timeout_case\\t/tests/frontend_timeout_case.sv\\nTIMEOUT\\tsolver_timeout_case\\t/tests/solver_timeout_case.sv\\n\" > \"$OUT\"\nif [[ -n \"${BMC_TIMEOUT_REASON_CASES_OUT:-}\" ]]; then\n  mkdir -p \"$(dirname \"$BMC_TIMEOUT_REASON_CASES_OUT\")\"\n  printf \"frontend_timeout_case\\t/tests/frontend_timeout_case.sv\\tfrontend_command_timeout\\nsolver_timeout_case\\t/tests/solver_timeout_case.sv\\tsolver_command_timeout\\n\" > \"$BMC_TIMEOUT_REASON_CASES_OUT\"\nfi\necho \"sv-tests SVA summary: total=2 pass=0 fail=0 xfail=0 xpass=0 error=2 skip=0 unknown=0 timeout=2\"\n' > %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^sv-tests/BMC$' --sv-tests-bmc-tag-regex 'tag_bmc' --sv-tests-bmc-test-filter 'filter_bmc'
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+//
+// SUMMARY: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}2{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}2{{[[:space:]]+}}0
+// SUMMARY: bmc_timeout_cases=2
+// SUMMARY: bmc_timeout_stage_frontend_cases=1
+// SUMMARY: bmc_timeout_stage_solver_cases=1
+// SUMMARY: bmc_timeout_stage_unknown_cases=0
