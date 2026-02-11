@@ -1,6 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Re-exec from an immutable snapshot to avoid parse failures when this script is
+# edited concurrently during long formal cadence runs.
+if [[ "${RUN_FORMAL_ALL_SNAPSHOT_ACTIVE:-0}" != "1" &&
+      "${RUN_FORMAL_ALL_DISABLE_SNAPSHOT:-0}" != "1" ]]; then
+  run_formal_all_script_source="${BASH_SOURCE[0]:-$0}"
+  if [[ -f "$run_formal_all_script_source" ]]; then
+    run_formal_all_snapshot="$(mktemp "${TMPDIR:-/tmp}/run_formal_all.XXXXXX.sh")"
+    cp "$run_formal_all_script_source" "$run_formal_all_snapshot"
+    chmod +x "$run_formal_all_snapshot"
+    export RUN_FORMAL_ALL_SNAPSHOT_ACTIVE=1
+    export RUN_FORMAL_ALL_SNAPSHOT_PATH="$run_formal_all_snapshot"
+    exec /usr/bin/env bash "$run_formal_all_snapshot" "$@"
+  fi
+fi
+
+if [[ "${RUN_FORMAL_ALL_SNAPSHOT_ACTIVE:-0}" == "1" &&
+      -n "${RUN_FORMAL_ALL_SNAPSHOT_PATH:-}" ]]; then
+  run_formal_all_snapshot_cleanup="$RUN_FORMAL_ALL_SNAPSHOT_PATH"
+  trap 'rm -f "$run_formal_all_snapshot_cleanup"' EXIT
+fi
+
+if [[ "${RUN_FORMAL_ALL_DEBUG_SNAPSHOT:-0}" == "1" ]]; then
+  echo "[run_formal_all] snapshot_active=${RUN_FORMAL_ALL_SNAPSHOT_ACTIVE:-0} snapshot_path=${RUN_FORMAL_ALL_SNAPSHOT_PATH:--}" >&2
+fi
+
 usage() {
   cat <<'USAGE'
 run_formal_all.sh [options]

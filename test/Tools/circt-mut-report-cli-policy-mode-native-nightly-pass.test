@@ -6,6 +6,7 @@
 // RUN: FileCheck %s < %t/out.txt
 //
 // CHECK: policy.mode{{[[:space:]]}}native-nightly
+// CHECK: policy.mode_is_native_strict{{[[:space:]]}}0
 // CHECK: policy.profile_count{{[[:space:]]}}3
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-matrix-composite-nightly
 // CHECK: policy.profile_2{{[[:space:]]}}formal-regression-matrix-provenance-guard

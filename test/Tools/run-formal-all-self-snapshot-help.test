@@ -1,0 +1,8 @@
+// RUN: env RUN_FORMAL_ALL_DEBUG_SNAPSHOT=1 %S/../../utils/run_formal_all.sh --help 2>&1 | FileCheck %s --check-prefix=SNAP
+// RUN: env RUN_FORMAL_ALL_DEBUG_SNAPSHOT=1 RUN_FORMAL_ALL_DISABLE_SNAPSHOT=1 %S/../../utils/run_formal_all.sh --help 2>&1 | FileCheck %s --check-prefix=NOSNAP
+
+// SNAP: [run_formal_all] snapshot_active=1 snapshot_path=
+// SNAP: run_formal_all.sh [options]
+
+// NOSNAP: [run_formal_all] snapshot_active=0 snapshot_path=-
+// NOSNAP: run_formal_all.sh [options]
