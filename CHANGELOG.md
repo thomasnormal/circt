@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1084 - February 11, 2026
+
+### `circt-mut` Policy-Mode Closure: Native Strict + External Formal
+
+1. Extended matrix policy mode surface in `tools/circt-mut/circt-mut.cpp`:
+   - added `native-strict-formal`
+2. `native-strict-formal` now maps to:
+   - native strict composite policy bundle
+   - external formal guard profile
+   - native strict mode-contract profile
+   enabling one-shot strict native matrix + external formal governance.
+3. Added run-level forwarding for external formal report files:
+   - new repeatable run option:
+     - `--report-external-formal-results FILE`
+   - config fallback:
+     - `[run] report_external_formal_results` (CSV)
+   - forwarded to report as repeatable:
+     - `--external-formal-results FILE`
+4. Updated policy-mode/help/validation surfaces:
+   - `kMatrixPolicyModeList` includes `native-strict-formal`
+   - `circt-mut init|run|report --help` lists new mode
+   - mode-invalid diagnostics updated across init/run/report paths
+5. Added regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-missing-external-fail.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal.test`
+   - updated: run/report/init help + policy-mode invalid tests
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused native-strict-formal slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-init-help.test build-test/test/Tools/circt-mut-run-help.test build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-init-report-policy-invalid.test build-test/test/Tools/circt-mut-report-cli-policy-mode-invalid.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test build-test/test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test build-test/test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-pass.test build-test/test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-missing-external-fail.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal.test build-test/test/Tools/circt-mut-report-external-formal-results-basic.test build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-guard-pass.test build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-guard-fail.test`: PASS (13/13)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter 'circt-mut-.*\\.test' build-test/test/Tools`: PASS (313/313)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-strict-formal-mode ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - Summary snapshot produced in `summary.tsv`:
+    - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+    - FAIL/ERROR: `verilator-verification` BMC (`error=1`), `opentitan` LEC (`fail=1,error=1,missing_results=1`), AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+  - Harness issues observed after snapshot generation:
+    - `FileNotFoundError: 'build/bin/circt-verilog'`
+    - `utils/run_formal_all.sh: line 9700: syntax error near unexpected token 'fi'`
+
 ## Iteration 1083 - February 11, 2026
 
 ### Formal Driver: Runner-Emitted LEC Timeout Status + Class Override

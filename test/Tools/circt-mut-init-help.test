@@ -19,5 +19,6 @@
 // CHECK: native-smoke
 // CHECK: native-nightly
 // CHECK: native-strict
+// CHECK: native-strict-formal
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --force
