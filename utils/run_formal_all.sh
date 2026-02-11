@@ -77,6 +77,10 @@ Options:
   --fail-on-new-lec-error-bucket-case-ids
                          Fail when new LEC error-bucket case IDs
                          (`lec_error_bucket_case_ids`) appear vs baseline
+  --fail-on-new-lec-semantic-diag-subfamily-case-ids
+                         Fail when new LEC semantic-diag subfamily case IDs
+                         (`lec_semantic_diag_subfamily_case_ids`) appear vs
+                         baseline
   --fail-on-new-lec-circt-verilog-error-case-ids
                          Fail when LEC `CIRCT_VERILOG_ERROR` case IDs increase
                          vs baseline
@@ -1888,6 +1892,7 @@ FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS=0
 FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS=0
 FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES=0
 FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS=0
+FAIL_ON_NEW_LEC_SEMANTIC_DIAG_SUBFAMILY_CASE_IDS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=0
 FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=0
@@ -2265,6 +2270,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES=1; shift ;;
     --fail-on-new-lec-error-bucket-case-ids)
       FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS=1; shift ;;
+    --fail-on-new-lec-semantic-diag-subfamily-case-ids)
+      FAIL_ON_NEW_LEC_SEMANTIC_DIAG_SUBFAMILY_CASE_IDS=1; shift ;;
     --fail-on-new-lec-circt-verilog-error-case-ids)
       FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=1; shift ;;
     --fail-on-new-lec-circt-verilog-error-case-reasons)
@@ -4370,6 +4377,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS=1
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES=1
   FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS=1
+  FAIL_ON_NEW_LEC_SEMANTIC_DIAG_SUBFAMILY_CASE_IDS=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=1
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1
@@ -11837,6 +11845,18 @@ def classify_lec_error_bucket(diag: str, reason: str) -> str:
         return "semantic_diag_missing"
     return "semantic_other"
 
+def classify_lec_semantic_diag_subfamily(diag: str, reason: str) -> str:
+    upper_diag = (diag or "").upper()
+    upper_reason = (reason or "").upper()
+    haystack = f"{upper_diag} {upper_reason}"
+    if re.search(r"(PARSE|PARSER|IMPORT|SYNTAX|ELABORAT|SLANG)", haystack):
+        return "parser"
+    if re.search(r"(LOWER|PIPELINE|DIALECT|CONVERT|CONVERSION|LEGALIZ|CANONICAL)", haystack):
+        return "lowering"
+    if re.search(r"(SOLVER|SMT|Z3|SAT|UNSAT|MODEL|BITBLAST|CNF|NEQ|UNKNOWN)", haystack):
+        return "solver"
+    return ""
+
 def collect_lec_error_bucket_case_ids(out_dir: Path):
     sources = [
         ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
@@ -11870,6 +11890,53 @@ def collect_lec_error_bucket_case_ids(out_dir: Path):
                 bucket = classify_lec_error_bucket(diag, reason)
                 bucket_case_ids.setdefault(key, set()).add(f"{bucket}::{case_id}")
     return {key: ";".join(sorted(values)) for key, values in bucket_case_ids.items()}
+
+def collect_lec_semantic_diag_subfamily_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
+        ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+        ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
+    ]
+    subfamily_case_ids = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                status = parts[0].strip().upper() if parts else ""
+                if status != "ERROR":
+                    continue
+                base = parts[1].strip() if len(parts) > 1 else ""
+                file_path = parts[2].strip() if len(parts) > 2 else ""
+                explicit_diag = parts[5].strip() if len(parts) > 5 else ""
+                reason = parts[6].strip() if len(parts) > 6 else ""
+                diag = extract_diag_tag(file_path, explicit_diag)
+                if classify_lec_error_bucket(diag, reason) != "semantic_diag_error":
+                    continue
+                upper_diag = (diag or "").upper()
+                upper_reason = (reason or "").upper()
+                haystack = f"{upper_diag} {upper_reason}"
+                subfamily = ""
+                if re.search(r"(PARSE|PARSER|IMPORT|SYNTAX|ELABORAT|SLANG)", haystack):
+                    subfamily = "parser"
+                elif re.search(r"(LOWER|PIPELINE|DIALECT|CONVERT|CONVERSION|LEGALIZ|CANONICAL)", haystack):
+                    subfamily = "lowering"
+                elif re.search(r"(SOLVER|SMT|Z3|SAT|UNSAT|MODEL|BITBLAST|CNF|NEQ|UNKNOWN)", haystack):
+                    subfamily = "solver"
+                if not subfamily:
+                    continue
+                case_id = compose_case_id(base, file_path, explicit_diag)
+                if not case_id:
+                    continue
+                subfamily_case_ids.setdefault(key, set()).add(f"{subfamily}::{case_id}")
+    return {key: ";".join(sorted(values)) for key, values in subfamily_case_ids.items()}
 
 def read_baseline_int(row, key, summary_counts):
     raw = row.get(key)
@@ -11915,6 +11982,9 @@ lec_runner_command_case_ids = collect_lec_runner_command_case_ids(
     lec_runner_command_case_reasons
 )
 lec_error_bucket_case_ids = collect_lec_error_bucket_case_ids(out_dir)
+lec_semantic_diag_subfamily_case_ids = collect_lec_semantic_diag_subfamily_case_ids(
+    out_dir
+)
 
 baseline = {}
 if baseline_path.exists():
@@ -11962,6 +12032,7 @@ if baseline_path.exists():
                 'lec_runner_command_case_ids': row.get('lec_runner_command_case_ids', ''),
                 'lec_runner_command_case_reasons': row.get('lec_runner_command_case_reasons', ''),
                 'lec_error_bucket_case_ids': row.get('lec_error_bucket_case_ids', ''),
+                'lec_semantic_diag_subfamily_case_ids': row.get('lec_semantic_diag_subfamily_case_ids', ''),
             }
 
 for row in rows:
@@ -12003,6 +12074,7 @@ for row in rows:
         'lec_runner_command_case_ids': lec_runner_command_case_ids.get((row['suite'], row['mode']), ''),
         'lec_runner_command_case_reasons': lec_runner_command_case_reasons.get((row['suite'], row['mode']), ''),
         'lec_error_bucket_case_ids': lec_error_bucket_case_ids.get((row['suite'], row['mode']), ''),
+        'lec_semantic_diag_subfamily_case_ids': lec_semantic_diag_subfamily_case_ids.get((row['suite'], row['mode']), ''),
     }
 
 baseline_path.parent.mkdir(parents=True, exist_ok=True)
@@ -12038,6 +12110,7 @@ with baseline_path.open('w', newline='') as f:
             'lec_runner_command_case_ids',
             'lec_runner_command_case_reasons',
             'lec_error_bucket_case_ids',
+            'lec_semantic_diag_subfamily_case_ids',
         ],
         delimiter='\t',
     )
@@ -12106,6 +12179,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES" == "1" || \
       "$FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS" == "1" || \
+      "$FAIL_ON_NEW_LEC_SEMANTIC_DIAG_SUBFAMILY_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" == "1" || \
@@ -12168,6 +12242,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS" \
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES" \
   FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS="$FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS" \
+  FAIL_ON_NEW_LEC_SEMANTIC_DIAG_SUBFAMILY_CASE_IDS="$FAIL_ON_NEW_LEC_SEMANTIC_DIAG_SUBFAMILY_CASE_IDS" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" \
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" \
@@ -12828,6 +12903,53 @@ def collect_lec_error_bucket_case_ids(out_dir: Path):
                 bucket_case_ids.setdefault(key, set()).add(f"{bucket}::{case_id}")
     return bucket_case_ids
 
+def collect_lec_semantic_diag_subfamily_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
+        ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+        ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
+    ]
+    subfamily_case_ids = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                status = parts[0].strip().upper() if parts else ""
+                if status != "ERROR":
+                    continue
+                base = parts[1].strip() if len(parts) > 1 else ""
+                file_path = parts[2].strip() if len(parts) > 2 else ""
+                explicit_diag = parts[5].strip() if len(parts) > 5 else ""
+                reason = parts[6].strip() if len(parts) > 6 else ""
+                diag = extract_diag_tag(file_path, explicit_diag)
+                if classify_lec_error_bucket(diag, reason) != "semantic_diag_error":
+                    continue
+                upper_diag = (diag or "").upper()
+                upper_reason = (reason or "").upper()
+                haystack = f"{upper_diag} {upper_reason}"
+                subfamily = ""
+                if re.search(r"(PARSE|PARSER|IMPORT|SYNTAX|ELABORAT|SLANG)", haystack):
+                    subfamily = "parser"
+                elif re.search(r"(LOWER|PIPELINE|DIALECT|CONVERT|CONVERSION|LEGALIZ|CANONICAL)", haystack):
+                    subfamily = "lowering"
+                elif re.search(r"(SOLVER|SMT|Z3|SAT|UNSAT|MODEL|BITBLAST|CNF|NEQ|UNKNOWN)", haystack):
+                    subfamily = "solver"
+                if not subfamily:
+                    continue
+                case_id = compose_case_id(base, file_path, explicit_diag)
+                if not case_id:
+                    continue
+                subfamily_case_ids.setdefault(key, set()).add(f"{subfamily}::{case_id}")
+    return subfamily_case_ids
+
 current_lec_runner_command_case_reasons = collect_lec_runner_command_case_reasons(
     current_lec_circt_opt_error_case_reasons,
     current_lec_circt_verilog_error_case_reasons,
@@ -12837,6 +12959,9 @@ current_lec_runner_command_case_ids = collect_lec_runner_command_case_ids(
 )
 current_lec_error_bucket_case_ids = collect_lec_error_bucket_case_ids(
     Path(os.environ["OUT_DIR"])
+)
+current_lec_semantic_diag_subfamily_case_ids = (
+    collect_lec_semantic_diag_subfamily_case_ids(Path(os.environ["OUT_DIR"]))
 )
 
 history = {}
@@ -12891,6 +13016,9 @@ fail_on_new_lec_runner_command_cases = (
 )
 fail_on_new_lec_error_bucket_case_ids = (
     os.environ.get("FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS", "0") == "1"
+)
+fail_on_new_lec_semantic_diag_subfamily_case_ids = (
+    os.environ.get("FAIL_ON_NEW_LEC_SEMANTIC_DIAG_SUBFAMILY_CASE_IDS", "0") == "1"
 )
 fail_on_new_lec_circt_verilog_error_case_ids = (
     os.environ.get("FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS", "0") == "1"
@@ -13516,6 +13644,32 @@ for key, current_row in summary.items():
                     sample += ", ..."
                 gate_errors.append(
                     f"{suite} {mode}: new LEC error-bucket case IDs observed (baseline={len(baseline_error_bucket_case_ids)} current={len(current_error_bucket_case_ids)}, window={baseline_window}): {sample}"
+                )
+    if fail_on_new_lec_semantic_diag_subfamily_case_ids and mode.startswith("LEC"):
+        baseline_subfamily_case_ids_raw = [
+            row.get("lec_semantic_diag_subfamily_case_ids") for row in compare_rows
+        ]
+        if any(raw is not None for raw in baseline_subfamily_case_ids_raw):
+            baseline_subfamily_case_ids = set()
+            for raw in baseline_subfamily_case_ids_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_subfamily_case_ids.add(token)
+            current_subfamily_case_ids = current_lec_semantic_diag_subfamily_case_ids.get(
+                key, set()
+            )
+            new_subfamily_case_ids = sorted(
+                current_subfamily_case_ids - baseline_subfamily_case_ids
+            )
+            if new_subfamily_case_ids:
+                sample = ", ".join(new_subfamily_case_ids[:2])
+                if len(new_subfamily_case_ids) > 2:
+                    sample += ", ..."
+                gate_errors.append(
+                    f"{suite} {mode}: new LEC semantic-diag subfamily case IDs observed (baseline={len(baseline_subfamily_case_ids)} current={len(current_subfamily_case_ids)}, window={baseline_window}): {sample}"
                 )
     if mode.startswith("BMC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
