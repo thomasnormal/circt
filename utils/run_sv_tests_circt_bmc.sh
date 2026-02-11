@@ -581,9 +581,11 @@ top_module=${top_module}
   fi
 
   bmc_args=("${bmc_base_args[@]}")
-  if [[ "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]]; then
+  if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
+    bmc_args+=("--emit-mlir")
+  elif [[ "$BMC_RUN_SMTLIB" == "1" ]]; then
     bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
-  elif [[ "$BMC_SMOKE_ONLY" != "1" ]]; then
+  else
     bmc_args+=("--shared-libs=$Z3_LIB")
   fi
   out=""

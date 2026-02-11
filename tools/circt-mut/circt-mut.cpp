@@ -9170,7 +9170,9 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            applyComposite(
                "formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1") &&
            applyComposite(
-               "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1");
+               "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1") &&
+           applyComposite(
+               "formal-regression-matrix-external-formal-compile-mode-budget-v1");
   }
   if (profile == "formal-regression-matrix-composite-trend-nightly") {
     return applyComposite("formal-regression-matrix-lane-trend-nightly") &&
@@ -9208,7 +9210,9 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            applyComposite(
                "formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1") &&
            applyComposite(
-               "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1");
+               "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1") &&
+           applyComposite(
+               "formal-regression-matrix-external-formal-compile-mode-budget-v1");
   }
   if (profile ==
       "formal-regression-matrix-composite-stop-on-fail-trend-nightly") {

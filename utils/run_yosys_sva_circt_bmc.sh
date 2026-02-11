@@ -8372,7 +8372,12 @@ run_case() {
   record_drop_remark_case "$base" "$sv" "$verilog_log"
   local out
   bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
-      "--module" "$TOP" "--shared-libs=$Z3_LIB")
+      "--module" "$TOP")
+  if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
+    bmc_args+=("--emit-mlir")
+  else
+    bmc_args+=("--shared-libs=$Z3_LIB")
+  fi
   if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
     bmc_args+=("--rising-clocks-only")
   fi

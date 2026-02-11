@@ -1,7 +1,7 @@
 // RUN: rm -rf %t && mkdir -p %t/sv-tests/tests %t/bin
 // RUN: printf ':tags: smoke\nmodule top; endmodule\n' > %t/sv-tests/tests/coherent-bmc.sv
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "module {}"\n' > %t/bin/circt-verilog
-// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "BMC_RESULT=UNSAT"\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ " $* " != *" --emit-mlir "* ]]; then\n  echo "missing --emit-mlir in smoke mode" >&2\n  exit 1\nfi\necho "BMC_RESULT=UNSAT"\n' > %t/bin/circt-bmc
 // RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-bmc
 // RUN: env TAG_REGEX='smoke' TEST_FILTER='coherent-bmc' BMC_SMOKE_ONLY=1 Z3_LIB=/dev/null CIRCT_VERILOG=%t/bin/circt-verilog OUT=%t/results.tsv /usr/bin/bash %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s --check-prefix=SUMMARY
 // RUN: FileCheck %s --check-prefix=RESULT < %t/results.tsv

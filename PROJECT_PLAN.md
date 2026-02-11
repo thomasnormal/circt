@@ -9,6 +9,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++)
+
+1. Added stop-on-fail counterpart for release-grade native strict formal trend
+   governance:
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1`
+2. This closes the previous profile-gap between strict formal trend gating and
+   stop-on-fail native execution contracts.
+3. Closed the previously open `verilator` BMC smoke error path:
+   - root cause was solver-dependent JIT in smoke mode (missing `Z3_*` symbols).
+   - smoke runners now use `circt-bmc --emit-mlir` (solver-independent).
+4. Current limitations:
+   - the new composite profiles still do not directly consume strict
+     case-id/case-reason drift artifacts from `run_formal_all` baselines.
+   - UVM-heavy `sv-tests` BMC/LEC still need stable suite-specific runtime
+     envelopes for repeatable cadence telemetry.
+5. Next long-term features:
+   - add profile wiring that gates on strict drift identity artifacts
+     (case-id + case-reason) in addition to trend metrics.
+   - add explicit timeout-envelope governance by suite/case family.
+   - add targeted reproducer + semantic bucket routing for remaining
+     non-smoke `verilator` BMC/LEC edge regressions.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++)
 
 1. Added release-grade composite mutation gate for native strict formal lanes:

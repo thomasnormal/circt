@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1129 - February 11, 2026
+
+### Mutation Governance: Stop-On-Fail Native-Strict Formal Trend Composite (v1)
+
+1. Added new profile:
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1`
+2. Composition:
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict`
+   - `formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1`
+   - `formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1`
+   - `formal-regression-matrix-external-formal-compile-mode-budget-v1`
+3. Added focused tests:
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v1-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Formal BMC Runner Tech-Debt Fix: Solver-Independent Smoke Path
+
+1. Fixed smoke-mode BMC behavior in:
+   - `utils/run_sv_tests_circt_bmc.sh`
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - `utils/run_yosys_sva_circt_bmc.sh`
+2. New behavior:
+   - `BMC_SMOKE_ONLY=1` now runs `circt-bmc --emit-mlir`, avoiding JIT Z3
+     symbol materialization and aligning with smoke intent.
+3. Strengthened smoke-contract regressions by requiring `--emit-mlir`:
+   - `test/Tools/run-sv-tests-bmc-toolchain-derived-from-circt-verilog.test`
+   - `test/Tools/run-verilator-verification-circt-bmc-toolchain-derived-from-circt-verilog.test`
+   - `test/Tools/run-yosys-sva-bmc-toolchain-derived-from-circt-verilog.test`
+
+### Tests and Validation
+
+- `bash -n`:
+  - `utils/run_sv_tests_circt_bmc.sh`
+  - `utils/run_verilator_verification_circt_bmc.sh`
+  - `utils/run_yosys_sva_circt_bmc.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv` focused slice:
+  - 10 tests (new composite profile + smoke contract + adjacent coverage)
+  - PASS (10/10)
+- External targeted probes:
+  - `verilator-verification` BMC (`assert_changed`, smoke): PASS
+  - `sv-tests` BMC (`16.10--property-local-var-uvm`, smoke): PASS
+  - `yosys/tests/sva` BMC (`simple_and`, smoke): filtered-empty (`total=0`)
+
 ## Iteration 1128 - February 11, 2026
 
 ### Mutation Governance: External Formal Status Rollups + Compile Budget Profile
