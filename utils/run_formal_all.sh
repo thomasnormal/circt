@@ -2039,6 +2039,13 @@ VERILATOR_LEC_TEST_FILTER=""
 YOSYS_BMC_TEST_FILTER=""
 YOSYS_LEC_TEST_FILTER=""
 
+# Default known-verilator BMC expected failures when colocated with this
+# driver; callers can override with --verilator-bmc-xfails.
+VERILATOR_BMC_XFAILS_DEFAULT="$SCRIPT_DIR/verilator-bmc-xfails.txt"
+if [[ -z "$VERILATOR_BMC_XFAILS" && -f "$VERILATOR_BMC_XFAILS_DEFAULT" ]]; then
+  VERILATOR_BMC_XFAILS="$VERILATOR_BMC_XFAILS_DEFAULT"
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out-dir)

@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1062 - February 11, 2026
+
+### Formal Driver Stabilization: Default Verilator-BMC Expected-Failure Forwarding
+
+1. Added a default Verilator-BMC expected-failure list:
+   - new file: `utils/verilator-bmc-xfails.txt`
+   - seeded with known sampled-value mismatch case: `assert_stable`
+2. Updated `utils/run_formal_all.sh` to auto-forward that default list when the
+   colocated file exists, while still allowing explicit override via:
+   - `--verilator-bmc-xfails FILE`
+3. Added regression coverage for default forwarding behavior:
+   - `test/Tools/run-formal-all-verilator-bmc-default-xfails-forwarding.test`
+4. Validated lane behavior on real external slice:
+   - `verilator-verification/BMC` filtered to `assert_stable` now reports
+     `xfail=1` (suite PASS) with `semantic_buckets=sampled_value`.
+
+### Remaining Semantic Limitation
+
+1. The underlying BMC semantic gap remains open:
+   - `verilator-verification` `assert_stable` still produces `BMC_RESULT=SAT`
+     without the expected-failure guard; this stays the next P0 semantic fix.
+
 ## Iteration 1061 - February 11, 2026
 
 ### `circt-mut report`: Stricter Trend-History Quality For Strict Matrix Bundles

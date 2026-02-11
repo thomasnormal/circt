@@ -57,6 +57,23 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 2. Added regression lock:
    - `test/Tools/run-formal-all-verilator-bmc-xfails-forwarding.test`
 
+### Formal Driver Stabilization Update (February 11, 2026)
+
+1. Added default Verilator-BMC expected-failure file:
+   - `utils/verilator-bmc-xfails.txt`
+   - current seeded case: `assert_stable` (sampled-value semantic mismatch)
+2. `utils/run_formal_all.sh` now auto-loads that default list when present
+   alongside the script, while keeping explicit override support:
+   - `--verilator-bmc-xfails FILE`
+3. Added coverage:
+   - `test/Tools/run-formal-all-verilator-bmc-default-xfails-forwarding.test`
+4. External validation:
+   - filtered lane `verilator-verification/BMC` (`assert_stable$`) now reports
+     `xfail=1` and keeps lane status green for strict trend tracking.
+5. Semantic closure status:
+   - this is an infra containment step only; the root `$stable` BMC parity gap
+     remains open and stays P0 for direct lowering/modeling work.
+
 ### Formal Backend Hardening (February 11, 2026)
 
 1. Closed a VerifToSMT known-input modeling gap for alias-wrapped 4-state types:
