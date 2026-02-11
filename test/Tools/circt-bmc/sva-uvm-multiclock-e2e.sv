@@ -1,4 +1,4 @@
-// RUN: circt-verilog --uvm-path=%S/../../../lib/Runtime/uvm --ir-hw %s | \
+// RUN: circt-verilog --uvm-path=%S/../../../lib/Runtime/uvm-core/src --ir-hw %s | \
 // RUN:   circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers \
 // RUN:   --lower-to-bmc="top-module=sva_uvm_multiclock bound=5 allow-multi-clock" \
 // RUN:   | FileCheck %s --check-prefix=CHECK-BMC
