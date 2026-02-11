@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1137 - February 11, 2026
+
+### Mutation Regression Stabilization: Keep Compile-Mode Rows in Formal-Trend v1 Fixtures
+
+1. Updated:
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v1-fail.test`
+2. Both fixtures now include explicit external-formal `compile` rows in
+   `summary.tsv`, so `formal-regression-matrix-external-formal-compile-mode-budget-v1`
+   remains exercised when validating
+   `formal-regression-matrix-composite-native-strict-formal-trend-v1`.
+
+### Tests and Validation
+
+- Focused lit:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v1-pass.test`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v1-fail.test`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-v1-pass.test`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-v1-fail.test`
+  - PASS (4/4)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (358/358 selected)
+
 ## Iteration 1136 - February 11, 2026
 
 ### Mutation Governance: External Formal Non-Empty Filter Contract Profile + v6 Composites
