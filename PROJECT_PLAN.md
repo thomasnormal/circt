@@ -9,6 +9,33 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++)
+
+1. Added digest-level BMC identity governance end-to-end:
+   - `run_formal_all` now exports:
+     - `bmc_abstraction_provenance_identity_digest_u64`
+     - `bmc_ir_check_key_identity_digest_u64`
+     - `bmc_ir_check_fingerprint_identity_digest_u64`
+2. Added mutation profile:
+   - `formal-regression-matrix-external-formal-bmc-provenance-check-identity-digest-trend-guard-v1`
+   with strict no-drift gates (`delta == 0`) for BMC digest identities.
+3. Added staged rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v5`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v5`
+4. Current remaining limitations:
+   - digest gates detect drift but do not localize *which* identity changed;
+     root-cause still requires consulting attribution artifacts.
+   - OpenTitan bounded LEC cadence remains operationally brittle
+     (`missing_results` under bounded quick runs).
+   - targeted external probes can still waste cycles on filter-empty slices
+     without explicit non-empty contracts.
+5. Next long-term features:
+   - add digest-breakdown explainers in `circt-mut report` so failures print
+     stable set-diff hints per suite/mode.
+   - add explicit non-empty filter contracts for sv-tests/verilator/yosys lanes.
+   - harden OpenTitan bounded LEC result emission and classify failures
+     deterministically instead of `missing_results`.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++)
 
 1. Added BMC provenance/check identity trend governance:
