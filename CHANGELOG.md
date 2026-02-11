@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1120 - February 11, 2026
+
+### Formal Governance: Strict LEC Semantic-Diag Subfamily Case-ID Drift Gate
+
+1. Extended `run_formal_all.sh` strict-gate controls with:
+   - `--fail-on-new-lec-semantic-diag-subfamily-case-ids`
+2. Added baseline/current identity tracking field:
+   - `lec_semantic_diag_subfamily_case_ids`
+   containing `subfamily::case_id` tuples for semantic-diag errors
+   (`parser`, `lowering`, `solver`).
+3. Integrated gate into strict-mode default bundle so `--strict-gate` now
+   covers semantic-diag subfamily case-ID drift automatically.
+4. Added dedicated regression:
+   - `test/Tools/run-formal-all-strict-gate-lec-semantic-diag-subfamily-case-ids.test`
+   validating:
+   - baseline captures parser tuple
+   - strict gate fails when lowering tuple appears in a later run.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-semantic-diag-subfamily-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-lec-error-bucket-semantic-diag-subfamilies.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-error-bucket-case-ids.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-guard-pass.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-guard-fail.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-guard-missing-keys-pass.test`
+  - PASS (6/6)
+- External cadence probes (filtered):
+  - `sv-tests` LEC probe: filtered-empty (`total=0`)
+  - `verilator-verification` LEC probe: `total=1 error=1`
+  - `yosys/tests/sva` LEC probe: filtered-empty (`total=0`)
+  - OpenTitan LEC probe (`impl-filter=canright`) with explicit
+    `build-test/bin` tools:
+    - `PASS	aes_sbox_canright	...	opentitan	LEC	EQ`
+  - AVIP `apb_avip` compile probe with `CIRCT_VERILOG=build-test/bin/circt-verilog`
+    returned success (`0`) and produced `avip-circt-verilog.log`.
+
 ## Iteration 1119 - February 11, 2026
 
 ### Mutation Policy: Native Strict Summary v1 Regression Lock-In
