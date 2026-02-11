@@ -7699,6 +7699,8 @@ static void appendTrendHistoryQualityRules(ReportOptions &opts,
 static void appendTrendHistoryQualityStrictRules(ReportOptions &opts) {
   appendTrendHistoryQualityRules(opts, 3.0);
   appendUniqueRule(opts.failIfValueLtRules,
+                   "trend.matrix_core_numeric_keys_full_history", 5.0);
+  appendUniqueRule(opts.failIfValueLtRules,
                    "trend.numeric_keys_full_history_pct", 80.0);
   appendUniqueRule(opts.failIfValueLtRules,
                    "trend.matrix_core_numeric_keys_full_history_pct", 100.0);

@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1069 - February 11, 2026
+
+### `circt-mut report`: Strict Trend Core-Key Full-History Count Gate
+
+1. Strengthened strict trend-history policy in
+   `tools/circt-mut/circt-mut.cpp` with an explicit core-key full-history
+   count floor:
+   - `trend.matrix_core_numeric_keys_full_history >= 5`
+2. This complements percentage-based strict gates by making failures explicit
+   when any required core key history is missing, even if users inspect only
+   derived percentages.
+3. Updated regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-core-key-coverage-fail.test`
+   now asserts both strict failures:
+   - `trend.matrix_core_numeric_keys_full_history value=4.00 < 5.00`
+   - `trend.matrix_core_numeric_keys_full_history_pct value=80.00 < 100.00`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused strict trend slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-core-key-coverage-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-history-quality-fail.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-trend-strict.test`: PASS (3/3)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter 'circt-mut-.*\\.test' build-test/test/Tools`: PASS (306/306)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-trend-core-count-strict ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC (`assert_fell` ERROR), `opentitan` LEC (`missing_results=1`), AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1068 - February 11, 2026
 
 ### Formal Driver Hardening: Explicit Yosys BMC Profile Selection In `run_formal_all`

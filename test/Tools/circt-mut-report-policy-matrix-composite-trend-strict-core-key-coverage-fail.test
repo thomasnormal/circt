@@ -8,5 +8,6 @@
 //
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-matrix-composite-trend-strict
 // CHECK: value_gate.status{{[[:space:]]}}fail
+// CHECK: value_gate.failure_{{[0-9]+}}{{[[:space:]]}}trend.matrix_core_numeric_keys_full_history value=4.00 < 5.00
 // CHECK: value_gate.failure_{{[0-9]+}}{{[[:space:]]}}trend.matrix_core_numeric_keys_full_history_pct value=80.00 < 100.00
 // CHECK: trend.gate_status{{[[:space:]]}}pass
