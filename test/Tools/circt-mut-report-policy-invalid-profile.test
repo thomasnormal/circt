@@ -3,4 +3,5 @@
 // CHECK: circt-mut report: unknown --policy-profile value: nope (expected
 // CHECK-SAME: formal-regression-basic
 // CHECK-SAME: formal-regression-matrix-runtime-strict
+// CHECK-SAME: formal-regression-matrix-composite-trend-strict
 // CHECK-SAME: formal-regression-matrix-composite-stop-on-fail-strict

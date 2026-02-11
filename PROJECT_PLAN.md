@@ -127,6 +127,11 @@ See CHANGELOG.md on recent progress.
   a single composite matrix profile (instead of paired guard/runtime profiles),
   simplifying CI policy configuration and reducing multi-profile precedence
   edge-cases in run/report flows.
+- Latest mutation-governance milestone (current): trend governance now has
+  single-profile composite bundles
+  (`formal-regression-matrix-composite-trend-{nightly,strict}`) that compose
+  lane-trend, runtime-trend, and lane-drift checks for long-run matrix
+  regression tracking.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
