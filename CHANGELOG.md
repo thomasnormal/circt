@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1035 - February 11, 2026
+
+### BMC Semantic Closure: `disable iff` Truthiness + Local-Var Abort Edges
+
+1. Fixed `disable iff` condition lowering in
+   `lib/Conversion/ImportVerilog/AssertionExpr.cpp`:
+   - `disable iff` conditions now go through `convertToBool(...)` before
+     `convertToI1(...)`.
+   - This aligns importer semantics with SystemVerilog integral truthiness and
+     removes the prior 1-bit-only restriction.
+2. Applied the same truthiness normalization for scoped default disable clauses
+   (`default disable iff`) before emitting LTL disable wrappers.
+3. Added focused BMC regressions:
+   - `test/Tools/circt-bmc/sva-disable-iff-wide-cond-sat-e2e.sv`
+   - `test/Tools/circt-bmc/sva-disable-iff-wide-cond-unsat-e2e.sv`
+   - `test/Tools/circt-bmc/sva-local-var-disable-iff-abort-unsat-e2e.sv`
+   - `test/Tools/circt-bmc/sva-local-var-disable-iff-no-abort-sat-e2e.sv`
+4. The local-var/disable edge pair validates abort semantics:
+   - disabling between antecedent and consequent aborts the check (`UNSAT`)
+   - keeping disable low preserves consequent checking (`SAT`)
+
+### Tests and Validation
+
+- Reproduced pre-fix importer failure for wide `disable iff`:
+  - `circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-disable-iff-wide-cond-*.sv`
+  - observed: `error: expected a 1-bit integer`
+- Validated new local-var/disable edge regressions with current binaries:
+  - `sva-local-var-disable-iff-abort-unsat-e2e.sv`: `BMC_RESULT=UNSAT` (JIT + SMT-LIB)
+  - `sva-local-var-disable-iff-no-abort-sat-e2e.sv`: `BMC_RESULT=SAT` (JIT + SMT-LIB)
+- Full rebuild/test of updated importer was blocked by an unrelated in-tree
+  compile error in `ImportVerilog.cpp` (`CompilationFlags::AllowVirtualIfaceWithOverride`
+  not found), so post-fix wide-condition runtime validation remains pending
+  until the tree is buildable again.
+
 ## Iteration 1034 - February 11, 2026
 
 ### `circt-mut report`: Policy-Mode Defaults Now Enforce Provenance Profiles

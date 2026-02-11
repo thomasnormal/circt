@@ -226,6 +226,10 @@ See CHANGELOG.md on recent progress.
       `--opentitan-e2e-impl-filter` for
       `opentitan/E2E|E2E_STRICT|E2E_MODE_DIFF`.
   - Close remaining local-variable and `disable iff` semantic mismatches.
+  - Latest closure hardening (current):
+    `ImportVerilog` now treats `disable iff` conditions using integral
+    truthiness (not just 1-bit operands), and BMC regression coverage now
+    includes explicit local-var/`disable iff` abort-vs-no-abort edge tests.
   - Reduce multi-clock edge-case divergence.
   - Expand full (not filtered) regular closure cadence on core suites.
   - Keep strict-gate semantic-tag coverage checks active without blocking
