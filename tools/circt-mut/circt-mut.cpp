@@ -266,6 +266,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-semantic-guard-yosys|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|\n";
+  os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1|\n";
   os << "                           formal-regression-matrix-provenance-guard|\n";
   os << "                           formal-regression-matrix-provenance-strict|\n";
   os << "                           formal-regression-matrix-native-lifecycle-strict|\n";
@@ -8938,6 +8939,24 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     }
     return applyComposite("formal-regression-matrix-trend-history-quality");
   }
+  if (profile ==
+      "formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1") {
+    for (StringRef key : {
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_parser_cases",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_lowering_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_parser_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_lowering_cases",
+         }) {
+      appendUniqueRule(opts.failIfTrendDeltaGtRules, key, 0.0);
+    }
+    for (StringRef key : {
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_solver_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_solver_cases",
+         }) {
+      appendUniqueRule(opts.failIfTrendDeltaGtRules, key, 1.0);
+    }
+    return applyComposite("formal-regression-matrix-trend-history-quality");
+  }
   if (profile == "formal-regression-matrix-provenance-guard") {
     appendMatrixPrequalifyProvenanceColumnPresenceRules(opts);
     appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
@@ -9108,6 +9127,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-semantic-guard-yosys|"
            "formal-regression-matrix-external-formal-semantic-diag-family-guard|"
            "formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|"
+           "formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1|"
            "formal-regression-matrix-provenance-guard|"
            "formal-regression-matrix-provenance-strict|"
            "formal-regression-matrix-native-lifecycle-strict|"

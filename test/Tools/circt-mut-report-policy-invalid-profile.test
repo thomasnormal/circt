@@ -14,6 +14,7 @@
 // CHECK-DAG: formal-regression-matrix-external-formal-semantic-guard-yosys
 // CHECK-DAG: formal-regression-matrix-external-formal-semantic-diag-family-guard
 // CHECK-DAG: formal-regression-matrix-external-formal-semantic-diag-family-trend-guard
+// CHECK-DAG: formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1
 // CHECK-DAG: formal-regression-matrix-composite-native-strict
 // CHECK-DAG: formal-regression-matrix-composite-trend-strict
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-strict
