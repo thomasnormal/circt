@@ -151,6 +151,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-trend-guard|\n";
   os << "                           formal-regression-matrix-guard-smoke|\n";
   os << "                           formal-regression-matrix-guard-nightly|\n";
+  os << "                           formal-regression-matrix-stop-on-fail-guard-smoke|\n";
+  os << "                           formal-regression-matrix-stop-on-fail-guard-nightly|\n";
   os << "                           formal-regression-matrix-guard-strict|\n";
   os << "                           formal-regression-matrix-nightly|\n";
   os << "                           formal-regression-matrix-strict|\n";
@@ -6610,6 +6612,36 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      1.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-stop-on-fail-guard-smoke") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 5.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 5.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 5.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.skip_budget_rows_non_stop_on_fail", 0.0);
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
+                     1.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-stop-on-fail-guard-nightly") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.skip_budget_rows_non_stop_on_fail", 0.0);
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
+                     1.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-guard-strict") {
     opts.failOnPrequalifyDrift = true;
     appendUniqueRule(opts.failIfValueGtRules,
@@ -6855,6 +6887,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-trend-guard|"
            "formal-regression-matrix-guard-smoke|"
            "formal-regression-matrix-guard-nightly|"
+           "formal-regression-matrix-stop-on-fail-guard-smoke|"
+           "formal-regression-matrix-stop-on-fail-guard-nightly|"
            "formal-regression-matrix-guard-strict|"
            "formal-regression-matrix-nightly|"
            "formal-regression-matrix-strict|"

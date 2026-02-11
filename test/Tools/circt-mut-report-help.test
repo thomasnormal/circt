@@ -18,6 +18,8 @@
 // CHECK: formal-regression-matrix-trend-guard
 // CHECK: formal-regression-matrix-guard-smoke
 // CHECK: formal-regression-matrix-guard-nightly
+// CHECK: formal-regression-matrix-stop-on-fail-guard-smoke
+// CHECK: formal-regression-matrix-stop-on-fail-guard-nightly
 // CHECK: formal-regression-matrix-guard-strict
 // CHECK: formal-regression-matrix-nightly
 // CHECK: formal-regression-matrix-strict

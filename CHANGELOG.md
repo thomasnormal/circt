@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 999 - February 11, 2026
+
+### `circt-mut report`: Stop-On-Fail Guard Profiles for Smoke/Nightly
+
+1. Added two new built-in matrix value-gate policy profiles in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-stop-on-fail-guard-smoke`
+   - `formal-regression-matrix-stop-on-fail-guard-nightly`
+2. Profile semantics:
+   - both enforce `matrix.skip_budget_rows_non_stop_on_fail <= 0` so only
+     budgeted `STOP_ON_FAIL` lane cuts are tolerated.
+   - smoke variant keeps relaxed global-filter thresholds (`<= 5`) for
+     practical smoke stability.
+   - nightly variant enforces strict global-filter thresholds (`<= 0`) for
+     tighter formal governance.
+3. Updated user-facing profile surfaces:
+   - `circt-mut report --help`
+   - invalid profile diagnostics (`unknown --policy-profile ... expected ...`)
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-stop-on-fail-guard-smoke-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-stop-on-fail-guard-nightly-fail.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-report-policy-matrix-stop-on-fail-guard-smoke-pass.test test/Tools/circt-mut-report-policy-matrix-stop-on-fail-guard-nightly-fail.test`: PASS (4/4)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (202/202)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-stop-on-fail-guard-profiles ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter 'rv_plic'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `opentitan/LEC`, AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 998 - February 11, 2026
 
 ### `circt-mut report`: Lane-Level Skip Diagnostics in Report Rows
