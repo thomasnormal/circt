@@ -718,6 +718,12 @@ See CHANGELOG.md on recent progress.
   via `--report-external-formal-results` / `[run] report_external_formal_results`.
   This closes the last manual wiring gap for native strict matrix governance
   + external formal closure in one mode invocation.
+- Latest mutation-governance milestone (current): policy-mode now also supports
+  strict non-native external-formal governance:
+  - `strict-formal`
+  mapping to strict composite + provenance strict + external formal guard
+  profiles, enabling strict formal-closure enforcement without native-family
+  mode contracts.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
