@@ -18,6 +18,7 @@
 // CHECK-DAG: formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1
 // CHECK-DAG: formal-regression-matrix-external-formal-compile-mode-budget-v1
 // CHECK-DAG: formal-regression-matrix-composite-native-strict
+// CHECK-DAG: formal-regression-matrix-composite-native-strict-formal-trend-v1
 // CHECK-DAG: formal-regression-matrix-composite-trend-strict
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-strict
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-native-strict

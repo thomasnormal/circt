@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1127 - February 11, 2026
+
+### Mutation Governance: Composite Native-Strict Formal Trend Profile (v1)
+
+1. Added new composite profile in `circt-mut report`:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v1`
+2. Composition:
+   - `formal-regression-matrix-composite-native-strict`
+   - `formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1`
+   - `formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1`
+3. Added focused regressions:
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v1-fail.test`
+   - updated profile listings in:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- `llvm/build/bin/llvm-lit -sv` focused slice:
+  - 6 tests (new composite pass/fail + updated help/profile-list + adjacent trend profiles)
+  - PASS (6/6)
+- External targeted cadence probes (`build-test/bin` tools):
+  - `sv-tests` LEC (`16.15--property-iff-uvm`, smoke): PASS
+  - `verilator-verification` LEC (`assert_changed`, smoke): PASS (`EQ`)
+  - `verilator-verification` BMC (`assert_changed`, smoke): ERROR (still open)
+  - `yosys/tests/sva` BMC/LEC (`simple_and`, smoke): filtered-empty (`total=0`)
+  - OpenTitan LEC (`canright`): PASS (`EQ`)
+  - AVIP `apb_avip` compile probe: command completed, log emitted
+  - `sv-tests` BMC smoke probe timed out before emitting a summary artifact in this window.
+
 ## Iteration 1126 - February 11, 2026
 
 ### Mutation Governance: Frontend Timeout Trend Guard (v1)
