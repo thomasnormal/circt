@@ -9,6 +9,27 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 19:02)
+
+1. Tightened LEC timeout governance in `run_formal_all.sh`:
+   - added `--fail-on-new-lec-timeout-case-ids`
+   - gate now detects growth in timeout *identity set*, not just counts.
+2. Baseline telemetry extension:
+   - baseline TSV now records `lec_timeout_case_ids` per LEC lane.
+   - legacy baseline compatibility is preserved (empty/missing field => no
+     case-ID drift enforcement until data exists).
+3. Strict-gate default hardening:
+   - `--strict-gate` now automatically enables
+     `--fail-on-new-lec-timeout-case-ids`.
+4. New regression lock:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout-case-ids.test`.
+5. Remaining long-term limitations after this slice:
+   - LEC still needs semantic/perf closure on UVM sequence-subroutine and
+     multiclock-heavy cases that currently converge to TIMEOUT.
+   - BMC still needs deeper bucket closure for multiclock/subroutine edges.
+   - mutation matrix still needs stronger external-formal ingestion scaling
+     controls (cache/shard/provenance compaction) for large portfolios.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 18:52)
 
 1. Added LEC timeout strict-gate control in `run_formal_all.sh`:
