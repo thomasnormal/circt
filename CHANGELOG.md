@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1109 - February 11, 2026
+
+### BMC Semantic Closure: Deterministic Sequence-Subroutine E2E Outcomes
+
+1. Added two deterministic `circt-bmc` e2e tests that include explicit
+   sequence subroutine calls in match items:
+   - `test/Tools/circt-bmc/sva-sequence-subroutine-call-unsat-e2e.sv`
+   - `test/Tools/circt-bmc/sva-sequence-subroutine-call-sat-e2e.sv`
+2. These pin the expected semantic behavior across both BMC backends:
+   - UNSAT case: consequent matches captured value
+   - SAT case: consequent intentionally mismatches captured value
+3. Why this matters:
+   - provides a small, deterministic semantic signal for the
+     sequence-subroutine family without relying on full `sv-tests` harness
+     latency.
+   - improves long-term triage of multiclock/subroutine closure work by adding
+     backend-parity anchors in core tool tests.
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv` (local env):
+  - `build-test/test/Tools/circt-bmc/sva-sequence-subroutine-call-unsat-e2e.sv`
+  - `build-test/test/Tools/circt-bmc/sva-sequence-subroutine-call-sat-e2e.sv`
+  - both are `Unsupported` in this local config due solver feature gating.
+- Manual backend validation with explicit Z3 paths and rebuilt `circt-bmc`:
+  - `sva-sequence-subroutine-call-unsat-e2e.sv`:
+    - JIT: `BMC_RESULT=UNSAT`
+    - SMT-LIB: `BMC_RESULT=UNSAT`
+  - `sva-sequence-subroutine-call-sat-e2e.sv`:
+    - JIT: `BMC_RESULT=SAT`
+    - SMT-LIB: `BMC_RESULT=SAT`
+
 ## Iteration 1108 - February 11, 2026
 
 ### Formal Governance: Targeted BMC Semantic-Bucket Case-ID Drift Gates
