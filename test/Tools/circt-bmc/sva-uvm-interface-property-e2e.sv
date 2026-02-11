@@ -1,5 +1,5 @@
 // XFAIL: *
-// RUN: circt-verilog --uvm-path=%S/../../../lib/Runtime/uvm --ir-hw %s | \
+// RUN: circt-verilog --uvm-path=%S/../../../lib/Runtime/uvm-core/src --ir-hw %s | \
 // RUN:   circt-bmc --emit-mlir -b 5 --module=sva_uvm_interface_property - | \
 // RUN:   FileCheck %s --check-prefix=CHECK-BMC
 // REQUIRES: slang
