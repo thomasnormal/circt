@@ -9,6 +9,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:55)
+
+1. Completed strict-gate parity for LEC `CIRCT_VERILOG_ERROR` identity drift:
+   - new gates:
+     - `--fail-on-new-lec-circt-verilog-error-case-ids`
+     - `--fail-on-new-lec-circt-verilog-error-case-reasons`
+   - both are now included in `--strict-gate` defaults.
+2. Baseline state now persists full verilog-error identity telemetry:
+   - `lec_circt_verilog_error_case_ids`
+   - `lec_circt_verilog_error_case_reasons`
+3. This closes the previously noted governance gap:
+   - verilog-error is now tracked at reason-key, case-id, and case+reason
+     levels, matching opt-error governance depth.
+4. Remaining long-term limitations and next features:
+   - error reason extraction is still log-derived string normalization; we need
+     compiler-emitted stable diagnostic category IDs for low-churn governance.
+   - formal runner telemetry helpers are duplicated; extract shared library
+     helpers for reason parsing/cache keying to reduce drift and maintenance
+     cost.
+   - mutation generation/reporting should ingest formal reason-family deltas
+     (opt/verilog case+reason) to prioritize mutator families that target active
+     breakage buckets.
+   - next BMC semantic closure focus remains multiclock and sequence-subroutine
+     buckets with strict drift gates on bucket case IDs.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:30)
 
 1. Added reason-level governance for LEC `CIRCT_VERILOG_ERROR`:

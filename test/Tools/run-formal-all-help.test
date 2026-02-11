@@ -12,6 +12,8 @@
 // CHECK: --fail-on-new-lec-circt-opt-error-reason-keys
 // CHECK: --fail-on-new-lec-circt-opt-error-case-reasons
 // CHECK: --fail-on-new-lec-circt-verilog-error-reason-keys
+// CHECK: --fail-on-new-lec-circt-verilog-error-case-ids
+// CHECK: --fail-on-new-lec-circt-verilog-error-case-reasons
 // CHECK: --fail-on-new-lec-timeout-class-cases
 // CHECK: --fail-on-new-bmc-unknown-cases
 // CHECK: --fail-on-new-lec-drop-remark-cases

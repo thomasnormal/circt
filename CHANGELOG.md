@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1097 - February 11, 2026
+
+### Formal Governance: LEC `CIRCT_VERILOG_ERROR` Case-ID and Case+Reason Drift
+
+1. Completed strict-gate parity for `CIRCT_VERILOG_ERROR` in
+   `utils/run_formal_all.sh`:
+   - added options:
+     - `--fail-on-new-lec-circt-verilog-error-case-ids`
+     - `--fail-on-new-lec-circt-verilog-error-case-reasons`
+   - both are enabled by default under `--strict-gate`.
+2. Extended baseline telemetry persistence:
+   - `lec_circt_verilog_error_case_ids`
+   - `lec_circt_verilog_error_case_reasons`
+3. Added strict-gate regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-case-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-case-ids-defaults.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-case-reasons.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-case-reasons-defaults.test`
+   - updated `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-reason-keys.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-reason-keys-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-case-ids-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-case-reasons.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-case-reasons-defaults.test`
+  - PASS (7/7)
+
 ## Iteration 1096 - February 11, 2026
 
 ### Formal Governance: LEC `CIRCT_VERILOG_ERROR` Reason-Key Drift
