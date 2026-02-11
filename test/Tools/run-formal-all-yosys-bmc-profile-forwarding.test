@@ -1,0 +1,13 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/yosys %t/sv-tests %t/verilator
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nexpected="${EXPECTED_BMC_ASSUME_KNOWN_INPUTS:-}"\nactual="${BMC_ASSUME_KNOWN_INPUTS:-}"\nif [[ "$actual" != "$expected" ]]; then\n  echo "unexpected BMC_ASSUME_KNOWN_INPUTS: expected=$expected actual=$actual" >&2\n  exit 1\nfi\nmkdir -p "$(dirname "$OUT")"\nprintf "PASS\\tprofile_case\\t/tests/profile_case.sv\\tyosys/tests/sva\\tBMC\\n" > "$OUT"\necho "yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0"\n' > %t/utils/run_yosys_sva_circt_bmc.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_yosys_sva_circt_bmc.sh
+// RUN: cd %t && EXPECTED_BMC_ASSUME_KNOWN_INPUTS=1 utils/run_formal_all.sh --out-dir %t/out-known --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^yosys/tests/sva/BMC$' --yosys-bmc-test-filter 'profile_case' --yosys-bmc-profile known
+// RUN: cd %t && EXPECTED_BMC_ASSUME_KNOWN_INPUTS=0 utils/run_formal_all.sh --out-dir %t/out-xprop --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^yosys/tests/sva/BMC$' --yosys-bmc-test-filter 'profile_case' --yosys-bmc-profile xprop
+// RUN: cd %t && EXPECTED_BMC_ASSUME_KNOWN_INPUTS=1 utils/run_formal_all.sh --out-dir %t/out-auto-known --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^yosys/tests/sva/BMC$' --yosys-bmc-test-filter 'profile_case' --yosys-bmc-profile auto --bmc-assume-known-inputs
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out-known/summary.tsv
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out-xprop/summary.tsv
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out-auto-known/summary.tsv
+//
+// SUMMARY: yosys/tests/sva{{[[:space:]]+}}BMC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
