@@ -21,6 +21,8 @@
 // CHECK: formal-regression-matrix-guard-strict
 // CHECK: formal-regression-matrix-nightly
 // CHECK: formal-regression-matrix-strict
+// CHECK: formal-regression-matrix-stop-on-fail-basic
+// CHECK: formal-regression-matrix-stop-on-fail-trend
 // CHECK: formal-regression-matrix-stop-on-fail-strict
 // CHECK: formal-regression-matrix-full-lanes-strict
 // CHECK: formal-regression-matrix-lane-drift-nightly
@@ -36,4 +38,5 @@
 // CHECK: --fail-if-trend-delta-lt
 // CHECK: --fail-on-prequalify-drift
 // CHECK: --lane-budget-out
+// CHECK: --skip-budget-out
 // CHECK: --out

@@ -154,6 +154,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-guard-strict|\n";
   os << "                           formal-regression-matrix-nightly|\n";
   os << "                           formal-regression-matrix-strict|\n";
+  os << "                           formal-regression-matrix-stop-on-fail-basic|\n";
+  os << "                           formal-regression-matrix-stop-on-fail-trend|\n";
   os << "                           formal-regression-matrix-stop-on-fail-strict|\n";
   os << "                           formal-regression-matrix-full-lanes-strict|\n";
   os << "                           formal-regression-matrix-lane-drift-nightly|\n";
@@ -6681,6 +6683,34 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      0.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-stop-on-fail-basic") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfDeltaGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfDeltaGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfDeltaGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfDeltaGtRules,
+                     "matrix.skip_budget_rows_non_stop_on_fail", 0.0);
+    appendUniqueRule(opts.failIfDeltaLtRules, "matrix.detected_mutants_sum",
+                     0.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-stop-on-fail-trend") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.skip_budget_rows_non_stop_on_fail", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaLtRules, "matrix.detected_mutants_sum",
+                     0.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-stop-on-fail-strict") {
     opts.failOnPrequalifyDrift = true;
     appendUniqueRule(opts.failIfValueGtRules,
@@ -6828,6 +6858,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-guard-strict|"
            "formal-regression-matrix-nightly|"
            "formal-regression-matrix-strict|"
+           "formal-regression-matrix-stop-on-fail-basic|"
+           "formal-regression-matrix-stop-on-fail-trend|"
            "formal-regression-matrix-stop-on-fail-strict|"
            "formal-regression-matrix-full-lanes-strict|"
            "formal-regression-matrix-lane-drift-nightly|"
