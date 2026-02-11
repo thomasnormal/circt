@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1042 - February 11, 2026
+
+### `circt-mut` Policy-Mode Tech Debt: Canonical Mode String
+
+1. Refactored `tools/circt-mut/circt-mut.cpp` to centralize the matrix
+   policy-mode value list in one canonical constant:
+   - `kMatrixPolicyModeList`
+2. Rewired policy-mode diagnostics to use the shared constant across:
+   - `init` (`--report-policy-mode` validation)
+   - `run` (`--report-policy-mode` validation and runtime forwarding checks)
+   - `report` (`--policy-mode` and config `policy_mode` validation)
+3. This removes repeated hard-coded mode lists and lowers drift risk when
+   policy modes evolve, while preserving existing behavior and error semantics.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused policy-mode validation/provenance slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-init-report-policy-invalid|circt-mut-run-with-report-cli-policy-mode-invalid|circt-mut-report-cli-policy-mode-invalid|circt-mut-report-policy-config-matrix-mode-invalid|circt-mut-run-with-report-cli-policy-stop-on-fail-invalid|circt-mut-run-with-report-config-policy-mode-provenance-strict-no-summary-fail|circt-mut-report-policy-config-matrix-mode-provenance-strict-no-summary-fail'`: PASS (7/7)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-.*\\.test'`: PASS (269/269)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-mode-string-unify ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC+LEC, `yosys/tests/sva` BMC+LEC, `opentitan` LEC, AVIP compile `axi4Lite/spi/uart`
+
 ## Iteration 1041 - February 11, 2026
 
 ### Provenance-Strict Regression Hardening: No-Summary Failure Paths

@@ -5742,6 +5742,10 @@ static std::string resolveProjectFilePath(StringRef projectDir, StringRef file) 
   return std::string(fullPath.str());
 }
 
+static constexpr StringLiteral kMatrixPolicyModeList =
+    "smoke|nightly|strict|trend-nightly|trend-strict|provenance-guard|"
+    "provenance-strict";
+
 static bool isMatrixPolicyMode(StringRef mode);
 
 static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
@@ -5881,8 +5885,7 @@ static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
         result.error =
             (Twine("circt-mut init: invalid --report-policy-mode value: ") +
              *v +
-             " (expected smoke|nightly|strict|trend-nightly|trend-strict|"
-             "provenance-guard|provenance-strict)")
+             (Twine(" (expected ") + kMatrixPolicyModeList + ")"))
                 .str();
         return result;
       }
@@ -6486,9 +6489,8 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
         result.error = (Twine("circt-mut run: invalid --report-policy-mode "
                               "value: ") +
                         *v +
-                        " (expected smoke|nightly|strict|trend-nightly|"
-                        "trend-strict|provenance-guard|provenance-strict)")
-                           .str();
+                        (Twine(" (expected ") + kMatrixPolicyModeList + ")"))
+                            .str();
         return result;
       }
       result.opts.reportPolicyMode = mode;
@@ -6743,8 +6745,7 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         }
         if (!isMatrixPolicyMode(mode)) {
           errs() << "circt-mut run: invalid report policy mode value '"
-                 << mode << "' (expected smoke|nightly|strict|trend-nightly|"
-                 << "trend-strict|provenance-guard|provenance-strict)\n";
+                 << mode << "' (expected " << kMatrixPolicyModeList << ")\n";
           return 1;
         }
         bool stop = stopOnFail.value_or(false);
@@ -7585,8 +7586,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     policyProfile = "formal-regression-matrix-provenance-strict";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
-             "' (expected smoke|nightly|strict|trend-nightly|trend-strict|"
-             "provenance-guard|provenance-strict)")
+             (Twine("' (expected ") + kMatrixPolicyModeList + ")"))
                 .str();
     return false;
   }
@@ -10256,8 +10256,7 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       if (!isMatrixPolicyMode(mode)) {
         result.error =
             (Twine("circt-mut report: invalid --policy-mode value: ") + *v +
-             " (expected smoke|nightly|strict|trend-nightly|trend-strict|"
-             "provenance-guard|provenance-strict)")
+             (Twine(" (expected ") + kMatrixPolicyModeList + ")"))
                 .str();
         return result;
       }
@@ -10636,8 +10635,7 @@ static int runNativeReport(const ReportOptions &opts) {
         if (!hasCLIPolicyMode && !isMatrixPolicyMode(mode)) {
           errs() << "circt-mut report: invalid [report] key 'policy_mode' "
                     "value '"
-                 << mode << "' (expected smoke|nightly|strict|trend-nightly|"
-                 << "trend-strict|provenance-guard|provenance-strict)\n";
+                 << mode << "' (expected " << kMatrixPolicyModeList << ")\n";
           return 1;
         }
         std::string modeError;
