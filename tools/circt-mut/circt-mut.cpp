@@ -6674,6 +6674,27 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
   }
   SmallVector<std::string, 48> reportArgsOwned;
   if (withReport) {
+    bool hasCLIReportCompare = !opts.reportCompare.empty();
+    bool hasCLIReportCompareHistoryLatest =
+        !opts.reportCompareHistoryLatest.empty();
+    if (hasCLIReportCompare && hasCLIReportCompareHistoryLatest) {
+      errs() << "circt-mut run: --report-compare and "
+                "--report-compare-history-latest are mutually exclusive\n";
+      return 1;
+    }
+    auto runCompareIt = cfg.run.find("report_compare");
+    auto runCompareHistoryIt = cfg.run.find("report_compare_history_latest");
+    bool hasConfigReportCompare =
+        runCompareIt != cfg.run.end() && !runCompareIt->second.empty();
+    bool hasConfigReportCompareHistory =
+        runCompareHistoryIt != cfg.run.end() && !runCompareHistoryIt->second.empty();
+    if (!hasCLIReportCompare && !hasCLIReportCompareHistoryLatest &&
+        hasConfigReportCompare && hasConfigReportCompareHistory) {
+      errs() << "circt-mut run: [run] keys 'report_compare' and "
+                "'report_compare_history_latest' are mutually exclusive\n";
+      return 1;
+    }
+
     reportArgsOwned.push_back("report");
     reportArgsOwned.push_back("--project-dir");
     reportArgsOwned.push_back(opts.projectDir);
@@ -6771,9 +6792,6 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       }
     }
 
-    bool hasCLIReportCompare = !opts.reportCompare.empty();
-    bool hasCLIReportCompareHistoryLatest =
-        !opts.reportCompareHistoryLatest.empty();
     if (hasCLIReportCompare) {
       reportArgsOwned.push_back("--compare");
       reportArgsOwned.push_back(opts.reportCompare);
