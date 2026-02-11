@@ -232,6 +232,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-provenance-guard|\n";
   os << "                           formal-regression-matrix-provenance-strict|\n";
   os << "                           formal-regression-matrix-native-lifecycle-strict|\n";
+  os << "                           formal-regression-matrix-policy-mode-native-strict-contract|\n";
   os << "                           formal-regression-matrix-runtime-smoke|\n";
   os << "                           formal-regression-matrix-runtime-nightly|\n";
   os << "                           formal-regression-matrix-runtime-trend|\n";
@@ -7598,6 +7599,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                                            StringRef errorPrefix) {
   std::string policyProfile;
   std::string provenanceProfile;
+  std::string modeContractProfile;
   if (mode == "smoke") {
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-smoke"
@@ -7633,6 +7635,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
                         : "formal-regression-matrix-composite-native-strict";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-strict-contract";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
              (Twine("' (expected ") + kMatrixPolicyModeList + ")"))
@@ -7642,6 +7646,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
   out.push_back(policyProfile);
   if (!provenanceProfile.empty())
     out.push_back(provenanceProfile);
+  if (!modeContractProfile.empty())
+    out.push_back(modeContractProfile);
   return true;
 }
 
@@ -8045,6 +8051,12 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     return true;
   }
+  if (profile == "formal-regression-matrix-policy-mode-native-strict-contract") {
+    appendUniqueRule(opts.failIfValueLtRules, "policy.mode_is_set", 1.0);
+    appendUniqueRule(opts.failIfValueLtRules, "policy.mode_is_native_strict",
+                     1.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-runtime-smoke") {
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.runtime_summary_invalid_rows", 0.0);
@@ -8168,6 +8180,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-provenance-guard|"
            "formal-regression-matrix-provenance-strict|"
            "formal-regression-matrix-native-lifecycle-strict|"
+           "formal-regression-matrix-policy-mode-native-strict-contract|"
            "formal-regression-matrix-runtime-smoke|"
            "formal-regression-matrix-runtime-nightly|"
            "formal-regression-matrix-runtime-trend|"
@@ -10714,6 +10727,9 @@ static int runNativeReport(const ReportOptions &opts) {
   rows.emplace_back("policy.mode",
                     appliedPolicyMode.empty() ? std::string("-")
                                               : appliedPolicyMode);
+  rows.emplace_back("policy.mode_is_set", appliedPolicyMode.empty() ? "0" : "1");
+  rows.emplace_back("policy.mode_is_native_strict",
+                    appliedPolicyMode == "native-strict" ? "1" : "0");
   rows.emplace_back("policy.mode_source", appliedPolicyModeSource);
   rows.emplace_back("policy.stop_on_fail",
                     appliedPolicyStopOnFail.has_value()

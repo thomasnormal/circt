@@ -42,6 +42,7 @@
 // CHECK: formal-regression-matrix-provenance-guard
 // CHECK: formal-regression-matrix-provenance-strict
 // CHECK: formal-regression-matrix-native-lifecycle-strict
+// CHECK: formal-regression-matrix-policy-mode-native-strict-contract
 // CHECK: formal-regression-matrix-runtime-smoke
 // CHECK: formal-regression-matrix-runtime-nightly
 // CHECK: formal-regression-matrix-runtime-trend

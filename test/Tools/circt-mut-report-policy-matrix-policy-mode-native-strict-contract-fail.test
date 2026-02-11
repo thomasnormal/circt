@@ -1,0 +1,13 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/matrix/lane1
+// RUN: printf 'total_mutants\t1\nrelevant_mutants\t1\ndetected_mutants\t1\npropagated_not_detected_mutants\t0\nnot_propagated_mutants\t0\nnot_activated_mutants\t0\nerrors\t0\n' > %t/proj/out/matrix/lane1/metrics.tsv
+// RUN: printf 'lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\nlane1\tPASS\t0\t100.00\tPASS\t%t/proj/out/matrix/lane1\t%t/proj/out/matrix/lane1/metrics.tsv\t-\n' > %t/proj/out/matrix/results.tsv
+// RUN: not circt-mut report --project-dir %t/proj --mode matrix --policy-profile formal-regression-matrix-policy-mode-native-strict-contract > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+
+// CHECK-DAG: policy.profile_1{{[[:space:]]}}formal-regression-matrix-policy-mode-native-strict-contract
+// CHECK-DAG: policy.mode{{[[:space:]]}}-
+// CHECK-DAG: policy.mode_is_set{{[[:space:]]}}0
+// CHECK-DAG: policy.mode_is_native_strict{{[[:space:]]}}0
+// CHECK-DAG: value_gate.failure_{{[0-9]+}}{{[[:space:]]}}policy.mode_is_set value=0.00 < 1.00
+// CHECK-DAG: value_gate.failure_{{[0-9]+}}{{[[:space:]]}}policy.mode_is_native_strict value=0.00 < 1.00
+// CHECK-DAG: value_gate.status{{[[:space:]]}}fail
