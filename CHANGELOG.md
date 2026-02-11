@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1071 - February 11, 2026
+
+### `circt-mut report`: Close Direct Strict Lane-Trend History-Quality Bypass
+
+1. Hardened strict direct lane-trend profile behavior in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-lane-trend-strict` now uses
+     `appendTrendHistoryQualityStrictRules(...)`
+   - this aligns direct strict profile semantics with strict composite trend
+     bundles (history runs + strict coverage checks), eliminating a 2-run
+     bypass in direct profile selection.
+2. Added focused regression:
+   - `test/Tools/circt-mut-report-policy-matrix-lane-trend-strict-history-quality-fail.test`
+   verifies direct strict lane-trend policy fails on 2-run history with:
+   - `trend.history_runs_selected value=2.00 < 3.00`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused strict trend-policy slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-report-policy-matrix-lane-trend-strict-history-quality-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-lane-trend-strict-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-history-quality-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-core-key-coverage-fail.test`: PASS (4/4)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter 'circt-mut-.*\\.test' build-test/test/Tools`: PASS (307/307)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-lane-trend-strict-history-quality ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC (`assert_fell` ERROR), `opentitan` LEC (`missing_results=1`), AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1070 - February 11, 2026
 
 ### LEC Runner Hardening: Explicit Fallback For Silent `circt-opt` Failures

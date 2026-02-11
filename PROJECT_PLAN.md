@@ -467,6 +467,11 @@ See CHANGELOG.md on recent progress.
   - `trend.matrix_core_numeric_keys_full_history >= 5`
   so strict gates fail clearly on missing core key history, even when users
   only inspect percentages.
+- Latest mutation-governance milestone (current): direct strict lane trend
+  policy now reuses the strict history-quality contract (instead of the generic
+  trend-nightly contract), eliminating a policy-selection bypass where
+  `formal-regression-matrix-lane-trend-strict` could run with only 2 history
+  runs while strict composite profiles required 3.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
