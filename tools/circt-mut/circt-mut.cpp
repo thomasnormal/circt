@@ -7546,26 +7546,32 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                                            std::string &error,
                                            StringRef errorPrefix) {
   std::string policyProfile;
+  std::string provenanceProfile;
   if (mode == "smoke") {
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-smoke"
                         : "formal-regression-matrix-composite-smoke";
+    provenanceProfile = "formal-regression-matrix-provenance-guard";
   } else if (mode == "nightly") {
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-nightly"
                         : "formal-regression-matrix-composite-nightly";
+    provenanceProfile = "formal-regression-matrix-provenance-guard";
   } else if (mode == "strict") {
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-strict"
                         : "formal-regression-matrix-composite-strict";
+    provenanceProfile = "formal-regression-matrix-provenance-strict";
   } else if (mode == "trend-nightly") {
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-trend-nightly"
                         : "formal-regression-matrix-composite-trend-nightly";
+    provenanceProfile = "formal-regression-matrix-provenance-guard";
   } else if (mode == "trend-strict") {
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-trend-strict"
                         : "formal-regression-matrix-composite-trend-strict";
+    provenanceProfile = "formal-regression-matrix-provenance-strict";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
              "' (expected smoke|nightly|strict|trend-nightly|trend-strict)")
@@ -7573,6 +7579,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     return false;
   }
   out.push_back(policyProfile);
+  out.push_back(provenanceProfile);
   return true;
 }
 

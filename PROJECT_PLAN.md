@@ -184,6 +184,12 @@ See CHANGELOG.md on recent progress.
   with explicit column-presence + deficit-zero gating on prequalify artifact
   provenance metrics, so CI can adopt provenance enforcement independently from
   broader guard/strict mutation quality bundles.
+- Latest mutation-governance milestone (current): matrix `policy_mode`
+  expansion now appends provenance profiles by default:
+  - smoke/nightly/trend-nightly -> `formal-regression-matrix-provenance-guard`
+  - strict/trend-strict -> `formal-regression-matrix-provenance-strict`
+  so CI defaults (`--policy-mode ...`) enforce prequalify artifact provenance
+  presence/hygiene without extra per-job `--policy-profile` wiring.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
@@ -198,8 +204,8 @@ See CHANGELOG.md on recent progress.
     profile mapping, and native matrix lane scheduling now supports
     cache-aware key spreading. Remaining migration work: full script parity for
     all lane telemetry/control options and elimination of script fallback paths.
-  - Wire the composite matrix policy bundles into CI defaults for
-    nightly/strict matrix report jobs.
+  - Wire matrix `--policy-mode` defaults through formal driver entrypoints that
+    still pass explicit legacy `--policy-profile` values.
   - Add bounded-history defaults to matrix report jobs in CI bootstrap wiring
     (`--history --history-bootstrap --history-max-runs`) for stable trend data.
 - Lane-state:

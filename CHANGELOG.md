@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1034 - February 11, 2026
+
+### `circt-mut report`: Policy-Mode Defaults Now Enforce Provenance Profiles
+
+1. Updated matrix policy-mode expansion in `tools/circt-mut/circt-mut.cpp` so
+   `--policy-mode` (and `[report].policy_mode`) now appends a provenance
+   profile automatically in addition to the existing composite profile:
+   - smoke/nightly/trend-nightly -> `formal-regression-matrix-provenance-guard`
+   - strict/trend-strict -> `formal-regression-matrix-provenance-strict`
+2. Kept explicit `formal-regression-matrix-composite-*` profiles unchanged to
+   preserve compatibility for callers that pass those profiles directly.
+3. Updated policy-mode regression fixtures to include
+   `prequalify_pair_file` / `prequalify_log_file` columns with concrete path
+   values in `results.tsv`, matching stricter provenance requirements.
+4. Added regression:
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-provenance-missing-columns-fail.test`
+   verifying strict policy-mode now fails when legacy matrix results omit
+   prequalify provenance columns.
+5. Updated policy-mode expectation checks to assert two applied profiles
+   (`composite` + `provenance`) across CLI/config smoke/nightly/strict/trend
+   coverage tests.
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build-test circt-mut`: PASS
+- Focused policy-mode/provenance tests (executed from test `RUN:` lines with
+  `%t/%s` substitution, `build-test/bin/circt-mut`, and
+  `/home/thomas-ahle/circt/llvm/build/bin/FileCheck`): PASS
+  - `test/Tools/circt-mut-report-policy-config-matrix-mode-nightly-default.test`
+  - `test/Tools/circt-mut-report-policy-config-matrix-mode-smoke-stop-on-fail.test`
+  - `test/Tools/circt-mut-report-policy-config-matrix-mode-strict-default.test`
+  - `test/Tools/circt-mut-report-policy-config-matrix-mode-trend-strict-stop-on-fail.test`
+  - `test/Tools/circt-mut-report-cli-policy-mode-overrides-config-profiles.test`
+  - `test/Tools/circt-mut-report-cli-policy-mode-smoke-stop-on-fail.test`
+  - `test/Tools/circt-mut-report-cli-policy-mode-strict-default.test`
+  - `test/Tools/circt-mut-report-cli-policy-mode-trend-nightly-default.test`
+  - `test/Tools/circt-mut-report-cli-policy-mode-strict-provenance-missing-columns-fail.test`
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-mode-provenance ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: AVIP compile `ahb_avip`, `apb_avip`
+  - FAIL/ERROR snapshot:
+    - AVIP compile: `axi4Lite_avip`
+    - `verilator-verification` BMC/LEC: `assert_fell` (error)
+    - `yosys/tests/sva` BMC: `basic02` (fail)
+    - `yosys/tests/sva` LEC: `basic02` (error)
+    - `opentitan` LEC: `aes_sbox` (missing_results / fail)
+
 ## Iteration 1033 - February 11, 2026
 
 ### `circt-mut report`: Dedicated Matrix Provenance Policy Profiles
