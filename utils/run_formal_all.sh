@@ -70,6 +70,9 @@ Options:
   --fail-on-any-lec-drop-remarks
                          Fail when any LEC lane reports
                          `lec_drop_remark_cases > 0` in the current run
+  --fail-on-any-lec-timeouts
+                         Fail when any `LEC*` lane reports
+                         `lec_timeout_cases > 0` in the current run
   --fail-on-new-lec-counter KEY
                          Fail when LEC summary counter KEY increases vs baseline
                          for any `LEC*` lane (repeatable)
@@ -1827,6 +1830,7 @@ FAIL_ON_NEW_LEC_DROP_REMARK_CASES=0
 FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS=0
 FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=0
 FAIL_ON_ANY_LEC_DROP_REMARKS=0
+FAIL_ON_ANY_LEC_TIMEOUTS=0
 LEC_DROP_REMARK_PATTERN="${LEC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
 declare -a FAIL_ON_NEW_LEC_COUNTER_KEYS=()
 declare -a FAIL_ON_NEW_LEC_COUNTER_PREFIXES=()
@@ -2184,6 +2188,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_ANY_BMC_DROP_REMARKS=1; shift ;;
     --fail-on-any-lec-drop-remarks)
       FAIL_ON_ANY_LEC_DROP_REMARKS=1; shift ;;
+    --fail-on-any-lec-timeouts)
+      FAIL_ON_ANY_LEC_TIMEOUTS=1; shift ;;
     --fail-on-new-lec-counter)
       FAIL_ON_NEW_LEC_COUNTER_KEYS+=("$2"); shift 2 ;;
     --fail-on-new-lec-counter-prefix)
@@ -11487,6 +11493,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES" == "1" || \
       "$FAIL_ON_NEW_LEC_DIAG_MISSING_CASES" == "1" || \
       "$FAIL_ON_ANY_LEC_DIAG_MISSING_CASES" == "1" || \
+      "$FAIL_ON_ANY_LEC_TIMEOUTS" == "1" || \
       "$FAIL_ON_ANY_LEC_DROP_REMARKS" == "1" || \
       -n "$LEC_COUNTER_KEYS_CSV" || \
       -n "$LEC_COUNTER_PREFIXES_CSV" || \
@@ -11531,6 +11538,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES="$FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES" \
   FAIL_ON_NEW_LEC_DIAG_MISSING_CASES="$FAIL_ON_NEW_LEC_DIAG_MISSING_CASES" \
   FAIL_ON_ANY_LEC_DIAG_MISSING_CASES="$FAIL_ON_ANY_LEC_DIAG_MISSING_CASES" \
+  FAIL_ON_ANY_LEC_TIMEOUTS="$FAIL_ON_ANY_LEC_TIMEOUTS" \
   FAIL_ON_ANY_LEC_DROP_REMARKS="$FAIL_ON_ANY_LEC_DROP_REMARKS" \
   LEC_COUNTER_KEYS="$LEC_COUNTER_KEYS_CSV" \
   LEC_COUNTER_PREFIXES="$LEC_COUNTER_PREFIXES_CSV" \
@@ -11920,6 +11928,9 @@ fail_on_new_lec_diag_missing_cases = (
 )
 fail_on_any_lec_diag_missing_cases = (
     os.environ.get("FAIL_ON_ANY_LEC_DIAG_MISSING_CASES", "0") == "1"
+)
+fail_on_any_lec_timeouts = (
+    os.environ.get("FAIL_ON_ANY_LEC_TIMEOUTS", "0") == "1"
 )
 fail_on_any_lec_drop_remarks = (
     os.environ.get("FAIL_ON_ANY_LEC_DROP_REMARKS", "0") == "1"
@@ -12508,6 +12519,10 @@ for key, current_row in summary.items():
         if fail_on_any_lec_diag_missing_cases and current_diag_missing > 0:
             gate_errors.append(
                 f"{suite} {mode}: lec_diag_missing_cases must be zero (current={current_diag_missing})"
+            )
+        if fail_on_any_lec_timeouts and current_timeout > 0:
+            gate_errors.append(
+                f"{suite} {mode}: lec_timeout_cases must be zero (current={current_timeout})"
             )
         if fail_on_new_lec_drop_remark_cases:
             baseline_drop_remark_values = []
