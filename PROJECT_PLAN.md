@@ -1975,6 +1975,14 @@ See CHANGELOG.md on recent progress.
     - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v8`
   enabling incremental lane-class rollout while providing a deterministic
   no-compile-failure target profile for long-term closure.
+- Latest mutation-governance milestone (current): policy-mode now exposes
+  compile-budget rollout modes directly for report/run entrypoints:
+  - `strict-formal-compile-debt`
+  - `strict-formal-compile-strict`
+  - `native-strict-formal-compile-debt`
+  - `native-strict-formal-compile-strict`
+  so CI lane classes can select compile-governance intent without manually
+  composing profile bundles.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

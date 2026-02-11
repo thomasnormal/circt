@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1144 - February 11, 2026
+
+### Mutation Governance: Policy-Mode Compile Rollout Modes (Debt/Strict, Native/Non-Native)
+
+1. Added policy-mode surface for compile-governance rollout:
+   - `strict-formal-compile-debt`
+   - `strict-formal-compile-strict`
+   - `native-strict-formal-compile-debt`
+   - `native-strict-formal-compile-strict`
+2. Mode mapping enforces compile budgets via:
+   - `formal-regression-matrix-external-formal-compile-mode-budget-debt-v1`
+   - `formal-regression-matrix-external-formal-compile-mode-budget-strict-v1`
+   without coupling to blanket external fail-like gating.
+3. Updated native strict classification telemetry for mode variants:
+   - `policy.mode_is_native_strict` now applies to `native-strict-*` modes.
+4. Added/updated regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-compile-debt-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-compile-strict-fail.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-compile-strict-pass.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-compile-debt.test`
+   - updated mode-list diagnostics:
+     - `test/Tools/circt-mut-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-init-report-policy-invalid.test`
+     - `test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test`
+
+### Tests and Validation
+
+- Focused policy-mode slice (8 tests): PASS
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (400/400 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-mode-compile-rollout-noavip ...`
+  - PASS: `sv-tests` LEC (filtered-empty), `verilator` BMC/LEC, `yosys/tests/sva` BMC/LEC
+  - FAIL: `sv-tests` BMC (`missing_summary=1 runner_exit=2`), `opentitan` LEC (`missing_results=1`)
+- AVIP compile probes (`utils/run_avip_circt_verilog.sh`, 180s timeout/lane):
+  - PASS: `ahb_avip`, `apb_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`
+  - FAIL: `axi4Lite_avip`, `axi4_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1143 - February 11, 2026
 
 ### LEC Timeout Taxonomy + Mutation Governance: Stage Counters and v11 Composites
