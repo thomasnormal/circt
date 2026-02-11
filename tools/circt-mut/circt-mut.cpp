@@ -197,6 +197,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --fail-on-prequalify-drift\n";
   os << "                           Fail if matrix prequalify results.tsv counters\n";
   os << "                           drift from native prequalify summary counters\n";
+  os << "  --no-fail-on-prequalify-drift\n";
+  os << "                           Explicitly disable prequalify drift gate\n";
   os << "  --lane-budget-out FILE   Write per-lane matrix budget TSV artifact\n";
   os << "  --skip-budget-out FILE   Write matrix skip-budget TSV artifact\n";
   os << "  --out FILE               Write report TSV to FILE (also prints to stdout)\n";
@@ -5934,6 +5936,31 @@ static bool appendOptionalConfigBoolFlagArg(
   return false;
 }
 
+static bool appendOptionalConfigBoolOptionArg(
+    SmallVectorImpl<std::string> &args, const StringMap<std::string> &sectionMap,
+    StringRef key, StringRef trueOptionFlag, StringRef falseOptionFlag,
+    StringRef sectionName, std::string &error) {
+  auto it = sectionMap.find(key);
+  if (it == sectionMap.end() || it->second.empty())
+    return true;
+  std::string lowered = StringRef(it->second).trim().lower();
+  if (lowered == "1" || lowered == "true" || lowered == "yes" ||
+      lowered == "on") {
+    args.push_back(trueOptionFlag.str());
+    return true;
+  }
+  if (lowered == "0" || lowered == "false" || lowered == "no" ||
+      lowered == "off") {
+    args.push_back(falseOptionFlag.str());
+    return true;
+  }
+  error = (Twine("circt-mut run: invalid boolean [") + sectionName + "] key '" +
+           key + "' value '" + it->second +
+           "' (expected 1|0|true|false|yes|no|on|off)")
+              .str();
+  return false;
+}
+
 static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
   RunParseResult result;
 
@@ -6217,10 +6244,10 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
                                          "report_history_bootstrap",
                                          "--history-bootstrap", "run",
                                          error) ||
-        !appendOptionalConfigBoolFlagArg(reportArgsOwned, cfg.run,
-                                         "report_fail_on_prequalify_drift",
-                                         "--fail-on-prequalify-drift", "run",
-                                         error)) {
+        !appendOptionalConfigBoolOptionArg(
+            reportArgsOwned, cfg.run, "report_fail_on_prequalify_drift",
+            "--fail-on-prequalify-drift", "--no-fail-on-prequalify-drift",
+            "run", error)) {
       errs() << error << "\n";
       return 1;
     }
@@ -6653,6 +6680,7 @@ struct ReportOptions {
   SmallVector<DeltaGateRule, 8> failIfTrendDeltaGtRules;
   SmallVector<DeltaGateRule, 8> failIfTrendDeltaLtRules;
   bool failOnPrequalifyDrift = false;
+  bool failOnPrequalifyDriftOverrideSet = false;
   std::string laneBudgetOutFile;
   std::string skipBudgetOutFile;
   std::string outFile;
@@ -9187,6 +9215,12 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
     }
     if (arg == "--fail-on-prequalify-drift") {
       result.opts.failOnPrequalifyDrift = true;
+      result.opts.failOnPrequalifyDriftOverrideSet = true;
+      continue;
+    }
+    if (arg == "--no-fail-on-prequalify-drift") {
+      result.opts.failOnPrequalifyDrift = false;
+      result.opts.failOnPrequalifyDriftOverrideSet = true;
       continue;
     }
 
@@ -9228,6 +9262,7 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
     if (result.opts.appendHistoryFile.empty())
       result.opts.appendHistoryFile = result.opts.historyFile;
   }
+  bool failOnPrequalifyDriftOverrideValue = result.opts.failOnPrequalifyDrift;
   if (!result.opts.policyProfiles.empty()) {
     SmallVector<std::string, 4> uniqueProfiles;
     StringSet<> seen;
@@ -9240,7 +9275,8 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
     }
     result.opts.policyProfiles = std::move(uniqueProfiles);
   }
-
+  if (result.opts.failOnPrequalifyDriftOverrideSet)
+    result.opts.failOnPrequalifyDrift = failOnPrequalifyDriftOverrideValue;
   result.ok = true;
   return result;
 }
@@ -9263,6 +9299,9 @@ static int runNativeReport(const ReportOptions &opts) {
   uint64_t historyMaxRuns = effectiveOpts.historyMaxRuns;
   bool historyBootstrap = effectiveOpts.historyBootstrap;
   SmallVector<std::string, 4> policyProfiles = effectiveOpts.policyProfiles;
+  std::optional<bool> failOnPrequalifyDriftOverride;
+  if (effectiveOpts.failOnPrequalifyDriftOverrideSet)
+    failOnPrequalifyDriftOverride = effectiveOpts.failOnPrequalifyDrift;
 
   SmallString<256> configPath;
   if (opts.configPath.empty()) {
@@ -9341,6 +9380,23 @@ static int runNativeReport(const ReportOptions &opts) {
         else {
           errs() << "circt-mut report: invalid [report] key "
                     "'history_bootstrap' value '"
+                 << it->second
+                 << "' (expected 1|0|true|false|yes|no|on|off)\n";
+          return 1;
+        }
+      }
+    }
+    if (!failOnPrequalifyDriftOverride.has_value()) {
+      if (auto it = cfg.report.find("fail_on_prequalify_drift");
+          it != cfg.report.end() && !it->second.empty()) {
+        StringRef raw = StringRef(it->second).trim().lower();
+        if (raw == "1" || raw == "true" || raw == "yes" || raw == "on")
+          failOnPrequalifyDriftOverride = true;
+        else if (raw == "0" || raw == "false" || raw == "no" || raw == "off")
+          failOnPrequalifyDriftOverride = false;
+        else {
+          errs() << "circt-mut report: invalid [report] key "
+                    "'fail_on_prequalify_drift' value '"
                  << it->second
                  << "' (expected 1|0|true|false|yes|no|on|off)\n";
           return 1;
@@ -9431,6 +9487,8 @@ static int runNativeReport(const ReportOptions &opts) {
     }
     policyProfiles = std::move(uniqueProfiles);
   }
+  if (failOnPrequalifyDriftOverride.has_value())
+    effectiveOpts.failOnPrequalifyDrift = *failOnPrequalifyDriftOverride;
   if (!historyFile.empty()) {
     if (compareFile.empty() && compareHistoryLatestFile.empty())
       compareHistoryLatestFile = historyFile;
