@@ -1216,6 +1216,9 @@ struct AssertionExprVisitor {
 
   Value visit(const slang::ast::DisableIffAssertionExpr &expr) {
     auto disableCond = context.convertRvalueExpression(expr.condition);
+    // IEEE 1800 allows general integral truthy expressions in `disable iff`.
+    // Normalize to a boolean first, then to builtin i1 for LTL lowering.
+    disableCond = context.convertToBool(disableCond);
     disableCond = context.convertToI1(disableCond);
     if (!disableCond)
       return {};
@@ -1615,6 +1618,7 @@ Value Context::convertAssertionExpression(const slang::ast::AssertionExpr &expr,
        value.getType().isInteger(1))) {
     if (auto *disableExpr = compilation.getDefaultDisable(*currentScope)) {
       auto disableVal = convertRvalueExpression(*disableExpr);
+      disableVal = convertToBool(disableVal);
       disableVal = convertToI1(disableVal);
       if (disableVal) {
         auto orOp = ltl::OrOp::create(
