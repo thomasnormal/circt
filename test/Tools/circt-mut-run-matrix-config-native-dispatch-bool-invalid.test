@@ -1,0 +1,6 @@
+// RUN: rm -rf %t && mkdir -p %t/proj
+// RUN: printf 'lane1\tdesign.il\tmutations.txt\ttests.tsv\t-\t-\t-\n' > %t/proj/lanes.tsv
+// RUN: printf '[matrix]\nlanes_tsv = "lanes.tsv"\nout_dir = "out/matrix"\nnative_matrix_dispatch = maybe\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut run --project-dir %t/proj --mode matrix 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut run: invalid boolean [matrix] key 'native_matrix_dispatch' value 'maybe' (expected 1|0|true|false|yes|no|on|off)
