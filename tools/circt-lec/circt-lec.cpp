@@ -30,6 +30,7 @@
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/LLHD/Transforms/LLHDPasses.h"
+#include "circt/Dialect/Moore/MooreDialect.h"
 #include "circt/Dialect/OM/OMDialect.h"
 #include "circt/Dialect/OM/OMPasses.h"
 #include "circt/Dialect/Sim/SimDialect.h"
@@ -1294,6 +1295,7 @@ int main(int argc, char **argv) {
     circt::hw::HWDialect,
     circt::ltl::LTLDialect,
     circt::llhd::LLHDDialect,
+    circt::moore::MooreDialect,
     circt::om::OMDialect,
     circt::sim::SimDialect,
     circt::sv::SVDialect,

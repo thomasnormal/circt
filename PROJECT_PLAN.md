@@ -95,6 +95,22 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - runner classification remains `CIRCT_OPT_ERROR` (as expected), but
      root-cause diagnostics are now pass-local and actionable.
 
+### Formal Closure Snapshot Update (February 11, 2026, 18:40)
+
+1. LEC preprocessing closure landed for UVM sequence stress cases:
+   - `StripLLHDInterfaceSignals.cpp` now scopes LLHD stripping/no-LLHD checks
+     to `hw.module` regions (ignores helper-region LLHD).
+   - `circt-lec` now registers `circt::moore::MooreDialect`, removing parser
+     failures on residual `moore.*` helper ops.
+2. New regression locks:
+   - `test/Tools/circt-lec/lec-strip-llhd-ignore-non-hw-module.mlir`
+   - `test/Tools/circt-lec/lec-moore-dialect-parse.mlir`
+3. Focused external sv-tests outcome shift:
+   - `16.11--sequence-subroutine-uvm` and `16.13--sequence-multiclock-uvm`
+     no longer hit `CIRCT_OPT_ERROR`.
+   - forced LEC mode now reaches solver and reports `TIMEOUT`, which is the
+     new remaining blocker for these cases.
+
 ### Formal Closure Snapshot (February 11, 2026, 16:22)
 
 1. sv-tests focused semantic closure (SMT-LIB lane mode, explicit build-test tools):
@@ -125,10 +141,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
      non-empty slices less ergonomic than sv-tests lanes.
    - mixed 4-state/2-state expectations still leak into targeted external lanes
 2. LEC hardening limits still open:
-   - `strip-llhd-interface-signals` diagnostics are no longer silent, but some
-     UVM-heavy sv-tests sequence forms still fail with
-     `expected llhd.signal in hw.module for LEC` and need semantic/pass
-     closure rather than runner-side handling.
+   - UVM-heavy sequence cases (`16.11--sequence-subroutine-uvm`,
+     `16.13--sequence-multiclock-uvm`) now clear preprocessing but timeout in
+     forced LEC mode; next closure is solver/runtime tractability.
    - maintain strict no-waiver X-prop governance while improving diagnostics depth
    - keep cross-suite drop-remark accounting deterministic in strict gates
 3. Mutation generation limits still open:
@@ -493,6 +508,10 @@ See CHANGELOG.md on recent progress.
   - `trend.matrix_core_numeric_keys_missing_history_list`
   with strict gate `missing_history == 0`, making history sparsity failures
   directly actionable in CI logs (not only via aggregate percentages/counts).
+- Latest mutation-governance milestone (current): strict direct lane-trend
+  profile parity is closed end-to-end with strict composites:
+  - direct strict lane trend now requires strict history quality (3-run floor),
+  - and strict reports emit explicit missing core-key history diagnostics.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
