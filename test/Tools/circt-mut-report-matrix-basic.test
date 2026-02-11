@@ -28,6 +28,8 @@
 // CHECK: matrix.gate_skip{{[[:space:]]}}0
 // CHECK: matrix.lanes_with_metrics{{[[:space:]]}}2
 // CHECK: matrix.lanes_missing_metrics{{[[:space:]]}}0
+// CHECK: matrix.results_metrics_file_column_present{{[[:space:]]}}1
+// CHECK: matrix.results_metrics_file_fallback_lanes{{[[:space:]]}}0
 // CHECK: matrix.total_mutants_sum{{[[:space:]]}}15
 // CHECK: matrix.relevant_mutants_sum{{[[:space:]]}}11
 // CHECK: matrix.detected_mutants_sum{{[[:space:]]}}7
