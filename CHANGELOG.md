@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1086 - February 11, 2026
+
+### `circt-mut` Policy-Mode Expansion: Strict Formal (Non-Native)
+
+1. Added new matrix policy mode in `tools/circt-mut/circt-mut.cpp`:
+   - `strict-formal`
+2. `strict-formal` policy-mode mapping now composes:
+   - `formal-regression-matrix-composite-strict`
+   - `formal-regression-matrix-provenance-strict`
+   - `formal-regression-matrix-external-formal-guard`
+   so strict mutation governance can require external formal closure without
+   native-family mode contracts.
+3. Updated mode surfaces and validation:
+   - `kMatrixPolicyModeList`
+   - `circt-mut init|run|report --help`
+   - mode-invalid diagnostics across init/run/report config + CLI tests.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-missing-external-fail.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-strict-formal.test`
+   - updated help and invalid-mode tests.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused strict-formal slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-init-help.test build-test/test/Tools/circt-mut-run-help.test build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-init-report-policy-invalid.test build-test/test/Tools/circt-mut-report-cli-policy-mode-invalid.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test build-test/test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-pass.test build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-missing-external-fail.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-strict-formal.test build-test/test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-pass.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal.test`: PASS (12/12)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter 'circt-mut-.*\\.test' build-test/test/Tools`: PASS (316/316)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-strict-formal-mode ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR: `verilator-verification` BMC (`error=1`), `opentitan` LEC (`fail=1,error=1,missing_results=1`), AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1085 - February 11, 2026
 
 ### Formal Driver: BMC Timeout Case-ID Drift Gate

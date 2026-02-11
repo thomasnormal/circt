@@ -123,7 +123,7 @@ static void printInitHelp(raw_ostream &os) {
   os << "                            provenance-guard|provenance-strict|\n";
   os << "                            native-lifecycle-strict|native-smoke|\n";
   os << "                            native-nightly|native-strict|\n";
-  os << "                            native-strict-formal,\n";
+  os << "                            native-strict-formal|strict-formal,\n";
   os << "                            default: smoke)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           Enable stop-on-fail report guard profile in\n";
@@ -181,7 +181,7 @@ static void printRunHelp(raw_ostream &os) {
   os << "                           provenance-guard|provenance-strict|\n";
   os << "                           native-lifecycle-strict|native-smoke|\n";
   os << "                           native-nightly|native-strict|\n";
-  os << "                           native-strict-formal\n";
+  os << "                           native-strict-formal|strict-formal\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --report-external-formal-results FILE\n";
   os << "                           Repeatable override for report\n";
@@ -219,7 +219,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           provenance-guard|provenance-strict|\n";
   os << "                           native-lifecycle-strict|native-smoke|\n";
   os << "                           native-nightly|native-strict|\n";
-  os << "                           native-strict-formal\n";
+  os << "                           native-strict-formal|strict-formal\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -5771,7 +5771,7 @@ static constexpr StringLiteral kMatrixPolicyModeList =
     "smoke|nightly|strict|trend-nightly|trend-strict|native-trend-nightly|"
     "native-trend-strict|provenance-guard|provenance-strict|"
     "native-lifecycle-strict|native-smoke|native-nightly|native-strict|"
-    "native-strict-formal";
+    "native-strict-formal|strict-formal";
 
 static bool isMatrixPolicyMode(StringRef mode);
 
@@ -7980,14 +7980,14 @@ static bool isMatrixPolicyMode(StringRef mode) {
          mode == "provenance-guard" || mode == "provenance-strict" ||
          mode == "native-lifecycle-strict" || mode == "native-smoke" ||
          mode == "native-nightly" || mode == "native-strict" ||
-         mode == "native-strict-formal";
+         mode == "native-strict-formal" || mode == "strict-formal";
 }
 
 static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
          mode == "trend-nightly" || mode == "trend-strict" ||
          mode == "native-trend-nightly" || mode == "native-trend-strict" ||
-         mode == "native-strict-formal";
+         mode == "native-strict-formal" || mode == "strict-formal";
 }
 
 static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
@@ -8070,6 +8070,12 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     externalFormalProfile = "formal-regression-matrix-external-formal-guard";
     modeContractProfile =
         "formal-regression-matrix-policy-mode-native-strict-contract";
+  } else if (mode == "strict-formal") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-strict"
+                        : "formal-regression-matrix-composite-strict";
+    provenanceProfile = "formal-regression-matrix-provenance-strict";
+    externalFormalProfile = "formal-regression-matrix-external-formal-guard";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
              (Twine("' (expected ") + kMatrixPolicyModeList + ")"))
