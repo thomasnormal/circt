@@ -9,6 +9,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++++++)
+
+1. Added stage-attributed BMC timeout telemetry:
+   - `bmc_timeout_stage_frontend_cases`
+   - `bmc_timeout_stage_solver_cases`
+   - `bmc_timeout_stage_unknown_cases`
+2. Driver plumbing:
+   - `run_sv_tests_circt_bmc.sh` now emits timeout reason artifacts.
+   - `run_formal_all.sh` folds those artifacts into per-lane BMC summaries.
+3. Validation highlights:
+   - new lit coverage for timeout reason emission + summary propagation is green.
+   - real `sv-tests/BMC` forced-timeout probe confirms frontend attribution in
+     `summary.tsv`.
+4. Remaining limitations:
+   - timeout-stage attribution is currently strongest where runner emits
+     reason artifacts; deeper parity still needed across all BMC/LEC/OpenTitan
+     lane scripts.
+   - policy gates in `circt-mut` do not yet consume `bmc_timeout_stage_*`
+     counters, so trend enforcement still happens at aggregate timeout level.
+5. Next long-term features:
+   - add `circt-mut` external-formal profiles for stage-specific timeout drift
+     (frontend vs solver), then roll into strict composites.
+   - extend timeout reason artifact contract to LEC/OpenTitan runners and map
+     to a unified formal timeout taxonomy.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++++)
 
 1. Hardened BMC harness timeout accounting at compile stage:

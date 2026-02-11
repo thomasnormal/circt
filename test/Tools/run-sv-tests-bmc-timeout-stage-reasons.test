@@ -1,0 +1,17 @@
+// RUN: rm -rf %t/sv-tests
+// RUN: mkdir -p %t/sv-tests/tests %t/bin
+// RUN: printf ':tags: 16.9\n:type: simulation\n:top_module: top\nmodule top;\n  logic clk;\n  assert property (@(posedge clk) 1);\nendmodule\n' > %t/sv-tests/tests/frontend_timeout_case.sv
+// RUN: printf ':tags: 16.9\n:type: simulation\n:top_module: top\nmodule top;\n  logic clk;\n  assert property (@(posedge clk) 1);\nendmodule\n' > %t/sv-tests/tests/solver_timeout_case.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nlast=\"\"\nfor a in \"$@\"; do last=\"$a\"; done\nif [[ \"$last\" == *frontend_timeout_case.sv ]]; then\n  sleep 5\nelse\n  echo \"module @top {\"\n  echo \"  verif.assert %true\"\n  echo \"}\"\nfi\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nlast=\"\"\nfor a in \"$@\"; do last=\"$a\"; done\nif [[ \"$last\" == *solver_timeout_case* ]]; then\n  sleep 5\nelse\n  echo \"BMC_RESULT=UNSAT\"\nfi\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-bmc
+// RUN: env CIRCT_TIMEOUT_SECS=1 CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc TEST_FILTER='frontend_timeout_case|solver_timeout_case' BMC_TIMEOUT_REASON_CASES_OUT=%t/timeout-reasons.tsv OUT=%t/results.tsv %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s --check-prefix=SUMMARY
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+// RUN: FileCheck %s --check-prefix=REASONS < %t/timeout-reasons.tsv
+//
+// SUMMARY: sv-tests SVA summary: total=2 pass=0 fail=0 xfail=0 xpass=0 error=2 skip=0 unknown=0 timeout=2
+// RESULTS-DAG: TIMEOUT{{[[:space:]]+}}frontend_timeout_case{{[[:space:]]+}}{{.*}}frontend_timeout_case.sv
+// RESULTS-DAG: TIMEOUT{{[[:space:]]+}}solver_timeout_case{{[[:space:]]+}}{{.*}}solver_timeout_case.sv
+// REASONS-DAG: frontend_timeout_case{{[[:space:]]+}}{{.*}}frontend_timeout_case.sv{{[[:space:]]+}}frontend_command_timeout
+// REASONS-DAG: solver_timeout_case{{[[:space:]]+}}{{.*}}solver_timeout_case.sv{{[[:space:]]+}}solver_command_timeout
