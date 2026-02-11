@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 995 - February 10, 2026
+
+### `circt-mut report`: Strict Profile Split for Stop-On-Fail vs Full-Lanes
+
+1. Added two explicit matrix strict policy profiles in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-stop-on-fail-strict`
+   - `formal-regression-matrix-full-lanes-strict`
+2. Semantics:
+   - `formal-regression-matrix-stop-on-fail-strict` keeps strict matrix quality
+     gates but intentionally does **not** fail on non-zero `matrix.lanes_skip`
+     (for campaigns that use deterministic stop-on-fail cuts).
+   - `formal-regression-matrix-full-lanes-strict` enforces full strict
+     behavior including `matrix.lanes_skip == 0`.
+3. Added/updated regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-stop-on-fail-strict-skip-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-full-lanes-strict-skip-fail.test`
+   - `test/Tools/circt-mut-report-help.test` (new profile names shown)
+   - `test/Tools/circt-mut-report-policy-invalid-profile.test` (expected list)
+4. Updated `PROJECT_PLAN.md` mutation roadmap entry to record profile bundle
+   expansion in the native `circt-mut` policy-pack surface.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (67/67)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (195/195)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-profile-split-20260210 ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC,
+    `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile for
+    `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known): AVIP compile `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 994 - February 10, 2026
 
 ### `circt-mut report`: Matrix-Basic Compare Gates Skip-Lane Drift
