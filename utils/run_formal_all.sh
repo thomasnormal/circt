@@ -4146,6 +4146,13 @@ if [[ -z "$CIRCT_VERILOG_BIN_OPENTITAN" ]]; then
   CIRCT_VERILOG_BIN_OPENTITAN="$CIRCT_VERILOG_BIN"
 fi
 
+# Keep formal runner tools on a coherent CIRCT toolchain by default.
+# Callers may override individual binaries via environment.
+CIRCT_TOOL_DIR="$(dirname "$CIRCT_VERILOG_BIN")"
+FORMAL_CIRCT_OPT_BIN="${CIRCT_OPT:-$CIRCT_TOOL_DIR/circt-opt}"
+FORMAL_CIRCT_BMC_BIN="${CIRCT_BMC:-$CIRCT_TOOL_DIR/circt-bmc}"
+FORMAL_CIRCT_LEC_BIN="${CIRCT_LEC:-$CIRCT_TOOL_DIR/circt-lec}"
+
 if [[ "$WITH_OPENTITAN" == "1" || \
       "$WITH_OPENTITAN_LEC_STRICT" == "1" || \
       "$WITH_OPENTITAN_E2E" == "1" || \
@@ -8451,6 +8458,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     # known JIT/Z3-LLVM backend divergence on local-var/disable-iff cases.
     run_suite sv-tests-bmc \
       env OUT="$OUT_DIR/sv-tests-bmc-results.txt" \
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
+      CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
+      CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
+      CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$sv_bmc_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_check_attribution_file" \
       BMC_DROP_REMARK_CASES_OUT="$sv_bmc_drop_remark_cases_file" \
@@ -8496,6 +8507,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       if [[ "$SV_TESTS_BMC_BACKEND_PARITY" == "1" ]]; then
         run_suite sv-tests-bmc-backend-parity-jit \
           env OUT="$OUT_DIR/sv-tests-bmc-jit-results.txt" \
+          CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
+          CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
+          CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
+          CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN" \
           BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
           BMC_RUN_SMTLIB=0 \
           ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
@@ -8541,6 +8556,10 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
     # Keep the semantic-closure lane aligned with sv-tests/BMC backend policy.
     run_suite sv-tests-bmc-uvm-semantics \
       env OUT="$sv_bmc_uvm_semantics_results_file" \
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
+      CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
+      CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
+      CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$sv_bmc_uvm_semantics_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_uvm_semantics_check_attribution_file" \
       BMC_DROP_REMARK_CASES_OUT="$sv_bmc_uvm_semantics_drop_remark_cases_file" \
@@ -8604,6 +8623,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
     : > "$sv_lec_drop_remark_reasons_file"
     run_suite sv-tests-lec \
       env OUT="$OUT_DIR/sv-tests-lec-results.txt" \
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
+      CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
+      CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
+      CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN" \
       LEC_DROP_REMARK_CASES_OUT="$sv_lec_drop_remark_cases_file" \
       LEC_DROP_REMARK_REASONS_OUT="$sv_lec_drop_remark_reasons_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
@@ -8652,6 +8675,10 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
     : > "$verilator_bmc_drop_remark_reasons_file"
     run_suite verilator-bmc \
       env OUT="$OUT_DIR/verilator-bmc-results.txt" \
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
+      CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
+      CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
+      CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$verilator_bmc_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$verilator_bmc_check_attribution_file" \
       BMC_DROP_REMARK_CASES_OUT="$verilator_bmc_drop_remark_cases_file" \
@@ -8709,6 +8736,10 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
     : > "$verilator_lec_drop_remark_reasons_file"
     run_suite verilator-lec \
       env OUT="$OUT_DIR/verilator-lec-results.txt" \
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
+      CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
+      CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
+      CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN" \
       LEC_DROP_REMARK_CASES_OUT="$verilator_lec_drop_remark_cases_file" \
       LEC_DROP_REMARK_REASONS_OUT="$verilator_lec_drop_remark_reasons_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
@@ -8755,6 +8786,10 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     # to avoid spurious X-driven counterexamples.  Only forward an explicit
     # override from the user (--bmc-assume-known-inputs flag).
     yosys_bmc_env=(OUT="$OUT_DIR/yosys-bmc-results.txt"
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN"
+      CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN"
+      CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN"
+      CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN"
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
       BMC_ABSTRACTION_PROVENANCE_OUT="$yosys_bmc_provenance_file"
@@ -8813,6 +8848,10 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
     : > "$yosys_lec_drop_remark_reasons_file"
     run_suite yosys-lec \
       env OUT="$OUT_DIR/yosys-lec-results.txt" \
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
+      CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
+      CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
+      CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN" \
       LEC_DROP_REMARK_CASES_OUT="$yosys_lec_drop_remark_cases_file" \
       LEC_DROP_REMARK_REASONS_OUT="$yosys_lec_drop_remark_reasons_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
