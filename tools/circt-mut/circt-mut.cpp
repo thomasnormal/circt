@@ -6102,6 +6102,72 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
            << reportMode << "' (expected cover|matrix|all)\n";
     return 1;
   }
+  SmallVector<std::string, 48> reportArgsOwned;
+  if (withReport) {
+    reportArgsOwned.push_back("report");
+    reportArgsOwned.push_back("--project-dir");
+    reportArgsOwned.push_back(opts.projectDir);
+    reportArgsOwned.push_back("--config");
+    reportArgsOwned.push_back(std::string(configPath));
+    reportArgsOwned.push_back("--mode");
+    reportArgsOwned.push_back(reportMode);
+
+    auto appendRunReportCSV = [&](StringRef key) {
+      auto it = cfg.run.find(key);
+      if (it == cfg.run.end() || it->second.empty())
+        return;
+      SmallVector<StringRef, 8> entries;
+      StringRef(it->second).split(entries, ',', /*MaxSplit=*/-1,
+                                  /*KeepEmpty=*/false);
+      for (StringRef raw : entries) {
+        StringRef token = raw.trim();
+        if (token.empty())
+          continue;
+        reportArgsOwned.push_back("--policy-profile");
+        reportArgsOwned.push_back(token.str());
+      }
+    };
+    appendRunReportCSV("report_policy_profile");
+    appendRunReportCSV("report_policy_profiles");
+
+    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_compare",
+                                "--compare", opts.projectDir);
+    appendOptionalConfigPathArg(reportArgsOwned, cfg.run,
+                                "report_compare_history_latest",
+                                "--compare-history-latest", opts.projectDir);
+    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_history",
+                                "--history", opts.projectDir);
+    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_append_history",
+                                "--append-history", opts.projectDir);
+    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_trend_history",
+                                "--trend-history", opts.projectDir);
+    appendOptionalConfigArg(reportArgsOwned, cfg.run, "report_history_max_runs",
+                            "--history-max-runs");
+    appendOptionalConfigArg(reportArgsOwned, cfg.run, "report_trend_window",
+                            "--trend-window");
+    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_cover_work_dir",
+                                "--cover-work-dir", opts.projectDir);
+    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_matrix_out_dir",
+                                "--matrix-out-dir", opts.projectDir);
+    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_lane_budget_out",
+                                "--lane-budget-out", opts.projectDir);
+    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_skip_budget_out",
+                                "--skip-budget-out", opts.projectDir);
+    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_out", "--out",
+                                opts.projectDir);
+
+    if (!appendOptionalConfigBoolFlagArg(reportArgsOwned, cfg.run,
+                                         "report_history_bootstrap",
+                                         "--history-bootstrap", "run",
+                                         error) ||
+        !appendOptionalConfigBoolFlagArg(reportArgsOwned, cfg.run,
+                                         "report_fail_on_prequalify_drift",
+                                         "--fail-on-prequalify-drift", "run",
+                                         error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+  }
 
   auto runCoverFromConfig = [&]() -> int {
     SmallVector<std::string, 96> args;
@@ -6487,17 +6553,11 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
               "post-run report.\n";
     return 1;
   }
-  SmallVector<std::string, 12> reportArgsOwned;
-  reportArgsOwned.push_back(mainExec);
-  reportArgsOwned.push_back("report");
-  reportArgsOwned.push_back("--project-dir");
-  reportArgsOwned.push_back(opts.projectDir);
-  reportArgsOwned.push_back("--config");
-  reportArgsOwned.push_back(std::string(configPath));
-  reportArgsOwned.push_back("--mode");
-  reportArgsOwned.push_back(reportMode);
-  SmallVector<StringRef, 12> reportArgs;
-  for (const auto &arg : reportArgsOwned)
+  SmallVector<std::string, 48> reportExecArgsOwned;
+  reportExecArgsOwned.push_back(mainExec);
+  reportExecArgsOwned.append(reportArgsOwned.begin(), reportArgsOwned.end());
+  SmallVector<StringRef, 48> reportArgs;
+  for (const auto &arg : reportExecArgsOwned)
     reportArgs.push_back(arg);
 
   std::string errMsg;
