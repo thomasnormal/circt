@@ -340,6 +340,12 @@ See CHANGELOG.md on recent progress.
   `formal-regression-matrix-lane-trend-*`), not only composite trend bundles,
   so one-run history snapshots cannot bypass trend governance via profile
   selection.
+- Latest mutation-governance milestone (current): strict matrix trend bundles
+  now enforce deeper trend-history evidence (`trend.history_runs_selected >= 3`)
+  via `formal-regression-matrix-trend-history-quality-strict`, composed into:
+  - `formal-regression-matrix-composite-trend-strict`
+  - `formal-regression-matrix-composite-stop-on-fail-trend-strict`
+  while nightly trend bundles keep the `>= 2` contract for staged rollout.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

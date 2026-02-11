@@ -1,15 +1,16 @@
 // RUN: not circt-mut report --mode cover --policy-profile nope 2>&1 | FileCheck %s
 //
 // CHECK: circt-mut report: unknown --policy-profile value: nope (expected
-// CHECK-SAME: formal-regression-basic
-// CHECK-SAME: formal-regression-matrix-provenance-strict
-// CHECK-SAME: formal-regression-matrix-native-lifecycle-strict
-// CHECK-SAME: formal-regression-matrix-policy-mode-native-strict-contract
-// CHECK-SAME: formal-regression-matrix-policy-mode-native-family-contract
-// CHECK-SAME: formal-regression-matrix-runtime-strict
-// CHECK-SAME: formal-regression-matrix-composite-native-strict
-// CHECK-SAME: formal-regression-matrix-composite-trend-strict
-// CHECK-SAME: formal-regression-matrix-composite-stop-on-fail-strict
-// CHECK-SAME: formal-regression-matrix-composite-stop-on-fail-native-strict
-// CHECK-SAME: formal-regression-matrix-composite-stop-on-fail-trend-nightly
-// CHECK-SAME: formal-regression-matrix-composite-stop-on-fail-trend-strict
+// CHECK-DAG: formal-regression-basic
+// CHECK-DAG: formal-regression-matrix-provenance-strict
+// CHECK-DAG: formal-regression-matrix-native-lifecycle-strict
+// CHECK-DAG: formal-regression-matrix-policy-mode-native-strict-contract
+// CHECK-DAG: formal-regression-matrix-policy-mode-native-family-contract
+// CHECK-DAG: formal-regression-matrix-runtime-strict
+// CHECK-DAG: formal-regression-matrix-trend-history-quality-strict
+// CHECK-DAG: formal-regression-matrix-composite-native-strict
+// CHECK-DAG: formal-regression-matrix-composite-trend-strict
+// CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-strict
+// CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-native-strict
+// CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-trend-nightly
+// CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-trend-strict

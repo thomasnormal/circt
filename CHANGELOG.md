@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1061 - February 11, 2026
+
+### `circt-mut report`: Stricter Trend-History Quality For Strict Matrix Bundles
+
+1. Extended matrix trend policy composition in `tools/circt-mut/circt-mut.cpp`
+   with a strict history-quality profile:
+   - `formal-regression-matrix-trend-history-quality-strict`
+2. Strict history-quality profile enforces:
+   - `trend.history_runs_selected >= 3`
+   - `trend.numeric_keys >= 1`
+3. Wired strict history quality into strict matrix trend composites:
+   - `formal-regression-matrix-composite-trend-strict`
+   - `formal-regression-matrix-composite-stop-on-fail-trend-strict`
+   while nightly bundles continue using the existing `>= 2` threshold.
+4. Updated report help/profile diagnostics to include the new profile:
+   - `circt-mut report --help` profile list
+   - unknown-profile expected profile enumeration
+5. Added/updated regression coverage:
+   - new `test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-history-quality-fail.test`
+     (2-run history now fails strict composite with `value=2.00 < 3.00`)
+   - updated `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-trend-strict.test`
+     to use 3-run trend history for strict pass semantics
+   - updated `test/Tools/circt-mut-report-policy-config-matrix-mode-trend-strict-stop-on-fail.test`
+     to use 3-run trend history for strict stop-on-fail pass semantics
+   - updated `test/Tools/circt-mut-report-help.test`
+   - updated `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused strict-history policy slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-report-policy-invalid-profile.test build-test/test/Tools/circt-mut-report-policy-config-matrix-mode-trend-strict-stop-on-fail.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-trend-strict.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-trend-nightly-history-quality-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-history-quality-fail.test`: PASS (6/6)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter 'circt-mut-.*\\.test' build-test/test/Tools`: PASS (305/305)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-trend-history-strict-v2 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC (`assert_fell` ERROR), `opentitan` LEC (`missing_results=1`), AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1060 - February 11, 2026
 
 ### BMC Provenance Hardening: LLHD Interface Abstraction Metadata From Process Stripping
