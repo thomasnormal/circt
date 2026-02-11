@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/cover
+// RUN: printf 'detected_mutants\t1\nerrors\t0\n' > %t/proj/out/cover/metrics.tsv
+// RUN: printf 'key\tvalue\ncover.detected_mutants\t1\n' > %t/proj/base.tsv
+// RUN: printf 'run_id\ttimestamp_utc\tkey\tvalue\n1\t2026-02-10T00:00:00Z\tcover.detected_mutants\t1\n' > %t/proj/history.tsv
+// RUN: printf '[report]\ncompare = "base.tsv"\ncompare_history_latest = "history.tsv"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut report --project-dir %t/proj --mode cover 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: [report] keys 'compare' and 'compare_history_latest' are mutually exclusive
