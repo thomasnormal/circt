@@ -8077,16 +8077,23 @@ emit_case_result_row() {
   local status="$1"
   local base="$2"
   local case_path="$3"
+  local mode="$4"
+  local profile="$5"
   local tags="${semantic_tags_by_case[$base]-}"
+  local diag="${mode^^}_${profile^^}"
+  diag="${diag//[^A-Z0-9_]/_}"
+  if [[ -z "$diag" ]]; then
+    diag="CASE"
+  fi
   if [[ -z "$OUT" ]]; then
     return
   fi
   if [[ -n "$tags" ]]; then
-    printf "%s\t%s\t%s\tyosys/tests/sva\tBMC\tsemantic_buckets=%s\n" \
-      "$status" "$base" "$case_path" "$tags" >> "$OUT"
+    printf "%s\t%s\t%s\tyosys/tests/sva\tBMC\t%s\tsemantic_buckets=%s\n" \
+      "$status" "$base" "$case_path" "$diag" "$tags" >> "$OUT"
   else
-    printf "%s\t%s\t%s\tyosys/tests/sva\tBMC\n" \
-      "$status" "$base" "$case_path" >> "$OUT"
+    printf "%s\t%s\t%s\tyosys/tests/sva\tBMC\t%s\n" \
+      "$status" "$base" "$case_path" "$diag" >> "$OUT"
   fi
 }
 
@@ -8172,14 +8179,14 @@ report_case_outcome() {
   case "$expected" in
     skip)
       echo "UNSKIP($mode): $base [$profile]"
-      emit_case_result_row "UNSKIP" "$base" "$case_path"
+      emit_case_result_row "UNSKIP" "$base" "$case_path" "$mode" "$profile"
       mode_out_unskip=$((mode_out_unskip + 1))
       failures=$((failures + 1))
       ;;
     xfail)
       if [[ "$passed" == "1" ]]; then
         echo "XPASS($mode): $base [$profile]"
-        emit_case_result_row "XPASS" "$base" "$case_path"
+        emit_case_result_row "XPASS" "$base" "$case_path" "$mode" "$profile"
         mode_out_xpass=$((mode_out_xpass + 1))
         xpasses=$((xpasses + 1))
         if [[ "$ALLOW_XPASS" != "1" ]]; then
@@ -8187,7 +8194,7 @@ report_case_outcome() {
         fi
       else
         echo "XFAIL($mode): $base [$profile]"
-        emit_case_result_row "XFAIL" "$base" "$case_path"
+        emit_case_result_row "XFAIL" "$base" "$case_path" "$mode" "$profile"
         mode_out_xfail=$((mode_out_xfail + 1))
         xfails=$((xfails + 1))
       fi
@@ -8195,23 +8202,23 @@ report_case_outcome() {
     fail)
       if [[ "$passed" == "1" ]]; then
         echo "EPASS($mode): $base [$profile]"
-        emit_case_result_row "EPASS" "$base" "$case_path"
+        emit_case_result_row "EPASS" "$base" "$case_path" "$mode" "$profile"
         mode_out_epass=$((mode_out_epass + 1))
         failures=$((failures + 1))
       else
         echo "EFAIL($mode): $base [$profile]"
-        emit_case_result_row "EFAIL" "$base" "$case_path"
+        emit_case_result_row "EFAIL" "$base" "$case_path" "$mode" "$profile"
         mode_out_efail=$((mode_out_efail + 1))
       fi
       ;;
     pass)
       if [[ "$passed" == "1" ]]; then
         echo "PASS($mode): $base"
-        emit_case_result_row "PASS" "$base" "$case_path"
+        emit_case_result_row "PASS" "$base" "$case_path" "$mode" "$profile"
         mode_out_pass=$((mode_out_pass + 1))
       else
         echo "FAIL($mode): $base"
-        emit_case_result_row "FAIL" "$base" "$case_path"
+        emit_case_result_row "FAIL" "$base" "$case_path" "$mode" "$profile"
         mode_out_fail=$((mode_out_fail + 1))
         failures=$((failures + 1))
       fi
@@ -8244,7 +8251,7 @@ report_skipped_case() {
   if [[ "$emit_line" == "1" ]]; then
     echo "SKIP($reason): $base"
   fi
-  emit_case_result_row "SKIP" "$base" "$case_path"
+  emit_case_result_row "SKIP" "$base" "$case_path" "$mode" "$profile"
   if [[ "$expected" == "skip" ]]; then
     mode_skipped_expected=$((mode_skipped_expected + 1))
     if [[ "$emit_line" == "1" ]]; then

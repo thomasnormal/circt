@@ -12,5 +12,4 @@
 // RUN: cat %t/out.tsv | FileCheck %s --check-prefix=OUTTSV
 //
 // RUNOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
-// OUTTSV: PASS{{[[:space:]]+}}semantic_case{{[[:space:]]+}}{{.*}}semantic_case.sv{{[[:space:]]+}}yosys/tests/sva{{[[:space:]]+}}BMC{{[[:space:]]+}}semantic_buckets=four_state
-
+// OUTTSV: PASS{{[[:space:]]+}}semantic_case{{[[:space:]]+}}{{.*}}semantic_case.sv{{[[:space:]]+}}yosys/tests/sva{{[[:space:]]+}}BMC{{[[:space:]]+}}PASS_KNOWN{{[[:space:]]+}}semantic_buckets=four_state
