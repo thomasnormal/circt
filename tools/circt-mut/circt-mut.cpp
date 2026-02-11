@@ -123,7 +123,9 @@ static void printInitHelp(raw_ostream &os) {
   os << "                            provenance-guard|provenance-strict|\n";
   os << "                            native-lifecycle-strict|native-smoke|\n";
   os << "                            native-nightly|native-strict|\n";
-  os << "                            native-strict-formal|strict-formal,\n";
+  os << "                            native-strict-formal|strict-formal|\n";
+  os << "                            native-strict-formal-summary|\n";
+  os << "                            strict-formal-summary,\n";
   os << "                            default: smoke)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           Enable stop-on-fail report guard profile in\n";
@@ -181,7 +183,9 @@ static void printRunHelp(raw_ostream &os) {
   os << "                           provenance-guard|provenance-strict|\n";
   os << "                           native-lifecycle-strict|native-smoke|\n";
   os << "                           native-nightly|native-strict|\n";
-  os << "                           native-strict-formal|strict-formal\n";
+  os << "                           native-strict-formal|strict-formal|\n";
+  os << "                           native-strict-formal-summary|\n";
+  os << "                           strict-formal-summary\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --report-external-formal-results FILE\n";
   os << "                           Repeatable override for report\n";
@@ -223,7 +227,9 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           provenance-guard|provenance-strict|\n";
   os << "                           native-lifecycle-strict|native-smoke|\n";
   os << "                           native-nightly|native-strict|\n";
-  os << "                           native-strict-formal|strict-formal\n";
+  os << "                           native-strict-formal|strict-formal|\n";
+  os << "                           native-strict-formal-summary|\n";
+  os << "                           strict-formal-summary\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -248,6 +254,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-lane-trend-nightly|\n";
   os << "                           formal-regression-matrix-lane-trend-strict|\n";
   os << "                           formal-regression-matrix-external-formal-guard|\n";
+  os << "                           formal-regression-matrix-external-formal-summary-guard|\n";
   os << "                           formal-regression-matrix-provenance-guard|\n";
   os << "                           formal-regression-matrix-provenance-strict|\n";
   os << "                           formal-regression-matrix-native-lifecycle-strict|\n";
@@ -5775,7 +5782,8 @@ static constexpr StringLiteral kMatrixPolicyModeList =
     "smoke|nightly|strict|trend-nightly|trend-strict|native-trend-nightly|"
     "native-trend-strict|provenance-guard|provenance-strict|"
     "native-lifecycle-strict|native-smoke|native-nightly|native-strict|"
-    "native-strict-formal|strict-formal";
+    "native-strict-formal|strict-formal|native-strict-formal-summary|"
+    "strict-formal-summary";
 
 static bool isMatrixPolicyMode(StringRef mode);
 
@@ -7548,6 +7556,11 @@ struct ExternalFormalSummary {
   uint64_t summarySkip = 0;
   uint64_t summaryXFail = 0;
   uint64_t summaryXPass = 0;
+  uint64_t summaryTSVFiles = 0;
+  uint64_t summaryTSVRows = 0;
+  uint64_t summaryTSVSchemaValidFiles = 0;
+  uint64_t summaryTSVSchemaInvalidFiles = 0;
+  uint64_t summaryTSVParseErrors = 0;
 };
 
 struct MatrixLaneBudgetRow {
@@ -7704,6 +7717,7 @@ static bool collectExternalFormalSummary(
     std::string &error) {
   ExternalFormalSummary summary;
   SmallVector<StringRef, 32> tokens;
+  SmallVector<StringRef, 32> fields;
   for (const auto &path : files) {
     auto bufferOrErr = MemoryBuffer::getFile(path);
     if (!bufferOrErr) {
@@ -7716,6 +7730,100 @@ static bool collectExternalFormalSummary(
     SmallVector<StringRef, 256> lines;
     bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
                                          /*KeepEmpty=*/false);
+    StringRef baseName = sys::path::filename(path);
+    if (baseName == "summary.tsv") {
+      ++summary.summaryTSVFiles;
+      bool headerSeen = false;
+      bool schemaValid = false;
+      bool schemaInvalid = false;
+      size_t totalCol = static_cast<size_t>(-1);
+      size_t passCol = static_cast<size_t>(-1);
+      size_t failCol = static_cast<size_t>(-1);
+      size_t xfailCol = static_cast<size_t>(-1);
+      size_t xpassCol = static_cast<size_t>(-1);
+      size_t errorCol = static_cast<size_t>(-1);
+      size_t skipCol = static_cast<size_t>(-1);
+      auto parseCountField = [&](StringRef field,
+                                 uint64_t &out) -> bool {
+        StringRef token = field.trim();
+        if (token.empty())
+          return false;
+        return !token.getAsInteger(10, out);
+      };
+      for (StringRef rawLine : lines) {
+        StringRef line = rawLine.rtrim("\r").trim();
+        if (line.empty() || line.starts_with("#"))
+          continue;
+        ++summary.lines;
+        splitTSVLine(line, fields);
+        if (!headerSeen) {
+          headerSeen = true;
+          auto findCol = [&](StringRef name) -> size_t {
+            for (size_t i = 0, e = fields.size(); i < e; ++i)
+              if (fields[i].trim().lower() == name)
+                return i;
+            return static_cast<size_t>(-1);
+          };
+          totalCol = findCol("total");
+          passCol = findCol("pass");
+          failCol = findCol("fail");
+          xfailCol = findCol("xfail");
+          xpassCol = findCol("xpass");
+          errorCol = findCol("error");
+          skipCol = findCol("skip");
+          schemaValid = totalCol != static_cast<size_t>(-1) &&
+                        passCol != static_cast<size_t>(-1) &&
+                        failCol != static_cast<size_t>(-1) &&
+                        xfailCol != static_cast<size_t>(-1) &&
+                        xpassCol != static_cast<size_t>(-1) &&
+                        errorCol != static_cast<size_t>(-1) &&
+                        skipCol != static_cast<size_t>(-1);
+          if (!schemaValid) {
+            schemaInvalid = true;
+            ++summary.summaryTSVParseErrors;
+          }
+          continue;
+        }
+        if (!schemaValid) {
+          ++summary.unparsedLines;
+          continue;
+        }
+        size_t maxCol = std::max({totalCol, passCol, failCol, xfailCol, xpassCol,
+                                  errorCol, skipCol});
+        if (fields.size() <= maxCol) {
+          ++summary.summaryTSVParseErrors;
+          ++summary.unparsedLines;
+          continue;
+        }
+        uint64_t total = 0, pass = 0, fail = 0, xfail = 0;
+        uint64_t xpass = 0, errorCount = 0, skip = 0;
+        if (!parseCountField(fields[totalCol], total) ||
+            !parseCountField(fields[passCol], pass) ||
+            !parseCountField(fields[failCol], fail) ||
+            !parseCountField(fields[xfailCol], xfail) ||
+            !parseCountField(fields[xpassCol], xpass) ||
+            !parseCountField(fields[errorCol], errorCount) ||
+            !parseCountField(fields[skipCol], skip)) {
+          ++summary.summaryTSVParseErrors;
+          ++summary.unparsedLines;
+          continue;
+        }
+        ++summary.summaryTSVRows;
+        ++summary.parsedSummaryLines;
+        summary.summaryTotal += total;
+        summary.summaryPass += pass;
+        summary.summaryFail += fail;
+        summary.summaryError += errorCount;
+        summary.summarySkip += skip;
+        summary.summaryXFail += xfail;
+        summary.summaryXPass += xpass;
+      }
+      if (!headerSeen || !schemaValid || schemaInvalid)
+        ++summary.summaryTSVSchemaInvalidFiles;
+      else
+        ++summary.summaryTSVSchemaValidFiles;
+      continue;
+    }
     for (StringRef rawLine : lines) {
       StringRef line = rawLine.rtrim("\r").trim();
       if (line.empty() || line.starts_with("#"))
@@ -7835,6 +7943,16 @@ static bool collectExternalFormalSummary(
                     std::to_string(summary.summaryXFail));
   rows.emplace_back("external_formal.summary_xpass",
                     std::to_string(summary.summaryXPass));
+  rows.emplace_back("external_formal.summary_tsv_files",
+                    std::to_string(summary.summaryTSVFiles));
+  rows.emplace_back("external_formal.summary_tsv_rows",
+                    std::to_string(summary.summaryTSVRows));
+  rows.emplace_back("external_formal.summary_tsv_schema_valid_files",
+                    std::to_string(summary.summaryTSVSchemaValidFiles));
+  rows.emplace_back("external_formal.summary_tsv_schema_invalid_files",
+                    std::to_string(summary.summaryTSVSchemaInvalidFiles));
+  rows.emplace_back("external_formal.summary_tsv_parse_errors",
+                    std::to_string(summary.summaryTSVParseErrors));
 
   uint64_t failLikeSum = summary.fail + summary.error + summary.xpass +
                          summary.summaryFail + summary.summaryError +
@@ -8051,14 +8169,18 @@ static bool isMatrixPolicyMode(StringRef mode) {
          mode == "provenance-guard" || mode == "provenance-strict" ||
          mode == "native-lifecycle-strict" || mode == "native-smoke" ||
          mode == "native-nightly" || mode == "native-strict" ||
-         mode == "native-strict-formal" || mode == "strict-formal";
+         mode == "native-strict-formal" || mode == "strict-formal" ||
+         mode == "native-strict-formal-summary" ||
+         mode == "strict-formal-summary";
 }
 
 static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
          mode == "trend-nightly" || mode == "trend-strict" ||
          mode == "native-trend-nightly" || mode == "native-trend-strict" ||
-         mode == "native-strict-formal" || mode == "strict-formal";
+         mode == "native-strict-formal" || mode == "strict-formal" ||
+         mode == "native-strict-formal-summary" ||
+         mode == "strict-formal-summary";
 }
 
 static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
@@ -8068,6 +8190,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
   std::string policyProfile;
   std::string provenanceProfile;
   std::string externalFormalProfile;
+  std::string externalFormalSummaryProfile;
   std::string modeContractProfile;
   if (mode == "smoke") {
     policyProfile = stopOnFail
@@ -8147,6 +8270,23 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                         : "formal-regression-matrix-composite-strict";
     provenanceProfile = "formal-regression-matrix-provenance-strict";
     externalFormalProfile = "formal-regression-matrix-external-formal-guard";
+  } else if (mode == "native-strict-formal-summary") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
+                        : "formal-regression-matrix-composite-native-strict";
+    externalFormalProfile = "formal-regression-matrix-external-formal-guard";
+    externalFormalSummaryProfile =
+        "formal-regression-matrix-external-formal-summary-guard";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-strict-contract";
+  } else if (mode == "strict-formal-summary") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-strict"
+                        : "formal-regression-matrix-composite-strict";
+    provenanceProfile = "formal-regression-matrix-provenance-strict";
+    externalFormalProfile = "formal-regression-matrix-external-formal-guard";
+    externalFormalSummaryProfile =
+        "formal-regression-matrix-external-formal-summary-guard";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
              (Twine("' (expected ") + kMatrixPolicyModeList + ")"))
@@ -8158,6 +8298,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     out.push_back(provenanceProfile);
   if (!externalFormalProfile.empty())
     out.push_back(externalFormalProfile);
+  if (!externalFormalSummaryProfile.empty())
+    out.push_back(externalFormalSummaryProfile);
   if (!modeContractProfile.empty())
     out.push_back(modeContractProfile);
   return true;
@@ -8557,6 +8699,20 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      0.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-external-formal-summary-guard") {
+    appendUniqueRule(opts.failIfValueLtRules, "external_formal.files", 1.0);
+    appendUniqueRule(opts.failIfValueLtRules, "external_formal.summary_tsv_files",
+                     1.0);
+    appendUniqueRule(opts.failIfValueLtRules,
+                     "external_formal.summary_tsv_schema_valid_files", 1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_tsv_schema_invalid_files", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_tsv_parse_errors", 0.0);
+    appendUniqueRule(opts.failIfValueLtRules, "external_formal.summary_tsv_rows",
+                     1.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-provenance-guard") {
     appendMatrixPrequalifyProvenanceColumnPresenceRules(opts);
     appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
@@ -8721,6 +8877,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-lane-trend-nightly|"
            "formal-regression-matrix-lane-trend-strict|"
            "formal-regression-matrix-external-formal-guard|"
+           "formal-regression-matrix-external-formal-summary-guard|"
            "formal-regression-matrix-provenance-guard|"
            "formal-regression-matrix-provenance-strict|"
            "formal-regression-matrix-native-lifecycle-strict|"
@@ -11543,7 +11700,8 @@ static int runNativeReport(const ReportOptions &opts) {
                         : "0");
   rows.emplace_back("policy.mode_is_native_strict",
                     (appliedPolicyMode == "native-strict" ||
-                     appliedPolicyMode == "native-strict-formal")
+                     appliedPolicyMode == "native-strict-formal" ||
+                     appliedPolicyMode == "native-strict-formal-summary")
                         ? "1"
                         : "0");
   rows.emplace_back("policy.mode_source", appliedPolicyModeSource);
@@ -11700,6 +11858,11 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("external_formal.summary_skip", "0");
     rows.emplace_back("external_formal.summary_xfail", "0");
     rows.emplace_back("external_formal.summary_xpass", "0");
+    rows.emplace_back("external_formal.summary_tsv_files", "0");
+    rows.emplace_back("external_formal.summary_tsv_rows", "0");
+    rows.emplace_back("external_formal.summary_tsv_schema_valid_files", "0");
+    rows.emplace_back("external_formal.summary_tsv_schema_invalid_files", "0");
+    rows.emplace_back("external_formal.summary_tsv_parse_errors", "0");
     rows.emplace_back("external_formal.fail_like_sum", "0");
   }
   if (!effectiveOpts.laneBudgetOutFile.empty()) {
