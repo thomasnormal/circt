@@ -9,6 +9,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:40)
+
+1. Added a second scoped external-formal semantic guard profile in
+   `circt-mut`:
+   - `formal-regression-matrix-external-formal-semantic-guard-yosys`
+   - rule enforces
+     `external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_error_cases <= 0`.
+2. Current formal limitations still open:
+   - BMC deterministic multiclock semantic parity anchor is still missing in
+     the e2e regression set and policy bundles.
+   - LEC semantic decomposition is still coarse inside
+     `semantic_diag_error` (needs parser/lowering/solver family split).
+   - mutation policy still lacks trend-aware scoped semantic guard bundles for
+     sustained closure quality (not just point-in-time strictness).
+3. Next long-term features to build:
+   - add deterministic multiclock SAT/UNSAT BMC e2e pair and wire into
+     BMC semantic-bucket drift gates.
+   - split `lec_error_bucket_semantic_diag_error_cases` into stable reason
+     families and expose counters per suite/mode.
+   - add scoped semantic trend profiles in `circt-mut` that combine
+     `verilator` + `yosys` guard keys with history-window deltas.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:20)
 
 1. Added first native scoped formal-semantic policy profile in `circt-mut`:

@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1115 - February 11, 2026
+
+### Mutation Policy: Scoped External Formal Semantic Guard For Yosys LEC
+
+1. Added a new policy profile in `circt-mut report`:
+   - `formal-regression-matrix-external-formal-semantic-guard-yosys`
+2. Added guard rule:
+   - `external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_error_cases <= 0`
+3. Integrated the profile into:
+   - policy profile help output
+   - unknown-profile diagnostics / accepted-profile listing
+4. Added dedicated regression tests:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-guard-yosys-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-guard-yosys-fail.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-guard-yosys-pass.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-guard-yosys-fail.test`
+  - `build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`
+  - `build-test/test/Tools/circt-mut-report-help.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-guard-pass.test`
+  - PASS (5/5)
+
 ## Iteration 1114 - February 11, 2026
 
 ### Mutation Policy: Scoped External Formal Semantic Guard Profile
