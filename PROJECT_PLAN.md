@@ -173,6 +173,10 @@ See CHANGELOG.md on recent progress.
   - `matrix.prequalify_results_summary_present_missing_log_file_lanes`
   enabling straightforward strict gates on native prequalification artifact
   hygiene in CI.
+- Latest mutation-governance milestone (current): matrix guard/strict policy
+  bundles now gate provenance completeness directly by requiring both deficit
+  counters above to stay zero, enabling native prequalification artifact
+  hygiene enforcement without bespoke CI rule wiring.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

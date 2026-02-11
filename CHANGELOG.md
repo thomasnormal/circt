@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1032 - February 11, 2026
+
+### `circt-mut report`: Policy-Gated Prequalify Provenance Hygiene
+
+1. Extended matrix policy profiles in `tools/circt-mut/circt-mut.cpp` to gate
+   prequalification provenance completeness counters (must remain zero):
+   - `matrix.prequalify_results_summary_present_missing_pair_file_lanes`
+   - `matrix.prequalify_results_summary_present_missing_log_file_lanes`
+2. Applied the new gates across matrix guard/strict profile families, including
+   stop-on-fail variants and nightly/strict baselines, so provenance hygiene is
+   enforced by default policy bundles rather than ad-hoc CI wiring.
+3. Hardened report aggregation semantics so missing-path deficit counters only
+   accrue when the corresponding `prequalify_pair_file` /
+   `prequalify_log_file` columns are present, preserving compatibility with
+   legacy `results.tsv` fixtures.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-guard-strict-prequalify-provenance-fail.test`
+   verifies strict profile failure on summary-present rows lacking provenance
+   paths.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused policy/report provenance slice:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-policy-matrix-guard-strict-prequalify-provenance-fail.test test/Tools/circt-mut-report-matrix-prequalify-path-completeness.test test/Tools/circt-mut-report-matrix-lane-prequalify-keys.test test/Tools/circt-mut-report-policy-matrix-guard-smoke-pass.test test/Tools/circt-mut-report-policy-matrix-guard-nightly-fail.test test/Tools/circt-mut-report-policy-matrix-stop-on-fail-guard-smoke-pass.test test/Tools/circt-mut-report-policy-matrix-stop-on-fail-guard-nightly-fail.test test/Tools/circt-mut-report-policy-matrix-guard-strict-zero-detected-lane-fail.test`: PASS (8/8)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (260/260)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-prequalify-provenance-gates ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1031 - February 11, 2026
 
 ### `circt-mut report`: Prequalify Provenance Completeness Deficit Counters
