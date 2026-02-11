@@ -246,6 +246,27 @@ extract_verilog_error_reason() {
       if (match(line, /^[^:]+:[0-9]+(:[0-9]+)?:[[:space:]]*/))
         line = substr(line, RLENGTH + 1)
       sub(/^[Ee]rror:[[:space:]]*/, "", line)
+      low = tolower(line)
+      if (index(low, "failed to run command") > 0) {
+        if (index(low, "no such file or directory") > 0) {
+          print "runner_command_not_found"
+          exit
+        }
+        if (index(low, "permission denied") > 0) {
+          print "runner_command_permission_denied"
+          exit
+        }
+        print "runner_failed_to_run_command"
+        exit
+      }
+      if (index(low, "cannot allocate memory") > 0 || index(low, "memory exhausted") > 0) {
+        print "command_oom"
+        exit
+      }
+      if (index(low, "timed out") > 0 || index(low, "timeout") > 0) {
+        print "command_timeout"
+        exit
+      }
       gsub(/[0-9]+/, "<n>", line)
       gsub(/[^A-Za-z0-9]+/, "_", line)
       gsub(/^_+/, "", line)

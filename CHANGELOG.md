@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1098 - February 11, 2026
+
+### Formal Runner Hardening: Stable LEC `CIRCT_VERILOG_ERROR` Spawn/Timeout Reasons
+
+1. Hardened `extract_verilog_error_reason` in all LEC runners:
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. Added canonical reason mapping for wrapper/infra failures:
+   - `runner_command_not_found`
+   - `runner_command_permission_denied`
+   - `runner_failed_to_run_command`
+   - `command_timeout`
+   - `command_oom`
+3. This removes path-dependent reason-token churn (for example,
+   `timeout_failed_to_run_command_<absolute_path>`) and improves strict-gate
+   reason drift signal quality.
+4. Added regression coverage:
+   - `test/Tools/run-sv-tests-lec-verilog-error-timeout-wrapper-reason.test`
+   - `test/Tools/run-verilator-verification-circt-lec-verilog-error-timeout-wrapper-reason.test`
+   - `test/Tools/run-yosys-sva-circt-lec-verilog-error-timeout-wrapper-reason.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-sv-tests-lec-verilog-error-reason.test`
+  - `build-test/test/Tools/run-sv-tests-lec-verilog-error-timeout-wrapper-reason.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-error-diag.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-verilog-error-timeout-wrapper-reason.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-error-diag.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-verilog-error-timeout-wrapper-reason.test`
+  - PASS (6/6)
+- External filtered cadence checks (explicit `build-test/bin` tools):
+  - `sv-tests` `16.15--property-iff-uvm`
+  - `verilator-verification` `assert_changed`
+  - `yosys/tests/sva` `basic00`
+  - all emit stable `CIRCT_VERILOG_ERROR` reason:
+    `runner_command_permission_denied`
+
 ## Iteration 1097 - February 11, 2026
 
 ### Formal Governance: LEC `CIRCT_VERILOG_ERROR` Case-ID and Case+Reason Drift
