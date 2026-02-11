@@ -299,9 +299,13 @@ See CHANGELOG.md on recent progress.
   and `trend.numeric_keys >= 1`) through a dedicated profile component
   (`formal-regression-matrix-trend-history-quality`), preventing one-run trend
   snapshots from silently passing nightly/strict trend governance.
-  (`formal-regression-matrix-policy-mode-native-family-contract`) and
-  provenance enforcement, so trend governance can be deployed under native
-  policy contracts without bespoke profile stacks.
+- Latest mutation-governance milestone (current): trend-history quality
+  contracts are now consistently applied across direct trend profiles
+  (`formal-regression-trend`, `formal-regression-matrix-trend*`,
+  `formal-regression-matrix-stop-on-fail-trend`,
+  `formal-regression-matrix-lane-trend-*`), not only composite trend bundles,
+  so one-run history snapshots cannot bypass trend governance via profile
+  selection.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
