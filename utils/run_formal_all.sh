@@ -161,6 +161,11 @@ Options:
   --fail-on-new-bmc-semantic-bucket-case-ids
                          Fail when BMC semantic-bucket case IDs increase vs
                          baseline (bucket::case_id identity tuples)
+  --fail-on-new-bmc-semantic-bucket-case-ids-for BUCKET
+                         Fail when BMC semantic-bucket case IDs increase vs
+                         baseline for the selected BUCKET only (repeatable;
+                         accepts `sequence-subroutine` or
+                         `sequence_subroutine`)
   --fail-on-new-bmc-semantic-bucket-unclassified-cases
                          Fail when BMC semantic-bucket unclassified fail-like
                          case count increases vs baseline
@@ -1911,6 +1916,7 @@ FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS=0
+declare -a FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS=()
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES=0
 FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION=0
 FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=0
@@ -2311,6 +2317,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1; shift ;;
     --fail-on-new-bmc-semantic-bucket-case-ids)
       FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS=1; shift ;;
+    --fail-on-new-bmc-semantic-bucket-case-ids-for)
+      FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS+=("$2"); shift 2 ;;
     --fail-on-new-bmc-semantic-bucket-unclassified-cases)
       FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES=1; shift ;;
     --fail-on-bmc-semantic-tagged-cases-regression)
@@ -4430,6 +4438,7 @@ dedupe_array FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES
 dedupe_array FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES
 dedupe_array FAIL_ON_NEW_LEC_COUNTER_KEYS
 dedupe_array FAIL_ON_NEW_LEC_COUNTER_PREFIXES
+dedupe_array FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS
 
 for xprop_key in "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[@]}"; do
   if [[ ! "$xprop_key" =~ ^[a-z][a-z0-9_]*$ ]]; then
@@ -4461,6 +4470,13 @@ for lec_prefix in "${FAIL_ON_NEW_LEC_COUNTER_PREFIXES[@]}"; do
     exit 1
   fi
 done
+for bmc_bucket in "${FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS[@]}"; do
+  bmc_bucket_normalized="${bmc_bucket//-/_}"
+  if [[ ! "$bmc_bucket_normalized" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "invalid --fail-on-new-bmc-semantic-bucket-case-ids-for: expected [a-z][a-z0-9_-]*, got '$bmc_bucket'" >&2
+    exit 1
+  fi
+done
 OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV=""
 if [[ "${#FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[@]}" -gt 0 ]]; then
   OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV="$(IFS=,; echo "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[*]}")"
@@ -4480,6 +4496,10 @@ fi
 LEC_COUNTER_PREFIXES_CSV=""
 if [[ "${#FAIL_ON_NEW_LEC_COUNTER_PREFIXES[@]}" -gt 0 ]]; then
   LEC_COUNTER_PREFIXES_CSV="$(IFS=,; echo "${FAIL_ON_NEW_LEC_COUNTER_PREFIXES[*]}")"
+fi
+BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS_CSV=""
+if [[ "${#FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS[@]}" -gt 0 ]]; then
+  BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS_CSV="$(IFS=,; echo "${FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS[*]}")"
 fi
 if [[ "$OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT" -gt 1 ]]; then
   echo "Use only one of --opentitan-e2e-lec-x-optimistic or --opentitan-e2e-lec-strict-x." >&2
@@ -12054,6 +12074,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS" == "1" || \
+      -n "$BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS_CSV" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES" == "1" || \
       "$FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION" == "1" || \
       "$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" == "1" || \
@@ -12115,6 +12136,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS" \
+  BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS="$BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS_CSV" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES" \
   FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION="$FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION" \
   FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE="$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" \
@@ -12882,6 +12904,13 @@ fail_on_new_bmc_semantic_bucket_cases = (
 fail_on_new_bmc_semantic_bucket_case_ids = (
     os.environ.get("FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS", "0") == "1"
 )
+bmc_semantic_bucket_case_id_buckets = sorted(
+    {
+        token.strip().replace("-", "_")
+        for token in os.environ.get("BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS", "").split(",")
+        if token.strip()
+    }
+)
 fail_on_new_bmc_semantic_bucket_unclassified_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES", "0")
     == "1"
@@ -13546,6 +13575,44 @@ for key, current_row in summary.items():
                     gate_errors.append(
                         f"{suite} {mode}: new BMC semantic-bucket case IDs observed (baseline={len(baseline_semantic_case_ids)} current={len(current_semantic_case_ids)}, window={baseline_window}): {sample}"
                     )
+        if bmc_semantic_bucket_case_id_buckets:
+            baseline_semantic_case_ids_raw = [
+                row.get("bmc_semantic_bucket_case_ids") for row in compare_rows
+            ]
+            if any(raw is not None for raw in baseline_semantic_case_ids_raw):
+                baseline_semantic_case_ids = set()
+                for raw in baseline_semantic_case_ids_raw:
+                    if raw is None or raw == "":
+                        continue
+                    for token in raw.split(";"):
+                        token = token.strip()
+                        if token:
+                            baseline_semantic_case_ids.add(token)
+                current_semantic_case_ids = current_bmc_semantic_bucket_case_ids.get(
+                    key, set()
+                )
+                for bucket_name in bmc_semantic_bucket_case_id_buckets:
+                    bucket_prefix = f"{bucket_name}::"
+                    baseline_bucket_case_ids = {
+                        token
+                        for token in baseline_semantic_case_ids
+                        if token.startswith(bucket_prefix)
+                    }
+                    current_bucket_case_ids = {
+                        token
+                        for token in current_semantic_case_ids
+                        if token.startswith(bucket_prefix)
+                    }
+                    new_bucket_case_ids = sorted(
+                        current_bucket_case_ids - baseline_bucket_case_ids
+                    )
+                    if new_bucket_case_ids:
+                        sample = ", ".join(new_bucket_case_ids[:2])
+                        if len(new_bucket_case_ids) > 2:
+                            sample += ", ..."
+                        gate_errors.append(
+                            f"{suite} {mode}: new BMC semantic-bucket case IDs observed for {bucket_name} (baseline={len(baseline_bucket_case_ids)} current={len(current_bucket_case_ids)}, window={baseline_window}): {sample}"
+                        )
         if fail_on_new_bmc_semantic_bucket_unclassified_cases:
             baseline_unclassified_values = []
             for counts in parsed_counts:

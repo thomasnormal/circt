@@ -9,6 +9,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 21:35)
+
+1. Added focused BMC semantic drift governance:
+   - `--fail-on-new-bmc-semantic-bucket-case-ids-for <bucket>` in
+     `run_formal_all.sh` (repeatable).
+2. Practical usage:
+   - allows strict closure on selected families such as `multiclock` and
+     `sequence_subroutine` while keeping other semantic buckets in observation
+     mode.
+3. Remaining limitations:
+   - BMC closure signal for `sequence_subroutine` and `multiclock` still relies
+     on harness-scale runs; we still need smaller deterministic e2e corpus for
+     these families with explicit expected SAT/UNSAT outcomes.
+   - semantic bucket taxonomy still has `unclassified` pressure in some paths,
+     reducing prioritization precision.
+4. Next long-term features:
+   - build dedicated `circt-bmc` e2e micro-suite for multiclock/subroutine
+     corner semantics and wire into nightly strict profile.
+   - expand semantic bucketing from regex+metadata heuristics to compiler
+     emitted stable category IDs where possible.
+   - feed bucket-specific drift deltas into mutation profile ranking so mutator
+     investment tracks active formal semantic debt.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 21:20)
 
 1. Added strict LEC error-bucket drift governance in `run_formal_all.sh`:

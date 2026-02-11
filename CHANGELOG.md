@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1108 - February 11, 2026
+
+### Formal Governance: Targeted BMC Semantic-Bucket Case-ID Drift Gates
+
+1. Added repeatable bucket-scoped BMC case-ID gate in
+   `utils/run_formal_all.sh`:
+   - `--fail-on-new-bmc-semantic-bucket-case-ids-for BUCKET`
+2. Gate behavior:
+   - compares baseline vs current only for selected semantic bucket IDs
+     (`bucket::case_id` tuples) from `bmc_semantic_bucket_case_ids`.
+   - accepts either underscore or dash bucket names, e.g.
+     `sequence_subroutine` and `sequence-subroutine`.
+3. Why this matters long term:
+   - enables focused closure governance for high-priority semantic families
+     (for example `multiclock`, `sequence_subroutine`) without requiring
+     broad all-bucket case-ID gating everywhere.
+4. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids-for.test`
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids-for-nonmatching.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids-for.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids-for-nonmatching.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids-defaults.test`
+  - PASS (4/4)
+
 ## Iteration 1107 - February 11, 2026
 
 ### Formal Governance: LEC Error-Bucket Case-ID Drift Gating
