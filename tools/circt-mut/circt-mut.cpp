@@ -118,7 +118,7 @@ static void printInitHelp(raw_ostream &os) {
   os << "                           generated config (default: false)\n";
   os << "  --report-policy-mode MODE\n";
   os << "                           Report policy mode for generated config\n";
-  os << "                           (smoke|nightly, default: smoke)\n";
+  os << "                           (smoke|nightly|strict, default: smoke)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           Enable stop-on-fail report guard profile in\n";
   os << "                           generated config (default: true)\n";
@@ -170,7 +170,7 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --report-policy-profile NAME\n";
   os << "                           Repeatable post-run report policy profile\n";
   os << "  --report-policy-mode MODE\n";
-  os << "                           smoke|nightly (maps to report policy profile)\n";
+  os << "                           smoke|nightly|strict (maps to report policy profile)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
   os << "  --report-fail-on-prequalify-drift\n";
@@ -219,7 +219,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-lane-trend-strict|\n";
   os << "                           formal-regression-matrix-runtime-smoke|\n";
   os << "                           formal-regression-matrix-runtime-nightly|\n";
-  os << "                           formal-regression-matrix-runtime-trend\n";
+  os << "                           formal-regression-matrix-runtime-trend|\n";
+  os << "                           formal-regression-matrix-runtime-strict\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
   os << "  --fail-if-value-gt RULE  Fail if current numeric value exceeds threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
@@ -5705,10 +5706,10 @@ static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
       if (!v)
         return result;
       std::string mode = v->trim().lower();
-      if (mode != "smoke" && mode != "nightly") {
+      if (mode != "smoke" && mode != "nightly" && mode != "strict") {
         result.error =
             (Twine("circt-mut init: invalid --report-policy-mode value: ") +
-             *v + " (expected smoke|nightly)")
+             *v + " (expected smoke|nightly|strict)")
                 .str();
         return result;
       }
@@ -6303,10 +6304,10 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       if (!v)
         return result;
       std::string mode = StringRef(*v).trim().lower();
-      if (mode != "smoke" && mode != "nightly") {
+      if (mode != "smoke" && mode != "nightly" && mode != "strict") {
         result.error = (Twine("circt-mut run: invalid --report-policy-mode "
                               "value: ") +
-                        *v + " (expected smoke|nightly)")
+                        *v + " (expected smoke|nightly|strict)")
                            .str();
         return result;
       }
@@ -6573,9 +6574,13 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
                               ? "formal-regression-matrix-stop-on-fail-guard-nightly"
                               : "formal-regression-matrix-guard-nightly";
           runtimePolicyProfile = "formal-regression-matrix-runtime-nightly";
+        } else if (mode == "strict") {
+          policyProfile = stop ? "formal-regression-matrix-stop-on-fail-strict"
+                               : "formal-regression-matrix-full-lanes-strict";
+          runtimePolicyProfile = "formal-regression-matrix-runtime-strict";
         } else {
           errs() << "circt-mut run: invalid report policy mode value '" << mode
-                 << "' (expected smoke|nightly)\n";
+                 << "' (expected smoke|nightly|strict)\n";
           return 1;
         }
         reportArgsOwned.push_back("--policy-profile");
@@ -7767,6 +7772,17 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      600000000000.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-runtime-strict") {
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.runtime_summary_invalid_rows", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.runtime_ns_avg",
+                     60000000000.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.runtime_ns_max",
+                     240000000000.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.runtime_ns_sum",
+                     720000000000.0);
+    return true;
+  }
   error = (Twine("circt-mut report: unknown --policy-profile value: ") + profile +
            " (expected formal-regression-basic|formal-regression-trend|"
            "formal-regression-matrix-basic|formal-regression-matrix-trend|"
@@ -7789,7 +7805,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-lane-trend-strict|"
            "formal-regression-matrix-runtime-smoke|"
            "formal-regression-matrix-runtime-nightly|"
-           "formal-regression-matrix-runtime-trend)")
+           "formal-regression-matrix-runtime-trend|"
+           "formal-regression-matrix-runtime-strict)")
               .str();
   return false;
 }
@@ -10105,10 +10122,16 @@ static int runNativeReport(const ReportOptions &opts) {
               stopOnFail ? "formal-regression-matrix-stop-on-fail-guard-nightly"
                          : "formal-regression-matrix-guard-nightly");
           policyProfiles.push_back("formal-regression-matrix-runtime-nightly");
+        } else if (mode == "strict") {
+          policyProfiles.push_back(stopOnFail
+                                       ? "formal-regression-matrix-stop-on-fail-strict"
+                                       : "formal-regression-matrix-full-lanes-strict");
+          policyProfiles.push_back("formal-regression-matrix-runtime-strict");
         } else {
           errs() << "circt-mut report: invalid [report] key 'policy_mode' "
                     "value '"
-                 << policyModeIt->second << "' (expected smoke|nightly)\n";
+                 << policyModeIt->second
+                 << "' (expected smoke|nightly|strict)\n";
           return 1;
         }
       }

@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1020 - February 11, 2026
+
+### `circt-mut init/run/report`: Add `strict` Policy-Mode with Runtime Coupling
+
+1. Extended policy-mode enums in `tools/circt-mut/circt-mut.cpp` from
+   `smoke|nightly` to `smoke|nightly|strict` for:
+   - `circt-mut init --report-policy-mode`
+   - `circt-mut run --report-policy-mode`
+   - `circt-mut report` config key `[report] policy_mode`
+2. Added strict policy-mode mappings:
+   - `run --report-policy-mode strict` now emits:
+     - `formal-regression-matrix-full-lanes-strict` (or
+       `formal-regression-matrix-stop-on-fail-strict` when stop-on-fail is
+       enabled),
+     - plus `formal-regression-matrix-runtime-strict`.
+   - `[report] policy_mode = "strict"` maps identically.
+3. Added new runtime profile:
+   - `formal-regression-matrix-runtime-strict`
+4. Updated help and diagnostics to include strict/runtime-strict profile names.
+5. Added/updated regression coverage:
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-strict.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-strict-default.test`
+   - `test/Tools/circt-mut-init-report-policy-invalid.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test`
+   - policy-mode smoke/nightly tests updated to account for paired runtime
+     profiles.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused strict/policy slices:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-init-report-policy-invalid.test test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test test/Tools/circt-mut-run-with-report-cli-policy-mode-strict.test test/Tools/circt-mut-report-policy-config-matrix-mode-strict-default.test test/Tools/circt-mut-run-with-report-cli-policy-mode-stop-on-fail.test test/Tools/circt-mut-run-with-report-config-policy-mode-stop-on-fail.test test/Tools/circt-mut-report-policy-config-matrix-mode-nightly-default.test test/Tools/circt-mut-report-policy-config-matrix-mode-smoke-stop-on-fail.test test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test`: PASS (11/11)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (243/243)
+- External filtered formal cadence:
+  - `LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-strict-policy-mode ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1019 - February 11, 2026
 
 ### `circt-mut run/report`: Policy-Mode Runtime Governance Coupling

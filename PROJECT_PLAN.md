@@ -125,7 +125,7 @@ See CHANGELOG.md on recent progress.
   - Composite matrix policy bundles are now available
     (`formal-regression-matrix-nightly|strict`) with dedicated lane-drift
     bundles (`formal-regression-matrix-lane-drift-nightly|strict`) and
-    runtime bundles (`formal-regression-matrix-runtime-smoke|nightly|trend`).
+    runtime bundles (`formal-regression-matrix-runtime-smoke|nightly|strict|trend`).
     Policy-mode smoke/nightly mapping now auto-couples guard + runtime
     profiles, but native matrix lane scheduling is only partially migrated:
     `--native-matrix-dispatch` now exists as an opt-in scaffold, but lane-job
