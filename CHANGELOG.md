@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1016 - February 11, 2026
+
+### `circt-mut matrix/report`: Persisted Native Runtime Sidecar + Report Aggregation
+
+1. Extended native matrix dispatch in `tools/circt-mut/circt-mut.cpp` to emit
+   per-lane runtime sidecar:
+   - `<out-dir>/native_matrix_dispatch_runtime.tsv`
+   - columns: `lane_id`, `runtime_ns`
+   - emitted log key: `native_matrix_dispatch_runtime_tsv`
+2. Extended `circt-mut report --mode matrix` aggregation to consume the runtime
+   sidecar (when present) and emit runtime metrics:
+   - `matrix.runtime_summary_file`
+   - `matrix.runtime_summary_present`
+   - `matrix.runtime_summary_rows`
+   - `matrix.runtime_summary_invalid_rows`
+   - `matrix.runtime_summary_matched_rows`
+   - `matrix.runtime_ns_sum`
+   - `matrix.runtime_ns_avg`
+   - `matrix.runtime_ns_max`
+   - `matrix.runtime_ns_max_lane`
+3. Added lane-level runtime fields in matrix lane-budget report rows:
+   - `matrix.lane_budget.lane.<id>.has_runtime_ns`
+   - `matrix.lane_budget.lane.<id>.runtime_ns`
+4. Added/updated regression coverage:
+   - `test/Tools/circt-mut-matrix-native-dispatch-basic.test`
+   - `test/Tools/circt-mut-report-matrix-basic.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused slices:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch-basic.test test/Tools/circt-mut-report-matrix-basic.test test/Tools/circt-mut-matrix-native-dispatch-jobs-order.test test/Tools/circt-mut-matrix-native-dispatch-stop-on-fail-jobs.test`: PASS (4/4)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (239/239)
+- External filtered formal cadence:
+  - `LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-runtime-report ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1015 - February 11, 2026
 
 ### `circt-mut matrix`: Native Dispatch Runtime Telemetry

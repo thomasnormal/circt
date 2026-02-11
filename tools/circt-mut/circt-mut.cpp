@@ -4773,6 +4773,8 @@ static int runNativeMatrixDispatch(const char *argv0,
   std::string gateSummaryPath = joinPath2(cfg.outDir, "gate_summary.tsv");
   if (auto v = getLastOptionValue(args, "--gate-summary-file"))
     gateSummaryPath = *v;
+  std::string runtimeSummaryPath =
+      joinPath2(cfg.outDir, "native_matrix_dispatch_runtime.tsv");
   if (!ensureParentDirForFile(resultsPath, error)) {
     errs() << error << "\n";
     return 1;
@@ -4815,6 +4817,8 @@ static int runNativeMatrixDispatch(const char *argv0,
   uint64_t laneSkip = 0;
   uint64_t laneExecuted = 0;
   uint64_t laneRuntimeNanos = 0;
+  std::vector<std::pair<std::string, uint64_t>> runtimeRows;
+  runtimeRows.reserve(rawLines.size());
   bool stopOnFail = hasOptionFlag(args, "--stop-on-fail");
   uint64_t matrixJobs = 1;
   if (!cfg.matrixJobs.empty()) {
@@ -5152,11 +5156,13 @@ static int runNativeMatrixDispatch(const char *argv0,
     if (!runArgvToLog(coverCmd, laneLog, /*timeoutSeconds=*/0, coverRC,
                       runError)) {
       auto laneEnd = std::chrono::steady_clock::now();
-      laneRuntimeNanos += static_cast<uint64_t>(std::chrono::duration_cast<
-                                                    std::chrono::nanoseconds>(
-                                                    laneEnd - laneStart)
-                                                    .count());
+      uint64_t runtimeNanos = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(laneEnd -
+                                                               laneStart)
+              .count());
+      laneRuntimeNanos += runtimeNanos;
       ++laneExecuted;
+      runtimeRows.emplace_back(laneID, runtimeNanos);
       emitLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
                   "DISPATCH_ERROR", "cover_invocation_failed");
       ++laneFail;
@@ -5170,10 +5176,12 @@ static int runNativeMatrixDispatch(const char *argv0,
     std::string summaryPath = joinPath2(laneWorkDir, "summary.json");
     std::string coveragePercent = "-";
     auto laneEnd = std::chrono::steady_clock::now();
-    laneRuntimeNanos += static_cast<uint64_t>(
+    uint64_t runtimeNanos = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(laneEnd - laneStart)
             .count());
+    laneRuntimeNanos += runtimeNanos;
     ++laneExecuted;
+    runtimeRows.emplace_back(laneID, runtimeNanos);
     if (sys::fs::exists(metricsPath)) {
       std::string metricsText = readTextFileOrEmpty(metricsPath);
       SmallVector<StringRef, 128> metricLines;
@@ -5333,11 +5341,13 @@ static int runNativeMatrixDispatch(const char *argv0,
       } else if (outcomes[i].pass) {
         ++laneExecuted;
         laneRuntimeNanos += outcomes[i].runtimeNanos;
+        runtimeRows.emplace_back(job.laneID, outcomes[i].runtimeNanos);
         ++lanePass;
         gateCounts["PASS"]++;
       } else {
         ++laneExecuted;
         laneRuntimeNanos += outcomes[i].runtimeNanos;
+        runtimeRows.emplace_back(job.laneID, outcomes[i].runtimeNanos);
         ++laneFail;
         gateCounts["FAIL"]++;
       }
@@ -5364,8 +5374,22 @@ static int runNativeMatrixDispatch(const char *argv0,
     gateOut << gate << '\t' << gateCounts[gate] << '\n';
   gateOut.close();
 
+  std::error_code runtimeEC;
+  raw_fd_ostream runtimeOut(runtimeSummaryPath, runtimeEC, sys::fs::OF_Text);
+  if (runtimeEC) {
+    errs() << "circt-mut matrix: failed to open runtime summary file: "
+           << runtimeSummaryPath << ": " << runtimeEC.message() << "\n";
+    return 1;
+  }
+  runtimeOut << "lane_id\truntime_ns\n";
+  for (const auto &it : runtimeRows)
+    runtimeOut << it.first << '\t' << it.second << '\n';
+  runtimeOut.close();
+
   outs() << "native_matrix_dispatch_results_tsv\t" << resultsPath << "\n";
   outs() << "native_matrix_dispatch_gate_summary_tsv\t" << gateSummaryPath
+         << "\n";
+  outs() << "native_matrix_dispatch_runtime_tsv\t" << runtimeSummaryPath
          << "\n";
   outs() << "native_matrix_dispatch_lanes\t" << laneTotal << "\n";
   outs() << "native_matrix_dispatch_lane_jobs\t" << matrixJobs << "\n";
@@ -7114,6 +7138,8 @@ struct MatrixLaneBudgetRow {
   uint64_t bmcUnknownMutants = 0;
   std::string configErrorCode;
   std::string configErrorReason;
+  bool hasRuntimeNanos = false;
+  uint64_t runtimeNanos = 0;
 };
 
 struct SkipBudgetSummary {
@@ -8366,6 +8392,14 @@ static bool collectMatrixReport(
   std::string laneBudgetWorstBMCUnknownLaneID = "-";
   std::string laneBudgetWorstErrorsLaneID = "-";
   std::string laneBudgetLowestDetectedLaneID = "-";
+  bool runtimeSummaryPresent = false;
+  uint64_t runtimeSummaryRows = 0;
+  uint64_t runtimeSummaryInvalidRows = 0;
+  uint64_t runtimeSummaryMatchedRows = 0;
+  uint64_t runtimeSummarySum = 0;
+  uint64_t runtimeSummaryMax = 0;
+  std::string runtimeSummaryMaxLane = "-";
+  StringMap<uint64_t> runtimeNanosByLane;
   StringMap<MatrixPrequalifyLaneMetrics> resultsPrequalifyByLane;
   double coverageSum = 0.0;
   uint64_t coverageCount = 0;
@@ -8412,6 +8446,74 @@ static bool collectMatrixReport(
   };
   for (const char *key : kExtraMetricKeys)
     extraMetricSums[key] = 0;
+
+  SmallString<256> runtimeSummaryPath(matrixOutDir);
+  sys::path::append(runtimeSummaryPath, "native_matrix_dispatch_runtime.tsv");
+  if (sys::fs::exists(runtimeSummaryPath)) {
+    runtimeSummaryPresent = true;
+    auto runtimeBufferOrErr = MemoryBuffer::getFile(runtimeSummaryPath);
+    if (!runtimeBufferOrErr) {
+      error = (Twine("circt-mut report: unable to read matrix runtime summary file: ") +
+               runtimeSummaryPath)
+                  .str();
+      return false;
+    }
+    SmallVector<StringRef, 256> runtimeLines;
+    runtimeBufferOrErr.get()->getBuffer().split(runtimeLines, '\n',
+                                                /*MaxSplit=*/-1,
+                                                /*KeepEmpty=*/false);
+    if (!runtimeLines.empty()) {
+      SmallVector<StringRef, 8> runtimeHeader;
+      splitTSVLine(runtimeLines.front().rtrim("\r"), runtimeHeader);
+      int laneIDCol = -1;
+      int runtimeCol = -1;
+      for (size_t i = 0; i < runtimeHeader.size(); ++i) {
+        StringRef h = runtimeHeader[i].trim();
+        if (h == "lane_id")
+          laneIDCol = static_cast<int>(i);
+        else if (h == "runtime_ns")
+          runtimeCol = static_cast<int>(i);
+      }
+      if (laneIDCol == -1 || runtimeCol == -1) {
+        error = (Twine("circt-mut report: invalid matrix runtime summary header in ") +
+                 runtimeSummaryPath + " (expected lane_id and runtime_ns columns)")
+                    .str();
+        return false;
+      }
+      SmallVector<StringRef, 8> runtimeFields;
+      for (size_t lineNo = 1; lineNo < runtimeLines.size(); ++lineNo) {
+        StringRef runtimeLine = runtimeLines[lineNo].rtrim("\r");
+        if (runtimeLine.trim().empty())
+          continue;
+        splitTSVLine(runtimeLine, runtimeFields);
+        if (static_cast<size_t>(laneIDCol) >= runtimeFields.size() ||
+            static_cast<size_t>(runtimeCol) >= runtimeFields.size()) {
+          ++runtimeSummaryInvalidRows;
+          continue;
+        }
+        StringRef laneID = runtimeFields[laneIDCol].trim();
+        StringRef runtimeValue = runtimeFields[runtimeCol].trim();
+        if (laneID.empty() || runtimeValue.empty()) {
+          ++runtimeSummaryInvalidRows;
+          continue;
+        }
+        uint64_t parsed = 0;
+        if (runtimeValue.getAsInteger(10, parsed)) {
+          ++runtimeSummaryInvalidRows;
+          continue;
+        }
+        ++runtimeSummaryRows;
+        runtimeNanosByLane[laneID] = parsed;
+        runtimeSummarySum += parsed;
+        if (parsed > runtimeSummaryMax ||
+            (parsed == runtimeSummaryMax &&
+             (runtimeSummaryMaxLane == "-" || laneID.str() < runtimeSummaryMaxLane))) {
+          runtimeSummaryMax = parsed;
+          runtimeSummaryMaxLane = laneID.str();
+        }
+      }
+    }
+  }
 
   auto addMetric = [&](const StringMap<std::string> &metrics, StringRef key,
                        uint64_t &accumulator) {
@@ -8515,6 +8617,14 @@ static bool collectMatrixReport(
     laneBudgetRow.laneID = laneID.str();
     laneBudgetRow.status = status.str();
     laneBudgetRow.gateStatus = gate.str();
+    if (!laneID.empty()) {
+      if (auto runtimeIt = runtimeNanosByLane.find(laneID);
+          runtimeIt != runtimeNanosByLane.end()) {
+        laneBudgetRow.hasRuntimeNanos = true;
+        laneBudgetRow.runtimeNanos = runtimeIt->second;
+        ++runtimeSummaryMatchedRows;
+      }
+    }
     laneBudgetRow.configErrorCode =
         (configErrorCodeCol != static_cast<size_t>(-1)
              ? getField(configErrorCodeCol).str()
@@ -8717,6 +8827,23 @@ static bool collectMatrixReport(
 
   rows.emplace_back("matrix.out_dir", std::string(matrixOutDir));
   rows.emplace_back("matrix.results_file", std::string(resultsPath.str()));
+  rows.emplace_back("matrix.runtime_summary_file",
+                    runtimeSummaryPresent ? std::string(runtimeSummaryPath.str())
+                                          : std::string("-"));
+  rows.emplace_back("matrix.runtime_summary_present",
+                    runtimeSummaryPresent ? "1" : "0");
+  rows.emplace_back("matrix.runtime_summary_rows",
+                    std::to_string(runtimeSummaryRows));
+  rows.emplace_back("matrix.runtime_summary_invalid_rows",
+                    std::to_string(runtimeSummaryInvalidRows));
+  rows.emplace_back("matrix.runtime_summary_matched_rows",
+                    std::to_string(runtimeSummaryMatchedRows));
+  rows.emplace_back("matrix.runtime_ns_sum", std::to_string(runtimeSummarySum));
+  uint64_t runtimeAvg =
+      runtimeSummaryRows ? (runtimeSummarySum / runtimeSummaryRows) : 0;
+  rows.emplace_back("matrix.runtime_ns_avg", std::to_string(runtimeAvg));
+  rows.emplace_back("matrix.runtime_ns_max", std::to_string(runtimeSummaryMax));
+  rows.emplace_back("matrix.runtime_ns_max_lane", runtimeSummaryMaxLane);
   rows.emplace_back("matrix.lanes_total", std::to_string(lanesTotal));
   rows.emplace_back("matrix.lanes_pass", std::to_string(lanesPass));
   rows.emplace_back("matrix.lanes_fail", std::to_string(lanesFail));
@@ -8822,6 +8949,11 @@ static bool collectMatrixReport(
                                                        : lane.configErrorReason);
       rows.emplace_back((Twine(laneBase) + ".has_metrics").str(),
                         lane.hasMetrics ? "1" : "0");
+      rows.emplace_back((Twine(laneBase) + ".has_runtime_ns").str(),
+                        lane.hasRuntimeNanos ? "1" : "0");
+      rows.emplace_back((Twine(laneBase) + ".runtime_ns").str(),
+                        lane.hasRuntimeNanos ? std::to_string(lane.runtimeNanos)
+                                             : std::string("-"));
       rows.emplace_back((Twine(laneBase) + ".prequalify_summary_present").str(),
                         lane.hasPrequalifySummary ? "1" : "0");
       rows.emplace_back((Twine(laneBase) + ".prequalify_total_mutants").str(),
