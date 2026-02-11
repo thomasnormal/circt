@@ -617,6 +617,10 @@ Options:
   --require-explicit-sv-tests-filters
                          Deprecated no-op (explicit lane filters are now
                          always required for selected BMC/LEC/OpenTitan lanes)
+  --require-nonempty-filtered-lanes
+                         Fail filtered formal lanes that report `total=0` by
+                         marking them `error=1 nonempty_filter_miss=1` in
+                         summary output
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in
                          non-sv-tests BMC suite runs (sv-tests BMC lanes
                          already force SMT-LIB mode for semantic parity)
@@ -2170,6 +2174,7 @@ VERILATOR_LEC_TEST_FILTER=""
 YOSYS_BMC_TEST_FILTER=""
 YOSYS_BMC_PROFILE="auto"
 YOSYS_LEC_TEST_FILTER=""
+REQUIRE_NONEMPTY_FILTERED_LANES=0
 
 # Default known-verilator BMC expected failures when colocated with this
 # driver; callers can override with --verilator-bmc-xfails.
@@ -2658,6 +2663,8 @@ while [[ $# -gt 0 ]]; do
       YOSYS_LEC_TEST_FILTER="$2"; shift 2 ;;
     --require-explicit-sv-tests-filters)
       shift ;;
+    --require-nonempty-filtered-lanes)
+      REQUIRE_NONEMPTY_FILTERED_LANES=1; shift ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -7441,6 +7448,43 @@ extract_kv() {
   echo "$line" | tr ' ' '\n' | sed -n "s/^${key}=\([0-9]\+\)$/\\1/p"
 }
 
+maybe_enforce_nonempty_filtered_lane() {
+  local lane_id="$1"
+  local total_ref="$2"
+  local error_ref="$3"
+  local summary_ref="$4"
+  if [[ "$REQUIRE_NONEMPTY_FILTERED_LANES" != "1" ]]; then
+    return 0
+  fi
+  local total="${!total_ref:-0}"
+  if [[ "$total" != "0" ]]; then
+    return 0
+  fi
+  local enforced_error="${!error_ref:-0}"
+  if ! [[ "$enforced_error" =~ ^[0-9]+$ ]]; then
+    enforced_error=0
+  fi
+  if (( enforced_error < 1 )); then
+    enforced_error=1
+  fi
+  local enforced_summary="${!summary_ref}"
+  if [[ "$enforced_summary" != *"nonempty_filter_miss=1"* ]]; then
+    if [[ -n "$enforced_summary" ]]; then
+      enforced_summary="${enforced_summary} nonempty_filter_miss=1"
+    else
+      enforced_summary="nonempty_filter_miss=1"
+    fi
+  fi
+  if [[ "$enforced_summary" =~ (^|[[:space:]])error=[0-9]+($|[[:space:]]) ]]; then
+    enforced_summary="$(echo "$enforced_summary" | sed -E "s/(^|[[:space:]])error=[0-9]+([[:space:]]|$)/\\1error=${enforced_error}\\2/")"
+  else
+    enforced_summary="${enforced_summary} error=${enforced_error}"
+  fi
+  printf -v "$error_ref" '%s' "$enforced_error"
+  printf -v "$summary_ref" '%s' "$enforced_summary"
+  echo "non-empty filter contract miss: ${lane_id} produced total=0 under explicit filters" >&2
+}
+
 summarize_bmc_drop_remark_log() {
   local log_file="$1"
   if [[ ! -f "$log_file" ]]; then
@@ -9083,6 +9127,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
           summary="${summary} ${bmc_backend_parity_summary}"
         fi
       fi
+      maybe_enforce_nonempty_filtered_lane "sv-tests/BMC" total error summary
       record_result_with_summary "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     else
       suite_ec="$(suite_exit_code sv-tests-bmc)"
@@ -9158,6 +9203,7 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
       fi
+      maybe_enforce_nonempty_filtered_lane "sv-tests-uvm/BMC_SEMANTICS" total error summary
       record_result_with_summary "sv-tests-uvm" "BMC_SEMANTICS" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     else
       suite_ec="$(suite_exit_code sv-tests-bmc-uvm-semantics)"
@@ -9207,6 +9253,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
       if [[ -n "$lec_case_summary" ]]; then
         summary="${summary} ${lec_case_summary}"
       fi
+      maybe_enforce_nonempty_filtered_lane "sv-tests/LEC" total error summary
       record_result_with_summary "sv-tests" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     else
       suite_ec="$(suite_exit_code sv-tests-lec)"
@@ -9278,6 +9325,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
       fi
+      maybe_enforce_nonempty_filtered_lane "verilator-verification/BMC" total error summary
       record_result_with_summary "verilator-verification" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     fi
   fi
@@ -9322,6 +9370,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
       if [[ -n "$lec_case_summary" ]]; then
         summary="${summary} ${lec_case_summary}"
       fi
+      maybe_enforce_nonempty_filtered_lane "verilator-verification/LEC" total error summary
       record_result_with_summary "verilator-verification" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     fi
   fi
@@ -9387,7 +9436,8 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       xfail="${xfail:-0}"
       xpass="${xpass:-0}"
       pass=$((total - failures - skipped))
-      summary="total=${total} pass=${pass} fail=${failures} xfail=${xfail} xpass=${xpass} error=0 skip=${skipped}"
+      error=0
+      summary="total=${total} pass=${pass} fail=${failures} xfail=${xfail} xpass=${xpass} error=${error} skip=${skipped}"
       bmc_drop_summary="$(summarize_bmc_drop_remark_log "$OUT_DIR/yosys-bmc.log")"
       if [[ -n "$bmc_drop_summary" ]]; then
         summary="${summary} ${bmc_drop_summary}"
@@ -9408,7 +9458,8 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
       fi
-      record_result_with_summary "yosys/tests/sva" "BMC" "$total" "$pass" "$failures" "$xfail" "$xpass" 0 "$skipped" "$summary"
+      maybe_enforce_nonempty_filtered_lane "yosys/tests/sva/BMC" total error summary
+      record_result_with_summary "yosys/tests/sva" "BMC" "$total" "$pass" "$failures" "$xfail" "$xpass" "$error" "$skipped" "$summary"
     fi
   fi
 fi
@@ -9452,6 +9503,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
       if [[ -n "$lec_case_summary" ]]; then
         summary="${summary} ${lec_case_summary}"
       fi
+      maybe_enforce_nonempty_filtered_lane "yosys/tests/sva/LEC" total error summary
       record_result_with_summary "yosys/tests/sva" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     fi
   fi

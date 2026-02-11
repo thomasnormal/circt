@@ -40,6 +40,7 @@
 // CHECK: --fail-on-new-opentitan-lec-strict-xprop-counter-prefix
 // CHECK: --fail-on-new-opentitan-lec-strict-xprop-key-prefix
 // CHECK: --sv-tests-bmc-backend-parity
+// CHECK: --require-nonempty-filtered-lanes
 // CHECK: --bmc-allow-multi-clock
 // CHECK: --with-opentitan-lec-strict
 // CHECK: --opentitan-lec-impl-filter

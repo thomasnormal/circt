@@ -9,6 +9,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++)
+
+1. Added targeted-filter non-empty contract support in `run_formal_all`:
+   - `--require-nonempty-filtered-lanes`
+2. Contract behavior:
+   - filtered lanes that produce `total=0` are normalized to
+     `error=1 nonempty_filter_miss=1`.
+   - this closes a long-running blind spot where targeted cadence probes could
+     appear healthy while matching zero tests.
+3. Scope currently covered:
+   - `sv-tests` BMC/LEC
+   - `sv-tests-uvm` BMC_SEMANTICS
+   - `verilator-verification` BMC/LEC
+   - `yosys/tests/sva` BMC/LEC
+4. Remaining limitations:
+   - contract is opt-in (`--require-nonempty-filtered-lanes`) and not yet
+     default-on for all targeted formal runs.
+   - no per-lane minimum-volume threshold yet (only zero/non-zero contract).
+   - OpenTitan filtered lanes are still governed separately and can report
+     filter-empty semantics through mode-specific summaries.
+5. Next long-term features:
+   - promote non-empty contract into strict formal composites for CI/nightly.
+   - add lane-specific minimum expected volume gates (e.g., `min_total>=N`).
+   - add OpenTitan non-empty filter contract parity in both LEC and E2E lanes.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++)
 
 1. Added digest-level BMC identity governance end-to-end:

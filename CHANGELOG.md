@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1135 - February 11, 2026
+
+### Formal Driver Hardening: Non-Empty Filter Contracts for Targeted Lanes
+
+1. Added `run_formal_all` flag:
+   - `--require-nonempty-filtered-lanes`
+2. When enabled, filtered formal lanes that return `total=0` are forced to:
+   - `error=1`
+   - `nonempty_filter_miss=1` (summary token)
+   so targeted probes cannot silently report green on filter-empty slices.
+3. Applied to filtered BMC/LEC families:
+   - `sv-tests` (`BMC`, `LEC`)
+   - `sv-tests-uvm` (`BMC_SEMANTICS`)
+   - `verilator-verification` (`BMC`, `LEC`)
+   - `yosys/tests/sva` (`BMC`, `LEC`)
+4. Added/updated tests:
+   - `test/Tools/run-formal-all-require-nonempty-filtered-lanes.test`
+   - updated `test/Tools/run-formal-all-help.test`
+5. Validation:
+   - focused lit slice PASS (`run-formal-all-help`, `run-formal-all-require-nonempty-filtered-lanes`, forwarding/fingerprint smoke)
+   - real filtered `sv-tests` BMC probe with flag enabled reports:
+     `error=1 nonempty_filter_miss=1` on `total=0`
+
 ## Iteration 1134 - February 11, 2026
 
 ### Formal Governance: BMC Provenance/IR-Check Identity Digest Trend Gates (v1) + v5 Composites
