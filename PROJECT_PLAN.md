@@ -1009,6 +1009,21 @@ See CHANGELOG.md on recent progress.
   with report telemetry keys (`external_formal.out_dir`,
   `external_formal.files_discovered`) so strict-formal governance can consume
   runner out-directories directly without manual file-list wiring.
+- Latest mutation-governance milestone (current): external-formal governance
+  now has schema-aware summary coverage for `summary.tsv`:
+  - new metrics:
+    - `external_formal.summary_tsv_files`
+    - `external_formal.summary_tsv_rows`
+    - `external_formal.summary_tsv_schema_valid_files`
+    - `external_formal.summary_tsv_schema_invalid_files`
+    - `external_formal.summary_tsv_parse_errors`
+  - new strict profile:
+    - `formal-regression-matrix-external-formal-summary-guard`
+  - new policy modes for staged rollout:
+    - `strict-formal-summary`
+    - `native-strict-formal-summary`
+  enabling strict matrix+formal closure to gate not just on external-formal
+  fail-like counts, but on structured summary-schema integrity.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

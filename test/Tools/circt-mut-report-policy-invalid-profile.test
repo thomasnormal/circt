@@ -9,6 +9,7 @@
 // CHECK-DAG: formal-regression-matrix-runtime-strict
 // CHECK-DAG: formal-regression-matrix-trend-history-quality-strict
 // CHECK-DAG: formal-regression-matrix-external-formal-guard
+// CHECK-DAG: formal-regression-matrix-external-formal-summary-guard
 // CHECK-DAG: formal-regression-matrix-composite-native-strict
 // CHECK-DAG: formal-regression-matrix-composite-trend-strict
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-strict

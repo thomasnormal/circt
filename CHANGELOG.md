@@ -1,5 +1,69 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1099 - February 11, 2026
+
+### `circt-mut` External Formal `summary.tsv` Schema Guard + Strict Modes
+
+1. Extended external-formal report aggregation in `tools/circt-mut/circt-mut.cpp`
+   with structured `summary.tsv` ingestion (when discovered/selected):
+   - parses tabular summary columns:
+     `total`, `pass`, `fail`, `xfail`, `xpass`, `error`, `skip`
+   - emits schema/quality metrics:
+     - `external_formal.summary_tsv_files`
+     - `external_formal.summary_tsv_rows`
+     - `external_formal.summary_tsv_schema_valid_files`
+     - `external_formal.summary_tsv_schema_invalid_files`
+     - `external_formal.summary_tsv_parse_errors`
+2. Added strict external-formal summary policy profile:
+   - `formal-regression-matrix-external-formal-summary-guard`
+   - requires:
+     - external-formal files present
+     - at least one `summary.tsv` discovered
+     - at least one schema-valid summary file
+     - zero schema-invalid files
+     - zero parse errors
+     - at least one parsed summary row
+3. Added new matrix policy modes for incremental strict rollout:
+   - `strict-formal-summary`
+   - `native-strict-formal-summary`
+   Both compose existing strict formal governance with the new
+   `formal-regression-matrix-external-formal-summary-guard`.
+4. Updated mode/profile help + validation surfaces:
+   - `circt-mut init|run|report --help` mode lists now include both new modes.
+   - invalid mode diagnostics now include both new modes.
+   - invalid profile diagnostics now include the new summary profile.
+5. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-summary-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-summary-guard-fail.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-summary-pass.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-strict-formal-summary.test`
+   - plus updates to help/invalid diagnostics tests.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused mutation policy/help slice:
+  - `llvm-lit -sv -j 1` on 14 tests including:
+    - help/invalid diagnostics (`init|run|report`)
+    - new external-formal summary-guard pass/fail
+    - new strict-formal-summary policy-mode report/run pass
+  - PASS (14/14)
+- Full mutation suite:
+  - `llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (323/323 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-summary-guard ...`
+  - output summary captured at:
+    - `/tmp/formal-all-summary-guard/summary.tsv`
+  - snapshot status:
+    - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile
+      `ahb/apb/axi4/i2s/i3c/jtag`
+    - FAIL: `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC,
+      `opentitan` LEC, AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+  - runner exited non-zero with trailing script parse error:
+    - `utils/run_formal_all.sh: line 9822: syntax error near unexpected token '('`
+    - summary TSV still emitted and used for snapshot reporting.
+
 ## Iteration 1098 - February 11, 2026
 
 ### Formal Runner Hardening: Stable LEC `CIRCT_VERILOG_ERROR` Spawn/Timeout Reasons
