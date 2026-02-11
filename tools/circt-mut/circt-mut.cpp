@@ -139,6 +139,12 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --with-report            Run 'circt-mut report' after run completes\n";
   os << "  --with-report-on-fail    Run report even if run flow fails\n";
   os << "  --report-mode MODE       cover|matrix|all (default: same as --mode)\n";
+  os << "  --report-history FILE    Override post-run report --history\n";
+  os << "  --report-out FILE        Override post-run report --out\n";
+  os << "  --report-history-bootstrap\n";
+  os << "                           Enable post-run report --history-bootstrap\n";
+  os << "  --report-no-history-bootstrap\n";
+  os << "                           Disable post-run report history bootstrap\n";
   os << "  --report-policy-profile NAME\n";
   os << "                           Repeatable post-run report policy profile\n";
   os << "  --report-policy-mode MODE\n";
@@ -5753,6 +5759,9 @@ struct RunOptions {
   bool withReport = false;
   bool withReportOnFail = false;
   std::string reportMode;
+  std::string reportHistory;
+  std::string reportOut;
+  std::optional<bool> reportHistoryBootstrap;
   SmallVector<std::string, 4> reportPolicyProfiles;
   std::string reportPolicyMode;
   std::optional<bool> reportPolicyStopOnFail;
@@ -6055,6 +6064,28 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       result.opts.reportMode = v->str();
       continue;
     }
+    if (arg == "--report-history" || arg.starts_with("--report-history=")) {
+      auto v = consumeValue(i, arg, "--report-history");
+      if (!v)
+        return result;
+      result.opts.reportHistory = v->str();
+      continue;
+    }
+    if (arg == "--report-out" || arg.starts_with("--report-out=")) {
+      auto v = consumeValue(i, arg, "--report-out");
+      if (!v)
+        return result;
+      result.opts.reportOut = v->str();
+      continue;
+    }
+    if (arg == "--report-history-bootstrap") {
+      result.opts.reportHistoryBootstrap = true;
+      continue;
+    }
+    if (arg == "--report-no-history-bootstrap") {
+      result.opts.reportHistoryBootstrap = false;
+      continue;
+    }
     if (arg == "--report-policy-profile" ||
         arg.starts_with("--report-policy-profile=")) {
       auto v = consumeValue(i, arg, "--report-policy-profile");
@@ -6223,7 +6254,9 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     return 1;
   }
   if (!withReport) {
-    if (!opts.reportMode.empty() || !opts.reportPolicyProfiles.empty() ||
+    if (!opts.reportMode.empty() || !opts.reportHistory.empty() ||
+        !opts.reportOut.empty() || opts.reportHistoryBootstrap.has_value() ||
+        !opts.reportPolicyProfiles.empty() ||
         !opts.reportPolicyMode.empty() ||
         opts.reportPolicyStopOnFail.has_value() ||
         opts.reportFailOnPrequalifyDrift.has_value()) {
@@ -6348,8 +6381,13 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     appendOptionalConfigPathArg(reportArgsOwned, cfg.run,
                                 "report_compare_history_latest",
                                 "--compare-history-latest", opts.projectDir);
-    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_history",
-                                "--history", opts.projectDir);
+    if (!opts.reportHistory.empty()) {
+      reportArgsOwned.push_back("--history");
+      reportArgsOwned.push_back(opts.reportHistory);
+    } else {
+      appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_history",
+                                  "--history", opts.projectDir);
+    }
     appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_append_history",
                                 "--append-history", opts.projectDir);
     appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_trend_history",
@@ -6366,12 +6404,21 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
                                 "--lane-budget-out", opts.projectDir);
     appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_skip_budget_out",
                                 "--skip-budget-out", opts.projectDir);
-    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_out", "--out",
-                                opts.projectDir);
+    if (!opts.reportOut.empty()) {
+      reportArgsOwned.push_back("--out");
+      reportArgsOwned.push_back(opts.reportOut);
+    } else {
+      appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_out",
+                                  "--out", opts.projectDir);
+    }
 
-    if (!appendOptionalConfigBoolFlagArg(reportArgsOwned, cfg.run,
-                                         "report_history_bootstrap",
-                                         "--history-bootstrap", "run", error)) {
+    if (opts.reportHistoryBootstrap.has_value()) {
+      if (*opts.reportHistoryBootstrap)
+        reportArgsOwned.push_back("--history-bootstrap");
+    } else if (!appendOptionalConfigBoolFlagArg(reportArgsOwned, cfg.run,
+                                                "report_history_bootstrap",
+                                                "--history-bootstrap", "run",
+                                                error)) {
       errs() << error << "\n";
       return 1;
     }
