@@ -7549,6 +7549,11 @@ static bool isMatrixPolicyMode(StringRef mode) {
          mode == "provenance-guard" || mode == "provenance-strict";
 }
 
+static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
+  return mode == "smoke" || mode == "nightly" || mode == "strict" ||
+         mode == "trend-nightly" || mode == "trend-strict";
+}
+
 static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                                            SmallVectorImpl<std::string> &out,
                                            std::string &error,
@@ -10469,6 +10474,8 @@ static int runNativeReport(const ReportOptions &opts) {
   std::string appliedPolicyMode;
   std::string appliedPolicyModeSource = "none";
   std::optional<bool> appliedPolicyStopOnFail;
+  std::optional<bool> appliedPolicyStopOnFailEffective;
+  std::optional<bool> appliedPolicyStopOnFailIgnored;
   std::optional<bool> failOnPrequalifyDriftOverride;
   if (effectiveOpts.failOnPrequalifyDriftOverrideSet)
     failOnPrequalifyDriftOverride = effectiveOpts.failOnPrequalifyDrift;
@@ -10651,7 +10658,12 @@ static int runNativeReport(const ReportOptions &opts) {
         }
         appliedPolicyMode = mode;
         appliedPolicyModeSource = hasCLIPolicyMode ? "cli" : "config";
-        appliedPolicyStopOnFail = stopOnFail.value_or(false);
+        bool requestedStopOnFail = stopOnFail.value_or(false);
+        bool usesStopOnFail = matrixPolicyModeUsesStopOnFail(mode);
+        appliedPolicyStopOnFail = requestedStopOnFail;
+        appliedPolicyStopOnFailEffective =
+            usesStopOnFail ? requestedStopOnFail : false;
+        appliedPolicyStopOnFailIgnored = (!usesStopOnFail && requestedStopOnFail);
       }
     }
   }
@@ -10670,7 +10682,12 @@ static int runNativeReport(const ReportOptions &opts) {
     }
     appliedPolicyMode = effectiveOpts.policyMode;
     appliedPolicyModeSource = "cli";
-    appliedPolicyStopOnFail = effectiveOpts.policyStopOnFail.value_or(false);
+    bool requestedStopOnFail = effectiveOpts.policyStopOnFail.value_or(false);
+    bool usesStopOnFail = matrixPolicyModeUsesStopOnFail(effectiveOpts.policyMode);
+    appliedPolicyStopOnFail = requestedStopOnFail;
+    appliedPolicyStopOnFailEffective =
+        usesStopOnFail ? requestedStopOnFail : false;
+    appliedPolicyStopOnFailIgnored = (!usesStopOnFail && requestedStopOnFail);
   }
   if (!policyProfiles.empty()) {
     SmallVector<std::string, 4> uniqueProfiles;
@@ -10713,6 +10730,16 @@ static int runNativeReport(const ReportOptions &opts) {
                     appliedPolicyStopOnFail.has_value()
                         ? (*appliedPolicyStopOnFail ? std::string("1")
                                                     : std::string("0"))
+                        : std::string("-"));
+  rows.emplace_back("policy.stop_on_fail_effective",
+                    appliedPolicyStopOnFailEffective.has_value()
+                        ? (*appliedPolicyStopOnFailEffective ? std::string("1")
+                                                             : std::string("0"))
+                        : std::string("-"));
+  rows.emplace_back("policy.stop_on_fail_ignored",
+                    appliedPolicyStopOnFailIgnored.has_value()
+                        ? (*appliedPolicyStopOnFailIgnored ? std::string("1")
+                                                           : std::string("0"))
                         : std::string("-"));
   if (!policyProfiles.empty()) {
     rows.emplace_back("policy.profile_count",
