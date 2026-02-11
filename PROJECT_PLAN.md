@@ -138,6 +138,11 @@ See CHANGELOG.md on recent progress.
   stop-on-fail composite trend bundles
   (`formal-regression-matrix-composite-stop-on-fail-trend-{nightly,strict}`)
   so config/CLI governance remains orthogonal when trend windows are enabled.
+- Latest mutation-governance milestone (current): native matrix dispatch now
+  supports cache-aware lane scheduling parity (`--lane-schedule-policy
+  cache-aware`) with deterministic leader-first key spreading and explicit
+  scheduling telemetry (`native_matrix_dispatch_schedule_*`) for CI/runtime
+  debugging.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
@@ -149,9 +154,9 @@ See CHANGELOG.md on recent progress.
     bundles (`formal-regression-matrix-lane-drift-nightly|strict`) and
     runtime bundles (`formal-regression-matrix-runtime-smoke|nightly|strict|trend`).
     Policy-mode now supports smoke/nightly/strict/trend-* with composite
-    profile mapping, but native matrix lane scheduling is only partially migrated:
-    `--native-matrix-dispatch` now exists as an opt-in scaffold, but lane-job
-    parallelism and lane-level gate override parity are still script-backed.
+    profile mapping, and native matrix lane scheduling now supports
+    cache-aware key spreading. Remaining migration work: full script parity for
+    all lane telemetry/control options and elimination of script fallback paths.
   - Wire the composite matrix policy bundles into CI defaults for
     nightly/strict matrix report jobs.
   - Add bounded-history defaults to matrix report jobs in CI bootstrap wiring
