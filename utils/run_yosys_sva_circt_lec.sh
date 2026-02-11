@@ -172,6 +172,30 @@ extract_opt_error_reason() {
         print "no_diag"
         exit
       }
+      if (index(low, "failed to run command") > 0) {
+        if (index(low, "text file busy") > 0) {
+          print "runner_command_text_file_busy"
+          exit
+        }
+        if (index(low, "no such file or directory") > 0) {
+          print "runner_command_not_found"
+          exit
+        }
+        if (index(low, "permission denied") > 0) {
+          print "runner_command_permission_denied"
+          exit
+        }
+        print "runner_failed_to_run_command"
+        exit
+      }
+      if (index(low, "cannot allocate memory") > 0 || index(low, "memory exhausted") > 0) {
+        print "command_oom"
+        exit
+      }
+      if (index(low, "timed out") > 0 || index(low, "timeout") > 0) {
+        print "command_timeout"
+        exit
+      }
       gsub(/[0-9]+/, "<n>", line)
       gsub(/[^A-Za-z0-9]+/, "_", line)
       gsub(/^_+/, "", line)
@@ -397,23 +421,39 @@ file=${sv} hash=$(hash_file "$sv")
   fi
   opt_args+=("$mlir")
 
-  if run_limited "$CIRCT_OPT" "${opt_args[@]}" > "$opt_mlir" 2> "$opt_log"; then
+  opt_bin="$CIRCT_OPT"
+  if run_limited "$opt_bin" "${opt_args[@]}" > "$opt_mlir" 2> "$opt_log"; then
     :
   else
     opt_status=$?
-    if [[ ! -s "$opt_log" ]]; then
-      printf "error: circt-opt failed without diagnostics for case '%s'\n" \
-        "$base" | tee -a "$opt_log" >&2
+    if grep -Eiq "failed to run command .*text file busy" "$opt_log"; then
+      sleep "$CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS"
+      fallback_opt="$tmpdir/${base}.circt-opt.retry.bin"
+      if cp -f "$CIRCT_OPT" "$fallback_opt" 2>/dev/null; then
+        chmod +x "$fallback_opt" 2>/dev/null || true
+        opt_bin="$fallback_opt"
+      fi
+      if run_limited "$opt_bin" "${opt_args[@]}" > "$opt_mlir" 2> "$opt_log"; then
+        opt_status=0
+      else
+        opt_status=$?
+      fi
     fi
-    if [[ "$opt_status" -eq 124 || "$opt_status" -eq 137 ]]; then
-      printf "TIMEOUT\t%s\t%s\tyosys/tests/sva\tLEC\tCIRCT_OPT_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
-    else
-      opt_reason="$(extract_opt_error_reason "$opt_log")"
-      printf "ERROR\t%s\t%s\tyosys/tests/sva\tLEC\tCIRCT_OPT_ERROR\t%s\n" "$base" "$sv" "$opt_reason" >> "$results_tmp"
+    if [[ "$opt_status" -ne 0 ]]; then
+      if [[ ! -s "$opt_log" ]]; then
+        printf "error: circt-opt failed without diagnostics for case '%s'\n" \
+          "$base" | tee -a "$opt_log" >&2
+      fi
+      if [[ "$opt_status" -eq 124 || "$opt_status" -eq 137 ]]; then
+        printf "TIMEOUT\t%s\t%s\tyosys/tests/sva\tLEC\tCIRCT_OPT_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
+      else
+        opt_reason="$(extract_opt_error_reason "$opt_log")"
+        printf "ERROR\t%s\t%s\tyosys/tests/sva\tLEC\tCIRCT_OPT_ERROR\t%s\n" "$base" "$sv" "$opt_reason" >> "$results_tmp"
+      fi
+      error=$((error + 1))
+      save_logs
+      continue
     fi
-    error=$((error + 1))
-    save_logs
-    continue
   fi
 
   lec_args=()
