@@ -9,6 +9,32 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 21:25)
+
+1. Added sv-tests BMC front-end compile cache in
+   `utils/run_sv_tests_circt_bmc.sh`:
+   - opt-in via `BMC_MLIR_CACHE_DIR`
+   - deterministic keying over tool flags + file content hashes
+   - cache summary telemetry emitted per run (hits/misses/stores).
+2. New regression lock:
+   - `test/Tools/run-sv-tests-bmc-mlir-cache.test`
+   - validates compile dedup across repeated identical runs.
+3. Long-term impact:
+   - reduces repeated closure-loop front-end cost for stable case sets, which is
+     a prerequisite for practical multiclock/subroutine semantic closure at
+     scale.
+4. Current limitation signal:
+   - external filtered `verilator-verification` and `yosys/tests/sva` formal
+     slices are currently red in this workspace snapshot (broad errors/fails),
+     suggesting global environment/tool drift outside this cache-only patch.
+5. Next high-leverage features:
+   - extend the same cache pattern to LEC runners (`sv-tests`/`verilator`/`yosys`)
+     with shared key schema and invalidation policy.
+   - add cache eviction policy + size guardrails (`max entries` / `max bytes`)
+     for long-running CI workers.
+   - tie cache hit/miss telemetry into `run_formal_all.sh` lane summaries for
+     governance on performance regressions (not only semantic regressions).
+
 ### Formal Closure Snapshot Update (February 11, 2026, 21:05)
 
 1. Added explicit BMC semantic coverage for sequence-subroutine failures:

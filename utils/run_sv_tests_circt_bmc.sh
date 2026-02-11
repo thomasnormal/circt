@@ -24,6 +24,7 @@ Z3_LIB="${Z3_LIB:-/home/thomas-ahle/z3-install/lib64/libz3.so}"
 CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
 CIRCT_BMC="${CIRCT_BMC:-build/bin/circt-bmc}"
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
+BMC_MLIR_CACHE_DIR="${BMC_MLIR_CACHE_DIR:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
 BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-0}"
 Z3_BIN="${Z3_BIN:-}"
@@ -33,6 +34,7 @@ DROP_REMARK_PATTERN="${DROP_REMARK_PATTERN:-will be dropped during lowering}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
 BMC_DROP_REMARK_CASES_OUT="${BMC_DROP_REMARK_CASES_OUT:-}"
+BMC_DROP_REMARK_REASONS_OUT="${BMC_DROP_REMARK_REASONS_OUT:-}"
 BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS - it's emitted before LTLToCore and LowerClockedAssertLike passes
@@ -174,10 +176,14 @@ timeout=0
 skip=0
 total=0
 drop_remark_cases=0
+cache_hits=0
+cache_misses=0
+cache_stores=0
 
 declare -A expect_mode
 declare -A semantic_tags_by_case
 declare -A drop_remark_seen_cases
+declare -A drop_remark_seen_case_reasons
 
 load_semantic_tag_map() {
   if [[ -z "$BMC_SEMANTIC_TAG_MAP_FILE" || ! -f "$BMC_SEMANTIC_TAG_MAP_FILE" ]]; then
@@ -221,6 +227,36 @@ record_drop_remark_case() {
   if ! grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
     return
   fi
+  while IFS= read -r reason; do
+    if [[ -z "$reason" ]]; then
+      continue
+    fi
+    local reason_key="${case_id}|${reason}"
+    if [[ -n "${drop_remark_seen_case_reasons["$reason_key"]+x}" ]]; then
+      continue
+    fi
+    drop_remark_seen_case_reasons["$reason_key"]=1
+    if [[ -n "$BMC_DROP_REMARK_REASONS_OUT" ]]; then
+      printf "%s\t%s\t%s\n" "$case_id" "$case_path" "$reason" >> "$BMC_DROP_REMARK_REASONS_OUT"
+    fi
+  done < <(
+    awk -v pattern="$DROP_REMARK_PATTERN" '
+      index($0, pattern) {
+        line = $0
+        gsub(/\t/, " ", line)
+        sub(/^[[:space:]]+/, "", line)
+        if (match(line, /^[^:]+:[0-9]+(:[0-9]+)?:[[:space:]]*/))
+          line = substr(line, RLENGTH + 1)
+        sub(/^[Ww]arning:[[:space:]]*/, "", line)
+        gsub(/[[:space:]]+/, " ", line)
+        gsub(/[0-9]+/, "<n>", line)
+        gsub(/;/, ",", line)
+        if (length(line) > 240)
+          line = substr(line, 1, 240)
+        print line
+      }
+    ' "$verilog_log" | sort -u
+  )
   if [[ -n "${drop_remark_seen_cases["$case_id"]+x}" ]]; then
     return
   fi
@@ -265,6 +301,28 @@ normalize_paths() {
     fi
   done
   printf '%s\n' "${out[@]}"
+}
+
+hash_key() {
+  local payload="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf "%s" "$payload" | sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    printf "%s" "$payload" | shasum -a 256 | awk '{print $1}'
+  else
+    printf "%s" "$payload" | cksum | awk '{print $1}'
+  fi
+}
+
+hash_file() {
+  local path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+  else
+    cksum "$path" | awk '{print $1}'
+  fi
 }
 
 while IFS= read -r -d '' sv; do
@@ -405,25 +463,69 @@ while IFS= read -r -d '' sv; do
   fi
   cmd+=("${files[@]}")
 
-  if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
-    record_drop_remark_case "$base" "$sv" "$verilog_log"
-    if [[ "$force_xfail" == "1" ]]; then
-      result="XFAIL"
-      xfail=$((xfail + 1))
-    # Treat expected compile failures as PASS for negative compilation/parsing
-    # tests. Simulation-negative tests are expected to compile and are handled
-    # via SAT/UNSAT classification below.
-    elif [[ "$expect_compile_fail" == "1" ]]; then
-      result="PASS"
-      pass=$((pass + 1))
+  cache_hit=0
+  cache_file=""
+  if [[ -n "$BMC_MLIR_CACHE_DIR" ]]; then
+    mkdir -p "$BMC_MLIR_CACHE_DIR"
+    cache_payload="circt_verilog=${CIRCT_VERILOG}
+circt_verilog_args=${CIRCT_VERILOG_ARGS}
+disable_uvm_auto_include=${DISABLE_UVM_AUTO_INCLUDE}
+use_uvm=${use_uvm}
+uvm_path=${UVM_PATH}
+top_module=${top_module}
+"
+    for inc in "${incdirs[@]}"; do
+      cache_payload+="incdir=${inc}
+"
+    done
+    for def in "${defines[@]}"; do
+      cache_payload+="define=${def}
+"
+    done
+    for f in "${files[@]}"; do
+      cache_payload+="file=${f} hash=$(hash_file "$f")
+"
+    done
+    cache_key="$(hash_key "$cache_payload")"
+    cache_file="$BMC_MLIR_CACHE_DIR/${cache_key}.mlir"
+    if [[ -s "$cache_file" ]]; then
+      cp -f "$cache_file" "$mlir"
+      : > "$verilog_log"
+      echo "[run_sv_tests_circt_bmc] cache-hit key=$cache_key case=$base" >> "$verilog_log"
+      cache_hit=1
+      cache_hits=$((cache_hits + 1))
     else
-      result="ERROR"
-      error=$((error + 1))
+      cache_misses=$((cache_misses + 1))
     fi
-    emit_result_row "$result" "$base" "$sv"
-    continue
   fi
-  record_drop_remark_case "$base" "$sv" "$verilog_log"
+
+  if [[ "$cache_hit" != "1" ]]; then
+    if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+      record_drop_remark_case "$base" "$sv" "$verilog_log"
+      if [[ "$force_xfail" == "1" ]]; then
+        result="XFAIL"
+        xfail=$((xfail + 1))
+      # Treat expected compile failures as PASS for negative compilation/parsing
+      # tests. Simulation-negative tests are expected to compile and are handled
+      # via SAT/UNSAT classification below.
+      elif [[ "$expect_compile_fail" == "1" ]]; then
+        result="PASS"
+        pass=$((pass + 1))
+      else
+        result="ERROR"
+        error=$((error + 1))
+      fi
+      emit_result_row "$result" "$base" "$sv"
+      continue
+    fi
+    record_drop_remark_case "$base" "$sv" "$verilog_log"
+    if [[ -n "$cache_file" && -s "$mlir" ]]; then
+      cache_tmp="$cache_file.tmp.$$.$RANDOM"
+      cp -f "$mlir" "$cache_tmp" 2>/dev/null || true
+      mv -f "$cache_tmp" "$cache_file" 2>/dev/null || true
+      cache_stores=$((cache_stores + 1))
+    fi
+  fi
 
   if [[ "$run_bmc" == "0" ]]; then
     if [[ "$force_xfail" == "1" ]]; then
@@ -460,28 +562,43 @@ while IFS= read -r -d '' sv; do
   fi
   append_bmc_check_attribution "$base" "$sv" "$mlir"
 
-  bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
+  bmc_base_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
     "--module" "$top_module")
+  if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
+    bmc_base_args+=("--rising-clocks-only")
+  fi
+  if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
+    bmc_base_args+=("--allow-multi-clock")
+  fi
+  if [[ -n "$CIRCT_BMC_ARGS" ]]; then
+    read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"
+    bmc_base_args+=("${extra_bmc_args[@]}")
+  fi
+
+  bmc_args=("${bmc_base_args[@]}")
   if [[ "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]]; then
     bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
   elif [[ "$BMC_SMOKE_ONLY" != "1" ]]; then
     bmc_args+=("--shared-libs=$Z3_LIB")
-  fi
-  if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
-    bmc_args+=("--rising-clocks-only")
-  fi
-  if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
-    bmc_args+=("--allow-multi-clock")
-  fi
-  if [[ -n "$CIRCT_BMC_ARGS" ]]; then
-    read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"
-    bmc_args+=("${extra_bmc_args[@]}")
   fi
   out=""
   if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2> "$bmc_log")"; then
     bmc_status=0
   else
     bmc_status=$?
+  fi
+  if [[ "$bmc_status" -ne 0 && "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]] && \
+      grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
+    echo "BMC_RUN_SMTLIB fallback($base): retrying with --run due unsupported SMT-LIB export op(s)" >&2
+    {
+      echo "[run_sv_tests_circt_bmc] BMC_RUN_SMTLIB fallback($base): unsupported SMT-LIB export op(s), retrying with --run"
+    } >> "$bmc_log"
+    bmc_args=("${bmc_base_args[@]}" "--shared-libs=$Z3_LIB")
+    if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>> "$bmc_log")"; then
+      bmc_status=0
+    else
+      bmc_status=$?
+    fi
   fi
   append_bmc_abstraction_provenance "$base" "$sv" "$bmc_log"
   # NOTE: The "no property provided to check" warning is typically spurious.
@@ -627,9 +744,15 @@ fi
 if [[ -n "$BMC_DROP_REMARK_CASES_OUT" && -f "$BMC_DROP_REMARK_CASES_OUT" ]]; then
   sort -u -o "$BMC_DROP_REMARK_CASES_OUT" "$BMC_DROP_REMARK_CASES_OUT"
 fi
+if [[ -n "$BMC_DROP_REMARK_REASONS_OUT" && -f "$BMC_DROP_REMARK_REASONS_OUT" ]]; then
+  sort -u -o "$BMC_DROP_REMARK_REASONS_OUT" "$BMC_DROP_REMARK_REASONS_OUT"
+fi
 
 echo "sv-tests SVA summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"
 echo "sv-tests dropped-syntax summary: drop_remark_cases=$drop_remark_cases pattern='$DROP_REMARK_PATTERN'"
+if [[ -n "$BMC_MLIR_CACHE_DIR" ]]; then
+  echo "sv-tests frontend cache summary: hits=$cache_hits misses=$cache_misses stores=$cache_stores dir=$BMC_MLIR_CACHE_DIR"
+fi
 echo "results: $OUT"
 if [[ "$FAIL_ON_DROP_REMARKS" == "1" && "$drop_remark_cases" -gt 0 ]]; then
   echo "FAIL_ON_DROP_REMARKS triggered: drop_remark_cases=$drop_remark_cases" >&2
