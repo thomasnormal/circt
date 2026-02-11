@@ -9,6 +9,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 21:45)
+
+1. Added strict drift governance for LEC semantic-diag subfamily identities:
+   - new flag:
+     - `--fail-on-new-lec-semantic-diag-subfamily-case-ids`
+   - tracks baseline/current drift via:
+     - `lec_semantic_diag_subfamily_case_ids`
+   - strict-gate default now enables this check.
+2. Coverage and quality impact:
+   - semantic parser/lowering/solver subfamily counters now have matching
+     case-ID drift controls, closing the previous governance gap where only
+     aggregate semantic buckets had identity drift gates.
+3. Current limitations:
+   - subfamily classification remains heuristic and token-based.
+   - OpenTitan and AVIP cadence runs are still vulnerable to transient
+     zero-byte tool artifacts during concurrent rebuilds (`build-test/bin`).
+4. Next long-term features:
+   - stabilize structured LEC reason contracts in runner outputs and migrate
+     subfamily classification from heuristics to reason-code mapping.
+   - add per-subfamily case+reason drift gates (not just case IDs).
+   - add a built-in `circt-mut` profile for subfamily drift budget trends
+     over history windows.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59)
 
 1. LEC semantic-error telemetry now tracks subfamilies beneath
