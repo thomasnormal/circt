@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1025 - February 11, 2026
+
+### `circt-mut` Policy-Mode Trend Expansion + Stop-On-Fail Trend Composites
+
+1. Extended matrix policy-mode enums in `tools/circt-mut/circt-mut.cpp` from
+   `smoke|nightly|strict` to:
+   - `smoke|nightly|strict|trend-nightly|trend-strict`
+   across:
+   - `circt-mut init --report-policy-mode`
+   - `circt-mut run --report-policy-mode`
+   - `circt-mut report --policy-mode`
+   - `[report] policy_mode` config validation.
+2. Reduced parser drift by centralizing mode validation into
+   `isMatrixPolicyMode(...)` and reusing it across init/run/report CLI + config
+   surfaces.
+3. Added new policy bundles:
+   - `formal-regression-matrix-composite-stop-on-fail-trend-nightly`
+   - `formal-regression-matrix-composite-stop-on-fail-trend-strict`
+   These compose:
+   - stop-on-fail trend global-filter gates,
+   - lane-trend rules,
+   - runtime trend rules,
+   - lane-drift checks.
+4. Updated help/diagnostics surfaces:
+   - mode help now documents trend policy modes for init/run/report.
+   - invalid mode diagnostics now include trend mode values.
+   - invalid profile diagnostics include new stop-on-fail trend composites.
+5. Added regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-trend-nightly-default.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-trend-strict-stop-on-fail.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-trend-nightly.test`
+   - updated invalid/help/profile tests for new enum/profile surfaces.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused policy-mode trend slice:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-init-help.test test/Tools/circt-mut-run-help.test test/Tools/circt-mut-report-help.test test/Tools/circt-mut-init-report-policy-invalid.test test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test test/Tools/circt-mut-report-cli-policy-mode-invalid.test test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-report-cli-policy-mode-trend-nightly-default.test test/Tools/circt-mut-report-policy-config-matrix-mode-trend-strict-stop-on-fail.test test/Tools/circt-mut-run-with-report-cli-policy-mode-trend-nightly.test`: PASS (11/11)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (255/255)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-mode-trend-composite ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1024 - February 11, 2026
 
 ### `circt-mut report`: Composite Trend Policy Bundles
