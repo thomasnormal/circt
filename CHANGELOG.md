@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1041 - February 11, 2026
+
+### Provenance-Strict Regression Hardening: No-Summary Failure Paths
+
+1. Added strict failure-path regression for config-driven report mode:
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-provenance-strict-no-summary-fail.test`
+   - validates that `[report] policy_mode = "provenance-strict"` fails when
+     `matrix.prequalify_results_summary_present_lanes = 0`.
+2. Added strict failure-path regression for config-driven run-with-report mode:
+   - `test/Tools/circt-mut-run-with-report-config-policy-mode-provenance-strict-no-summary-fail.test`
+   - validates that native `circt-mut run` report handoff preserves the same
+     strict provenance failure semantics.
+3. These tests close a policy-governance gap by ensuring provenance-strict is
+   enforced symmetrically on both report entrypoints (direct and run-integrated)
+   when summary-presence preconditions are unmet.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused strict-failure provenance slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-report-policy-config-matrix-mode-provenance-strict-no-summary-fail|circt-mut-run-with-report-config-policy-mode-provenance-strict-no-summary-fail|circt-mut-report-policy-config-matrix-mode-provenance-strict-default|circt-mut-run-with-report-config-policy-mode-provenance-guard|circt-mut-report-cli-policy-mode-provenance-strict-pass|circt-mut-run-with-report-cli-policy-mode-provenance-strict'`: PASS (6/6)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-.*\\.test'`: PASS (269/269)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-provenance-strict-fail-coverage ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC+LEC, `yosys/tests/sva` BMC+LEC, `opentitan` LEC, AVIP compile `axi4Lite/spi/uart`
+
 ## Iteration 1040 - February 11, 2026
 
 ### `circt-mut` Provenance Policy Modes: Config-Surface Hardening
