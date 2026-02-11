@@ -10,4 +10,5 @@
 // CHECK: policy.profile_3{{[[:space:]]}}formal-regression-matrix-external-formal-guard
 // CHECK: policy.profile_4{{[[:space:]]}}formal-regression-matrix-external-formal-summary-guard
 // CHECK: external_formal.summary_tsv_schema_valid_files{{[[:space:]]}}1
+// CHECK: external_formal.summary_tsv_schema_version_invalid_rows{{[[:space:]]}}0
 // CHECK: value_gate.status{{[[:space:]]}}pass
