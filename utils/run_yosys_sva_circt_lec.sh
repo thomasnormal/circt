@@ -3,6 +3,11 @@ set -euo pipefail
 
 YOSYS_SVA_DIR="${1:-/home/thomas-ahle/yosys/tests/sva}"
 CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
+if [[ "$CIRCT_VERILOG" == */* ]]; then
+  CIRCT_TOOL_DIR_DEFAULT="$(dirname "$CIRCT_VERILOG")"
+else
+  CIRCT_TOOL_DIR_DEFAULT="build/bin"
+fi
 
 # Memory limit settings to prevent system hangs
 CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
@@ -17,8 +22,8 @@ run_limited() {
     timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
   )
 }
-CIRCT_OPT="${CIRCT_OPT:-build/bin/circt-opt}"
-CIRCT_LEC="${CIRCT_LEC:-build/bin/circt-lec}"
+CIRCT_OPT="${CIRCT_OPT:-$CIRCT_TOOL_DIR_DEFAULT/circt-opt}"
+CIRCT_LEC="${CIRCT_LEC:-$CIRCT_TOOL_DIR_DEFAULT/circt-lec}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 LEC_MLIR_CACHE_DIR="${LEC_MLIR_CACHE_DIR:-}"
 CIRCT_OPT_ARGS="${CIRCT_OPT_ARGS:-}"
