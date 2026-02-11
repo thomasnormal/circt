@@ -855,6 +855,15 @@ See CHANGELOG.md on recent progress.
   mapping to strict composite + provenance strict + external formal guard
   profiles, enabling strict formal-closure enforcement without native-family
   mode contracts.
+- Latest mutation-governance milestone (current): `circt-mut report` now
+  supports external-formal out-dir auto-discovery:
+  - `--external-formal-out-dir` / `[report] external_formal_out_dir`
+  - `circt-mut run` forwarding via
+    `--report-external-formal-out-dir` /
+    `[run] report_external_formal_out_dir`
+  with report telemetry keys (`external_formal.out_dir`,
+  `external_formal.files_discovered`) so strict-formal governance can consume
+  runner out-directories directly without manual file-list wiring.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
