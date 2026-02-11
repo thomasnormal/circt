@@ -118,7 +118,8 @@ static void printInitHelp(raw_ostream &os) {
   os << "                           generated config (default: false)\n";
   os << "  --report-policy-mode MODE\n";
   os << "                           Report policy mode for generated config\n";
-  os << "                           (smoke|nightly|strict|trend-nightly|trend-strict,\n";
+  os << "                           (smoke|nightly|strict|trend-nightly|trend-strict|\n";
+  os << "                            provenance-guard|provenance-strict,\n";
   os << "                            default: smoke)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           Enable stop-on-fail report guard profile in\n";
@@ -171,7 +172,8 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --report-policy-profile NAME\n";
   os << "                           Repeatable post-run report policy profile\n";
   os << "  --report-policy-mode MODE\n";
-  os << "                           smoke|nightly|strict|trend-nightly|trend-strict\n";
+  os << "                           smoke|nightly|strict|trend-nightly|trend-strict|\n";
+  os << "                           provenance-guard|provenance-strict\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -199,7 +201,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --trend-history FILE     Compute trend summary from history TSV\n";
   os << "  --trend-window N         Use latest N history runs for trends (0=all)\n";
   os << "  --policy-profile NAME    Apply built-in report policy profile\n";
-  os << "  --policy-mode MODE       smoke|nightly|strict|trend-nightly|trend-strict\n";
+  os << "  --policy-mode MODE       smoke|nightly|strict|trend-nightly|trend-strict|\n";
+  os << "                           provenance-guard|provenance-strict\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -5877,7 +5880,9 @@ static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
       if (!isMatrixPolicyMode(mode)) {
         result.error =
             (Twine("circt-mut init: invalid --report-policy-mode value: ") +
-             *v + " (expected smoke|nightly|strict|trend-nightly|trend-strict)")
+             *v +
+             " (expected smoke|nightly|strict|trend-nightly|trend-strict|"
+             "provenance-guard|provenance-strict)")
                 .str();
         return result;
       }
@@ -6480,7 +6485,9 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       if (!isMatrixPolicyMode(mode)) {
         result.error = (Twine("circt-mut run: invalid --report-policy-mode "
                               "value: ") +
-                        *v + " (expected smoke|nightly|strict|trend-nightly|trend-strict)")
+                        *v +
+                        " (expected smoke|nightly|strict|trend-nightly|"
+                        "trend-strict|provenance-guard|provenance-strict)")
                            .str();
         return result;
       }
@@ -6736,8 +6743,8 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         }
         if (!isMatrixPolicyMode(mode)) {
           errs() << "circt-mut run: invalid report policy mode value '"
-                 << mode
-                 << "' (expected smoke|nightly|strict|trend-nightly|trend-strict)\n";
+                 << mode << "' (expected smoke|nightly|strict|trend-nightly|"
+                 << "trend-strict|provenance-guard|provenance-strict)\n";
           return 1;
         }
         bool stop = stopOnFail.value_or(false);
@@ -7537,7 +7544,8 @@ static bool appendUniqueRule(SmallVectorImpl<DeltaGateRule> &rules, StringRef ke
 
 static bool isMatrixPolicyMode(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
-         mode == "trend-nightly" || mode == "trend-strict";
+         mode == "trend-nightly" || mode == "trend-strict" ||
+         mode == "provenance-guard" || mode == "provenance-strict";
 }
 
 static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
@@ -7571,14 +7579,20 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                         ? "formal-regression-matrix-composite-stop-on-fail-trend-strict"
                         : "formal-regression-matrix-composite-trend-strict";
     provenanceProfile = "formal-regression-matrix-provenance-strict";
+  } else if (mode == "provenance-guard") {
+    policyProfile = "formal-regression-matrix-provenance-guard";
+  } else if (mode == "provenance-strict") {
+    policyProfile = "formal-regression-matrix-provenance-strict";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
-             "' (expected smoke|nightly|strict|trend-nightly|trend-strict)")
+             "' (expected smoke|nightly|strict|trend-nightly|trend-strict|"
+             "provenance-guard|provenance-strict)")
                 .str();
     return false;
   }
   out.push_back(policyProfile);
-  out.push_back(provenanceProfile);
+  if (!provenanceProfile.empty())
+    out.push_back(provenanceProfile);
   return true;
 }
 
@@ -10242,7 +10256,8 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       if (!isMatrixPolicyMode(mode)) {
         result.error =
             (Twine("circt-mut report: invalid --policy-mode value: ") + *v +
-             " (expected smoke|nightly|strict|trend-nightly|trend-strict)")
+             " (expected smoke|nightly|strict|trend-nightly|trend-strict|"
+             "provenance-guard|provenance-strict)")
                 .str();
         return result;
       }
@@ -10621,8 +10636,8 @@ static int runNativeReport(const ReportOptions &opts) {
         if (!hasCLIPolicyMode && !isMatrixPolicyMode(mode)) {
           errs() << "circt-mut report: invalid [report] key 'policy_mode' "
                     "value '"
-                 << mode
-                 << "' (expected smoke|nightly|strict|trend-nightly|trend-strict)\n";
+                 << mode << "' (expected smoke|nightly|strict|trend-nightly|"
+                 << "trend-strict|provenance-guard|provenance-strict)\n";
           return 1;
         }
         std::string modeError;

@@ -17,6 +17,8 @@
 // CHECK: --policy-mode
 // CHECK: trend-nightly
 // CHECK: trend-strict
+// CHECK: provenance-guard
+// CHECK: provenance-strict
 // CHECK: --policy-stop-on-fail
 // CHECK: formal-regression-matrix-guard
 // CHECK: formal-regression-matrix-trend-guard
