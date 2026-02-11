@@ -1,5 +1,23 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1065 - February 11, 2026
+
+### Yosys BMC Drift Hardening: Mode/Profile-Qualified Case Diagnostics
+
+1. Hardened `utils/run_yosys_sva_circt_bmc.sh` case-row emission:
+   - every emitted row now carries an explicit diag token in column 6:
+     - `PASS_KNOWN`, `FAIL_KNOWN`, `PASS_XPROP`, `FAIL_XPROP`, etc.
+   - semantic bucket annotations remain preserved in trailing columns.
+2. This keeps `base` IDs stable while enabling unambiguous `base_diag`
+   matching in `run_formal_all.sh` expected-failure-case governance, even when
+   pass/fail modes emit rows for the same test base name.
+3. Added/updated regression coverage:
+   - `test/Tools/run-yosys-sva-bmc-out-file.test`
+   - `test/Tools/run-yosys-sva-bmc-semantic-tag-map.test`
+4. Focused validation:
+   - `yosys/tests/sva` (`basic00|basic01`, known-input profile) remains clean:
+     pass-mode and fail-mode both pass with mode/profile-qualified diagnostics.
+
 ## Iteration 1064 - February 11, 2026
 
 ### BMC Semantic Closure: `$stable` Parity For Verilator `assert_stable`

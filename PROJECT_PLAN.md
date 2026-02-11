@@ -25,6 +25,22 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 4. New regression lock:
    - `test/Tools/circt-bmc/sva-stable-toggling-unsat-e2e.sv`.
 
+### Formal Closure Snapshot Update (February 11, 2026, 17:35)
+
+1. Yosys BMC lane drift-hardening landed:
+   - `run_yosys_sva_circt_bmc.sh` now emits explicit mode/profile diagnostics
+     per row (`PASS_KNOWN`, `FAIL_KNOWN`, `PASS_XPROP`, `FAIL_XPROP`, ...).
+2. Long-term impact:
+   - keeps `base` IDs stable while enabling unambiguous `base_diag` matching in
+     expected-failure-case governance (`run_formal_all.sh`) for dual-mode rows.
+   - prevents pass-mode/fail-mode row conflation for identical test base IDs.
+3. Focused external sanity:
+   - `yosys/tests/sva` filtered slice (`basic00|basic01`, known profile) remains
+     fully passing in both pass/fail modes with mode-qualified diagnostics.
+4. Regression locks updated:
+   - `test/Tools/run-yosys-sva-bmc-out-file.test`
+   - `test/Tools/run-yosys-sva-bmc-semantic-tag-map.test`
+
 ### Formal Closure Snapshot (February 11, 2026, 16:22)
 
 1. sv-tests focused semantic closure (SMT-LIB lane mode, explicit build-test tools):
@@ -48,7 +64,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 ### Formal Limitations And Long-Term Build Targets
 
 1. BMC semantic limits still open:
-   - Yosys SVA expectation drift around `basic01 pass` profile handling
+   - Yosys SVA expectation governance still needs strict lane-owned
+     expected-case checks that fail fast on profile drift in CI.
    - mixed 4-state/2-state expectations still leak into targeted external lanes
 2. LEC hardening limits still open:
    - maintain strict no-waiver X-prop governance while improving diagnostics depth
@@ -57,7 +74,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - complete native matrix scheduling migration (script parity -> native parity)
    - strengthen lane-level trend drift guardrails for nightly/strict policy bundles
 4. Priority implementation order (formal-only tracks):
-   - P0: close yosys `basic01` pass-profile expectation drift with strict, lane-owned rule checks
+   - P0: add strict lane-owned expected-case policy checks for yosys BMC/LEC
+     (profile-aware fail-fast gates in formal driver paths)
    - P1: normalize yosys `basic01` pass/fail profile expectation accounting
    - P1: add strict lane-level formal closure report artifact generation
    - P2: extend mutation report trend governance with prequalify/bucket deltas
