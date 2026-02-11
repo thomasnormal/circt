@@ -1,0 +1,13 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
+// RUN: printf '#!/usr/bin/env python3\nprint("No AES S-Box implementations selected.")\n' > %t/utils/run_opentitan_circt_lec.py
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_opentitan_circt_lec.py %t/fake-circt-verilog-opentitan
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-lec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/LEC$' --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --opentitan-lec-impl-filter ".*"
+// RUN: FileCheck %s --check-prefix=LECSUM < %t/out-lec/summary.tsv
+// RUN: FileCheck %s --check-prefix=LECCASE < %t/out-lec/opentitan-lec-results.txt
+//
+// LECSUM: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
+// LECSUM: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}total=1 pass=0 fail=0 xfail=0 xpass=0 error=0 skip=1 no_matching_impl_filter=1
+// LECCASE: SKIP{{[[:space:]]+}}aes_sbox{{[[:space:]]+}}no_matching_impl_filter{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC
