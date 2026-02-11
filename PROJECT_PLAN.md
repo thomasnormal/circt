@@ -9,6 +9,32 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++)
+
+1. Added release-grade composite mutation gate for native strict formal lanes:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v1`
+2. This profile unifies:
+   - native strict matrix lifecycle/provenance gates
+   - semantic-diag family trend budget controls
+   - frontend preprocess-timeout trend guards
+3. Current targeted external cadence signal:
+   - `sv-tests` LEC targeted probe is now passing in smoke mode.
+   - `verilator` LEC targeted probe is passing (`assert_changed`).
+   - OpenTitan `canright` LEC remains passing.
+   - persistent open issue: `verilator` BMC `assert_changed` error.
+4. Remaining limitations:
+   - no stop-on-fail variant of the new composite profile yet.
+   - no single profile yet that also binds strict case-ID/case+reason drift
+     governance from `run_formal_all` baselines.
+   - `sv-tests` BMC UVM-heavy slices still need dedicated runtime envelopes for
+     stable cadence telemetry.
+5. Next long-term features:
+   - add `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1`.
+   - add a profile that combines trend budgets with strict drift identity gates
+     (case-id + case-reason).
+   - add deterministic reproducer tests for the remaining `verilator` BMC
+     `assert_changed` error path and route to semantic bucket governance.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59++++)
 
 1. Added a dedicated mutation trend profile for frontend timeout debt:

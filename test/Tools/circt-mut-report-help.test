@@ -75,6 +75,7 @@
 // CHECK: formal-regression-matrix-composite-nightly
 // CHECK: formal-regression-matrix-composite-strict
 // CHECK: formal-regression-matrix-composite-native-strict
+// CHECK: formal-regression-matrix-composite-native-strict-formal-trend-v1
 // CHECK: formal-regression-matrix-composite-trend-nightly
 // CHECK: formal-regression-matrix-composite-trend-strict
 // CHECK: formal-regression-matrix-composite-stop-on-fail-smoke

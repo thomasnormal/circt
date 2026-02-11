@@ -284,6 +284,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-composite-nightly|\n";
   os << "                           formal-regression-matrix-composite-strict|\n";
   os << "                           formal-regression-matrix-composite-native-strict|\n";
+  os << "                           formal-regression-matrix-composite-native-strict-formal-trend-v1|\n";
   os << "                           formal-regression-matrix-composite-trend-nightly|\n";
   os << "                           formal-regression-matrix-composite-trend-strict|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-smoke|\n";
@@ -9162,6 +9163,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            applyComposite("formal-regression-matrix-provenance-strict") &&
            applyComposite("formal-regression-matrix-native-lifecycle-strict");
   }
+  if (profile ==
+      "formal-regression-matrix-composite-native-strict-formal-trend-v1") {
+    return applyComposite("formal-regression-matrix-composite-native-strict") &&
+           applyComposite(
+               "formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1") &&
+           applyComposite(
+               "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1");
+  }
   if (profile == "formal-regression-matrix-composite-trend-nightly") {
     return applyComposite("formal-regression-matrix-lane-trend-nightly") &&
            applyComposite("formal-regression-matrix-runtime-trend") &&
@@ -9252,6 +9261,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-composite-nightly|"
            "formal-regression-matrix-composite-strict|"
            "formal-regression-matrix-composite-native-strict|"
+           "formal-regression-matrix-composite-native-strict-formal-trend-v1|"
            "formal-regression-matrix-composite-trend-nightly|"
            "formal-regression-matrix-composite-trend-strict|"
            "formal-regression-matrix-composite-stop-on-fail-smoke|"
