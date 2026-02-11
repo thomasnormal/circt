@@ -340,9 +340,16 @@ while IFS= read -r -d '' sv; do
   fi
   cmd+=("${files[@]}")
 
-  if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+  if run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+    :
+  else
+    verilog_status=$?
     record_drop_remark_case "$base" "$sv" "$verilog_log"
-    printf "ERROR\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_ERROR\n" "$base" "$sv" >> "$results_tmp"
+    if [[ "$verilog_status" -eq 124 || "$verilog_status" -eq 137 ]]; then
+      printf "TIMEOUT\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
+    else
+      printf "ERROR\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_ERROR\n" "$base" "$sv" >> "$results_tmp"
+    fi
     error=$((error + 1))
     save_logs
     continue
@@ -358,12 +365,19 @@ while IFS= read -r -d '' sv; do
   fi
   opt_cmd+=("$mlir")
 
-  if ! run_limited "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
+  if run_limited "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
+    :
+  else
+    opt_status=$?
     if [[ ! -s "$opt_log" ]]; then
       printf "error: circt-opt failed without diagnostics for case '%s'\n" \
         "$base" | tee -a "$opt_log" >&2
     fi
-    printf "ERROR\t%s\t%s\tsv-tests\tLEC\tCIRCT_OPT_ERROR\n" "$base" "$sv" >> "$results_tmp"
+    if [[ "$opt_status" -eq 124 || "$opt_status" -eq 137 ]]; then
+      printf "TIMEOUT\t%s\t%s\tsv-tests\tLEC\tCIRCT_OPT_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
+    else
+      printf "ERROR\t%s\t%s\tsv-tests\tLEC\tCIRCT_OPT_ERROR\n" "$base" "$sv" >> "$results_tmp"
+    fi
     error=$((error + 1))
     save_logs
     continue
@@ -438,6 +452,7 @@ while IFS= read -r -d '' sv; do
       *)
         if [[ "$lec_status" -eq 124 || "$lec_status" -eq 137 ]]; then
           lec_diag="TIMEOUT"
+          result="TIMEOUT"
         else
           lec_diag="ERROR"
         fi
@@ -450,7 +465,15 @@ while IFS= read -r -d '' sv; do
     FAIL) fail=$((fail + 1)) ;;
     *) error=$((error + 1)) ;;
   esac
-  printf "%s\t%s\t%s\tsv-tests\tLEC\t%s\n" "$result" "$base" "$sv" "$lec_diag" >> "$results_tmp"
+  lec_timeout_class=""
+  if [[ "$result" == "TIMEOUT" ]]; then
+    lec_timeout_class="solver_budget"
+  fi
+  if [[ -n "$lec_timeout_class" ]]; then
+    printf "%s\t%s\t%s\tsv-tests\tLEC\t%s\t%s\n" "$result" "$base" "$sv" "$lec_diag" "$lec_timeout_class" >> "$results_tmp"
+  else
+    printf "%s\t%s\t%s\tsv-tests\tLEC\t%s\n" "$result" "$base" "$sv" "$lec_diag" >> "$results_tmp"
+  fi
   save_logs
 done < <(find "$SV_TESTS_DIR/tests" -type f -name "*.sv" -print0)
 

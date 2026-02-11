@@ -5,6 +5,7 @@ VERIF_DIR="${1:-/home/thomas-ahle/verilator-verification}"
 shift || true
 TOP="${TOP:-top}"
 TEST_FILTER="${TEST_FILTER:-}"
+CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-300}"
 CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 CIRCT_OPT="${CIRCT_OPT:-build/bin/circt-opt}"
@@ -21,6 +22,10 @@ KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 DROP_REMARK_PATTERN="${DROP_REMARK_PATTERN:-will be dropped during lowering}"
 LEC_DROP_REMARK_CASES_OUT="${LEC_DROP_REMARK_CASES_OUT:-}"
 LEC_DROP_REMARK_REASONS_OUT="${LEC_DROP_REMARK_REASONS_OUT:-}"
+
+run_limited() {
+  timeout --signal=KILL "$CIRCT_TIMEOUT_SECS" "$@"
+}
 
 if [[ ! -d "$VERIF_DIR/tests" ]]; then
   echo "verilator-verification directory not found: $VERIF_DIR" >&2
@@ -242,9 +247,16 @@ for suite in "${suites[@]}"; do
     fi
     cmd+=("$sv")
 
-    if ! "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+    if run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+      :
+    else
+      verilog_status=$?
       record_drop_remark_case "$base" "$sv" "$verilog_log"
-      printf "ERROR\t%s\t%s\tverilator-verification\tLEC\tCIRCT_VERILOG_ERROR\n" "$base" "$sv" >> "$results_tmp"
+      if [[ "$verilog_status" -eq 124 || "$verilog_status" -eq 137 ]]; then
+        printf "TIMEOUT\t%s\t%s\tverilator-verification\tLEC\tCIRCT_VERILOG_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
+      else
+        printf "ERROR\t%s\t%s\tverilator-verification\tLEC\tCIRCT_VERILOG_ERROR\n" "$base" "$sv" >> "$results_tmp"
+      fi
       error=$((error + 1))
       save_logs
       continue
@@ -260,12 +272,19 @@ for suite in "${suites[@]}"; do
     fi
     opt_cmd+=("$mlir")
 
-    if ! "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
+    if run_limited "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
+      :
+    else
+      opt_status=$?
       if [[ ! -s "$opt_log" ]]; then
         printf "error: circt-opt failed without diagnostics for case '%s'\n" \
           "$base" | tee -a "$opt_log" >&2
       fi
-      printf "ERROR\t%s\t%s\tverilator-verification\tLEC\tCIRCT_OPT_ERROR\n" "$base" "$sv" >> "$results_tmp"
+      if [[ "$opt_status" -eq 124 || "$opt_status" -eq 137 ]]; then
+        printf "TIMEOUT\t%s\t%s\tverilator-verification\tLEC\tCIRCT_OPT_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
+      else
+        printf "ERROR\t%s\t%s\tverilator-verification\tLEC\tCIRCT_OPT_ERROR\n" "$base" "$sv" >> "$results_tmp"
+      fi
       error=$((error + 1))
       save_logs
       continue
@@ -287,7 +306,7 @@ for suite in "${suites[@]}"; do
     lec_args+=("-c1=$top_for_file" "-c2=$top_for_file" "$opt_mlir" "$opt_mlir")
 
     lec_out=""
-    if lec_out="$($CIRCT_LEC "${lec_args[@]}" 2> "$lec_log")"; then
+    if lec_out="$(run_limited "$CIRCT_LEC" "${lec_args[@]}" 2> "$lec_log")"; then
       lec_status=0
     else
       lec_status=$?
@@ -328,6 +347,7 @@ for suite in "${suites[@]}"; do
         *)
           if [[ "$lec_status" -eq 124 || "$lec_status" -eq 137 ]]; then
             lec_diag="TIMEOUT"
+            result="TIMEOUT"
           else
             lec_diag="ERROR"
           fi
@@ -341,7 +361,15 @@ for suite in "${suites[@]}"; do
       *) error=$((error + 1)) ;;
     esac
 
-    printf "%s\t%s\t%s\tverilator-verification\tLEC\t%s\n" "$result" "$base" "$sv" "$lec_diag" >> "$results_tmp"
+    lec_timeout_class=""
+    if [[ "$result" == "TIMEOUT" ]]; then
+      lec_timeout_class="solver_budget"
+    fi
+    if [[ -n "$lec_timeout_class" ]]; then
+      printf "%s\t%s\t%s\tverilator-verification\tLEC\t%s\t%s\n" "$result" "$base" "$sv" "$lec_diag" "$lec_timeout_class" >> "$results_tmp"
+    else
+      printf "%s\t%s\t%s\tverilator-verification\tLEC\t%s\n" "$result" "$base" "$sv" "$lec_diag" >> "$results_tmp"
+    fi
     save_logs
   done < <(find "$suite" -type f -name "*.sv" -print0)
 done
