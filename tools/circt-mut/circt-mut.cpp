@@ -6112,10 +6112,11 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     reportArgsOwned.push_back("--mode");
     reportArgsOwned.push_back(reportMode);
 
-    auto appendRunReportCSV = [&](StringRef key) {
+    auto appendRunReportCSV = [&](StringRef key) -> bool {
       auto it = cfg.run.find(key);
       if (it == cfg.run.end() || it->second.empty())
-        return;
+        return false;
+      bool appended = false;
       SmallVector<StringRef, 8> entries;
       StringRef(it->second).split(entries, ',', /*MaxSplit=*/-1,
                                   /*KeepEmpty=*/false);
@@ -6125,10 +6126,66 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
           continue;
         reportArgsOwned.push_back("--policy-profile");
         reportArgsOwned.push_back(token.str());
+        appended = true;
       }
+      return appended;
     };
-    appendRunReportCSV("report_policy_profile");
-    appendRunReportCSV("report_policy_profiles");
+    bool hasExplicitPolicyProfile = appendRunReportCSV("report_policy_profile");
+    hasExplicitPolicyProfile |= appendRunReportCSV("report_policy_profiles");
+    if (!hasExplicitPolicyProfile) {
+      auto policyModeIt = cfg.run.find("report_policy_mode");
+      auto policyStopOnFailIt = cfg.run.find("report_policy_stop_on_fail");
+      bool hasPolicyMode =
+          policyModeIt != cfg.run.end() && !policyModeIt->second.empty();
+      bool hasPolicyStopOnFail = policyStopOnFailIt != cfg.run.end() &&
+                                 !policyStopOnFailIt->second.empty();
+      if (hasPolicyStopOnFail && !hasPolicyMode) {
+        errs() << "circt-mut run: [run] key 'report_policy_stop_on_fail' "
+                  "requires 'report_policy_mode'\n";
+        return 1;
+      }
+      if (hasPolicyMode) {
+        if (reportMode != "matrix" && reportMode != "all") {
+          errs() << "circt-mut run: [run] key 'report_policy_mode' requires "
+                    "'report_mode = matrix|all'\n";
+          return 1;
+        }
+        std::string mode = StringRef(policyModeIt->second).trim().lower();
+        bool stopOnFail = false;
+        if (hasPolicyStopOnFail) {
+          StringRef raw = StringRef(policyStopOnFailIt->second).trim().lower();
+          if (raw == "1" || raw == "true" || raw == "yes" || raw == "on")
+            stopOnFail = true;
+          else if (raw == "0" || raw == "false" || raw == "no" ||
+                   raw == "off")
+            stopOnFail = false;
+          else {
+            errs() << "circt-mut run: invalid boolean [run] key "
+                      "'report_policy_stop_on_fail' value '"
+                   << policyStopOnFailIt->second
+                   << "' (expected 1|0|true|false|yes|no|on|off)\n";
+            return 1;
+          }
+        }
+        std::string policyProfile;
+        if (mode == "smoke") {
+          policyProfile = stopOnFail
+                              ? "formal-regression-matrix-stop-on-fail-guard-smoke"
+                              : "formal-regression-matrix-guard-smoke";
+        } else if (mode == "nightly") {
+          policyProfile = stopOnFail
+                              ? "formal-regression-matrix-stop-on-fail-guard-nightly"
+                              : "formal-regression-matrix-guard-nightly";
+        } else {
+          errs() << "circt-mut run: invalid [run] key 'report_policy_mode' "
+                    "value '"
+                 << policyModeIt->second << "' (expected smoke|nightly)\n";
+          return 1;
+        }
+        reportArgsOwned.push_back("--policy-profile");
+        reportArgsOwned.push_back(policyProfile);
+      }
+    }
 
     appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_compare",
                                 "--compare", opts.projectDir);
