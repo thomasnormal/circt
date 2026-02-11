@@ -228,6 +228,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-lane-trend-strict|\n";
   os << "                           formal-regression-matrix-provenance-guard|\n";
   os << "                           formal-regression-matrix-provenance-strict|\n";
+  os << "                           formal-regression-matrix-native-lifecycle-strict|\n";
   os << "                           formal-regression-matrix-runtime-smoke|\n";
   os << "                           formal-regression-matrix-runtime-nightly|\n";
   os << "                           formal-regression-matrix-runtime-trend|\n";
@@ -7561,6 +7562,19 @@ static void appendMatrixPrequalifyProvenanceColumnPresenceRules(
                    "matrix.prequalify_results_log_file_column_present", 1.0);
 }
 
+static void appendMatrixNativeLifecycleStrictRules(ReportOptions &opts) {
+  appendUniqueRule(opts.failIfValueLtRules,
+                   "matrix.results_metrics_file_column_present", 1.0);
+  appendUniqueRule(opts.failIfValueGtRules,
+                   "matrix.results_metrics_file_fallback_lanes", 0.0);
+  appendUniqueRule(opts.failIfValueLtRules, "matrix.runtime_summary_present",
+                   1.0);
+  appendUniqueRule(opts.failIfValueLtRules,
+                   "matrix.native_prequalify_summary_file_exists", 1.0);
+  appendUniqueRule(opts.failIfValueLtRules,
+                   "matrix.prequalify_results_columns_present", 1.0);
+}
+
 static bool isMatrixPolicyMode(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
          mode == "trend-nightly" || mode == "trend-strict" ||
@@ -8013,6 +8027,12 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     return true;
   }
+  if (profile == "formal-regression-matrix-native-lifecycle-strict") {
+    appendMatrixNativeLifecycleStrictRules(opts);
+    appendMatrixPrequalifyProvenanceColumnPresenceRules(opts);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
+    return true;
+  }
   if (profile == "formal-regression-matrix-runtime-smoke") {
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.runtime_summary_invalid_rows", 0.0);
@@ -8125,6 +8145,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-lane-trend-strict|"
            "formal-regression-matrix-provenance-guard|"
            "formal-regression-matrix-provenance-strict|"
+           "formal-regression-matrix-native-lifecycle-strict|"
            "formal-regression-matrix-runtime-smoke|"
            "formal-regression-matrix-runtime-nightly|"
            "formal-regression-matrix-runtime-trend|"
@@ -8717,6 +8738,7 @@ static bool collectMatrixReport(
   size_t metricsCol = static_cast<size_t>(-1);
   if (auto it = colIndex.find("metrics_file"); it != colIndex.end())
     metricsCol = it->second;
+  bool hasMetricsFileColumn = metricsCol != static_cast<size_t>(-1);
   size_t prequalifySummaryPresentCol = static_cast<size_t>(-1);
   if (auto it = colIndex.find("prequalify_summary_present");
       it != colIndex.end())
@@ -8793,6 +8815,7 @@ static bool collectMatrixReport(
   uint64_t gateSkip = 0;
   uint64_t lanesWithMetrics = 0;
   uint64_t lanesMissingMetrics = 0;
+  uint64_t resultsMetricsFileFallbackLanes = 0;
   uint64_t invalidMetricValues = 0;
   uint64_t totalMutantsSum = 0;
   uint64_t relevantMutantsSum = 0;
@@ -9234,16 +9257,20 @@ static bool collectMatrixReport(
     }
 
     std::string metricsPath;
+    bool usedMetricsFileFallback = false;
     if (metricsCol != static_cast<size_t>(-1)) {
       StringRef metricsValue = getField(metricsCol);
       if (!metricsValue.empty() && metricsValue != "-")
         metricsPath = resolveRelativeTo(matrixOutDir, metricsValue);
     }
     if (metricsPath.empty() && !laneID.empty()) {
+      usedMetricsFileFallback = true;
       SmallString<256> fallbackPath(matrixOutDir);
       sys::path::append(fallbackPath, laneID, "metrics.tsv");
       metricsPath = std::string(fallbackPath.str());
     }
+    if (usedMetricsFileFallback)
+      ++resultsMetricsFileFallbackLanes;
     if (metricsPath.empty() || !sys::fs::exists(metricsPath)) {
       ++lanesMissingMetrics;
       if (laneBudgetRowsOut)
@@ -9345,6 +9372,10 @@ static bool collectMatrixReport(
                     std::to_string(lanesMissingMetrics));
   rows.emplace_back("matrix.invalid_metric_values",
                     std::to_string(invalidMetricValues));
+  rows.emplace_back("matrix.results_metrics_file_column_present",
+                    hasMetricsFileColumn ? "1" : "0");
+  rows.emplace_back("matrix.results_metrics_file_fallback_lanes",
+                    std::to_string(resultsMetricsFileFallbackLanes));
   rows.emplace_back("matrix.total_mutants_sum", std::to_string(totalMutantsSum));
   rows.emplace_back("matrix.relevant_mutants_sum",
                     std::to_string(relevantMutantsSum));
