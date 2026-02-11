@@ -9,6 +9,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+++)
+
+1. Closed a long-running direct-runner reliability gap:
+   - suite runners now derive coherent tool defaults from `CIRCT_VERILOG`
+     when sibling vars are unset (`CIRCT_OPT`/`CIRCT_LEC`/`CIRCT_BMC`).
+2. Immediate impact:
+   - removed false `runner_command_not_found` classifications caused by mixed
+     tool roots during direct suite invocations.
+   - verified on real probe:
+     - `verilator-verification` LEC `assert_changed` now passes with only
+       `CIRCT_VERILOG` set.
+3. Remaining limitations:
+   - heavy UVM `sv-tests` LEC cases still hit frontend timeout windows under
+     constrained runtime budgets; this is now a true compile-cost bottleneck
+     rather than toolchain miswiring.
+4. Next long-term features:
+   - add adaptive timeout budgets keyed by suite/case family to distinguish
+     frontend scalability regressions from solver regressions.
+   - add explicit frontend-timeout drift gates in strict formal governance.
+   - route persistent frontend-timeout families into dedicated mutation
+     suppression/triage streams (separate from semantic-diag regression gates).
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59++)
 
 1. Added budgeted semantic-diag trend governance profile in `circt-mut`:

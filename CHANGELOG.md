@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1125 - February 11, 2026
+
+### Formal Runner Hardening: Coherent Toolchain Defaults in Direct Suite Runners
+
+1. Fixed direct-runner toolchain drift in:
+   - `utils/run_sv_tests_circt_bmc.sh`
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_bmc.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. New behavior:
+   - when `CIRCT_VERILOG` is set to a path and sibling tool env vars are unset,
+     runners derive defaults from `dirname(CIRCT_VERILOG)`:
+     - BMC: `CIRCT_BMC`
+     - LEC: `CIRCT_OPT`, `CIRCT_LEC`
+   - fallback remains `build/bin` when `CIRCT_VERILOG` is a bare command name.
+3. Added regression tests:
+   - `test/Tools/run-sv-tests-bmc-toolchain-derived-from-circt-verilog.test`
+   - `test/Tools/run-sv-tests-lec-toolchain-derived-from-circt-verilog.test`
+   - `test/Tools/run-verilator-verification-circt-bmc-toolchain-derived-from-circt-verilog.test`
+   - `test/Tools/run-verilator-verification-circt-lec-toolchain-derived-from-circt-verilog.test`
+   - `test/Tools/run-yosys-sva-bmc-toolchain-derived-from-circt-verilog.test`
+   - `test/Tools/run-yosys-sva-circt-lec-toolchain-derived-from-circt-verilog.test`
+
+### Tests and Validation
+
+- `bash -n`:
+  - `utils/run_sv_tests_circt_bmc.sh`
+  - `utils/run_sv_tests_circt_lec.sh`
+  - `utils/run_verilator_verification_circt_bmc.sh`
+  - `utils/run_verilator_verification_circt_lec.sh`
+  - `utils/run_yosys_sva_circt_bmc.sh`
+  - `utils/run_yosys_sva_circt_lec.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv` focused slice:
+  - new derivation tests + adjacent runner regressions
+  - PASS (9/9)
+- External targeted probes (direct runners, only `CIRCT_VERILOG` set):
+  - `verilator-verification` LEC `assert_changed`: PASS (`EQ`)
+  - `sv-tests` LEC `16.15--property-iff-uvm`:
+    - no `runner_command_not_found`
+    - current outcome is frontend preprocessing timeout
+      (`CIRCT_VERILOG_TIMEOUT`) under constrained timeout windows.
+
 ## Iteration 1124 - February 11, 2026
 
 ### Mutation + Formal Reliability: Native Strict Flag Hardening and Stable Runner Snapshot

@@ -18,7 +18,12 @@ run_limited() {
   )
 }
 CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
-CIRCT_BMC="${CIRCT_BMC:-build/bin/circt-bmc}"
+if [[ "$CIRCT_VERILOG" == */* ]]; then
+  CIRCT_TOOL_DIR_DEFAULT="$(dirname "$CIRCT_VERILOG")"
+else
+  CIRCT_TOOL_DIR_DEFAULT="build/bin"
+fi
+CIRCT_BMC="${CIRCT_BMC:-$CIRCT_TOOL_DIR_DEFAULT/circt-bmc}"
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
 # Yosys SVA tests are 2-state; default to known inputs to avoid X-driven

@@ -22,7 +22,12 @@ ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-0}"
 FORCE_BMC="${FORCE_BMC:-0}"
 Z3_LIB="${Z3_LIB:-/home/thomas-ahle/z3-install/lib64/libz3.so}"
 CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
-CIRCT_BMC="${CIRCT_BMC:-build/bin/circt-bmc}"
+if [[ "$CIRCT_VERILOG" == */* ]]; then
+  CIRCT_TOOL_DIR_DEFAULT="$(dirname "$CIRCT_VERILOG")"
+else
+  CIRCT_TOOL_DIR_DEFAULT="build/bin"
+fi
+CIRCT_BMC="${CIRCT_BMC:-$CIRCT_TOOL_DIR_DEFAULT/circt-bmc}"
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
 BMC_MLIR_CACHE_DIR="${BMC_MLIR_CACHE_DIR:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
