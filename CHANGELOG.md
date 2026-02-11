@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1126 - February 11, 2026
+
+### Mutation Governance: Frontend Timeout Trend Guard (v1)
+
+1. Added new `circt-mut report` profile:
+   - `formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1`
+2. The profile enforces zero-growth trend deltas for LEC preprocess timeout
+   counters:
+   - `external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_class_preprocess_cases`
+   - `external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_timeout_class_preprocess_cases`
+   - `external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_timeout_class_preprocess_cases`
+3. Profile composes with:
+   - `formal-regression-matrix-trend-history-quality`
+4. Added focused tests:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-frontend-timeout-trend-guard-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-frontend-timeout-trend-guard-v1-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- `llvm/build/bin/llvm-lit -sv` focused profile slice:
+  - 6 tests (new timeout-trend profile tests + adjacent budget profile tests)
+  - PASS (6/6)
+
 ## Iteration 1125 - February 11, 2026
 
 ### Formal Runner Hardening: Coherent Toolchain Defaults in Direct Suite Runners

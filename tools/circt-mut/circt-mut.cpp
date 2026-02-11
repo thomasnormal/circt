@@ -267,6 +267,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1|\n";
+  os << "                           formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1|\n";
+  os << "                           formal-regression-matrix-external-formal-compile-mode-budget-v1|\n";
   os << "                           formal-regression-matrix-provenance-guard|\n";
   os << "                           formal-regression-matrix-provenance-strict|\n";
   os << "                           formal-regression-matrix-native-lifecycle-strict|\n";
@@ -7551,6 +7553,16 @@ struct ReportOptions {
 };
 
 struct ExternalFormalSummary {
+  struct StatusCounts {
+    uint64_t total = 0;
+    uint64_t pass = 0;
+    uint64_t fail = 0;
+    uint64_t xfail = 0;
+    uint64_t xpass = 0;
+    uint64_t error = 0;
+    uint64_t skip = 0;
+  };
+
   uint64_t files = 0;
   uint64_t lines = 0;
   uint64_t parsedStatusLines = 0;
@@ -7583,6 +7595,9 @@ struct ExternalFormalSummary {
   uint64_t summaryTSVDuplicateRows = 0;
   uint64_t summaryTSVUniqueRows = 0;
   StringMap<uint64_t> summaryCounterSums;
+  std::map<std::pair<std::string, std::string>, StatusCounts>
+      summaryStatusSumsBySuiteMode;
+  StringMap<StatusCounts> summaryStatusSumsByMode;
   std::map<std::pair<std::string, std::string>, StringMap<uint64_t>>
       summaryCounterSumsBySuiteMode;
 };
@@ -7886,6 +7901,31 @@ static bool collectExternalFormalSummary(
         summary.summarySkip += skip;
         summary.summaryXFail += xfail;
         summary.summaryXPass += xpass;
+        if (suiteCol != static_cast<size_t>(-1) &&
+            modeCol != static_cast<size_t>(-1) && fields.size() > suiteCol &&
+            fields.size() > modeCol) {
+          StringRef suiteName = fields[suiteCol].trim();
+          StringRef modeName = fields[modeCol].trim();
+          if (!suiteName.empty() && !modeName.empty()) {
+            auto key = std::make_pair(suiteName.str(), modeName.str());
+            auto &suiteModeCounts = summary.summaryStatusSumsBySuiteMode[key];
+            suiteModeCounts.total += total;
+            suiteModeCounts.pass += pass;
+            suiteModeCounts.fail += fail;
+            suiteModeCounts.xfail += xfail;
+            suiteModeCounts.xpass += xpass;
+            suiteModeCounts.error += errorCount;
+            suiteModeCounts.skip += skip;
+            auto &modeCounts = summary.summaryStatusSumsByMode[modeName.str()];
+            modeCounts.total += total;
+            modeCounts.pass += pass;
+            modeCounts.fail += fail;
+            modeCounts.xfail += xfail;
+            modeCounts.xpass += xpass;
+            modeCounts.error += errorCount;
+            modeCounts.skip += skip;
+          }
+        }
         SmallVector<std::pair<std::string, uint64_t>, 16>
             rowSummaryCounterPairs;
         if (summaryCol != static_cast<size_t>(-1) &&
@@ -8084,6 +8124,46 @@ static bool collectExternalFormalSummary(
   for (const auto &entry : summaryCounterRows)
     rows.emplace_back("external_formal.summary_counter." + entry.first,
                       std::to_string(entry.second));
+  for (const auto &suiteModeEntry : summary.summaryStatusSumsBySuiteMode) {
+    std::string safeSuite = sanitizeReportKeySegment(suiteModeEntry.first.first);
+    std::string safeMode = sanitizeReportKeySegment(suiteModeEntry.first.second);
+    std::string rowPrefix = ("external_formal.summary_status_by_suite_mode." +
+                             safeSuite + "." + safeMode + ".");
+    rows.emplace_back(rowPrefix + "total",
+                      std::to_string(suiteModeEntry.second.total));
+    rows.emplace_back(rowPrefix + "pass",
+                      std::to_string(suiteModeEntry.second.pass));
+    rows.emplace_back(rowPrefix + "fail",
+                      std::to_string(suiteModeEntry.second.fail));
+    rows.emplace_back(rowPrefix + "xfail",
+                      std::to_string(suiteModeEntry.second.xfail));
+    rows.emplace_back(rowPrefix + "xpass",
+                      std::to_string(suiteModeEntry.second.xpass));
+    rows.emplace_back(rowPrefix + "error",
+                      std::to_string(suiteModeEntry.second.error));
+    rows.emplace_back(rowPrefix + "skip",
+                      std::to_string(suiteModeEntry.second.skip));
+  }
+  SmallVector<std::pair<std::string, ExternalFormalSummary::StatusCounts>, 16>
+      modeStatusRows;
+  modeStatusRows.reserve(summary.summaryStatusSumsByMode.size());
+  for (const auto &entry : summary.summaryStatusSumsByMode)
+    modeStatusRows.emplace_back(entry.getKey().str(), entry.getValue());
+  llvm::sort(modeStatusRows, [](const auto &lhs, const auto &rhs) {
+    return lhs.first < rhs.first;
+  });
+  for (const auto &entry : modeStatusRows) {
+    std::string safeMode = sanitizeReportKeySegment(entry.first);
+    std::string rowPrefix =
+        ("external_formal.summary_status_by_mode." + safeMode + ".");
+    rows.emplace_back(rowPrefix + "total", std::to_string(entry.second.total));
+    rows.emplace_back(rowPrefix + "pass", std::to_string(entry.second.pass));
+    rows.emplace_back(rowPrefix + "fail", std::to_string(entry.second.fail));
+    rows.emplace_back(rowPrefix + "xfail", std::to_string(entry.second.xfail));
+    rows.emplace_back(rowPrefix + "xpass", std::to_string(entry.second.xpass));
+    rows.emplace_back(rowPrefix + "error", std::to_string(entry.second.error));
+    rows.emplace_back(rowPrefix + "skip", std::to_string(entry.second.skip));
+  }
   for (const auto &suiteModeEntry : summary.summaryCounterSumsBySuiteMode) {
     SmallVector<std::pair<std::string, uint64_t>, 16> suiteCounterRows;
     suiteCounterRows.reserve(suiteModeEntry.second.size());
@@ -8957,6 +9037,33 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     }
     return applyComposite("formal-regression-matrix-trend-history-quality");
   }
+  if (profile ==
+      "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1") {
+    for (StringRef key : {
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_class_preprocess_cases",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_timeout_class_preprocess_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_timeout_class_preprocess_cases",
+         }) {
+      appendUniqueRule(opts.failIfTrendDeltaGtRules, key, 0.0);
+    }
+    return applyComposite("formal-regression-matrix-trend-history-quality");
+  }
+  if (profile ==
+      "formal-regression-matrix-external-formal-compile-mode-budget-v1") {
+    appendUniqueRule(opts.failIfValueLtRules,
+                     "external_formal.summary_status_by_mode.compile.total",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_status_by_mode.compile.fail",
+                     3.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_status_by_mode.compile.error",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_status_by_mode.compile.xpass",
+                     0.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-provenance-guard") {
     appendMatrixPrequalifyProvenanceColumnPresenceRules(opts);
     appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
@@ -9128,6 +9235,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-semantic-diag-family-guard|"
            "formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|"
            "formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1|"
+           "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1|"
+           "formal-regression-matrix-external-formal-compile-mode-budget-v1|"
            "formal-regression-matrix-provenance-guard|"
            "formal-regression-matrix-provenance-strict|"
            "formal-regression-matrix-native-lifecycle-strict|"
@@ -12305,7 +12414,9 @@ static int runNativeReport(const ReportOptions &opts) {
     auto defaultZeroExternalFormalCounter = [&](StringRef key)
         -> std::optional<double> {
       if (key.starts_with("external_formal.summary_counter.") ||
-          key.starts_with("external_formal.summary_counter_by_suite_mode."))
+          key.starts_with("external_formal.summary_counter_by_suite_mode.") ||
+          key.starts_with("external_formal.summary_status_by_suite_mode.") ||
+          key.starts_with("external_formal.summary_status_by_mode."))
         return 0.0;
       return std::nullopt;
     };
@@ -12372,7 +12483,9 @@ static int runNativeReport(const ReportOptions &opts) {
     auto defaultZeroExternalFormalTrendDelta = [&](StringRef key)
         -> std::optional<double> {
       if (key.starts_with("external_formal.summary_counter.") ||
-          key.starts_with("external_formal.summary_counter_by_suite_mode."))
+          key.starts_with("external_formal.summary_counter_by_suite_mode.") ||
+          key.starts_with("external_formal.summary_status_by_suite_mode.") ||
+          key.starts_with("external_formal.summary_status_by_mode."))
         return 0.0;
       return std::nullopt;
     };
