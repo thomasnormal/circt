@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1064 - February 11, 2026
+
+### BMC Semantic Closure: `$stable` Parity For Verilator `assert_stable`
+
+1. Fixed LLHD signal stripping for register-backed state probes in
+   `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`:
+   - added a fast-path that resolves probes through a single unconditional
+     zero-time register-state drive (`seq.firreg`/`seq.compreg`) instead of
+     falling back to signal-init semantics.
+   - this preserves read-before-write state behavior for procedural cycles.
+2. Added regression coverage:
+   - `test/Tools/circt-bmc/sva-stable-toggling-unsat-e2e.sv`
+3. Closed external semantic mismatch:
+   - direct run:
+     `/home/thomas-ahle/verilator-verification/tests/asserts/assert_stable.sv`
+     now reports `BMC_RESULT=UNSAT`.
+   - filtered suite run:
+     `run_verilator_verification_circt_bmc.sh` with `assert_stable$` now
+     reports `pass=1 fail=0 xfail=0`.
+4. Removed obsolete expected-failure debt:
+   - cleared `assert_stable` from `utils/verilator-bmc-xfails.txt`.
+   - updated `test/Tools/run-formal-all-verilator-bmc-default-xfails-forwarding.test`
+     to validate forwarding generically (without pinning to this closed case).
+
 ## Iteration 1063 - February 11, 2026
 
 ### MooreToCore BMC Hardening: Deterministic `$past` Register Initialization

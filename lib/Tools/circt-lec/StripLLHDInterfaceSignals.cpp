@@ -9,6 +9,7 @@
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Support/BoolCondition.h"
 #include "circt/Support/FourStateUtils.h"
 #include "circt/Support/TwoStateUtils.h"
@@ -2275,6 +2276,54 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         }
         return success();
       }
+    }
+  }
+
+  // Stateful signal fast-path: a single unconditional 0-time drive sourced
+  // from a register value should resolve probes to that register state, not to
+  // the signal init.
+  //
+  // This preserves procedural read-before-write semantics when LLHD lowering
+  // models state through a signal that is re-driven from seq.firreg/seq.compreg
+  // each cycle.
+  if (forwardedArgs.empty() && drives.size() == 1) {
+    llhd::DriveOp driveOp = drives.front();
+    auto isRegisterStateValue = [&](Value value) -> bool {
+      Value base = unwrapStoredValue(value);
+      return isa_and_nonnull<seq::FirRegOp, seq::CompRegOp>(
+          base.getDefiningOp());
+    };
+    if (drivePaths.lookup(driveOp).empty() && !driveOp.getEnable() &&
+        isZeroTimeLike(driveOp) && isRegisterStateValue(driveOp.getValue())) {
+      Value drivenValue = unwrapStoredValue(driveOp.getValue());
+      if (!drivenValue)
+        return driveOp.emitError("unsupported LLHD register-state drive value");
+
+      for (auto probe : probes) {
+        OpBuilder probeBuilder(probe);
+        Value replacement = materializePath(probeBuilder, drivenValue,
+                                            probePaths.lookup(probe),
+                                            probe.getLoc());
+        if (!replacement)
+          return probe.emitError("unsupported LLHD probe path in LEC");
+        if (replacement.getType() != probe.getResult().getType())
+          return probe.emitError("signal probe type mismatch in LEC");
+        probe.getResult().replaceAllUsesWith(replacement);
+        probe.erase();
+      }
+      driveOp.erase();
+      for (Operation *refOp : llvm::reverse(derivedRefs)) {
+        if (refOp->use_empty())
+          refOp->erase();
+      }
+      if (sigOp.use_empty()) {
+        Value init = sigOp.getInit();
+        sigOp.erase();
+        if (auto *def = init.getDefiningOp())
+          if (def->use_empty())
+            def->erase();
+      }
+      return success();
     }
   }
 
