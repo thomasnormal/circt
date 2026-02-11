@@ -3,13 +3,16 @@
 // RUN: chmod +x %t/scripts/run_mutation_matrix.sh
 // RUN: printf 'lane1\tdesign.il\tmutations.txt\ttests.tsv\t-\t-\t-\n' > %t/proj/lanes.tsv
 // RUN: printf 'key\tvalue\nmatrix.detected_mutants_sum\t1\n' > %t/proj/out/baseline.tsv
-// RUN: printf '[run]\nwith_report = true\nreport_mode = "matrix"\nreport_compare = "out/baseline.tsv"\nreport_fail_if_delta_gt = "matrix.detected_mutants_sum=0.5"\n[matrix]\nlanes_tsv = "lanes.tsv"\nout_dir = "out/matrix"\n' > %t/proj/circt-mut.toml
+// RUN: printf '[run]\nwith_report = true\nreport_mode = "matrix"\nreport_compare = "out/baseline.tsv"\nreport_fail_if_value_gt = "matrix.detected_mutants_sum=1.5"\nreport_fail_if_delta_gt = "matrix.detected_mutants_sum=0.5"\n[matrix]\nlanes_tsv = "lanes.tsv"\nout_dir = "out/matrix"\n' > %t/proj/circt-mut.toml
 // RUN: not env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut run --project-dir %t/proj --mode matrix > %t/fail.txt 2>&1
 // RUN: FileCheck %s --check-prefix=FAIL < %t/fail.txt
-// RUN: env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut run --project-dir %t/proj --mode matrix --report-fail-if-delta-gt matrix.detected_mutants_sum=2.0 > %t/pass.txt
+// RUN: env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut run --project-dir %t/proj --mode matrix --report-fail-if-value-gt matrix.detected_mutants_sum=3.0 --report-fail-if-delta-gt matrix.detected_mutants_sum=2.0 > %t/pass.txt
 // RUN: FileCheck %s --check-prefix=PASS < %t/pass.txt
 //
 // FAIL: compare.gate_status{{[[:space:]]}}fail
 // FAIL: compare.gate_failure_{{[0-9]+}}{{[[:space:]]}}matrix.detected_mutants_sum delta=1.00 > 0.50
+// FAIL: value_gate.status{{[[:space:]]}}fail
+// FAIL: value_gate.failure_{{[0-9]+}}{{[[:space:]]}}matrix.detected_mutants_sum value=2.00 > 1.50
 //
 // PASS: compare.gate_status{{[[:space:]]}}pass
+// PASS: value_gate.status{{[[:space:]]}}pass

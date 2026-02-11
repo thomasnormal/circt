@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/matrix/lane1
+// RUN: printf 'total_mutants\t4\nrelevant_mutants\t4\ndetected_mutants\t2\npropagated_not_detected_mutants\t1\nnot_propagated_mutants\t1\nnot_activated_mutants\t0\nerrors\t0\n' > %t/proj/out/matrix/lane1/metrics.tsv
+// RUN: printf 'lane_id\tstatus\texit_code\tcoverage_percent\truntime_ns\tgate_status\tlane_dir\tmetrics_file\tsummary_json\nlane1\tPASS\t0\t50.00\t700000000000\tPASS\t%t/proj/out/matrix/lane1\t%t/proj/out/matrix/lane1/metrics.tsv\t-\n' > %t/proj/out/matrix/results.tsv
+// RUN: printf 'run_id\ttimestamp_utc\tkey\tvalue\n1\t2026-02-10T00:00:00Z\tmatrix.runtime_ns_avg\t0\n1\t2026-02-10T00:00:00Z\tmatrix.runtime_ns_max\t0\n1\t2026-02-10T00:00:00Z\tmatrix.runtime_ns_sum\t0\n' > %t/proj/trend.tsv
+// RUN: not circt-mut report --project-dir %t/proj --mode matrix --trend-history trend.tsv --policy-profile formal-regression-matrix-runtime-trend > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK-DAG: policy.profile_1{{[[:space:]]}}formal-regression-matrix-runtime-trend
+// CHECK-DAG: trend.gate_status{{[[:space:]]}}fail
+// CHECK-DAG: trend.gate_failure_{{[0-9]+}}{{[[:space:]]}}matrix.runtime_ns_avg trend_delta=700000000000.00 > 60000000000.00
+

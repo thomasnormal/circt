@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1018 - February 11, 2026
+
+### `circt-mut run/report`: Runtime Governance Policies + Value-Gate Forwarding
+
+1. Extended `circt-mut run` post-report override surface in
+   `tools/circt-mut/circt-mut.cpp` with value-gate forwarding:
+   - `--report-fail-if-value-gt RULE`
+   - `--report-fail-if-value-lt RULE`
+   - config forwarding for `[run] report_fail_if_value_gt` and
+     `[run] report_fail_if_value_lt`
+   - existing `--with-report` guardrails now treat these value-gate overrides
+     consistently with delta/trend overrides.
+2. Added new matrix runtime policy profiles in `circt-mut report`:
+   - `formal-regression-matrix-runtime-nightly`
+   - `formal-regression-matrix-runtime-trend`
+   These provide long-run runtime budget governance on:
+   - `matrix.runtime_ns_avg`
+   - `matrix.runtime_ns_max`
+   - `matrix.runtime_ns_sum`
+   - plus runtime data hygiene (`matrix.runtime_summary_invalid_rows`).
+3. Updated help/profile validation surfaces:
+   - `circt-mut run --help` now documents report value-gate overrides.
+   - `circt-mut report --help` and invalid-profile diagnostics include the new
+     runtime policy names.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-run-with-report-cli-gate-override-config.test`
+   - `test/Tools/circt-mut-report-policy-matrix-runtime-nightly-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-runtime-trend-fail.test`
+   - plus updates to run/report help + invalid-profile tests.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused slices:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-help.test test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-run-with-report-cli-gate-override-config.test test/Tools/circt-mut-report-policy-matrix-runtime-nightly-fail.test test/Tools/circt-mut-report-policy-matrix-runtime-trend-fail.test`: PASS (6/6)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (241/241)
+- External filtered formal cadence:
+  - `LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-runtime-policy ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1017 - February 11, 2026
 
 ### `circt-mut matrix/report`: Runtime Column in `results.tsv` + Report Priority
