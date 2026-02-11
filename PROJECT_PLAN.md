@@ -9,6 +9,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:58)
+
+1. Added LEC verilog-front-end ETXTBSY hardening across all formal runners:
+   - retry on wrapper `Text file busy`
+   - fallback to a copied temp binary before classifying as error
+2. Current signal after fix:
+   - filtered external lanes now progress beyond `CIRCT_VERILOG_ERROR`
+     ETXTBSY and fail later at `CIRCT_OPT_ERROR` timeout-wrapper stage.
+3. Why this is high leverage:
+   - removes a high-noise infrastructure failure mode that previously obscured
+     real semantic/lowering bottlenecks in external cadence runs.
+4. Remaining limitations and next long-term features:
+   - `CIRCT_OPT_ERROR` reason taxonomy still contains wrapper/path-derived
+     timeout strings; apply the same canonicalization and retry hardening used
+     for verilog stage.
+   - add explicit `runner_command_*` counter families in `run_formal_all.sh`
+     summaries to separate infra churn from semantic regressions.
+   - continue BMC semantic closure on multiclock + sequence-subroutine buckets
+     with strict bucket case-ID drift gating.
+   - mutation generation/reporting should consume formal reason-family deltas to
+     prioritize mutator profiles against active breakage classes.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59)
 
 1. Stabilized LEC `CIRCT_VERILOG_ERROR` reason normalization in all primary

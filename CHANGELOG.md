@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1100 - February 11, 2026
+
+### Formal Runner Hardening: LEC `circt-verilog` ETXTBSY Retry + Fallback Binary
+
+1. Hardened all LEC runners against transient executable relink contention:
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. Added ETXTBSY mitigation flow for verilog frontend stage:
+   - detect wrapper diagnostic `failed to run command ... Text file busy`
+   - wait `CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS` (default `1`)
+   - copy `CIRCT_VERILOG` into per-run tempdir and retry from copied binary
+3. Added stable reason token:
+   - `runner_command_text_file_busy`
+4. Added regression coverage:
+   - `test/Tools/run-sv-tests-lec-verilog-text-file-busy-retry.test`
+   - `test/Tools/run-verilator-verification-circt-lec-verilog-text-file-busy-retry.test`
+   - `test/Tools/run-yosys-sva-circt-lec-verilog-text-file-busy-retry.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-sv-tests-lec-verilog-error-reason.test`
+  - `build-test/test/Tools/run-sv-tests-lec-verilog-error-timeout-wrapper-reason.test`
+  - `build-test/test/Tools/run-sv-tests-lec-verilog-text-file-busy-retry.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-error-diag.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-verilog-error-timeout-wrapper-reason.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-verilog-text-file-busy-retry.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-error-diag.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-verilog-error-timeout-wrapper-reason.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-verilog-text-file-busy-retry.test`
+  - PASS (9/9)
+- External filtered cadence checks (explicit `build-test/bin` tools):
+  - `sv-tests` `16.15--property-iff-uvm`
+  - `verilator-verification` `assert_changed`
+  - `yosys/tests/sva` `basic00`
+  - all progressed past verilog ETXTBSY into downstream `CIRCT_OPT_ERROR`
+    timeout-wrapper failures, confirming the verilog-stage ETXTBSY mitigation is
+    effective.
+
 ## Iteration 1099 - February 11, 2026
 
 ### `circt-mut` External Formal `summary.tsv` Schema Guard + Strict Modes
