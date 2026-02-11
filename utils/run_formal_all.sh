@@ -44,6 +44,10 @@ Options:
                          Fail when LEC timeout-case count increases vs baseline
   --fail-on-new-lec-timeout-case-ids
                          Fail when LEC timeout case IDs increase vs baseline
+  --fail-on-new-lec-timeout-class-cases
+                         Fail when LEC timeout class-case counts increase vs
+                         baseline (`lec_timeout_class_{solver_budget,
+                         preprocess,model_size,unknown}_cases`)
   --fail-on-new-bmc-unknown-cases
                          Fail when BMC unknown-case count increases vs baseline
   --fail-on-new-bmc-drop-remark-cases
@@ -1824,6 +1828,7 @@ FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_LEC_TIMEOUT_CASES=0
 FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS=0
+FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=0
@@ -2175,6 +2180,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_TIMEOUT_CASES=1; shift ;;
     --fail-on-new-lec-timeout-case-ids)
       FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS=1; shift ;;
+    --fail-on-new-lec-timeout-class-cases)
+      FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1; shift ;;
     --fail-on-new-bmc-unknown-cases)
       FAIL_ON_NEW_BMC_UNKNOWN_CASES=1; shift ;;
     --fail-on-new-bmc-drop-remark-cases)
@@ -4258,6 +4265,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_BMC_TIMEOUT_CASES=1
   FAIL_ON_NEW_LEC_TIMEOUT_CASES=1
   FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS=1
+  FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=1
@@ -7337,6 +7345,20 @@ def normalize(token: str) -> str:
         value = "unknown"
     return value
 
+def classify_timeout_diag(diag_token: str) -> str:
+    raw = (diag_token or "").strip().upper()
+    if not raw:
+        return "unknown"
+    # Preprocess/lowering pipeline timeouts should be distinguished from
+    # generic solver budget exhaustion.
+    if re.search(r"(CIRCT_OPT|CIRCT_VERILOG|IMPORT|PARSE|LOWER|PREPROCESS)", raw):
+        return "preprocess"
+    if re.search(r"(MODEL_SIZE|STATE_SPACE|BITBLAST|CNF_SIZE|MEMORY)", raw):
+        return "model_size"
+    if re.search(r"(SOLVER|SMT|Z3|BUDGET|TIMEOUT|^TO$)", raw):
+        return "solver_budget"
+    return "unknown"
+
 counts = defaultdict(int)
 rows = 0
 with path.open(encoding="utf-8") as f:
@@ -7365,6 +7387,8 @@ with path.open(encoding="utf-8") as f:
             counts[f"lec_status_{status}_diag_{diag}_cases"] += 1
             if status == "timeout":
                 counts[f"lec_timeout_diag_{diag}_cases"] += 1
+                timeout_class = classify_timeout_diag(maybe_diag)
+                counts[f"lec_timeout_class_{timeout_class}_cases"] += 1
             if explicit_diag:
                 counts["lec_diag_explicit_cases"] += 1
             elif used_path_fallback:
@@ -7373,6 +7397,7 @@ with path.open(encoding="utf-8") as f:
             counts["lec_diag_missing_cases"] += 1
             if status == "timeout":
                 counts["lec_timeout_diag_missing_cases"] += 1
+                counts["lec_timeout_class_unknown_cases"] += 1
 
 if rows <= 0:
     print("")
@@ -7383,6 +7408,10 @@ for counter_key in (
     "lec_diag_path_fallback_cases",
     "lec_diag_missing_cases",
     "lec_timeout_diag_missing_cases",
+    "lec_timeout_class_solver_budget_cases",
+    "lec_timeout_class_preprocess_cases",
+    "lec_timeout_class_model_size_cases",
+    "lec_timeout_class_unknown_cases",
 ):
     counts[counter_key] += 0
 counts["lec_timeout_cases"] = counts.get("lec_status_timeout_cases", 0)
@@ -11493,6 +11522,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS" == "1" || \
+      "$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" == "1" || \
@@ -11539,6 +11569,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_TIMEOUT_CASES="$FAIL_ON_NEW_BMC_TIMEOUT_CASES" \
   FAIL_ON_NEW_LEC_TIMEOUT_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CASES" \
   FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS="$FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS" \
+  FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES="$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" \
@@ -11904,6 +11935,9 @@ fail_on_new_lec_timeout_cases = (
 )
 fail_on_new_lec_timeout_case_ids = (
     os.environ.get("FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS", "0") == "1"
+)
+fail_on_new_lec_timeout_class_cases = (
+    os.environ.get("FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES", "0") == "1"
 )
 fail_on_new_bmc_unknown_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_UNKNOWN_CASES", "0") == "1"
@@ -12569,6 +12603,29 @@ for key, current_row in summary.items():
                 if current_timeout > baseline_timeout:
                     gate_errors.append(
                         f"{suite} {mode}: lec_timeout_cases increased ({baseline_timeout} -> {current_timeout}, window={baseline_window})"
+                    )
+        if fail_on_new_lec_timeout_class_cases:
+            timeout_class_keys = [
+                "lec_timeout_class_solver_budget_cases",
+                "lec_timeout_class_preprocess_cases",
+                "lec_timeout_class_model_size_cases",
+                "lec_timeout_class_unknown_cases",
+            ]
+            for timeout_class_key in timeout_class_keys:
+                baseline_class_values = []
+                for counts in parsed_counts:
+                    if timeout_class_key in counts:
+                        baseline_class_values.append(int(counts[timeout_class_key]))
+                if not baseline_class_values:
+                    if strict_gate:
+                        continue
+                    baseline_timeout_class = 0
+                else:
+                    baseline_timeout_class = min(baseline_class_values)
+                current_timeout_class = int(current_counts.get(timeout_class_key, 0))
+                if current_timeout_class > baseline_timeout_class:
+                    gate_errors.append(
+                        f"{suite} {mode}: {timeout_class_key} increased ({baseline_timeout_class} -> {current_timeout_class}, window={baseline_window})"
                     )
         if fail_on_new_lec_diag_path_fallback_cases:
             baseline_diag_path_fallback_values = []

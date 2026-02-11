@@ -9,6 +9,33 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 19:14)
+
+1. Added normalized LEC timeout-class telemetry in `run_formal_all.sh`:
+   - `lec_timeout_class_solver_budget_cases`
+   - `lec_timeout_class_preprocess_cases`
+   - `lec_timeout_class_model_size_cases`
+   - `lec_timeout_class_unknown_cases`
+2. Added strict-gate timeout-class drift control:
+   - `--fail-on-new-lec-timeout-class-cases`
+   - detects class-count increases vs baseline for `LEC*` lanes.
+3. Strict-gate behavior:
+   - `--strict-gate` now enables timeout-class drift checks.
+   - legacy baseline compatibility preserved (if historical rows predate class
+     counters, strict mode skips class drift enforcement until telemetry exists).
+4. New regression lock:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout-class-cases.test`
+5. External sanity:
+   - `/home/thomas-ahle/verilator-verification` LEC filtered slice
+     (`assert_past|assert_stable`) remains PASS and now emits zeroed timeout
+     class counters explicitly.
+6. Remaining strategic limitations:
+   - class taxonomy currently inferred from diag tags only; it still needs
+     richer provenance wiring from runners/passes for higher-fidelity root cause
+     attribution (pipeline stage + solver transcript class + model-size hints).
+   - BMC multiclock/subroutine semantic closure still needs additional targeted
+     attribution and strict-gate coverage.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 19:12)
 
 1. Added LEC timeout provenance buckets in `run_formal_all.sh` summaries:
