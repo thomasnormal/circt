@@ -3764,10 +3764,8 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
   });
   for (auto combOp : combinationalOps) {
     auto parentModule = combOp->getParentOfType<hw::HWModuleOp>();
-    if (!parentModule) {
-      combOp.emitError("expected llhd.combinational in hw.module for LEC");
-      return signalPassFailure();
-    }
+    if (!parentModule)
+      continue;
     auto stateIt = moduleStates.find(parentModule.getOperation());
     if (stateIt == moduleStates.end()) {
       combOp.emitError("missing per-module state while lowering "
@@ -3785,10 +3783,8 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
 
   for (auto sigOp : signals) {
     auto parentModule = sigOp->getParentOfType<hw::HWModuleOp>();
-    if (!parentModule) {
-      sigOp.emitError("expected llhd.signal in hw.module for LEC");
-      return signalPassFailure();
-    }
+    if (!parentModule)
+      continue;
     auto stateIt = moduleStates.find(parentModule.getOperation());
     if (stateIt == moduleStates.end()) {
       sigOp.emitError(
@@ -3828,7 +3824,11 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
 
   bool hasLLHD = false;
   module.walk([&](Operation *op) {
-    if (isa<llhd::LLHDDialect>(op->getDialect()))
+    if (!isa<llhd::LLHDDialect>(op->getDialect()))
+      return;
+    // LEC only reasons about hw.module bodies. Residual LLHD in helper
+    // functions/classes outside hw.module should not fail this pass.
+    if (op->getParentOfType<hw::HWModuleOp>())
       hasLLHD = true;
   });
   if (hasLLHD && requireNoLLHD) {
