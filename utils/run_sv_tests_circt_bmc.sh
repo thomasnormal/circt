@@ -40,7 +40,7 @@ BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
 # After these passes complete, the actual assertions are present and checked correctly.
 # Setting this to 1 would cause false SKIP results (e.g., 9/26 instead of 23/26 pass rate).
 NO_PROPERTY_AS_SKIP="${NO_PROPERTY_AS_SKIP:-0}"
-TAG_REGEX="${TAG_REGEX:-(^| )16\\.|(^| )9\\.4\\.4}"
+TAG_REGEX="${TAG_REGEX:-}"
 TEST_FILTER="${TEST_FILTER:-}"
 OUT="${OUT:-$PWD/sv-tests-bmc-results.txt}"
 mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
@@ -52,7 +52,11 @@ UVM_TAG_REGEX="${UVM_TAG_REGEX:-(^| )uvm( |$)}"
 INCLUDE_UVM_TAGS="${INCLUDE_UVM_TAGS:-0}"
 TAG_REGEX_EFFECTIVE="$TAG_REGEX"
 if [[ "$INCLUDE_UVM_TAGS" == "1" ]]; then
-  TAG_REGEX_EFFECTIVE="($TAG_REGEX_EFFECTIVE)|$UVM_TAG_REGEX"
+  if [[ -n "$TAG_REGEX_EFFECTIVE" ]]; then
+    TAG_REGEX_EFFECTIVE="($TAG_REGEX_EFFECTIVE)|$UVM_TAG_REGEX"
+  else
+    TAG_REGEX_EFFECTIVE="$UVM_TAG_REGEX"
+  fi
 fi
 
 resolve_default_uvm_path() {
@@ -127,6 +131,11 @@ UVM_PATH="${UVM_PATH:-$(resolve_default_uvm_path)}"
 
 if [[ ! -d "$SV_TESTS_DIR/tests" ]]; then
   echo "sv-tests directory not found: $SV_TESTS_DIR" >&2
+  exit 1
+fi
+
+if [[ -z "$TAG_REGEX" && -z "$TEST_FILTER" ]]; then
+  echo "must set TAG_REGEX or TEST_FILTER explicitly (no default filter)" >&2
   exit 1
 fi
 
@@ -264,7 +273,7 @@ while IFS= read -r -d '' sv; do
     skip=$((skip + 1))
     continue
   fi
-  if ! [[ "$tags" =~ $TAG_REGEX_EFFECTIVE ]]; then
+  if [[ -n "$TAG_REGEX_EFFECTIVE" ]] && ! [[ "$tags" =~ $TAG_REGEX_EFFECTIVE ]]; then
     skip=$((skip + 1))
     continue
   fi
@@ -295,6 +304,7 @@ while IFS= read -r -d '' sv; do
   if [[ -n "$should_fail_because" ]]; then
     should_fail="1"
   fi
+  force_xfail=0
   expect="${expect_mode[$base]-}"
   case "$expect" in
     skip)
@@ -305,6 +315,7 @@ while IFS= read -r -d '' sv; do
       run_bmc=0
       ;;
     xfail)
+      force_xfail=1
       should_fail="1"
       ;;
   esac
@@ -396,10 +407,13 @@ while IFS= read -r -d '' sv; do
 
   if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
     record_drop_remark_case "$base" "$sv" "$verilog_log"
+    if [[ "$force_xfail" == "1" ]]; then
+      result="XFAIL"
+      xfail=$((xfail + 1))
     # Treat expected compile failures as PASS for negative compilation/parsing
     # tests. Simulation-negative tests are expected to compile and are handled
     # via SAT/UNSAT classification below.
-    if [[ "$expect_compile_fail" == "1" ]]; then
+    elif [[ "$expect_compile_fail" == "1" ]]; then
       result="PASS"
       pass=$((pass + 1))
     else
@@ -412,7 +426,10 @@ while IFS= read -r -d '' sv; do
   record_drop_remark_case "$base" "$sv" "$verilog_log"
 
   if [[ "$run_bmc" == "0" ]]; then
-    if [[ "$expect_compile_fail" == "1" ]]; then
+    if [[ "$force_xfail" == "1" ]]; then
+      result="XPASS"
+      xpass=$((xpass + 1))
+    elif [[ "$expect_compile_fail" == "1" ]]; then
       result="FAIL"
       fail=$((fail + 1))
     else
@@ -543,7 +560,15 @@ while IFS= read -r -d '' sv; do
     continue
   fi
 
-  if [[ "$expect_bmc_violation" == "1" ]]; then
+  if [[ "$force_xfail" == "1" ]]; then
+    if [[ "$result" == "PASS" ]]; then
+      result="XPASS"
+      xpass=$((xpass + 1))
+    else
+      result="XFAIL"
+      xfail=$((xfail + 1))
+    fi
+  elif [[ "$expect_bmc_violation" == "1" ]]; then
     case "$result" in
       PASS) pass=$((pass + 1)) ;;
       FAIL) fail=$((fail + 1)) ;;
