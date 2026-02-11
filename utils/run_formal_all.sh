@@ -65,6 +65,12 @@ Options:
                          Fail when new LEC runner-command reason counter keys
                          (`lec_runner_command_reason_*_cases`) appear vs
                          baseline
+  --fail-on-new-lec-runner-command-case-ids
+                         Fail when new LEC runner-command case IDs appear vs
+                         baseline
+  --fail-on-new-lec-runner-command-case-reasons
+                         Fail when new LEC runner-command case+reason tuples
+                         appear vs baseline
   --fail-on-new-lec-circt-verilog-error-case-ids
                          Fail when LEC `CIRCT_VERILOG_ERROR` case IDs increase
                          vs baseline
@@ -1864,6 +1870,8 @@ FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS=0
 FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_REASONS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS=0
 FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS=0
+FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS=0
+FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=0
 FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=0
@@ -2231,6 +2239,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS=1; shift ;;
     --fail-on-new-lec-runner-command-reason-keys)
       FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS=1; shift ;;
+    --fail-on-new-lec-runner-command-case-ids)
+      FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS=1; shift ;;
+    --fail-on-new-lec-runner-command-case-reasons)
+      FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS=1; shift ;;
     --fail-on-new-lec-circt-verilog-error-case-ids)
       FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=1; shift ;;
     --fail-on-new-lec-circt-verilog-error-case-reasons)
@@ -4328,6 +4340,8 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_REASONS=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS=1
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS=1
+  FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS=1
+  FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=1
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1
@@ -11660,6 +11674,39 @@ def collect_lec_circt_verilog_error_case_reasons(out_dir: Path):
                     case_reason_ids.setdefault(key, set()).add(f"{case_id}::{reason}")
     return {key: ";".join(sorted(values)) for key, values in case_reason_ids.items()}
 
+def collect_lec_runner_command_case_reasons(
+    lec_circt_opt_error_case_reasons: dict, lec_circt_verilog_error_case_reasons: dict
+):
+    case_reason_ids = {}
+    for source in (lec_circt_opt_error_case_reasons, lec_circt_verilog_error_case_reasons):
+        for key, raw_values in source.items():
+            if not raw_values:
+                continue
+            for token in raw_values.split(";"):
+                token = token.strip()
+                if not token or "::" not in token:
+                    continue
+                _, reason = token.rsplit("::", 1)
+                if not reason.startswith("runner_command_"):
+                    continue
+                case_reason_ids.setdefault(key, set()).add(token)
+    return {key: ";".join(sorted(values)) for key, values in case_reason_ids.items()}
+
+def collect_lec_runner_command_case_ids(lec_runner_command_case_reasons: dict):
+    case_ids = {}
+    for key, raw_values in lec_runner_command_case_reasons.items():
+        if not raw_values:
+            continue
+        for token in raw_values.split(";"):
+            token = token.strip()
+            if not token or "::" not in token:
+                continue
+            case_id, _ = token.rsplit("::", 1)
+            case_id = case_id.strip()
+            if case_id:
+                case_ids.setdefault(key, set()).add(case_id)
+    return {key: ";".join(sorted(values)) for key, values in case_ids.items()}
+
 def read_baseline_int(row, key, summary_counts):
     raw = row.get(key)
     if raw is not None and raw != "":
@@ -11697,6 +11744,12 @@ lec_circt_opt_error_case_ids = collect_lec_circt_opt_error_case_ids(out_dir)
 lec_circt_opt_error_case_reasons = collect_lec_circt_opt_error_case_reasons(out_dir)
 lec_circt_verilog_error_case_ids = collect_lec_circt_verilog_error_case_ids(out_dir)
 lec_circt_verilog_error_case_reasons = collect_lec_circt_verilog_error_case_reasons(out_dir)
+lec_runner_command_case_reasons = collect_lec_runner_command_case_reasons(
+    lec_circt_opt_error_case_reasons, lec_circt_verilog_error_case_reasons
+)
+lec_runner_command_case_ids = collect_lec_runner_command_case_ids(
+    lec_runner_command_case_reasons
+)
 
 baseline = {}
 if baseline_path.exists():
@@ -11741,6 +11794,8 @@ if baseline_path.exists():
                 'lec_circt_opt_error_case_reasons': row.get('lec_circt_opt_error_case_reasons', ''),
                 'lec_circt_verilog_error_case_ids': row.get('lec_circt_verilog_error_case_ids', ''),
                 'lec_circt_verilog_error_case_reasons': row.get('lec_circt_verilog_error_case_reasons', ''),
+                'lec_runner_command_case_ids': row.get('lec_runner_command_case_ids', ''),
+                'lec_runner_command_case_reasons': row.get('lec_runner_command_case_reasons', ''),
             }
 
 for row in rows:
@@ -11779,6 +11834,8 @@ for row in rows:
         'lec_circt_opt_error_case_reasons': lec_circt_opt_error_case_reasons.get((row['suite'], row['mode']), ''),
         'lec_circt_verilog_error_case_ids': lec_circt_verilog_error_case_ids.get((row['suite'], row['mode']), ''),
         'lec_circt_verilog_error_case_reasons': lec_circt_verilog_error_case_reasons.get((row['suite'], row['mode']), ''),
+        'lec_runner_command_case_ids': lec_runner_command_case_ids.get((row['suite'], row['mode']), ''),
+        'lec_runner_command_case_reasons': lec_runner_command_case_reasons.get((row['suite'], row['mode']), ''),
     }
 
 baseline_path.parent.mkdir(parents=True, exist_ok=True)
@@ -11811,6 +11868,8 @@ with baseline_path.open('w', newline='') as f:
             'lec_circt_opt_error_case_reasons',
             'lec_circt_verilog_error_case_ids',
             'lec_circt_verilog_error_case_reasons',
+            'lec_runner_command_case_ids',
+            'lec_runner_command_case_reasons',
         ],
         delimiter='\t',
     )
@@ -11875,6 +11934,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS" == "1" || \
       "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS" == "1" || \
+      "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS" == "1" || \
+      "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" == "1" || \
@@ -11931,6 +11992,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_REASONS="$FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_REASONS" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS" \
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS" \
+  FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS" \
+  FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" \
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" \
@@ -12500,6 +12563,40 @@ current_lec_circt_verilog_error_case_reasons = (
     collect_lec_circt_verilog_error_case_reasons(Path(os.environ["OUT_DIR"]))
 )
 
+def collect_lec_runner_command_case_reasons(
+    lec_circt_opt_error_case_reasons: dict, lec_circt_verilog_error_case_reasons: dict
+):
+    case_reasons = {}
+    for source in (lec_circt_opt_error_case_reasons, lec_circt_verilog_error_case_reasons):
+        for key, reason_tokens in source.items():
+            for token in reason_tokens:
+                if "::" not in token:
+                    continue
+                _, reason = token.rsplit("::", 1)
+                if reason.startswith("runner_command_"):
+                    case_reasons.setdefault(key, set()).add(token)
+    return case_reasons
+
+def collect_lec_runner_command_case_ids(lec_runner_command_case_reasons: dict):
+    case_ids = {}
+    for key, reason_tokens in lec_runner_command_case_reasons.items():
+        for token in reason_tokens:
+            if "::" not in token:
+                continue
+            case_id, _ = token.rsplit("::", 1)
+            case_id = case_id.strip()
+            if case_id:
+                case_ids.setdefault(key, set()).add(case_id)
+    return case_ids
+
+current_lec_runner_command_case_reasons = collect_lec_runner_command_case_reasons(
+    current_lec_circt_opt_error_case_reasons,
+    current_lec_circt_verilog_error_case_reasons,
+)
+current_lec_runner_command_case_ids = collect_lec_runner_command_case_ids(
+    current_lec_runner_command_case_reasons
+)
+
 history = {}
 with baseline_path.open() as f:
     reader = csv.DictReader(f, delimiter='\t')
@@ -12540,6 +12637,12 @@ fail_on_new_lec_circt_verilog_error_reason_keys = (
 )
 fail_on_new_lec_runner_command_reason_keys = (
     os.environ.get("FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS", "0") == "1"
+)
+fail_on_new_lec_runner_command_case_ids = (
+    os.environ.get("FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS", "0") == "1"
+)
+fail_on_new_lec_runner_command_case_reasons = (
+    os.environ.get("FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS", "0") == "1"
 )
 fail_on_new_lec_circt_verilog_error_case_ids = (
     os.environ.get("FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS", "0") == "1"
@@ -13076,6 +13179,59 @@ for key, current_row in summary.items():
                     sample += ", ..."
                 gate_errors.append(
                     f"{suite} {mode}: new LEC CIRCT_VERILOG_ERROR case+reason tuples observed (baseline={len(baseline_verilog_error_case_reasons)} current={len(current_verilog_error_case_reasons)}, window={baseline_window}): {sample}"
+                )
+    if fail_on_new_lec_runner_command_case_ids and mode.startswith("LEC"):
+        baseline_runner_command_case_ids_raw = [
+            row.get("lec_runner_command_case_ids") for row in compare_rows
+        ]
+        if any(raw is not None for raw in baseline_runner_command_case_ids_raw):
+            baseline_runner_command_case_ids = set()
+            for raw in baseline_runner_command_case_ids_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_runner_command_case_ids.add(token)
+            current_runner_command_case_ids = current_lec_runner_command_case_ids.get(
+                key, set()
+            )
+            new_runner_command_case_ids = sorted(
+                current_runner_command_case_ids - baseline_runner_command_case_ids
+            )
+            if new_runner_command_case_ids:
+                sample = ", ".join(new_runner_command_case_ids[:3])
+                if len(new_runner_command_case_ids) > 3:
+                    sample += ", ..."
+                gate_errors.append(
+                    f"{suite} {mode}: new LEC runner-command case IDs observed (baseline={len(baseline_runner_command_case_ids)} current={len(current_runner_command_case_ids)}, window={baseline_window}): {sample}"
+                )
+    if fail_on_new_lec_runner_command_case_reasons and mode.startswith("LEC"):
+        baseline_runner_command_case_reasons_raw = [
+            row.get("lec_runner_command_case_reasons") for row in compare_rows
+        ]
+        if any(raw is not None for raw in baseline_runner_command_case_reasons_raw):
+            baseline_runner_command_case_reasons = set()
+            for raw in baseline_runner_command_case_reasons_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_runner_command_case_reasons.add(token)
+            current_runner_command_case_reasons = (
+                current_lec_runner_command_case_reasons.get(key, set())
+            )
+            new_runner_command_case_reasons = sorted(
+                current_runner_command_case_reasons
+                - baseline_runner_command_case_reasons
+            )
+            if new_runner_command_case_reasons:
+                sample = ", ".join(new_runner_command_case_reasons[:2])
+                if len(new_runner_command_case_reasons) > 2:
+                    sample += ", ..."
+                gate_errors.append(
+                    f"{suite} {mode}: new LEC runner-command case+reason tuples observed (baseline={len(baseline_runner_command_case_reasons)} current={len(current_runner_command_case_reasons)}, window={baseline_window}): {sample}"
                 )
     if mode.startswith("BMC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
