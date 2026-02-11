@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1007 - February 11, 2026
+
+### `circt-mut run`: Policy-Mode Mapping for Post-Run Report Profiles
+
+1. Extended `circt-mut run` post-run report forwarding in
+   `tools/circt-mut/circt-mut.cpp` to support policy-mode config handoff:
+   - `[run] report_policy_mode = smoke|nightly`
+   - `[run] report_policy_stop_on_fail = <bool>`
+2. Added run-level mapping/validation behavior:
+   - maps mode/stop tuple to concrete report policy profile:
+     - `smoke + false` -> `formal-regression-matrix-guard-smoke`
+     - `smoke + true` -> `formal-regression-matrix-stop-on-fail-guard-smoke`
+     - `nightly + false` -> `formal-regression-matrix-guard-nightly`
+     - `nightly + true` -> `formal-regression-matrix-stop-on-fail-guard-nightly`
+   - requires `report_mode = matrix|all` for policy-mode use.
+   - requires `report_policy_mode` when `report_policy_stop_on_fail` is set.
+   - preserves explicit profile precedence: if
+     `report_policy_profile(s)` is set, mode mapping is skipped.
+3. Added regression coverage:
+   - `test/Tools/circt-mut-run-with-report-config-policy-mode-stop-on-fail.test`
+   - `test/Tools/circt-mut-run-with-report-config-policy-stop-on-fail-requires-mode.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-with-report-*.test test/Tools/circt-mut-run-with-report-on-fail-*.test test/Tools/circt-mut-run-help.test`: PASS (14/14)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (224/224)
+- External filtered formal cadence:
+  - `LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-run-policy-mode-pass-through-20260211 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1006 - February 11, 2026
 
 ### `circt-mut run`: `[run] report_*` Pass-Through for Post-Run Governance
