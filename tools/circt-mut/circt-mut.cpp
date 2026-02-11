@@ -267,6 +267,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1|\n";
+  os << "                           formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1|\n";
   os << "                           formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1|\n";
   os << "                           formal-regression-matrix-external-formal-compile-mode-budget-v1|\n";
   os << "                           formal-regression-matrix-provenance-guard|\n";
@@ -285,6 +286,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-composite-strict|\n";
   os << "                           formal-regression-matrix-composite-native-strict|\n";
   os << "                           formal-regression-matrix-composite-native-strict-formal-trend-v1|\n";
+  os << "                           formal-regression-matrix-composite-native-strict-formal-trend-v2|\n";
   os << "                           formal-regression-matrix-composite-trend-nightly|\n";
   os << "                           formal-regression-matrix-composite-trend-strict|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-smoke|\n";
@@ -292,6 +294,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-composite-stop-on-fail-strict|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-native-strict|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1|\n";
+  os << "                           formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v2|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-trend-nightly|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-trend-strict\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
@@ -9040,6 +9043,41 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return applyComposite("formal-regression-matrix-trend-history-quality");
   }
   if (profile ==
+      "formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1") {
+    for (StringRef key : {
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_error_bucket_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_semantic_diag_subfamily_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_semantic_diag_subfamily_case_reasons_cardinality",
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_runner_command_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_runner_command_case_reasons_cardinality",
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_circt_opt_error_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_circt_opt_error_case_reasons_cardinality",
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_circt_verilog_error_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_circt_verilog_error_case_reasons_cardinality",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_semantic_diag_subfamily_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_semantic_diag_subfamily_case_reasons_cardinality",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_runner_command_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_runner_command_case_reasons_cardinality",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_circt_opt_error_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_circt_opt_error_case_reasons_cardinality",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_circt_verilog_error_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_circt_verilog_error_case_reasons_cardinality",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_semantic_diag_subfamily_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_semantic_diag_subfamily_case_reasons_cardinality",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_runner_command_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_runner_command_case_reasons_cardinality",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_circt_opt_error_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_circt_opt_error_case_reasons_cardinality",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_circt_verilog_error_case_ids_cardinality",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_circt_verilog_error_case_reasons_cardinality",
+         }) {
+      appendUniqueRule(opts.failIfTrendDeltaGtRules, key, 0.0);
+    }
+    return applyComposite("formal-regression-matrix-trend-history-quality");
+  }
+  if (profile ==
       "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1") {
     for (StringRef key : {
              "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_class_preprocess_cases",
@@ -9174,6 +9212,13 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            applyComposite(
                "formal-regression-matrix-external-formal-compile-mode-budget-v1");
   }
+  if (profile ==
+      "formal-regression-matrix-composite-native-strict-formal-trend-v2") {
+    return applyComposite(
+               "formal-regression-matrix-composite-native-strict-formal-trend-v1") &&
+           applyComposite(
+               "formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1");
+  }
   if (profile == "formal-regression-matrix-composite-trend-nightly") {
     return applyComposite("formal-regression-matrix-lane-trend-nightly") &&
            applyComposite("formal-regression-matrix-runtime-trend") &&
@@ -9213,6 +9258,13 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1") &&
            applyComposite(
                "formal-regression-matrix-external-formal-compile-mode-budget-v1");
+  }
+  if (profile ==
+      "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v2") {
+    return applyComposite(
+               "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1") &&
+           applyComposite(
+               "formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1");
   }
   if (profile ==
       "formal-regression-matrix-composite-stop-on-fail-trend-nightly") {
@@ -9258,6 +9310,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-semantic-diag-family-guard|"
            "formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|"
            "formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1|"
+           "formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1|"
            "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1|"
            "formal-regression-matrix-external-formal-compile-mode-budget-v1|"
            "formal-regression-matrix-provenance-guard|"
@@ -9276,6 +9329,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-composite-strict|"
            "formal-regression-matrix-composite-native-strict|"
            "formal-regression-matrix-composite-native-strict-formal-trend-v1|"
+           "formal-regression-matrix-composite-native-strict-formal-trend-v2|"
            "formal-regression-matrix-composite-trend-nightly|"
            "formal-regression-matrix-composite-trend-strict|"
            "formal-regression-matrix-composite-stop-on-fail-smoke|"
@@ -9283,6 +9337,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-composite-stop-on-fail-strict|"
            "formal-regression-matrix-composite-stop-on-fail-native-strict|"
            "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1|"
+           "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v2|"
            "formal-regression-matrix-composite-stop-on-fail-trend-nightly|"
            "formal-regression-matrix-composite-stop-on-fail-trend-strict)")
               .str();

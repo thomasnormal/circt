@@ -9,6 +9,30 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++)
+
+1. Closed the strict-identity telemetry gap between `run_formal_all` and
+   `circt-mut` trend governance:
+   - lane summaries now emit identity-cardinality counters for LEC and BMC
+     strict artifacts (case-id/case+reason families).
+2. Added dedicated mutation profile:
+   - `formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1`
+   and staged composite rollout profiles:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v2`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v2`
+3. Current remaining limitations:
+   - identity trend guard currently covers LEC strict identity families only;
+     equivalent BMC identity trend policy is not yet enforced in `circt-mut`.
+   - OpenTitan identity-family trend gates are still policy-optional rather
+     than first-class in the new v1 profile.
+4. Next long-term features:
+   - add BMC identity trend profile for semantic-bucket/timeout/provenance
+     cardinality families.
+   - add OpenTitan strict identity trend profile and wire into native-strict
+     formal v3 composites.
+   - add volume-normalized identity drift budgets (per-case-family baselines),
+     not only absolute cardinality deltas.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++)
 
 1. Added stop-on-fail counterpart for release-grade native strict formal trend

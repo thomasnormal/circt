@@ -7506,6 +7506,18 @@ def normalize(token: str) -> str:
         value = "unknown"
     return value
 
+def compose_case_id(base: str, file_path: str, explicit_diag: str) -> str:
+    case_id = ""
+    if base:
+        case_id = base
+        if explicit_diag:
+            case_id = f"{base}#{explicit_diag.upper()}"
+    elif file_path:
+        case_id = file_path
+        if explicit_diag:
+            case_id = f"{file_path}#{explicit_diag.upper()}"
+    return case_id
+
 def classify_timeout_diag(diag_token: str) -> str:
     raw = (diag_token or "").strip().upper()
     if not raw:
@@ -7568,6 +7580,16 @@ def classify_semantic_diag_subbucket(diag: str, reason_key: str) -> str:
     return "semantic_diag_error"
 
 counts = defaultdict(int)
+timeout_case_ids = set()
+circt_opt_error_case_ids = set()
+circt_opt_error_case_reasons = set()
+circt_verilog_error_case_ids = set()
+circt_verilog_error_case_reasons = set()
+runner_command_case_ids = set()
+runner_command_case_reasons = set()
+error_bucket_case_ids = set()
+semantic_diag_subfamily_case_ids = set()
+semantic_diag_subfamily_case_reasons = set()
 rows = 0
 with path.open(encoding="utf-8") as f:
     for line in f:
@@ -7578,6 +7600,10 @@ with path.open(encoding="utf-8") as f:
         if not parts:
             continue
         status = normalize(parts[0].strip())
+        base = parts[1].strip() if len(parts) > 1 else ""
+        file_path = parts[2].strip() if len(parts) > 2 else ""
+        explicit_diag = parts[5].strip() if len(parts) > 5 else ""
+        case_id = compose_case_id(base, file_path, explicit_diag)
         reason_token = parts[6].strip() if len(parts) > 6 else ""
         timeout_class_override = ""
         if reason_token:
@@ -7586,8 +7612,7 @@ with path.open(encoding="utf-8") as f:
         counts["lec_cases"] += 1
         counts[f"lec_status_{status}_cases"] += 1
 
-        case_path = parts[2].strip() if len(parts) > 2 else ""
-        explicit_diag = parts[5].strip() if len(parts) > 5 else ""
+        case_path = file_path
         maybe_diag = explicit_diag
         used_path_fallback = False
         if not maybe_diag and "#" in case_path:
@@ -7605,28 +7630,59 @@ with path.open(encoding="utf-8") as f:
                     else classify_timeout_diag(maybe_diag)
                 )
                 counts[f"lec_timeout_class_{timeout_class}_cases"] += 1
+                if case_id:
+                    timeout_case_ids.add(case_id)
             if status == "error" and diag == "circt_opt_error":
                 reason_key = normalize(reason_token) if reason_token else "missing"
                 counts[f"lec_circt_opt_error_reason_{reason_key}_cases"] += 1
+                if case_id:
+                    circt_opt_error_case_ids.add(case_id)
+                    circt_opt_error_case_reasons.add(f"{case_id}::{reason_key}")
                 if reason_key.startswith("runner_command_"):
                     counts[f"lec_runner_command_reason_{reason_key}_cases"] += 1
                     counts["lec_runner_command_cases"] += 1
-                counts[f"lec_error_bucket_{classify_error_bucket(diag, reason_key)}_cases"] += 1
+                    if case_id:
+                        runner_command_case_ids.add(case_id)
+                        runner_command_case_reasons.add(f"{case_id}::{reason_key}")
+                error_bucket = classify_error_bucket(diag, reason_key)
+                counts[f"lec_error_bucket_{error_bucket}_cases"] += 1
+                if case_id:
+                    error_bucket_case_ids.add(f"{error_bucket}::{case_id}")
             if status == "error" and diag == "circt_verilog_error":
                 reason_key = normalize(reason_token) if reason_token else "missing"
                 counts[f"lec_circt_verilog_error_reason_{reason_key}_cases"] += 1
+                if case_id:
+                    circt_verilog_error_case_ids.add(case_id)
+                    circt_verilog_error_case_reasons.add(f"{case_id}::{reason_key}")
                 if reason_key.startswith("runner_command_"):
                     counts[f"lec_runner_command_reason_{reason_key}_cases"] += 1
                     counts["lec_runner_command_cases"] += 1
-                counts[f"lec_error_bucket_{classify_error_bucket(diag, reason_key)}_cases"] += 1
+                    if case_id:
+                        runner_command_case_ids.add(case_id)
+                        runner_command_case_reasons.add(f"{case_id}::{reason_key}")
+                error_bucket = classify_error_bucket(diag, reason_key)
+                counts[f"lec_error_bucket_{error_bucket}_cases"] += 1
+                if case_id:
+                    error_bucket_case_ids.add(f"{error_bucket}::{case_id}")
             if status == "error" and diag not in {"circt_opt_error", "circt_verilog_error"}:
                 reason_key = normalize(reason_token) if reason_token else ""
                 error_bucket = classify_error_bucket(diag, reason_key)
                 counts[f"lec_error_bucket_{error_bucket}_cases"] += 1
+                if case_id:
+                    error_bucket_case_ids.add(f"{error_bucket}::{case_id}")
                 if error_bucket == "semantic_diag_error":
                     semantic_subbucket = classify_semantic_diag_subbucket(diag, reason_key)
                     if semantic_subbucket != "semantic_diag_error":
                         counts[f"lec_error_bucket_{semantic_subbucket}_cases"] += 1
+                        subfamily = semantic_subbucket
+                        if subfamily.startswith("semantic_diag_"):
+                            subfamily = subfamily[len("semantic_diag_"):]
+                        reason_subkey = normalize(reason_token) if reason_token else "missing"
+                        if case_id:
+                            semantic_diag_subfamily_case_ids.add(f"{subfamily}::{case_id}")
+                            semantic_diag_subfamily_case_reasons.add(
+                                f"{subfamily}::{case_id}::{reason_subkey}"
+                            )
             if explicit_diag:
                 counts["lec_diag_explicit_cases"] += 1
             elif used_path_fallback:
@@ -7637,6 +7693,8 @@ with path.open(encoding="utf-8") as f:
                 counts["lec_timeout_diag_missing_cases"] += 1
                 timeout_class = timeout_class_override if timeout_class_override else "unknown"
                 counts[f"lec_timeout_class_{timeout_class}_cases"] += 1
+                if case_id:
+                    timeout_case_ids.add(case_id)
 
 if rows <= 0:
     print("")
@@ -7654,6 +7712,18 @@ for counter_key in (
 ):
     counts[counter_key] += 0
 counts["lec_timeout_cases"] = counts.get("lec_status_timeout_cases", 0)
+counts["lec_timeout_case_ids_cardinality"] = len(timeout_case_ids)
+counts["lec_circt_opt_error_case_ids_cardinality"] = len(circt_opt_error_case_ids)
+counts["lec_circt_opt_error_case_reasons_cardinality"] = len(circt_opt_error_case_reasons)
+counts["lec_circt_verilog_error_case_ids_cardinality"] = len(circt_verilog_error_case_ids)
+counts["lec_circt_verilog_error_case_reasons_cardinality"] = len(circt_verilog_error_case_reasons)
+counts["lec_runner_command_case_ids_cardinality"] = len(runner_command_case_ids)
+counts["lec_runner_command_case_reasons_cardinality"] = len(runner_command_case_reasons)
+counts["lec_error_bucket_case_ids_cardinality"] = len(error_bucket_case_ids)
+counts["lec_semantic_diag_subfamily_case_ids_cardinality"] = len(semantic_diag_subfamily_case_ids)
+counts["lec_semantic_diag_subfamily_case_reasons_cardinality"] = len(
+    semantic_diag_subfamily_case_reasons
+)
 
 parts = [f"{key}={counts[key]}" for key in sorted(counts)]
 print(" ".join(parts))
@@ -7783,6 +7853,7 @@ with path.open(encoding="utf-8") as f:
 timeout_case_ids_value = ";".join(sorted(timeout_case_ids))
 print(
     f"bmc_timeout_cases={timeout_cases} "
+    f"bmc_timeout_case_ids_cardinality={len(timeout_case_ids)} "
     f"bmc_timeout_case_ids={timeout_case_ids_value} "
     f"bmc_unknown_cases={unknown_cases}"
 )
@@ -7979,6 +8050,21 @@ for values in bucket_case_sets.values():
     classified_cases.update(values)
 
 unclassified_cases = len(all_fail_like_cases - classified_cases)
+semantic_bucket_case_ids = set()
+for case_key in all_fail_like_cases:
+    case_id, case_path = case_key
+    identity_case = case_id if case_id else case_path
+    if not identity_case:
+        identity_case = "__aggregate__"
+    buckets = [
+        bucket
+        for bucket in sorted(bucket_case_sets.keys())
+        if case_key in bucket_case_sets[bucket]
+    ]
+    if not buckets:
+        buckets = ["unclassified"]
+    for bucket in buckets:
+        semantic_bucket_case_ids.add(f"{bucket}::{identity_case}")
 
 if buckets_out:
     rows = []
@@ -8035,6 +8121,7 @@ parts = [
     f"bmc_semantic_bucket_implication_timing_cases={len(bucket_case_sets['implication_timing'])}",
     f"bmc_semantic_bucket_hierarchical_net_cases={len(bucket_case_sets['hierarchical_net'])}",
     f"bmc_semantic_bucket_unclassified_cases={unclassified_cases}",
+    f"bmc_semantic_bucket_case_ids_cardinality={len(semantic_bucket_case_ids)}",
 ]
 print(" ".join(parts))
 PY
