@@ -74,6 +74,9 @@ Options:
   --fail-on-new-lec-runner-command-cases
                          Fail when LEC runner-command case count
                          (`lec_runner_command_cases`) increases vs baseline
+  --fail-on-new-lec-error-bucket-case-ids
+                         Fail when new LEC error-bucket case IDs
+                         (`lec_error_bucket_case_ids`) appear vs baseline
   --fail-on-new-lec-circt-verilog-error-case-ids
                          Fail when LEC `CIRCT_VERILOG_ERROR` case IDs increase
                          vs baseline
@@ -1879,6 +1882,7 @@ FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS=0
 FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS=0
 FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS=0
 FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES=0
+FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=0
 FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=0
@@ -2253,6 +2257,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS=1; shift ;;
     --fail-on-new-lec-runner-command-cases)
       FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES=1; shift ;;
+    --fail-on-new-lec-error-bucket-case-ids)
+      FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS=1; shift ;;
     --fail-on-new-lec-circt-verilog-error-case-ids)
       FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=1; shift ;;
     --fail-on-new-lec-circt-verilog-error-case-reasons)
@@ -4355,6 +4361,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS=1
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS=1
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES=1
+  FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=1
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1
@@ -7458,6 +7465,19 @@ def normalize_timeout_class(token: str) -> str:
         return value
     return ""
 
+def classify_error_bucket(diag: str, reason_key: str) -> str:
+    if diag in {"circt_opt_error", "circt_verilog_error"}:
+        if reason_key.startswith("runner_command_"):
+            return "infra_runner_command"
+        if reason_key == "command_timeout":
+            return "infra_timeout"
+        if reason_key == "command_oom":
+            return "infra_oom"
+        if reason_key == "no_diag":
+            return "tool_no_diag"
+        return "tool_pipeline"
+    return "semantic_other"
+
 counts = defaultdict(int)
 rows = 0
 with path.open(encoding="utf-8") as f:
@@ -7502,12 +7522,16 @@ with path.open(encoding="utf-8") as f:
                 if reason_key.startswith("runner_command_"):
                     counts[f"lec_runner_command_reason_{reason_key}_cases"] += 1
                     counts["lec_runner_command_cases"] += 1
+                counts[f"lec_error_bucket_{classify_error_bucket(diag, reason_key)}_cases"] += 1
             if status == "error" and diag == "circt_verilog_error":
                 reason_key = normalize(reason_token) if reason_token else "missing"
                 counts[f"lec_circt_verilog_error_reason_{reason_key}_cases"] += 1
                 if reason_key.startswith("runner_command_"):
                     counts[f"lec_runner_command_reason_{reason_key}_cases"] += 1
                     counts["lec_runner_command_cases"] += 1
+                counts[f"lec_error_bucket_{classify_error_bucket(diag, reason_key)}_cases"] += 1
+            if status == "error" and diag not in {"circt_opt_error", "circt_verilog_error"}:
+                counts[f"lec_error_bucket_{classify_error_bucket(diag, '')}_cases"] += 1
             if explicit_diag:
                 counts["lec_diag_explicit_cases"] += 1
             elif used_path_fallback:
@@ -11722,6 +11746,53 @@ def collect_lec_runner_command_case_ids(lec_runner_command_case_reasons: dict):
                 case_ids.setdefault(key, set()).add(case_id)
     return {key: ";".join(sorted(values)) for key, values in case_ids.items()}
 
+def classify_lec_error_bucket(diag: str, reason: str) -> str:
+    if diag in {"CIRCT_OPT_ERROR", "CIRCT_VERILOG_ERROR"}:
+        if reason.startswith("runner_command_"):
+            return "infra_runner_command"
+        if reason == "command_timeout":
+            return "infra_timeout"
+        if reason == "command_oom":
+            return "infra_oom"
+        if reason == "no_diag":
+            return "tool_no_diag"
+        return "tool_pipeline"
+    return "semantic_other"
+
+def collect_lec_error_bucket_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
+        ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+        ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
+    ]
+    bucket_case_ids = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                status = parts[0].strip().upper() if parts else ""
+                if status != "ERROR":
+                    continue
+                base = parts[1].strip() if len(parts) > 1 else ""
+                file_path = parts[2].strip() if len(parts) > 2 else ""
+                explicit_diag = parts[5].strip() if len(parts) > 5 else ""
+                reason = parts[6].strip() if len(parts) > 6 else ""
+                diag = extract_diag_tag(file_path, explicit_diag)
+                case_id = compose_case_id(base, file_path, explicit_diag)
+                if not case_id:
+                    continue
+                bucket = classify_lec_error_bucket(diag, reason)
+                bucket_case_ids.setdefault(key, set()).add(f"{bucket}::{case_id}")
+    return {key: ";".join(sorted(values)) for key, values in bucket_case_ids.items()}
+
 def read_baseline_int(row, key, summary_counts):
     raw = row.get(key)
     if raw is not None and raw != "":
@@ -11765,6 +11836,7 @@ lec_runner_command_case_reasons = collect_lec_runner_command_case_reasons(
 lec_runner_command_case_ids = collect_lec_runner_command_case_ids(
     lec_runner_command_case_reasons
 )
+lec_error_bucket_case_ids = collect_lec_error_bucket_case_ids(out_dir)
 
 baseline = {}
 if baseline_path.exists():
@@ -11811,6 +11883,7 @@ if baseline_path.exists():
                 'lec_circt_verilog_error_case_reasons': row.get('lec_circt_verilog_error_case_reasons', ''),
                 'lec_runner_command_case_ids': row.get('lec_runner_command_case_ids', ''),
                 'lec_runner_command_case_reasons': row.get('lec_runner_command_case_reasons', ''),
+                'lec_error_bucket_case_ids': row.get('lec_error_bucket_case_ids', ''),
             }
 
 for row in rows:
@@ -11851,6 +11924,7 @@ for row in rows:
         'lec_circt_verilog_error_case_reasons': lec_circt_verilog_error_case_reasons.get((row['suite'], row['mode']), ''),
         'lec_runner_command_case_ids': lec_runner_command_case_ids.get((row['suite'], row['mode']), ''),
         'lec_runner_command_case_reasons': lec_runner_command_case_reasons.get((row['suite'], row['mode']), ''),
+        'lec_error_bucket_case_ids': lec_error_bucket_case_ids.get((row['suite'], row['mode']), ''),
     }
 
 baseline_path.parent.mkdir(parents=True, exist_ok=True)
@@ -11885,6 +11959,7 @@ with baseline_path.open('w', newline='') as f:
             'lec_circt_verilog_error_case_reasons',
             'lec_runner_command_case_ids',
             'lec_runner_command_case_reasons',
+            'lec_error_bucket_case_ids',
         ],
         delimiter='\t',
     )
@@ -11952,6 +12027,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES" == "1" || \
+      "$FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" == "1" || \
@@ -12012,6 +12088,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS" \
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS" \
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES" \
+  FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS="$FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" \
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" \
@@ -12608,12 +12685,62 @@ def collect_lec_runner_command_case_ids(lec_runner_command_case_reasons: dict):
                 case_ids.setdefault(key, set()).add(case_id)
     return case_ids
 
+def classify_lec_error_bucket(diag: str, reason: str) -> str:
+    if diag in {"CIRCT_OPT_ERROR", "CIRCT_VERILOG_ERROR"}:
+        if reason.startswith("runner_command_"):
+            return "infra_runner_command"
+        if reason == "command_timeout":
+            return "infra_timeout"
+        if reason == "command_oom":
+            return "infra_oom"
+        if reason == "no_diag":
+            return "tool_no_diag"
+        return "tool_pipeline"
+    return "semantic_other"
+
+def collect_lec_error_bucket_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
+        ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+        ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
+    ]
+    bucket_case_ids = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                status = parts[0].strip().upper() if parts else ""
+                if status != "ERROR":
+                    continue
+                base = parts[1].strip() if len(parts) > 1 else ""
+                file_path = parts[2].strip() if len(parts) > 2 else ""
+                explicit_diag = parts[5].strip() if len(parts) > 5 else ""
+                reason = parts[6].strip() if len(parts) > 6 else ""
+                diag = extract_diag_tag(file_path, explicit_diag)
+                case_id = compose_case_id(base, file_path, explicit_diag)
+                if not case_id:
+                    continue
+                bucket = classify_lec_error_bucket(diag, reason)
+                bucket_case_ids.setdefault(key, set()).add(f"{bucket}::{case_id}")
+    return bucket_case_ids
+
 current_lec_runner_command_case_reasons = collect_lec_runner_command_case_reasons(
     current_lec_circt_opt_error_case_reasons,
     current_lec_circt_verilog_error_case_reasons,
 )
 current_lec_runner_command_case_ids = collect_lec_runner_command_case_ids(
     current_lec_runner_command_case_reasons
+)
+current_lec_error_bucket_case_ids = collect_lec_error_bucket_case_ids(
+    Path(os.environ["OUT_DIR"])
 )
 
 history = {}
@@ -12665,6 +12792,9 @@ fail_on_new_lec_runner_command_case_reasons = (
 )
 fail_on_new_lec_runner_command_cases = (
     os.environ.get("FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES", "0") == "1"
+)
+fail_on_new_lec_error_bucket_case_ids = (
+    os.environ.get("FAIL_ON_NEW_LEC_ERROR_BUCKET_CASE_IDS", "0") == "1"
 )
 fail_on_new_lec_circt_verilog_error_case_ids = (
     os.environ.get("FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS", "0") == "1"
@@ -13257,6 +13387,32 @@ for key, current_row in summary.items():
                     sample += ", ..."
                 gate_errors.append(
                     f"{suite} {mode}: new LEC runner-command case+reason tuples observed (baseline={len(baseline_runner_command_case_reasons)} current={len(current_runner_command_case_reasons)}, window={baseline_window}): {sample}"
+                )
+    if fail_on_new_lec_error_bucket_case_ids and mode.startswith("LEC"):
+        baseline_error_bucket_case_ids_raw = [
+            row.get("lec_error_bucket_case_ids") for row in compare_rows
+        ]
+        if any(raw is not None for raw in baseline_error_bucket_case_ids_raw):
+            baseline_error_bucket_case_ids = set()
+            for raw in baseline_error_bucket_case_ids_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_error_bucket_case_ids.add(token)
+            current_error_bucket_case_ids = current_lec_error_bucket_case_ids.get(
+                key, set()
+            )
+            new_error_bucket_case_ids = sorted(
+                current_error_bucket_case_ids - baseline_error_bucket_case_ids
+            )
+            if new_error_bucket_case_ids:
+                sample = ", ".join(new_error_bucket_case_ids[:2])
+                if len(new_error_bucket_case_ids) > 2:
+                    sample += ", ..."
+                gate_errors.append(
+                    f"{suite} {mode}: new LEC error-bucket case IDs observed (baseline={len(baseline_error_bucket_case_ids)} current={len(current_error_bucket_case_ids)}, window={baseline_window}): {sample}"
                 )
     if mode.startswith("BMC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
