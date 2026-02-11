@@ -217,6 +217,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-lane-drift-strict|\n";
   os << "                           formal-regression-matrix-lane-trend-nightly|\n";
   os << "                           formal-regression-matrix-lane-trend-strict|\n";
+  os << "                           formal-regression-matrix-runtime-smoke|\n";
   os << "                           formal-regression-matrix-runtime-nightly|\n";
   os << "                           formal-regression-matrix-runtime-trend\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
@@ -6561,14 +6562,17 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         }
         bool stop = stopOnFail.value_or(false);
         std::string policyProfile;
+        std::string runtimePolicyProfile;
         if (mode == "smoke") {
           policyProfile = stop
                               ? "formal-regression-matrix-stop-on-fail-guard-smoke"
                               : "formal-regression-matrix-guard-smoke";
+          runtimePolicyProfile = "formal-regression-matrix-runtime-smoke";
         } else if (mode == "nightly") {
           policyProfile = stop
                               ? "formal-regression-matrix-stop-on-fail-guard-nightly"
                               : "formal-regression-matrix-guard-nightly";
+          runtimePolicyProfile = "formal-regression-matrix-runtime-nightly";
         } else {
           errs() << "circt-mut run: invalid report policy mode value '" << mode
                  << "' (expected smoke|nightly)\n";
@@ -6576,6 +6580,8 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         }
         reportArgsOwned.push_back("--policy-profile");
         reportArgsOwned.push_back(policyProfile);
+        reportArgsOwned.push_back("--policy-profile");
+        reportArgsOwned.push_back(runtimePolicyProfile);
       }
     }
 
@@ -7730,6 +7736,17 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.prequalify_drift_comparable", 0.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-runtime-smoke") {
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.runtime_summary_invalid_rows", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.runtime_ns_avg",
+                     300000000000.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.runtime_ns_max",
+                     1200000000000.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.runtime_ns_sum",
+                     3600000000000.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-runtime-nightly") {
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.runtime_summary_invalid_rows", 0.0);
@@ -7770,6 +7787,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-lane-drift-strict|"
            "formal-regression-matrix-lane-trend-nightly|"
            "formal-regression-matrix-lane-trend-strict|"
+           "formal-regression-matrix-runtime-smoke|"
            "formal-regression-matrix-runtime-nightly|"
            "formal-regression-matrix-runtime-trend)")
               .str();
@@ -10081,10 +10099,12 @@ static int runNativeReport(const ReportOptions &opts) {
           policyProfiles.push_back(
               stopOnFail ? "formal-regression-matrix-stop-on-fail-guard-smoke"
                          : "formal-regression-matrix-guard-smoke");
+          policyProfiles.push_back("formal-regression-matrix-runtime-smoke");
         } else if (mode == "nightly") {
           policyProfiles.push_back(
               stopOnFail ? "formal-regression-matrix-stop-on-fail-guard-nightly"
                          : "formal-regression-matrix-guard-nightly");
+          policyProfiles.push_back("formal-regression-matrix-runtime-nightly");
         } else {
           errs() << "circt-mut report: invalid [report] key 'policy_mode' "
                     "value '"
