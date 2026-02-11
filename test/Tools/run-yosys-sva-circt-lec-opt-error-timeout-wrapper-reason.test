@@ -1,0 +1,12 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top;\nendmodule\n' > %t/opt_timeout_wrapper.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncat <<'\''MLIR'\''\nmodule {\n  hw.module @top() {\n    hw.output\n  }\n}\nMLIR\n' > %t/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "timeout: failed to run command '\''/missing/circt-opt'\'': No such file or directory" >&2\nexit 1\n' > %t/fake-opt.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "LEC_RESULT=EQ"\n' > %t/fake-lec.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-opt.sh %t/fake-lec.sh
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_OPT=%t/fake-opt.sh CIRCT_LEC=%t/fake-lec.sh DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 OUT=%t/results.tsv TEST_FILTER='opt_timeout_wrapper' %S/../../utils/run_yosys_sva_circt_lec.sh %t > %t/out.log
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out.log
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+//
+// SUMMARY: yosys LEC summary: total=1 pass=0 fail=0 error=1 skip=0
+// RESULTS: ERROR{{[[:space:]]+}}opt_timeout_wrapper{{[[:space:]]+}}{{.*}}opt_timeout_wrapper.sv{{[[:space:]]+}}yosys/tests/sva{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_OPT_ERROR{{[[:space:]]+}}runner_command_not_found

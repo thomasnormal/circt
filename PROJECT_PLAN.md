@@ -9,6 +9,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59)
+
+1. Completed opt-stage parity with verilog-stage runner hardening:
+   - stable infra reason taxonomy for `CIRCT_OPT_ERROR`
+   - ETXTBSY retry with fallback copied binary in all three LEC runners.
+2. Impact:
+   - removes remaining high-cardinality wrapper/path noise from opt-stage error
+     telemetry and improves strict-gate drift stability.
+3. External filtered cadence signal after this change:
+   - no immediate wrapper-class `CIRCT_OPT_ERROR`/`CIRCT_VERILOG_ERROR` churn in
+     sampled `sv-tests`/`verilator`/`yosys` filtered runs.
+   - current failures in filtered `verilator`/`yosys` samples are now LEC-stage
+     `ERROR` outcomes, which is the next semantic/debugging target.
+4. Remaining long-term features and limitations:
+   - formal summaries still do not explicitly bucket infra `runner_command_*`
+     families; add dedicated counters in `run_formal_all.sh`.
+   - reason extraction remains log-heuristic; move toward compiler-emitted
+     stable diagnostic category IDs.
+   - continue BMC semantic closure on multiclock + sequence-subroutine with
+     strict bucket case-ID drift gating.
+   - mutation pipeline should consume formal reason-family deltas directly for
+     profile gating and mutator prioritization.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:58)
 
 1. Added LEC verilog-front-end ETXTBSY hardening across all formal runners:

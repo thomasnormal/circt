@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1101 - February 11, 2026
+
+### Formal Runner Hardening: LEC `circt-opt` Stable Infra Reasons + ETXTBSY Retry
+
+1. Extended `CIRCT_OPT_ERROR` reason normalization in all LEC runners:
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. Added stable infra reason mapping for opt-stage wrapper failures:
+   - `runner_command_not_found`
+   - `runner_command_permission_denied`
+   - `runner_failed_to_run_command`
+   - `runner_command_text_file_busy`
+   - `command_timeout`
+   - `command_oom`
+3. Added ETXTBSY mitigation for opt stage in all runners:
+   - detect `failed to run command ... Text file busy`
+   - retry after `CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS`
+   - copy `CIRCT_OPT` to per-run temp binary and retry from the copy.
+4. Added regression coverage:
+   - `test/Tools/run-sv-tests-lec-opt-error-timeout-wrapper-reason.test`
+   - `test/Tools/run-verilator-verification-circt-lec-opt-error-timeout-wrapper-reason.test`
+   - `test/Tools/run-yosys-sva-circt-lec-opt-error-timeout-wrapper-reason.test`
+   - `test/Tools/run-sv-tests-lec-opt-text-file-busy-retry.test`
+   - `test/Tools/run-verilator-verification-circt-lec-opt-text-file-busy-retry.test`
+   - `test/Tools/run-yosys-sva-circt-lec-opt-text-file-busy-retry.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-sv-tests-lec-silent-opt-diagnostic.test`
+  - `build-test/test/Tools/run-sv-tests-lec-opt-error-timeout-wrapper-reason.test`
+  - `build-test/test/Tools/run-sv-tests-lec-opt-text-file-busy-retry.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-opt-error-reason.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-opt-error-timeout-wrapper-reason.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-opt-text-file-busy-retry.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-opt-error-reason.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-opt-error-timeout-wrapper-reason.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-opt-text-file-busy-retry.test`
+  - PASS (9/9)
+- External filtered cadence checks (explicit `build-test/bin` tools):
+  - `sv-tests` `16.15--property-iff-uvm`: `PASS` (`LEC_NOT_RUN` in sv-tests metadata flow)
+  - `verilator-verification` `assert_changed`: `ERROR` (LEC-stage)
+  - `yosys/tests/sva` `basic00`: `ERROR` (LEC-stage)
+  - no remaining `CIRCT_OPT_ERROR`/`CIRCT_VERILOG_ERROR` wrapper reason churn in
+    this filtered snapshot.
+
 ## Iteration 1100 - February 11, 2026
 
 ### Formal Runner Hardening: LEC `circt-verilog` ETXTBSY Retry + Fallback Binary
