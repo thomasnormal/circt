@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1091 - February 11, 2026
+
+### Formal Runner Performance: LEC Front-End Cache for Verilator and Yosys Suites
+
+1. Extended LEC front-end MLIR caching to:
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. Both runners now support:
+   - `LEC_MLIR_CACHE_DIR`
+   - deterministic keying over tool/config identity plus source file hash
+   - summary telemetry:
+     - `verilator-verification frontend cache summary: ...`
+     - `yosys frontend cache summary: ...`
+3. Added regression locks:
+   - `test/Tools/run-verilator-verification-circt-lec-mlir-cache.test`
+   - `test/Tools/run-yosys-sva-circt-lec-mlir-cache.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-mlir-cache.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-mlir-cache.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-drop-remarks.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-error-diag.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-require-filter.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-drop-remarks.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-error-diag.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-require-filter.test`
+  - PASS (10/10)
+- Focused external sanity with explicit `build-test/bin` tools:
+  - `verilator-verification` case `assert_changed`:
+    - run1 cache summary: `hits=0 misses=1 stores=1`
+    - run2 cache summary: `hits=1 misses=0 stores=0`
+    - case outcome: `CIRCT_OPT_ERROR`
+  - `yosys/tests/sva` case `basic00`:
+    - run1 cache summary: `hits=0 misses=1 stores=1`
+    - run2 cache summary: `hits=1 misses=0 stores=0`
+    - case outcome: `CIRCT_OPT_ERROR`
+
 ## Iteration 1090 - February 11, 2026
 
 ### Formal Runner Performance: sv-tests LEC Front-End MLIR Cache

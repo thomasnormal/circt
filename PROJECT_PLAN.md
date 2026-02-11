@@ -9,6 +9,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 22:10)
+
+1. Extended LEC front-end MLIR caching to external-suite runners:
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+   - shared env toggle: `LEC_MLIR_CACHE_DIR`
+2. Added dedicated regression tests:
+   - `test/Tools/run-verilator-verification-circt-lec-mlir-cache.test`
+   - `test/Tools/run-yosys-sva-circt-lec-mlir-cache.test`
+3. Focused external sanity (single-case run pairs, explicit build-test tools):
+   - `verilator-verification/assert_changed`: run1 miss/store, run2 hit
+   - `yosys/tests/sva/basic00`: run1 miss/store, run2 hit
+4. Limitation signal remains unchanged:
+   - both sampled external cases still end in `CIRCT_OPT_ERROR`, indicating
+     semantic/lowering problems orthogonal to caching.
+5. Long-term features and tech debt priorities:
+   - close `CIRCT_OPT_ERROR` root causes with stage-specific diagnostics and
+     bucketed provenance in `run_formal_all.sh`.
+   - deduplicate runner-local cache helper logic (`hash_key/hash_file`) into a
+     shared formal helper script to prevent drift.
+   - add cache budget governance (`max bytes` / eviction policy) and per-lane
+     cache effectiveness rollups in formal summaries.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 21:45)
 
 1. Added sv-tests LEC front-end compile cache in
