@@ -7567,6 +7567,8 @@ struct ExternalFormalSummary {
   uint64_t summaryTSVSchemaVersionInvalidRows = 0;
   uint64_t summaryTSVSchemaVersionMin = 0;
   uint64_t summaryTSVSchemaVersionMax = 0;
+  uint64_t summaryTSVDuplicateRows = 0;
+  uint64_t summaryTSVUniqueRows = 0;
 };
 
 struct MatrixLaneBudgetRow {
@@ -7750,6 +7752,9 @@ static bool collectExternalFormalSummary(
       size_t errorCol = static_cast<size_t>(-1);
       size_t skipCol = static_cast<size_t>(-1);
       size_t schemaVersionCol = static_cast<size_t>(-1);
+      size_t suiteCol = static_cast<size_t>(-1);
+      size_t modeCol = static_cast<size_t>(-1);
+      StringSet<> seenSummaryRows;
       auto parseCountField = [&](StringRef field,
                                  uint64_t &out) -> bool {
         StringRef token = field.trim();
@@ -7779,6 +7784,8 @@ static bool collectExternalFormalSummary(
           errorCol = findCol("error");
           skipCol = findCol("skip");
           schemaVersionCol = findCol("schema_version");
+          suiteCol = findCol("suite");
+          modeCol = findCol("mode");
           schemaValid = totalCol != static_cast<size_t>(-1) &&
                         passCol != static_cast<size_t>(-1) &&
                         failCol != static_cast<size_t>(-1) &&
@@ -7828,6 +7835,18 @@ static bool collectExternalFormalSummary(
         }
         ++summary.summaryTSVRows;
         ++summary.parsedSummaryLines;
+        bool duplicateRow = false;
+        if (suiteCol != static_cast<size_t>(-1) &&
+            modeCol != static_cast<size_t>(-1) && fields.size() > suiteCol &&
+            fields.size() > modeCol) {
+          std::string rowKey =
+              (fields[suiteCol].trim().str() + "\t" + fields[modeCol].trim().str());
+          duplicateRow = !seenSummaryRows.insert(rowKey).second;
+        }
+        if (duplicateRow)
+          ++summary.summaryTSVDuplicateRows;
+        else
+          ++summary.summaryTSVUniqueRows;
         ++summary.summaryTSVSchemaVersionRows;
         if (summary.summaryTSVSchemaVersionMin == 0 ||
             schemaVersion < summary.summaryTSVSchemaVersionMin)
@@ -7995,6 +8014,10 @@ static bool collectExternalFormalSummary(
                     std::to_string(summary.summaryTSVSchemaVersionMin));
   rows.emplace_back("external_formal.summary_tsv_schema_version_max",
                     std::to_string(summary.summaryTSVSchemaVersionMax));
+  rows.emplace_back("external_formal.summary_tsv_duplicate_rows",
+                    std::to_string(summary.summaryTSVDuplicateRows));
+  rows.emplace_back("external_formal.summary_tsv_unique_rows",
+                    std::to_string(summary.summaryTSVUniqueRows));
 
   uint64_t failLikeSum = summary.fail + summary.error + summary.xpass +
                          summary.summaryFail + summary.summaryError +
@@ -8760,6 +8783,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      0.0);
     appendUniqueRule(opts.failIfValueLtRules,
                      "external_formal.summary_tsv_schema_version_min", 1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_tsv_duplicate_rows", 0.0);
     return true;
   }
   if (profile == "formal-regression-matrix-provenance-guard") {
@@ -11919,6 +11944,8 @@ static int runNativeReport(const ReportOptions &opts) {
                       "0");
     rows.emplace_back("external_formal.summary_tsv_schema_version_min", "0");
     rows.emplace_back("external_formal.summary_tsv_schema_version_max", "0");
+    rows.emplace_back("external_formal.summary_tsv_duplicate_rows", "0");
+    rows.emplace_back("external_formal.summary_tsv_unique_rows", "0");
     rows.emplace_back("external_formal.fail_like_sum", "0");
   }
   if (!effectiveOpts.laneBudgetOutFile.empty()) {

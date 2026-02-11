@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1105 - February 11, 2026
+
+### `circt-mut` Strict Summary Gating: Duplicate Row Detection
+
+1. Extended external-formal `summary.tsv` aggregation in
+   `tools/circt-mut/circt-mut.cpp` with duplicate row telemetry:
+   - `external_formal.summary_tsv_duplicate_rows`
+   - `external_formal.summary_tsv_unique_rows`
+2. Duplicate-row detection semantics:
+   - when both `suite` and `mode` columns are present, rows are keyed by
+     `suite\tmode`
+   - repeated keys are counted as duplicates while preserving aggregate
+     numeric telemetry for diagnosis.
+3. Tightened strict summary profile policy:
+   - `formal-regression-matrix-external-formal-summary-guard`
+   now additionally requires:
+   - `external_formal.summary_tsv_duplicate_rows == 0`
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-summary-guard-duplicate-rows-fail.test`
+   - updated pass assertions in
+     `test/Tools/circt-mut-report-policy-matrix-external-formal-summary-guard-pass.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused strict-summary slice:
+  - `llvm-lit -sv -j 1` on:
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-pass.test`
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-fail.test`
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-inconsistent-rows-fail.test`
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-schema-version-invalid-fail.test`
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-duplicate-rows-fail.test`
+    - `circt-mut-report-cli-policy-mode-strict-formal-summary-pass.test`
+    - `circt-mut-run-with-report-cli-policy-mode-strict-formal-summary.test`
+  - PASS (7/7)
+- Full mutation suite:
+  - `llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (326/326 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-summary-duplicate-contract ...`
+  - summary snapshot emitted at:
+    - `/tmp/formal-all-summary-duplicate-contract/summary.tsv`
+  - snapshot status:
+    - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile
+      `ahb/apb/axi4/i2s/i3c/jtag`
+    - FAIL: `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC,
+      `opentitan` LEC, AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+  - runner exited non-zero with trailing script parse error:
+    - `utils/run_formal_all.sh: line 9864: syntax error near unexpected token ')'`
+
+
 ## Iteration 1109 - February 11, 2026
 
 ### BMC Semantic Closure: Deterministic Sequence-Subroutine E2E Outcomes

@@ -13,4 +13,5 @@
 // CHECK-DAG: external_formal.summary_tsv_inconsistent_rows{{[[:space:]]}}0
 // CHECK-DAG: external_formal.summary_tsv_schema_version_invalid_rows{{[[:space:]]}}0
 // CHECK-DAG: external_formal.summary_tsv_schema_version_min{{[[:space:]]}}1
+// CHECK-DAG: external_formal.summary_tsv_duplicate_rows{{[[:space:]]}}0
 // CHECK-DAG: value_gate.status{{[[:space:]]}}pass

@@ -1219,6 +1219,14 @@ See CHANGELOG.md on recent progress.
     absent; when present, non-numeric values are rejected and policy-gated.
   This allows future versioned summary evolution without regressing current
   runner outputs.
+- Latest mutation-governance milestone (current): strict summary governance now
+  also checks for duplicate lane rows in `summary.tsv` when suite+mode keys are
+  present:
+  - new metrics:
+    - `external_formal.summary_tsv_duplicate_rows`
+    - `external_formal.summary_tsv_unique_rows`
+  - strict summary guard now requires zero duplicates, preventing silently
+  double-counted external formal lanes from passing policy.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
