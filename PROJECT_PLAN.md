@@ -9,6 +9,32 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++++++++++)
+
+1. Added BMC core minimum-volume governance in mutation policy:
+   - `formal-regression-matrix-external-formal-bmc-core-min-total-v1`
+2. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v13`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v13`
+3. Contract impact:
+   - strict formal trend profiles now require non-empty BMC evidence from all
+     core suites (`sv-tests`, `sv-tests-uvm`, `verilator-verification`,
+     `yosys/tests/sva`) in addition to existing LEC/core trend gates.
+4. Validation highlights:
+   - focused lit for v13 profile/composites/help diagnostics is green.
+   - v13 fail fixtures prove the new BMC core gate is active by requiring
+     `sv-tests-uvm/BMC_SEMANTICS.total >= 1`.
+5. Remaining limitations:
+   - core min-volume contracts are binary (`>=1`) and do not enforce stronger
+     per-suite floor budgets by cadence (smoke/nightly/weekly).
+   - contracts ensure evidence presence, but do not yet bind presence to
+     quality budgets (e.g., timeout-stage/error-bucket caps per suite).
+6. Next long-term features:
+   - introduce cadence-aware budget profiles (`core-min-total-v2`) with
+     suite-specific thresholds (`>=N`) for nightly/weekly policy modes.
+   - pair BMC/LEC volume gates with quality gates on stage counters and key
+     semantic/error buckets to prevent low-quality non-empty formal evidence.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++++++++)
 
 1. Added LEC core minimum-volume governance in mutation policy:

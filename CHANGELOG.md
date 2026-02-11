@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1146 - February 11, 2026
+
+### Mutation Governance: BMC Core-Minimum Volume Gate + v13 Strict Composites
+
+1. Added `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-bmc-core-min-total-v1`
+2. Profile contract:
+   - requires `external_formal.summary_status_by_suite_mode.<suite>.BMC.total >= 1`
+   for core BMC suites:
+   - `sv-tests/BMC`
+   - `sv-tests-uvm/BMC_SEMANTICS`
+   - `verilator-verification/BMC`
+   - `yosys/tests/sva/BMC`
+3. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v13`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v13`
+   (`v12` + BMC core-minimum volume profile).
+4. Added/updated regressions:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-core-min-total-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-core-min-total-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v13-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v13-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v13-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v13-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+5. Validation:
+   - `ninja -C build-test circt-mut`: PASS
+   - focused lit slice (help/invalid + new profile/composites): PASS (8/8)
+
 ## Iteration 1145 - February 11, 2026
 
 ### Mutation Governance: LEC Core-Minimum Volume Gate + v12 Strict Composites
