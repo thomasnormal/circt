@@ -9,6 +9,27 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:10)
+
+1. Added strict governance for LEC `CIRCT_OPT_ERROR` case+reason identity
+   drift in `run_formal_all.sh`:
+   - new gate: `--fail-on-new-lec-circt-opt-error-case-reasons`
+   - new baseline field: `lec_circt_opt_error_case_reasons`
+2. Strict-gate now enforces three tiers for this class:
+   - case IDs (`lec_circt_opt_error_case_ids`)
+   - reason keys (`lec_circt_opt_error_reason_*_cases`)
+   - case+reason tuples (`lec_circt_opt_error_case_reasons`)
+3. Long-term impact:
+   - this closes a governance blind spot where stable case sets could still
+     drift into new failure reasons undetected.
+4. Remaining limitations and next high-leverage features:
+   - reason extraction is still log-heuristic; migrate to stable, structured
+     reason categories emitted by lowering/pipeline stages.
+   - formal runner helper duplication (cache/reason normalization) should be
+     consolidated into shared utilities.
+   - mutation pipeline should start ingesting these LEC reason-family counters
+     for profile gating and targeted mutator prioritization.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 22:55)
 
 1. Added reason-level telemetry for LEC `CIRCT_OPT_ERROR` in runner outputs:

@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1095 - February 11, 2026
+
+### Formal Governance: LEC `CIRCT_OPT_ERROR` Case+Reason Tuple Drift
+
+1. Added new strict-gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-new-lec-circt-opt-error-case-reasons`
+2. Added baseline telemetry field:
+   - `lec_circt_opt_error_case_reasons`
+   - format: `case_id::reason` (semicolon-separated set)
+3. Strict-gate hardening:
+   - `--strict-gate` now enables case+reason tuple drift checks by default.
+4. Added regression locks:
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-reasons.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-reasons-defaults.test`
+   - updated help coverage in `test/Tools/run-formal-all-help.test`.
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-reasons.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-reasons-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-reason-keys.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-reason-keys-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-ids-defaults.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - `build-test/test/Tools/run-sv-tests-lec-silent-opt-diagnostic.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-opt-error-reason.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-opt-error-reason.test`
+  - PASS (10/10)
+
 ## Iteration 1094 - February 11, 2026
 
 ### Formal Governance: LEC `CIRCT_OPT_ERROR` Reason-Key Drift
