@@ -18,6 +18,6 @@
 // LOG-DAG: native_matrix_dispatch_pass{{[[:space:]]+}}2
 // LOG-DAG: native_matrix_dispatch_fail{{[[:space:]]+}}0
 //
-// RESULTS: lane_id{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}coverage_percent{{[[:space:]]}}gate_status
-// RESULTS: lane_slow{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}11.00{{[[:space:]]}}PASS
-// RESULTS: lane_fast{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}22.00{{[[:space:]]}}PASS
+// RESULTS: lane_id{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}coverage_percent{{[[:space:]]}}runtime_ns{{[[:space:]]}}gate_status
+// RESULTS: lane_slow{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}11.00{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}PASS
+// RESULTS: lane_fast{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}22.00{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}PASS

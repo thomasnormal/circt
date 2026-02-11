@@ -19,10 +19,10 @@
 // LOG-DAG: native_matrix_dispatch_fail{{[[:space:]]+}}1
 // LOG-DAG: native_matrix_dispatch_skip{{[[:space:]]+}}2
 //
-// RESULTS: lane_id{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}coverage_percent{{[[:space:]]}}gate_status
-// RESULTS: lane_fail{{[[:space:]]}}FAIL{{[[:space:]]}}2{{[[:space:]]}}0.00{{[[:space:]]}}FAIL
-// RESULTS: lane_slow{{[[:space:]]}}SKIP{{[[:space:]]}}0{{[[:space:]]}}-{{[[:space:]]}}SKIP
-// RESULTS: lane_late{{[[:space:]]}}SKIP{{[[:space:]]}}0{{[[:space:]]}}-{{[[:space:]]}}SKIP
+// RESULTS: lane_id{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}coverage_percent{{[[:space:]]}}runtime_ns{{[[:space:]]}}gate_status
+// RESULTS: lane_fail{{[[:space:]]}}FAIL{{[[:space:]]}}2{{[[:space:]]}}0.00{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}FAIL
+// RESULTS: lane_slow{{[[:space:]]}}SKIP{{[[:space:]]}}0{{[[:space:]]}}-{{[[:space:]]}}-{{[[:space:]]}}SKIP
+// RESULTS: lane_late{{[[:space:]]}}SKIP{{[[:space:]]}}0{{[[:space:]]}}-{{[[:space:]]}}-{{[[:space:]]}}SKIP
 //
 // GATES: gate_status{{[[:space:]]}}count
 // GATES-DAG: FAIL{{[[:space:]]}}1
