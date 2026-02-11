@@ -8,6 +8,8 @@
 // CHECK: policy.mode{{[[:space:]]}}-
 // CHECK: policy.mode_source{{[[:space:]]}}none
 // CHECK: policy.stop_on_fail{{[[:space:]]}}-
+// CHECK: policy.stop_on_fail_effective{{[[:space:]]}}-
+// CHECK: policy.stop_on_fail_ignored{{[[:space:]]}}-
 // CHECK: policy.profile_count{{[[:space:]]}}1
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-trend
 // CHECK-NOT: formal-regression-basic
