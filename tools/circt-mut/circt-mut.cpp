@@ -7563,6 +7563,10 @@ struct ExternalFormalSummary {
   uint64_t summaryTSVParseErrors = 0;
   uint64_t summaryTSVConsistentRows = 0;
   uint64_t summaryTSVInconsistentRows = 0;
+  uint64_t summaryTSVSchemaVersionRows = 0;
+  uint64_t summaryTSVSchemaVersionInvalidRows = 0;
+  uint64_t summaryTSVSchemaVersionMin = 0;
+  uint64_t summaryTSVSchemaVersionMax = 0;
 };
 
 struct MatrixLaneBudgetRow {
@@ -7745,6 +7749,7 @@ static bool collectExternalFormalSummary(
       size_t xpassCol = static_cast<size_t>(-1);
       size_t errorCol = static_cast<size_t>(-1);
       size_t skipCol = static_cast<size_t>(-1);
+      size_t schemaVersionCol = static_cast<size_t>(-1);
       auto parseCountField = [&](StringRef field,
                                  uint64_t &out) -> bool {
         StringRef token = field.trim();
@@ -7773,6 +7778,7 @@ static bool collectExternalFormalSummary(
           xpassCol = findCol("xpass");
           errorCol = findCol("error");
           skipCol = findCol("skip");
+          schemaVersionCol = findCol("schema_version");
           schemaValid = totalCol != static_cast<size_t>(-1) &&
                         passCol != static_cast<size_t>(-1) &&
                         failCol != static_cast<size_t>(-1) &&
@@ -7799,6 +7805,7 @@ static bool collectExternalFormalSummary(
         }
         uint64_t total = 0, pass = 0, fail = 0, xfail = 0;
         uint64_t xpass = 0, errorCount = 0, skip = 0;
+        uint64_t schemaVersion = 1;
         if (!parseCountField(fields[totalCol], total) ||
             !parseCountField(fields[passCol], pass) ||
             !parseCountField(fields[failCol], fail) ||
@@ -7810,8 +7817,23 @@ static bool collectExternalFormalSummary(
           ++summary.unparsedLines;
           continue;
         }
+        if (schemaVersionCol != static_cast<size_t>(-1)) {
+          if (fields.size() <= schemaVersionCol ||
+              !parseCountField(fields[schemaVersionCol], schemaVersion)) {
+            ++summary.summaryTSVParseErrors;
+            ++summary.summaryTSVSchemaVersionInvalidRows;
+            ++summary.unparsedLines;
+            continue;
+          }
+        }
         ++summary.summaryTSVRows;
         ++summary.parsedSummaryLines;
+        ++summary.summaryTSVSchemaVersionRows;
+        if (summary.summaryTSVSchemaVersionMin == 0 ||
+            schemaVersion < summary.summaryTSVSchemaVersionMin)
+          summary.summaryTSVSchemaVersionMin = schemaVersion;
+        if (schemaVersion > summary.summaryTSVSchemaVersionMax)
+          summary.summaryTSVSchemaVersionMax = schemaVersion;
         uint64_t statusSum =
             pass + fail + xfail + xpass + errorCount + skip;
         if (total == statusSum)
@@ -7965,6 +7987,14 @@ static bool collectExternalFormalSummary(
                     std::to_string(summary.summaryTSVConsistentRows));
   rows.emplace_back("external_formal.summary_tsv_inconsistent_rows",
                     std::to_string(summary.summaryTSVInconsistentRows));
+  rows.emplace_back("external_formal.summary_tsv_schema_version_rows",
+                    std::to_string(summary.summaryTSVSchemaVersionRows));
+  rows.emplace_back("external_formal.summary_tsv_schema_version_invalid_rows",
+                    std::to_string(summary.summaryTSVSchemaVersionInvalidRows));
+  rows.emplace_back("external_formal.summary_tsv_schema_version_min",
+                    std::to_string(summary.summaryTSVSchemaVersionMin));
+  rows.emplace_back("external_formal.summary_tsv_schema_version_max",
+                    std::to_string(summary.summaryTSVSchemaVersionMax));
 
   uint64_t failLikeSum = summary.fail + summary.error + summary.xpass +
                          summary.summaryFail + summary.summaryError +
@@ -8725,6 +8755,11 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      1.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "external_formal.summary_tsv_inconsistent_rows", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_tsv_schema_version_invalid_rows",
+                     0.0);
+    appendUniqueRule(opts.failIfValueLtRules,
+                     "external_formal.summary_tsv_schema_version_min", 1.0);
     return true;
   }
   if (profile == "formal-regression-matrix-provenance-guard") {
@@ -11879,6 +11914,11 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("external_formal.summary_tsv_parse_errors", "0");
     rows.emplace_back("external_formal.summary_tsv_consistent_rows", "0");
     rows.emplace_back("external_formal.summary_tsv_inconsistent_rows", "0");
+    rows.emplace_back("external_formal.summary_tsv_schema_version_rows", "0");
+    rows.emplace_back("external_formal.summary_tsv_schema_version_invalid_rows",
+                      "0");
+    rows.emplace_back("external_formal.summary_tsv_schema_version_min", "0");
+    rows.emplace_back("external_formal.summary_tsv_schema_version_max", "0");
     rows.emplace_back("external_formal.fail_like_sum", "0");
   }
   if (!effectiveOpts.laneBudgetOutFile.empty()) {
