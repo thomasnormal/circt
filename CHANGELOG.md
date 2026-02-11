@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1121 - February 11, 2026
+
+### Formal Governance: LEC Semantic-Diag Subfamily Case+Reason Drift Gate
+
+1. Added a new strict-gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-new-lec-semantic-diag-subfamily-case-reasons`
+2. Added baseline/current tracking field:
+   - `lec_semantic_diag_subfamily_case_reasons`
+   storing tuples:
+   - `subfamily::case_id::reason_key`
+   for LEC semantic-diag errors (`parser`, `lowering`, `solver`).
+3. Integrated gate into strict defaults:
+   - `--strict-gate` now enables both subfamily case-ID drift and
+     subfamily case+reason drift checks.
+4. Added dedicated regression:
+   - `test/Tools/run-formal-all-strict-gate-lec-semantic-diag-subfamily-case-reasons.test`
+5. Kept prior subfamily case-ID gate coverage active:
+   - `test/Tools/run-formal-all-strict-gate-lec-semantic-diag-subfamily-case-ids.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-semantic-diag-subfamily-case-reasons.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-semantic-diag-subfamily-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-lec-error-bucket-semantic-diag-subfamilies.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-error-bucket-case-ids.test`
+  - PASS (4/4)
+- External cadence probes (filtered/targeted):
+  - OpenTitan LEC (`impl-filter=canright`) with explicit `build-test/bin`
+    tools: `PASS` (`aes_sbox_canright`, `EQ`)
+  - AVIP `apb_avip` compile probe with
+    `CIRCT_VERILOG=/home/thomas-ahle/circt/build-test/bin/circt-verilog`:
+    completed with exit code `0`.
+
 ## Iteration 1120 - February 11, 2026
 
 ### Formal Governance: Strict LEC Semantic-Diag Subfamily Case-ID Drift Gate
