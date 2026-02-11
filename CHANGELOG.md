@@ -1,5 +1,70 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1132 - February 11, 2026
+
+### Formal Governance: BMC Identity Cardinality Trend Gates (v1) + v3 Composites
+
+1. Added new `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-bmc-identity-cardinality-trend-guard-v1`
+2. Scope (zero-growth trend deltas):
+   - `external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_timeout_case_ids_cardinality`
+   - `external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_semantic_bucket_case_ids_cardinality`
+   - `external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.{bmc_timeout_case_ids_cardinality,bmc_semantic_bucket_case_ids_cardinality}`
+   - `external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.{bmc_timeout_case_ids_cardinality,bmc_semantic_bucket_case_ids_cardinality}`
+   - `external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.{bmc_timeout_case_ids_cardinality,bmc_semantic_bucket_case_ids_cardinality}`
+3. Added staged composite rollouts:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v3`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v3`
+   (`v2` + BMC identity cardinality trend guard).
+4. Added regressions:
+   - `test/Tools/run-formal-all-bmc-identity-cardinality-summary.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-identity-cardinality-trend-guard-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-identity-cardinality-trend-guard-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v3-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v3-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v3-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v3-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+## Iteration 1131 - February 11, 2026
+
+### Mutation Governance: Native-Strict Formal Trend Composite Includes Compile Budget
+
+1. Updated profile composition:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v1`
+2. Composition now includes:
+   - `formal-regression-matrix-composite-native-strict`
+   - `formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1`
+   - `formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1`
+   - `formal-regression-matrix-external-formal-compile-mode-budget-v1`
+3. Updated focused regressions so composite evaluation includes compile rows in
+   external `summary.tsv` fixtures:
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v1-fail.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused lit slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v1-pass.test`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v1-fail.test`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v1-pass.test`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v1-fail.test`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-v1-pass.test`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-v1-fail.test`
+  - PASS (6/6)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (350/350 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-composite-compile-budget-v1 ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator` BMC/LEC,
+    `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL: `opentitan` LEC, AVIP compile `axi4Lite/spi/uart`
+
 ## Iteration 1130 - February 11, 2026
 
 ### Formal Governance: Identity Cardinality Counters + Trend Profile (v1)

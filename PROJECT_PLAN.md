@@ -9,6 +9,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++)
+
+1. Added BMC identity trend governance in `circt-mut`:
+   - `formal-regression-matrix-external-formal-bmc-identity-cardinality-trend-guard-v1`
+2. Added release-grade staged composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v3`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v3`
+   (`v2` + BMC identity trend policy).
+3. Current remaining limitations:
+   - BMC identity guard currently enforces timeout/semantic-bucket cardinality
+     growth only; provenance/check-attribution identity families are not yet
+     covered in `circt-mut` trend policy.
+   - OpenTitan formal runner signal is still brittle in quick cadence mode
+     (`run_opentitan_formal_e2e.sh` LEC lane reported `missing_results` in
+     bounded run).
+   - sv-tests targeted LEC probes can still collapse to filter-empty depending
+     on tag/filter combinations, reducing semantic signal density.
+4. Next long-term features:
+   - add BMC provenance/check-identity trend profiles and roll into v4
+     composites.
+   - add OpenTitan LEC strict identity/counter contract in external-formal
+     policy profiles (not just lane-local strict-gate checks).
+   - add explicit non-empty-filter contract for targeted sv-tests semantic
+     closure probes to prevent accidental filter-empty green runs.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++)
 
 1. Closed the strict-identity telemetry gap between `run_formal_all` and
@@ -1664,6 +1689,23 @@ See CHANGELOG.md on recent progress.
   - `compile.xpass == 0`
   providing explicit policy budgeting for known AVIP compile debt while still
   preventing regression drift.
+- Latest mutation-governance milestone (current): the native strict formal
+  trend composite bundles now include compile-budget governance by default:
+  - `formal-regression-matrix-composite-native-strict-formal-trend-v1`
+  - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1`
+  both now compose:
+  - semantic-diag trend budget v1
+  - frontend-timeout trend guard v1
+  - compile-mode budget v1
+  so CI can adopt one profile and get integrated formal + mutation + compile
+  debt controls.
+- Latest mutation-governance milestone (current): added BMC identity-cardinality
+  trend governance and staged v3 composites:
+  - `formal-regression-matrix-external-formal-bmc-identity-cardinality-trend-guard-v1`
+  - `formal-regression-matrix-composite-native-strict-formal-trend-v3`
+  - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v3`
+  enabling stricter drift control for BMC failure-identity growth while keeping
+  rollout incremental via explicit composite versioning.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
