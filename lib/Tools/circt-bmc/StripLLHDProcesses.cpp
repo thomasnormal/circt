@@ -16,7 +16,9 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Support/raw_ostream.h"
 #include <string>
@@ -38,6 +40,10 @@ static constexpr const char *kBMCAbstractedLLHDProcessResultsAttr =
     "circt.bmc_abstracted_llhd_process_results";
 static constexpr const char *kBMCAbstractedLLHDProcessResultDetailsAttr =
     "circt.bmc_abstracted_llhd_process_result_details";
+static constexpr const char *kBMCAbstractedLLHDInterfaceInputsAttr =
+    "circt.bmc_abstracted_llhd_interface_inputs";
+static constexpr const char *kBMCAbstractedLLHDInterfaceInputDetailsAttr =
+    "circt.bmc_abstracted_llhd_interface_input_details";
 
 struct BlockGuardInfo {
   Value condition;
@@ -69,6 +75,88 @@ static bool isDefinedInsideProcess(Value value, ProcessOp process) {
   if (auto *region = value.getParentRegion())
     return process.getBody().isAncestor(region);
   return false;
+}
+
+static std::optional<llvm::APInt> getConstantBitsFromAttr(Attribute attr,
+                                                          Type type) {
+  if (auto intTy = dyn_cast<IntegerType>(type)) {
+    unsigned width = intTy.getWidth();
+    if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+      return intAttr.getValue().zextOrTrunc(width);
+    if (auto boolAttr = dyn_cast<BoolAttr>(attr))
+      return llvm::APInt(width, boolAttr.getValue() ? 1 : 0);
+    return std::nullopt;
+  }
+  if (auto structTy = dyn_cast<hw::StructType>(type)) {
+    auto arr = dyn_cast<ArrayAttr>(attr);
+    if (!arr || arr.size() != structTy.getElements().size())
+      return std::nullopt;
+    int64_t totalWidth = hw::getBitWidth(type);
+    if (totalWidth <= 0)
+      return std::nullopt;
+    llvm::APInt bits(totalWidth, 0);
+    unsigned offset = static_cast<unsigned>(totalWidth);
+    for (auto [fieldAttr, fieldInfo] :
+         llvm::zip(arr.getValue(), structTy.getElements())) {
+      auto fieldBits = getConstantBitsFromAttr(fieldAttr, fieldInfo.type);
+      if (!fieldBits)
+        return std::nullopt;
+      unsigned width = fieldBits->getBitWidth();
+      if (width > offset)
+        return std::nullopt;
+      offset -= width;
+      bits.insertBits(*fieldBits, offset);
+    }
+    return bits;
+  }
+  if (auto arrayTy = dyn_cast<hw::ArrayType>(type)) {
+    auto arr = dyn_cast<ArrayAttr>(attr);
+    if (!arr || arr.size() != arrayTy.getNumElements())
+      return std::nullopt;
+    int64_t totalWidth = hw::getBitWidth(type);
+    if (totalWidth <= 0)
+      return std::nullopt;
+    llvm::APInt bits(totalWidth, 0);
+    unsigned offset = static_cast<unsigned>(totalWidth);
+    Type elemType = arrayTy.getElementType();
+    for (Attribute elemAttr : arr.getValue()) {
+      auto elemBits = getConstantBitsFromAttr(elemAttr, elemType);
+      if (!elemBits)
+        return std::nullopt;
+      unsigned width = elemBits->getBitWidth();
+      if (width > offset)
+        return std::nullopt;
+      offset -= width;
+      bits.insertBits(*elemBits, offset);
+    }
+    return bits;
+  }
+  return std::nullopt;
+}
+
+static std::optional<llvm::APInt> getConstantBits(Value value) {
+  if (auto hwConst = value.getDefiningOp<hw::ConstantOp>())
+    return hwConst.getValue();
+  if (auto aggConst = value.getDefiningOp<hw::AggregateConstantOp>())
+    return getConstantBitsFromAttr(aggConst.getFieldsAttr(), aggConst.getType());
+  if (auto bitcast = value.getDefiningOp<hw::BitcastOp>()) {
+    auto bits = getConstantBits(bitcast.getInput());
+    if (!bits)
+      return std::nullopt;
+    int64_t width = hw::getBitWidth(bitcast.getType());
+    if (width <= 0)
+      return std::nullopt;
+    return bits->zextOrTrunc(static_cast<unsigned>(width));
+  }
+  return std::nullopt;
+}
+
+static bool areBitEquivalentConstants(Value a, Value b) {
+  if (a == b)
+    return true;
+  auto lhs = getConstantBits(a);
+  auto rhs = getConstantBits(b);
+  return lhs && rhs && *lhs == *rhs;
 }
 
 static std::optional<SmallVector<Value>>
@@ -164,6 +252,22 @@ struct StripLLHDProcessesPass
         hwModule.walk(
             [&](ProcessOp process) { processes.push_back(process); });
         DenseMap<Operation *, bool> processContainsAssertLike;
+        DenseMap<Operation *, bool> processHasWait;
+        DenseSet<Value> signalsWithDynamicDrives;
+        for (auto process : processes) {
+          bool hasWait = false;
+          process.walk([&](WaitOp) { hasWait = true; });
+          processHasWait[process.getOperation()] = hasWait;
+        }
+        hwModule.walk([&](DriveOp drvOp) {
+          if (auto process = drvOp->getParentOfType<ProcessOp>()) {
+            if (!isValueFromAbove(drvOp.getSignal(), process))
+              return;
+            if (!processHasWait.lookup(process.getOperation()))
+              return;
+          }
+          signalsWithDynamicDrives.insert(drvOp.getSignal());
+        });
         for (auto process : processes) {
           bool hasAssertLike = false;
           process.walk([&](Operation *op) {
@@ -180,6 +284,8 @@ struct StripLLHDProcessesPass
         DenseMap<Value, Value> signalInputs;
         int64_t abstractedProcessResultCount = 0;
         SmallVector<Attribute> abstractedProcessResultDetails;
+        int64_t abstractedInterfaceInputCount = 0;
+        SmallVector<Attribute> abstractedInterfaceInputDetails;
         auto getSignalName = [](Value signal) -> StringRef {
           if (auto sig = signal.getDefiningOp<SignalOp>()) {
             if (auto nameAttr = sig.getNameAttr())
@@ -187,6 +293,35 @@ struct StripLLHDProcessesPass
           }
           return "llhd_signal";
         };
+        auto recordAbstractedInterfaceInput =
+            [&](StringAttr name, StringAttr base, Type type, StringRef reason,
+                StringRef signalName, std::optional<unsigned> fieldIndex,
+                Location loc) {
+              Builder builder(hwModule.getContext());
+              ++abstractedInterfaceInputCount;
+              SmallVector<NamedAttribute> attrs{
+                  builder.getNamedAttr("name", name),
+                  builder.getNamedAttr("base", base),
+                  builder.getNamedAttr("type", TypeAttr::get(type)),
+                  builder.getNamedAttr(
+                      "reason", StringAttr::get(hwModule.getContext(), reason)),
+                  builder.getNamedAttr(
+                      "signal",
+                      StringAttr::get(hwModule.getContext(), signalName)),
+              };
+              if (fieldIndex)
+                attrs.push_back(builder.getNamedAttr(
+                    "field", builder.getI64IntegerAttr(*fieldIndex)));
+              std::string locStr;
+              llvm::raw_string_ostream os(locStr);
+              loc.print(os);
+              os.flush();
+              if (!locStr.empty())
+                attrs.push_back(builder.getNamedAttr(
+                    "loc", StringAttr::get(hwModule.getContext(), locStr)));
+              abstractedInterfaceInputDetails.push_back(
+                  DictionaryAttr::get(hwModule.getContext(), attrs));
+            };
         Value zeroTime;
         auto getZeroTime = [&]() -> Value {
           if (zeroTime)
@@ -200,8 +335,7 @@ struct StripLLHDProcessesPass
         };
 
         for (auto process : processes) {
-          bool hasWait = false;
-          process.walk([&](WaitOp) { hasWait = true; });
+          bool hasWait = processHasWait.lookup(process.getOperation());
 
           SmallVector<Operation *> assertLikeOps;
           process.walk([&](Operation *op) {
@@ -644,11 +778,21 @@ struct StripLLHDProcessesPass
             auto typeIt = driveValueTypes.find(signal);
             if (typeIt == driveValueTypes.end())
               continue;
-            auto baseName = ns.newName(getSignalName(signal));
-            auto newInput =
-                addInputPort(StringAttr::get(hwModule.getContext(), baseName),
-                             typeIt->second);
+            auto baseName = StringAttr::get(hwModule.getContext(),
+                                            ns.newName(getSignalName(signal)));
+            auto newInput = addInputPort(baseName, typeIt->second);
             signalInputs[signal] = newInput.second;
+            Location driveLoc = process.getLoc();
+            for (auto drvOp : dynamicDrives) {
+              if (drvOp.getSignal() == signal) {
+                driveLoc = drvOp.getLoc();
+                break;
+              }
+            }
+            recordAbstractedInterfaceInput(
+                newInput.first, baseName, typeIt->second,
+                "dynamic_drive_resolution_unknown", getSignalName(signal),
+                std::nullopt, driveLoc);
             OpBuilder builder(hwModule.getContext());
             builder.setInsertionPoint(
                 hwModule.getBodyBlock()->getTerminator());
@@ -659,6 +803,28 @@ struct StripLLHDProcessesPass
           OpBuilder builder(process);
           builder.setInsertionPointAfter(process);
           for (auto drvOp : initDrives) {
+            // A no-wait process is often used only to establish initial signal
+            // values. If the same signal is also driven dynamically by another
+            // process, cloning this drive as a permanent concurrent driver can
+            // over-constrain the signal and distort clock/event reconstruction.
+            // Drop only the redundant "drive signal to its own init at zero
+            // time" form in that case.
+            if (signalsWithDynamicDrives.contains(drvOp.getSignal())) {
+              if (auto sigOp =
+                      drvOp.getSignal().getDefiningOp<llhd::SignalOp>()) {
+                if (!drvOp.getEnable() &&
+                    areBitEquivalentConstants(sigOp.getInit(),
+                                              drvOp.getValue())) {
+                  if (auto constTime =
+                          drvOp.getTime().getDefiningOp<llhd::ConstantTimeOp>()) {
+                    auto attr = constTime.getValueAttr();
+                    if (attr.getTime() == 0 && attr.getDelta() == 0 &&
+                        attr.getEpsilon() <= 1)
+                      continue;
+                  }
+                }
+              }
+            }
             if (!isValueFromAbove(drvOp.getValue(), process))
               continue;
             if (!isValueFromAbove(drvOp.getTime(), process))
@@ -747,6 +913,19 @@ struct StripLLHDProcessesPass
         } else {
           hwModule->removeAttr(kBMCAbstractedLLHDProcessResultsAttr);
           hwModule->removeAttr(kBMCAbstractedLLHDProcessResultDetailsAttr);
+        }
+        if (abstractedInterfaceInputCount > 0) {
+          hwModule->setAttr(
+              kBMCAbstractedLLHDInterfaceInputsAttr,
+              IntegerAttr::get(IntegerType::get(hwModule.getContext(), 32),
+                               abstractedInterfaceInputCount));
+          if (!abstractedInterfaceInputDetails.empty())
+            hwModule->setAttr(kBMCAbstractedLLHDInterfaceInputDetailsAttr,
+                              ArrayAttr::get(hwModule.getContext(),
+                                             abstractedInterfaceInputDetails));
+        } else {
+          hwModule->removeAttr(kBMCAbstractedLLHDInterfaceInputsAttr);
+          hwModule->removeAttr(kBMCAbstractedLLHDInterfaceInputDetailsAttr);
         }
 
         SmallVector<InstanceOp> instances;
