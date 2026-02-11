@@ -28,6 +28,7 @@
 // CHECK: trend-nightly
 // CHECK: trend-strict
 // CHECK: native-lifecycle-strict
+// CHECK: native-strict
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --report-fail-on-prequalify-drift
 // CHECK: --report-no-fail-on-prequalify-drift
