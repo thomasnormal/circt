@@ -8829,9 +8829,13 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     if [[ -n "$line" ]]; then
       total=$(echo "$line" | sed -n 's/.*summary: \([0-9]\+\) tests.*/\1/p')
       failures=$(echo "$line" | sed -n 's/.*failures=\([0-9]\+\).*/\1/p')
+      xfail=$(echo "$line" | sed -n 's/.*xfail=\([0-9]\+\).*/\1/p')
+      xpass=$(echo "$line" | sed -n 's/.*xpass=\([0-9]\+\).*/\1/p')
       skipped=$(echo "$line" | sed -n 's/.*skipped=\([0-9]\+\).*/\1/p')
+      xfail="${xfail:-0}"
+      xpass="${xpass:-0}"
       pass=$((total - failures - skipped))
-      summary="total=${total} pass=${pass} fail=${failures} xfail=0 xpass=0 error=0 skip=${skipped}"
+      summary="total=${total} pass=${pass} fail=${failures} xfail=${xfail} xpass=${xpass} error=0 skip=${skipped}"
       bmc_drop_summary="$(summarize_bmc_drop_remark_log "$OUT_DIR/yosys-bmc.log")"
       if [[ -n "$bmc_drop_summary" ]]; then
         summary="${summary} ${bmc_drop_summary}"
@@ -8852,7 +8856,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
       fi
-      record_result_with_summary "yosys/tests/sva" "BMC" "$total" "$pass" "$failures" 0 0 0 "$skipped" "$summary"
+      record_result_with_summary "yosys/tests/sva" "BMC" "$total" "$pass" "$failures" "$xfail" "$xpass" 0 "$skipped" "$summary"
     fi
   fi
 fi
