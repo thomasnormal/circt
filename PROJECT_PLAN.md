@@ -9,6 +9,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 22:35)
+
+1. Added strict governance for LEC `CIRCT_OPT_ERROR` identity drift in
+   `utils/run_formal_all.sh`:
+   - new gate: `--fail-on-new-lec-circt-opt-error-case-ids`
+   - new baseline field: `lec_circt_opt_error_case_ids`
+2. Strict-gate hardening:
+   - `--strict-gate` now includes this LEC case-ID drift check by default.
+3. Added regression locks:
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-ids-defaults.test`
+4. Why this matters long term:
+   - cache improvements reduce runtime cost, but this gate makes persistent
+     `CIRCT_OPT_ERROR` churn auditable as concrete case-identity regressions,
+     not just aggregate error counts.
+5. Remaining limitations and next features:
+   - still need root-cause taxonomy for `CIRCT_OPT_ERROR` classes in lowering
+     (shape/clocking/diag-source buckets) to prioritize real semantic fixes.
+   - duplicated cache helper logic across runners is still technical debt;
+     shared helper extraction remains next maintainability step.
+   - formal lane governance should add per-lane cache effectiveness rollups and
+     bounded cache policy controls for CI longevity.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 22:10)
 
 1. Extended LEC front-end MLIR caching to external-suite runners:
