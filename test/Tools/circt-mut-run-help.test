@@ -7,7 +7,13 @@
 // CHECK: --with-report
 // CHECK: --with-report-on-fail
 // CHECK: --report-mode MODE
+// CHECK: --report-compare FILE
+// CHECK: --report-compare-history-latest FILE
 // CHECK: --report-history FILE
+// CHECK: --report-append-history FILE
+// CHECK: --report-trend-history FILE
+// CHECK: --report-trend-window N
+// CHECK: --report-history-max-runs N
 // CHECK: --report-out FILE
 // CHECK: --report-history-bootstrap
 // CHECK: --report-no-history-bootstrap
