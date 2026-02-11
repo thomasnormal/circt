@@ -58,6 +58,7 @@
 // CHECK: formal-regression-matrix-external-formal-semantic-diag-family-guard
 // CHECK: formal-regression-matrix-external-formal-semantic-diag-family-trend-guard
 // CHECK: formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1
+// CHECK: formal-regression-matrix-external-formal-bmc-identity-cardinality-trend-guard-v1
 // CHECK: formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1
 // CHECK: formal-regression-matrix-external-formal-compile-mode-budget-v1
 // CHECK: formal-regression-matrix-provenance-guard
@@ -76,6 +77,8 @@
 // CHECK: formal-regression-matrix-composite-strict
 // CHECK: formal-regression-matrix-composite-native-strict
 // CHECK: formal-regression-matrix-composite-native-strict-formal-trend-v1
+// CHECK: formal-regression-matrix-composite-native-strict-formal-trend-v2
+// CHECK: formal-regression-matrix-composite-native-strict-formal-trend-v3
 // CHECK: formal-regression-matrix-composite-trend-nightly
 // CHECK: formal-regression-matrix-composite-trend-strict
 // CHECK: formal-regression-matrix-composite-stop-on-fail-smoke
@@ -83,6 +86,8 @@
 // CHECK: formal-regression-matrix-composite-stop-on-fail-strict
 // CHECK: formal-regression-matrix-composite-stop-on-fail-native-strict
 // CHECK: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1
+// CHECK: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v2
+// CHECK: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v3
 // CHECK: formal-regression-matrix-composite-stop-on-fail-trend-nightly
 // CHECK: formal-regression-matrix-composite-stop-on-fail-trend-strict
 // CHECK: --append-history
