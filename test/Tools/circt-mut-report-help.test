@@ -51,6 +51,8 @@
 // CHECK: formal-regression-matrix-runtime-smoke
 // CHECK: formal-regression-matrix-runtime-nightly
 // CHECK: formal-regression-matrix-runtime-trend
+// CHECK: formal-regression-matrix-trend-history-quality
+// CHECK: formal-regression-matrix-trend-history-quality-strict
 // CHECK: formal-regression-matrix-runtime-strict
 // CHECK: formal-regression-matrix-composite-smoke
 // CHECK: formal-regression-matrix-composite-nightly
