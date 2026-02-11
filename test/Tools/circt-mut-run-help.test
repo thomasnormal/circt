@@ -15,6 +15,10 @@
 // CHECK: --report-trend-window N
 // CHECK: --report-history-max-runs N
 // CHECK: --report-out FILE
+// CHECK: --report-fail-if-delta-gt RULE
+// CHECK: --report-fail-if-delta-lt RULE
+// CHECK: --report-fail-if-trend-delta-gt RULE
+// CHECK: --report-fail-if-trend-delta-lt RULE
 // CHECK: --report-history-bootstrap
 // CHECK: --report-no-history-bootstrap
 // CHECK: --report-policy-profile NAME
