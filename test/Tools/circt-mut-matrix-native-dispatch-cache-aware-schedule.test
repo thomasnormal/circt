@@ -1,0 +1,22 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts %t/bin
+// RUN: ln -s "$(command -v circt-mut)" %t/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/bin/yosys
+// RUN: chmod +x %t/bin/yosys
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --work-dir) work_dir="$2"; shift 2 ;;&\n    --work-dir=*) work_dir="${1#*=}"; shift ;;&\n    *) shift ;;&\n  esac\ndone\nmkdir -p "$work_dir"\nprintf "mutation_coverage_percent\\t100.00\\n" > "$work_dir/metrics.tsv"\nprintf "{}" > "$work_dir/summary.json"\nbasename "$work_dir" >> %t/order.txt\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf 't\tbash -c true\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 'lane_a\t%t/design.il\t-\t%t/tests.tsv\t-\t-\t-\t2\t-\t7\nlane_b\t%t/design.il\t-\t%t/tests.tsv\t-\t-\t-\t2\t-\t7\nlane_c\t%t/design.il\t-\t%t/tests.tsv\t-\t-\t-\t2\t-\t9\n' > %t/lanes.tsv
+// RUN: env PATH=%t/bin:/usr/bin:/bin CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --native-matrix-dispatch --lanes-tsv %t/lanes.tsv --out-dir %t/out --jobs 1 --lane-schedule-policy cache-aware --reuse-cache-dir %t/cache > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=ORDER < %t/order.txt
+//
+// LOG: native_matrix_dispatch_lane_schedule_policy{{[[:space:]]+}}cache-aware
+// LOG: native_matrix_dispatch_schedule_unique_keys{{[[:space:]]+}}2
+// LOG: native_matrix_dispatch_schedule_deferred_followers{{[[:space:]]+}}1
+// LOG: native_matrix_dispatch_pass{{[[:space:]]+}}3
+// LOG: native_matrix_dispatch_fail{{[[:space:]]+}}0
+//
+// ORDER: lane_a
+// ORDER-NEXT: lane_c
+// ORDER-NEXT: lane_b

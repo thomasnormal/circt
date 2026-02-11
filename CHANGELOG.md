@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1026 - February 11, 2026
+
+### `circt-mut matrix`: Native Cache-Aware Lane Scheduling Parity
+
+1. Extended native matrix dispatch in `tools/circt-mut/circt-mut.cpp` to honor
+   `--lane-schedule-policy` directly (not just script mode):
+   - `fifo`
+   - `cache-aware`
+2. Added native validation for schedule policy values in matrix preflight:
+   - invalid values now fail fast with:
+     `circt-mut matrix: invalid --lane-schedule-policy for native dispatch`
+3. Added cache-aware scheduling in native dispatch:
+   - computes lane cache keys from generated-mutation lane inputs
+     (`design`, `generate_count`, top/seed/yosys/modes/mode-counts/
+     mode-weights/profiles/cfg/select plus default fallback behavior),
+   - executes leader lanes (first unique cache key) before deferred followers.
+4. Added native scheduling telemetry in matrix summary output:
+   - `native_matrix_dispatch_lane_schedule_policy`
+   - `native_matrix_dispatch_schedule_unique_keys`
+   - `native_matrix_dispatch_schedule_deferred_followers`
+5. Added regression coverage:
+   - `test/Tools/circt-mut-matrix-native-dispatch-cache-aware-schedule.test`
+   - `test/Tools/circt-mut-matrix-native-dispatch-lane-schedule-policy-invalid.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused native matrix scheduling slice:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch-basic.test test/Tools/circt-mut-matrix-native-dispatch-cache-aware-schedule.test test/Tools/circt-mut-matrix-native-dispatch-lane-schedule-policy-invalid.test`: PASS (3/3)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (257/257)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-matrix-schedule ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1025 - February 11, 2026
 
 ### `circt-mut` Policy-Mode Trend Expansion + Stop-On-Fail Trend Composites

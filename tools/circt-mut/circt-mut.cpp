@@ -3734,6 +3734,7 @@ struct MatrixNativePrequalifyConfig {
   std::string createMutatedScript;
   std::string jobsPerLane = "1";
   std::string matrixJobs = "1";
+  std::string laneSchedulePolicy = "fifo";
   std::string reuseCacheDir;
   std::string reuseCacheMode;
   std::string defaultReusePairFile;
@@ -3807,6 +3808,7 @@ static bool parseMatrixNativePrequalifyConfig(ArrayRef<std::string> args,
   readValue("--create-mutated-script", cfg.createMutatedScript);
   readValue("--jobs-per-lane", cfg.jobsPerLane);
   readValue("--jobs", cfg.matrixJobs);
+  readValue("--lane-schedule-policy", cfg.laneSchedulePolicy);
   readValue("--reuse-cache-dir", cfg.reuseCacheDir);
   readValue("--reuse-cache-mode", cfg.reuseCacheMode);
   readValue("--default-reuse-pair-file", cfg.defaultReusePairFile);
@@ -3865,6 +3867,14 @@ static bool parseMatrixNativePrequalifyConfig(ArrayRef<std::string> args,
     error = "circt-mut matrix: missing --lanes-tsv for native prequalification.";
     return false;
   }
+  if (cfg.laneSchedulePolicy != "fifo" &&
+      cfg.laneSchedulePolicy != "cache-aware") {
+    error = (Twine("circt-mut matrix: invalid --lane-schedule-policy for "
+                   "native dispatch: ") +
+             cfg.laneSchedulePolicy + " (expected fifo|cache-aware)")
+                .str();
+    return false;
+  }
   return true;
 }
 
@@ -3889,6 +3899,46 @@ static bool parseLaneBoolWithDefault(StringRef rawValue, bool defaultValue,
            " (expected 1|0|true|false|yes|no|-).")
               .str();
   return false;
+}
+
+static std::string computeMatrixLaneScheduleKey(
+    const MatrixNativePrequalifyConfig &cfg, StringRef laneID,
+    StringRef laneDesign, StringRef laneGenerateCount, StringRef laneMutationsTop,
+    StringRef laneMutationsSeed, StringRef laneMutationsYosys,
+    StringRef laneMutationsModes, StringRef laneMutationsModeCounts,
+    StringRef laneMutationsModeWeights, StringRef laneMutationsProfiles,
+    StringRef laneMutationsCfg, StringRef laneMutationsSelect) {
+  if (cfg.reuseCacheDir.empty() || laneGenerateCount.empty() ||
+      laneGenerateCount == "-")
+    return (Twine("lane:") + laneID).str();
+
+  StringRef seed = laneMutationsSeed;
+  if (seed.empty() || seed == "-")
+    seed = cfg.defaultMutationsSeed;
+  if (seed.empty() || seed == "-")
+    seed = "1";
+
+  StringRef yosys = laneMutationsYosys;
+  if (yosys.empty() || yosys == "-")
+    yosys = cfg.defaultMutationsYosys;
+  if (yosys.empty() || yosys == "-")
+    yosys = "yosys";
+
+  SmallString<512> key;
+  raw_svector_ostream os(key);
+  os << "cache:v1\n";
+  os << "design=" << laneDesign << "\n";
+  os << "count=" << laneGenerateCount << "\n";
+  os << "top=" << laneMutationsTop << "\n";
+  os << "seed=" << seed << "\n";
+  os << "yosys=" << yosys << "\n";
+  os << "modes=" << laneMutationsModes << "\n";
+  os << "mode_counts=" << laneMutationsModeCounts << "\n";
+  os << "mode_weights=" << laneMutationsModeWeights << "\n";
+  os << "profiles=" << laneMutationsProfiles << "\n";
+  os << "cfg=" << laneMutationsCfg << "\n";
+  os << "select=" << laneMutationsSelect << "\n";
+  return std::string(key.str());
 }
 
 static int runNativeMatrixGlobalFilterPrequalify(
@@ -4854,7 +4904,7 @@ static int runNativeMatrixDispatch(const char *argv0,
       return 1;
     }
   }
-  bool bufferedMode = matrixJobs > 1;
+  bool bufferedMode = matrixJobs > 1 || cfg.laneSchedulePolicy == "cache-aware";
   std::optional<Regex> includeLaneRegex;
   std::optional<Regex> excludeLaneRegex;
   if (auto v = getLastOptionValue(args, "--include-lane-regex")) {
@@ -4885,9 +4935,12 @@ static int runNativeMatrixDispatch(const char *argv0,
     std::string laneID;
     std::string laneWorkDir;
     std::string laneLog;
+    std::string scheduleKey;
     SmallVector<std::string, 96> coverCmd;
   };
   std::vector<PendingLaneJob> pendingJobs;
+  uint64_t scheduleUniqueKeys = 0;
+  uint64_t scheduleDeferredFollowers = 0;
   auto formatLaneRow = [](StringRef laneID, StringRef status, int exitCode,
                           StringRef coveragePercent, StringRef runtimeNanos,
                           StringRef gateStatus, StringRef laneDir,
@@ -5021,37 +5074,48 @@ static int runNativeMatrixDispatch(const char *argv0,
 
     bool generatedLane =
         laneMutationsFile.empty() || laneMutationsFile == "-";
+    std::string laneMutationsTop;
+    std::string laneMutationsSeed;
+    std::string laneMutationsYosys;
+    std::string laneMutationsModes;
+    std::string laneMutationsModeCounts;
+    std::string laneMutationsModeWeights;
+    std::string laneMutationsProfiles;
+    std::string laneMutationsCfg;
+    std::string laneMutationsSelect;
     if (!generatedLane) {
       coverCmd.push_back("--mutations-file");
       coverCmd.push_back(laneMutationsFile);
     } else {
       coverCmd.push_back("--generate-mutations");
       coverCmd.push_back(laneGenerateCount);
-      maybeAddArg(coverCmd, "--mutations-top",
-                  effectiveColumn(cols, ColMutationsTop, ""));
-      maybeAddArg(coverCmd, "--mutations-seed",
-                  effectiveColumn(cols, ColMutationsSeed,
-                                  cfg.defaultMutationsSeed));
-      maybeAddArg(coverCmd, "--mutations-yosys",
-                  effectiveColumn(cols, ColMutationsYosys,
-                                  cfg.defaultMutationsYosys));
-      maybeAddArg(coverCmd, "--mutations-modes",
-                  effectiveColumn(cols, ColMutationsModes,
-                                  cfg.defaultMutationsModes));
-      maybeAddArg(coverCmd, "--mutations-mode-counts",
-                  effectiveColumn(cols, ColMutationsModeCounts,
-                                  cfg.defaultMutationsModeCounts));
+      laneMutationsTop = effectiveColumn(cols, ColMutationsTop, "");
+      laneMutationsSeed =
+          effectiveColumn(cols, ColMutationsSeed, cfg.defaultMutationsSeed);
+      laneMutationsYosys =
+          effectiveColumn(cols, ColMutationsYosys, cfg.defaultMutationsYosys);
+      laneMutationsModes =
+          effectiveColumn(cols, ColMutationsModes, cfg.defaultMutationsModes);
+      laneMutationsModeCounts = effectiveColumn(cols, ColMutationsModeCounts,
+                                                cfg.defaultMutationsModeCounts);
+      laneMutationsModeWeights = effectiveColumn(
+          cols, ColMutationsModeWeights, cfg.defaultMutationsModeWeights);
+      laneMutationsProfiles = effectiveColumn(cols, ColMutationsProfiles,
+                                              cfg.defaultMutationsProfiles);
+      laneMutationsCfg =
+          effectiveColumn(cols, ColMutationsCfg, cfg.defaultMutationsCfg);
+      laneMutationsSelect =
+          effectiveColumn(cols, ColMutationsSelect, cfg.defaultMutationsSelect);
+      maybeAddArg(coverCmd, "--mutations-top", laneMutationsTop);
+      maybeAddArg(coverCmd, "--mutations-seed", laneMutationsSeed);
+      maybeAddArg(coverCmd, "--mutations-yosys", laneMutationsYosys);
+      maybeAddArg(coverCmd, "--mutations-modes", laneMutationsModes);
+      maybeAddArg(coverCmd, "--mutations-mode-counts", laneMutationsModeCounts);
       maybeAddArg(coverCmd, "--mutations-mode-weights",
-                  effectiveColumn(cols, ColMutationsModeWeights,
-                                  cfg.defaultMutationsModeWeights));
-      maybeAddArg(coverCmd, "--mutations-profiles",
-                  effectiveColumn(cols, ColMutationsProfiles,
-                                  cfg.defaultMutationsProfiles));
-      maybeAddArg(coverCmd, "--mutations-cfg",
-                  effectiveColumn(cols, ColMutationsCfg, cfg.defaultMutationsCfg));
-      maybeAddArg(coverCmd, "--mutations-select",
-                  effectiveColumn(cols, ColMutationsSelect,
-                                  cfg.defaultMutationsSelect));
+                  laneMutationsModeWeights);
+      maybeAddArg(coverCmd, "--mutations-profiles", laneMutationsProfiles);
+      maybeAddArg(coverCmd, "--mutations-cfg", laneMutationsCfg);
+      maybeAddArg(coverCmd, "--mutations-select", laneMutationsSelect);
     }
 
     std::string laneGlobalCmd = effectiveColumn(cols, ColGlobalPropagateCmd,
@@ -5171,6 +5235,11 @@ static int runNativeMatrixDispatch(const char *argv0,
       job.laneID = laneID;
       job.laneWorkDir = laneWorkDir;
       job.laneLog = joinPath2(laneWorkDir, "native_matrix_lane.log");
+      job.scheduleKey = computeMatrixLaneScheduleKey(
+          cfg, laneID, laneDesign, laneGenerateCount, laneMutationsTop,
+          laneMutationsSeed, laneMutationsYosys, laneMutationsModes,
+          laneMutationsModeCounts, laneMutationsModeWeights,
+          laneMutationsProfiles, laneMutationsCfg, laneMutationsSelect);
       job.coverCmd = std::move(coverCmd);
       pendingJobs.push_back(std::move(job));
       bufferedRows.emplace_back();
@@ -5243,6 +5312,34 @@ static int runNativeMatrixDispatch(const char *argv0,
       ++laneFail;
     if (!pass && stopOnFail)
       break;
+  }
+
+  if (bufferedMode && cfg.laneSchedulePolicy == "cache-aware") {
+    StringSet<> seenKeys;
+    std::vector<PendingLaneJob> leaders;
+    std::vector<PendingLaneJob> followers;
+    leaders.reserve(pendingJobs.size());
+    followers.reserve(pendingJobs.size());
+    for (auto &job : pendingJobs) {
+      StringRef key = job.scheduleKey;
+      if (key.empty())
+        key = job.laneID;
+      if (seenKeys.insert(key).second) {
+        leaders.push_back(std::move(job));
+        ++scheduleUniqueKeys;
+      } else {
+        followers.push_back(std::move(job));
+        ++scheduleDeferredFollowers;
+      }
+    }
+    pendingJobs.clear();
+    pendingJobs.reserve(leaders.size() + followers.size());
+    for (auto &job : leaders)
+      pendingJobs.push_back(std::move(job));
+    for (auto &job : followers)
+      pendingJobs.push_back(std::move(job));
+  } else if (bufferedMode) {
+    scheduleUniqueKeys = pendingJobs.size();
   }
 
   if (bufferedMode) {
@@ -5385,6 +5482,8 @@ static int runNativeMatrixDispatch(const char *argv0,
     for (const auto &row : bufferedRows)
       out << row << '\n';
   }
+  if (!bufferedMode)
+    scheduleUniqueKeys = laneTotal;
 
   out.close();
   std::error_code gateEC;
@@ -5423,6 +5522,12 @@ static int runNativeMatrixDispatch(const char *argv0,
          << "\n";
   outs() << "native_matrix_dispatch_lanes\t" << laneTotal << "\n";
   outs() << "native_matrix_dispatch_lane_jobs\t" << matrixJobs << "\n";
+  outs() << "native_matrix_dispatch_lane_schedule_policy\t"
+         << cfg.laneSchedulePolicy << "\n";
+  outs() << "native_matrix_dispatch_schedule_unique_keys\t"
+         << scheduleUniqueKeys << "\n";
+  outs() << "native_matrix_dispatch_schedule_deferred_followers\t"
+         << scheduleDeferredFollowers << "\n";
   outs() << "native_matrix_dispatch_pass\t" << lanePass << "\n";
   outs() << "native_matrix_dispatch_fail\t" << laneFail << "\n";
   outs() << "native_matrix_dispatch_skip\t" << laneSkip << "\n";
