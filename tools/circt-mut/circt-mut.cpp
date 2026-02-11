@@ -154,6 +154,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-guard-strict|\n";
   os << "                           formal-regression-matrix-nightly|\n";
   os << "                           formal-regression-matrix-strict|\n";
+  os << "                           formal-regression-matrix-stop-on-fail-strict|\n";
+  os << "                           formal-regression-matrix-full-lanes-strict|\n";
   os << "                           formal-regression-matrix-lane-drift-nightly|\n";
   os << "                           formal-regression-matrix-lane-drift-strict|\n";
   os << "                           formal-regression-matrix-lane-trend-nightly|\n";
@@ -6666,6 +6668,65 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      0.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-stop-on-fail-strict") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.lane_budget.lanes_zero_detected_mutants", 0.0);
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.prequalify_drift_comparable",
+                     1.0);
+    appendUniqueRule(opts.failIfValueLtRules,
+                     "matrix.prequalify_drift_lane_rows_compared", 1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_nonzero_metrics", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_lane_rows_mismatch", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_drift_lane_rows_missing_in_results", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_lane_rows_missing_in_native",
+                     0.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-full-lanes-strict") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.lanes_skip", 0.0);
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.lane_budget.lanes_zero_detected_mutants", 0.0);
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.prequalify_drift_comparable",
+                     1.0);
+    appendUniqueRule(opts.failIfValueLtRules,
+                     "matrix.prequalify_drift_lane_rows_compared", 1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_nonzero_metrics", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_lane_rows_mismatch", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_drift_lane_rows_missing_in_results", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_lane_rows_missing_in_native",
+                     0.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-lane-drift-nightly") {
     appendUniqueRule(opts.failIfValueLtRules, "matrix.prequalify_drift_comparable",
                      1.0);
@@ -6752,6 +6813,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-guard-strict|"
            "formal-regression-matrix-nightly|"
            "formal-regression-matrix-strict|"
+           "formal-regression-matrix-stop-on-fail-strict|"
+           "formal-regression-matrix-full-lanes-strict|"
            "formal-regression-matrix-lane-drift-nightly|"
            "formal-regression-matrix-lane-drift-strict|"
            "formal-regression-matrix-lane-trend-nightly|"
