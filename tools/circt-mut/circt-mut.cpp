@@ -119,7 +119,8 @@ static void printInitHelp(raw_ostream &os) {
   os << "  --report-policy-mode MODE\n";
   os << "                           Report policy mode for generated config\n";
   os << "                           (smoke|nightly|strict|trend-nightly|trend-strict|\n";
-  os << "                            provenance-guard|provenance-strict,\n";
+  os << "                            provenance-guard|provenance-strict|\n";
+  os << "                            native-lifecycle-strict,\n";
   os << "                            default: smoke)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           Enable stop-on-fail report guard profile in\n";
@@ -173,7 +174,8 @@ static void printRunHelp(raw_ostream &os) {
   os << "                           Repeatable post-run report policy profile\n";
   os << "  --report-policy-mode MODE\n";
   os << "                           smoke|nightly|strict|trend-nightly|trend-strict|\n";
-  os << "                           provenance-guard|provenance-strict\n";
+  os << "                           provenance-guard|provenance-strict|\n";
+  os << "                           native-lifecycle-strict\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -202,7 +204,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --trend-window N         Use latest N history runs for trends (0=all)\n";
   os << "  --policy-profile NAME    Apply built-in report policy profile\n";
   os << "  --policy-mode MODE       smoke|nightly|strict|trend-nightly|trend-strict|\n";
-  os << "                           provenance-guard|provenance-strict\n";
+  os << "                           provenance-guard|provenance-strict|\n";
+  os << "                           native-lifecycle-strict\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -5745,7 +5748,7 @@ static std::string resolveProjectFilePath(StringRef projectDir, StringRef file) 
 
 static constexpr StringLiteral kMatrixPolicyModeList =
     "smoke|nightly|strict|trend-nightly|trend-strict|provenance-guard|"
-    "provenance-strict";
+    "provenance-strict|native-lifecycle-strict";
 
 static bool isMatrixPolicyMode(StringRef mode);
 
@@ -7578,7 +7581,8 @@ static void appendMatrixNativeLifecycleStrictRules(ReportOptions &opts) {
 static bool isMatrixPolicyMode(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
          mode == "trend-nightly" || mode == "trend-strict" ||
-         mode == "provenance-guard" || mode == "provenance-strict";
+         mode == "provenance-guard" || mode == "provenance-strict" ||
+         mode == "native-lifecycle-strict";
 }
 
 static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
@@ -7621,6 +7625,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     policyProfile = "formal-regression-matrix-provenance-guard";
   } else if (mode == "provenance-strict") {
     policyProfile = "formal-regression-matrix-provenance-strict";
+  } else if (mode == "native-lifecycle-strict") {
+    policyProfile = "formal-regression-matrix-native-lifecycle-strict";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
              (Twine("' (expected ") + kMatrixPolicyModeList + ")"))
