@@ -9,6 +9,27 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 22:35)
+
+1. LEC semantic error telemetry now decomposes coarse `semantic_other`:
+   - added semantic sub-buckets (`semantic_diag_error`,
+     `semantic_result_tag`, `semantic_diag_missing`) plus `infra_config`.
+2. Real signal impact:
+   - filtered `verilator-verification/LEC` (`assert_changed`) now lands in
+     `lec_error_bucket_semantic_diag_error_cases=1` instead of broad
+     `semantic_other`.
+3. Remaining limitations:
+   - `semantic_diag_error` is still a transitional bucket; we still need finer
+     parser/lowering/solver family attribution for stronger triage.
+   - BMC multiclock deterministic SAT/UNSAT pair is still missing.
+4. Next long-term features:
+   - split `semantic_diag_error` into stable reason families (for example
+     parser_import, lowering_pipeline, solver_contract) and add case-ID drift
+     gates per family.
+   - add deterministic multiclock SAT/UNSAT e2e parity pair and fold into
+     strict-cadence profiles.
+   - consume refined BMC/LEC bucket deltas directly in mutation profile ranking.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 22:20)
 
 1. OpenTitan LEC filtered no-match handling is now explicit and non-failing:

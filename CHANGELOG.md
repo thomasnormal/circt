@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1111 - February 11, 2026
+
+### Formal Telemetry: Decompose LEC `semantic_other` Error Bucket
+
+1. Refined LEC error-bucket classification in `utils/run_formal_all.sh` to
+   reduce coarse `semantic_other` aggregation for `ERROR` rows.
+2. New stable sub-buckets for non-`CIRCT_*_ERROR` diagnostics:
+   - `semantic_diag_error` (e.g. `diag=ERROR` / `CIRCT_LEC_ERROR`)
+   - `semantic_result_tag` (e.g. `diag=NEQ|UNKNOWN` when surfaced on `ERROR`)
+   - `semantic_diag_missing` (no recoverable diag tag)
+   - `infra_config` (e.g. `UVM_PATH_MISSING`)
+3. Preserved existing infra/tool-path buckets for
+   `CIRCT_OPT_ERROR`/`CIRCT_VERILOG_ERROR` and reason-token mapping.
+4. Added regression coverage:
+   - `test/Tools/run-formal-all-lec-error-bucket-semantic-diag-error.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-lec-error-bucket-semantic-diag-error.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-error-bucket-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-error-bucket-case-ids-defaults.test`
+  - PASS (3/3)
+- Real filtered cadence check:
+  - `verilator-verification/LEC` with `assert_changed` filter now reports
+    `lec_error_bucket_semantic_diag_error_cases=1` (previously
+    `lec_error_bucket_semantic_other_cases`).
+
 ## Iteration 1110 - February 11, 2026
 
 ### Formal Runner Hygiene: OpenTitan LEC Empty-Selection Becomes Explicit SKIP
