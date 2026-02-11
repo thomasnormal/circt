@@ -9,6 +9,30 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 20:50)
+
+1. Added explicit LEC infra budget governance for runner-command failures:
+   - new aggregate summary counter: `lec_runner_command_cases`
+   - new gates:
+     - `--fail-on-new-lec-runner-command-cases`
+     - `--fail-on-any-lec-runner-command-cases`
+2. Strict-gate now covers runner-command drift at four granularities:
+   - reason-key (`lec_runner_command_reason_*_cases`)
+   - case IDs (`lec_runner_command_case_ids`)
+   - case+reason tuples (`lec_runner_command_case_reasons`)
+   - aggregate count (`lec_runner_command_cases`)
+3. Remaining limitations and next long-term targets:
+   - current filtered `sv-tests` and `verilator` LEC smokes still report
+     `runner_command_permission_denied` infra errors
+     (`lec_runner_command_cases=1`), so zero-any-case budgets are not yet
+     generally deployable.
+   - add lane-level infra budget policy (per-suite allowed burst/rate) instead
+     of only absolute/new-count gates.
+   - continue LEC semantic classification for remaining non-infra `ERROR`
+     populations in `verilator` and `yosys` filtered lanes.
+   - continue BMC semantic closure for multiclock + sequence-subroutine buckets
+     with strict case-ID drift gates and mutation-priority integration.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 20:30)
 
 1. Added dedicated formal-governance counters for infra runner failures:

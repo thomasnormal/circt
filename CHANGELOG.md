@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1105 - February 11, 2026
+
+### Formal Governance: LEC `runner_command_*` Aggregate Case-Count Budget Gates
+
+1. Added aggregate LEC infra counter emission in `run_formal_all.sh`:
+   - `lec_runner_command_cases`
+   counting `runner_command_*` reasons across `CIRCT_OPT_ERROR` and
+   `CIRCT_VERILOG_ERROR`.
+2. Added explicit strict-gate options:
+   - `--fail-on-new-lec-runner-command-cases`
+   - `--fail-on-any-lec-runner-command-cases`
+3. Included `--fail-on-new-lec-runner-command-cases` in `--strict-gate`
+   defaults for baseline-drift governance.
+4. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-runner-command-cases.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-runner-command-cases-defaults.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-runner-command-cases-any.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-cases.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-cases-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-cases-any.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-case-reasons.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-reason-keys.test`
+  - PASS (6/6)
+- External filtered cadence smokes (explicit `build-test/bin` tools):
+  - `sv-tests/LEC` filtered (`16.15--property-iff-uvm`):
+    - `error=1`, `lec_runner_command_cases=1`
+    - `lec_runner_command_reason_runner_command_permission_denied_cases=1`
+  - `verilator-verification/LEC` filtered (`assert_changed`):
+    - `error=1`, `lec_runner_command_cases=1`
+    - `lec_runner_command_reason_runner_command_permission_denied_cases=1`
+
 ## Iteration 1104 - February 11, 2026
 
 ### Formal Governance: LEC `runner_command_*` Case Identity Drift Gates
