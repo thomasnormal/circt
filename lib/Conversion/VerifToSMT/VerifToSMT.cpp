@@ -83,6 +83,9 @@ static Value gateSMTWithEnable(Value property, Value enable, bool isCover,
 
 static bool isFourStateStruct(Type originalTy, int64_t &valueWidth,
                               int64_t &unknownWidth) {
+  if (auto aliasTy = dyn_cast<hw::TypeAliasType>(originalTy))
+    return isFourStateStruct(aliasTy.getCanonicalType(), valueWidth,
+                             unknownWidth);
   auto structTy = dyn_cast<hw::StructType>(originalTy);
   if (!structTy)
     return false;

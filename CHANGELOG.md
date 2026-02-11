@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1059 - February 11, 2026
+
+### VerifToSMT: Honor `--assume-known-inputs` For Alias-Wrapped 4-State Inputs
+
+1. Fixed a formal soundness hole in `lib/Conversion/VerifToSMT/VerifToSMT.cpp`:
+   - `isFourStateStruct(...)` now unwraps `!hw.typealias<...>` recursively
+     before checking for `{value, unknown}` shape.
+   - This makes knownness constraints (`unknown == 0`) and 4-state warnings
+     apply consistently even when inputs are carried via typedef aliases.
+2. Added regression coverage for alias-wrapped 4-state inputs:
+   - `test/Conversion/VerifToSMT/bmc-assume-known-inputs.mlir`
+   - `test/Conversion/VerifToSMT/lec-assume-known-inputs.mlir`
+   - `test/Conversion/VerifToSMT/four-state-input-warning.mlir`
+3. External formal cadence snapshot (explicit `build-test/bin` toolchain):
+   - `verilator-verification` BMC (`assert_(past|stable)$`):
+     - PASS `assert_past`
+     - FAIL `assert_stable` (still open semantic gap)
+   - `verilator-verification` LEC (`assert_(past|stable)$`):
+     - PASS `assert_past`
+     - PASS `assert_stable`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-opt circt-bmc circt-lec`: PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-assume-known-inputs.mlir build-test/test/Conversion/VerifToSMT/lec-assume-known-inputs.mlir build-test/test/Conversion/VerifToSMT/four-state-input-warning.mlir`: PASS (3/3)
+
 ## Iteration 1058 - February 11, 2026
 
 ### `circt-mut report`: Trend History Quality Enforced Across Direct Profiles
