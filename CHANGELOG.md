@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1008 - February 11, 2026
+
+### `circt-mut report/run`: Explicit Drift-Gate Disable Path
+
+1. Extended `circt-mut report` in `tools/circt-mut/circt-mut.cpp` with:
+   - `--no-fail-on-prequalify-drift`
+   - `[report] fail_on_prequalify_drift = <bool>` parsing
+2. Added explicit override semantics so drift gating can be disabled even when
+   policy profiles would otherwise enable it.
+   - This addresses the long-term governance limitation where profile bundles
+     were effectively all-or-nothing for drift gating.
+3. Extended `circt-mut run --with-report` pass-through from `[run]`:
+   - `report_fail_on_prequalify_drift = true` ->
+     `--fail-on-prequalify-drift`
+   - `report_fail_on_prequalify_drift = false` ->
+     `--no-fail-on-prequalify-drift`
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-help.test` (new report flag)
+   - `test/Tools/circt-mut-report-prequalify-drift-config-disable.test`
+   - `test/Tools/circt-mut-run-with-report-config-prequalify-drift-disable.test`
+   - `test/Tools/circt-mut-run-with-report-config-prequalify-drift-invalid.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused run/report slice:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-prequalify-drift-config-disable.test test/Tools/circt-mut-run-with-report-config-prequalify-drift-*.test test/Tools/circt-mut-run-with-report-*.test`: PASS (16/16)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (227/227)
+- External filtered formal cadence:
+  - `LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-report-no-prequalify-drift-override-20260211 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1007 - February 11, 2026
 
 ### `circt-mut run`: Policy-Mode Mapping for Post-Run Report Profiles
