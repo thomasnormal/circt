@@ -5,5 +5,7 @@
 
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-matrix-stop-on-fail-strict
 // CHECK: matrix.lanes_skip{{[[:space:]]}}1
+// CHECK: matrix.skip_budget_rows_stop_on_fail{{[[:space:]]}}1
+// CHECK: matrix.skip_budget_rows_non_stop_on_fail{{[[:space:]]}}0
 // CHECK: value_gate.status{{[[:space:]]}}pass
 // CHECK: matrix.prequalify_drift_gate_status{{[[:space:]]}}pass

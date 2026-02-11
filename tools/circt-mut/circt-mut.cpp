@@ -179,6 +179,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           Fail if matrix prequalify results.tsv counters\n";
   os << "                           drift from native prequalify summary counters\n";
   os << "  --lane-budget-out FILE   Write per-lane matrix budget TSV artifact\n";
+  os << "  --skip-budget-out FILE   Write matrix skip-budget TSV artifact\n";
   os << "  --out FILE               Write report TSV to FILE (also prints to stdout)\n";
   os << "  -h, --help               Show help\n";
 }
@@ -6294,6 +6295,7 @@ struct ReportOptions {
   SmallVector<DeltaGateRule, 8> failIfTrendDeltaLtRules;
   bool failOnPrequalifyDrift = false;
   std::string laneBudgetOutFile;
+  std::string skipBudgetOutFile;
   std::string outFile;
 };
 
@@ -6319,6 +6321,17 @@ struct MatrixLaneBudgetRow {
   uint64_t timeoutMutants = 0;
   uint64_t lecUnknownMutants = 0;
   uint64_t bmcUnknownMutants = 0;
+  std::string configErrorCode;
+  std::string configErrorReason;
+};
+
+struct SkipBudgetSummary {
+  uint64_t totalRows = 0;
+  uint64_t skipRows = 0;
+  uint64_t nonSkipRows = 0;
+  uint64_t stopOnFailRows = 0;
+  uint64_t nonStopOnFailSkipRows = 0;
+  uint64_t rowsWithReason = 0;
 };
 
 struct ReportParseResult {
@@ -6695,6 +6708,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.prequalify_drift_lane_rows_missing_in_native",
                      0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.skip_budget_rows_non_stop_on_fail", 0.0);
     return true;
   }
   if (profile == "formal-regression-matrix-full-lanes-strict") {
@@ -7441,6 +7456,12 @@ static bool collectMatrixReport(
   if (auto it = colIndex.find("prequalify_cmd_error_mutants");
       it != colIndex.end())
     prequalifyCmdErrorMutantsCol = it->second;
+  size_t configErrorCodeCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("config_error_code"); it != colIndex.end())
+    configErrorCodeCol = it->second;
+  size_t configErrorReasonCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("config_error_reason"); it != colIndex.end())
+    configErrorReasonCol = it->second;
   bool hasResultsPrequalifyColumns =
       prequalifySummaryPresentCol != static_cast<size_t>(-1) ||
       prequalifyTotalMutantsCol != static_cast<size_t>(-1);
@@ -7641,6 +7662,14 @@ static bool collectMatrixReport(
     laneBudgetRow.laneID = laneID.str();
     laneBudgetRow.status = status.str();
     laneBudgetRow.gateStatus = gate.str();
+    laneBudgetRow.configErrorCode =
+        (configErrorCodeCol != static_cast<size_t>(-1)
+             ? getField(configErrorCodeCol).str()
+             : std::string());
+    laneBudgetRow.configErrorReason =
+        (configErrorReasonCol != static_cast<size_t>(-1)
+             ? getField(configErrorReasonCol).str()
+             : std::string());
     if (status == "PASS")
       ++lanesPass;
     else if (status == "FAIL")
@@ -8437,6 +8466,63 @@ static bool writeLaneBudgetFile(StringRef path,
   return true;
 }
 
+static SkipBudgetSummary
+computeSkipBudgetSummary(ArrayRef<MatrixLaneBudgetRow> laneRows) {
+  SkipBudgetSummary summary;
+  summary.totalRows = laneRows.size();
+  for (const auto &row : laneRows) {
+    bool isSkip = row.status == "SKIP" || row.gateStatus == "SKIP";
+    if (isSkip) {
+      ++summary.skipRows;
+      if (row.configErrorCode == "STOP_ON_FAIL")
+        ++summary.stopOnFailRows;
+      else
+        ++summary.nonStopOnFailSkipRows;
+      if (!row.configErrorReason.empty() && row.configErrorReason != "-")
+        ++summary.rowsWithReason;
+    } else {
+      ++summary.nonSkipRows;
+    }
+  }
+  return summary;
+}
+
+static bool writeSkipBudgetFile(StringRef path,
+                                ArrayRef<MatrixLaneBudgetRow> laneRows,
+                                std::string &error) {
+  SmallString<256> parent(path);
+  sys::path::remove_filename(parent);
+  if (!parent.empty()) {
+    std::error_code dirEC = sys::fs::create_directories(parent);
+    if (dirEC) {
+      error = (Twine("circt-mut report: failed to create skip budget output "
+                     "directory: ") +
+               parent + ": " + dirEC.message())
+                  .str();
+      return false;
+    }
+  }
+
+  std::error_code ec;
+  raw_fd_ostream os(path, ec, sys::fs::OF_Text);
+  if (ec) {
+    error = (Twine("circt-mut report: failed to open --skip-budget-out file: ") +
+             path + ": " + ec.message())
+                .str();
+    return false;
+  }
+  os << "lane_id\tstatus\tgate_status\tis_skip\thas_metrics\tconfig_error_code\t"
+        "config_error_reason\n";
+  for (const auto &row : laneRows) {
+    bool isSkip = row.status == "SKIP" || row.gateStatus == "SKIP";
+    os << row.laneID << "\t" << row.status << "\t" << row.gateStatus << "\t"
+       << (isSkip ? "1" : "0") << "\t" << (row.hasMetrics ? "1" : "0") << "\t"
+       << (row.configErrorCode.empty() ? "-" : row.configErrorCode) << "\t"
+       << (row.configErrorReason.empty() ? "-" : row.configErrorReason) << "\n";
+  }
+  return true;
+}
+
 static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
   ReportParseResult result;
 
@@ -8656,6 +8742,13 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       if (!v)
         return result;
       result.opts.laneBudgetOutFile = v->str();
+      continue;
+    }
+    if (arg == "--skip-budget-out" || arg.starts_with("--skip-budget-out=")) {
+      auto v = consumeValue(i, arg, "--skip-budget-out");
+      if (!v)
+        return result;
+      result.opts.skipBudgetOutFile = v->str();
       continue;
     }
     if (arg == "--fail-on-prequalify-drift") {
@@ -8890,6 +8983,12 @@ static int runNativeReport(const ReportOptions &opts) {
               "--mode all\n";
     return 1;
   }
+  if (!opts.skipBudgetOutFile.empty() &&
+      !(opts.mode == "matrix" || opts.mode == "all")) {
+    errs() << "circt-mut report: --skip-budget-out requires --mode matrix or "
+              "--mode all\n";
+    return 1;
+  }
   if (opts.mode == "cover" || opts.mode == "all") {
     if (!collectCoverReport(coverWorkDir, rows, error)) {
       errs() << error << "\n";
@@ -8906,6 +9005,19 @@ static int runNativeReport(const ReportOptions &opts) {
       errs() << error << "\n";
       return 1;
     }
+    SkipBudgetSummary skipSummary = computeSkipBudgetSummary(laneBudgetRows);
+    rows.emplace_back("matrix.skip_budget_rows_total",
+                      std::to_string(skipSummary.totalRows));
+    rows.emplace_back("matrix.skip_budget_rows_skip",
+                      std::to_string(skipSummary.skipRows));
+    rows.emplace_back("matrix.skip_budget_rows_non_skip",
+                      std::to_string(skipSummary.nonSkipRows));
+    rows.emplace_back("matrix.skip_budget_rows_stop_on_fail",
+                      std::to_string(skipSummary.stopOnFailRows));
+    rows.emplace_back("matrix.skip_budget_rows_non_stop_on_fail",
+                      std::to_string(skipSummary.nonStopOnFailSkipRows));
+    rows.emplace_back("matrix.skip_budget_rows_with_reason",
+                      std::to_string(skipSummary.rowsWithReason));
   }
   if (!opts.laneBudgetOutFile.empty()) {
     std::string laneBudgetOut =
@@ -8917,6 +9029,28 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("matrix.lane_budget_file", laneBudgetOut);
     rows.emplace_back("matrix.lane_budget_file_rows",
                       std::to_string(laneBudgetRows.size()));
+  }
+  if (!opts.skipBudgetOutFile.empty()) {
+    std::string skipBudgetOut =
+        resolveRelativeTo(opts.projectDir, opts.skipBudgetOutFile);
+    if (!writeSkipBudgetFile(skipBudgetOut, laneBudgetRows, error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    SkipBudgetSummary skipSummary = computeSkipBudgetSummary(laneBudgetRows);
+    rows.emplace_back("matrix.skip_budget_file", skipBudgetOut);
+    rows.emplace_back("matrix.skip_budget_file_rows",
+                      std::to_string(laneBudgetRows.size()));
+    rows.emplace_back("matrix.skip_budget_rows_skip",
+                      std::to_string(skipSummary.skipRows));
+    rows.emplace_back("matrix.skip_budget_rows_non_skip",
+                      std::to_string(skipSummary.nonSkipRows));
+    rows.emplace_back("matrix.skip_budget_rows_stop_on_fail",
+                      std::to_string(skipSummary.stopOnFailRows));
+    rows.emplace_back("matrix.skip_budget_rows_non_stop_on_fail",
+                      std::to_string(skipSummary.nonStopOnFailSkipRows));
+    rows.emplace_back("matrix.skip_budget_rows_with_reason",
+                      std::to_string(skipSummary.rowsWithReason));
   }
 
   if (compareFile.empty() && compareHistoryLatestFile.empty() &&
