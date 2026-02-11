@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1147 - February 11, 2026
+
+### Mutation Governance: Core Timeout-Stage Quality Budget + v14 Strict Composites
+
+1. Added `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-core-timeout-stage-budget-v1`
+2. Profile contract:
+   - enforces `value <= 0` for core BMC/LEC timeout-stage counters:
+   - BMC:
+     - `sv-tests/BMC`
+     - `sv-tests-uvm/BMC_SEMANTICS`
+     - `verilator-verification/BMC`
+     - `yosys/tests/sva/BMC`
+   - LEC:
+     - `sv-tests/LEC`
+     - `verilator-verification/LEC`
+     - `yosys/tests/sva/LEC`
+3. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v14`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v14`
+   (`v13` + core timeout-stage quality budget profile).
+4. Added/updated regressions:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-core-timeout-stage-budget-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-core-timeout-stage-budget-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v14-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v14-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v14-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v14-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+5. Validation:
+   - `ninja -C build-test circt-mut`: PASS
+   - focused lit slice (10 targeted tests): PASS (10/10)
+   - direct policy sanity probe:
+     - profile fails as expected on nonzero
+       `sv-tests/BMC.bmc_timeout_stage_frontend_cases`.
+
 ## Iteration 1146 - February 11, 2026
 
 ### Mutation Governance: BMC Core-Minimum Volume Gate + v13 Strict Composites
