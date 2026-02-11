@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1138 - February 11, 2026
+
+### Mutation Governance: sv-tests BMC Minimum-Volume Contract + v7 Composites
+
+1. Added `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-sv-tests-bmc-min-total-v1`
+2. Profile contract:
+   - enforces `external_formal.summary_status_by_suite_mode.sv_tests.BMC.total >= 1`
+     so strict formal trend policies cannot silently accept zero-volume BMC
+     slices.
+3. Added staged strict composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v7`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v7`
+   (`v6` + sv-tests BMC minimum-volume contract).
+4. Added/updated regressions:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-sv-tests-bmc-min-total-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-sv-tests-bmc-min-total-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v7-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v7-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v7-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v7-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+5. Targeted external probe snapshot:
+   - `sv-tests` BMC (non-matching filter): `total=0 skip=1028`
+   - `verilator-verification` LEC (`assert_changed`): `PASS` (`total=1`)
+   - `yosys/tests/sva` LEC (`basic00`): `PASS` (`total=1`)
+   - OpenTitan E2E LEC-only (`aes_sbox`): `FAIL missing_results`
+   - AVIP `apb_avip` compile probe: exit `0`
+
 ## Iteration 1137 - February 11, 2026
 
 ### Mutation Regression Stabilization: Keep Compile-Mode Rows in Formal-Trend v1 Fixtures

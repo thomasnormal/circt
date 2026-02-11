@@ -9,6 +9,33 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++)
+
+1. Added first minimum-volume formal policy gate in `circt-mut`:
+   - `formal-regression-matrix-external-formal-sv-tests-bmc-min-total-v1`
+2. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v7`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v7`
+3. Contract impact:
+   - strict formal trend policies now fail when `sv-tests/BMC` volume drops to
+     zero, even if other drift guards remain green.
+4. Current targeted probe status:
+   - `sv-tests` BMC targeted non-match slice: `total=0 skip=1028`
+   - `verilator-verification` LEC (`assert_changed`): `PASS`
+   - `yosys/tests/sva` LEC (`basic00`): `PASS`
+   - OpenTitan LEC-only (`aes_sbox`): `FAIL missing_results`
+   - AVIP (`apb_avip`) compile probe: exit `0`
+5. Remaining limitations:
+   - minimum-volume policy is currently scoped to `sv-tests/BMC` only.
+   - no minimum-volume contracts yet for `sv-tests/LEC`, `sv-tests-uvm`,
+     `verilator`, `yosys`, or OpenTitan lanes.
+   - OpenTitan bounded LEC result emission remains unstable (`missing_results`).
+6. Next long-term features:
+   - extend `min_total` profiles across all filtered formal lanes and OpenTitan.
+   - wire per-lane volume policies into strict nightly/CI matrix modes.
+   - harden OpenTitan LEC result contract so `missing_results` is replaced by
+     deterministic classified failures.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++)
 
 1. Promoted non-empty filtered-lane contracts into mutation governance:
