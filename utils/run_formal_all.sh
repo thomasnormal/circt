@@ -61,6 +61,10 @@ Options:
                          counter keys
                          (`lec_circt_verilog_error_reason_*_cases`) appear vs
                          baseline
+  --fail-on-new-lec-runner-command-reason-keys
+                         Fail when new LEC runner-command reason counter keys
+                         (`lec_runner_command_reason_*_cases`) appear vs
+                         baseline
   --fail-on-new-lec-circt-verilog-error-case-ids
                          Fail when LEC `CIRCT_VERILOG_ERROR` case IDs increase
                          vs baseline
@@ -1859,6 +1863,7 @@ FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_IDS=0
 FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS=0
 FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_REASONS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS=0
+FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=0
 FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=0
@@ -2224,6 +2229,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_REASONS=1; shift ;;
     --fail-on-new-lec-circt-verilog-error-reason-keys)
       FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS=1; shift ;;
+    --fail-on-new-lec-runner-command-reason-keys)
+      FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS=1; shift ;;
     --fail-on-new-lec-circt-verilog-error-case-ids)
       FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=1; shift ;;
     --fail-on-new-lec-circt-verilog-error-case-reasons)
@@ -4320,6 +4327,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS=1
   FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_REASONS=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS=1
+  FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=1
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1
@@ -7464,9 +7472,13 @@ with path.open(encoding="utf-8") as f:
             if status == "error" and diag == "circt_opt_error":
                 reason_key = normalize(reason_token) if reason_token else "missing"
                 counts[f"lec_circt_opt_error_reason_{reason_key}_cases"] += 1
+                if reason_key.startswith("runner_command_"):
+                    counts[f"lec_runner_command_reason_{reason_key}_cases"] += 1
             if status == "error" and diag == "circt_verilog_error":
                 reason_key = normalize(reason_token) if reason_token else "missing"
                 counts[f"lec_circt_verilog_error_reason_{reason_key}_cases"] += 1
+                if reason_key.startswith("runner_command_"):
+                    counts[f"lec_runner_command_reason_{reason_key}_cases"] += 1
             if explicit_diag:
                 counts["lec_diag_explicit_cases"] += 1
             elif used_path_fallback:
@@ -11862,6 +11874,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS" == "1" || \
+      "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" == "1" || \
@@ -11917,6 +11930,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS="$FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_REASON_KEYS" \
   FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_REASONS="$FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_REASONS" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS" \
+  FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" \
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" \
@@ -12523,6 +12537,9 @@ fail_on_new_lec_circt_opt_error_case_reasons = (
 )
 fail_on_new_lec_circt_verilog_error_reason_keys = (
     os.environ.get("FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS", "0") == "1"
+)
+fail_on_new_lec_runner_command_reason_keys = (
+    os.environ.get("FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS", "0") == "1"
 )
 fail_on_new_lec_circt_verilog_error_case_ids = (
     os.environ.get("FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS", "0") == "1"
@@ -13517,6 +13534,36 @@ for key, current_row in summary.items():
                         sample += ", ..."
                     gate_errors.append(
                         f"{suite} {mode}: new LEC CIRCT_VERILOG_ERROR reason keys observed (baseline={len(baseline_verilog_reason_keys)} current={len(current_verilog_reason_keys)}, window={baseline_window}): {sample}"
+                    )
+        if fail_on_new_lec_runner_command_reason_keys:
+            baseline_runner_command_reason_keys = set()
+            for counts in parsed_counts:
+                for counter_key in counts.keys():
+                    if (
+                        counter_key.startswith("lec_runner_command_reason_")
+                        and counter_key.endswith("_cases")
+                    ):
+                        baseline_runner_command_reason_keys.add(counter_key)
+            should_enforce_runner_command_reason_key_drift = (
+                bool(baseline_runner_command_reason_keys) or not strict_gate
+            )
+            if should_enforce_runner_command_reason_key_drift:
+                current_runner_command_reason_keys = {
+                    counter_key
+                    for counter_key in current_counts.keys()
+                    if counter_key.startswith("lec_runner_command_reason_")
+                    and counter_key.endswith("_cases")
+                }
+                new_runner_command_reason_keys = sorted(
+                    current_runner_command_reason_keys
+                    - baseline_runner_command_reason_keys
+                )
+                if new_runner_command_reason_keys:
+                    sample = ", ".join(new_runner_command_reason_keys[:3])
+                    if len(new_runner_command_reason_keys) > 3:
+                        sample += ", ..."
+                    gate_errors.append(
+                        f"{suite} {mode}: new LEC runner-command reason keys observed (baseline={len(baseline_runner_command_reason_keys)} current={len(current_runner_command_reason_keys)}, window={baseline_window}): {sample}"
                     )
         if lec_counter_keys:
             for counter_key in lec_counter_keys:
