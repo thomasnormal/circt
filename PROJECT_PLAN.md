@@ -9,6 +9,26 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:05)
+
+1. `circt-mut report` now exports per-suite/per-mode external formal counters:
+   - `external_formal.summary_counter_by_suite_mode.<suite>.<mode>.<key>`
+2. Long-term value:
+   - enables mutation policy and profile ranking to target active failing
+     formal families at lane granularity (for example `verilator/LEC`
+     semantic buckets) instead of only global aggregate deltas.
+3. Remaining limitations:
+   - we still do not have built-in policy profiles that consume the new scoped
+     keys directly.
+   - LEC semantic diagnostics still need deeper decomposition beneath
+     `semantic_diag_error`.
+4. Next long-term features:
+   - add native policy profiles for strict-formal modes keyed to scoped
+     `external_formal.summary_counter_by_suite_mode.*` thresholds.
+   - add deterministic multiclock SAT/UNSAT BMC pair and track those counters
+     in policy budgets.
+   - connect scoped formal deltas to mutator-family auto-prioritization.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 22:50)
 
 1. Mutation/reporting now consumes formal summary bucket counters natively:

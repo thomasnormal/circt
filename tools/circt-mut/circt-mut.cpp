@@ -7578,6 +7578,8 @@ struct ExternalFormalSummary {
   uint64_t summaryTSVDuplicateRows = 0;
   uint64_t summaryTSVUniqueRows = 0;
   StringMap<uint64_t> summaryCounterSums;
+  std::map<std::pair<std::string, std::string>, StringMap<uint64_t>>
+      summaryCounterSumsBySuiteMode;
 };
 
 struct MatrixLaneBudgetRow {
@@ -7729,6 +7731,8 @@ static bool parseSummaryTokenCount(StringRef token, StringRef key,
   return true;
 }
 
+static std::string sanitizeReportKeySegment(StringRef raw);
+
 static bool collectExternalFormalSummary(
     ArrayRef<std::string> files, std::vector<std::pair<std::string, std::string>> &rows,
     std::string &error) {
@@ -7877,6 +7881,8 @@ static bool collectExternalFormalSummary(
         summary.summarySkip += skip;
         summary.summaryXFail += xfail;
         summary.summaryXPass += xpass;
+        SmallVector<std::pair<std::string, uint64_t>, 16>
+            rowSummaryCounterPairs;
         if (summaryCol != static_cast<size_t>(-1) &&
             fields.size() > summaryCol) {
           splitWhitespace(fields[summaryCol].trim(), tokens);
@@ -7891,6 +7897,19 @@ static bool collectExternalFormalSummary(
             if (!value)
               continue;
             summary.summaryCounterSums[key] += *value;
+            rowSummaryCounterPairs.emplace_back(key.str(), *value);
+          }
+        }
+        if (suiteCol != static_cast<size_t>(-1) &&
+            modeCol != static_cast<size_t>(-1) && fields.size() > suiteCol &&
+            fields.size() > modeCol && !rowSummaryCounterPairs.empty()) {
+          StringRef suiteName = fields[suiteCol].trim();
+          StringRef modeName = fields[modeCol].trim();
+          if (!suiteName.empty() && !modeName.empty()) {
+            auto key = std::make_pair(suiteName.str(), modeName.str());
+            auto &counterMap = summary.summaryCounterSumsBySuiteMode[key];
+            for (const auto &entry : rowSummaryCounterPairs)
+              counterMap[entry.first] += entry.second;
           }
         }
       }
@@ -8060,6 +8079,23 @@ static bool collectExternalFormalSummary(
   for (const auto &entry : summaryCounterRows)
     rows.emplace_back("external_formal.summary_counter." + entry.first,
                       std::to_string(entry.second));
+  for (const auto &suiteModeEntry : summary.summaryCounterSumsBySuiteMode) {
+    SmallVector<std::pair<std::string, uint64_t>, 16> suiteCounterRows;
+    suiteCounterRows.reserve(suiteModeEntry.second.size());
+    for (const auto &counterEntry : suiteModeEntry.second)
+      suiteCounterRows.emplace_back(counterEntry.getKey().str(),
+                                    counterEntry.getValue());
+    llvm::sort(suiteCounterRows, [](const auto &lhs, const auto &rhs) {
+      return lhs.first < rhs.first;
+    });
+    std::string safeSuite = sanitizeReportKeySegment(suiteModeEntry.first.first);
+    std::string safeMode = sanitizeReportKeySegment(suiteModeEntry.first.second);
+    std::string rowPrefix = ("external_formal.summary_counter_by_suite_mode." +
+                             safeSuite + "." + safeMode + ".");
+    for (const auto &counterEntry : suiteCounterRows)
+      rows.emplace_back(rowPrefix + counterEntry.first,
+                        std::to_string(counterEntry.second));
+  }
   return true;
 }
 

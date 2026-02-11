@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1113 - February 11, 2026
+
+### Mutation Integration: Per-Suite/Mode External Formal Counter Export
+
+1. Extended `circt-mut report` external formal summary ingestion to emit
+   suite/mode scoped counter telemetry from `summary.tsv` `summary` tokens:
+   - `external_formal.summary_counter_by_suite_mode.<suite>.<mode>.<key>`
+2. Key details:
+   - metric-key path segments for `<suite>` and `<mode>` are sanitized via
+     the same report-key sanitizer used for lane keys.
+   - existing global aggregate rows
+     `external_formal.summary_counter.<key>` remain unchanged.
+3. Why this matters:
+   - mutation policy can now route/weight by concrete formal lane families
+     (for example `verilator_verification.LEC.lec_error_bucket_*`) instead of
+     only global totals.
+4. Updated regression:
+   - `test/Tools/circt-mut-report-external-formal-summary-counter-keys.test`
+   now validates both global and suite/mode-scoped counter rows.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/circt-mut-report-external-formal-summary-counter-keys.test`
+  - `build-test/test/Tools/run-formal-all-lec-error-bucket-semantic-diag-error.test`
+  - PASS (2/2)
+- Real sampled report check:
+  - `circt-mut report --external-formal-out-dir /tmp/formal-verilator-lec-bucket-20260211-210703`
+  - emits scoped rows such as:
+    - `external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_error_cases	1`
+
 ## Iteration 1112 - February 11, 2026
 
 ### Mutation Integration: Surface External Formal Summary Counter Keys
