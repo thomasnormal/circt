@@ -10844,10 +10844,10 @@ static int runNativeReport(const ReportOptions &opts) {
       appendHistoryFile = historyFile;
   }
 
-  if (!opts.coverWorkDir.empty())
-    coverWorkDir = resolveRelativeTo(opts.projectDir, opts.coverWorkDir);
-  if (!opts.matrixOutDir.empty())
-    matrixOutDir = resolveRelativeTo(opts.projectDir, opts.matrixOutDir);
+  if (!effectiveOpts.coverWorkDir.empty())
+    coverWorkDir = resolveRelativeTo(opts.projectDir, effectiveOpts.coverWorkDir);
+  if (!effectiveOpts.matrixOutDir.empty())
+    matrixOutDir = resolveRelativeTo(opts.projectDir, effectiveOpts.matrixOutDir);
 
   std::vector<std::pair<std::string, std::string>> rows;
   rows.emplace_back("report.mode", opts.mode);
@@ -10904,13 +10904,13 @@ static int runNativeReport(const ReportOptions &opts) {
   uint64_t prequalifyDriftLaneRowsMissingInResults = 0;
   uint64_t prequalifyDriftLaneRowsMissingInNative = 0;
   std::vector<MatrixLaneBudgetRow> laneBudgetRows;
-  if (!opts.laneBudgetOutFile.empty() &&
+  if (!effectiveOpts.laneBudgetOutFile.empty() &&
       !(opts.mode == "matrix" || opts.mode == "all")) {
     errs() << "circt-mut report: --lane-budget-out requires --mode matrix or "
               "--mode all\n";
     return 1;
   }
-  if (!opts.skipBudgetOutFile.empty() &&
+  if (!effectiveOpts.skipBudgetOutFile.empty() &&
       !(opts.mode == "matrix" || opts.mode == "all")) {
     errs() << "circt-mut report: --skip-budget-out requires --mode matrix or "
               "--mode all\n";
@@ -10946,9 +10946,9 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("matrix.skip_budget_rows_with_reason",
                       std::to_string(skipSummary.rowsWithReason));
   }
-  if (!opts.laneBudgetOutFile.empty()) {
+  if (!effectiveOpts.laneBudgetOutFile.empty()) {
     std::string laneBudgetOut =
-        resolveRelativeTo(opts.projectDir, opts.laneBudgetOutFile);
+        resolveRelativeTo(opts.projectDir, effectiveOpts.laneBudgetOutFile);
     if (!writeLaneBudgetFile(laneBudgetOut, laneBudgetRows, error)) {
       errs() << error << "\n";
       return 1;
@@ -10957,9 +10957,9 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("matrix.lane_budget_file_rows",
                       std::to_string(laneBudgetRows.size()));
   }
-  if (!opts.skipBudgetOutFile.empty()) {
+  if (!effectiveOpts.skipBudgetOutFile.empty()) {
     std::string skipBudgetOut =
-        resolveRelativeTo(opts.projectDir, opts.skipBudgetOutFile);
+        resolveRelativeTo(opts.projectDir, effectiveOpts.skipBudgetOutFile);
     if (!writeSkipBudgetFile(skipBudgetOut, laneBudgetRows, error)) {
       errs() << error << "\n";
       return 1;
@@ -11300,8 +11300,8 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("history.bootstrap_active", "1");
 
   std::string outFile;
-  if (!opts.outFile.empty())
-    outFile = resolveRelativeTo(opts.projectDir, opts.outFile);
+  if (!effectiveOpts.outFile.empty())
+    outFile = resolveRelativeTo(opts.projectDir, effectiveOpts.outFile);
   if (!outFile.empty()) {
     if (!writeReportFile(outFile, rows, error)) {
       errs() << error << "\n";

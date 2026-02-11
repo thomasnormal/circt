@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/custom/cover
+// RUN: printf 'total_mutants\t5\nrelevant_mutants\t5\ndetected_mutants\t3\npropagated_not_detected_mutants\t1\nnot_propagated_mutants\t1\nnot_activated_mutants\t0\nerrors\t0\nmutation_coverage_percent\t60.00\n' > %t/proj/custom/cover/metrics.tsv
+// RUN: printf '[report]\ncover_work_dir = "custom/cover"\n' > %t/proj/circt-mut.toml
+// RUN: circt-mut report --project-dir %t/proj --mode cover > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK: cover.work_dir{{[[:space:]]}}{{.*}}custom/cover
+// CHECK: cover.detected_mutants{{[[:space:]]}}3

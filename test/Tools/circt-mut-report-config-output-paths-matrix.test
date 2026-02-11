@@ -1,0 +1,20 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/custom/matrix/lane1
+// RUN: printf 'total_mutants\t3\nrelevant_mutants\t3\ndetected_mutants\t2\npropagated_not_detected_mutants\t1\nnot_propagated_mutants\t0\nnot_activated_mutants\t0\nerrors\t0\n' > %t/proj/custom/matrix/lane1/metrics.tsv
+// RUN: printf 'lane_id\tstatus\texit_code\tcoverage_percent\truntime_ns\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\tconfig_error_code\tconfig_error_reason\nlane1\tPASS\t0\t66.67\t1000\tPASS\t%t/proj/custom/matrix/lane1\t%t/proj/custom/matrix/lane1/metrics.tsv\t-\tdisabled\t0\t0\t0\t0\t0\t-\t-\n' > %t/proj/custom/matrix/results.tsv
+// RUN: printf '[report]\nmatrix_out_dir = "custom/matrix"\nout = "cfg-report.tsv"\nlane_budget_out = "cfg-lane-budget.tsv"\nskip_budget_out = "cfg-skip-budget.tsv"\n' > %t/proj/circt-mut.toml
+// RUN: circt-mut report --project-dir %t/proj --mode matrix > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+// RUN: FileCheck %s --check-prefix=OUTFILE < %t/proj/cfg-report.tsv
+// RUN: FileCheck %s --check-prefix=LANEFILE < %t/proj/cfg-lane-budget.tsv
+// RUN: FileCheck %s --check-prefix=SKIPFILE < %t/proj/cfg-skip-budget.tsv
+//
+// CHECK: matrix.out_dir{{[[:space:]]}}{{.*}}custom/matrix
+// CHECK: matrix.lane_budget_file{{[[:space:]]}}{{.*}}cfg-lane-budget.tsv
+// CHECK: matrix.skip_budget_file{{[[:space:]]}}{{.*}}cfg-skip-budget.tsv
+// CHECK: report.file{{[[:space:]]}}{{.*}}cfg-report.tsv
+// OUTFILE: key{{[[:space:]]}}value
+// OUTFILE: matrix.out_dir{{[[:space:]]}}{{.*}}custom/matrix
+// LANEFILE: lane_id{{[[:space:]]}}status
+// LANEFILE: lane1{{[[:space:]]}}PASS
+// SKIPFILE: lane_id{{[[:space:]]}}status{{[[:space:]]}}gate_status{{[[:space:]]}}is_skip
+// SKIPFILE: lane1{{[[:space:]]}}PASS{{[[:space:]]}}PASS{{[[:space:]]}}0
