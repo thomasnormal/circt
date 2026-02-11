@@ -9,6 +9,32 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++++++++++)
+
+1. Added core timeout-stage quality-budget governance:
+   - `formal-regression-matrix-external-formal-core-timeout-stage-budget-v1`
+2. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v14`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v14`
+3. Contract impact:
+   - strict formal trend profiles now require both:
+     - non-empty core formal evidence (v13), and
+     - zero timeout-stage counters across core BMC/LEC suites (v14).
+4. Validation highlights:
+   - focused lit slice for v14 profile/composites/help diagnostics is green.
+   - direct policy probe confirms deterministic failure on nonzero
+     `sv-tests/BMC.bmc_timeout_stage_frontend_cases`.
+5. Remaining limitations:
+   - timeout-stage budget is currently hard strict (`<=0`) and may be too
+     rigid for exploratory/nightly modes without mode-aware thresholds.
+   - quality budget currently covers timeout-stage signals only; semantic/error
+     quality buckets are still not normalized into the same core profile.
+6. Next long-term features:
+   - split strict vs debt variants for core timeout-stage budgets
+     (e.g., `core-timeout-stage-budget-{strict,debt}-v1`).
+   - add core semantic-diagnostic/error-bucket budget profile and fold into a
+     `v15` strict composite with explicit mode-aware limits.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++++++++++)
 
 1. Added BMC core minimum-volume governance in mutation policy:
