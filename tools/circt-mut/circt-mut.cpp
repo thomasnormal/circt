@@ -6564,6 +6564,16 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
                    "--report-compare-history-latest are mutually exclusive";
     return result;
   }
+  if (!result.opts.reportHistory.empty() &&
+      (!result.opts.reportCompare.empty() ||
+       !result.opts.reportCompareHistoryLatest.empty() ||
+       !result.opts.reportTrendHistory.empty() ||
+       !result.opts.reportAppendHistory.empty())) {
+    result.error = "circt-mut run: --report-history is mutually exclusive with "
+                   "--report-compare, --report-compare-history-latest, "
+                   "--report-trend-history, and --report-append-history";
+    return result;
+  }
   if (!result.opts.reportPolicyMode.empty() &&
       !result.opts.reportPolicyProfiles.empty()) {
     result.error = "circt-mut run: --report-policy-mode and "
@@ -6689,6 +6699,9 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     bool hasCLIReportCompare = !opts.reportCompare.empty();
     bool hasCLIReportCompareHistoryLatest =
         !opts.reportCompareHistoryLatest.empty();
+    bool hasCLIReportHistory = !opts.reportHistory.empty();
+    bool hasCLIReportAppendHistory = !opts.reportAppendHistory.empty();
+    bool hasCLIReportTrendHistory = !opts.reportTrendHistory.empty();
     if (hasCLIReportCompare && hasCLIReportCompareHistoryLatest) {
       errs() << "circt-mut run: --report-compare and "
                 "--report-compare-history-latest are mutually exclusive\n";
@@ -6700,10 +6713,38 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         runCompareIt != cfg.run.end() && !runCompareIt->second.empty();
     bool hasConfigReportCompareHistory =
         runCompareHistoryIt != cfg.run.end() && !runCompareHistoryIt->second.empty();
+    auto runHistoryIt = cfg.run.find("report_history");
+    auto runAppendHistoryIt = cfg.run.find("report_append_history");
+    auto runTrendHistoryIt = cfg.run.find("report_trend_history");
+    bool hasConfigReportHistory =
+        runHistoryIt != cfg.run.end() && !runHistoryIt->second.empty();
+    bool hasConfigReportAppendHistory =
+        runAppendHistoryIt != cfg.run.end() && !runAppendHistoryIt->second.empty();
+    bool hasConfigReportTrendHistory =
+        runTrendHistoryIt != cfg.run.end() && !runTrendHistoryIt->second.empty();
     if (!hasCLIReportCompare && !hasCLIReportCompareHistoryLatest &&
         hasConfigReportCompare && hasConfigReportCompareHistory) {
       errs() << "circt-mut run: [run] keys 'report_compare' and "
                 "'report_compare_history_latest' are mutually exclusive\n";
+      return 1;
+    }
+    bool hasAnyReportHistoryShorthand =
+        hasCLIReportHistory || hasConfigReportHistory;
+    bool hasAnyReportCompareSelector =
+        hasCLIReportCompare || hasCLIReportCompareHistoryLatest ||
+        hasConfigReportCompare || hasConfigReportCompareHistory;
+    bool hasAnyReportAppendSelector =
+        hasCLIReportAppendHistory || hasConfigReportAppendHistory;
+    bool hasAnyReportTrendSelector =
+        hasCLIReportTrendHistory || hasConfigReportTrendHistory;
+    if (hasAnyReportHistoryShorthand &&
+        (hasAnyReportCompareSelector || hasAnyReportAppendSelector ||
+         hasAnyReportTrendSelector)) {
+      errs() << "circt-mut run: report_history shorthand is mutually "
+                "exclusive with report compare/trend/append selectors "
+                "(--report-history/[run] report_history vs "
+                "--report-compare/--report-compare-history-latest/"
+                "--report-trend-history/--report-append-history)\n";
       return 1;
     }
 
@@ -10505,6 +10546,16 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
                    "are mutually exclusive";
     return result;
   }
+  if (!result.opts.historyFile.empty() &&
+      (!result.opts.compareFile.empty() ||
+       !result.opts.compareHistoryLatestFile.empty() ||
+       !result.opts.trendHistoryFile.empty() ||
+       !result.opts.appendHistoryFile.empty())) {
+    result.error =
+        "circt-mut report: --history is mutually exclusive with --compare, "
+        "--compare-history-latest, --trend-history, and --append-history";
+    return result;
+  }
   if (result.opts.historyMaxRuns > 0 && result.opts.appendHistoryFile.empty()) {
     result.error = "circt-mut report: --history-max-runs requires --append-history "
                    "or --history";
@@ -10671,6 +10722,29 @@ static int runNativeReport(const ReportOptions &opts) {
           return 1;
         }
       }
+    }
+    bool hasConfigHistory =
+        cfg.report.contains("history") && !cfg.report.lookup("history").empty();
+    bool hasConfigCompare =
+        cfg.report.contains("compare") && !cfg.report.lookup("compare").empty();
+    bool hasConfigCompareHistory = cfg.report.contains("compare_history_latest") &&
+                                   !cfg.report.lookup("compare_history_latest")
+                                        .empty();
+    bool hasConfigTrendHistory = cfg.report.contains("trend_history") &&
+                                 !cfg.report.lookup("trend_history").empty();
+    bool hasConfigAppendHistory = cfg.report.contains("append_history") &&
+                                  !cfg.report.lookup("append_history").empty();
+    bool hasCLIHistorySelector =
+        !opts.historyFile.empty() || !opts.compareFile.empty() ||
+        !opts.compareHistoryLatestFile.empty() || !opts.trendHistoryFile.empty() ||
+        !opts.appendHistoryFile.empty();
+    if (!hasCLIHistorySelector && hasConfigHistory &&
+        (hasConfigCompare || hasConfigCompareHistory || hasConfigTrendHistory ||
+         hasConfigAppendHistory)) {
+      errs() << "circt-mut report: [report] key 'history' is mutually "
+                "exclusive with 'compare', 'compare_history_latest', "
+                "'trend_history', and 'append_history'\n";
+      return 1;
     }
     if (!historyBootstrap) {
       if (auto it = cfg.report.find("history_bootstrap");

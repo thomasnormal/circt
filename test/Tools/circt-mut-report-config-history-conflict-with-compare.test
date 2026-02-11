@@ -1,0 +1,5 @@
+// RUN: rm -rf %t && mkdir -p %t/proj
+// RUN: printf '[report]\ncompare = "base.tsv"\nhistory = "history.tsv"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut report --project-dir %t/proj --mode cover 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: [report] key 'history' is mutually exclusive with 'compare', 'compare_history_latest', 'trend_history', and 'append_history'

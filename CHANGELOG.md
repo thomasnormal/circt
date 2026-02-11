@@ -1,5 +1,244 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1055 - February 11, 2026
+
+### `circt-mut report/run`: Deterministic History-Shorthand Conflict Handling
+
+1. Tightened CLI validation in `tools/circt-mut/circt-mut.cpp`:
+   - `circt-mut report`: `--history` is now mutually exclusive with:
+     - `--compare`
+     - `--compare-history-latest`
+     - `--trend-history`
+     - `--append-history`
+   - `circt-mut run`: `--report-history` is now mutually exclusive with:
+     - `--report-compare`
+     - `--report-compare-history-latest`
+     - `--report-trend-history`
+     - `--report-append-history`
+2. Added config-level conflict hardening:
+   - `circt-mut report` now rejects `[report] history` combined with
+     `compare` / `compare_history_latest` / `trend_history` / `append_history`
+     (when no overriding CLI history selector is provided).
+   - `circt-mut run` now preflights `[run] report_history` against report
+     compare/trend/append selectors before launching expensive run stages.
+3. Added focused regression coverage:
+   - `test/Tools/circt-mut-report-history-conflict-with-compare.test`
+   - `test/Tools/circt-mut-report-config-history-conflict-with-compare.test`
+   - `test/Tools/circt-mut-run-report-history-conflict-with-compare.test`
+   - `test/Tools/circt-mut-run-report-history-config-conflict-with-compare.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused history/conflict slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 --filter 'circt-mut-(report-history-conflict-with-compare|report-config-history-conflict-with-compare|run-report-history-conflict-with-compare|run-report-history-config-conflict-with-compare|report-history-config-shorthand|run-with-report-cli-history-out-override-config|run-with-report-cli-compare-trend-override-config)\\.test' build-test/test/Tools`: PASS (7/7)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 --filter 'circt-mut-.*\\.test' build-test/test/Tools`: PASS (302/302)
+- External filtered formal cadence snapshot:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-history-shorthand-conflicts ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC, `verilator-verification` LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb_avip` + `apb_avip`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC (`assert_fell` ERROR), `opentitan` LEC (`aes_sbox` missing_results), AVIP compile `axi4Lite_avip` FAIL
+
+## Iteration 1054 - February 11, 2026
+
+### SEQBDYZMB Fix: Body Fork Interception in `uvm_sequence_base::start()`
+
+1. **Root Cause**: `executePhaseBlockingPhaseMap` was propagated from parent to
+   ALL fork children in `interpretSimFork` (line ~14967), including
+   `master_phase_process` children. When C_master (the phase traversal child)
+   reached `start()`, the body fork (default Join type) was intercepted and
+   skipped entirely — `body()` was never called, sequence status remained at 2
+   instead of reaching 256 (ENDED), triggering the SEQBDYZMB warning.
+
+2. **Fix**: Added `if (!isMasterPhaseProcessFork)` guard around the map
+   propagation. Master_phase_process children run the actual phase body
+   (build_phase, run_phase, etc.) and their internal forks must not be
+   intercepted. The map entry is designed only for P_execute's wait fork
+   (join_any objection polling).
+
+3. **File changed**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - 3-line change in `interpretSimFork` fork child creation loop
+
+### Tests and Validation
+
+- circt-sim unit tests: 48/49 PASS (1 pre-existing deep-recursion failure)
+- APB AVIP dual-top: 0 SEQBDYZMB, 0 UVM_ERROR, 0 UVM_FATAL
+  - UVM phases run correctly (build → connect → topology → run)
+  - Simulation blocks on BFM/driver transaction completion (known remaining gap)
+  - Only warning: DRVCONNECT (seq_item_port not connected — pre-existing)
+
+## Iteration 1053 - February 11, 2026
+
+### `circt-mut` Matrix Policy Modes: Native Trend Governance Rollout
+
+1. Extended matrix policy-mode enum/validation in
+   `tools/circt-mut/circt-mut.cpp` with:
+   - `native-trend-nightly`
+   - `native-trend-strict`
+2. Added policy-mode mappings:
+   - `native-trend-nightly` -> trend-nightly composite
+     (`formal-regression-matrix-composite-trend-nightly` or stop-on-fail
+     variant) + `formal-regression-matrix-provenance-guard` +
+     `formal-regression-matrix-policy-mode-native-family-contract`
+   - `native-trend-strict` -> trend-strict composite
+     (`formal-regression-matrix-composite-trend-strict` or stop-on-fail
+     variant) + `formal-regression-matrix-provenance-strict` +
+     `formal-regression-matrix-policy-mode-native-family-contract`
+3. Updated CLI help/diagnostic mode surfaces (`init`, `run`, `report`) and
+   invalid-mode expectations to include native trend modes.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-trend-nightly-pass.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-trend-strict.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-native-trend-nightly-default.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused native-trend policy slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-mut-init-help.test build-test/test/Tools/circt-mut-run-help.test build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-report-cli-policy-mode-invalid.test build-test/test/Tools/circt-mut-init-report-policy-invalid.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test build-test/test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test build-test/test/Tools/circt-mut-report-cli-policy-mode-native-trend-nightly-pass.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-trend-strict.test build-test/test/Tools/circt-mut-report-policy-config-matrix-mode-native-trend-nightly-default.test build-test/test/Tools/circt-mut-report-cli-policy-mode-trend-nightly-default.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-trend-nightly.test`: PASS (12/12)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'circt-mut-.*\\.test'`: PASS (285/285)
+- External filtered formal cadence snapshot (bounded 240s):
+  - `timeout 240s utils/run_formal_all.sh --out-dir /tmp/formal-all-native-trend-modes ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` BMC/LEC
+  - FAIL/ERROR snapshot: `verilator-verification` BMC (`assert_fell` ERROR), `opentitan` LEC (`aes_sbox` missing_results)
+  - AVIP: no completed lane result before timeout in this bounded run
+
+## Iteration 1052 - February 11, 2026
+
+### BMC Semantic Closure: Local-Var + `disable iff` Mid-Flight Abort Edges
+
+1. Added new targeted BMC e2e tests for local assertion variables with
+   mid-flight `disable iff` behavior:
+   - `test/Tools/circt-bmc/sva-local-var-disable-iff-midflight-abort-unsat-e2e.sv`
+   - `test/Tools/circt-bmc/sva-local-var-disable-iff-midflight-no-abort-sat-e2e.sv`
+2. Validated expected semantics in both backends:
+   - abort case (`disable iff` asserted on consequent cycle): `BMC_RESULT=UNSAT`
+   - no-abort control (`disable iff` held low): `BMC_RESULT=SAT`
+3. Re-ran focused UVM semantic closure slice with explicit caller-owned filter
+   wiring and explicit tool paths:
+   - `16.10--property-local-var-uvm`: PASS
+   - `16.10--sequence-local-var-uvm`: PASS
+   - `16.15--property-iff-uvm`: PASS
+   - `16.15--property-iff-uvm-fail`: XFAIL (expected; known sv-tests metadata/content mismatch)
+
+## Iteration 1051 - February 11, 2026
+
+### `circt-mut report/run/init`: Native Lifecycle Strict Policy Mode
+
+1. Extended matrix policy-mode support in `tools/circt-mut/circt-mut.cpp`:
+   - added `native-lifecycle-strict` to accepted policy-mode enums
+   - mode maps to profile:
+     `formal-regression-matrix-native-lifecycle-strict`
+2. Updated CLI help surfaces (`init`, `run`, `report`) and invalid-mode
+   diagnostics to include the new mode.
+3. Added regression coverage for mode wiring:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-lifecycle-strict-pass.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-native-lifecycle-strict-default.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-lifecycle-strict.test`
+   - updated mode-invalid and help tests:
+     - `test/Tools/circt-mut-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-init-report-policy-invalid.test`
+     - `test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test`
+     - `test/Tools/circt-mut-init-help.test`
+     - `test/Tools/circt-mut-run-help.test`
+     - `test/Tools/circt-mut-report-help.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused mode/help/invalid + new native-lifecycle-mode tests:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-mut-init-help.test build-test/test/Tools/circt-mut-run-help.test build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-report-cli-policy-mode-invalid.test build-test/test/Tools/circt-mut-init-report-policy-invalid.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test build-test/test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test build-test/test/Tools/circt-mut-report-cli-policy-mode-native-lifecycle-strict-pass.test build-test/test/Tools/circt-mut-report-policy-config-matrix-mode-native-lifecycle-strict-default.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-lifecycle-strict.test`: PASS (10/10)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'circt-mut-.*\\.test'`: PASS (274/274)
+- External filtered formal cadence snapshot (bounded run):
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-lifecycle-mode ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` BMC+LEC
+  - FAIL/ERROR snapshot: `verilator-verification` BMC (ERROR=1), `opentitan` LEC (FAIL=1), AVIP compile PASS=2 FAIL=1 with one additional AVIP compile in-progress when bounded.
+
+## Iteration 1050 - February 11, 2026
+
+### `circt-mut report`: Native Matrix Lifecycle Strict Policy Profile
+
+1. Added native lifecycle governance metrics to matrix report output in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `matrix.results_metrics_file_column_present`
+   - `matrix.results_metrics_file_fallback_lanes`
+2. Added policy profile:
+   - `formal-regression-matrix-native-lifecycle-strict`
+3. The new profile enforces strict native-lifecycle hygiene by gating:
+   - metrics-file column must be present
+   - metrics-file fallback lane count must be zero
+   - runtime summary must be present
+   - native prequalify summary file must exist
+   - prequalify result columns must be present
+   - provenance column presence and provenance-deficit zero constraints
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-native-lifecycle-strict-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-native-lifecycle-strict-missing-metrics-column-fail.test`
+   - updated `test/Tools/circt-mut-report-matrix-basic.test`
+   - updated `test/Tools/circt-mut-report-help.test`
+   - updated `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused native-lifecycle/profile slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-report-policy-invalid-profile.test build-test/test/Tools/circt-mut-report-matrix-basic.test build-test/test/Tools/circt-mut-report-policy-matrix-native-lifecycle-strict-pass.test build-test/test/Tools/circt-mut-report-policy-matrix-native-lifecycle-strict-missing-metrics-column-fail.test`: PASS (5/5)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'circt-mut-.*\\.test'`: PASS (271/271)
+- External filtered formal cadence snapshot:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-lifecycle-strict ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty)
+  - FAIL/ERROR snapshot: `verilator-verification` BMC+LEC, `yosys/tests/sva` BMC FAIL and LEC ERROR, `opentitan` LEC FAIL, AVIP compile PASS=3 FAIL=1 (partial bounded snapshot)
+
+## Iteration 1049 - February 11, 2026
+
+### `circt-sim`: APB AVIP Dual-Top Reaches Run-Phase and 50ns Simulation Time
+
+1. **Fixed join type mismatch in UVM phase hopper execute_phase blocking**:
+   The MLIR compiled execute_phase's fork as `join` (JoinAll, type=0), not
+   `join_any` (type=1). The objection polling interception only checked for
+   JoinAny, causing the phase hopper to stall at 0 fs. Now intercepts both
+   JoinAny and JoinAll fork types for execute_phase blocking.
+
+2. **Added native `m_uvm_get_root` short-circuit after global init**: During
+   run_phase, `m_uvm_get_root` was failing because its body contains complex
+   error-reporting paths (scf.if, call_indirect) that don't work in forked
+   process contexts. After init, the root is already constructed, so we
+   short-circuit to return the cached root pointer via `__moore_uvm_get_root_inst()`.
+   Applied to both func.call and llvm.call paths.
+
+3. **Made grace period configurable**: Changed `kFinishGracePeriodSecs` from
+   a compile-time constant (30s) to a runtime-configurable value (default 120s).
+   Override via `CIRCT_SIM_GRACE_PERIOD_SECS` environment variable.
+
+4. **Completed abort-to-failure propagation audit**: Fixed 6 sites where
+   abort/termination during function execution caused misleading diagnostics
+   ("Failed in func body", "virtual method call failed"). Both
+   `interpretFuncBody` and `interpretLLVMFuncBody` now properly absorb
+   failures during abort/termination.
+
+5. **Cleaned up debug prints**: Converted all `[PHASE-DBG]`, `[FORK-DBG]`,
+   `[GRACE-DBG]` stderr traces to `LLVM_DEBUG` macro usage.
+
+### APB AVIP Results
+
+- Simulation reaches **50 ns** (was stuck at 0 fs)
+- **0 UVM_FATAL, 0 UVM_ERROR**
+- Full UVM phase progression: build → connect → end_of_elaboration →
+  start_of_simulation → run
+- BFM drives idle state (`drive_apb_idle state = IDLE`)
+- Test sequence starts (`apb_8b_write_test`)
+- Remaining: SEQBDYZMB warning (sequence body fork terminated early,
+  preventing bus transactions)
+
+### Tests and Validation
+
+- `circt-sim`: TBD/225 (regression running)
+- APB AVIP: 50 ns, 0 errors, exit code 0
+
 ## Iteration 1048 - February 11, 2026
 
 ### `circt-mut report`: Centralized Matrix Provenance Policy Rule Wiring
