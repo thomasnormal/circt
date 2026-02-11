@@ -9,6 +9,32 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 19:12)
+
+1. Added LEC timeout provenance buckets in `run_formal_all.sh` summaries:
+   - `lec_timeout_diag_<diag>_cases`
+   - `lec_timeout_diag_missing_cases`
+2. Added strict-gate drift control for timeout provenance keys:
+   - `--fail-on-new-lec-timeout-diag-keys`
+   - detects new timeout diagnostic buckets across `LEC*` lanes vs baseline.
+3. Strict-gate behavior:
+   - `--strict-gate` now enables timeout diagnostic key drift checks.
+   - legacy baseline compatibility preserved (skip drift enforcement when
+     baseline predates timeout-diagnostic key emission).
+4. New regression lock:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout-diag-keys.test`
+5. External sanity:
+   - `/home/thomas-ahle/verilator-verification` LEC filtered slice
+     (`assert_past|assert_stable`) remains green and now emits
+     `lec_timeout_diag_missing_cases=0` in summary telemetry.
+6. Remaining strategic gaps:
+   - convert timeout provenance from diag-key buckets into higher-level
+     semantic classes (solver-budget / preprocessing / model-size / unknown).
+   - drive BMC multiclock + sequence-subroutine closure with dedicated
+     semantic-bucket strict gates and attribution.
+   - mutation report scaling: add incremental ingest cache invalidation keyed
+     by external-formal artifact hash + profile policy fingerprint.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 19:10)
 
 1. Added hard zero-timeout gate for LEC lanes in `run_formal_all.sh`:

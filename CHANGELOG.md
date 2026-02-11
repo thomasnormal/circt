@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1081 - February 11, 2026
+
+### Formal Driver: LEC Timeout Provenance Keys + Strict Gate
+
+1. Extended LEC case-summary telemetry in `utils/run_formal_all.sh`:
+   - `lec_timeout_diag_<diag>_cases`
+   - `lec_timeout_diag_missing_cases`
+2. Added new strict-gate option:
+   - `--fail-on-new-lec-timeout-diag-keys`
+   which fails when new timeout diagnostic bucket keys appear vs baseline for
+   any `LEC*` lane.
+3. Strict-gate default wiring:
+   - `--strict-gate` now enables timeout diagnostic-key drift checks.
+4. Legacy baseline compatibility:
+   - under strict mode, timeout-key drift enforcement is skipped when baseline
+     rows do not yet carry timeout-diagnostic key telemetry.
+5. Added regression lock:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout-diag-keys.test`
+6. Updated help regression surface:
+   - `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-diag-keys.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-any.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - PASS (5/5)
+- External focused sanity:
+  - `run_formal_all.sh` on `/home/thomas-ahle/verilator-verification` LEC
+    filtered slice (`assert_past|assert_stable`) with
+    `--fail-on-any-lec-timeouts`: PASS; summary includes
+    `lec_timeout_diag_missing_cases=0`.
+
 ## Iteration 1080 - February 11, 2026
 
 ### Formal Driver: Enforce Zero LEC Timeouts In Current Run

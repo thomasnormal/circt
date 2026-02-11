@@ -84,6 +84,10 @@ Options:
                          Fail when new LEC diagnostic counter keys
                          (`lec_diag_*_cases`) appear vs baseline for any
                          `LEC*` lane
+  --fail-on-new-lec-timeout-diag-keys
+                         Fail when new LEC timeout diagnostic counter keys
+                         (`lec_timeout_diag_*_cases`) appear vs baseline for
+                         any `LEC*` lane
   --fail-on-new-lec-diag-path-fallback-cases
                          Fail when `lec_diag_path_fallback_cases` increases
                          vs baseline for any `LEC*` lane
@@ -1835,6 +1839,7 @@ LEC_DROP_REMARK_PATTERN="${LEC_DROP_REMARK_PATTERN:-will be dropped during lower
 declare -a FAIL_ON_NEW_LEC_COUNTER_KEYS=()
 declare -a FAIL_ON_NEW_LEC_COUNTER_PREFIXES=()
 FAIL_ON_NEW_LEC_DIAG_KEYS=0
+FAIL_ON_NEW_LEC_TIMEOUT_DIAG_KEYS=0
 FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES=0
 FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES=0
 FAIL_ON_NEW_LEC_DIAG_MISSING_CASES=0
@@ -2196,6 +2201,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_COUNTER_PREFIXES+=("$2"); shift 2 ;;
     --fail-on-new-lec-diag-keys)
       FAIL_ON_NEW_LEC_DIAG_KEYS=1; shift ;;
+    --fail-on-new-lec-timeout-diag-keys)
+      FAIL_ON_NEW_LEC_TIMEOUT_DIAG_KEYS=1; shift ;;
     --fail-on-new-lec-diag-path-fallback-cases)
       FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES=1; shift ;;
     --fail-on-any-lec-diag-path-fallback-cases)
@@ -4259,6 +4266,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS=1
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=1
   FAIL_ON_NEW_LEC_DIAG_KEYS=1
+  FAIL_ON_NEW_LEC_TIMEOUT_DIAG_KEYS=1
   FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES=1
   FAIL_ON_NEW_LEC_DIAG_MISSING_CASES=1
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1
@@ -7355,12 +7363,16 @@ with path.open(encoding="utf-8") as f:
             diag = normalize(maybe_diag)
             counts[f"lec_diag_{diag}_cases"] += 1
             counts[f"lec_status_{status}_diag_{diag}_cases"] += 1
+            if status == "timeout":
+                counts[f"lec_timeout_diag_{diag}_cases"] += 1
             if explicit_diag:
                 counts["lec_diag_explicit_cases"] += 1
             elif used_path_fallback:
                 counts["lec_diag_path_fallback_cases"] += 1
         else:
             counts["lec_diag_missing_cases"] += 1
+            if status == "timeout":
+                counts["lec_timeout_diag_missing_cases"] += 1
 
 if rows <= 0:
     print("")
@@ -7370,6 +7382,7 @@ for counter_key in (
     "lec_diag_explicit_cases",
     "lec_diag_path_fallback_cases",
     "lec_diag_missing_cases",
+    "lec_timeout_diag_missing_cases",
 ):
     counts[counter_key] += 0
 counts["lec_timeout_cases"] = counts.get("lec_status_timeout_cases", 0)
@@ -11489,6 +11502,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_DIAG_KEYS" == "1" || \
+      "$FAIL_ON_NEW_LEC_TIMEOUT_DIAG_KEYS" == "1" || \
       "$FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES" == "1" || \
       "$FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES" == "1" || \
       "$FAIL_ON_NEW_LEC_DIAG_MISSING_CASES" == "1" || \
@@ -11534,6 +11548,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" \
   FAIL_ON_NEW_LEC_DIAG_KEYS="$FAIL_ON_NEW_LEC_DIAG_KEYS" \
+  FAIL_ON_NEW_LEC_TIMEOUT_DIAG_KEYS="$FAIL_ON_NEW_LEC_TIMEOUT_DIAG_KEYS" \
   FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES="$FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES" \
   FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES="$FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES" \
   FAIL_ON_NEW_LEC_DIAG_MISSING_CASES="$FAIL_ON_NEW_LEC_DIAG_MISSING_CASES" \
@@ -11916,6 +11931,9 @@ fail_on_new_lec_drop_remark_case_reasons = (
 )
 fail_on_new_lec_diag_keys = (
     os.environ.get("FAIL_ON_NEW_LEC_DIAG_KEYS", "0") == "1"
+)
+fail_on_new_lec_timeout_diag_keys = (
+    os.environ.get("FAIL_ON_NEW_LEC_TIMEOUT_DIAG_KEYS", "0") == "1"
 )
 fail_on_new_lec_diag_path_fallback_cases = (
     os.environ.get("FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES", "0") == "1"
@@ -12603,6 +12621,34 @@ for key, current_row in summary.items():
                         sample += ", ..."
                     gate_errors.append(
                         f"{suite} {mode}: new LEC diagnostic keys observed (baseline={len(baseline_diag_keys)} current={len(current_diag_keys)}, window={baseline_window}): {sample}"
+                    )
+        if fail_on_new_lec_timeout_diag_keys:
+            baseline_timeout_diag_keys = set()
+            for counts in parsed_counts:
+                for counter_key in counts.keys():
+                    if counter_key.startswith("lec_timeout_diag_") and counter_key.endswith("_cases"):
+                        baseline_timeout_diag_keys.add(counter_key)
+            # Under global strict-gate, avoid churn against legacy baselines
+            # that predate explicit timeout diagnostic counter emission.
+            should_enforce_timeout_diag_key_drift = (
+                bool(baseline_timeout_diag_keys) or not strict_gate
+            )
+            if should_enforce_timeout_diag_key_drift:
+                current_timeout_diag_keys = {
+                    counter_key
+                    for counter_key in current_counts.keys()
+                    if counter_key.startswith("lec_timeout_diag_")
+                    and counter_key.endswith("_cases")
+                }
+                new_timeout_diag_keys = sorted(
+                    current_timeout_diag_keys - baseline_timeout_diag_keys
+                )
+                if new_timeout_diag_keys:
+                    sample = ", ".join(new_timeout_diag_keys[:3])
+                    if len(new_timeout_diag_keys) > 3:
+                        sample += ", ..."
+                    gate_errors.append(
+                        f"{suite} {mode}: new LEC timeout diagnostic keys observed (baseline={len(baseline_timeout_diag_keys)} current={len(current_timeout_diag_keys)}, window={baseline_window}): {sample}"
                     )
         if lec_counter_keys:
             for counter_key in lec_counter_keys:
