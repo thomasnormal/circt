@@ -1865,6 +1865,17 @@ See CHANGELOG.md on recent progress.
   and native-strict formal trend v1 fixture coverage now includes explicit
   compile rows, preserving compile-budget contract checks during staged policy
   evolution.
+- Latest mutation-governance milestone (current): compile-budget governance now
+  has staged debt vs strict policy profiles and strict-composite integration:
+  - `formal-regression-matrix-external-formal-compile-mode-budget-debt-v1`
+    (`compile.fail <= 4`)
+  - `formal-regression-matrix-external-formal-compile-mode-budget-strict-v1`
+    (`compile.fail == 0`)
+  - strict formal-trend v8 composites:
+    - `formal-regression-matrix-composite-native-strict-formal-trend-v8`
+    - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v8`
+  enabling incremental lane-class rollout while providing a deterministic
+  no-compile-failure target profile for long-term closure.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
