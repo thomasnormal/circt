@@ -227,6 +227,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-composite-smoke|\n";
   os << "                           formal-regression-matrix-composite-nightly|\n";
   os << "                           formal-regression-matrix-composite-strict|\n";
+  os << "                           formal-regression-matrix-composite-trend-nightly|\n";
+  os << "                           formal-regression-matrix-composite-trend-strict|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-smoke|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-nightly|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-strict\n";
@@ -7828,6 +7830,16 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return applyComposite("formal-regression-matrix-full-lanes-strict") &&
            applyComposite("formal-regression-matrix-runtime-strict");
   }
+  if (profile == "formal-regression-matrix-composite-trend-nightly") {
+    return applyComposite("formal-regression-matrix-lane-trend-nightly") &&
+           applyComposite("formal-regression-matrix-runtime-trend") &&
+           applyComposite("formal-regression-matrix-lane-drift-nightly");
+  }
+  if (profile == "formal-regression-matrix-composite-trend-strict") {
+    return applyComposite("formal-regression-matrix-lane-trend-strict") &&
+           applyComposite("formal-regression-matrix-runtime-trend") &&
+           applyComposite("formal-regression-matrix-lane-drift-strict");
+  }
   if (profile == "formal-regression-matrix-composite-stop-on-fail-smoke") {
     return applyComposite("formal-regression-matrix-stop-on-fail-guard-smoke") &&
            applyComposite("formal-regression-matrix-runtime-smoke");
@@ -7867,6 +7879,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-composite-smoke|"
            "formal-regression-matrix-composite-nightly|"
            "formal-regression-matrix-composite-strict|"
+           "formal-regression-matrix-composite-trend-nightly|"
+           "formal-regression-matrix-composite-trend-strict|"
            "formal-regression-matrix-composite-stop-on-fail-smoke|"
            "formal-regression-matrix-composite-stop-on-fail-nightly|"
            "formal-regression-matrix-composite-stop-on-fail-strict)")
