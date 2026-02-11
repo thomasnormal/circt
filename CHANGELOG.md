@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1130 - February 11, 2026
+
+### Formal Governance: Identity Cardinality Counters + Trend Profile (v1)
+
+1. Added strict-identity cardinality counters to `run_formal_all` summaries so
+   they are exported directly through `summary.tsv`:
+   - LEC: timeout/circt-opt/circt-verilog/runner-command/error-bucket/semantic-subfamily
+     case-id and case+reason cardinalities.
+   - BMC: timeout case-id cardinality and semantic-bucket case-id cardinality.
+2. Added `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1`
+   with zero-growth trend gates on LEC identity-cardinality keys across:
+   - `sv_tests/LEC`
+   - `verilator_verification/LEC`
+   - `yosys_tests_sva/LEC`
+3. Added opt-in composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v2`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v2`
+4. Added regressions:
+   - `test/Tools/run-formal-all-lec-identity-cardinality-summary.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-identity-cardinality-trend-guard-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-identity-cardinality-trend-guard-v1-fail.test`
+
 ## Iteration 1129 - February 11, 2026
 
 ### Mutation Governance: Stop-On-Fail Native-Strict Formal Trend Composite (v1)

@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/matrix/lane1 %t/formal-out
+// RUN: printf 'total_mutants\t1\nrelevant_mutants\t1\ndetected_mutants\t1\npropagated_not_detected_mutants\t0\nnot_propagated_mutants\t0\nnot_activated_mutants\t0\nerrors\t0\nglobal_filter_timeout_mutants\t0\nglobal_filter_lec_unknown_mutants\t0\nglobal_filter_bmc_unknown_mutants\t0\n' > %t/proj/out/matrix/lane1/metrics.tsv
+// RUN: printf 'lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\nlane1\tPASS\t0\t100.00\tPASS\t%t/proj/out/matrix/lane1\t%t/proj/out/matrix/lane1/metrics.tsv\t-\n' > %t/proj/out/matrix/results.tsv
+// RUN: printf 'suite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tsummary\nsv-tests\tLEC\t1\t0\t0\t0\t0\t1\t0\ttotal=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 lec_runner_command_case_ids_cardinality=3\n' > %t/formal-out/summary.tsv
+// RUN: printf 'run_id\ttimestamp_utc\tkey\tvalue\n1\t2026-02-10T00:00:00Z\texternal_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_runner_command_case_ids_cardinality\t2\n2\t2026-02-10T00:01:00Z\texternal_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_runner_command_case_ids_cardinality\t2\n3\t2026-02-10T00:02:00Z\texternal_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_runner_command_case_ids_cardinality\t2\n' > %t/proj/trend.tsv
+// RUN: not circt-mut report --project-dir %t/proj --mode matrix --external-formal-out-dir %t/formal-out --trend-history trend.tsv --policy-profile formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1 > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK-DAG: policy.profile_1{{[[:space:]]}}formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1
+// CHECK-DAG: trend.gate_status{{[[:space:]]}}fail
+// CHECK-DAG: trend.gate_failure_{{[0-9]+}}{{[[:space:]]}}external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_runner_command_case_ids_cardinality trend_delta=1.00 > 0.00
