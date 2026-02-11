@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1017 - February 11, 2026
+
+### `circt-mut matrix/report`: Runtime Column in `results.tsv` + Report Priority
+
+1. Extended native matrix dispatch in `tools/circt-mut/circt-mut.cpp` to emit
+   per-lane `runtime_ns` directly in `results.tsv` (between
+   `coverage_percent` and `gate_status`) for PASS/FAIL rows, with `-` for SKIP
+   rows.
+2. Updated `circt-mut report --mode matrix` runtime aggregation priority:
+   - prefer `results.tsv` `runtime_ns` when present;
+   - fall back to `native_matrix_dispatch_runtime.tsv` for compatibility with
+     older artifacts.
+3. Updated native dispatch/report regression coverage to lock the new schema:
+   - `test/Tools/circt-mut-matrix-native-dispatch-basic.test`
+   - `test/Tools/circt-mut-matrix-native-dispatch-conflict.test`
+   - `test/Tools/circt-mut-matrix-native-dispatch-jobs-order.test`
+   - `test/Tools/circt-mut-matrix-native-dispatch-lane-filter.test`
+   - `test/Tools/circt-mut-matrix-native-dispatch-stop-on-fail-jobs.test`
+   - `test/Tools/circt-mut-run-matrix-config-native-dispatch.test`
+   - `test/Tools/circt-mut-report-matrix-basic.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused schema/runtime slices:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch-basic.test test/Tools/circt-mut-matrix-native-dispatch-conflict.test test/Tools/circt-mut-matrix-native-dispatch-jobs-order.test test/Tools/circt-mut-matrix-native-dispatch-lane-filter.test test/Tools/circt-mut-matrix-native-dispatch-stop-on-fail-jobs.test test/Tools/circt-mut-run-matrix-config-native-dispatch.test test/Tools/circt-mut-report-matrix-basic.test`: PASS (7/7)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (239/239)
+
 ## Iteration 1016 - February 11, 2026
 
 ### `circt-mut matrix/report`: Persisted Native Runtime Sidecar + Report Aggregation
