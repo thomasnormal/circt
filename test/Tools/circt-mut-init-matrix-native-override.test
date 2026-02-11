@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: circt-mut init --project-dir %t/proj --matrix-native-dispatch true --matrix-native-global-filter-prequalify yes > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=CFG < %t/proj/circt-mut.toml
+//
+// LOG: Initialized circt-mut project:
+//
+// CFG: [matrix]
+// CFG: native_matrix_dispatch = true
+// CFG: native_global_filter_prequalify = true

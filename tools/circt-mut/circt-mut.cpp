@@ -110,6 +110,12 @@ static void printInitHelp(raw_ostream &os) {
   os << "  --lanes-tsv FILE         Matrix lane manifest path (default: lanes.tsv)\n";
   os << "  --cover-work-dir DIR     Cover output root (default: out/cover)\n";
   os << "  --matrix-out-dir DIR     Matrix output root (default: out/matrix)\n";
+  os << "  --matrix-native-dispatch BOOL\n";
+  os << "                           Enable native matrix dispatch in generated\n";
+  os << "                           config (default: false)\n";
+  os << "  --matrix-native-global-filter-prequalify BOOL\n";
+  os << "                           Enable native matrix prequalification in\n";
+  os << "                           generated config (default: false)\n";
   os << "  --report-policy-mode MODE\n";
   os << "                           Report policy mode for generated config\n";
   os << "                           (smoke|nightly, default: smoke)\n";
@@ -5388,6 +5394,8 @@ struct InitOptions {
   std::string lanesTSV = "lanes.tsv";
   std::string coverWorkDir = "out/cover";
   std::string matrixOutDir = "out/matrix";
+  bool matrixNativeDispatch = false;
+  bool matrixNativeGlobalFilterPrequalify = false;
   std::string reportPolicyMode = "smoke";
   bool reportPolicyStopOnFail = true;
   bool force = false;
@@ -5535,6 +5543,51 @@ static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
       result.opts.matrixOutDir = v->str();
       continue;
     }
+    if (arg == "--matrix-native-dispatch" ||
+        arg.starts_with("--matrix-native-dispatch=")) {
+      auto v = consumeValue(i, arg, "--matrix-native-dispatch");
+      if (!v)
+        return result;
+      std::string lowered = v->trim().lower();
+      if (lowered == "1" || lowered == "true" || lowered == "yes" ||
+          lowered == "on") {
+        result.opts.matrixNativeDispatch = true;
+        continue;
+      }
+      if (lowered == "0" || lowered == "false" || lowered == "no" ||
+          lowered == "off") {
+        result.opts.matrixNativeDispatch = false;
+        continue;
+      }
+      result.error = (Twine("circt-mut init: invalid --matrix-native-dispatch "
+                            "value: ") +
+                      *v + " (expected 1|0|true|false|yes|no|on|off)")
+                         .str();
+      return result;
+    }
+    if (arg == "--matrix-native-global-filter-prequalify" ||
+        arg.starts_with("--matrix-native-global-filter-prequalify=")) {
+      auto v = consumeValue(i, arg, "--matrix-native-global-filter-prequalify");
+      if (!v)
+        return result;
+      std::string lowered = v->trim().lower();
+      if (lowered == "1" || lowered == "true" || lowered == "yes" ||
+          lowered == "on") {
+        result.opts.matrixNativeGlobalFilterPrequalify = true;
+        continue;
+      }
+      if (lowered == "0" || lowered == "false" || lowered == "no" ||
+          lowered == "off") {
+        result.opts.matrixNativeGlobalFilterPrequalify = false;
+        continue;
+      }
+      result.error =
+          (Twine("circt-mut init: invalid --matrix-native-global-filter-prequalify "
+                 "value: ") +
+           *v + " (expected 1|0|true|false|yes|no|on|off)")
+              .str();
+      return result;
+    }
     if (arg == "--report-policy-mode" ||
         arg.starts_with("--report-policy-mode=")) {
       auto v = consumeValue(i, arg, "--report-policy-mode");
@@ -5626,6 +5679,10 @@ static int runNativeInit(const InitOptions &opts) {
   cfg << "[matrix]\n";
   cfg << "lanes_tsv = \"" << escapeTomlBasicString(opts.lanesTSV) << "\"\n";
   cfg << "out_dir = \"" << escapeTomlBasicString(opts.matrixOutDir) << "\"\n";
+  cfg << "native_matrix_dispatch = "
+      << (opts.matrixNativeDispatch ? "true" : "false") << "\n";
+  cfg << "native_global_filter_prequalify = "
+      << (opts.matrixNativeGlobalFilterPrequalify ? "true" : "false") << "\n";
   cfg << "default_formal_global_propagate_circt_chain = \"auto\"\n";
   cfg << "default_formal_global_propagate_timeout_seconds = 60\n\n";
   cfg << "[report]\n";
