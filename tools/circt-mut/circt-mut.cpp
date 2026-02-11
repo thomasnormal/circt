@@ -7698,6 +7698,10 @@ static void appendTrendHistoryQualityRules(ReportOptions &opts,
 
 static void appendTrendHistoryQualityStrictRules(ReportOptions &opts) {
   appendTrendHistoryQualityRules(opts, 3.0);
+  appendUniqueRule(opts.failIfValueLtRules,
+                   "trend.numeric_keys_full_history_pct", 80.0);
+  appendUniqueRule(opts.failIfValueLtRules,
+                   "trend.matrix_core_numeric_keys_full_history_pct", 100.0);
 }
 
 static bool isMatrixPolicyMode(StringRef mode) {
@@ -8766,6 +8770,8 @@ static void appendTrendRows(
   }
 
   uint64_t numericKeys = 0;
+  uint64_t numericKeysFullHistory = 0;
+  StringMap<uint64_t> keySampleCounts;
   for (const auto &currentRow : numericCurrentRows) {
     StringRef key = currentRow.first;
     double currentValue = currentRow.second;
@@ -8796,6 +8802,9 @@ static void appendTrendRows(
     if (samples == 0)
       continue;
     ++numericKeys;
+    keySampleCounts[currentRow.first] = samples;
+    if (samples == selected.size())
+      ++numericKeysFullHistory;
     double mean = sum / static_cast<double>(samples);
     double delta = currentValue - mean;
     trendDeltas[key] = delta;
@@ -8815,6 +8824,44 @@ static void appendTrendRows(
                                   : std::string("-"));
   }
   rows.emplace_back("trend.numeric_keys", std::to_string(numericKeys));
+  rows.emplace_back("trend.numeric_keys_full_history",
+                    std::to_string(numericKeysFullHistory));
+  rows.emplace_back("trend.numeric_keys_partial_history",
+                    std::to_string(numericKeys - numericKeysFullHistory));
+  rows.emplace_back(
+      "trend.numeric_keys_full_history_pct",
+      numericKeys != 0
+          ? formatDouble2((100.0 * static_cast<double>(numericKeysFullHistory)) /
+                          static_cast<double>(numericKeys))
+          : std::string("0.00"));
+
+  static constexpr StringLiteral matrixTrendCoreKeys[] = {
+      "matrix.detected_mutants_sum", "matrix.lanes_skip", "matrix.runtime_ns_avg",
+      "matrix.runtime_ns_max", "matrix.runtime_ns_sum"};
+  uint64_t matrixCoreCurrent = 0;
+  uint64_t matrixCoreFullHistory = 0;
+  for (StringRef coreKey : matrixTrendCoreKeys) {
+    auto itCurrent = llvm::find_if(numericCurrentRows, [&](const auto &row) {
+      return StringRef(row.first) == coreKey;
+    });
+    if (itCurrent == numericCurrentRows.end())
+      continue;
+    ++matrixCoreCurrent;
+    auto itSamples = keySampleCounts.find(coreKey);
+    if (itSamples != keySampleCounts.end() && itSamples->second == selected.size())
+      ++matrixCoreFullHistory;
+  }
+  rows.emplace_back("trend.matrix_core_numeric_keys_current",
+                    std::to_string(matrixCoreCurrent));
+  rows.emplace_back("trend.matrix_core_numeric_keys_full_history",
+                    std::to_string(matrixCoreFullHistory));
+  rows.emplace_back(
+      "trend.matrix_core_numeric_keys_full_history_pct",
+      matrixCoreCurrent != 0
+          ? formatDouble2(
+                (100.0 * static_cast<double>(matrixCoreFullHistory)) /
+                static_cast<double>(matrixCoreCurrent))
+          : std::string("0.00"));
 }
 
 static bool collectCoverReport(StringRef coverWorkDir,
