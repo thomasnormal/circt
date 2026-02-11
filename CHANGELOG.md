@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1136 - February 11, 2026
+
+### Mutation Governance: External Formal Non-Empty Filter Contract Profile + v6 Composites
+
+1. Added `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-nonempty-filter-contract-v1`
+2. Profile contract:
+   - enforces `nonempty_filter_miss == 0` on filtered formal lanes via value
+     gates over:
+     - `sv_tests` (`BMC`, `LEC`)
+     - `sv_tests_uvm` (`BMC_SEMANTICS`)
+     - `verilator_verification` (`BMC`, `LEC`)
+     - `yosys_tests_sva` (`BMC`, `LEC`)
+3. Added staged strict composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v6`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v6`
+   (`v5` + non-empty filter contract profile).
+4. Added/updated regressions:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-nonempty-filter-contract-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-nonempty-filter-contract-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v6-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v6-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v6-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v6-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
 ## Iteration 1135 - February 11, 2026
 
 ### Formal Driver Hardening: Non-Empty Filter Contracts for Targeted Lanes
