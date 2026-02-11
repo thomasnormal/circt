@@ -1,5 +1,58 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1118 - February 11, 2026
+
+### Formal + Mutation Closure: LEC Semantic-Diag Subfamilies and Scoped Family Guard
+
+1. Extended LEC summary bucketing in `utils/run_formal_all.sh`:
+   - added semantic subfamily counters under `semantic_diag_error`:
+     - `lec_error_bucket_semantic_diag_parser_cases`
+     - `lec_error_bucket_semantic_diag_lowering_cases`
+     - `lec_error_bucket_semantic_diag_solver_cases`
+   - retained legacy aggregate:
+     - `lec_error_bucket_semantic_diag_error_cases`
+2. Added regression coverage:
+   - `test/Tools/run-formal-all-lec-error-bucket-semantic-diag-subfamilies.test`
+3. Added new `circt-mut report` profile:
+   - `formal-regression-matrix-external-formal-semantic-diag-family-guard`
+   - enforces zero parser/lowering/solver semantic counters across scoped lanes:
+     - `verilator_verification/LEC`
+     - `yosys_tests_sva/LEC`
+4. Hardened value-gate behavior for external formal counters:
+   - missing keys under:
+     - `external_formal.summary_counter.*`
+     - `external_formal.summary_counter_by_suite_mode.*`
+     now default to `0.00` instead of hard error, preventing brittle failures
+     on empty/filtered lanes.
+5. Added mutation-policy regressions:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-guard-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-guard-missing-keys-pass.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- `bash -n utils/run_formal_all.sh`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-lec-error-bucket-semantic-diag-subfamilies.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-guard-pass.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-guard-fail.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-diag-family-guard-missing-keys-pass.test`
+  - `build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`
+  - `build-test/test/Tools/circt-mut-report-help.test`
+  - PASS (6/6)
+- Focused external-cadence sample:
+  - `run_formal_all.sh` over `verilator-verification/LEC` + `yosys/tests/sva/LEC`
+    with explicit filters produced summary at:
+    - `/tmp/formal-cadence-lec-subfamilies-20260211-212711/summary.tsv`
+  - follow-up `circt-mut report` with
+    `formal-regression-matrix-external-formal-semantic-diag-family-guard`:
+    - `value_gate.status=pass`
+    - missing scoped keys surfaced as `0.00`.
+
 ## Iteration 1117 - February 11, 2026
 
 ### BMC Semantic Closure: Deterministic Multiclock SAT/UNSAT E2E Pair

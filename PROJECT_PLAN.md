@@ -9,6 +9,35 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59)
+
+1. LEC semantic-error telemetry now tracks subfamilies beneath
+   `semantic_diag_error`:
+   - `lec_error_bucket_semantic_diag_parser_cases`
+   - `lec_error_bucket_semantic_diag_lowering_cases`
+   - `lec_error_bucket_semantic_diag_solver_cases`
+   while preserving the legacy aggregate
+   `lec_error_bucket_semantic_diag_error_cases`.
+2. Mutation governance now has a long-term scoped family guard profile:
+   - `formal-regression-matrix-external-formal-semantic-diag-family-guard`
+   - gates parser/lowering/solver counters for both:
+     - `verilator_verification/LEC`
+     - `yosys_tests_sva/LEC`
+   - missing scoped external-formal counters now default to `0` in value-gate
+     evaluation to avoid brittle failures on empty/filtered lanes.
+3. Remaining limitations:
+   - subfamily classification currently uses reason/diag token heuristics;
+     explicit structured LEC reason codes are still needed for stronger
+     stability.
+   - `semantic_diag_error` case-ID drift governance is still aggregate; no
+     parser/lowering/solver case-ID drift split yet.
+4. Next long-term features:
+   - add structured reason emission in LEC runners and re-key subfamily
+     classification to stable reason contracts.
+   - add strict drift gates for per-subfamily case IDs and case+reason tuples.
+   - couple mutator-family prioritization to these scoped semantic subfamily
+     deltas (parser/lowering/solver debt routing).
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:55)
 
 1. Added deterministic multiclock BMC e2e parity anchors:
