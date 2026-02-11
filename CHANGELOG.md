@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1117 - February 11, 2026
+
+### BMC Semantic Closure: Deterministic Multiclock SAT/UNSAT E2E Pair
+
+1. Added new multiclock BMC e2e tests:
+   - `test/Tools/circt-bmc/sva-multiclock-assume-domains-unsat-e2e.sv`
+   - `test/Tools/circt-bmc/sva-multiclock-assume-domains-sat-e2e.sv`
+2. Coverage intent:
+   - enforce deterministic multiclock outcomes for both proving and
+     counterexample paths under `--allow-multi-clock` and
+     `--assume-known-inputs`.
+3. Expected outcomes:
+   - unsat case: `BMC_RESULT=UNSAT`
+   - sat case: `BMC_RESULT=SAT`
+4. Backends covered:
+   - JIT
+   - SMT-LIB (`--run-smtlib`)
+
+### Tests and Validation
+
+- Manual backend checks with explicit tools + z3:
+  - JIT:
+    - `...sva-multiclock-assume-domains-unsat-e2e.sv` -> `BMC_RESULT=UNSAT`
+    - `...sva-multiclock-assume-domains-sat-e2e.sv` -> `BMC_RESULT=SAT`
+  - SMT-LIB:
+    - `...sva-multiclock-assume-domains-unsat-e2e.sv` -> `BMC_RESULT=UNSAT`
+    - `...sva-multiclock-assume-domains-sat-e2e.sv` -> `BMC_RESULT=SAT`
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/circt-bmc/sva-multiclock-assume-domains-unsat-e2e.sv`
+  - `build-test/test/Tools/circt-bmc/sva-multiclock-assume-domains-sat-e2e.sv`
+  - current environment marks them `Unsupported` (feature gating), while
+    direct tool validation confirms expected behavior.
+
 ## Iteration 1116 - February 11, 2026
 
 ### Mutation Policy: Strict External Formal Summary Schema v1 Modes

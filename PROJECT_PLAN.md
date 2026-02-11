@@ -9,6 +9,30 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:55)
+
+1. Added deterministic multiclock BMC e2e parity anchors:
+   - `test/Tools/circt-bmc/sva-multiclock-assume-domains-unsat-e2e.sv`
+   - `test/Tools/circt-bmc/sva-multiclock-assume-domains-sat-e2e.sv`
+   - expected outcomes validated in both JIT and SMT-LIB:
+     - unsat case: `BMC_RESULT=UNSAT`
+     - sat case: `BMC_RESULT=SAT`
+2. Remaining formal limitations:
+   - this multiclock pair currently uses assumption-anchored domain contracts;
+     we still need a non-trivial cross-domain implication anchor that is
+     deterministic without circular assumption structure.
+   - LEC `semantic_diag_error` decomposition is still not split into stable
+     parser/lowering/solver families.
+   - mutation policy is currently point-in-time scoped; trend-aware scoped
+     semantic gating remains open.
+3. Next long-term features:
+   - add a second multiclock pair targeting sequence-event-list semantics with
+     strict SAT/UNSAT determinism and bucket tracking.
+   - extend `run_formal_all.sh` semantic bucketing with finer LEC
+     `semantic_diag_error` subfamilies and strict drift gates.
+   - add `circt-mut` scoped semantic trend profiles over
+     `verilator_verification/LEC` + `yosys_tests_sva/LEC` counters.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:40)
 
 1. Added a second scoped external-formal semantic guard profile in
