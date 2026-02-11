@@ -4907,6 +4907,8 @@ static int runNativeMatrixDispatch(const char *argv0,
   uint64_t laneFail = 0;
   uint64_t laneSkip = 0;
   uint64_t laneExecuted = 0;
+  uint64_t laneFilteredInclude = 0;
+  uint64_t laneFilteredExclude = 0;
   uint64_t laneRuntimeNanos = 0;
   std::vector<std::pair<std::string, uint64_t>> runtimeRows;
   runtimeRows.reserve(rawLines.size());
@@ -5026,11 +5028,15 @@ static int runNativeMatrixDispatch(const char *argv0,
     }
     if (!includeLaneRegexes.empty() &&
         llvm::none_of(includeLaneRegexes,
-                      [&](const Regex &regex) { return regex.match(laneID); }))
+                      [&](const Regex &regex) { return regex.match(laneID); })) {
+      ++laneFilteredInclude;
       continue;
+    }
     if (llvm::any_of(excludeLaneRegexes,
-                     [&](const Regex &regex) { return regex.match(laneID); }))
+                     [&](const Regex &regex) { return regex.match(laneID); })) {
+      ++laneFilteredExclude;
       continue;
+    }
 
     ++laneTotal;
     std::string laneDesign = trimmedColumn(cols, ColDesign).str();
@@ -5547,6 +5553,10 @@ static int runNativeMatrixDispatch(const char *argv0,
          << scheduleUniqueKeys << "\n";
   outs() << "native_matrix_dispatch_schedule_deferred_followers\t"
          << scheduleDeferredFollowers << "\n";
+  outs() << "native_matrix_dispatch_filtered_include\t" << laneFilteredInclude
+         << "\n";
+  outs() << "native_matrix_dispatch_filtered_exclude\t" << laneFilteredExclude
+         << "\n";
   outs() << "native_matrix_dispatch_pass\t" << lanePass << "\n";
   outs() << "native_matrix_dispatch_fail\t" << laneFail << "\n";
   outs() << "native_matrix_dispatch_skip\t" << laneSkip << "\n";

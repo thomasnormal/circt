@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1028 - February 11, 2026
+
+### `circt-mut matrix`: Native Lane-Filter Telemetry Counters
+
+1. Extended native matrix dispatch in `tools/circt-mut/circt-mut.cpp` with
+   explicit lane-filter accounting counters:
+   - `native_matrix_dispatch_filtered_include`
+   - `native_matrix_dispatch_filtered_exclude`
+2. Counters are now tracked directly in native lane selection:
+   - include-filter misses increment `filtered_include`.
+   - exclude-filter matches increment `filtered_exclude`.
+3. Added regression assertion updates in:
+   - `test/Tools/circt-mut-matrix-native-dispatch-lane-filter-repeatable.test`
+   to pin expected include/exclude filtered counts.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused lane-filter native dispatch slice:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch-lane-filter.test test/Tools/circt-mut-matrix-native-dispatch-lane-filter-repeatable.test test/Tools/circt-mut-matrix-native-dispatch-lane-filter-invalid.test`: PASS (3/3)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (258/258)
+- Latest external filtered formal cadence snapshot remains:
+  - `/tmp/formal-all-native-lane-filter-repeatable`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1027 - February 11, 2026
 
 ### `circt-mut matrix`: Native Repeatable Lane-Filter Parity

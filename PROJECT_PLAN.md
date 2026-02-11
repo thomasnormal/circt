@@ -148,6 +148,12 @@ See CHANGELOG.md on recent progress.
   `--exclude-lane-regex` arguments (both `--flag value` and `--flag=value`)
   with deterministic OR semantics per filter class and strict per-pattern
   validation, closing another script-parity gap for CI lane slicing.
+- Latest mutation-governance milestone (current): native matrix dispatch now
+  emits lane-filter accounting telemetry
+  (`native_matrix_dispatch_filtered_include`,
+  `native_matrix_dispatch_filtered_exclude`) so CI/report consumers can
+  attribute lane-selection drops to include/exclude filters without parsing
+  rewritten lane manifests.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
