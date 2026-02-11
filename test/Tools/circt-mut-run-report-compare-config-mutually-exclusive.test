@@ -1,0 +1,5 @@
+// RUN: rm -rf %t && mkdir -p %t/proj
+// RUN: printf '[run]\nwith_report = true\nreport_mode = "cover"\nreport_compare = "a.tsv"\nreport_compare_history_latest = "h.tsv"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut run --project-dir %t/proj --mode cover 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut run: [run] keys 'report_compare' and 'report_compare_history_latest' are mutually exclusive
