@@ -8,6 +8,7 @@ TAG_REGEX="${TAG_REGEX:-}"
 CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
 CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-300}"
 CIRCT_MEMORY_LIMIT_KB=$((CIRCT_MEMORY_LIMIT_GB * 1024 * 1024))
+CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS="${CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS:-1}"
 
 # Run a command with memory limit
 run_limited() {
@@ -271,6 +272,10 @@ extract_verilog_error_reason() {
       sub(/^[Ee]rror:[[:space:]]*/, "", line)
       low = tolower(line)
       if (index(low, "failed to run command") > 0) {
+        if (index(low, "text file busy") > 0) {
+          print "runner_command_text_file_busy"
+          exit
+        }
         if (index(low, "no such file or directory") > 0) {
           print "runner_command_not_found"
           exit
@@ -499,16 +504,31 @@ top_module=${top_module}
       :
     else
       verilog_status=$?
-      record_drop_remark_case "$base" "$sv" "$verilog_log"
-      if [[ "$verilog_status" -eq 124 || "$verilog_status" -eq 137 ]]; then
-        printf "TIMEOUT\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
-      else
-        verilog_reason="$(extract_verilog_error_reason "$verilog_log")"
-        printf "ERROR\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_ERROR\t%s\n" "$base" "$sv" "$verilog_reason" >> "$results_tmp"
+      if grep -Eiq "failed to run command .*text file busy" "$verilog_log"; then
+        sleep "$CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS"
+        fallback_verilog="$tmpdir/${base}.circt-verilog.retry.bin"
+        if cp -f "$CIRCT_VERILOG" "$fallback_verilog" 2>/dev/null; then
+          chmod +x "$fallback_verilog" 2>/dev/null || true
+          cmd[0]="$fallback_verilog"
+        fi
+        if run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+          verilog_status=0
+        else
+          verilog_status=$?
+        fi
       fi
-      error=$((error + 1))
-      save_logs
-      continue
+      if [[ "$verilog_status" -ne 0 ]]; then
+        record_drop_remark_case "$base" "$sv" "$verilog_log"
+        if [[ "$verilog_status" -eq 124 || "$verilog_status" -eq 137 ]]; then
+          printf "TIMEOUT\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
+        else
+          verilog_reason="$(extract_verilog_error_reason "$verilog_log")"
+          printf "ERROR\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_ERROR\t%s\n" "$base" "$sv" "$verilog_reason" >> "$results_tmp"
+        fi
+        error=$((error + 1))
+        save_logs
+        continue
+      fi
     fi
     record_drop_remark_case "$base" "$sv" "$verilog_log"
     if [[ -n "$cache_file" && -s "$mlir" ]]; then
