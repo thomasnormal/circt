@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1139 - February 11, 2026
+
+### Formal Driver + Mutation Governance: Filtered-Lane Min-Total Violation Signals + v9 Composites
+
+1. Extended `run_formal_all` filtered lane summaries with a normalized min-volume
+   token:
+   - `filtered_min_total_violation={0|1}`
+   - wired for filtered formal lanes:
+     - `sv-tests` (`BMC`, `LEC`)
+     - `sv-tests-uvm` (`BMC_SEMANTICS`)
+     - `verilator-verification` (`BMC`, `LEC`)
+     - `yosys/tests/sva` (`BMC`, `LEC`)
+2. Added `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-filtered-lane-min-total-violation-v1`
+   enforcing zero violations across filtered formal lanes.
+3. Added staged strict composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v9`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v9`
+   (`v8` + filtered-lane min-total violation profile).
+4. Added/updated regressions:
+   - `test/Tools/run-formal-all-filtered-min-total-violation-summary.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-filtered-lane-min-total-violation-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-filtered-lane-min-total-violation-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v9-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v9-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v9-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v9-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+5. Validation:
+   - `ninja -C build-test circt-mut`
+   - focused lit slice (9 tests, including `run-formal-all` + v9 policy suite): PASS
+   - real filtered `sv-tests/BMC` probe:
+     - emits `filtered_min_total_violation=1 nonempty_filter_miss=1` for zero-volume filtered slice.
+
 ## Iteration 1138 - February 11, 2026
 
 ### Mutation Governance: sv-tests BMC Minimum-Volume Contract + v7 Composites

@@ -9,6 +9,33 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++++)
+
+1. Added filtered-lane min-volume violation telemetry in `run_formal_all`:
+   - `filtered_min_total_violation={0|1}` on filtered formal lane summaries.
+2. Added mutation policy profile:
+   - `formal-regression-matrix-external-formal-filtered-lane-min-total-violation-v1`
+3. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v9`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v9`
+4. Validation highlights:
+   - focused lit for new profile/composites and runner summary token: PASS
+   - real filtered `sv-tests/BMC` slice emits:
+     `filtered_min_total_violation=1 nonempty_filter_miss=1` on `total=0`.
+5. Remaining limitations:
+   - OpenTitan filtered lanes are still outside the unified min-total violation
+     token contract.
+   - per-lane thresholds are binary (`0/1`) and not yet budgeted (`min_total>=N`)
+     for lane-specific semantic slices.
+   - mutation report output does not yet include first-class lane/filter context
+     for each min-total failure beyond counter keys.
+6. Next long-term features:
+   - extend `filtered_min_total_violation` contract coverage to OpenTitan lanes.
+   - add lane-level threshold policies (`min_total>=N`) for critical buckets:
+     multiclock, sequence-subroutine, and LEC X-prop-sensitive slices.
+   - add structured failure explainers in `circt-mut report` for formal gates
+     (lane id, applied filter regex, matched-count provenance).
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++)
 
 1. Added first minimum-volume formal policy gate in `circt-mut`:
