@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1027 - February 11, 2026
+
+### `circt-mut matrix`: Native Repeatable Lane-Filter Parity
+
+1. Extended native matrix dispatch in `tools/circt-mut/circt-mut.cpp` to parse
+   repeatable lane regex filters:
+   - `--include-lane-regex` (repeatable)
+   - `--exclude-lane-regex` (repeatable)
+2. Added shared multi-value option collection helper for native matrix
+   dispatch argument scanning:
+   - supports both `--flag value` and `--flag=value` forms
+   - avoids token-skipping drift when options repeat.
+3. Updated native lane selection semantics to script-parity behavior:
+   - include filters: lane is selected if it matches **any** include regex.
+   - exclude filters: lane is dropped if it matches **any** exclude regex.
+   - include+exclude composition remains deterministic:
+     include-pass first, then exclude-prune.
+4. Preserved strict validation behavior:
+   - every provided include/exclude regex is compiled and validated;
+   - first invalid pattern still fails fast with an explicit
+     `invalid --include-lane-regex` / `invalid --exclude-lane-regex` error.
+5. Added regression coverage:
+   - `test/Tools/circt-mut-matrix-native-dispatch-lane-filter-repeatable.test`
+     validates repeatable include/exclude behavior across both flag syntaxes.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused lane-filter native dispatch slice:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch-lane-filter.test test/Tools/circt-mut-matrix-native-dispatch-lane-filter-repeatable.test test/Tools/circt-mut-matrix-native-dispatch-lane-filter-invalid.test`: PASS (3/3)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (258/258)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-lane-filter-repeatable ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1026 - February 11, 2026
 
 ### `circt-mut matrix`: Native Cache-Aware Lane Scheduling Parity

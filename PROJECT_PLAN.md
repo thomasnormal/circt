@@ -143,6 +143,11 @@ See CHANGELOG.md on recent progress.
   cache-aware`) with deterministic leader-first key spreading and explicit
   scheduling telemetry (`native_matrix_dispatch_schedule_*`) for CI/runtime
   debugging.
+- Latest mutation-governance milestone (current): native matrix dispatch lane
+  filtering now supports repeatable `--include-lane-regex` and
+  `--exclude-lane-regex` arguments (both `--flag value` and `--flag=value`)
+  with deterministic OR semantics per filter class and strict per-pattern
+  validation, closing another script-parity gap for CI lane slicing.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
