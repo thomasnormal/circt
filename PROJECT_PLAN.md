@@ -9,6 +9,27 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59++++)
+
+1. Added a dedicated mutation trend profile for frontend timeout debt:
+   - `formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1`
+2. Scope:
+   - zero-growth gates on `lec_timeout_class_preprocess_cases` for:
+     - `sv_tests/LEC`
+     - `verilator_verification/LEC`
+     - `yosys_tests_sva/LEC`
+3. Long-term impact:
+   - timeout regressions are now governed independently from semantic-diag
+     regressions, improving root-cause routing and policy clarity.
+4. Remaining limitations:
+   - guard is fixed-threshold (`delta <= 0`) and does not adapt to test-volume
+     shifts or expected compile-pressure windows.
+5. Next long-term features:
+   - add volume-normalized timeout drift gates.
+   - add rolling percentile/variance-aware timeout budgets per suite family.
+   - add coupled profiles that gate both timeout drift and semantic-diag drift
+     for release-grade native strict formal lanes.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+++)
 
 1. Closed a long-running direct-runner reliability gap:
