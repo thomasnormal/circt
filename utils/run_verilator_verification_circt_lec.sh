@@ -232,6 +232,39 @@ extract_opt_error_reason() {
   ' "$opt_log_file"
 }
 
+extract_verilog_error_reason() {
+  local verilog_log_file="$1"
+  if [[ ! -s "$verilog_log_file" ]]; then
+    printf 'no_diag\n'
+    return 0
+  fi
+  awk '
+    NF {
+      line = $0
+      gsub(/\t/, " ", line)
+      sub(/^[[:space:]]+/, "", line)
+      if (match(line, /^[^:]+:[0-9]+(:[0-9]+)?:[[:space:]]*/))
+        line = substr(line, RLENGTH + 1)
+      sub(/^[Ee]rror:[[:space:]]*/, "", line)
+      gsub(/[0-9]+/, "<n>", line)
+      gsub(/[^A-Za-z0-9]+/, "_", line)
+      gsub(/^_+/, "", line)
+      gsub(/_+$/, "", line)
+      line = tolower(line)
+      if (length(line) == 0)
+        line = "no_diag"
+      if (length(line) > 64)
+        line = substr(line, 1, 64)
+      print line
+      exit
+    }
+    END {
+      if (NR == 0)
+        print "no_diag"
+    }
+  ' "$verilog_log_file"
+}
+
 save_logs() {
   if [[ -z "$KEEP_LOGS_DIR" ]]; then
     return
@@ -345,7 +378,8 @@ file=${sv} hash=$(hash_file "$sv")
         if [[ "$verilog_status" -eq 124 || "$verilog_status" -eq 137 ]]; then
           printf "TIMEOUT\t%s\t%s\tverilator-verification\tLEC\tCIRCT_VERILOG_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
         else
-          printf "ERROR\t%s\t%s\tverilator-verification\tLEC\tCIRCT_VERILOG_ERROR\n" "$base" "$sv" >> "$results_tmp"
+          verilog_reason="$(extract_verilog_error_reason "$verilog_log")"
+          printf "ERROR\t%s\t%s\tverilator-verification\tLEC\tCIRCT_VERILOG_ERROR\t%s\n" "$base" "$sv" "$verilog_reason" >> "$results_tmp"
         fi
         error=$((error + 1))
         save_logs

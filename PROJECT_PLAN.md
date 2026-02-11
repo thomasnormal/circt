@@ -9,6 +9,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:30)
+
+1. Added reason-level governance for LEC `CIRCT_VERILOG_ERROR`:
+   - runner reason extraction in `sv-tests` / `verilator` / `yosys` LEC scripts
+   - summary counters:
+     - `lec_circt_verilog_error_reason_<token>_cases`
+   - new strict gate:
+     - `--fail-on-new-lec-circt-verilog-error-reason-keys`
+2. Strict-gate now governs both front-end and middle-end error families:
+   - `CIRCT_VERILOG_ERROR` reason-key drift
+   - `CIRCT_OPT_ERROR` case-ID / reason-key / case+reason drift
+3. Why this is high leverage:
+   - prevents silent migration of failure pressure between compile stages by
+     making reason-family churn explicit in lane governance.
+4. Remaining limitations and next long-term features:
+   - reason extraction still normalizes free-form logs; long-term stable
+     category IDs from compiler diagnostics are needed.
+   - next governance step should add `CIRCT_VERILOG_ERROR` case-id and
+     case+reason tuple drift (not just reason keys) for parity with opt-error.
+   - mutation reporting should ingest these reason counters to prioritize
+     mutators against active formal breakage families.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:10)
 
 1. Added strict governance for LEC `CIRCT_OPT_ERROR` case+reason identity

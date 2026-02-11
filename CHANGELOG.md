@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1096 - February 11, 2026
+
+### Formal Governance: LEC `CIRCT_VERILOG_ERROR` Reason-Key Drift
+
+1. Extended LEC runners to emit `CIRCT_VERILOG_ERROR` reason fingerprints
+   (column 7):
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. Extended `run_formal_all.sh` LEC summarization:
+   - adds per-lane counters:
+     - `lec_circt_verilog_error_reason_<token>_cases`
+3. Added strict-gate option:
+   - `--fail-on-new-lec-circt-verilog-error-reason-keys`
+   - enabled by default under `--strict-gate` (legacy-safe behavior).
+4. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-reason-keys.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-reason-keys-defaults.test`
+   - `test/Tools/run-sv-tests-lec-verilog-error-reason.test`
+   - updated:
+     - `test/Tools/run-verilator-verification-circt-lec-error-diag.test`
+     - `test/Tools/run-yosys-sva-circt-lec-error-diag.test`
+     - `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-reason-keys.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-reason-keys-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-reasons.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-reasons-defaults.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - `build-test/test/Tools/run-sv-tests-lec-verilog-error-reason.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-error-diag.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-error-diag.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-opt-error-reason.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-opt-error-reason.test`
+  - PASS (10/10)
+
 ## Iteration 1095 - February 11, 2026
 
 ### Formal Governance: LEC `CIRCT_OPT_ERROR` Case+Reason Tuple Drift
