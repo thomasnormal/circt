@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 997 - February 11, 2026
+
+### `circt-mut report`: Stop-On-Fail Compare/Trend Policy Bundles
+
+1. Added two new built-in matrix policy profiles in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-stop-on-fail-basic`
+   - `formal-regression-matrix-stop-on-fail-trend`
+2. Both profiles preserve stop-on-fail workflow semantics by gating skip
+   regressions on:
+   - `matrix.skip_budget_rows_non_stop_on_fail`
+   instead of blanket `matrix.lanes_skip`.
+3. Gate behavior:
+   - compare profile (`...-basic`) enforces
+     `delta(matrix.skip_budget_rows_non_stop_on_fail) <= 0`
+   - trend profile (`...-trend`) enforces
+     `trend_delta(matrix.skip_budget_rows_non_stop_on_fail) <= 0`
+   - both retain existing global-filter and detected-mutant regression gates.
+4. Updated user-facing profile surfaces:
+   - `circt-mut report --help`
+   - invalid profile diagnostics (`unknown --policy-profile ... expected ...`)
+5. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-stop-on-fail-basic-non-stop-skip-delta-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-stop-on-fail-trend-non-stop-skip-delta-fail.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-report-policy-matrix-stop-on-fail-basic-non-stop-skip-delta-fail.test test/Tools/circt-mut-report-policy-matrix-stop-on-fail-trend-non-stop-skip-delta-fail.test`: PASS (4/4)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (200/200)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-stop-on-fail-policy-profiles ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter 'rv_plic'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `opentitan/LEC`, AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 996 - February 11, 2026
 
 ### `circt-mut report`: Always-On Skip-Budget Telemetry + Stop-On-Fail Policy Hardening
