@@ -10466,6 +10466,8 @@ static int runNativeReport(const ReportOptions &opts) {
   SmallVector<std::string, 4> policyProfiles = effectiveOpts.policyProfiles;
   bool hasCLIPolicyMode = !effectiveOpts.policyMode.empty();
   bool hasCLIPolicyProfile = !effectiveOpts.policyProfiles.empty();
+  std::string appliedPolicyMode;
+  std::optional<bool> appliedPolicyStopOnFail;
   std::optional<bool> failOnPrequalifyDriftOverride;
   if (effectiveOpts.failOnPrequalifyDriftOverrideSet)
     failOnPrequalifyDriftOverride = effectiveOpts.failOnPrequalifyDrift;
@@ -10646,6 +10648,8 @@ static int runNativeReport(const ReportOptions &opts) {
           errs() << modeError << "\n";
           return 1;
         }
+        appliedPolicyMode = mode;
+        appliedPolicyStopOnFail = stopOnFail.value_or(false);
       }
     }
   }
@@ -10662,6 +10666,8 @@ static int runNativeReport(const ReportOptions &opts) {
       errs() << modeError << "\n";
       return 1;
     }
+    appliedPolicyMode = effectiveOpts.policyMode;
+    appliedPolicyStopOnFail = effectiveOpts.policyStopOnFail.value_or(false);
   }
   if (!policyProfiles.empty()) {
     SmallVector<std::string, 4> uniqueProfiles;
@@ -10696,6 +10702,14 @@ static int runNativeReport(const ReportOptions &opts) {
 
   std::vector<std::pair<std::string, std::string>> rows;
   rows.emplace_back("report.mode", opts.mode);
+  rows.emplace_back("policy.mode",
+                    appliedPolicyMode.empty() ? std::string("-")
+                                              : appliedPolicyMode);
+  rows.emplace_back("policy.stop_on_fail",
+                    appliedPolicyStopOnFail.has_value()
+                        ? (*appliedPolicyStopOnFail ? std::string("1")
+                                                    : std::string("0"))
+                        : std::string("-"));
   if (!policyProfiles.empty()) {
     rows.emplace_back("policy.profile_count",
                       std::to_string(policyProfiles.size()));

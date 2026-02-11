@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1043 - February 11, 2026
+
+### `circt-mut report`: Policy-Mode Audit Rows
+
+1. Extended report output in `tools/circt-mut/circt-mut.cpp` with policy-mode
+   audit keys:
+   - `policy.mode`
+   - `policy.stop_on_fail`
+2. Audit keys reflect applied policy-mode mapping (CLI or config) and report:
+   - resolved mode name and stop-on-fail bit when mode->profile mapping is used
+   - `-` when explicit policy profiles are used without mode mapping.
+3. Added regression coverage for audit semantics:
+   - `test/Tools/circt-mut-report-cli-policy-mode-smoke-stop-on-fail.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-nightly-default.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-provenance-strict-default.test`
+   - `test/Tools/circt-mut-report-policy-config-cli-precedence.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused policy-mode audit + provenance slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-report-cli-policy-mode-smoke-stop-on-fail|circt-mut-report-policy-config-matrix-mode-provenance-strict-default|circt-mut-report-policy-config-cli-precedence|circt-mut-report-policy-config-matrix-mode-nightly-default|circt-mut-report-cli-policy-mode-strict-default|circt-mut-report-cli-policy-mode-trend-nightly-default|circt-mut-report-policy-config-matrix-mode-smoke-stop-on-fail|circt-mut-report-policy-config-matrix-mode-trend-strict-stop-on-fail|circt-mut-report-policy-config-matrix-mode-provenance-strict-no-summary-fail'`: PASS (9/9)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-.*\\.test'`: PASS (269/269)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-mode-audit-rows ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC+LEC, `yosys/tests/sva` BMC+LEC, `opentitan` LEC, AVIP compile `axi4Lite/spi/uart`
+
 ## Iteration 1042 - February 11, 2026
 
 ### `circt-mut` Policy-Mode Tech Debt: Canonical Mode String
