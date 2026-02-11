@@ -9,6 +9,26 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 20:30)
+
+1. Added dedicated formal-governance counters for infra runner failures:
+   - `lec_runner_command_reason_*_cases` emitted from LEC summaries in
+     `run_formal_all.sh`.
+2. Added new strict-gate control:
+   - `--fail-on-new-lec-runner-command-reason-keys`
+   - now enabled by default under `--strict-gate`.
+3. Why this is long-term useful:
+   - separates infrastructure execution regressions
+     (`runner_command_not_found/permission_denied/text_file_busy/...`) from
+     semantic/lowering reason-family drift in dashboards and gates.
+4. Current limitations and next build targets:
+   - continue reducing duplicated runner-side reason parsing (move toward shared
+     helper/module and compiler-emitted category IDs).
+   - add formal lane-level surfacing for `runner_command_*` case IDs/reasons
+     (not just summary counter keys) to improve mutation prioritization input.
+   - continue BMC semantic closure on multiclock + sequence-subroutine buckets
+     with strict case-ID drift gates.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59)
 
 1. Completed opt-stage parity with verilog-stage runner hardening:
@@ -1069,6 +1089,13 @@ See CHANGELOG.md on recent progress.
     - `native-strict-formal-summary`
   enabling strict matrix+formal closure to gate not just on external-formal
   fail-like counts, but on structured summary-schema integrity.
+- Latest mutation-governance milestone (current): summary-schema strict
+  governance now also enforces per-row count consistency in `summary.tsv`:
+  - new metrics:
+    - `external_formal.summary_tsv_consistent_rows`
+    - `external_formal.summary_tsv_inconsistent_rows`
+  - strict summary guard now requires zero inconsistent rows
+  so malformed `total` vs status-count tuples fail policy deterministically.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
