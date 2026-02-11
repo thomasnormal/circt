@@ -1,0 +1,3 @@
+// RUN: not circt-mut run --with-report --report-policy-mode smoke --report-policy-profile formal-regression-matrix-guard 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut run: --report-policy-mode and --report-policy-profile are mutually exclusive
