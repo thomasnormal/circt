@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t/proj
+// RUN: printf '[run]\nwith_report = maybe\n[matrix]\nlanes_tsv = "lanes.tsv"\nout_dir = "out/matrix"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut run --project-dir %t/proj --mode matrix 2>&1 | FileCheck %s --check-prefix=BOOL
+// RUN: printf '[run]\nreport_mode = "bad"\n[matrix]\nlanes_tsv = "lanes.tsv"\nout_dir = "out/matrix"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut run --project-dir %t/proj --mode matrix 2>&1 | FileCheck %s --check-prefix=MODE
+//
+// BOOL: circt-mut run: invalid boolean [run] key 'with_report' value 'maybe' (expected 1|0|true|false|yes|no|on|off)
+// MODE: circt-mut run: invalid [run] key 'report_mode' value 'bad' (expected cover|matrix|all)

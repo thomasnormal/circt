@@ -136,6 +136,8 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --project-dir DIR        Project root directory (default: .)\n";
   os << "  --config FILE            Config file path (default: <project-dir>/circt-mut.toml)\n";
   os << "  --mode MODE              cover|matrix|all (default: all)\n";
+  os << "  --with-report            Run 'circt-mut report' after run completes\n";
+  os << "  --report-mode MODE       cover|matrix|all (default: same as --mode)\n";
   os << "  -h, --help               Show help\n";
 }
 
@@ -5735,6 +5737,8 @@ struct RunOptions {
   std::string projectDir = ".";
   std::string configPath;
   std::string mode = "all";
+  bool withReport = false;
+  std::string reportMode;
 };
 
 struct RunParseResult {
@@ -5745,6 +5749,7 @@ struct RunParseResult {
 };
 
 struct RunConfigValues {
+  StringMap<std::string> run;
   StringMap<std::string> cover;
   StringMap<std::string> matrix;
   StringMap<std::string> report;
@@ -5838,7 +5843,9 @@ static bool parseRunConfigFile(StringRef path, RunConfigValues &cfg,
       parsedValue = value.str();
     }
 
-    if (section == "cover")
+    if (section == "run")
+      cfg.run[key] = parsedValue;
+    else if (section == "cover")
       cfg.cover[key] = parsedValue;
     else if (section == "matrix")
       cfg.matrix[key] = parsedValue;
@@ -5975,6 +5982,17 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       result.opts.mode = v->str();
       continue;
     }
+    if (arg == "--with-report") {
+      result.opts.withReport = true;
+      continue;
+    }
+    if (arg == "--report-mode" || arg.starts_with("--report-mode=")) {
+      auto v = consumeValue(i, arg, "--report-mode");
+      if (!v)
+        return result;
+      result.opts.reportMode = v->str();
+      continue;
+    }
 
     if (arg.starts_with("-")) {
       result.error = (Twine("circt-mut run: unknown option: ") + arg).str();
@@ -5990,6 +6008,14 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
     result.error =
         (Twine("circt-mut run: invalid --mode value: ") + result.opts.mode +
          " (expected cover|matrix|all)")
+            .str();
+    return result;
+  }
+  if (!result.opts.reportMode.empty() && result.opts.reportMode != "cover" &&
+      result.opts.reportMode != "matrix" && result.opts.reportMode != "all") {
+    result.error =
+        (Twine("circt-mut run: invalid --report-mode value: ") +
+         result.opts.reportMode + " (expected cover|matrix|all)")
             .str();
     return result;
   }
@@ -6014,6 +6040,40 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
   std::string error;
   if (!parseRunConfigFile(configPath, cfg, error)) {
     errs() << error << "\n";
+    return 1;
+  }
+
+  bool withReport = opts.withReport;
+  if (!withReport) {
+    auto it = cfg.run.find("with_report");
+    if (it != cfg.run.end() && !it->second.empty()) {
+      std::string lowered = StringRef(it->second).trim().lower();
+      if (lowered == "1" || lowered == "true" || lowered == "yes" ||
+          lowered == "on")
+        withReport = true;
+      else if (lowered == "0" || lowered == "false" || lowered == "no" ||
+               lowered == "off")
+        withReport = false;
+      else {
+        errs() << "circt-mut run: invalid boolean [run] key 'with_report' "
+                  "value '"
+               << it->second
+               << "' (expected 1|0|true|false|yes|no|on|off)\n";
+        return 1;
+      }
+    }
+  }
+  std::string reportMode = opts.reportMode;
+  if (reportMode.empty()) {
+    auto it = cfg.run.find("report_mode");
+    if (it != cfg.run.end() && !it->second.empty())
+      reportMode = StringRef(it->second).trim().str();
+  }
+  if (reportMode.empty())
+    reportMode = opts.mode;
+  if (reportMode != "cover" && reportMode != "matrix" && reportMode != "all") {
+    errs() << "circt-mut run: invalid [run] key 'report_mode' value '"
+           << reportMode << "' (expected cover|matrix|all)\n";
     return 1;
   }
 
@@ -6379,15 +6439,48 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     return runMatrixFlow(argv0, argRefs);
   };
 
-  if (opts.mode == "cover")
-    return runCoverFromConfig();
-  if (opts.mode == "matrix")
-    return runMatrixFromConfig();
-
-  int rc = runCoverFromConfig();
-  if (rc != 0)
+  int rc = 0;
+  if (opts.mode == "cover") {
+    rc = runCoverFromConfig();
+  } else if (opts.mode == "matrix") {
+    rc = runMatrixFromConfig();
+  } else {
+    rc = runCoverFromConfig();
+    if (rc == 0)
+      rc = runMatrixFromConfig();
+  }
+  if (rc != 0 || !withReport)
     return rc;
-  return runMatrixFromConfig();
+
+  std::string mainExec =
+      sys::fs::getMainExecutable(argv0, reinterpret_cast<void *>(&printHelp));
+  if (mainExec.empty()) {
+    errs() << "circt-mut run: unable to locate circt-mut executable for "
+              "post-run report.\n";
+    return 1;
+  }
+  SmallVector<std::string, 12> reportArgsOwned;
+  reportArgsOwned.push_back(mainExec);
+  reportArgsOwned.push_back("report");
+  reportArgsOwned.push_back("--project-dir");
+  reportArgsOwned.push_back(opts.projectDir);
+  reportArgsOwned.push_back("--config");
+  reportArgsOwned.push_back(std::string(configPath));
+  reportArgsOwned.push_back("--mode");
+  reportArgsOwned.push_back(reportMode);
+  SmallVector<StringRef, 12> reportArgs;
+  for (const auto &arg : reportArgsOwned)
+    reportArgs.push_back(arg);
+
+  std::string errMsg;
+  int reportRC = sys::ExecuteAndWait(mainExec, reportArgs, /*Env=*/std::nullopt,
+                                     /*Redirects=*/{},
+                                     /*SecondsToWait=*/0, /*MemoryLimit=*/0,
+                                     &errMsg);
+  if (!errMsg.empty())
+    errs() << "circt-mut run: post-run report execution error: " << errMsg
+           << "\n";
+  return reportRC;
 }
 
 struct ReportOptions {

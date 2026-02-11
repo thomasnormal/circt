@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1004 - February 11, 2026
+
+### `circt-mut run`: Optional Post-Run Report for CI Governance
+
+1. Extended `circt-mut run` in `tools/circt-mut/circt-mut.cpp` with
+   post-run reporting controls:
+   - CLI:
+     - `--with-report`
+     - `--report-mode cover|matrix|all` (default: same as `--mode`)
+   - Config (`[run]` section):
+     - `with_report = <bool>`
+     - `report_mode = cover|matrix|all`
+2. Behavior:
+   - when enabled, `circt-mut run` now executes `circt-mut report` after
+     successful run flow completion using the same `--project-dir` and
+     resolved config path.
+   - This enables single-command execution + governance summary emission for
+     CI wrappers without requiring separate orchestration steps.
+3. Added strict validation/diagnostics:
+   - invalid CLI `--report-mode` values
+   - invalid `[run] with_report` bool encodings
+   - invalid `[run] report_mode` values.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-run-help.test` (new options in help)
+   - `test/Tools/circt-mut-run-with-report-cli-matrix.test`
+   - `test/Tools/circt-mut-run-with-report-config-matrix.test`
+   - `test/Tools/circt-mut-run-with-report-config-invalid.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-help.test test/Tools/circt-mut-run-with-report-*.test test/Tools/circt-mut-run-matrix-config*.test`: PASS (8/8)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (217/217)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-run-with-report-20260211 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter 'aes'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1003 - February 11, 2026
 
 ### `circt-mut init`: Matrix Native Toggle Defaults for Campaign Bootstrap

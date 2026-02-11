@@ -4,3 +4,5 @@
 // CHECK: --project-dir DIR
 // CHECK: --config FILE
 // CHECK: --mode MODE
+// CHECK: --with-report
+// CHECK: --report-mode MODE
