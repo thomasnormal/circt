@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1067 - February 11, 2026
+
+### `circt-mut report`: Strict Trend Key-Coverage Quality Gates
+
+1. Extended trend aggregation in `tools/circt-mut/circt-mut.cpp` with
+   history-coverage quality metrics:
+   - `trend.numeric_keys_full_history`
+   - `trend.numeric_keys_partial_history`
+   - `trend.numeric_keys_full_history_pct`
+   - `trend.matrix_core_numeric_keys_current`
+   - `trend.matrix_core_numeric_keys_full_history`
+   - `trend.matrix_core_numeric_keys_full_history_pct`
+2. Added strict trend quality gates in
+   `formal-regression-matrix-trend-history-quality-strict`:
+   - `trend.numeric_keys_full_history_pct >= 80`
+   - `trend.matrix_core_numeric_keys_full_history_pct >= 100`
+   in addition to existing strict requirements
+   (`trend.history_runs_selected >= 3`, `trend.numeric_keys >= 1`).
+3. Defined matrix core trend keys for strict history completeness:
+   - `matrix.detected_mutants_sum`
+   - `matrix.lanes_skip`
+   - `matrix.runtime_ns_avg`
+   - `matrix.runtime_ns_max`
+   - `matrix.runtime_ns_sum`
+4. Added/updated regression coverage:
+   - new `test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-core-key-coverage-fail.test`
+     verifies strict composite fails when a core key is missing from one
+     selected history run (`80.00 < 100.00`)
+   - updated `test/Tools/circt-mut-report-trend-history-basic.test`
+     to assert new trend key-history coverage metrics.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused strict trend-coverage slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-report-trend-history-basic.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-trend-nightly-history-quality-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-history-quality-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-trend-strict-core-key-coverage-fail.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-trend-strict.test build-test/test/Tools/circt-mut-report-policy-config-matrix-mode-trend-strict-stop-on-fail.test build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`: PASS (8/8)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter 'circt-mut-.*\\.test' build-test/test/Tools`: PASS (306/306)
+- External filtered formal cadence snapshot:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-trend-key-coverage-strict-rerun2 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC (`assert_fell` ERROR), `opentitan` LEC (`missing_results=1`), AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+  - note: summary-text emission in `run_formal_all.sh` failed late, but suite outcomes were captured in `/tmp/formal-all-trend-key-coverage-strict-rerun2/summary.tsv`.
+
 ## Iteration 1066 - February 11, 2026
 
 ### Formal Driver Hardening: Preserve Yosys BMC `xfail/xpass` In Lane Summaries

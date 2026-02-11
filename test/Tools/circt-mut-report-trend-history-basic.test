@@ -16,3 +16,10 @@
 // CHECK-DAG: trend.cover.detected_mutants.delta_vs_mean{{[[:space:]]}}1.50
 // CHECK-DAG: trend.cover.global_filter_timeout_mutants.mean{{[[:space:]]}}4.00
 // CHECK-DAG: trend.cover.global_filter_timeout_mutants.delta_vs_mean{{[[:space:]]}}-1.00
+// CHECK-DAG: trend.numeric_keys{{[[:space:]]}}2
+// CHECK-DAG: trend.numeric_keys_full_history{{[[:space:]]}}2
+// CHECK-DAG: trend.numeric_keys_partial_history{{[[:space:]]}}0
+// CHECK-DAG: trend.numeric_keys_full_history_pct{{[[:space:]]}}100.00
+// CHECK-DAG: trend.matrix_core_numeric_keys_current{{[[:space:]]}}0
+// CHECK-DAG: trend.matrix_core_numeric_keys_full_history{{[[:space:]]}}0
+// CHECK-DAG: trend.matrix_core_numeric_keys_full_history_pct{{[[:space:]]}}0.00

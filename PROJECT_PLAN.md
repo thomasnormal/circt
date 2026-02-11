@@ -419,6 +419,14 @@ See CHANGELOG.md on recent progress.
   - `formal-regression-matrix-composite-trend-strict`
   - `formal-regression-matrix-composite-stop-on-fail-trend-strict`
   while nightly trend bundles keep the `>= 2` contract for staged rollout.
+- Latest mutation-governance milestone (current): strict matrix trend policy now
+  also enforces history-coverage quality for numeric trend keys:
+  - `trend.numeric_keys_full_history_pct >= 80`
+  - `trend.matrix_core_numeric_keys_full_history_pct = 100`
+  where matrix core keys are
+  `matrix.detected_mutants_sum`, `matrix.lanes_skip`, and runtime
+  (`matrix.runtime_ns_{avg,max,sum}`), reducing false confidence from sparse
+  strict trend windows with missing core-key history rows.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
