@@ -73,6 +73,15 @@
    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`
      with `CIRCT_VERILOG=build-test/bin/circt-verilog` exited cleanly
      (`0`, log: `avip-circt-verilog.log`).
+5. Added lane-governance feature for external BMC expected failures:
+   - `utils/run_formal_all.sh` now accepts
+     `--verilator-bmc-xfails <file>` and forwards it as `XFAILS` to
+     `run_verilator_verification_circt_bmc.sh`.
+   - Includes input validation (missing file -> hard error) and lane-state
+     config hash wiring (`verilator_bmc_xfails=...`) to preserve deterministic
+     resume semantics.
+   - Added regression test:
+     - `test/Tools/run-formal-all-verilator-bmc-xfails-forwarding.test`
 
 ### Formal Backlog Delta
 

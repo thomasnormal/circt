@@ -498,6 +498,10 @@ Options:
   --verilator-bmc-test-filter REGEX
                          Base-name regex filter passed to verilator BMC runner
                          (required when verilator-verification/BMC lane runs)
+  --verilator-bmc-xfails FILE
+                         Optional newline list of expected-failing
+                         verilator-verification BMC test names; forwarded as
+                         `XFAILS` to the verilator BMC runner
   --verilator-lec-test-filter REGEX
                          Base-name regex filter passed to verilator LEC runner
                          (required when verilator-verification/LEC lane runs)
@@ -2030,6 +2034,7 @@ SV_TESTS_LEC_TEST_FILTER=""
 SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX=""
 SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER=""
 VERILATOR_BMC_TEST_FILTER=""
+VERILATOR_BMC_XFAILS=""
 VERILATOR_LEC_TEST_FILTER=""
 YOSYS_BMC_TEST_FILTER=""
 YOSYS_LEC_TEST_FILTER=""
@@ -2454,6 +2459,8 @@ while [[ $# -gt 0 ]]; do
       SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER="$2"; shift 2 ;;
     --verilator-bmc-test-filter)
       VERILATOR_BMC_TEST_FILTER="$2"; shift 2 ;;
+    --verilator-bmc-xfails)
+      VERILATOR_BMC_XFAILS="$2"; shift 2 ;;
     --verilator-lec-test-filter)
       VERILATOR_LEC_TEST_FILTER="$2"; shift 2 ;;
     --yosys-bmc-test-filter)
@@ -2576,6 +2583,10 @@ if [[ -n "$VERILATOR_BMC_TEST_FILTER" ]]; then
     echo "invalid --verilator-bmc-test-filter: $VERILATOR_BMC_TEST_FILTER" >&2
     exit 1
   fi
+fi
+if [[ -n "$VERILATOR_BMC_XFAILS" && ! -f "$VERILATOR_BMC_XFAILS" ]]; then
+  echo "missing --verilator-bmc-xfails file: $VERILATOR_BMC_XFAILS" >&2
+  exit 1
 fi
 if [[ -n "$VERILATOR_LEC_TEST_FILTER" ]]; then
   set +e
@@ -6333,6 +6344,7 @@ compute_lane_state_config_hash() {
     printf "sv_tests_uvm_bmc_semantics_tag_regex=%s\n" "$SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX"
     printf "sv_tests_uvm_bmc_semantics_test_filter=%s\n" "$SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER"
     printf "verilator_bmc_test_filter=%s\n" "$VERILATOR_BMC_TEST_FILTER"
+    printf "verilator_bmc_xfails=%s\n" "$VERILATOR_BMC_XFAILS"
     printf "verilator_lec_test_filter=%s\n" "$VERILATOR_LEC_TEST_FILTER"
     printf "yosys_bmc_test_filter=%s\n" "$YOSYS_BMC_TEST_FILTER"
     printf "yosys_lec_test_filter=%s\n" "$YOSYS_LEC_TEST_FILTER"
@@ -8684,6 +8696,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       BMC_DROP_REMARK_CASES_OUT="$verilator_bmc_drop_remark_cases_file" \
       BMC_DROP_REMARK_REASONS_OUT="$verilator_bmc_drop_remark_reasons_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$VERILATOR_BMC_SEMANTIC_TAG_MAP_FILE" \
+      XFAILS="$VERILATOR_BMC_XFAILS" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
