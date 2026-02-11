@@ -73,6 +73,24 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
      LEC passes, so next semantic-closure patch should target `$stable`
      lowering/evaluation directly.
 
+### BMC Provenance Hardening (February 11, 2026)
+
+1. `StripLLHDProcesses` now emits interface abstraction attrs for unresolved
+   dynamic process drives:
+   - `circt.bmc_abstracted_llhd_interface_inputs`
+   - `circt.bmc_abstracted_llhd_interface_input_details`
+   with per-row reason `dynamic_drive_resolution_unknown`.
+2. `StripLLHDInterfaceSignals` now preserves and extends pre-existing LLHD
+   interface abstraction metadata instead of dropping it when no new rows are
+   added in the same pass.
+3. New/updated regressions:
+   - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
+   - `test/Tools/circt-lec/lec-strip-llhd-interface-abstraction-attr.mlir`
+4. Remaining high-priority limitation:
+   - `assert_stable` BMC still fails in verilator slice; abstraction metadata
+     is now available earlier in the LLHD strip pipeline, but end-to-end
+     `circt-bmc` CLI provenance surfacing for this path remains incomplete.
+
 ### Test Results
 
 | Mode | Eligible | Pass | Fail | Rate |

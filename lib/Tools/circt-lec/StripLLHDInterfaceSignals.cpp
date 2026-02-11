@@ -73,6 +73,15 @@ struct ModuleState {
     insertIndex = module.getNumInputPorts();
     if (auto numRegsAttr = module->getAttrOfType<IntegerAttr>("num_regs"))
       insertIndex = module.getNumInputPorts() - numRegsAttr.getInt();
+    if (auto countAttr =
+            module->getAttrOfType<IntegerAttr>(
+                kBMCAbstractedLLHDInterfaceInputsAttr))
+      abstractedInterfaceInputCount = countAttr.getInt();
+    if (auto detailsAttr =
+            module->getAttrOfType<ArrayAttr>(
+                kBMCAbstractedLLHDInterfaceInputDetailsAttr))
+      abstractedInterfaceInputDetails.assign(detailsAttr.begin(),
+                                             detailsAttr.end());
   }
 
   Value addInput(hw::HWModuleOp module, StringRef baseName, Type type,

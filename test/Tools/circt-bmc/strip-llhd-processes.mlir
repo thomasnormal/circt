@@ -22,6 +22,38 @@ module {
   // CHECK-NOT: llhd.process
   // CHECK-EXT-LABEL: hw.module @top
   // CHECK-EXT-NOT: llhd.process
+  // CHECK-LABEL: hw.module @interface_abstraction_proc
+  // CHECK-SAME: in %sig
+  // CHECK-DAG: circt.bmc_abstracted_llhd_interface_input_details =
+  // CHECK-DAG: circt.bmc_abstracted_llhd_interface_inputs = 1 : i32
+  // CHECK-DAG: dynamic_drive_resolution_unknown
+  // CHECK-DAG: signal = "sig"
+  // CHECK-NOT: circt.bmc_abstracted_llhd_process_results
+  // CHECK: verif.assert
+  // CHECK-NOT: llhd.process
+  hw.module @interface_abstraction_proc() {
+    %c0_i2 = hw.constant 0 : i2
+    %true = hw.constant true
+    %t0 = llhd.constant_time <0ns, 0d, 1e>
+    %sig_init = hw.aggregate_constant [false, false] : !hw.struct<value: i1, unknown: i1>
+    %sig = llhd.sig %sig_init : !hw.struct<value: i1, unknown: i1>
+    llhd.process {
+      cf.br ^bb0
+    ^bb0:
+      %cur = llhd.prb %sig : !hw.struct<value: i1, unknown: i1>
+      %cur_value = hw.struct_extract %cur["value"] : !hw.struct<value: i1, unknown: i1>
+      %next_value = comb.xor %cur_value, %true : i1
+      %next_unknown = hw.constant false
+      %next = hw.struct_create (%next_value, %next_unknown) : !hw.struct<value: i1, unknown: i1>
+      llhd.drv %sig, %next after %t0 : !hw.struct<value: i1, unknown: i1>
+      llhd.wait delay %t0, ^bb0
+    }
+    %probe = llhd.prb %sig : !hw.struct<value: i1, unknown: i1>
+    %value = hw.struct_extract %probe["value"] : !hw.struct<value: i1, unknown: i1>
+    verif.assert %value : i1
+    hw.output
+  }
+
   // CHECK-LABEL: hw.module @assert_proc
   // CHECK-DAG: circt.bmc_abstracted_llhd_process_result_details =
   // CHECK-DAG: circt.bmc_abstracted_llhd_process_results = 1 : i32
@@ -145,6 +177,36 @@ module {
       llhd.drv %sink, %probe after %t0 : i1
       llhd.halt
     }
+    hw.output
+  }
+
+  // CHECK-LABEL: hw.module @redundant_init_drive_bitcast_equiv
+  // CHECK: circt.bmc_abstracted_llhd_process_results = 2 : i32
+  // CHECK-NOT: llhd.process
+  // CHECK-NOT: llhd.drv %sig, %sig_zero
+  // CHECK: llhd.drv %sig, %llhd_process_result after
+  hw.module @redundant_init_drive_bitcast_equiv() {
+    %true = hw.constant true
+    %c0_i2 = hw.constant 0 : i2
+    %sig_init = hw.bitcast %c0_i2 : (i2) -> !hw.struct<value: i1, unknown: i1>
+    %sig_zero = hw.aggregate_constant [false, false] : !hw.struct<value: i1, unknown: i1>
+    %t0 = llhd.constant_time <0ns, 0d, 1e>
+    %sig = llhd.sig %sig_init : !hw.struct<value: i1, unknown: i1>
+    llhd.process {
+      llhd.drv %sig, %sig_zero after %t0 : !hw.struct<value: i1, unknown: i1>
+      llhd.halt
+    }
+    %p:2 = llhd.process -> !hw.struct<value: i1, unknown: i1>, i1 {
+      cf.br ^bb1(%sig_zero, %true : !hw.struct<value: i1, unknown: i1>, i1)
+    ^bb1(%v: !hw.struct<value: i1, unknown: i1>, %en: i1):
+      llhd.wait yield (%v, %en : !hw.struct<value: i1, unknown: i1>, i1), delay %t0, ^bb2
+    ^bb2:
+      cf.br ^bb1(%v, %en : !hw.struct<value: i1, unknown: i1>, i1)
+    }
+    llhd.drv %sig, %p#0 after %t0 if %p#1 : !hw.struct<value: i1, unknown: i1>
+    %probe = llhd.prb %sig : !hw.struct<value: i1, unknown: i1>
+    %value = hw.struct_extract %probe["value"] : !hw.struct<value: i1, unknown: i1>
+    verif.assert %value : i1
     hw.output
   }
 }

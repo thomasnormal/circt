@@ -39,4 +39,24 @@ module {
     verif.assert %in : i1
     hw.output
   }
+
+  // CHECK-LABEL: hw.module @preserve_existing
+  // CHECK-DAG: circt.bmc_abstracted_llhd_interface_inputs = 2 : i32
+  // CHECK-DAG: circt.bmc_abstracted_llhd_interface_input_details
+  // CHECK-DAG: legacy_sig_unknown
+  hw.module @preserve_existing(in %in : i1) attributes {
+      circt.bmc_abstracted_llhd_interface_inputs = 2 : i32,
+      circt.bmc_abstracted_llhd_interface_input_details = [{
+        name = "legacy_sig_unknown",
+        base = "legacy_sig_unknown",
+        type = i1,
+        reason = "dynamic_drive_resolution_unknown",
+        signal = "legacy_sig"
+      }]
+    } {
+    %sig = llhd.sig %in : i1
+    %probe = llhd.prb %sig : i1
+    verif.assert %probe : i1
+    hw.output
+  }
 }

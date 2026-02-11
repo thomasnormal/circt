@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1060 - February 11, 2026
+
+### BMC Provenance Hardening: LLHD Interface Abstraction Metadata From Process Stripping
+
+1. Extended `lib/Tools/circt-bmc/StripLLHDProcesses.cpp` to emit BMC
+   interface-abstraction metadata when dynamic LLHD process drives cannot be
+   resolved and are abstracted to module inputs:
+   - `circt.bmc_abstracted_llhd_interface_inputs`
+   - `circt.bmc_abstracted_llhd_interface_input_details`
+   - detail rows include `name/base/type/reason/signal/loc`
+2. Added focused regression in:
+   - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
+   validating the new interface abstraction attributes and reason
+   `dynamic_drive_resolution_unknown`.
+3. Preserved pre-existing LLHD interface abstraction metadata across
+   `StripLLHDInterfaceSignals`:
+   - `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp` now seeds
+     `ModuleState` from existing abstraction attrs before adding new rows.
+4. Added preservation regression in:
+   - `test/Tools/circt-lec/lec-strip-llhd-interface-abstraction-attr.mlir`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-opt circt-bmc`: PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-interface-abstraction-attr.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir build-test/test/Tools/circt-lec/lec-strip-llhd-interface-abstraction-attr.mlir`: PASS (4/4)
+- External targeted cadence:
+  - `verilator-verification` BMC (`assert_stable`): still FAIL (open semantic gap)
+  - `yosys/tests/sva` BMC (`basic0(0|1)`): still 1 expectation mismatch (`basic01`)
+  - `yosys/tests/sva` LEC (`basic0(0|1)`): PASS
+  - AVIP compile smoke (`apb_avip`): PASS (exit 0)
+
 ## Iteration 1059 - February 11, 2026
 
 ### VerifToSMT: Honor `--assume-known-inputs` For Alias-Wrapped 4-State Inputs
