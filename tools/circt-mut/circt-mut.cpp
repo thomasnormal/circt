@@ -223,6 +223,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-lane-drift-strict|\n";
   os << "                           formal-regression-matrix-lane-trend-nightly|\n";
   os << "                           formal-regression-matrix-lane-trend-strict|\n";
+  os << "                           formal-regression-matrix-provenance-guard|\n";
+  os << "                           formal-regression-matrix-provenance-strict|\n";
   os << "                           formal-regression-matrix-runtime-smoke|\n";
   os << "                           formal-regression-matrix-runtime-nightly|\n";
   os << "                           formal-regression-matrix-runtime-trend|\n";
@@ -8026,6 +8028,38 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.prequalify_drift_comparable", 0.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-provenance-guard") {
+    appendUniqueRule(opts.failIfValueLtRules,
+                     "matrix.prequalify_results_pair_file_column_present", 1.0);
+    appendUniqueRule(opts.failIfValueLtRules,
+                     "matrix.prequalify_results_log_file_column_present", 1.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-provenance-strict") {
+    appendUniqueRule(opts.failIfValueLtRules,
+                     "matrix.prequalify_results_pair_file_column_present", 1.0);
+    appendUniqueRule(opts.failIfValueLtRules,
+                     "matrix.prequalify_results_log_file_column_present", 1.0);
+    appendUniqueRule(opts.failIfValueLtRules,
+                     "matrix.prequalify_results_summary_present_lanes", 1.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-runtime-smoke") {
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.runtime_summary_invalid_rows", 0.0);
@@ -8136,6 +8170,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-lane-drift-strict|"
            "formal-regression-matrix-lane-trend-nightly|"
            "formal-regression-matrix-lane-trend-strict|"
+           "formal-regression-matrix-provenance-guard|"
+           "formal-regression-matrix-provenance-strict|"
            "formal-regression-matrix-runtime-smoke|"
            "formal-regression-matrix-runtime-nightly|"
            "formal-regression-matrix-runtime-trend|"
@@ -9527,6 +9563,10 @@ static bool collectMatrixReport(
                       std::to_string(extraMetricSums[key]));
   rows.emplace_back("matrix.prequalify_results_columns_present",
                     hasResultsPrequalifyColumns ? "1" : "0");
+  rows.emplace_back("matrix.prequalify_results_pair_file_column_present",
+                    hasPrequalifyPairFileColumn ? "1" : "0");
+  rows.emplace_back("matrix.prequalify_results_log_file_column_present",
+                    hasPrequalifyLogFileColumn ? "1" : "0");
   rows.emplace_back("matrix.prequalify_results_lanes",
                     std::to_string(prequalifyResultsLanes));
   rows.emplace_back("matrix.prequalify_results_summary_present_lanes",
