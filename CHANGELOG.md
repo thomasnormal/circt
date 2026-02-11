@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1076 - February 11, 2026
+
+### Formal Driver: Lane-Specific BMC/LEC Timeout Controls In `run_formal_all`
+
+1. Added explicit timeout controls in `utils/run_formal_all.sh`:
+   - `--bmc-timeout-secs N`
+   - `--lec-timeout-secs N`
+2. Timeout settings are forwarded lane-specifically via `CIRCT_TIMEOUT_SECS`:
+   - BMC: sv-tests/verilator/yosys BMC lanes
+   - LEC: sv-tests/verilator/yosys LEC lanes
+3. Added strict input validation:
+   - both options require non-negative integer values.
+4. Included timeout settings in lane-state config hashing:
+   - `bmc_timeout_secs`
+   - `lec_timeout_secs`
+   so resume/provenance fingerprints reflect timeout-policy changes.
+5. Added regression lock:
+   - `test/Tools/run-formal-all-timeout-forwarding.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-timeout-forwarding.test`
+  - `build-test/test/Tools/run-formal-all-circt-toolchain-forwarding.test`
+  - `build-test/test/Tools/run-formal-all-yosys-bmc-profile-forwarding.test`
+  - `build-test/test/Tools/run-formal-all-yosys-bmc-xfail-summary.test`
+  - PASS (4/4)
+- External focused sanity:
+  - `run_formal_all.sh` on `yosys/tests/sva` BMC+LEC (`basic00|basic01`)
+    with `--bmc-timeout-secs 120 --lec-timeout-secs 120`: PASS (both lanes).
+
 ## Iteration 1075 - February 11, 2026
 
 ### LEC Semantic-Closure Progress: UVM Sequence Cases Advance From Parse Failures To Solver Timeouts

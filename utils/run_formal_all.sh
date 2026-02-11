@@ -522,8 +522,12 @@ Options:
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in
                          non-sv-tests BMC suite runs (sv-tests BMC lanes
                          already force SMT-LIB mode for semantic parity)
+  --bmc-timeout-secs N    Override CIRCT_TIMEOUT_SECS for BMC suite runners
+                         (sv-tests/verilator/yosys BMC lanes)
   --bmc-allow-multi-clock Add --allow-multi-clock to BMC runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
+  --lec-timeout-secs N    Override CIRCT_TIMEOUT_SECS for LEC suite runners
+                         (sv-tests/verilator/yosys LEC lanes)
   --lec-assume-known-inputs  Add --assume-known-inputs to LEC runs
   --lec-accept-xprop-only    Treat XPROP_ONLY mismatches as equivalent in LEC runs
   --with-opentitan       Run OpenTitan LEC script
@@ -2030,8 +2034,10 @@ OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT=0
 BMC_RUN_SMTLIB=0
 BMC_ALLOW_MULTI_CLOCK=0
 BMC_ASSUME_KNOWN_INPUTS=0
+BMC_TIMEOUT_SECS=""
 LEC_ASSUME_KNOWN_INPUTS=0
 LEC_ACCEPT_XPROP_ONLY=0
+LEC_TIMEOUT_SECS=""
 SV_TESTS_BMC_TAG_REGEX=""
 SV_TESTS_BMC_TEST_FILTER=""
 SV_TESTS_LEC_TAG_REGEX=""
@@ -2118,10 +2124,14 @@ while [[ $# -gt 0 ]]; do
       AVIP_GLOB="$2"; shift 2 ;;
     --bmc-run-smtlib)
       BMC_RUN_SMTLIB=1; shift ;;
+    --bmc-timeout-secs)
+      BMC_TIMEOUT_SECS="$2"; shift 2 ;;
     --bmc-allow-multi-clock)
       BMC_ALLOW_MULTI_CLOCK=1; shift ;;
     --bmc-assume-known-inputs)
       BMC_ASSUME_KNOWN_INPUTS=1; shift ;;
+    --lec-timeout-secs)
+      LEC_TIMEOUT_SECS="$2"; shift 2 ;;
     --lec-assume-known-inputs)
       LEC_ASSUME_KNOWN_INPUTS=1; shift ;;
     --lec-accept-xprop-only)
@@ -2622,6 +2632,14 @@ if [[ -n "$YOSYS_BMC_TEST_FILTER" ]]; then
     echo "invalid --yosys-bmc-test-filter: $YOSYS_BMC_TEST_FILTER" >&2
     exit 1
   fi
+fi
+if [[ -n "$BMC_TIMEOUT_SECS" && ! "$BMC_TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --bmc-timeout-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$LEC_TIMEOUT_SECS" && ! "$LEC_TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --lec-timeout-secs: expected non-negative integer" >&2
+  exit 1
 fi
 YOSYS_BMC_PROFILE="${YOSYS_BMC_PROFILE,,}"
 case "$YOSYS_BMC_PROFILE" in
@@ -4186,6 +4204,14 @@ CIRCT_TOOL_DIR="$(dirname "$CIRCT_VERILOG_BIN")"
 FORMAL_CIRCT_OPT_BIN="${CIRCT_OPT:-$CIRCT_TOOL_DIR/circt-opt}"
 FORMAL_CIRCT_BMC_BIN="${CIRCT_BMC:-$CIRCT_TOOL_DIR/circt-bmc}"
 FORMAL_CIRCT_LEC_BIN="${CIRCT_LEC:-$CIRCT_TOOL_DIR/circt-lec}"
+FORMAL_BMC_TIMEOUT_ENV=()
+FORMAL_LEC_TIMEOUT_ENV=()
+if [[ -n "$BMC_TIMEOUT_SECS" ]]; then
+  FORMAL_BMC_TIMEOUT_ENV=(CIRCT_TIMEOUT_SECS="$BMC_TIMEOUT_SECS")
+fi
+if [[ -n "$LEC_TIMEOUT_SECS" ]]; then
+  FORMAL_LEC_TIMEOUT_ENV=(CIRCT_TIMEOUT_SECS="$LEC_TIMEOUT_SECS")
+fi
 
 if [[ "$WITH_OPENTITAN" == "1" || \
       "$WITH_OPENTITAN_LEC_STRICT" == "1" || \
@@ -6246,8 +6272,10 @@ compute_lane_state_config_hash() {
     printf "sv_tests_bmc_backend_parity=%s\n" "$SV_TESTS_BMC_BACKEND_PARITY"
     printf "bmc_allow_multi_clock=%s\n" "$BMC_ALLOW_MULTI_CLOCK"
     printf "bmc_assume_known_inputs=%s\n" "$BMC_ASSUME_KNOWN_INPUTS"
+    printf "bmc_timeout_secs=%s\n" "$BMC_TIMEOUT_SECS"
     printf "lec_assume_known_inputs=%s\n" "$LEC_ASSUME_KNOWN_INPUTS"
     printf "lec_accept_xprop_only=%s\n" "$LEC_ACCEPT_XPROP_ONLY"
+    printf "lec_timeout_secs=%s\n" "$LEC_TIMEOUT_SECS"
     printf "with_opentitan=%s\n" "$WITH_OPENTITAN"
     printf "with_opentitan_lec_strict=%s\n" "$WITH_OPENTITAN_LEC_STRICT"
     printf "with_opentitan_e2e=%s\n" "$WITH_OPENTITAN_E2E"
@@ -6376,7 +6404,9 @@ compute_lane_state_config_hash() {
     printf "opentitan_e2e_impl_filter=%s\n" "$OPENTITAN_E2E_IMPL_FILTER"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
     printf "bmc_allow_multi_clock=%s\n" "$BMC_ALLOW_MULTI_CLOCK"
+    printf "bmc_timeout_secs=%s\n" "$BMC_TIMEOUT_SECS"
     printf "lec_smoke_only=%s\n" "${LEC_SMOKE_ONLY:-}"
+    printf "lec_timeout_secs=%s\n" "$LEC_TIMEOUT_SECS"
     printf "circt_bmc_args=%s\n" "${CIRCT_BMC_ARGS:-}"
     printf "circt_lec_args=%s\n" "${CIRCT_LEC_ARGS:-}"
   } | sha256sum | awk '{print $1}'
@@ -8493,7 +8523,8 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     # sv-tests semantic closure currently relies on SMT-LIB execution to avoid
     # known JIT/Z3-LLVM backend divergence on local-var/disable-iff cases.
     run_suite sv-tests-bmc \
-      env OUT="$OUT_DIR/sv-tests-bmc-results.txt" \
+      env "${FORMAL_BMC_TIMEOUT_ENV[@]}" \
+      OUT="$OUT_DIR/sv-tests-bmc-results.txt" \
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
       CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
       CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
@@ -8542,7 +8573,8 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       fi
       if [[ "$SV_TESTS_BMC_BACKEND_PARITY" == "1" ]]; then
         run_suite sv-tests-bmc-backend-parity-jit \
-          env OUT="$OUT_DIR/sv-tests-bmc-jit-results.txt" \
+          env "${FORMAL_BMC_TIMEOUT_ENV[@]}" \
+          OUT="$OUT_DIR/sv-tests-bmc-jit-results.txt" \
           CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
           CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
           CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
@@ -8591,7 +8623,8 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
     : > "$sv_bmc_uvm_semantics_drop_remark_reasons_file"
     # Keep the semantic-closure lane aligned with sv-tests/BMC backend policy.
     run_suite sv-tests-bmc-uvm-semantics \
-      env OUT="$sv_bmc_uvm_semantics_results_file" \
+      env "${FORMAL_BMC_TIMEOUT_ENV[@]}" \
+      OUT="$sv_bmc_uvm_semantics_results_file" \
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
       CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
       CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
@@ -8658,7 +8691,8 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
     : > "$sv_lec_drop_remark_cases_file"
     : > "$sv_lec_drop_remark_reasons_file"
     run_suite sv-tests-lec \
-      env OUT="$OUT_DIR/sv-tests-lec-results.txt" \
+      env "${FORMAL_LEC_TIMEOUT_ENV[@]}" \
+      OUT="$OUT_DIR/sv-tests-lec-results.txt" \
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
       CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
       CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
@@ -8710,7 +8744,8 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
     : > "$verilator_bmc_drop_remark_cases_file"
     : > "$verilator_bmc_drop_remark_reasons_file"
     run_suite verilator-bmc \
-      env OUT="$OUT_DIR/verilator-bmc-results.txt" \
+      env "${FORMAL_BMC_TIMEOUT_ENV[@]}" \
+      OUT="$OUT_DIR/verilator-bmc-results.txt" \
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
       CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
       CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
@@ -8772,7 +8807,8 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
     : > "$verilator_lec_drop_remark_cases_file"
     : > "$verilator_lec_drop_remark_reasons_file"
     run_suite verilator-lec \
-      env OUT="$OUT_DIR/verilator-lec-results.txt" \
+      env "${FORMAL_LEC_TIMEOUT_ENV[@]}" \
+      OUT="$OUT_DIR/verilator-lec-results.txt" \
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
       CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
       CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
@@ -8849,6 +8885,9 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
         fi
         ;;
     esac
+    if [[ ${#FORMAL_BMC_TIMEOUT_ENV[@]} -gt 0 ]]; then
+      yosys_bmc_env+=("${FORMAL_BMC_TIMEOUT_ENV[@]}")
+    fi
     run_suite yosys-bmc \
       env "${yosys_bmc_env[@]}" \
       utils/run_yosys_sva_circt_bmc.sh "$YOSYS_DIR" || true
@@ -8898,7 +8937,8 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
     : > "$yosys_lec_drop_remark_cases_file"
     : > "$yosys_lec_drop_remark_reasons_file"
     run_suite yosys-lec \
-      env OUT="$OUT_DIR/yosys-lec-results.txt" \
+      env "${FORMAL_LEC_TIMEOUT_ENV[@]}" \
+      OUT="$OUT_DIR/yosys-lec-results.txt" \
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
       CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
       CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \

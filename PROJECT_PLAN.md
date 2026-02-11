@@ -111,6 +111,21 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - forced LEC mode now reaches solver and reports `TIMEOUT`, which is the
      new remaining blocker for these cases.
 
+### Formal Closure Snapshot Update (February 11, 2026, 18:46)
+
+1. Added formal-driver timeout governance in `run_formal_all.sh`:
+   - `--bmc-timeout-secs N`
+   - `--lec-timeout-secs N`
+2. The driver now forwards lane-specific `CIRCT_TIMEOUT_SECS` overrides to:
+   - BMC lanes: sv-tests/verilator/yosys
+   - LEC lanes: sv-tests/verilator/yosys
+3. Timeout policies are now part of lane-state config hashing:
+   - `bmc_timeout_secs`
+   - `lec_timeout_secs`
+   so resume/provenance captures timeout-tuning changes explicitly.
+4. New regression lock:
+   - `test/Tools/run-formal-all-timeout-forwarding.test`
+
 ### Formal Closure Snapshot (February 11, 2026, 16:22)
 
 1. sv-tests focused semantic closure (SMT-LIB lane mode, explicit build-test tools):
@@ -144,6 +159,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - UVM-heavy sequence cases (`16.11--sequence-subroutine-uvm`,
      `16.13--sequence-multiclock-uvm`) now clear preprocessing but timeout in
      forced LEC mode; next closure is solver/runtime tractability.
+   - next long-term step: add timeout-budget governance in strict gate mode
+     (LEC timeout regression checks analogous to existing BMC timeout gating).
    - maintain strict no-waiver X-prop governance while improving diagnostics depth
    - keep cross-suite drop-remark accounting deterministic in strict gates
 3. Mutation generation limits still open:
