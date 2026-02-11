@@ -186,6 +186,8 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --report-external-formal-results FILE\n";
   os << "                           Repeatable override for report\n";
   os << "                           --external-formal-results\n";
+  os << "  --report-external-formal-out-dir DIR\n";
+  os << "                           Override report --external-formal-out-dir\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
   os << "  --report-fail-on-prequalify-drift\n";
@@ -205,6 +207,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --matrix-out-dir DIR     Override matrix output directory\n";
   os << "  --external-formal-results FILE\n";
   os << "                           Repeatable external formal results file\n";
+  os << "  --external-formal-out-dir DIR\n";
+  os << "                           Discover external formal results from out dir\n";
   os << "  --compare FILE           Compare against baseline report TSV\n";
   os << "  --compare-history-latest FILE\n";
   os << "                           Compare against latest snapshot in history TSV\n";
@@ -6072,6 +6076,7 @@ struct RunOptions {
   std::string reportPolicyMode;
   std::optional<bool> reportPolicyStopOnFail;
   SmallVector<std::string, 4> reportExternalFormalResultsFiles;
+  std::string reportExternalFormalOutDir;
   std::optional<bool> reportFailOnPrequalifyDrift;
 };
 
@@ -6549,6 +6554,20 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       result.opts.reportExternalFormalResultsFiles.push_back(path.str());
       continue;
     }
+    if (arg == "--report-external-formal-out-dir" ||
+        arg.starts_with("--report-external-formal-out-dir=")) {
+      auto v = consumeValue(i, arg, "--report-external-formal-out-dir");
+      if (!v)
+        return result;
+      StringRef path = v->trim();
+      if (path.empty()) {
+        result.error = "circt-mut run: --report-external-formal-out-dir "
+                       "requires non-empty value";
+        return result;
+      }
+      result.opts.reportExternalFormalOutDir = path.str();
+      continue;
+    }
     if (arg == "--report-fail-on-prequalify-drift") {
       result.opts.reportFailOnPrequalifyDrift = true;
       continue;
@@ -6711,6 +6730,7 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         !opts.reportPolicyMode.empty() ||
         opts.reportPolicyStopOnFail.has_value() ||
         !opts.reportExternalFormalResultsFiles.empty() ||
+        !opts.reportExternalFormalOutDir.empty() ||
         opts.reportFailOnPrequalifyDrift.has_value()) {
       errs() << "circt-mut run: report override options require "
                 "--with-report or [run] with_report = true\n";
@@ -6809,6 +6829,15 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
           reportArgsOwned.push_back(value);
         }
       }
+    }
+    if (!opts.reportExternalFormalOutDir.empty()) {
+      reportArgsOwned.push_back("--external-formal-out-dir");
+      reportArgsOwned.push_back(opts.reportExternalFormalOutDir);
+    } else {
+      appendOptionalConfigPathArg(reportArgsOwned, cfg.run,
+                                  "report_external_formal_out_dir",
+                                  "--external-formal-out-dir",
+                                  opts.projectDir);
     }
 
     auto appendRunReportCSV = [&](StringRef key) -> bool {
@@ -7485,6 +7514,7 @@ struct ReportOptions {
   std::string policyMode;
   std::optional<bool> policyStopOnFail;
   SmallVector<std::string, 4> externalFormalResultsFiles;
+  std::string externalFormalOutDir;
   std::string appendHistoryFile;
   SmallVector<DeltaGateRule, 8> failIfValueGtRules;
   SmallVector<DeltaGateRule, 8> failIfValueLtRules;
@@ -7810,6 +7840,47 @@ static bool collectExternalFormalSummary(
                          summary.summaryFail + summary.summaryError +
                          summary.summaryXPass;
   rows.emplace_back("external_formal.fail_like_sum", std::to_string(failLikeSum));
+  return true;
+}
+
+static bool discoverExternalFormalResultsFromOutDir(
+    StringRef outDir, SmallVectorImpl<std::string> &files, std::string &error) {
+  if (outDir.empty())
+    return true;
+  bool isDir = false;
+  if (std::error_code ec = sys::fs::is_directory(outDir, isDir); ec || !isDir) {
+    error = (Twine("circt-mut report: external formal out-dir is not a directory: ") +
+             outDir)
+                .str();
+    return false;
+  }
+
+  SmallString<256> summaryPath(outDir);
+  sys::path::append(summaryPath, "summary.tsv");
+  if (sys::fs::exists(summaryPath)) {
+    files.push_back(std::string(summaryPath.str()));
+    return true;
+  }
+
+  std::error_code ec;
+  for (sys::fs::directory_iterator it(outDir, ec), end; it != end && !ec;
+       it.increment(ec)) {
+    if (sys::fs::is_directory(it->path()))
+      continue;
+    StringRef name = sys::path::filename(it->path());
+    if (!name.contains("results"))
+      continue;
+    if (!name.ends_with(".txt") && !name.ends_with(".tsv"))
+      continue;
+    files.push_back(it->path());
+  }
+  if (ec) {
+    error = (Twine("circt-mut report: failed to scan external formal out-dir: ") +
+             outDir + ": " + ec.message())
+                .str();
+    return false;
+  }
+  llvm::sort(files);
   return true;
 }
 
@@ -10726,6 +10797,20 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.externalFormalResultsFiles.push_back(file.str());
       continue;
     }
+    if (arg == "--external-formal-out-dir" ||
+        arg.starts_with("--external-formal-out-dir=")) {
+      auto v = consumeValue(i, arg, "--external-formal-out-dir");
+      if (!v)
+        return result;
+      StringRef dir = v->trim();
+      if (dir.empty()) {
+        result.error = "circt-mut report: --external-formal-out-dir requires "
+                       "non-empty value";
+        return result;
+      }
+      result.opts.externalFormalOutDir = dir.str();
+      continue;
+    }
     if (arg == "--compare" || arg.starts_with("--compare=")) {
       auto v = consumeValue(i, arg, "--compare");
       if (!v)
@@ -11024,6 +11109,7 @@ static int runNativeReport(const ReportOptions &opts) {
   std::string trendHistoryFile = effectiveOpts.trendHistoryFile;
   SmallVector<std::string, 4> externalFormalResultsFiles =
       effectiveOpts.externalFormalResultsFiles;
+  std::string externalFormalOutDir = effectiveOpts.externalFormalOutDir;
   uint64_t trendWindowRuns = effectiveOpts.trendWindowRuns;
   std::string appendHistoryFile = effectiveOpts.appendHistoryFile;
   uint64_t historyMaxRuns = effectiveOpts.historyMaxRuns;
@@ -11251,6 +11337,11 @@ static int runNativeReport(const ReportOptions &opts) {
             externalFormalResultsFiles.push_back(token.str());
         }
       }
+    }
+    if (externalFormalOutDir.empty()) {
+      if (auto it = cfg.report.find("external_formal_out_dir");
+          it != cfg.report.end() && !it->second.empty())
+        externalFormalOutDir = it->second;
     }
     auto appendRulesFromReportCSV =
         [&](StringRef key, StringRef optionName,
@@ -11489,6 +11580,19 @@ static int runNativeReport(const ReportOptions &opts) {
       rows.emplace_back((Twine("policy.profile_") + Twine(i + 1)).str(),
                         policyProfiles[i]);
   }
+  std::string discoveryError;
+  SmallVector<std::string, 4> discoveredExternalFormalResultsFiles;
+  std::string resolvedExternalFormalOutDir;
+  if (!externalFormalOutDir.empty()) {
+    resolvedExternalFormalOutDir =
+        resolveRelativeTo(opts.projectDir, externalFormalOutDir);
+    if (!discoverExternalFormalResultsFromOutDir(resolvedExternalFormalOutDir,
+                                                 discoveredExternalFormalResultsFiles,
+                                                 discoveryError)) {
+      errs() << discoveryError << "\n";
+      return 1;
+    }
+  }
   SmallVector<std::string, 4> resolvedExternalFormalResultsFiles;
   for (const auto &path : externalFormalResultsFiles) {
     if (path.empty())
@@ -11497,6 +11601,23 @@ static int runNativeReport(const ReportOptions &opts) {
     if (llvm::is_contained(resolvedExternalFormalResultsFiles, resolved))
       continue;
     resolvedExternalFormalResultsFiles.push_back(std::move(resolved));
+  }
+  for (const auto &path : discoveredExternalFormalResultsFiles) {
+    if (path.empty())
+      continue;
+    if (llvm::is_contained(resolvedExternalFormalResultsFiles, path))
+      continue;
+    resolvedExternalFormalResultsFiles.push_back(path);
+  }
+  rows.emplace_back("external_formal.out_dir",
+                    resolvedExternalFormalOutDir.empty()
+                        ? std::string("-")
+                        : resolvedExternalFormalOutDir);
+  rows.emplace_back("external_formal.files_discovered",
+                    std::to_string(discoveredExternalFormalResultsFiles.size()));
+  for (size_t i = 0; i < discoveredExternalFormalResultsFiles.size(); ++i) {
+    rows.emplace_back((Twine("external_formal.discovered_file_") + Twine(i + 1)).str(),
+                      discoveredExternalFormalResultsFiles[i]);
   }
   rows.emplace_back("external_formal.files_configured",
                     std::to_string(resolvedExternalFormalResultsFiles.size()));

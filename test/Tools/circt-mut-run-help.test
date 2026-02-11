@@ -36,6 +36,7 @@
 // CHECK: native-strict-formal
 // CHECK: strict-formal
 // CHECK: --report-external-formal-results FILE
+// CHECK: --report-external-formal-out-dir DIR
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --report-fail-on-prequalify-drift
 // CHECK: --report-no-fail-on-prequalify-drift

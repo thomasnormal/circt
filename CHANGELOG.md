@@ -1,5 +1,57 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1092 - February 11, 2026
+
+### `circt-mut` External Formal Out-Dir Auto-Discovery
+
+1. Extended `circt-mut report` with out-dir ingestion:
+   - new CLI option: `--external-formal-out-dir DIR`
+   - new config key: `[report] external_formal_out_dir`
+2. Added report-side discovery and telemetry:
+   - discovers external-formal inputs from out-dir (`summary.tsv` preferred,
+     fallback to top-level `*results*.txt|*.tsv`)
+   - emits:
+     - `external_formal.out_dir`
+     - `external_formal.files_discovered`
+     - `external_formal.discovered_file_<n>`
+   - merges discovered files with explicit
+     `--external-formal-results` entries using de-duplicated resolved paths.
+3. Extended `circt-mut run` report forwarding:
+   - new CLI option: `--report-external-formal-out-dir DIR`
+   - new config key: `[run] report_external_formal_out_dir`
+   - forwarded to report as `--external-formal-out-dir`.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-out-dir-pass.test`
+   - `test/Tools/circt-mut-report-external-formal-out-dir-missing-dir-fail.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-strict-formal-out-dir.test`
+   - updated help checks:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-run-help.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused new/related mutation tests:
+  - `llvm-lit -sv -j 1` on:
+    - `circt-mut-report-help.test`
+    - `circt-mut-run-help.test`
+    - `circt-mut-report-external-formal-results-basic.test`
+    - `circt-mut-report-cli-policy-mode-strict-formal-out-dir-pass.test`
+    - `circt-mut-report-external-formal-out-dir-missing-dir-fail.test`
+    - `circt-mut-run-with-report-cli-policy-mode-strict-formal-out-dir.test`
+    - `circt-mut-report-cli-policy-mode-strict-formal-pass.test`
+    - `circt-mut-run-with-report-cli-policy-mode-strict-formal.test`
+  - PASS (8/8)
+- Full mutation tool suite:
+  - `llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (319/319 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-external-outdir ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile
+    `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL snapshot: `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC,
+    `opentitan` LEC, AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1091 - February 11, 2026
 
 ### Formal Runner Performance: LEC Front-End Cache for Verilator and Yosys Suites
