@@ -5,4 +5,5 @@
 // CHECK: --config FILE
 // CHECK: --mode MODE
 // CHECK: --with-report
+// CHECK: --with-report-on-fail
 // CHECK: --report-mode MODE
