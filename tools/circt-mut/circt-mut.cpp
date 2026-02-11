@@ -137,6 +137,7 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --config FILE            Config file path (default: <project-dir>/circt-mut.toml)\n";
   os << "  --mode MODE              cover|matrix|all (default: all)\n";
   os << "  --with-report            Run 'circt-mut report' after run completes\n";
+  os << "  --with-report-on-fail    Run report even if run flow fails\n";
   os << "  --report-mode MODE       cover|matrix|all (default: same as --mode)\n";
   os << "  -h, --help               Show help\n";
 }
@@ -5738,6 +5739,7 @@ struct RunOptions {
   std::string configPath;
   std::string mode = "all";
   bool withReport = false;
+  bool withReportOnFail = false;
   std::string reportMode;
 };
 
@@ -5986,6 +5988,10 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       result.opts.withReport = true;
       continue;
     }
+    if (arg == "--with-report-on-fail") {
+      result.opts.withReportOnFail = true;
+      continue;
+    }
     if (arg == "--report-mode" || arg.starts_with("--report-mode=")) {
       auto v = consumeValue(i, arg, "--report-mode");
       if (!v)
@@ -6057,6 +6063,26 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       else {
         errs() << "circt-mut run: invalid boolean [run] key 'with_report' "
                   "value '"
+               << it->second
+               << "' (expected 1|0|true|false|yes|no|on|off)\n";
+        return 1;
+      }
+    }
+  }
+  bool withReportOnFail = opts.withReportOnFail;
+  if (!withReportOnFail) {
+    auto it = cfg.run.find("with_report_on_fail");
+    if (it != cfg.run.end() && !it->second.empty()) {
+      std::string lowered = StringRef(it->second).trim().lower();
+      if (lowered == "1" || lowered == "true" || lowered == "yes" ||
+          lowered == "on")
+        withReportOnFail = true;
+      else if (lowered == "0" || lowered == "false" || lowered == "no" ||
+               lowered == "off")
+        withReportOnFail = false;
+      else {
+        errs() << "circt-mut run: invalid boolean [run] key "
+                  "'with_report_on_fail' value '"
                << it->second
                << "' (expected 1|0|true|false|yes|no|on|off)\n";
         return 1;
@@ -6449,7 +6475,9 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     if (rc == 0)
       rc = runMatrixFromConfig();
   }
-  if (rc != 0 || !withReport)
+  if (!withReport)
+    return rc;
+  if (rc != 0 && !withReportOnFail)
     return rc;
 
   std::string mainExec =
@@ -6480,6 +6508,8 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
   if (!errMsg.empty())
     errs() << "circt-mut run: post-run report execution error: " << errMsg
            << "\n";
+  if (rc != 0)
+    return rc;
   return reportRC;
 }
 

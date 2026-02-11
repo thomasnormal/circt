@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1005 - February 11, 2026
+
+### `circt-mut run`: Report Emission on Failing Run Flows
+
+1. Extended `circt-mut run` in `tools/circt-mut/circt-mut.cpp` with:
+   - CLI: `--with-report-on-fail`
+   - Config: `[run] with_report_on_fail = <bool>`
+2. Behavior:
+   - when `with_report` is enabled and run flow fails, `with_report_on_fail`
+     now allows `circt-mut report` to still execute for immediate governance
+     telemetry extraction from partial/failing matrix artifacts.
+   - run return-code semantics are preserved:
+     - failing run still returns run failure code (report does not mask it).
+3. Validation/diagnostics:
+   - strict bool parse for `[run] with_report_on_fail`
+     (`1|0|true|false|yes|no|on|off`).
+4. Added regression coverage:
+   - `test/Tools/circt-mut-run-help.test` (new flag in help)
+   - `test/Tools/circt-mut-run-with-report-on-fail-cli.test`
+   - `test/Tools/circt-mut-run-with-report-on-fail-config.test`
+   - `test/Tools/circt-mut-run-with-report-on-fail-config-invalid.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-help.test test/Tools/circt-mut-run-with-report-*.test test/Tools/circt-mut-run-with-report-on-fail-*.test`: PASS (10/10)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (220/220)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-run-with-report-on-fail-20260211 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter 'aes'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1004 - February 11, 2026
 
 ### `circt-mut run`: Optional Post-Run Report for CI Governance
