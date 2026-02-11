@@ -190,6 +190,11 @@ See CHANGELOG.md on recent progress.
   - strict/trend-strict -> `formal-regression-matrix-provenance-strict`
   so CI defaults (`--policy-mode ...`) enforce prequalify artifact provenance
   presence/hygiene without extra per-job `--policy-profile` wiring.
+- Latest mutation-governance milestone (current): `circt-mut run` now forwards
+  report policy mode as first-class report options (`--policy-mode` +
+  `--policy-stop-on-fail`) instead of eagerly expanding to profile names in
+  run-layer plumbing, removing duplicate mapping logic and keeping policy-mode
+  behavior sourced from report-layer defaults.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
@@ -1228,6 +1233,19 @@ See CHANGELOG.md on recent progress.
    `drop_remark_cases` for frontend diagnostics matching
    `"will be dropped during lowering"` and supports opt-in enforcement via
    `FAIL_ON_DROP_REMARKS=1`.
+6. Current closure hardening update (February 11, 2026):
+   - `ImportVerilog` is now tolerant of older slang builds that do not expose
+     `CompilationFlags::AllowVirtualIfaceWithOverride`, avoiding unrelated
+     build breaks while continuing BMC/LEC closure work.
+   - Focused UVM semantic slice remains `pass=3 fail=1` on:
+     `16.10--property-local-var-uvm`,
+     `16.10--sequence-local-var-uvm`,
+     `16.15--property-iff-uvm`,
+     `16.15--property-iff-uvm-fail`.
+   - The remaining `16.15--property-iff-uvm-fail` status is currently
+     attributable to test metadata/content mismatch (same effective property as
+     the pass variant), not a newly reproducing local-var/`disable iff`
+     importer regression.
 6. Formal orchestration now tracks this guardrail in strict-gate telemetry:
    `utils/run_formal_all.sh` captures `bmc_drop_remark_cases` for all active
    BMC lanes:

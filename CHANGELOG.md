@@ -1,5 +1,83 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1037 - February 11, 2026
+
+### BMC Semantic Closure Continuation: Disable-IFF/Local-Var Hardening
+
+1. Hardened `ImportVerilog` compatibility for mixed slang versions in
+   `lib/Conversion/ImportVerilog/ImportVerilog.cpp`:
+   - `AllowVirtualIfaceWithOverride` flag application is now guarded via
+     dependent lookup (`if constexpr (requires {...})`) so older slang builds
+     without that enum member still compile cleanly.
+2. Refined local-var `disable iff` edge tests to avoid internal delay-based
+   clock generation and keep the abort-vs-no-abort signal fully explicit:
+   - `test/Tools/circt-bmc/sva-local-var-disable-iff-abort-unsat-e2e.sv`
+   - `test/Tools/circt-bmc/sva-local-var-disable-iff-no-abort-sat-e2e.sv`
+3. Revalidated the focused semantic edge quartet end-to-end:
+   - `sva-disable-iff-wide-cond-sat-e2e.sv`: `BMC_RESULT=SAT` (JIT + SMT-LIB)
+   - `sva-disable-iff-wide-cond-unsat-e2e.sv`: `BMC_RESULT=UNSAT` (JIT + SMT-LIB)
+   - `sva-local-var-disable-iff-abort-unsat-e2e.sv`: `BMC_RESULT=UNSAT` (JIT + SMT-LIB)
+   - `sva-local-var-disable-iff-no-abort-sat-e2e.sv`: `BMC_RESULT=SAT` (JIT + SMT-LIB)
+4. Re-ran targeted sv-tests UVM semantic slice with explicit filter:
+   - PASS:
+     - `16.10--property-local-var-uvm`
+     - `16.10--sequence-local-var-uvm`
+     - `16.15--property-iff-uvm`
+   - FAIL:
+     - `16.15--property-iff-uvm-fail`
+   This remaining case is currently consistent with a test metadata/content
+   mismatch (effective property aligns with pass variant), not a new importer
+   semantic regression.
+
+## Iteration 1036 - February 11, 2026
+
+### `circt-mut run`: Forward Policy Mode/Stop-On-Fail Directly to Report
+
+1. Updated `tools/circt-mut/circt-mut.cpp` run-layer report wiring to pass:
+   - `--policy-mode <mode>`
+   - `--policy-stop-on-fail <true|false>`
+   directly to `circt-mut report` when `report_policy_mode` is active,
+   replacing run-layer eager expansion into `--policy-profile` lists.
+2. This removes duplicate mode->profile mapping logic from run-layer plumbing
+   and keeps future policy composition changes centralized in report-layer
+   policy handling.
+3. Retained compatibility constraints:
+   - report policy mode still requires report mode `matrix|all`
+   - explicit `report_policy_profile(s)` still override policy mode
+   - CLI/config stop-on-fail validation remains enforced.
+4. Updated run/report integration tests to match policy-mode forwarding
+   behavior and provenance-enabled defaults:
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-stop-on-fail.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-strict.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-trend-nightly.test`
+   - `test/Tools/circt-mut-run-with-report-config-policy-mode-stop-on-fail.test`
+   with aligned prequalify pair/log fixture columns and updated profile-count
+   expectations.
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build-test circt-mut`: PASS
+- Focused run/report policy-mode forwarding slice (executed from test `RUN:`
+  lines with `%t/%s` substitution, `build-test/bin/circt-mut`, and
+  `/home/thomas-ahle/circt/llvm/build/bin/FileCheck`): PASS
+  - `test/Tools/circt-mut-run-with-report-cli-policy-mode-stop-on-fail.test`
+  - `test/Tools/circt-mut-run-with-report-cli-policy-mode-strict.test`
+  - `test/Tools/circt-mut-run-with-report-cli-policy-mode-trend-nightly.test`
+  - `test/Tools/circt-mut-run-with-report-config-policy-mode-stop-on-fail.test`
+  - `test/Tools/circt-mut-run-with-report-cli-policy-profile-override-config.test`
+  - `test/Tools/circt-mut-run-with-report-cli-policy-stop-on-fail-requires-mode.test`
+  - `test/Tools/circt-mut-run-with-report-config-policy-stop-on-fail-requires-mode.test`
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-run-policy-mode-forward ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: AVIP compile `ahb_avip`, `apb_avip`
+  - FAIL/ERROR snapshot:
+    - AVIP compile: `axi4Lite_avip`
+    - `verilator-verification` BMC/LEC: `assert_fell` (error)
+    - `yosys/tests/sva` BMC: `basic02` (fail)
+    - `yosys/tests/sva` LEC: `basic02` (error)
+    - `opentitan` LEC: `aes_sbox` (missing_results / fail)
+
 ## Iteration 1035 - February 11, 2026
 
 ### BMC Semantic Closure: `disable iff` Truthiness + Local-Var Abort Edges

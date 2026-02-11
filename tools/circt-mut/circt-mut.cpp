@@ -6734,18 +6734,17 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
                     "'report_mode = matrix|all'\n";
           return 1;
         }
-        bool stop = stopOnFail.value_or(false);
-        SmallVector<std::string, 2> mappedProfiles;
-        std::string modeError;
-        if (!appendMatrixPolicyModeProfiles(mode, stop, mappedProfiles,
-                                            modeError, "circt-mut run:")) {
-          errs() << modeError << "\n";
+        if (!isMatrixPolicyMode(mode)) {
+          errs() << "circt-mut run: invalid report policy mode value '"
+                 << mode
+                 << "' (expected smoke|nightly|strict|trend-nightly|trend-strict)\n";
           return 1;
         }
-        for (const auto &profile : mappedProfiles) {
-          reportArgsOwned.push_back("--policy-profile");
-          reportArgsOwned.push_back(profile);
-        }
+        bool stop = stopOnFail.value_or(false);
+        reportArgsOwned.push_back("--policy-mode");
+        reportArgsOwned.push_back(mode);
+        reportArgsOwned.push_back("--policy-stop-on-fail");
+        reportArgsOwned.push_back(stop ? "true" : "false");
       }
     }
 
