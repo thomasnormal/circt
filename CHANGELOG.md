@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1089 - February 11, 2026
+
+### Formal Runner Performance: sv-tests BMC Front-End MLIR Cache
+
+1. Added opt-in front-end cache to `utils/run_sv_tests_circt_bmc.sh`:
+   - env switch: `BMC_MLIR_CACHE_DIR`
+   - caches post-`circt-verilog` MLIR per case using a deterministic key over:
+     - tool path/args + UVM mode/path + top module
+     - include dirs, defines, and content hashes of declared source files
+2. Cache behavior:
+   - cache hit skips `circt-verilog` invocation and reuses cached MLIR
+   - cache miss runs compile and stores MLIR for future runs
+   - summary telemetry added:
+     - `sv-tests frontend cache summary: hits=... misses=... stores=...`
+3. Added regression lock:
+   - `test/Tools/run-sv-tests-bmc-mlir-cache.test`
+   - proves two identical runs compile once and second run is cache hit.
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-sv-tests-bmc-mlir-cache.test`
+  - `build-test/test/Tools/run-sv-tests-bmc-xfail-override.test`
+  - `build-test/test/Tools/run-sv-tests-circt-bmc-check-attribution-long-line.test`
+  - PASS (3/3)
+- External filtered suite cadence (explicit `build-test/bin` tools):
+  - `verilator-verification` BMC/LEC and `yosys/tests/sva` BMC/LEC are
+    currently red in this workspace snapshot (error/fail dominant), indicating
+    broader environment/toolchain drift unrelated to this cache-only change.
+  - cache-specific functionality remains validated by dedicated lit coverage.
+
 ## Iteration 1088 - February 11, 2026
 
 ### Formal Driver: Add BMC `sequence_subroutine` Semantic Bucket
