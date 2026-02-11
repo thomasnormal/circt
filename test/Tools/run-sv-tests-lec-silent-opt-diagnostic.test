@@ -10,5 +10,5 @@
 // RUN: FileCheck %s --check-prefix=OPTLOG < %t/logs/silent-opt-case.circt-opt.log
 //
 // STDERR: error: circt-opt failed without diagnostics for case 'silent-opt-case'
-// RESULT: ERROR{{.*}}silent-opt-case{{.*}}CIRCT_OPT_ERROR
+// RESULT: ERROR{{.*}}silent-opt-case{{.*}}CIRCT_OPT_ERROR{{[[:space:]]+}}no_diag
 // OPTLOG: error: circt-opt failed without diagnostics for case 'silent-opt-case'
