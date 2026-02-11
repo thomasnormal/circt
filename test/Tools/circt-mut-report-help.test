@@ -34,6 +34,7 @@
 // CHECK: formal-regression-matrix-runtime-smoke
 // CHECK: formal-regression-matrix-runtime-nightly
 // CHECK: formal-regression-matrix-runtime-trend
+// CHECK: formal-regression-matrix-runtime-strict
 // CHECK: --append-history
 // CHECK: --fail-if-value-gt
 // CHECK: --fail-if-value-lt
