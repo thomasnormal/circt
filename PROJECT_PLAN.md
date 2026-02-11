@@ -9,6 +9,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59++)
+
+1. Added budgeted semantic-diag trend governance profile in `circt-mut`:
+   - `formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1`
+2. Current budget contract (`v1`):
+   - parser/lowering subfamilies: no positive trend delta allowed
+   - solver subfamily: up to `+1` trend delta allowed
+   for scoped LEC suites:
+   - `verilator_verification`
+   - `yosys_tests_sva`
+3. Long-term impact:
+   - enables staged policy rollout where solver fluctuations can be absorbed
+     temporarily without weakening parser/lowering hard-no-regression bars.
+4. Remaining limitations:
+   - budget profile is static (`v1`) and not lane-size aware.
+   - no dynamic policy based on historical variance bands yet.
+5. Next long-term features:
+   - add size-normalized trend policies (per-total-case or per-1k-case deltas).
+   - add rolling-window variance-aware solver budgets.
+   - bind budget profiles to strict case-ID/case+reason drift gates for
+     mandatory escalation when identity drift appears.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+)
 
 1. Added trend-aware mutation governance for semantic-diag subfamilies:
