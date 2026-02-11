@@ -10471,6 +10471,8 @@ static int runNativeReport(const ReportOptions &opts) {
   SmallVector<std::string, 4> policyProfiles = effectiveOpts.policyProfiles;
   bool hasCLIPolicyMode = !effectiveOpts.policyMode.empty();
   bool hasCLIPolicyProfile = !effectiveOpts.policyProfiles.empty();
+  std::string appliedPolicyProfileSource =
+      hasCLIPolicyProfile ? "cli" : "none";
   std::string appliedPolicyMode;
   std::string appliedPolicyModeSource = "none";
   std::optional<bool> appliedPolicyStopOnFail;
@@ -10596,6 +10598,8 @@ static int runNativeReport(const ReportOptions &opts) {
       if (auto it = cfg.report.find("policy_profiles");
           it != cfg.report.end() && !it->second.empty())
         parseProfileCSV(it->second);
+      if (!policyProfiles.empty())
+        appliedPolicyProfileSource = "config";
     }
     if (policyProfiles.empty()) {
       std::string mode;
@@ -10664,6 +10668,7 @@ static int runNativeReport(const ReportOptions &opts) {
         appliedPolicyStopOnFailEffective =
             usesStopOnFail ? requestedStopOnFail : false;
         appliedPolicyStopOnFailIgnored = (!usesStopOnFail && requestedStopOnFail);
+        appliedPolicyProfileSource = "mode";
       }
     }
   }
@@ -10688,6 +10693,7 @@ static int runNativeReport(const ReportOptions &opts) {
     appliedPolicyStopOnFailEffective =
         usesStopOnFail ? requestedStopOnFail : false;
     appliedPolicyStopOnFailIgnored = (!usesStopOnFail && requestedStopOnFail);
+    appliedPolicyProfileSource = "mode";
   }
   if (!policyProfiles.empty()) {
     SmallVector<std::string, 4> uniqueProfiles;
@@ -10741,6 +10747,7 @@ static int runNativeReport(const ReportOptions &opts) {
                         ? (*appliedPolicyStopOnFailIgnored ? std::string("1")
                                                            : std::string("0"))
                         : std::string("-"));
+  rows.emplace_back("policy.profile_source", appliedPolicyProfileSource);
   if (!policyProfiles.empty()) {
     rows.emplace_back("policy.profile_count",
                       std::to_string(policyProfiles.size()));
