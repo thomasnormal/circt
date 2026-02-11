@@ -1,0 +1,9 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "ERROR\\tparse_case\\t/tests/parse_case.sv\\tverilator-verification\\tLEC\\tERROR\\tparser_frontend_error\\n" > "$OUT"\nprintf "ERROR\\tlower_case\\t/tests/lower_case.sv\\tverilator-verification\\tLEC\\tERROR\\tlowering_pipeline_failure\\n" >> "$OUT"\nprintf "ERROR\\tsolver_case\\t/tests/solver_case.sv\\tverilator-verification\\tLEC\\tERROR\\tsolver_budget\\n" >> "$OUT"\nprintf "ERROR\\tother_case\\t/tests/other_case.sv\\tverilator-verification\\tLEC\\tERROR\\tmisc_reason\\n" >> "$OUT"\necho "verilator-verification LEC summary: total=4 pass=0 fail=0 error=4 skip=0"\n' > %t/utils/run_verilator_verification_circt_lec.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_verilator_verification_circt_lec.sh
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^verilator-verification/LEC$' --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*"
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+//
+// SUMMARY: verilator-verification{{[[:space:]]+}}LEC{{[[:space:]]+}}4{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}4{{[[:space:]]+}}0{{.*}}lec_error_bucket_semantic_diag_error_cases=4{{.*}}lec_error_bucket_semantic_diag_lowering_cases=1{{.*}}lec_error_bucket_semantic_diag_parser_cases=1{{.*}}lec_error_bucket_semantic_diag_solver_cases=1
