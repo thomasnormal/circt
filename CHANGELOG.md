@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1040 - February 11, 2026
+
+### `circt-mut` Provenance Policy Modes: Config-Surface Hardening
+
+1. Added config-surface regression coverage for provenance policy modes:
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-provenance-strict-default.test`
+   - `test/Tools/circt-mut-run-with-report-config-policy-mode-provenance-guard.test`
+2. Coverage verifies config-driven rollout behavior:
+   - `[report] policy_mode = "provenance-guard"` and `"provenance-strict"`
+   - `policy_stop_on_fail = true` remains compatible as a no-op for
+     provenance-only policy-mode mappings.
+3. Expanded mode list/help/invalid diagnostics were revalidated with focused
+   and full mutation suites after adding config-only provenance mode coverage.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused provenance config-mode slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-report-policy-config-matrix-mode-provenance-strict-default|circt-mut-run-with-report-config-policy-mode-provenance-guard|circt-mut-run-with-report-config-policy-mode-stop-on-fail|circt-mut-report-cli-policy-mode-provenance-strict-pass|circt-mut-run-with-report-cli-policy-mode-provenance-strict|circt-mut-report-policy-config-matrix-mode-strict-default|circt-mut-report-policy-config-matrix-mode-smoke-stop-on-fail'`: PASS (7/7)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-.*\\.test'`: PASS (267/267)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-config-provenance ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC+LEC, `yosys/tests/sva` BMC+LEC, `opentitan` LEC, AVIP compile `axi4Lite/spi/uart`
+
 ## Iteration 1039 - February 11, 2026
 
 ### `circt-mut` Policy-Mode Expansion: Provenance-Only Modes
@@ -91,6 +117,23 @@ while preventing native stack overflow. Updated
 Verified that the 2 tests listed as `FAIL` in `sv-tests-sim-results.txt`
 (`18.5.6--implication_0` and `18.7--in-line-constraints--randomize_3`) both
 pass with the current build. The results file is stale and needs re-running.
+
+### APB AVIP Recompilation
+
+Recompiled APB AVIP from SystemVerilog source to LLHD IR:
+- Output: `build-test/apb_avip_dual_llhd.mlir` — 494,597 lines, 32.9 MB
+- Contains `hw.module @hdl_top()`, `hw.module @hvl_top()`, plus BFM modules
+- Previous interface port binding blocker resolved in current `circt-verilog`
+- Simulation starts: UVM `apb_8b_write_test` launches, BFMs init, config prints
+- Stalls at 0 fs sim time — build_phase delta cycling issue, needs investigation
+
+### Final Test Counts
+
+| Suite | Total | Pass | Notes |
+|-------|-------|------|-------|
+| circt-sim | 225 | **225** | **100%** — call-depth fix resolved last failure |
+| ImportVerilog | 268 | 268 | 100% |
+| sv-tests sim | 912 | 856+ | 0 failures (2 prev FAILs were stale) |
 
 ## Iteration 1037 - February 11, 2026
 
