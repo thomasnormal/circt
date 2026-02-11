@@ -13,5 +13,6 @@
 // CHECK: trend-strict
 // CHECK: provenance-guard
 // CHECK: provenance-strict
+// CHECK: native-lifecycle-strict
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --force
