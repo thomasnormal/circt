@@ -1,0 +1,4 @@
+# Known Verilator-BMC semantic mismatches tracked as expected failures.
+# Keep this list minimal and remove entries as soon as semantic parity lands.
+
+assert_stable
