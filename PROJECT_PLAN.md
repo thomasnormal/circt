@@ -9,6 +9,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 22:05)
+
+1. Extended LEC semantic-diag subfamily drift governance from case IDs to
+   case+reason tuples:
+   - new strict gate flag:
+     - `--fail-on-new-lec-semantic-diag-subfamily-case-reasons`
+   - baseline field:
+     - `lec_semantic_diag_subfamily_case_reasons`
+   - strict-mode default now enables both:
+     - subfamily case-ID drift
+     - subfamily case+reason drift
+2. Impact:
+   - semantic parser/lowering/solver drift now tracks both identity and reason
+     movement, which is a stronger long-term signal for LEC regression quality
+     and mutator guidance.
+3. Remaining limitations:
+   - subfamily assignment is still heuristic (diag/reason token matching).
+   - no trend-window policy profile yet for subfamily case+reason deltas.
+4. Next long-term features:
+   - move to structured LEC reason-code contracts in runner outputs.
+   - add `circt-mut` profile(s) that gate and trend
+     `lec_semantic_diag_subfamily_case_reasons` deltas by lane family.
+   - add dedicated parser/lowering/solver drift dashboards in external formal
+     report artifacts.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 21:45)
 
 1. Added strict drift governance for LEC semantic-diag subfamily identities:
