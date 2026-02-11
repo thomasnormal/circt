@@ -151,6 +151,14 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --report-history-max-runs N\n";
   os << "                           Override post-run report --history-max-runs\n";
   os << "  --report-out FILE        Override post-run report --out\n";
+  os << "  --report-fail-if-delta-gt RULE\n";
+  os << "                           Repeatable override for report --fail-if-delta-gt\n";
+  os << "  --report-fail-if-delta-lt RULE\n";
+  os << "                           Repeatable override for report --fail-if-delta-lt\n";
+  os << "  --report-fail-if-trend-delta-gt RULE\n";
+  os << "                           Repeatable override for report --fail-if-trend-delta-gt\n";
+  os << "  --report-fail-if-trend-delta-lt RULE\n";
+  os << "                           Repeatable override for report --fail-if-trend-delta-lt\n";
   os << "  --report-history-bootstrap\n";
   os << "                           Enable post-run report --history-bootstrap\n";
   os << "  --report-no-history-bootstrap\n";
@@ -5777,6 +5785,10 @@ struct RunOptions {
   std::string reportTrendWindow;
   std::string reportHistoryMaxRuns;
   std::string reportOut;
+  SmallVector<std::string, 4> reportFailIfDeltaGt;
+  SmallVector<std::string, 4> reportFailIfDeltaLt;
+  SmallVector<std::string, 4> reportFailIfTrendDeltaGt;
+  SmallVector<std::string, 4> reportFailIfTrendDeltaLt;
   std::optional<bool> reportHistoryBootstrap;
   SmallVector<std::string, 4> reportPolicyProfiles;
   std::string reportPolicyMode;
@@ -6141,6 +6153,38 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       result.opts.reportOut = v->str();
       continue;
     }
+    if (arg == "--report-fail-if-delta-gt" ||
+        arg.starts_with("--report-fail-if-delta-gt=")) {
+      auto v = consumeValue(i, arg, "--report-fail-if-delta-gt");
+      if (!v)
+        return result;
+      result.opts.reportFailIfDeltaGt.push_back(v->str());
+      continue;
+    }
+    if (arg == "--report-fail-if-delta-lt" ||
+        arg.starts_with("--report-fail-if-delta-lt=")) {
+      auto v = consumeValue(i, arg, "--report-fail-if-delta-lt");
+      if (!v)
+        return result;
+      result.opts.reportFailIfDeltaLt.push_back(v->str());
+      continue;
+    }
+    if (arg == "--report-fail-if-trend-delta-gt" ||
+        arg.starts_with("--report-fail-if-trend-delta-gt=")) {
+      auto v = consumeValue(i, arg, "--report-fail-if-trend-delta-gt");
+      if (!v)
+        return result;
+      result.opts.reportFailIfTrendDeltaGt.push_back(v->str());
+      continue;
+    }
+    if (arg == "--report-fail-if-trend-delta-lt" ||
+        arg.starts_with("--report-fail-if-trend-delta-lt=")) {
+      auto v = consumeValue(i, arg, "--report-fail-if-trend-delta-lt");
+      if (!v)
+        return result;
+      result.opts.reportFailIfTrendDeltaLt.push_back(v->str());
+      continue;
+    }
     if (arg == "--report-history-bootstrap") {
       result.opts.reportHistoryBootstrap = true;
       continue;
@@ -6322,6 +6366,9 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         !opts.reportHistory.empty() || !opts.reportAppendHistory.empty() ||
         !opts.reportTrendHistory.empty() || !opts.reportTrendWindow.empty() ||
         !opts.reportHistoryMaxRuns.empty() || !opts.reportOut.empty() ||
+        !opts.reportFailIfDeltaGt.empty() || !opts.reportFailIfDeltaLt.empty() ||
+        !opts.reportFailIfTrendDeltaGt.empty() ||
+        !opts.reportFailIfTrendDeltaLt.empty() ||
         opts.reportHistoryBootstrap.has_value() || !opts.reportPolicyProfiles.empty() ||
         !opts.reportPolicyMode.empty() ||
         opts.reportPolicyStopOnFail.has_value() ||
@@ -6512,6 +6559,45 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_out",
                                   "--out", opts.projectDir);
     }
+    auto appendRulesFromCSV = [&](StringRef key, StringRef optionFlag) {
+      auto it = cfg.run.find(key);
+      if (it == cfg.run.end() || it->second.empty())
+        return;
+      SmallVector<StringRef, 8> entries;
+      StringRef(it->second).split(entries, ',', /*MaxSplit=*/-1,
+                                  /*KeepEmpty=*/false);
+      for (StringRef raw : entries) {
+        StringRef token = raw.trim();
+        if (token.empty())
+          continue;
+        reportArgsOwned.push_back(optionFlag.str());
+        reportArgsOwned.push_back(token.str());
+      }
+    };
+    auto appendRuleOverridesOrConfig = [&](const SmallVectorImpl<std::string> &cliRules,
+                                           StringRef configKey,
+                                           StringRef optionFlag) {
+      if (!cliRules.empty()) {
+        for (const auto &rule : cliRules) {
+          reportArgsOwned.push_back(optionFlag.str());
+          reportArgsOwned.push_back(rule);
+        }
+        return;
+      }
+      appendRulesFromCSV(configKey, optionFlag);
+    };
+    appendRuleOverridesOrConfig(opts.reportFailIfDeltaGt,
+                                "report_fail_if_delta_gt",
+                                "--fail-if-delta-gt");
+    appendRuleOverridesOrConfig(opts.reportFailIfDeltaLt,
+                                "report_fail_if_delta_lt",
+                                "--fail-if-delta-lt");
+    appendRuleOverridesOrConfig(opts.reportFailIfTrendDeltaGt,
+                                "report_fail_if_trend_delta_gt",
+                                "--fail-if-trend-delta-gt");
+    appendRuleOverridesOrConfig(opts.reportFailIfTrendDeltaLt,
+                                "report_fail_if_trend_delta_lt",
+                                "--fail-if-trend-delta-lt");
 
     if (opts.reportHistoryBootstrap.has_value()) {
       if (*opts.reportHistoryBootstrap)
