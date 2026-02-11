@@ -9,6 +9,34 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59)
+
+1. Stabilized LEC `CIRCT_VERILOG_ERROR` reason normalization in all primary
+   formal runners (`sv-tests`, `verilator`, `yosys`) for wrapper/infra faults:
+   - canonical tokens now include:
+     - `runner_command_not_found`
+     - `runner_command_permission_denied`
+     - `runner_failed_to_run_command`
+     - `command_timeout`
+     - `command_oom`
+2. Why this matters long term:
+   - removes host/path-dependent reason token churn that pollutes strict-gate
+     drift checks and makes baseline history noisy.
+3. Current concrete limitation signal:
+   - filtered external LEC smoke cases still fail with
+     `runner_command_permission_denied` (infra-level execution issue), now
+     clearly surfaced as one stable bucket instead of high-cardinality tokens.
+4. Next high-leverage features:
+   - move reason taxonomy from log heuristics to compiler-emitted stable
+     diagnostic category IDs (ImportVerilog/lowering/LEC pipeline).
+   - add structured infra-failure counters in `run_formal_all.sh` for
+     `runner_command_*` classes so infra regressions are visible separately from
+     semantic failures.
+   - continue BMC semantic closure on multiclock + sequence-subroutine with
+     focused filtered lanes and strict bucket case-ID drift gates.
+   - mutation pipeline: consume formal reason-family counters to prioritize
+     mutators against active failure families.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:55)
 
 1. Completed strict-gate parity for LEC `CIRCT_VERILOG_ERROR` identity drift:
