@@ -11,6 +11,7 @@
 // CHECK: --fail-on-new-lec-drop-remark-cases
 // CHECK: --fail-on-any-bmc-drop-remarks
 // CHECK: --fail-on-any-lec-drop-remarks
+// CHECK: --fail-on-any-lec-timeouts
 // CHECK: --fail-on-new-lec-diag-keys
 // CHECK: --fail-on-new-lec-diag-path-fallback-cases
 // CHECK: --fail-on-any-lec-diag-path-fallback-cases

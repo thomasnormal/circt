@@ -9,6 +9,26 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 19:10)
+
+1. Added hard zero-timeout gate for LEC lanes in `run_formal_all.sh`:
+   - `--fail-on-any-lec-timeouts`
+2. New strict policy capability:
+   - this enforces `lec_timeout_cases == 0` across any selected `LEC*` lanes
+     in the current run (independent of baseline-window drift).
+3. New regression lock:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout-any.test`
+4. External sanity:
+   - `/home/thomas-ahle/verilator-verification` LEC filtered slice
+     (`assert_past|assert_stable`) with `--fail-on-any-lec-timeouts` is
+     passing and reports `lec_timeout_cases=0`.
+5. Next long-term build priorities after this governance step:
+   - LEC timeout root-cause taxonomy/provenance (bucketed by solver budget,
+     pipeline stage, and semantic class) to make timeout regressions actionable.
+   - BMC semantic closure for multiclock + sequence-subroutine tails.
+   - mutation matrix scalability hardening (incremental caching/sharding for
+     external formal result ingestion).
+
 ### Formal Closure Snapshot Update (February 11, 2026, 19:02)
 
 1. Tightened LEC timeout governance in `run_formal_all.sh`:

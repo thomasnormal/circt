@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1080 - February 11, 2026
+
+### Formal Driver: Enforce Zero LEC Timeouts In Current Run
+
+1. Added new gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-any-lec-timeouts`
+2. Gate semantics:
+   - fails when any selected `LEC*` lane reports
+     `lec_timeout_cases > 0` in the current run.
+   - complements baseline drift gates by providing immediate “zero timeout”
+     enforcement mode.
+3. Added regression lock:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout-any.test`
+4. Updated help regression surface:
+   - `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-any.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - PASS (4/4)
+- External focused sanity:
+  - `run_formal_all.sh` on `/home/thomas-ahle/verilator-verification` LEC
+    filtered slice (`assert_past|assert_stable`) with
+    `--fail-on-any-lec-timeouts`: PASS (`lec_timeout_cases=0`).
+
 ## Iteration 1079 - February 11, 2026
 
 ### Formal Driver: Strict-Gate LEC Timeout Case-ID Drift Control
