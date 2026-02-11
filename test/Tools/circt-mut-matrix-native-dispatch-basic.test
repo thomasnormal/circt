@@ -19,6 +19,9 @@
 // LOG-DAG: native_matrix_dispatch_lanes{{[[:space:]]+}}2
 // LOG-DAG: native_matrix_dispatch_pass{{[[:space:]]+}}1
 // LOG-DAG: native_matrix_dispatch_fail{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_dispatch_executed_lanes{{[[:space:]]+}}2
+// LOG-DAG: native_matrix_dispatch_runtime_ns{{[[:space:]]+}}{{[0-9]+}}
+// LOG-DAG: native_matrix_dispatch_avg_lane_runtime_ns{{[[:space:]]+}}{{[0-9]+}}
 //
 // RESULTS: lane_id{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}coverage_percent{{[[:space:]]}}gate_status
 // RESULTS: lane_ok{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}75.00{{[[:space:]]}}PASS

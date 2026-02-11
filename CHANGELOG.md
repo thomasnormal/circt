@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1015 - February 11, 2026
+
+### `circt-mut matrix`: Native Dispatch Runtime Telemetry
+
+1. Extended native matrix dispatch telemetry in
+   `tools/circt-mut/circt-mut.cpp` to capture lane execution runtime with
+   deterministic summary counters:
+   - `native_matrix_dispatch_executed_lanes`
+   - `native_matrix_dispatch_runtime_ns`
+   - `native_matrix_dispatch_avg_lane_runtime_ns`
+2. Runtime accounting now includes both serial and `--jobs` parallel native
+   dispatch paths, and excludes synthetic STOP_ON_FAIL skip rows.
+3. Added regression coverage update:
+   - `test/Tools/circt-mut-matrix-native-dispatch-basic.test`
+4. This gives long-run formal/mutation campaigns native timing visibility
+   needed to drive lane-scheduling and policy-pack tuning during matrix
+   migration.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused matrix-native slices:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch-basic.test test/Tools/circt-mut-matrix-native-dispatch-jobs-order.test test/Tools/circt-mut-matrix-native-dispatch-stop-on-fail-jobs.test test/Tools/circt-mut-matrix-native-dispatch-conflict.test`: PASS (4/4)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (239/239)
+- External filtered formal cadence:
+  - `LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-runtime-telemetry ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1014 - February 11, 2026
 
 ### `circt-mut run`: CLI + Config Forwarding for Report Delta/Trend Gates
