@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1140 - February 11, 2026
+
+### Mutation Governance: Staged Compile-Budget Profiles + v8 Strict Composites
+
+1. Added new compile-budget policy profiles in `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-external-formal-compile-mode-budget-debt-v1`
+     (`compile.total >= 1`, `compile.fail <= 4`, `compile.error == 0`,
+     `compile.xpass == 0`)
+   - `formal-regression-matrix-external-formal-compile-mode-budget-strict-v1`
+     (`compile.total >= 1`, `compile.fail == 0`, `compile.error == 0`,
+     `compile.xpass == 0`)
+2. Added staged strict composite rollouts:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v8`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v8`
+   (`v7` + strict compile-budget profile).
+3. Added/updated regressions:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-debt-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-debt-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-strict-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-strict-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v8-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v8-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v8-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v8-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused policy slice (new profiles/composites + help/invalid-profile): PASS (10/10)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (390/390 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-compile-budget-v8-noavip ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator` BMC/LEC,
+    `yosys/tests/sva` BMC/LEC
+  - FAIL: `opentitan` LEC (`missing_results=1`)
+- AVIP compile probes (`utils/run_avip_circt_verilog.sh`, 180s timeout/lane):
+  - PASS: `ahb_avip`, `apb_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`
+  - FAIL: `axi4Lite_avip`, `axi4_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1139 - February 11, 2026
 
 ### Formal Driver + Mutation Governance: Filtered-Lane Min-Total Violation Signals + v9 Composites
