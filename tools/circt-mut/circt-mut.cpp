@@ -120,7 +120,8 @@ static void printInitHelp(raw_ostream &os) {
   os << "                           Report policy mode for generated config\n";
   os << "                           (smoke|nightly|strict|trend-nightly|trend-strict|\n";
   os << "                            provenance-guard|provenance-strict|\n";
-  os << "                            native-lifecycle-strict|native-strict,\n";
+  os << "                            native-lifecycle-strict|native-smoke|\n";
+  os << "                            native-nightly|native-strict,\n";
   os << "                            default: smoke)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           Enable stop-on-fail report guard profile in\n";
@@ -175,7 +176,8 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --report-policy-mode MODE\n";
   os << "                           smoke|nightly|strict|trend-nightly|trend-strict|\n";
   os << "                           provenance-guard|provenance-strict|\n";
-  os << "                           native-lifecycle-strict|native-strict\n";
+  os << "                           native-lifecycle-strict|native-smoke|\n";
+  os << "                           native-nightly|native-strict\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -205,7 +207,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --policy-profile NAME    Apply built-in report policy profile\n";
   os << "  --policy-mode MODE       smoke|nightly|strict|trend-nightly|trend-strict|\n";
   os << "                           provenance-guard|provenance-strict|\n";
-  os << "                           native-lifecycle-strict|native-strict\n";
+  os << "                           native-lifecycle-strict|native-smoke|\n";
+  os << "                           native-nightly|native-strict\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -233,6 +236,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-provenance-strict|\n";
   os << "                           formal-regression-matrix-native-lifecycle-strict|\n";
   os << "                           formal-regression-matrix-policy-mode-native-strict-contract|\n";
+  os << "                           formal-regression-matrix-policy-mode-native-family-contract|\n";
   os << "                           formal-regression-matrix-runtime-smoke|\n";
   os << "                           formal-regression-matrix-runtime-nightly|\n";
   os << "                           formal-regression-matrix-runtime-trend|\n";
@@ -5751,7 +5755,8 @@ static std::string resolveProjectFilePath(StringRef projectDir, StringRef file) 
 
 static constexpr StringLiteral kMatrixPolicyModeList =
     "smoke|nightly|strict|trend-nightly|trend-strict|provenance-guard|"
-    "provenance-strict|native-lifecycle-strict|native-strict";
+    "provenance-strict|native-lifecycle-strict|native-smoke|native-nightly|"
+    "native-strict";
 
 static bool isMatrixPolicyMode(StringRef mode);
 
@@ -7585,7 +7590,8 @@ static bool isMatrixPolicyMode(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
          mode == "trend-nightly" || mode == "trend-strict" ||
          mode == "provenance-guard" || mode == "provenance-strict" ||
-         mode == "native-lifecycle-strict" || mode == "native-strict";
+         mode == "native-lifecycle-strict" || mode == "native-smoke" ||
+         mode == "native-nightly" || mode == "native-strict";
 }
 
 static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
@@ -7631,6 +7637,20 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     policyProfile = "formal-regression-matrix-provenance-strict";
   } else if (mode == "native-lifecycle-strict") {
     policyProfile = "formal-regression-matrix-native-lifecycle-strict";
+  } else if (mode == "native-smoke") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-smoke"
+                        : "formal-regression-matrix-composite-smoke";
+    provenanceProfile = "formal-regression-matrix-provenance-guard";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-family-contract";
+  } else if (mode == "native-nightly") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-nightly"
+                        : "formal-regression-matrix-composite-nightly";
+    provenanceProfile = "formal-regression-matrix-provenance-guard";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-family-contract";
   } else if (mode == "native-strict") {
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
@@ -8057,6 +8077,12 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      1.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-policy-mode-native-family-contract") {
+    appendUniqueRule(opts.failIfValueLtRules, "policy.mode_is_set", 1.0);
+    appendUniqueRule(opts.failIfValueLtRules, "policy.mode_is_native_family",
+                     1.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-runtime-smoke") {
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.runtime_summary_invalid_rows", 0.0);
@@ -8181,6 +8207,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-provenance-strict|"
            "formal-regression-matrix-native-lifecycle-strict|"
            "formal-regression-matrix-policy-mode-native-strict-contract|"
+           "formal-regression-matrix-policy-mode-native-family-contract|"
            "formal-regression-matrix-runtime-smoke|"
            "formal-regression-matrix-runtime-nightly|"
            "formal-regression-matrix-runtime-trend|"
@@ -10728,6 +10755,11 @@ static int runNativeReport(const ReportOptions &opts) {
                     appliedPolicyMode.empty() ? std::string("-")
                                               : appliedPolicyMode);
   rows.emplace_back("policy.mode_is_set", appliedPolicyMode.empty() ? "0" : "1");
+  rows.emplace_back("policy.mode_is_native_family",
+                    (!appliedPolicyMode.empty() &&
+                     StringRef(appliedPolicyMode).starts_with("native-"))
+                        ? "1"
+                        : "0");
   rows.emplace_back("policy.mode_is_native_strict",
                     appliedPolicyMode == "native-strict" ? "1" : "0");
   rows.emplace_back("policy.mode_source", appliedPolicyModeSource);

@@ -28,6 +28,8 @@
 // CHECK: trend-nightly
 // CHECK: trend-strict
 // CHECK: native-lifecycle-strict
+// CHECK: native-smoke
+// CHECK: native-nightly
 // CHECK: native-strict
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --report-fail-on-prequalify-drift
