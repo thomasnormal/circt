@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1128 - February 11, 2026
+
+### Mutation Governance: External Formal Status Rollups + Compile Budget Profile
+
+1. Extended `circt-mut report` external formal `summary.tsv` ingestion in
+   `tools/circt-mut/circt-mut.cpp` with first-class status rollups:
+   - `external_formal.summary_status_by_suite_mode.<suite>.<mode>.{total,pass,fail,xfail,xpass,error,skip}`
+   - `external_formal.summary_status_by_mode.<mode>.{total,pass,fail,xfail,xpass,error,skip}`
+2. Added policy profile:
+   - `formal-regression-matrix-external-formal-compile-mode-budget-v1`
+   with staged compile governance gates:
+   - `external_formal.summary_status_by_mode.compile.total >= 1`
+   - `external_formal.summary_status_by_mode.compile.fail <= 3`
+   - `external_formal.summary_status_by_mode.compile.error <= 0`
+   - `external_formal.summary_status_by_mode.compile.xpass <= 0`
+3. Hardened missing-key fallback semantics for value/trend gates:
+   - `external_formal.summary_status_by_suite_mode.*`
+   - `external_formal.summary_status_by_mode.*`
+   now default to `0.0` when absent, matching existing external formal counter
+   behavior and avoiding brittle failures on filtered-empty slices.
+4. Updated profile/help surfaces:
+   - `test/Tools/circt-mut-report-help.test`
+   - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+5. Added/updated regressions:
+   - `test/Tools/circt-mut-report-external-formal-summary-counter-keys.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-v1-fail.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused lit slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1`
+    `build-test/test/Tools/circt-mut-report-external-formal-summary-counter-keys.test`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-v1-pass.test`
+    `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-compile-mode-budget-v1-fail.test`
+    `build-test/test/Tools/circt-mut-report-help.test`
+    `build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`
+  - PASS (5/5)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (344/344 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-compile-budget-v1 ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator` LEC,
+    `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL: `verilator` BMC, `opentitan` LEC, AVIP compile
+    `axi4Lite/spi/uart`
+
 ## Iteration 1127 - February 11, 2026
 
 ### Mutation Governance: Composite Native-Strict Formal Trend Profile (v1)

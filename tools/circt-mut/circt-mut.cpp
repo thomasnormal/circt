@@ -291,6 +291,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-composite-stop-on-fail-nightly|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-strict|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-native-strict|\n";
+  os << "                           formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-trend-nightly|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-trend-strict\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
@@ -9201,6 +9202,15 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            applyComposite("formal-regression-matrix-native-lifecycle-strict");
   }
   if (profile ==
+      "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1") {
+    return applyComposite(
+               "formal-regression-matrix-composite-stop-on-fail-native-strict") &&
+           applyComposite(
+               "formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1") &&
+           applyComposite(
+               "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1");
+  }
+  if (profile ==
       "formal-regression-matrix-composite-stop-on-fail-trend-nightly") {
     return applyComposite("formal-regression-matrix-stop-on-fail-trend") &&
            applyComposite("formal-regression-matrix-lane-trend-nightly") &&
@@ -9268,6 +9278,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-composite-stop-on-fail-nightly|"
            "formal-regression-matrix-composite-stop-on-fail-strict|"
            "formal-regression-matrix-composite-stop-on-fail-native-strict|"
+           "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1|"
            "formal-regression-matrix-composite-stop-on-fail-trend-nightly|"
            "formal-regression-matrix-composite-stop-on-fail-trend-strict)")
               .str();
