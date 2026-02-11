@@ -10467,6 +10467,7 @@ static int runNativeReport(const ReportOptions &opts) {
   bool hasCLIPolicyMode = !effectiveOpts.policyMode.empty();
   bool hasCLIPolicyProfile = !effectiveOpts.policyProfiles.empty();
   std::string appliedPolicyMode;
+  std::string appliedPolicyModeSource = "none";
   std::optional<bool> appliedPolicyStopOnFail;
   std::optional<bool> failOnPrequalifyDriftOverride;
   if (effectiveOpts.failOnPrequalifyDriftOverrideSet)
@@ -10649,6 +10650,7 @@ static int runNativeReport(const ReportOptions &opts) {
           return 1;
         }
         appliedPolicyMode = mode;
+        appliedPolicyModeSource = hasCLIPolicyMode ? "cli" : "config";
         appliedPolicyStopOnFail = stopOnFail.value_or(false);
       }
     }
@@ -10667,6 +10669,7 @@ static int runNativeReport(const ReportOptions &opts) {
       return 1;
     }
     appliedPolicyMode = effectiveOpts.policyMode;
+    appliedPolicyModeSource = "cli";
     appliedPolicyStopOnFail = effectiveOpts.policyStopOnFail.value_or(false);
   }
   if (!policyProfiles.empty()) {
@@ -10705,6 +10708,7 @@ static int runNativeReport(const ReportOptions &opts) {
   rows.emplace_back("policy.mode",
                     appliedPolicyMode.empty() ? std::string("-")
                                               : appliedPolicyMode);
+  rows.emplace_back("policy.mode_source", appliedPolicyModeSource);
   rows.emplace_back("policy.stop_on_fail",
                     appliedPolicyStopOnFail.has_value()
                         ? (*appliedPolicyStopOnFail ? std::string("1")

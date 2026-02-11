@@ -6,6 +6,7 @@
 // RUN: FileCheck %s < %t/out.txt
 //
 // CHECK: policy.mode{{[[:space:]]}}-
+// CHECK: policy.mode_source{{[[:space:]]}}none
 // CHECK: policy.stop_on_fail{{[[:space:]]}}-
 // CHECK: policy.profile_count{{[[:space:]]}}1
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-trend
