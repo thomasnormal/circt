@@ -9,6 +9,34 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 21:05)
+
+1. Added explicit BMC semantic coverage for sequence-subroutine failures:
+   - new semantic bucket: `sequence_subroutine`
+   - new summary counter:
+     - `bmc_semantic_bucket_sequence_subroutine_cases`
+2. Strict-gate integration:
+   - `--fail-on-new-bmc-semantic-bucket-cases` now also checks
+     `sequence_subroutine` bucket drift.
+3. New regression lock:
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases-sequence-subroutine.test`
+4. Focused validation:
+   - lit semantic-bucket stack remains green (7/7).
+   - external filtered smokes (`verilator-verification`, `yosys/tests/sva`)
+     remain passing with explicit `build-test/bin` tools.
+5. Current limitation signal:
+   - sv-tests UVM `sequence-subroutine`/`multiclock` focused reruns are still
+     dominated by front-end compile latency in this environment, limiting
+     per-iteration semantic signal throughput.
+6. Long-term next features (highest leverage):
+   - introduce direct BMC lane support for precompiled/partitioned sv-tests UVM
+     front-end artifacts (IR cache keying by case + tool hash) to cut closure
+     loop time.
+   - add semantic-bucket case-map provenance join with timeout metadata to
+     distinguish semantic misses vs compile-time pressure automatically.
+   - extend mutation report pipeline with profile-aware incremental cache reuse
+     and deterministic shard scheduling for AVIP-scale runs.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 20:45)
 
 1. Added semantic-bucket identity drift governance in `run_formal_all.sh`:
