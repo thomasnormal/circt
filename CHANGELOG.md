@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1068 - February 11, 2026
+
+### Formal Driver Hardening: Explicit Yosys BMC Profile Selection In `run_formal_all`
+
+1. Added explicit Yosys BMC profile control in `utils/run_formal_all.sh`:
+   - new option: `--yosys-bmc-profile auto|known|xprop`
+   - default remains `auto` for backward compatibility
+2. Wired profile selection to lane env forwarding:
+   - `known` -> `BMC_ASSUME_KNOWN_INPUTS=1`
+   - `xprop` -> `BMC_ASSUME_KNOWN_INPUTS=0`
+   - `auto` -> preserve prior behavior (follows global
+     `--bmc-assume-known-inputs` only)
+3. Included profile mode in lane-state config hashing
+   (`yosys_bmc_profile=...`) for deterministic cache/provenance behavior.
+4. Added regression lock:
+   - `test/Tools/run-formal-all-yosys-bmc-profile-forwarding.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-yosys-bmc-profile-forwarding.test`
+  - `build-test/test/Tools/run-formal-all-yosys-bmc-xfail-summary.test`
+  - `build-test/test/Tools/run-formal-all-expected-failure-cases-yosys-bmc.test`
+  - PASS (3/3)
+- External focused sanity (`/home/thomas-ahle/yosys/tests/sva`, `basic00|basic01`):
+  - known profile (`BMC_ASSUME_KNOWN_INPUTS=1`): `2 tests, failures=0, xfail=0`
+  - xprop profile (`BMC_ASSUME_KNOWN_INPUTS=0`): `2 tests, failures=0, xfail=2`
+
 ## Iteration 1067 - February 11, 2026
 
 ### `circt-mut report`: Strict Trend Key-Coverage Quality Gates

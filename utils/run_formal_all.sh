@@ -508,6 +508,11 @@ Options:
   --yosys-bmc-test-filter REGEX
                          Base-name regex filter passed to yosys SVA BMC runner
                          (required when yosys/tests/sva/BMC lane runs)
+  --yosys-bmc-profile MODE
+                         Yosys SVA BMC assumption profile:
+                         auto|known|xprop (default: auto)
+                         auto forwards known-input mode only when
+                         --bmc-assume-known-inputs is set
   --yosys-lec-test-filter REGEX
                          Base-name regex filter passed to yosys SVA LEC runner
                          (required when yosys/tests/sva/LEC lane runs)
@@ -2037,6 +2042,7 @@ VERILATOR_BMC_TEST_FILTER=""
 VERILATOR_BMC_XFAILS=""
 VERILATOR_LEC_TEST_FILTER=""
 YOSYS_BMC_TEST_FILTER=""
+YOSYS_BMC_PROFILE="auto"
 YOSYS_LEC_TEST_FILTER=""
 
 # Default known-verilator BMC expected failures when colocated with this
@@ -2472,6 +2478,8 @@ while [[ $# -gt 0 ]]; do
       VERILATOR_LEC_TEST_FILTER="$2"; shift 2 ;;
     --yosys-bmc-test-filter)
       YOSYS_BMC_TEST_FILTER="$2"; shift 2 ;;
+    --yosys-bmc-profile)
+      YOSYS_BMC_PROFILE="$2"; shift 2 ;;
     --yosys-lec-test-filter)
       YOSYS_LEC_TEST_FILTER="$2"; shift 2 ;;
     --require-explicit-sv-tests-filters)
@@ -2615,6 +2623,14 @@ if [[ -n "$YOSYS_BMC_TEST_FILTER" ]]; then
     exit 1
   fi
 fi
+YOSYS_BMC_PROFILE="${YOSYS_BMC_PROFILE,,}"
+case "$YOSYS_BMC_PROFILE" in
+  auto|known|xprop) ;;
+  *)
+    echo "invalid --yosys-bmc-profile: $YOSYS_BMC_PROFILE (expected auto|known|xprop)" >&2
+    exit 1
+    ;;
+esac
 if [[ -n "$YOSYS_LEC_TEST_FILTER" ]]; then
   set +e
   printf '' | grep -Eq "$YOSYS_LEC_TEST_FILTER" 2>/dev/null
@@ -6354,6 +6370,7 @@ compute_lane_state_config_hash() {
     printf "verilator_bmc_xfails=%s\n" "$VERILATOR_BMC_XFAILS"
     printf "verilator_lec_test_filter=%s\n" "$VERILATOR_LEC_TEST_FILTER"
     printf "yosys_bmc_test_filter=%s\n" "$YOSYS_BMC_TEST_FILTER"
+    printf "yosys_bmc_profile=%s\n" "$YOSYS_BMC_PROFILE"
     printf "yosys_lec_test_filter=%s\n" "$YOSYS_LEC_TEST_FILTER"
     printf "opentitan_lec_impl_filter=%s\n" "$OPENTITAN_LEC_IMPL_FILTER"
     printf "opentitan_e2e_impl_filter=%s\n" "$OPENTITAN_E2E_IMPL_FILTER"
@@ -8819,9 +8836,19 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       BMC_SEMANTIC_TAG_MAP_FILE="$YOSYS_BMC_SEMANTIC_TAG_MAP_FILE"
       TEST_FILTER="$YOSYS_BMC_TEST_FILTER"
       Z3_BIN="$Z3_BIN")
-    if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
-      yosys_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
-    fi
+    case "$YOSYS_BMC_PROFILE" in
+      known)
+        yosys_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
+        ;;
+      xprop)
+        yosys_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=0)
+        ;;
+      auto)
+        if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+          yosys_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
+        fi
+        ;;
+    esac
     run_suite yosys-bmc \
       env "${yosys_bmc_env[@]}" \
       utils/run_yosys_sva_circt_bmc.sh "$YOSYS_DIR" || true
