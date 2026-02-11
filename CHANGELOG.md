@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1119 - February 11, 2026
+
+### Mutation Policy: Native Strict Summary v1 Regression Lock-In
+
+1. Added dedicated regression coverage for native strict summary schema-v1
+   policy-mode wiring:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-summary-v1-pass.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-summary-v1.test`
+2. The new tests assert:
+   - `policy.mode = native-strict-formal-summary-v1`
+   - `policy.mode_is_native_strict = 1` (native strict contract compatibility)
+   - full profile chain:
+     - `formal-regression-matrix-composite-native-strict`
+     - `formal-regression-matrix-external-formal-guard`
+     - `formal-regression-matrix-external-formal-summary-guard`
+     - `formal-regression-matrix-external-formal-summary-v1-guard`
+     - `formal-regression-matrix-policy-mode-native-strict-contract`
+   - strict summary schema gate pass on `summary.tsv` schema version `1`.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused lit slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1`
+    `build-test/test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-summary-v1-pass.test`
+    `build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-summary-v1.test`
+    `build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-summary-v1-pass.test`
+    `build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-summary-v1-schema-version-fail.test`
+    `build-test/test/Tools/circt-mut-report-help.test`
+    `build-test/test/Tools/circt-mut-run-help.test`
+    `build-test/test/Tools/circt-mut-init-help.test`
+  - PASS (7/7)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (335/335 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-summary-v1-fix ...`
+  - `summary.tsv` emitted; snapshot:
+    - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile
+      `ahb/apb/axi4/i2s/i3c/jtag`
+    - FAIL: `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC,
+      `opentitan` LEC, AVIP compile `axi4Lite/spi/uart`
+  - known tail failure persists:
+    - `utils/run_formal_all.sh: line 9957: syntax error near unexpected token '('`
+
 ## Iteration 1118 - February 11, 2026
 
 ### Formal + Mutation Closure: LEC Semantic-Diag Subfamilies and Scoped Family Guard
