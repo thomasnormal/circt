@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1023 - February 11, 2026
+
+### `circt-mut run/report`: Policy-Mode Now Emits Single Composite Profile
+
+1. Updated policy-mode mapping in `tools/circt-mut/circt-mut.cpp` so
+   smoke/nightly/strict (+ stop-on-fail variants) now resolve to a single
+   composite matrix policy profile rather than two separate guard/runtime
+   profiles.
+2. This applies consistently across:
+   - `circt-mut run --report-policy-mode ...` forwarding path
+   - `circt-mut report --policy-mode ...`
+   - config-driven `[report] policy_mode`
+3. Reduced policy-composition tech debt:
+   - fewer profile rows in report output
+   - lower risk of partial override/mis-ordering between paired profiles.
+4. Updated regression expectations for policy-mode mappings:
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-stop-on-fail.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-strict.test`
+   - `test/Tools/circt-mut-run-with-report-config-policy-mode-stop-on-fail.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-overrides-config-profiles.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-smoke-stop-on-fail.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-default.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-nightly-default.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-smoke-stop-on-fail.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-strict-default.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused policy-mode/composite mapping slice:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-with-report-cli-policy-mode-stop-on-fail.test test/Tools/circt-mut-run-with-report-cli-policy-mode-strict.test test/Tools/circt-mut-run-with-report-config-policy-mode-stop-on-fail.test test/Tools/circt-mut-report-cli-policy-mode-overrides-config-profiles.test test/Tools/circt-mut-report-cli-policy-mode-smoke-stop-on-fail.test test/Tools/circt-mut-report-cli-policy-mode-strict-default.test test/Tools/circt-mut-report-policy-config-matrix-mode-nightly-default.test test/Tools/circt-mut-report-policy-config-matrix-mode-smoke-stop-on-fail.test test/Tools/circt-mut-report-policy-config-matrix-mode-strict-default.test test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-report-policy-matrix-composite-*.test`: PASS (13/13)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (250/250)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-mode-composite-mapping ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'assert_fell' --verilator-lec-test-filter 'assert_fell' --yosys-bmc-test-filter 'basic02' --yosys-lec-test-filter 'basic02' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1022 - February 11, 2026
 
 ### `circt-mut report`: Composite Matrix Policy Bundles

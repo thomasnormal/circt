@@ -123,6 +123,10 @@ See CHANGELOG.md on recent progress.
   bundles are now available for single-flag CI policy selection
   (`formal-regression-matrix-composite-*`), reducing manual profile
   composition drift between smoke/nightly/strict governance lanes.
+- Latest mutation-governance milestone (current): policy-mode mapping now emits
+  a single composite matrix profile (instead of paired guard/runtime profiles),
+  simplifying CI policy configuration and reducing multi-profile precedence
+  edge-cases in run/report flows.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

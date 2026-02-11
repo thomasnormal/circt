@@ -7380,20 +7380,18 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                                            std::string &error,
                                            StringRef errorPrefix) {
   std::string policyProfile;
-  std::string runtimePolicyProfile;
   if (mode == "smoke") {
-    policyProfile = stopOnFail ? "formal-regression-matrix-stop-on-fail-guard-smoke"
-                               : "formal-regression-matrix-guard-smoke";
-    runtimePolicyProfile = "formal-regression-matrix-runtime-smoke";
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-smoke"
+                        : "formal-regression-matrix-composite-smoke";
   } else if (mode == "nightly") {
-    policyProfile =
-        stopOnFail ? "formal-regression-matrix-stop-on-fail-guard-nightly"
-                   : "formal-regression-matrix-guard-nightly";
-    runtimePolicyProfile = "formal-regression-matrix-runtime-nightly";
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-nightly"
+                        : "formal-regression-matrix-composite-nightly";
   } else if (mode == "strict") {
-    policyProfile = stopOnFail ? "formal-regression-matrix-stop-on-fail-strict"
-                               : "formal-regression-matrix-full-lanes-strict";
-    runtimePolicyProfile = "formal-regression-matrix-runtime-strict";
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-strict"
+                        : "formal-regression-matrix-composite-strict";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
              "' (expected smoke|nightly|strict)")
@@ -7401,7 +7399,6 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     return false;
   }
   out.push_back(policyProfile);
-  out.push_back(runtimePolicyProfile);
   return true;
 }
 
