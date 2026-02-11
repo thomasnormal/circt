@@ -549,6 +549,14 @@ See CHANGELOG.md on recent progress.
   profile parity is closed end-to-end with strict composites:
   - direct strict lane trend now requires strict history quality (3-run floor),
   - and strict reports emit explicit missing core-key history diagnostics.
+- Latest mutation-governance milestone (current): `circt-mut report` now
+  ingests external formal result snapshots via
+  `--external-formal-results` / `[report] external_formal_results`, emits
+  normalized `external_formal.*` governance metrics (status and summary
+  fail-like rollups), and adds
+  `formal-regression-matrix-external-formal-guard` policy gating
+  (`external_formal.files >= 1`, `external_formal.fail_like_sum == 0`) for
+  direct matrix+formal closure checks in mutation CI.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
