@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1056 - February 11, 2026
+
+### Formal Semantic Closure: External-Suite Targeted Cadence + UVM Path Hygiene
+
+1. Closed a tooling debt source in BMC UVM test wiring:
+   - committed `8b78233a4` (`[circt-bmc] Point UVM tests to uvm-core runtime path`)
+   - updated BMC tool tests to use `lib/Runtime/uvm-core/src` instead of stale
+     `lib/Runtime/uvm` paths across:
+     - `test/Tools/circt-bmc/sv-tests-uvm-{path,smoke,tags-include,force-bmc}.mlir`
+     - `test/Tools/circt-bmc/sva-uvm-*.sv` (assert-final/assume/expect/interface-property/local-var/multiclock/seq-local-var/seq-subroutine)
+2. Re-validated sv-tests semantic-closure targets in formal-lane mode
+   (`BMC_RUN_SMTLIB=1`, explicit `build-test/bin` tools):
+   - PASS: `16.11--sequence-subroutine-uvm`
+   - PASS: `16.13--sequence-multiclock-uvm`
+   - summary: `total=2 pass=2 fail=0 error=0` from
+     `/tmp/sv-bmc-closure-remain-smtlib-20260211-160559.out`
+3. Ran targeted external formal slices (real repos, explicit filters):
+   - `verilator-verification` BMC:
+     - PASS: `assert_past`
+     - FAIL: `assert_stable` (`BMC_RESULT=SAT`, assertion violation reachable)
+   - `verilator-verification` LEC:
+     - PASS: `assert_past`, `assert_stable` (`LEC_RESULT=EQ`)
+   - `yosys/tests/sva` BMC:
+     - `basic00` aligned pass
+     - `basic01` pass-profile mismatch vs expectation baseline
+       (`utils/yosys-sva-bmc-expected.txt`: `basic01 pass xfail`)
+   - `yosys/tests/sva` LEC:
+     - PASS: `basic00`, `basic01` (`LEC_RESULT=EQ`)
+4. AVIP smoke cadence check:
+   - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`
+     with `CIRCT_VERILOG=build-test/bin/circt-verilog` exited cleanly
+     (`0`, log: `avip-circt-verilog.log`).
+
+### Formal Backlog Delta
+
+1. Promote `assert_stable` BMC mismatch to first-class semantic bug (next patch:
+   dedicated minimized e2e + lowering/parity fix).
+2. Normalize Yosys `basic01` pass/fail profile expectation handling to reduce
+   baseline drift and keep mutation/failure gating deterministic.
+3. Continue strict external-suite cadence with explicit toolchain pinning and
+   filter-owned runs to avoid stale-build noise.
+
 ## Iteration 1055 - February 11, 2026
 
 ### `circt-mut report/run`: Deterministic History-Shorthand Conflict Handling
