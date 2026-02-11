@@ -23,5 +23,7 @@
 // CHECK: strict-formal
 // CHECK: native-strict-formal-summary
 // CHECK: strict-formal-summary
+// CHECK: native-strict-formal-summary-v1
+// CHECK: strict-formal-summary-v1
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --force

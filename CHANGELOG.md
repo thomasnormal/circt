@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1116 - February 11, 2026
+
+### Mutation Policy: Strict External Formal Summary Schema v1 Modes
+
+1. Completed schema-v1 strict summary rollout coverage for matrix policy modes:
+   - `strict-formal-summary-v1`
+   - `native-strict-formal-summary-v1`
+2. Added explicit regression coverage for `strict-formal-summary-v1`:
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-summary-v1-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-summary-v1-schema-version-fail.test`
+   validating:
+   - policy-profile wiring to
+     `formal-regression-matrix-external-formal-summary-v1-guard`
+   - strict fail behavior when `external_formal.summary_tsv_schema_version_max`
+     exceeds `1`.
+3. Closed policy-mode diagnostic drift in invalid-mode tests by updating
+   accepted-mode lists to include:
+   - `native-strict-formal-summary-v1`
+   - `strict-formal-summary-v1`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused lit slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1`
+    `build-test/test/Tools/circt-mut-init-help.test`
+    `build-test/test/Tools/circt-mut-run-help.test`
+    `build-test/test/Tools/circt-mut-report-help.test`
+    `build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`
+    `build-test/test/Tools/circt-mut-init-report-policy-invalid.test`
+    `build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test`
+    `build-test/test/Tools/circt-mut-report-cli-policy-mode-invalid.test`
+    `build-test/test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test`
+    `build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-summary-v1-pass.test`
+    `build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-summary-v1-schema-version-fail.test`
+  - PASS (10/10)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (328/328 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-summary-v1-mode ...`
+  - `summary.tsv` emitted and consumed; snapshot:
+    - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile
+      `ahb/apb/axi4/i2s/i3c/jtag`
+    - FAIL: `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC,
+      `opentitan` LEC, AVIP compile `axi4Lite/spi/uart`
+  - runner still exits non-zero at tail with:
+    - `utils/run_formal_all.sh: line 9915: syntax error near unexpected token '('`
+
 ## Iteration 1115 - February 11, 2026
 
 ### Mutation Policy: Scoped External Formal Semantic Guard For Yosys LEC

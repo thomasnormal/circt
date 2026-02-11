@@ -1355,6 +1355,16 @@ See CHANGELOG.md on recent progress.
     - `external_formal.summary_tsv_unique_rows`
   - strict summary guard now requires zero duplicates, preventing silently
   double-counted external formal lanes from passing policy.
+- Latest mutation-governance milestone (current): strict summary governance now
+  has an explicit schema-evolution rollout track:
+  - new policy modes:
+    - `strict-formal-summary-v1`
+    - `native-strict-formal-summary-v1`
+  - new profile:
+    - `formal-regression-matrix-external-formal-summary-v1-guard`
+  with strict gate `external_formal.summary_tsv_schema_version_max <= 1`,
+  enabling deterministic schema-v1 pinning while keeping existing
+  `strict-formal-summary*` modes available for broader compatibility.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
