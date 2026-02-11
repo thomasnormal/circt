@@ -9,6 +9,44 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot (February 11, 2026, 16:22)
+
+1. sv-tests focused semantic closure (SMT-LIB lane mode, explicit build-test tools):
+   - PASS `16.10--property-local-var-uvm`
+   - PASS `16.10--sequence-local-var-uvm`
+   - PASS `16.11--sequence-subroutine-uvm`
+   - PASS `16.13--sequence-multiclock-uvm`
+   - PASS `16.15--property-iff-uvm`
+   - XFAIL `16.15--property-iff-uvm-fail` (known metadata/content mismatch)
+2. verilator-verification targeted formal slice:
+   - BMC: `assert_past` PASS, `assert_stable` FAIL (`BMC_RESULT=SAT`)
+   - LEC: `assert_past` PASS, `assert_stable` PASS (`LEC_RESULT=EQ`)
+3. yosys/tests/sva targeted formal slice:
+   - BMC mode check: `basic00` PASS, `basic01` mismatch in pass-profile
+     (`utils/yosys-sva-bmc-expected.txt` currently marks `basic01 pass xfail`)
+   - LEC: `basic00` PASS, `basic01` PASS (`LEC_RESULT=EQ`)
+4. AVIP smoke cadence:
+   - `apb_avip` compile pass with `CIRCT_VERILOG=build-test/bin/circt-verilog`
+     (exit code 0, emitted `avip-circt-verilog.log`)
+
+### Formal Limitations And Long-Term Build Targets
+
+1. BMC semantic limits still open:
+   - `$stable` semantics mismatch on verilator slice (`assert_stable`)
+   - Yosys SVA expectation drift around `basic01 pass` profile handling
+   - mixed 4-state/2-state expectations still leak into targeted external lanes
+2. LEC hardening limits still open:
+   - maintain strict no-waiver X-prop governance while improving diagnostics depth
+   - keep cross-suite drop-remark accounting deterministic in strict gates
+3. Mutation generation limits still open:
+   - complete native matrix scheduling migration (script parity -> native parity)
+   - strengthen lane-level trend drift guardrails for nightly/strict policy bundles
+4. Priority implementation order (formal-only tracks):
+   - P0: fix BMC `$stable` lowering/semantics parity and add dedicated e2e test
+   - P1: normalize yosys `basic01` pass/fail profile expectation accounting
+   - P1: add strict lane-level formal closure report artifact generation
+   - P2: extend mutation report trend governance with prequalify/bucket deltas
+
 ### Test Results
 
 | Mode | Eligible | Pass | Fail | Rate |
@@ -246,6 +284,11 @@ See CHANGELOG.md on recent progress.
     `--report-history` / `[run] report_history`
     are mutually exclusive with explicit compare/trend/append selectors,
     preventing ambiguous mixed-source policy/trend baselines in CI.
+- Latest mutation-governance milestone (current): matrix trend policy bundles
+  now enforce history data-quality minimums (`trend.history_runs_selected >= 2`
+  and `trend.numeric_keys >= 1`) through a dedicated profile component
+  (`formal-regression-matrix-trend-history-quality`), preventing one-run trend
+  snapshots from silently passing nightly/strict trend governance.
   (`formal-regression-matrix-policy-mode-native-family-contract`) and
   provenance enforcement, so trend governance can be deployed under native
   policy contracts without bespoke profile stacks.
