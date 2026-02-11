@@ -41,6 +41,15 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - `test/Tools/run-yosys-sva-bmc-out-file.test`
    - `test/Tools/run-yosys-sva-bmc-semantic-tag-map.test`
 
+### Formal Closure Snapshot Update (February 11, 2026, 17:50)
+
+1. `run_formal_all.sh` yosys BMC lane now preserves runner-reported
+   `xfail/xpass` counters in lane summaries and `summary.tsv`.
+2. New regression lock:
+   - `test/Tools/run-formal-all-yosys-bmc-xfail-summary.test`
+3. This closes a formal-driver accounting gap where expected-failure signals in
+   yosys BMC runs could be silently flattened to zero in aggregate dashboards.
+
 ### Formal Closure Snapshot (February 11, 2026, 16:22)
 
 1. sv-tests focused semantic closure (SMT-LIB lane mode, explicit build-test tools):
@@ -66,6 +75,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 1. BMC semantic limits still open:
    - Yosys SVA expectation governance still needs strict lane-owned
      expected-case checks that fail fast on profile drift in CI.
+   - `run_formal_all` yosys BMC lane still lacks an explicit profile toggle for
+     forcing xprop (`BMC_ASSUME_KNOWN_INPUTS=0`) coverage in driver mode.
    - mixed 4-state/2-state expectations still leak into targeted external lanes
 2. LEC hardening limits still open:
    - maintain strict no-waiver X-prop governance while improving diagnostics depth

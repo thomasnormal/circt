@@ -1,5 +1,23 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1066 - February 11, 2026
+
+### Formal Driver Hardening: Preserve Yosys BMC `xfail/xpass` In Lane Summaries
+
+1. Fixed `run_formal_all.sh` yosys BMC summary parsing:
+   - previously hardcoded `xfail=0 xpass=0` when reading
+     `run_yosys_sva_circt_bmc.sh` output.
+   - now parses and forwards `xfail` / `xpass` from yosys summary lines into:
+     - lane summary text
+     - `summary.tsv` numeric columns (`xfail`, `xpass`)
+2. Added regression lock:
+   - `test/Tools/run-formal-all-yosys-bmc-xfail-summary.test`
+3. Re-validated related yosys formal-driver coverage:
+   - `run-yosys-sva-bmc-out-file.test`
+   - `run-yosys-sva-bmc-semantic-tag-map.test`
+   - `run-formal-all-yosys-bmc-default-semantic-tag-map.test`
+   - `run-formal-all-expected-failure-cases-yosys-bmc.test`
+
 ## Iteration 1065 - February 11, 2026
 
 ### Yosys BMC Drift Hardening: Mode/Profile-Qualified Case Diagnostics
