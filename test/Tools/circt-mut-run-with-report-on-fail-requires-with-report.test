@@ -1,0 +1,5 @@
+// RUN: rm -rf %t && mkdir -p %t/proj
+// RUN: printf '[run]\nwith_report = false\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut run --project-dir %t/proj --with-report-on-fail 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut run: --with-report-on-fail requires --with-report or [run] with_report = true

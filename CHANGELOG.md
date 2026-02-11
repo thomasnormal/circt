@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1011 - February 11, 2026
+
+### `circt-mut run`: Guardrails for Report-Override CLI Usage
+
+1. Hardened `circt-mut run` in `tools/circt-mut/circt-mut.cpp` to reject
+   report-governance CLI overrides when report emission is disabled:
+   - blocks `--report-mode`, `--report-policy-profile`,
+     `--report-policy-mode`, `--report-policy-stop-on-fail`,
+     `--report-fail-on-prequalify-drift`, and
+     `--report-no-fail-on-prequalify-drift` unless report is enabled via
+     `--with-report` or `[run] with_report = true`.
+2. Added explicit validation for `--with-report-on-fail`:
+   - now requires report enablement (`--with-report` or config equivalent).
+3. This closes a CI reliability gap where wrappers could pass report override
+   flags that were silently ignored when report execution was off.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-run-report-override-requires-with-report.test`
+   - `test/Tools/circt-mut-run-with-report-on-fail-requires-with-report.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused run/report slices:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-report-override-requires-with-report.test test/Tools/circt-mut-run-with-report-on-fail-requires-with-report.test test/Tools/circt-mut-run-help.test test/Tools/circt-mut-run-with-report-cli-*.test test/Tools/circt-mut-run-with-report-config-*.test test/Tools/circt-mut-run-with-report-on-fail-*.test`: PASS (22/22)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (235/235)
+- External filtered formal cadence:
+  - `LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-run-report-override-guardrails-20260211 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1010 - February 11, 2026
 
 ### `circt-mut run`: Repeatable CLI `--report-policy-profile` Overrides
