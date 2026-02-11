@@ -116,6 +116,9 @@ See CHANGELOG.md on recent progress.
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
   command-level evidence.
+- Latest mutation-governance milestone: `circt-mut report` now supports direct
+  CLI matrix policy-mode selection (`--policy-mode` + optional
+  `--policy-stop-on-fail`) with precedence over config policy profiles.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

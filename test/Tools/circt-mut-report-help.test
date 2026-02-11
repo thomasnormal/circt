@@ -14,6 +14,8 @@
 // CHECK: --trend-history
 // CHECK: --trend-window
 // CHECK: --policy-profile
+// CHECK: --policy-mode
+// CHECK: --policy-stop-on-fail
 // CHECK: formal-regression-matrix-guard
 // CHECK: formal-regression-matrix-trend-guard
 // CHECK: formal-regression-matrix-guard-smoke
