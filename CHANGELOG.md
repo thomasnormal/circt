@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 998 - February 11, 2026
+
+### `circt-mut report`: Lane-Level Skip Diagnostics in Report Rows
+
+1. Extended matrix lane-budget row emission in
+   `tools/circt-mut/circt-mut.cpp` with explicit per-lane skip diagnostics:
+   - `matrix.lane_budget.lane.<lane>.is_skip`
+   - `matrix.lane_budget.lane.<lane>.is_stop_on_fail_skip`
+   - `matrix.lane_budget.lane.<lane>.skip_reason_code`
+   - `matrix.lane_budget.lane.<lane>.skip_reason`
+2. These keys are emitted unconditionally for each lane row (PASS/FAIL/SKIP),
+   which removes dependence on external TSV artifacts for compare/trend/debug
+   workflows.
+3. Updated regression coverage:
+   - `test/Tools/circt-mut-report-matrix-skip-status.test`
+   - now validates both non-skip lane defaults and STOP_ON_FAIL skip lane
+     classification/reason rows.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-matrix-skip-status.test test/Tools/circt-mut-report-policy-matrix-stop-on-fail-*.test`: PASS (5/5)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (200/200)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-lane-skip-telemetry ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter 'rv_plic'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `opentitan/LEC`, AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 997 - February 11, 2026
 
 ### `circt-mut report`: Stop-On-Fail Compare/Trend Policy Bundles

@@ -7986,6 +7986,19 @@ static bool collectMatrixReport(
       rows.emplace_back((Twine(laneBase) + ".gate_status").str(),
                         lane.gateStatus.empty() ? std::string("-")
                                                 : lane.gateStatus);
+      bool laneIsSkip = lane.status == "SKIP" || lane.gateStatus == "SKIP";
+      bool laneIsStopOnFailSkip =
+          laneIsSkip && lane.configErrorCode == "STOP_ON_FAIL";
+      rows.emplace_back((Twine(laneBase) + ".is_skip").str(),
+                        laneIsSkip ? "1" : "0");
+      rows.emplace_back((Twine(laneBase) + ".is_stop_on_fail_skip").str(),
+                        laneIsStopOnFailSkip ? "1" : "0");
+      rows.emplace_back((Twine(laneBase) + ".skip_reason_code").str(),
+                        lane.configErrorCode.empty() ? std::string("-")
+                                                     : lane.configErrorCode);
+      rows.emplace_back((Twine(laneBase) + ".skip_reason").str(),
+                        lane.configErrorReason.empty() ? std::string("-")
+                                                       : lane.configErrorReason);
       rows.emplace_back((Twine(laneBase) + ".has_metrics").str(),
                         lane.hasMetrics ? "1" : "0");
       rows.emplace_back((Twine(laneBase) + ".prequalify_summary_present").str(),
