@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1048 - February 11, 2026
+
+### `circt-mut report`: Centralized Matrix Provenance Policy Rule Wiring
+
+1. Refactored matrix provenance policy rule assembly in
+   `tools/circt-mut/circt-mut.cpp` by introducing shared helpers for:
+   - provenance deficit-zero gates:
+     `matrix.prequalify_results_summary_present_missing_pair_file_lanes`,
+     `matrix.prequalify_results_summary_present_missing_log_file_lanes`
+   - provenance column-presence gates:
+     `matrix.prequalify_results_pair_file_column_present`,
+     `matrix.prequalify_results_log_file_column_present`
+2. Replaced duplicated rule blocks across matrix guard/strict policy profiles
+   with helper calls, keeping policy semantics unchanged while reducing
+   maintenance drift risk for future profile growth.
+3. This is a long-term governance tech-debt reduction slice focused on
+   correctness and maintainability in mutation/formal policy bundles.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused matrix provenance policy slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-mut-report-policy-matrix-provenance-guard-pass.test build-test/test/Tools/circt-mut-report-policy-matrix-provenance-guard-missing-columns-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-guard-strict-prequalify-provenance-fail.test build-test/test/Tools/circt-mut-report-cli-policy-mode-smoke-stop-on-fail.test`: PASS (4/4)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'circt-mut-.*\\.test'`: PASS (269/269)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-refactor ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty)
+  - FAIL/ERROR snapshot: `verilator-verification` BMC+LEC, `yosys/tests/sva` BMC+LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4Lite/axi4/i2s/i3c/jtag/spi/uart`
+
 ## Iteration 1047 - February 11, 2026
 
 ### `circt-mut report`: Resolved Policy Profile CSV Audit Key

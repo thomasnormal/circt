@@ -7543,6 +7543,24 @@ static bool appendUniqueRule(SmallVectorImpl<DeltaGateRule> &rules, StringRef ke
   return true;
 }
 
+static void appendMatrixPrequalifyProvenanceDeficitZeroRules(
+    ReportOptions &opts) {
+  appendUniqueRule(
+      opts.failIfValueGtRules,
+      "matrix.prequalify_results_summary_present_missing_pair_file_lanes", 0.0);
+  appendUniqueRule(
+      opts.failIfValueGtRules,
+      "matrix.prequalify_results_summary_present_missing_log_file_lanes", 0.0);
+}
+
+static void appendMatrixPrequalifyProvenanceColumnPresenceRules(
+    ReportOptions &opts) {
+  appendUniqueRule(opts.failIfValueLtRules,
+                   "matrix.prequalify_results_pair_file_column_present", 1.0);
+  appendUniqueRule(opts.failIfValueLtRules,
+                   "matrix.prequalify_results_log_file_column_present", 1.0);
+}
+
 static bool isMatrixPolicyMode(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
          mode == "trend-nightly" || mode == "trend-strict" ||
@@ -7662,14 +7680,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
     return true;
@@ -7695,14 +7706,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 5.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 5.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
@@ -7716,14 +7720,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
@@ -7737,14 +7734,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 5.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 5.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.skip_budget_rows_non_stop_on_fail", 0.0);
@@ -7760,14 +7750,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.skip_budget_rows_non_stop_on_fail", 0.0);
@@ -7783,14 +7766,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
@@ -7809,14 +7785,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
@@ -7842,14 +7811,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
@@ -7908,14 +7870,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
@@ -7947,14 +7902,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
@@ -8054,35 +8002,15 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return true;
   }
   if (profile == "formal-regression-matrix-provenance-guard") {
-    appendUniqueRule(opts.failIfValueLtRules,
-                     "matrix.prequalify_results_pair_file_column_present", 1.0);
-    appendUniqueRule(opts.failIfValueLtRules,
-                     "matrix.prequalify_results_log_file_column_present", 1.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceColumnPresenceRules(opts);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     return true;
   }
   if (profile == "formal-regression-matrix-provenance-strict") {
-    appendUniqueRule(opts.failIfValueLtRules,
-                     "matrix.prequalify_results_pair_file_column_present", 1.0);
-    appendUniqueRule(opts.failIfValueLtRules,
-                     "matrix.prequalify_results_log_file_column_present", 1.0);
+    appendMatrixPrequalifyProvenanceColumnPresenceRules(opts);
     appendUniqueRule(opts.failIfValueLtRules,
                      "matrix.prequalify_results_summary_present_lanes", 1.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
-        0.0);
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
-        0.0);
+    appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
     return true;
   }
   if (profile == "formal-regression-matrix-runtime-smoke") {
