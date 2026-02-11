@@ -7687,6 +7687,13 @@ static void appendMatrixNativeLifecycleStrictRules(ReportOptions &opts) {
                    "matrix.prequalify_results_columns_present", 1.0);
 }
 
+static void appendTrendHistoryQualityRules(ReportOptions &opts,
+                                           double minSelectedRuns) {
+  appendUniqueRule(opts.failIfValueLtRules, "trend.history_runs_selected",
+                   minSelectedRuns);
+  appendUniqueRule(opts.failIfValueLtRules, "trend.numeric_keys", 1.0);
+}
+
 static bool isMatrixPolicyMode(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
          mode == "trend-nightly" || mode == "trend-strict" ||
@@ -8223,12 +8230,17 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return true;
   }
   if (profile == "formal-regression-matrix-runtime-trend") {
+    appendTrendHistoryQualityRules(opts, 2.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules, "matrix.runtime_ns_avg",
                      60000000000.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules, "matrix.runtime_ns_max",
                      180000000000.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules, "matrix.runtime_ns_sum",
                      600000000000.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-trend-history-quality") {
+    appendTrendHistoryQualityRules(opts, 2.0);
     return true;
   }
   if (profile == "formal-regression-matrix-runtime-strict") {
@@ -8262,12 +8274,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
   if (profile == "formal-regression-matrix-composite-trend-nightly") {
     return applyComposite("formal-regression-matrix-lane-trend-nightly") &&
            applyComposite("formal-regression-matrix-runtime-trend") &&
-           applyComposite("formal-regression-matrix-lane-drift-nightly");
+           applyComposite("formal-regression-matrix-lane-drift-nightly") &&
+           applyComposite("formal-regression-matrix-trend-history-quality");
   }
   if (profile == "formal-regression-matrix-composite-trend-strict") {
     return applyComposite("formal-regression-matrix-lane-trend-strict") &&
            applyComposite("formal-regression-matrix-runtime-trend") &&
-           applyComposite("formal-regression-matrix-lane-drift-strict");
+           applyComposite("formal-regression-matrix-lane-drift-strict") &&
+           applyComposite("formal-regression-matrix-trend-history-quality");
   }
   if (profile == "formal-regression-matrix-composite-stop-on-fail-smoke") {
     return applyComposite("formal-regression-matrix-stop-on-fail-guard-smoke") &&
@@ -8291,14 +8305,16 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return applyComposite("formal-regression-matrix-stop-on-fail-trend") &&
            applyComposite("formal-regression-matrix-lane-trend-nightly") &&
            applyComposite("formal-regression-matrix-runtime-trend") &&
-           applyComposite("formal-regression-matrix-lane-drift-nightly");
+           applyComposite("formal-regression-matrix-lane-drift-nightly") &&
+           applyComposite("formal-regression-matrix-trend-history-quality");
   }
   if (profile ==
       "formal-regression-matrix-composite-stop-on-fail-trend-strict") {
     return applyComposite("formal-regression-matrix-stop-on-fail-trend") &&
            applyComposite("formal-regression-matrix-lane-trend-strict") &&
            applyComposite("formal-regression-matrix-runtime-trend") &&
-           applyComposite("formal-regression-matrix-lane-drift-strict");
+           applyComposite("formal-regression-matrix-lane-drift-strict") &&
+           applyComposite("formal-regression-matrix-trend-history-quality");
   }
   error = (Twine("circt-mut report: unknown --policy-profile value: ") + profile +
            " (expected formal-regression-basic|formal-regression-trend|"
@@ -8328,6 +8344,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-runtime-smoke|"
            "formal-regression-matrix-runtime-nightly|"
            "formal-regression-matrix-runtime-trend|"
+           "formal-regression-matrix-trend-history-quality|"
            "formal-regression-matrix-runtime-strict|"
            "formal-regression-matrix-composite-smoke|"
            "formal-regression-matrix-composite-nightly|"
