@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1000 - February 11, 2026
+
+### `circt-mut report`: Config-Driven Smoke/Nightly Policy Defaults
+
+1. Extended `runNativeReport` in `tools/circt-mut/circt-mut.cpp` to support
+   report config policy-mode mapping when no explicit policy profiles are set:
+   - `[report] policy_mode = "smoke"` maps to
+     `formal-regression-matrix-guard-smoke`
+   - `[report] policy_mode = "nightly"` maps to
+     `formal-regression-matrix-guard-nightly`
+   - optional `[report] policy_stop_on_fail = true` upgrades each mode to the
+     corresponding stop-on-fail guard profile.
+2. Added strict config validation/diagnostics for:
+   - `policy_stop_on_fail` used without `policy_mode`
+   - invalid `policy_stop_on_fail` boolean encodings
+   - invalid `policy_mode` values (expected `smoke|nightly`)
+   - `policy_mode` used with non-matrix report modes.
+3. Added report regression coverage:
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-smoke-stop-on-fail.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-nightly-default.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test`
+   - `test/Tools/circt-mut-report-policy-config-stop-on-fail-requires-mode.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-requires-matrix-mode.test`
+4. Landed missing skip-budget artifact tests (tech debt cleanup):
+   - `test/Tools/circt-mut-report-skip-budget-out.test`
+   - `test/Tools/circt-mut-report-skip-budget-out-mode-error.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-policy-config-*.test`: PASS (8/8)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-skip-budget-out*.test`: PASS (2/2)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (207/207)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-mode-20260211 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter 'aes'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 999 - February 11, 2026
 
 ### `circt-mut report`: Stop-On-Fail Guard Profiles for Smoke/Nightly

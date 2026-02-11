@@ -9009,6 +9009,57 @@ static int runNativeReport(const ReportOptions &opts) {
           it != cfg.report.end() && !it->second.empty())
         parseProfileCSV(it->second);
     }
+    if (policyProfiles.empty()) {
+      auto policyModeIt = cfg.report.find("policy_mode");
+      auto policyStopOnFailIt = cfg.report.find("policy_stop_on_fail");
+      bool hasPolicyMode =
+          policyModeIt != cfg.report.end() && !policyModeIt->second.empty();
+      bool hasPolicyStopOnFail = policyStopOnFailIt != cfg.report.end() &&
+                                 !policyStopOnFailIt->second.empty();
+      if (hasPolicyStopOnFail && !hasPolicyMode) {
+        errs() << "circt-mut report: [report] key 'policy_stop_on_fail' "
+                  "requires 'policy_mode'\n";
+        return 1;
+      }
+      if (hasPolicyMode) {
+        std::string mode = StringRef(policyModeIt->second).trim().lower();
+        bool stopOnFail = false;
+        if (hasPolicyStopOnFail) {
+          StringRef raw = StringRef(policyStopOnFailIt->second).trim().lower();
+          if (raw == "1" || raw == "true" || raw == "yes" || raw == "on")
+            stopOnFail = true;
+          else if (raw == "0" || raw == "false" || raw == "no" ||
+                   raw == "off")
+            stopOnFail = false;
+          else {
+            errs() << "circt-mut report: invalid [report] key "
+                      "'policy_stop_on_fail' value '"
+                   << policyStopOnFailIt->second
+                   << "' (expected 1|0|true|false|yes|no|on|off)\n";
+            return 1;
+          }
+        }
+        if (opts.mode != "matrix" && opts.mode != "all") {
+          errs() << "circt-mut report: [report] key 'policy_mode' requires "
+                    "--mode matrix or --mode all\n";
+          return 1;
+        }
+        if (mode == "smoke") {
+          policyProfiles.push_back(
+              stopOnFail ? "formal-regression-matrix-stop-on-fail-guard-smoke"
+                         : "formal-regression-matrix-guard-smoke");
+        } else if (mode == "nightly") {
+          policyProfiles.push_back(
+              stopOnFail ? "formal-regression-matrix-stop-on-fail-guard-nightly"
+                         : "formal-regression-matrix-guard-nightly");
+        } else {
+          errs() << "circt-mut report: invalid [report] key 'policy_mode' "
+                    "value '"
+                 << policyModeIt->second << "' (expected smoke|nightly)\n";
+          return 1;
+        }
+      }
+    }
   }
   if (!policyProfiles.empty()) {
     SmallVector<std::string, 4> uniqueProfiles;
