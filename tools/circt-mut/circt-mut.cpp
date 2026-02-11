@@ -239,11 +239,13 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-composite-smoke|\n";
   os << "                           formal-regression-matrix-composite-nightly|\n";
   os << "                           formal-regression-matrix-composite-strict|\n";
+  os << "                           formal-regression-matrix-composite-native-strict|\n";
   os << "                           formal-regression-matrix-composite-trend-nightly|\n";
   os << "                           formal-regression-matrix-composite-trend-strict|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-smoke|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-nightly|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-strict|\n";
+  os << "                           formal-regression-matrix-composite-stop-on-fail-native-strict|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-trend-nightly|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-trend-strict\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
@@ -7596,7 +7598,6 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                                            StringRef errorPrefix) {
   std::string policyProfile;
   std::string provenanceProfile;
-  std::string lifecycleProfile;
   if (mode == "smoke") {
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-smoke"
@@ -7630,10 +7631,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     policyProfile = "formal-regression-matrix-native-lifecycle-strict";
   } else if (mode == "native-strict") {
     policyProfile = stopOnFail
-                        ? "formal-regression-matrix-composite-stop-on-fail-strict"
-                        : "formal-regression-matrix-composite-strict";
-    provenanceProfile = "formal-regression-matrix-provenance-strict";
-    lifecycleProfile = "formal-regression-matrix-native-lifecycle-strict";
+                        ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
+                        : "formal-regression-matrix-composite-native-strict";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
              (Twine("' (expected ") + kMatrixPolicyModeList + ")"))
@@ -7643,8 +7642,6 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
   out.push_back(policyProfile);
   if (!provenanceProfile.empty())
     out.push_back(provenanceProfile);
-  if (!lifecycleProfile.empty())
-    out.push_back(lifecycleProfile);
   return true;
 }
 
@@ -8102,6 +8099,11 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return applyComposite("formal-regression-matrix-full-lanes-strict") &&
            applyComposite("formal-regression-matrix-runtime-strict");
   }
+  if (profile == "formal-regression-matrix-composite-native-strict") {
+    return applyComposite("formal-regression-matrix-composite-strict") &&
+           applyComposite("formal-regression-matrix-provenance-strict") &&
+           applyComposite("formal-regression-matrix-native-lifecycle-strict");
+  }
   if (profile == "formal-regression-matrix-composite-trend-nightly") {
     return applyComposite("formal-regression-matrix-lane-trend-nightly") &&
            applyComposite("formal-regression-matrix-runtime-trend") &&
@@ -8123,6 +8125,11 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
   if (profile == "formal-regression-matrix-composite-stop-on-fail-strict") {
     return applyComposite("formal-regression-matrix-stop-on-fail-strict") &&
            applyComposite("formal-regression-matrix-runtime-strict");
+  }
+  if (profile == "formal-regression-matrix-composite-stop-on-fail-native-strict") {
+    return applyComposite("formal-regression-matrix-composite-stop-on-fail-strict") &&
+           applyComposite("formal-regression-matrix-provenance-strict") &&
+           applyComposite("formal-regression-matrix-native-lifecycle-strict");
   }
   if (profile ==
       "formal-regression-matrix-composite-stop-on-fail-trend-nightly") {
@@ -8168,11 +8175,13 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-composite-smoke|"
            "formal-regression-matrix-composite-nightly|"
            "formal-regression-matrix-composite-strict|"
+           "formal-regression-matrix-composite-native-strict|"
            "formal-regression-matrix-composite-trend-nightly|"
            "formal-regression-matrix-composite-trend-strict|"
            "formal-regression-matrix-composite-stop-on-fail-smoke|"
            "formal-regression-matrix-composite-stop-on-fail-nightly|"
            "formal-regression-matrix-composite-stop-on-fail-strict|"
+           "formal-regression-matrix-composite-stop-on-fail-native-strict|"
            "formal-regression-matrix-composite-stop-on-fail-trend-nightly|"
            "formal-regression-matrix-composite-stop-on-fail-trend-strict)")
               .str();

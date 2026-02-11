@@ -7,8 +7,6 @@
 // RUN: FileCheck %s < %t/out.txt
 //
 // CHECK: policy.mode{{[[:space:]]}}native-strict
-// CHECK: policy.profile_count{{[[:space:]]}}3
-// CHECK: policy.profile_1{{[[:space:]]}}formal-regression-matrix-composite-stop-on-fail-strict
-// CHECK: policy.profile_2{{[[:space:]]}}formal-regression-matrix-provenance-strict
-// CHECK: policy.profile_3{{[[:space:]]}}formal-regression-matrix-native-lifecycle-strict
+// CHECK: policy.profile_count{{[[:space:]]}}1
+// CHECK: policy.profile_1{{[[:space:]]}}formal-regression-matrix-composite-stop-on-fail-native-strict
 // CHECK: value_gate.status{{[[:space:]]}}pass

@@ -5,7 +5,9 @@
 // CHECK-SAME: formal-regression-matrix-provenance-strict
 // CHECK-SAME: formal-regression-matrix-native-lifecycle-strict
 // CHECK-SAME: formal-regression-matrix-runtime-strict
+// CHECK-SAME: formal-regression-matrix-composite-native-strict
 // CHECK-SAME: formal-regression-matrix-composite-trend-strict
 // CHECK-SAME: formal-regression-matrix-composite-stop-on-fail-strict
+// CHECK-SAME: formal-regression-matrix-composite-stop-on-fail-native-strict
 // CHECK-SAME: formal-regression-matrix-composite-stop-on-fail-trend-nightly
 // CHECK-SAME: formal-regression-matrix-composite-stop-on-fail-trend-strict
