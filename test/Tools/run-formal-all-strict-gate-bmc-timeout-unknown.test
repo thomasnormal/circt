@@ -9,7 +9,7 @@
 // RUN: chmod +x %t/utils/run_sv_tests_circt_bmc.sh
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-new --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/BMC$" --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --baseline-file %t/formal-baselines.tsv --fail-on-new-bmc-timeout-cases --fail-on-new-bmc-unknown-cases' 2>&1 | FileCheck %s --check-prefix=GATE
 //
-// BASE: sv-tests{{[[:space:]]+}}BMC{{.*}}bmc_timeout_cases=1{{[[:space:]]+}}bmc_unknown_cases=0
+// BASE: sv-tests{{[[:space:]]+}}BMC{{.*}}bmc_timeout_cases=1{{.*}}bmc_unknown_cases=0
 // GATE: strict gate failures:
 // GATE: sv-tests BMC: bmc_timeout_cases increased (1 -> 2, window=1)
 // GATE: sv-tests BMC: bmc_unknown_cases increased (0 -> 1, window=1)

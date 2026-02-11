@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1085 - February 11, 2026
+
+### Formal Driver: BMC Timeout Case-ID Drift Gate
+
+1. Added BMC timeout identity telemetry in `utils/run_formal_all.sh`:
+   - `summarize_bmc_case_file()` now emits:
+     - `bmc_timeout_case_ids`
+2. Added strict-gate option:
+   - `--fail-on-new-bmc-timeout-case-ids`
+   - fails when timeout case IDs increase vs baseline for `BMC*` lanes.
+3. Strict-gate default hardening:
+   - `--strict-gate` now enables BMC timeout case-ID drift checks.
+4. Baseline persistence hardening:
+   - baseline TSV now stores `bmc_timeout_case_ids` with legacy-row
+     compatibility.
+5. Added regression lock:
+   - `test/Tools/run-formal-all-strict-gate-bmc-timeout-case-ids.test`
+6. Updated affected regression expectation/help surface:
+   - `test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test`
+   - `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-timeout-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-class-cases.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-class-override.test`
+  - PASS (6/6)
+- External focused sanity:
+  - `run_formal_all.sh` on `/home/thomas-ahle/yosys/tests/sva` BMC filtered
+    slice (`basic00|basic01`) with explicit `build-test/bin` tools: PASS and
+    summary now includes `bmc_timeout_case_ids=`.
+
 ## Iteration 1084 - February 11, 2026
 
 ### `circt-mut` Policy-Mode Closure: Native Strict + External Formal
