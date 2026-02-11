@@ -356,7 +356,9 @@ for suite in "${suites[@]}"; do
 
     bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
       "--module" "$top_for_file")
-    if [[ "$BMC_SMOKE_ONLY" != "1" ]]; then
+    if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
+      bmc_args+=("--emit-mlir")
+    else
       if [[ "$BMC_RUN_SMTLIB" == "1" ]]; then
         bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
       else
