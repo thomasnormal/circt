@@ -120,7 +120,7 @@ static void printInitHelp(raw_ostream &os) {
   os << "                           Report policy mode for generated config\n";
   os << "                           (smoke|nightly|strict|trend-nightly|trend-strict|\n";
   os << "                            provenance-guard|provenance-strict|\n";
-  os << "                            native-lifecycle-strict,\n";
+  os << "                            native-lifecycle-strict|native-strict,\n";
   os << "                            default: smoke)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           Enable stop-on-fail report guard profile in\n";
@@ -175,7 +175,7 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --report-policy-mode MODE\n";
   os << "                           smoke|nightly|strict|trend-nightly|trend-strict|\n";
   os << "                           provenance-guard|provenance-strict|\n";
-  os << "                           native-lifecycle-strict\n";
+  os << "                           native-lifecycle-strict|native-strict\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -205,7 +205,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --policy-profile NAME    Apply built-in report policy profile\n";
   os << "  --policy-mode MODE       smoke|nightly|strict|trend-nightly|trend-strict|\n";
   os << "                           provenance-guard|provenance-strict|\n";
-  os << "                           native-lifecycle-strict\n";
+  os << "                           native-lifecycle-strict|native-strict\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -5748,7 +5748,7 @@ static std::string resolveProjectFilePath(StringRef projectDir, StringRef file) 
 
 static constexpr StringLiteral kMatrixPolicyModeList =
     "smoke|nightly|strict|trend-nightly|trend-strict|provenance-guard|"
-    "provenance-strict|native-lifecycle-strict";
+    "provenance-strict|native-lifecycle-strict|native-strict";
 
 static bool isMatrixPolicyMode(StringRef mode);
 
@@ -7582,7 +7582,7 @@ static bool isMatrixPolicyMode(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
          mode == "trend-nightly" || mode == "trend-strict" ||
          mode == "provenance-guard" || mode == "provenance-strict" ||
-         mode == "native-lifecycle-strict";
+         mode == "native-lifecycle-strict" || mode == "native-strict";
 }
 
 static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
@@ -7596,6 +7596,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                                            StringRef errorPrefix) {
   std::string policyProfile;
   std::string provenanceProfile;
+  std::string lifecycleProfile;
   if (mode == "smoke") {
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-smoke"
@@ -7627,6 +7628,12 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     policyProfile = "formal-regression-matrix-provenance-strict";
   } else if (mode == "native-lifecycle-strict") {
     policyProfile = "formal-regression-matrix-native-lifecycle-strict";
+  } else if (mode == "native-strict") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-strict"
+                        : "formal-regression-matrix-composite-strict";
+    provenanceProfile = "formal-regression-matrix-provenance-strict";
+    lifecycleProfile = "formal-regression-matrix-native-lifecycle-strict";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
              (Twine("' (expected ") + kMatrixPolicyModeList + ")"))
@@ -7636,6 +7643,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
   out.push_back(policyProfile);
   if (!provenanceProfile.empty())
     out.push_back(provenanceProfile);
+  if (!lifecycleProfile.empty())
+    out.push_back(lifecycleProfile);
   return true;
 }
 

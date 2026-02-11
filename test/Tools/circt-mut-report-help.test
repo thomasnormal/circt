@@ -20,6 +20,7 @@
 // CHECK: provenance-guard
 // CHECK: provenance-strict
 // CHECK: native-lifecycle-strict
+// CHECK: native-strict
 // CHECK: --policy-stop-on-fail
 // CHECK: formal-regression-matrix-guard
 // CHECK: formal-regression-matrix-trend-guard
