@@ -1,5 +1,5 @@
 // RUN: not circt-mut init --report-policy-mode weird 2>&1 | FileCheck %s --check-prefix=MODE
 // RUN: not circt-mut init --report-policy-stop-on-fail maybe 2>&1 | FileCheck %s --check-prefix=STOP
 //
-// MODE: circt-mut init: invalid --report-policy-mode value: weird (expected smoke|nightly|strict|trend-nightly|trend-strict)
+// MODE: circt-mut init: invalid --report-policy-mode value: weird (expected smoke|nightly|strict|trend-nightly|trend-strict|provenance-guard|provenance-strict)
 // STOP: circt-mut init: invalid --report-policy-stop-on-fail value: maybe (expected 1|0|true|false|yes|no|on|off)

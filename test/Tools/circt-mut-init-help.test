@@ -11,5 +11,7 @@
 // CHECK: --report-policy-mode MODE
 // CHECK: trend-nightly
 // CHECK: trend-strict
+// CHECK: provenance-guard
+// CHECK: provenance-strict
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --force

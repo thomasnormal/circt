@@ -1,5 +1,97 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1039 - February 11, 2026
+
+### `circt-mut` Policy-Mode Expansion: Provenance-Only Modes
+
+1. Extended matrix policy-mode handling in `tools/circt-mut/circt-mut.cpp`
+   to accept:
+   - `provenance-guard`
+   - `provenance-strict`
+2. Added mode mapping support in policy-mode profile expansion:
+   - `provenance-guard` -> `formal-regression-matrix-provenance-guard`
+   - `provenance-strict` -> `formal-regression-matrix-provenance-strict`
+   without auto-appending composite policy profiles.
+3. Updated validation/help surfaces for `init`, `run`, and `report`:
+   - accepted mode lists now include both provenance modes
+   - invalid-mode diagnostics now report the expanded mode set.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-provenance-strict-pass.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-provenance-strict.test`
+   - updated invalid/help tests for mode list expansion.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused policy-mode/help/invalid slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-init-help|circt-mut-report-help|circt-mut-init-report-policy-invalid|circt-mut-run-with-report-cli-policy-mode-invalid|circt-mut-report-cli-policy-mode-invalid|circt-mut-report-policy-config-matrix-mode-invalid|circt-mut-run-with-report-cli-policy-mode-provenance-strict|circt-mut-report-cli-policy-mode-provenance-strict-pass|circt-mut-run-with-report-cli-policy-mode-stop-on-fail|circt-mut-run-with-report-cli-policy-mode-strict|circt-mut-run-with-report-cli-policy-mode-trend-nightly|circt-mut-run-with-report-config-policy-mode-stop-on-fail'`: PASS (12/12)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-.*\\.test'`: PASS (265/265)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-mode-provenance ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC+LEC, `yosys/tests/sva` BMC+LEC, `opentitan` LEC, AVIP compile `axi4Lite/spi/uart`
+
+## Iteration 1038 - February 11, 2026
+
+### Abort→Failure() Propagation Audit
+
+Audited and fixed 8 sites in `LLHDProcessInterpreter.cpp` where
+timeout/abort during function execution produced misleading diagnostics
+("Failed in func body", "virtual method call failed", etc.) instead of
+clean shutdown.
+
+**Fixed sites:**
+
+1. `interpretFuncBody` (~line 13794): Guard "Failed in func body" diagnostic
+   — return `success()` with `halted=true` on `terminationRequested ||
+   isAbortRequested()`.
+2. `interpretLLVMFuncBody` (~line 24477): Guard "Failed in LLVM func body"
+   diagnostic — same pattern.
+3. `interpretFuncCall` (~line 13040): Absorb `failure()` from
+   `interpretFuncBody` when process is `halted` by abort/termination.
+4. `interpretLLVMCall` (~line 23552): Absorb `failure()` from
+   `interpretLLVMFuncBody` when process is `halted`.
+5. Call stack resume path (~line 4289): Finalize cleanly without misleading
+   "failed during resume" debug log when `state.halted`.
+6. Cross-dialect call sites (~lines 16534, 16630): Two `interpretFuncBody`
+   calls inside `interpretLLVMCall` — absorb failure if `halted`.
+
+Previously fixed (from prior session):
+- `interpretFuncBody:13642` — `terminationRequested` → `success()` + `halted=true`
+- `interpretFuncBody:13702` — `isAbortRequested()` → `success()`
+- `emitVtableWarning:6055` — suppressed during abort/termination
+- Process main loop `4431-4443` — `break` (clean exit)
+- `interpretLLVMFuncBody` — `terminationRequested` early-exit + `isAbortRequested()` → `success()`
+
+### Tests and Validation
+
+- Build: `ninja -C build-test circt-sim`: PASS
+- circt-sim lit: 224/225 pass (1 pre-existing native stack overflow in
+  `call-depth-protection.mlir` — unrelated to these changes)
+- `timeout-no-spurious-vtable-warning.mlir`: PASS (the specific regression test)
+- APB AVIP dual-top `.mlir` not available on disk for verification
+
+### Call Depth Protection Fix
+
+Lowered `maxCallDepth` from 200 to 100 across all 6 check sites in
+`LLHDProcessInterpreter.cpp`. The previous limit of 200 caused native C++
+stack overflow because each recursive call chains through
+`interpretFuncCall` → `interpretFuncBody` → `interpretOperation` (large
+stack frames). With 200 recursive calls, the 8MB default thread stack is
+exhausted before the virtual call depth check triggers.
+
+The new limit of 100 is safe for UVM (which rarely exceeds 50-70 call depth)
+while preventing native stack overflow. Updated
+`test/Tools/circt-sim/call-depth-protection.mlir` to recurse to depth 150
+(exceeds limit of 100, caught by protection).
+
+### sv-tests Results File Stale
+
+Verified that the 2 tests listed as `FAIL` in `sv-tests-sim-results.txt`
+(`18.5.6--implication_0` and `18.7--in-line-constraints--randomize_3`) both
+pass with the current build. The results file is stale and needs re-running.
+
 ## Iteration 1037 - February 11, 2026
 
 ### BMC Semantic Closure Continuation: Disable-IFF/Local-Var Hardening
