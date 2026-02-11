@@ -110,6 +110,12 @@ static void printInitHelp(raw_ostream &os) {
   os << "  --lanes-tsv FILE         Matrix lane manifest path (default: lanes.tsv)\n";
   os << "  --cover-work-dir DIR     Cover output root (default: out/cover)\n";
   os << "  --matrix-out-dir DIR     Matrix output root (default: out/matrix)\n";
+  os << "  --report-policy-mode MODE\n";
+  os << "                           Report policy mode for generated config\n";
+  os << "                           (smoke|nightly, default: smoke)\n";
+  os << "  --report-policy-stop-on-fail BOOL\n";
+  os << "                           Enable stop-on-fail report guard profile in\n";
+  os << "                           generated config (default: true)\n";
   os << "  --force                  Overwrite generated files if present\n";
   os << "  -h, --help               Show help\n\n";
   os << "Generated files:\n";
@@ -5382,6 +5388,8 @@ struct InitOptions {
   std::string lanesTSV = "lanes.tsv";
   std::string coverWorkDir = "out/cover";
   std::string matrixOutDir = "out/matrix";
+  std::string reportPolicyMode = "smoke";
+  bool reportPolicyStopOnFail = true;
   bool force = false;
 };
 
@@ -5527,6 +5535,44 @@ static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
       result.opts.matrixOutDir = v->str();
       continue;
     }
+    if (arg == "--report-policy-mode" ||
+        arg.starts_with("--report-policy-mode=")) {
+      auto v = consumeValue(i, arg, "--report-policy-mode");
+      if (!v)
+        return result;
+      std::string mode = v->trim().lower();
+      if (mode != "smoke" && mode != "nightly") {
+        result.error =
+            (Twine("circt-mut init: invalid --report-policy-mode value: ") +
+             *v + " (expected smoke|nightly)")
+                .str();
+        return result;
+      }
+      result.opts.reportPolicyMode = std::move(mode);
+      continue;
+    }
+    if (arg == "--report-policy-stop-on-fail" ||
+        arg.starts_with("--report-policy-stop-on-fail=")) {
+      auto v = consumeValue(i, arg, "--report-policy-stop-on-fail");
+      if (!v)
+        return result;
+      std::string lowered = v->trim().lower();
+      if (lowered == "1" || lowered == "true" || lowered == "yes" ||
+          lowered == "on") {
+        result.opts.reportPolicyStopOnFail = true;
+        continue;
+      }
+      if (lowered == "0" || lowered == "false" || lowered == "no" ||
+          lowered == "off") {
+        result.opts.reportPolicyStopOnFail = false;
+        continue;
+      }
+      result.error = (Twine("circt-mut init: invalid --report-policy-stop-on-fail "
+                            "value: ") +
+                      *v + " (expected 1|0|true|false|yes|no|on|off)")
+                         .str();
+      return result;
+    }
 
     if (arg.starts_with("-")) {
       result.error = (Twine("circt-mut init: unknown option: ") + arg).str();
@@ -5583,6 +5629,10 @@ static int runNativeInit(const InitOptions &opts) {
   cfg << "default_formal_global_propagate_circt_chain = \"auto\"\n";
   cfg << "default_formal_global_propagate_timeout_seconds = 60\n\n";
   cfg << "[report]\n";
+  cfg << "policy_mode = \"" << escapeTomlBasicString(opts.reportPolicyMode)
+      << "\"\n";
+  cfg << "policy_stop_on_fail = "
+      << (opts.reportPolicyStopOnFail ? "true" : "false") << "\n";
   cfg << "append_history = \"out/report-history.tsv\"\n";
   cfg << "history_max_runs = 200\n";
   cfg << "history_bootstrap = true\n";

@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: circt-mut init --project-dir %t/proj --report-policy-mode nightly --report-policy-stop-on-fail false > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=CFG < %t/proj/circt-mut.toml
+//
+// LOG: Initialized circt-mut project:
+// LOG: Config: {{.*}}circt-mut.toml
+//
+// CFG: [report]
+// CFG: policy_mode = "nightly"
+// CFG: policy_stop_on_fail = false

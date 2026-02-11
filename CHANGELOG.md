@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1001 - February 11, 2026
+
+### `circt-mut init`: Report Policy Mode Defaults for Generated Campaigns
+
+1. Extended `circt-mut init` in `tools/circt-mut/circt-mut.cpp` with explicit
+   report policy template controls:
+   - `--report-policy-mode smoke|nightly` (default: `smoke`)
+   - `--report-policy-stop-on-fail BOOL` (default: `true`)
+2. `circt-mut init` now emits these defaults directly into generated
+   `circt-mut.toml`:
+   - `[report] policy_mode = "smoke|nightly"`
+   - `[report] policy_stop_on_fail = true|false`
+   This wires default smoke/nightly governance selection at campaign bootstrap
+   time, so downstream `circt-mut report` runs inherit policy intent without
+   mandatory CLI profile flags.
+3. Added strict CLI validation for the new init options:
+   - invalid mode values reject with `expected smoke|nightly`
+   - invalid stop-on-fail values reject with
+     `expected 1|0|true|false|yes|no|on|off`
+4. Added/updated regression coverage:
+   - `test/Tools/circt-mut-init-basic.test` (default report policy lines)
+   - `test/Tools/circt-mut-init-help.test` (new options shown)
+   - `test/Tools/circt-mut-init-report-policy-override.test` (override path)
+   - `test/Tools/circt-mut-init-report-policy-invalid.test` (validation path)
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-init-*.test test/Tools/circt-mut-report-policy-config-*.test`: PASS (13/13)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (209/209)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-init-policy-template-20260211 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter 'aes'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1000 - February 11, 2026
 
 ### `circt-mut report`: Config-Driven Smoke/Nightly Policy Defaults
