@@ -197,6 +197,9 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --trend-history FILE     Compute trend summary from history TSV\n";
   os << "  --trend-window N         Use latest N history runs for trends (0=all)\n";
   os << "  --policy-profile NAME    Apply built-in report policy profile\n";
+  os << "  --policy-mode MODE       smoke|nightly|strict (maps to report policy profile)\n";
+  os << "  --policy-stop-on-fail BOOL\n";
+  os << "                           1|0|true|false|yes|no|on|off\n";
   os << "                           formal-regression-basic|formal-regression-trend|\n";
   os << "                           formal-regression-matrix-basic|\n";
   os << "                           formal-regression-matrix-trend|\n";
@@ -6039,6 +6042,11 @@ static void appendOptionalConfigArg(SmallVectorImpl<std::string> &args,
   args.push_back(it->second);
 }
 
+static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
+                                           SmallVectorImpl<std::string> &out,
+                                           std::string &error,
+                                           StringRef errorPrefix);
+
 static bool appendOptionalConfigBoolFlagArg(
     SmallVectorImpl<std::string> &args, const StringMap<std::string> &sectionMap,
     StringRef key, StringRef optionFlag, StringRef sectionName,
@@ -6562,31 +6570,17 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
           return 1;
         }
         bool stop = stopOnFail.value_or(false);
-        std::string policyProfile;
-        std::string runtimePolicyProfile;
-        if (mode == "smoke") {
-          policyProfile = stop
-                              ? "formal-regression-matrix-stop-on-fail-guard-smoke"
-                              : "formal-regression-matrix-guard-smoke";
-          runtimePolicyProfile = "formal-regression-matrix-runtime-smoke";
-        } else if (mode == "nightly") {
-          policyProfile = stop
-                              ? "formal-regression-matrix-stop-on-fail-guard-nightly"
-                              : "formal-regression-matrix-guard-nightly";
-          runtimePolicyProfile = "formal-regression-matrix-runtime-nightly";
-        } else if (mode == "strict") {
-          policyProfile = stop ? "formal-regression-matrix-stop-on-fail-strict"
-                               : "formal-regression-matrix-full-lanes-strict";
-          runtimePolicyProfile = "formal-regression-matrix-runtime-strict";
-        } else {
-          errs() << "circt-mut run: invalid report policy mode value '" << mode
-                 << "' (expected smoke|nightly|strict)\n";
+        SmallVector<std::string, 2> mappedProfiles;
+        std::string modeError;
+        if (!appendMatrixPolicyModeProfiles(mode, stop, mappedProfiles,
+                                            modeError, "circt-mut run:")) {
+          errs() << modeError << "\n";
           return 1;
         }
-        reportArgsOwned.push_back("--policy-profile");
-        reportArgsOwned.push_back(policyProfile);
-        reportArgsOwned.push_back("--policy-profile");
-        reportArgsOwned.push_back(runtimePolicyProfile);
+        for (const auto &profile : mappedProfiles) {
+          reportArgsOwned.push_back("--policy-profile");
+          reportArgsOwned.push_back(profile);
+        }
       }
     }
 
@@ -7148,6 +7142,8 @@ struct ReportOptions {
   std::string trendHistoryFile;
   uint64_t trendWindowRuns = 0;
   SmallVector<std::string, 4> policyProfiles;
+  std::string policyMode;
+  std::optional<bool> policyStopOnFail;
   std::string appendHistoryFile;
   SmallVector<DeltaGateRule, 8> failIfValueGtRules;
   SmallVector<DeltaGateRule, 8> failIfValueLtRules;
@@ -7370,6 +7366,36 @@ static bool appendUniqueRule(SmallVectorImpl<DeltaGateRule> &rules, StringRef ke
   rule.key = key.str();
   rule.threshold = threshold;
   rules.push_back(rule);
+  return true;
+}
+
+static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
+                                           SmallVectorImpl<std::string> &out,
+                                           std::string &error,
+                                           StringRef errorPrefix) {
+  std::string policyProfile;
+  std::string runtimePolicyProfile;
+  if (mode == "smoke") {
+    policyProfile = stopOnFail ? "formal-regression-matrix-stop-on-fail-guard-smoke"
+                               : "formal-regression-matrix-guard-smoke";
+    runtimePolicyProfile = "formal-regression-matrix-runtime-smoke";
+  } else if (mode == "nightly") {
+    policyProfile =
+        stopOnFail ? "formal-regression-matrix-stop-on-fail-guard-nightly"
+                   : "formal-regression-matrix-guard-nightly";
+    runtimePolicyProfile = "formal-regression-matrix-runtime-nightly";
+  } else if (mode == "strict") {
+    policyProfile = stopOnFail ? "formal-regression-matrix-stop-on-fail-strict"
+                               : "formal-regression-matrix-full-lanes-strict";
+    runtimePolicyProfile = "formal-regression-matrix-runtime-strict";
+  } else {
+    error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
+             "' (expected smoke|nightly|strict)")
+                .str();
+    return false;
+  }
+  out.push_back(policyProfile);
+  out.push_back(runtimePolicyProfile);
   return true;
 }
 
@@ -9664,6 +9690,21 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
     }
     return args[++index];
   };
+  auto parseBoolValue = [&](StringRef value, StringRef optName)
+      -> std::optional<bool> {
+    StringRef lowered = value.trim().lower();
+    if (lowered == "1" || lowered == "true" || lowered == "yes" ||
+        lowered == "on")
+      return true;
+    if (lowered == "0" || lowered == "false" || lowered == "no" ||
+        lowered == "off")
+      return false;
+    result.error =
+        (Twine("circt-mut report: invalid ") + optName + " value: " + value +
+         " (expected 1|0|true|false|yes|no|on|off)")
+            .str();
+    return std::nullopt;
+  };
 
   for (size_t i = 0; i < args.size(); ++i) {
     StringRef arg = args[i];
@@ -9776,6 +9817,32 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       if (!v)
         return result;
       result.opts.policyProfiles.push_back(v->str());
+      continue;
+    }
+    if (arg == "--policy-mode" || arg.starts_with("--policy-mode=")) {
+      auto v = consumeValue(i, arg, "--policy-mode");
+      if (!v)
+        return result;
+      std::string mode = StringRef(*v).trim().lower();
+      if (mode != "smoke" && mode != "nightly" && mode != "strict") {
+        result.error =
+            (Twine("circt-mut report: invalid --policy-mode value: ") + *v +
+             " (expected smoke|nightly|strict)")
+                .str();
+        return result;
+      }
+      result.opts.policyMode = mode;
+      continue;
+    }
+    if (arg == "--policy-stop-on-fail" ||
+        arg.starts_with("--policy-stop-on-fail=")) {
+      auto v = consumeValue(i, arg, "--policy-stop-on-fail");
+      if (!v)
+        return result;
+      auto parsed = parseBoolValue(*v, "--policy-stop-on-fail");
+      if (!parsed)
+        return result;
+      result.opts.policyStopOnFail = *parsed;
       continue;
     }
     if (arg == "--append-history" || arg.starts_with("--append-history=")) {
@@ -9910,6 +9977,18 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
                    "or --history";
     return result;
   }
+  if (result.opts.policyStopOnFail.has_value() &&
+      result.opts.policyMode.empty()) {
+    result.error =
+        "circt-mut report: --policy-stop-on-fail requires --policy-mode";
+    return result;
+  }
+  if (!result.opts.policyMode.empty() &&
+      result.opts.mode != "matrix" && result.opts.mode != "all") {
+    result.error = "circt-mut report: --policy-mode requires --mode matrix or "
+                   "--mode all";
+    return result;
+  }
   if (!result.opts.historyFile.empty()) {
     if (result.opts.compareFile.empty() &&
         result.opts.compareHistoryLatestFile.empty())
@@ -9956,6 +10035,8 @@ static int runNativeReport(const ReportOptions &opts) {
   uint64_t historyMaxRuns = effectiveOpts.historyMaxRuns;
   bool historyBootstrap = effectiveOpts.historyBootstrap;
   SmallVector<std::string, 4> policyProfiles = effectiveOpts.policyProfiles;
+  bool hasCLIPolicyMode = !effectiveOpts.policyMode.empty();
+  bool hasCLIPolicyProfile = !effectiveOpts.policyProfiles.empty();
   std::optional<bool> failOnPrequalifyDriftOverride;
   if (effectiveOpts.failOnPrequalifyDriftOverrideSet)
     failOnPrequalifyDriftOverride = effectiveOpts.failOnPrequalifyDrift;
@@ -10060,7 +10141,7 @@ static int runNativeReport(const ReportOptions &opts) {
         }
       }
     }
-    if (policyProfiles.empty()) {
+    if (policyProfiles.empty() && !hasCLIPolicyMode && !hasCLIPolicyProfile) {
       auto parseProfileCSV = [&](StringRef csv) {
         SmallVector<StringRef, 8> elems;
         csv.split(elems, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
@@ -10078,20 +10159,25 @@ static int runNativeReport(const ReportOptions &opts) {
         parseProfileCSV(it->second);
     }
     if (policyProfiles.empty()) {
-      auto policyModeIt = cfg.report.find("policy_mode");
-      auto policyStopOnFailIt = cfg.report.find("policy_stop_on_fail");
-      bool hasPolicyMode =
-          policyModeIt != cfg.report.end() && !policyModeIt->second.empty();
-      bool hasPolicyStopOnFail = policyStopOnFailIt != cfg.report.end() &&
-                                 !policyStopOnFailIt->second.empty();
-      if (hasPolicyStopOnFail && !hasPolicyMode) {
-        errs() << "circt-mut report: [report] key 'policy_stop_on_fail' "
-                  "requires 'policy_mode'\n";
-        return 1;
-      }
-      if (hasPolicyMode) {
-        std::string mode = StringRef(policyModeIt->second).trim().lower();
-        bool stopOnFail = false;
+      std::string mode;
+      std::optional<bool> stopOnFail;
+      if (hasCLIPolicyMode) {
+        mode = effectiveOpts.policyMode;
+        stopOnFail = effectiveOpts.policyStopOnFail;
+      } else {
+        auto policyModeIt = cfg.report.find("policy_mode");
+        auto policyStopOnFailIt = cfg.report.find("policy_stop_on_fail");
+        bool hasPolicyMode =
+            policyModeIt != cfg.report.end() && !policyModeIt->second.empty();
+        bool hasPolicyStopOnFail = policyStopOnFailIt != cfg.report.end() &&
+                                   !policyStopOnFailIt->second.empty();
+        if (hasPolicyStopOnFail && !hasPolicyMode) {
+          errs() << "circt-mut report: [report] key 'policy_stop_on_fail' "
+                    "requires 'policy_mode'\n";
+          return 1;
+        }
+        if (hasPolicyMode)
+          mode = StringRef(policyModeIt->second).trim().lower();
         if (hasPolicyStopOnFail) {
           StringRef raw = StringRef(policyStopOnFailIt->second).trim().lower();
           if (raw == "1" || raw == "true" || raw == "yes" || raw == "on")
@@ -10107,34 +10193,46 @@ static int runNativeReport(const ReportOptions &opts) {
             return 1;
           }
         }
+      }
+      if (!mode.empty()) {
         if (opts.mode != "matrix" && opts.mode != "all") {
-          errs() << "circt-mut report: [report] key 'policy_mode' requires "
-                    "--mode matrix or --mode all\n";
+          errs() << (hasCLIPolicyMode
+                         ? "circt-mut report: --policy-mode requires --mode "
+                           "matrix or --mode all\n"
+                         : "circt-mut report: [report] key 'policy_mode' "
+                           "requires --mode matrix or --mode all\n");
           return 1;
         }
-        if (mode == "smoke") {
-          policyProfiles.push_back(
-              stopOnFail ? "formal-regression-matrix-stop-on-fail-guard-smoke"
-                         : "formal-regression-matrix-guard-smoke");
-          policyProfiles.push_back("formal-regression-matrix-runtime-smoke");
-        } else if (mode == "nightly") {
-          policyProfiles.push_back(
-              stopOnFail ? "formal-regression-matrix-stop-on-fail-guard-nightly"
-                         : "formal-regression-matrix-guard-nightly");
-          policyProfiles.push_back("formal-regression-matrix-runtime-nightly");
-        } else if (mode == "strict") {
-          policyProfiles.push_back(stopOnFail
-                                       ? "formal-regression-matrix-stop-on-fail-strict"
-                                       : "formal-regression-matrix-full-lanes-strict");
-          policyProfiles.push_back("formal-regression-matrix-runtime-strict");
-        } else {
+        if (!hasCLIPolicyMode && mode != "smoke" && mode != "nightly" &&
+            mode != "strict") {
           errs() << "circt-mut report: invalid [report] key 'policy_mode' "
                     "value '"
-                 << policyModeIt->second
-                 << "' (expected smoke|nightly|strict)\n";
+                 << mode << "' (expected smoke|nightly|strict)\n";
+          return 1;
+        }
+        std::string modeError;
+        if (!appendMatrixPolicyModeProfiles(mode, stopOnFail.value_or(false),
+                                            policyProfiles, modeError,
+                                            hasCLIPolicyMode ? "circt-mut report:"
+                                                             : "circt-mut report: [report] key 'policy_mode'")) {
+          errs() << modeError << "\n";
           return 1;
         }
       }
+    }
+  }
+  if (policyProfiles.empty() && hasCLIPolicyMode) {
+    if (opts.mode != "matrix" && opts.mode != "all") {
+      errs() << "circt-mut report: --policy-mode requires --mode matrix or "
+                "--mode all\n";
+      return 1;
+    }
+    std::string modeError;
+    if (!appendMatrixPolicyModeProfiles(
+            effectiveOpts.policyMode, effectiveOpts.policyStopOnFail.value_or(false),
+            policyProfiles, modeError, "circt-mut report:")) {
+      errs() << modeError << "\n";
+      return 1;
     }
   }
   if (!policyProfiles.empty()) {
