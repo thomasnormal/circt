@@ -7359,6 +7359,12 @@ def classify_timeout_diag(diag_token: str) -> str:
         return "solver_budget"
     return "unknown"
 
+def normalize_timeout_class(token: str) -> str:
+    value = normalize(token)
+    if value in {"solver_budget", "preprocess", "model_size", "unknown"}:
+        return value
+    return ""
+
 counts = defaultdict(int)
 rows = 0
 with path.open(encoding="utf-8") as f:
@@ -7370,6 +7376,9 @@ with path.open(encoding="utf-8") as f:
         if not parts:
             continue
         status = normalize(parts[0].strip())
+        timeout_class_override = ""
+        if len(parts) > 6:
+            timeout_class_override = normalize_timeout_class(parts[6].strip())
         rows += 1
         counts["lec_cases"] += 1
         counts[f"lec_status_{status}_cases"] += 1
@@ -7387,7 +7396,11 @@ with path.open(encoding="utf-8") as f:
             counts[f"lec_status_{status}_diag_{diag}_cases"] += 1
             if status == "timeout":
                 counts[f"lec_timeout_diag_{diag}_cases"] += 1
-                timeout_class = classify_timeout_diag(maybe_diag)
+                timeout_class = (
+                    timeout_class_override
+                    if timeout_class_override
+                    else classify_timeout_diag(maybe_diag)
+                )
                 counts[f"lec_timeout_class_{timeout_class}_cases"] += 1
             if explicit_diag:
                 counts["lec_diag_explicit_cases"] += 1
@@ -7397,7 +7410,8 @@ with path.open(encoding="utf-8") as f:
             counts["lec_diag_missing_cases"] += 1
             if status == "timeout":
                 counts["lec_timeout_diag_missing_cases"] += 1
-                counts["lec_timeout_class_unknown_cases"] += 1
+                timeout_class = timeout_class_override if timeout_class_override else "unknown"
+                counts[f"lec_timeout_class_{timeout_class}_cases"] += 1
 
 if rows <= 0:
     print("")

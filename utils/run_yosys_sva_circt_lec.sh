@@ -199,10 +199,17 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
     verilog_args+=("${extra_args[@]}")
   fi
 
-  if ! run_limited "$CIRCT_VERILOG" --ir-hw "${verilog_args[@]}" "$sv" \
+  if run_limited "$CIRCT_VERILOG" --ir-hw "${verilog_args[@]}" "$sv" \
       > "$mlir" 2> "$verilog_log"; then
+    :
+  else
+    verilog_status=$?
     record_drop_remark_case "$base" "$sv" "$verilog_log"
-    printf "ERROR\t%s\t%s\tyosys/tests/sva\tLEC\tCIRCT_VERILOG_ERROR\n" "$base" "$sv" >> "$results_tmp"
+    if [[ "$verilog_status" -eq 124 || "$verilog_status" -eq 137 ]]; then
+      printf "TIMEOUT\t%s\t%s\tyosys/tests/sva\tLEC\tCIRCT_VERILOG_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
+    else
+      printf "ERROR\t%s\t%s\tyosys/tests/sva\tLEC\tCIRCT_VERILOG_ERROR\n" "$base" "$sv" >> "$results_tmp"
+    fi
     error=$((error + 1))
     save_logs
     continue
@@ -218,12 +225,19 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
   fi
   opt_args+=("$mlir")
 
-  if ! run_limited "$CIRCT_OPT" "${opt_args[@]}" > "$opt_mlir" 2> "$opt_log"; then
+  if run_limited "$CIRCT_OPT" "${opt_args[@]}" > "$opt_mlir" 2> "$opt_log"; then
+    :
+  else
+    opt_status=$?
     if [[ ! -s "$opt_log" ]]; then
       printf "error: circt-opt failed without diagnostics for case '%s'\n" \
         "$base" | tee -a "$opt_log" >&2
     fi
-    printf "ERROR\t%s\t%s\tyosys/tests/sva\tLEC\tCIRCT_OPT_ERROR\n" "$base" "$sv" >> "$results_tmp"
+    if [[ "$opt_status" -eq 124 || "$opt_status" -eq 137 ]]; then
+      printf "TIMEOUT\t%s\t%s\tyosys/tests/sva\tLEC\tCIRCT_OPT_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
+    else
+      printf "ERROR\t%s\t%s\tyosys/tests/sva\tLEC\tCIRCT_OPT_ERROR\n" "$base" "$sv" >> "$results_tmp"
+    fi
     error=$((error + 1))
     save_logs
     continue
@@ -289,6 +303,7 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
       *)
         if [[ "$lec_status" -eq 124 || "$lec_status" -eq 137 ]]; then
           lec_diag="TIMEOUT"
+          result="TIMEOUT"
         else
           lec_diag="ERROR"
         fi
@@ -302,7 +317,15 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
     *) error=$((error + 1)) ;;
   esac
 
-  printf "%s\t%s\t%s\tyosys/tests/sva\tLEC\t%s\n" "$result" "$base" "$sv" "$lec_diag" >> "$results_tmp"
+  lec_timeout_class=""
+  if [[ "$result" == "TIMEOUT" ]]; then
+    lec_timeout_class="solver_budget"
+  fi
+  if [[ -n "$lec_timeout_class" ]]; then
+    printf "%s\t%s\t%s\tyosys/tests/sva\tLEC\t%s\t%s\n" "$result" "$base" "$sv" "$lec_diag" "$lec_timeout_class" >> "$results_tmp"
+  else
+    printf "%s\t%s\t%s\tyosys/tests/sva\tLEC\t%s\n" "$result" "$base" "$sv" "$lec_diag" >> "$results_tmp"
+  fi
   echo "$result: $base"
   save_logs
 done

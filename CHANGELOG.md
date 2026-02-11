@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1083 - February 11, 2026
+
+### Formal Driver: Runner-Emitted LEC Timeout Status + Class Override
+
+1. Hardened LEC timeout provenance to be runner-authored (not only inferred):
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. Runner behavior changes:
+   - preprocessing timeouts now emit `TIMEOUT` rows (instead of generic
+     `ERROR`) with explicit timeout class `preprocess`.
+   - LEC solver timeouts now emit `TIMEOUT` rows with explicit timeout class
+     `solver_budget`.
+3. Summary ingestion upgrade in `utils/run_formal_all.sh`:
+   - `summarize_lec_case_file()` now accepts optional per-row timeout class
+     override (7th column) and prioritizes it over diag-token heuristics.
+4. New regression lock:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout-class-override.test`
+5. Impact:
+   - strict timeout-class drift gates now reflect stage-authored semantics with
+     lower false attribution noise.
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-class-cases.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-class-override.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-diag-keys.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-any.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - `build-test/test/Tools/run-sv-tests-lec-silent-opt-diagnostic.test`
+  - `build-test/test/Tools/run-sv-tests-circt-lec-drop-remarks.test`
+  - `build-test/test/Tools/run-verilator-verification-circt-lec-drop-remarks.test`
+  - `build-test/test/Tools/run-yosys-sva-circt-lec-drop-remarks.test`
+  - PASS (11/11)
+- External focused sanity:
+  - `/home/thomas-ahle/sv-tests` LEC filtered slice
+    (`16.15--property-iff-uvm|16.15--property-iff-uvm-fail`): PASS
+  - `/home/thomas-ahle/verilator-verification` LEC filtered slice
+    (`assert_past|assert_stable`): PASS
+  - `/home/thomas-ahle/yosys/tests/sva` LEC filtered slice
+    (`basic00|basic01`): PASS
+
 ## Iteration 1082 - February 11, 2026
 
 ### Formal Driver: LEC Timeout Class Taxonomy + Strict Drift Gate

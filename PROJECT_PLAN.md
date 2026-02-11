@@ -9,6 +9,38 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 20:00)
+
+1. Upgraded LEC timeout provenance from heuristic-only to runner-authored
+   classification:
+   - `run_sv_tests_circt_lec.sh`
+   - `run_verilator_verification_circt_lec.sh`
+   - `run_yosys_sva_circt_lec.sh`
+2. Timeout status normalization:
+   - preprocessing stage timeouts now emit `TIMEOUT` + class `preprocess`.
+   - solver-stage LEC timeouts now emit `TIMEOUT` + class `solver_budget`.
+3. Baseline summarization hardening in `run_formal_all.sh`:
+   - optional row-level timeout class override (7th column) now overrides
+     diag-token inference in `summarize_lec_case_file()`.
+4. Regression lock:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout-class-override.test`
+5. External sanity (explicit `build-test/bin` tools) remains green:
+   - `/home/thomas-ahle/sv-tests` LEC slice
+     (`16.15--property-iff-uvm|16.15--property-iff-uvm-fail`)
+   - `/home/thomas-ahle/verilator-verification` LEC slice
+     (`assert_past|assert_stable`)
+   - `/home/thomas-ahle/yosys/tests/sva` LEC slice (`basic00|basic01`)
+6. Remaining long-term limitations and next build targets:
+   - BMC semantic closure still has uncovered multiclock and
+     sequence-subroutine edge buckets; add strict-gated semantic bucket maps
+     for those ids.
+   - LEC timeout root-cause taxonomy still lacks model-size evidence from
+     solver transcripts; add structured timeout telemetry extraction to reduce
+     `unknown` bucket share.
+   - Mutation pipeline should add deterministic sharding + cache-key lineage
+     (IR hash + policy fingerprint + external-formal digest) to scale report
+     generation on large AVIP portfolios.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 19:14)
 
 1. Added normalized LEC timeout-class telemetry in `run_formal_all.sh`:
