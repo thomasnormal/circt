@@ -6,6 +6,7 @@
 // CHECK: --strict-gate-no-drop-remarks
 // CHECK: --fail-on-new-bmc-timeout-cases
 // CHECK: --fail-on-new-lec-timeout-cases
+// CHECK: --fail-on-new-lec-timeout-case-ids
 // CHECK: --fail-on-new-bmc-unknown-cases
 // CHECK: --fail-on-new-lec-drop-remark-cases
 // CHECK: --fail-on-any-bmc-drop-remarks

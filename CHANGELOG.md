@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1079 - February 11, 2026
+
+### Formal Driver: Strict-Gate LEC Timeout Case-ID Drift Control
+
+1. Added new gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-new-lec-timeout-case-ids`
+2. Added baseline telemetry for timeout identity tracking:
+   - baseline TSV now stores `lec_timeout_case_ids`.
+3. Added strict-gate default coverage:
+   - `--strict-gate` now enables timeout case-ID drift checks for `LEC*` lanes.
+4. Preserved compatibility with legacy baselines:
+   - case-ID drift check only enforces when baseline rows carry timeout case-ID
+     telemetry.
+5. Added regression lock:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout-case-ids.test`
+6. Updated help regression surface:
+   - `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test`
+  - `build-test/test/Tools/run-formal-all-timeout-forwarding.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - PASS (5/5)
+
 ## Iteration 1078 - February 11, 2026
 
 ### `circt-mut report`: External Formal Result Ingestion + Guard Policy
