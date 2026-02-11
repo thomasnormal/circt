@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1133 - February 11, 2026
+
+### Formal Governance: BMC Provenance/IR-Check Identity Trend Gates (v1) + v4 Composites
+
+1. Extended `run_formal_all` BMC check-attribution summary counters with
+   identity cardinalities:
+   - `bmc_ir_check_fingerprint_cardinality`
+   - `bmc_ir_check_key_cardinality`
+   - `bmc_ir_check_key_mode_{fingerprint,label,loc}_cardinality`
+2. Added new `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-bmc-provenance-check-identity-trend-guard-v1`
+   with zero-growth trend gates on:
+   - `bmc_abstraction_provenance_tokens`
+   - `bmc_ir_check_fingerprint_cardinality`
+   - `bmc_ir_check_key_cardinality`
+   across BMC suite families (`sv_tests`, `sv_tests_uvm`, `verilator_verification`,
+   `yosys_tests_sva`).
+3. Added staged release composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v4`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v4`
+4. Added/updated regressions:
+   - `test/Tools/run-formal-all-bmc-ir-check-fingerprints.test` (new summary counter checks)
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-provenance-check-identity-trend-guard-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-provenance-check-identity-trend-guard-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v4-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v4-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v4-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v4-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
 ## Iteration 1132 - February 11, 2026
 
 ### Formal Governance: BMC Identity Cardinality Trend Gates (v1) + v3 Composites
