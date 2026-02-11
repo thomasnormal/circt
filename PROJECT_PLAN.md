@@ -9,6 +9,34 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 20:20)
+
+1. Added BMC timeout identity telemetry and drift gating in
+   `run_formal_all.sh`:
+   - new counter/key: `bmc_timeout_case_ids`
+   - new gate: `--fail-on-new-bmc-timeout-case-ids`
+2. Strict-gate hardening:
+   - `--strict-gate` now also enables BMC timeout case-ID drift checks by
+     default, aligning BMC governance with LEC timeout identity controls.
+3. Baseline compatibility:
+   - baseline TSV now stores `bmc_timeout_case_ids`.
+   - legacy rows remain compatible (drift gate only enforces when baseline rows
+     carry timeout-ID telemetry).
+4. New regression lock:
+   - `test/Tools/run-formal-all-strict-gate-bmc-timeout-case-ids.test`
+5. External sanity:
+   - `/home/thomas-ahle/yosys/tests/sva` BMC slice (`basic00|basic01`) is
+     green with explicit `build-test/bin` tools and emits
+     `bmc_timeout_case_ids=` in summary telemetry.
+6. Remaining long-term limitations and next feature priorities:
+   - BMC semantic closure still needs concrete lowering/runtime work for
+     multiclock and sequence-subroutine tails (not just governance).
+   - LEC timeout classes still need model-size evidence wiring from solver logs
+     to reduce `unknown` attribution and improve remediation.
+   - Mutation generation/reporting needs deterministic shard/cache policy for
+     large AVIP portfolios (IR hash + policy fingerprint + external-formal
+     digest lineage).
+
 ### Formal Closure Snapshot Update (February 11, 2026, 20:00)
 
 1. Upgraded LEC timeout provenance from heuristic-only to runner-authored

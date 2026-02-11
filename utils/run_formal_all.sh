@@ -40,6 +40,8 @@ Options:
                          Fail when fail-like case IDs increase vs baseline
   --fail-on-new-bmc-timeout-cases
                          Fail when BMC timeout-case count increases vs baseline
+  --fail-on-new-bmc-timeout-case-ids
+                         Fail when BMC timeout case IDs increase vs baseline
   --fail-on-new-lec-timeout-cases
                          Fail when LEC timeout-case count increases vs baseline
   --fail-on-new-lec-timeout-case-ids
@@ -1826,6 +1828,7 @@ FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
 FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
+FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS=0
 FAIL_ON_NEW_LEC_TIMEOUT_CASES=0
 FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS=0
 FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=0
@@ -2176,6 +2179,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_FAILURE_CASES=1; shift ;;
     --fail-on-new-bmc-timeout-cases)
       FAIL_ON_NEW_BMC_TIMEOUT_CASES=1; shift ;;
+    --fail-on-new-bmc-timeout-case-ids)
+      FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS=1; shift ;;
     --fail-on-new-lec-timeout-cases)
       FAIL_ON_NEW_LEC_TIMEOUT_CASES=1; shift ;;
     --fail-on-new-lec-timeout-case-ids)
@@ -4263,6 +4268,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_PASSRATE_REGRESSION=1
   FAIL_ON_NEW_FAILURE_CASES=1
   FAIL_ON_NEW_BMC_TIMEOUT_CASES=1
+  FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS=1
   FAIL_ON_NEW_LEC_TIMEOUT_CASES=1
   FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS=1
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1
@@ -7528,18 +7534,39 @@ if not path.exists():
 
 timeout_cases = 0
 unknown_cases = 0
+timeout_case_ids = set()
 with path.open(encoding="utf-8") as f:
     for line in f:
         line = line.rstrip("\n")
         if not line:
             continue
-        status = line.split("\t", 1)[0].strip().upper()
+        parts = line.split("\t")
+        status = parts[0].strip().upper() if parts else ""
         if status == "TIMEOUT":
             timeout_cases += 1
+            base = parts[1].strip() if len(parts) > 1 else ""
+            file_path = parts[2].strip() if len(parts) > 2 else ""
+            explicit_diag = parts[5].strip() if len(parts) > 5 else ""
+            case_id = ""
+            if base:
+                case_id = base
+                if explicit_diag:
+                    case_id = f"{base}#{explicit_diag.upper()}"
+            elif file_path:
+                case_id = file_path
+                if explicit_diag:
+                    case_id = f"{file_path}#{explicit_diag.upper()}"
+            if case_id:
+                timeout_case_ids.add(case_id)
         elif status == "UNKNOWN":
             unknown_cases += 1
 
-print(f"bmc_timeout_cases={timeout_cases} bmc_unknown_cases={unknown_cases}")
+timeout_case_ids_value = ";".join(sorted(timeout_case_ids))
+print(
+    f"bmc_timeout_cases={timeout_cases} "
+    f"bmc_timeout_case_ids={timeout_case_ids_value} "
+    f"bmc_unknown_cases={unknown_cases}"
+)
 PY
 }
 
@@ -11266,6 +11293,35 @@ def collect_bmc_drop_remark_case_reasons(out_dir: Path):
                     reasons.setdefault(key, set()).add(f"{case_id}::{reason}")
     return {key: ";".join(sorted(values)) for key, values in reasons.items()}
 
+def collect_bmc_timeout_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-results.txt"),
+        ("sv-tests-uvm", "BMC_SEMANTICS", out_dir / "sv-tests-bmc-uvm-semantics-results.txt"),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-results.txt"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-results.txt"),
+    ]
+    timeout_case_ids = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                status = parts[0].strip().upper() if parts else ""
+                if status != "TIMEOUT":
+                    continue
+                base = parts[1].strip() if len(parts) > 1 else ""
+                file_path = parts[2].strip() if len(parts) > 2 else ""
+                explicit_diag = parts[3].strip() if len(parts) > 3 else ""
+                case_id = compose_case_id(base, file_path, explicit_diag)
+                if case_id:
+                    timeout_case_ids.setdefault(key, set()).add(case_id)
+    return {key: ";".join(sorted(values)) for key, values in timeout_case_ids.items()}
+
 def collect_lec_drop_remark_cases(out_dir: Path):
     sources = [
         ("sv-tests", "LEC", out_dir / "sv-tests-lec-drop-remark-cases.tsv"),
@@ -11379,6 +11435,7 @@ failure_cases = collect_failure_cases(out_dir, rows)
 bmc_abstraction_provenance = collect_bmc_abstraction_provenance(out_dir)
 bmc_drop_remark_case_ids = collect_bmc_drop_remark_cases(out_dir)
 bmc_drop_remark_case_reason_ids = collect_bmc_drop_remark_case_reasons(out_dir)
+bmc_timeout_case_ids = collect_bmc_timeout_case_ids(out_dir)
 lec_drop_remark_case_ids = collect_lec_drop_remark_cases(out_dir)
 lec_drop_remark_case_reason_ids = collect_lec_drop_remark_case_reasons(out_dir)
 lec_timeout_case_ids = collect_lec_timeout_case_ids(out_dir)
@@ -11417,6 +11474,7 @@ if baseline_path.exists():
                 'bmc_abstraction_provenance': row.get('bmc_abstraction_provenance', ''),
                 'bmc_drop_remark_case_ids': row.get('bmc_drop_remark_case_ids', ''),
                 'bmc_drop_remark_case_reason_ids': row.get('bmc_drop_remark_case_reason_ids', ''),
+                'bmc_timeout_case_ids': row.get('bmc_timeout_case_ids', ''),
                 'lec_drop_remark_case_ids': row.get('lec_drop_remark_case_ids', ''),
                 'lec_drop_remark_case_reason_ids': row.get('lec_drop_remark_case_reason_ids', ''),
                 'lec_timeout_case_ids': row.get('lec_timeout_case_ids', ''),
@@ -11449,6 +11507,7 @@ for row in rows:
         'bmc_abstraction_provenance': bmc_abstraction_provenance.get((row['suite'], row['mode']), ''),
         'bmc_drop_remark_case_ids': bmc_drop_remark_case_ids.get((row['suite'], row['mode']), ''),
         'bmc_drop_remark_case_reason_ids': bmc_drop_remark_case_reason_ids.get((row['suite'], row['mode']), ''),
+        'bmc_timeout_case_ids': bmc_timeout_case_ids.get((row['suite'], row['mode']), ''),
         'lec_drop_remark_case_ids': lec_drop_remark_case_ids.get((row['suite'], row['mode']), ''),
         'lec_drop_remark_case_reason_ids': lec_drop_remark_case_reason_ids.get((row['suite'], row['mode']), ''),
         'lec_timeout_case_ids': lec_timeout_case_ids.get((row['suite'], row['mode']), ''),
@@ -11475,6 +11534,7 @@ with baseline_path.open('w', newline='') as f:
             'bmc_abstraction_provenance',
             'bmc_drop_remark_case_ids',
             'bmc_drop_remark_case_reason_ids',
+            'bmc_timeout_case_ids',
             'lec_drop_remark_case_ids',
             'lec_drop_remark_case_reason_ids',
             'lec_timeout_case_ids',
@@ -11534,6 +11594,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_PASSRATE_REGRESSION" == "1" || \
       "$FAIL_ON_NEW_FAILURE_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_TIMEOUT_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" == "1" || \
@@ -11581,6 +11642,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_PASSRATE_REGRESSION="$FAIL_ON_PASSRATE_REGRESSION" \
   FAIL_ON_NEW_FAILURE_CASES="$FAIL_ON_NEW_FAILURE_CASES" \
   FAIL_ON_NEW_BMC_TIMEOUT_CASES="$FAIL_ON_NEW_BMC_TIMEOUT_CASES" \
+  FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS="$FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS" \
   FAIL_ON_NEW_LEC_TIMEOUT_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CASES" \
   FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS="$FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS" \
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" \
@@ -11815,6 +11877,35 @@ def collect_bmc_drop_remark_case_reasons(out_dir: Path):
                     reasons.setdefault(key, set()).add(f"{case_id}::{reason}")
     return reasons
 
+def collect_bmc_timeout_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-results.txt"),
+        ("sv-tests-uvm", "BMC_SEMANTICS", out_dir / "sv-tests-bmc-uvm-semantics-results.txt"),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-results.txt"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-results.txt"),
+    ]
+    case_ids = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                status = parts[0].strip().upper() if parts else ""
+                if status != "TIMEOUT":
+                    continue
+                base = parts[1].strip() if len(parts) > 1 else ""
+                file_path = parts[2].strip() if len(parts) > 2 else ""
+                explicit_diag = parts[3].strip() if len(parts) > 3 else ""
+                case_id = compose_case_id(base, file_path, explicit_diag)
+                if case_id:
+                    case_ids.setdefault(key, set()).add(case_id)
+    return case_ids
+
 def collect_lec_timeout_case_ids(out_dir: Path):
     sources = [
         ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
@@ -11917,6 +12008,9 @@ current_bmc_drop_remark_cases = collect_bmc_drop_remark_cases(
 current_bmc_drop_remark_case_reasons = collect_bmc_drop_remark_case_reasons(
     Path(os.environ["OUT_DIR"])
 )
+current_bmc_timeout_case_ids = collect_bmc_timeout_case_ids(
+    Path(os.environ["OUT_DIR"])
+)
 current_lec_drop_remark_cases = collect_lec_drop_remark_cases(
     Path(os.environ["OUT_DIR"])
 )
@@ -11943,6 +12037,9 @@ fail_on_passrate_regression = os.environ.get("FAIL_ON_PASSRATE_REGRESSION", "0")
 fail_on_new_failure_cases = os.environ.get("FAIL_ON_NEW_FAILURE_CASES", "0") == "1"
 fail_on_new_bmc_timeout_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_TIMEOUT_CASES", "0") == "1"
+)
+fail_on_new_bmc_timeout_case_ids = (
+    os.environ.get("FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS", "0") == "1"
 )
 fail_on_new_lec_timeout_cases = (
     os.environ.get("FAIL_ON_NEW_LEC_TIMEOUT_CASES", "0") == "1"
@@ -12275,6 +12372,30 @@ for key, current_row in summary.items():
                     sample += ", ..."
                 gate_errors.append(
                     f"{suite} {mode}: new dropped-syntax case-reason tuples observed (baseline={len(baseline_drop_case_reason_set)} current={len(current_drop_case_reason_set)}, window={baseline_window}): {sample}"
+                )
+    if fail_on_new_bmc_timeout_case_ids and mode.startswith("BMC"):
+        baseline_timeout_case_ids_raw = [
+            row.get("bmc_timeout_case_ids") for row in compare_rows
+        ]
+        if any(raw is not None for raw in baseline_timeout_case_ids_raw):
+            baseline_timeout_case_set = set()
+            for raw in baseline_timeout_case_ids_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_timeout_case_set.add(token)
+            current_timeout_case_set = current_bmc_timeout_case_ids.get(key, set())
+            new_timeout_cases = sorted(
+                current_timeout_case_set - baseline_timeout_case_set
+            )
+            if new_timeout_cases:
+                sample = ", ".join(new_timeout_cases[:3])
+                if len(new_timeout_cases) > 3:
+                    sample += ", ..."
+                gate_errors.append(
+                    f"{suite} {mode}: new BMC timeout case IDs observed (baseline={len(baseline_timeout_case_set)} current={len(current_timeout_case_set)}, window={baseline_window}): {sample}"
                 )
     if fail_on_new_lec_drop_remark_case_ids and mode.startswith("LEC"):
         baseline_drop_case_ids_raw = [

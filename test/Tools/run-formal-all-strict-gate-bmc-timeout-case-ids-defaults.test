@@ -1,0 +1,12 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "PASS\tcase_pass\t/tests/pass.sv\nTIMEOUT\tcase_timeout\t/tests/timeout.sv\n" > "$OUT"\necho "sv-tests SVA summary: total=2 pass=2 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=1"\n' > %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-base --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^sv-tests/BMC$' --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --baseline-file %t/formal-baselines.tsv --update-baselines
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "PASS\tcase_pass\t/tests/pass.sv\nTIMEOUT\tcase_timeout\t/tests/timeout.sv\nTIMEOUT\tcase_timeout_new\t/tests/timeout_new.sv\n" > "$OUT"\necho "sv-tests SVA summary: total=3 pass=3 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=2"\n' > %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: chmod +x %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-new --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/BMC$" --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --baseline-file %t/formal-baselines.tsv --strict-gate' 2>&1 | FileCheck %s
+//
+// CHECK: strict gate failures:
+// CHECK: sv-tests BMC: new BMC timeout case IDs observed (baseline=1 current=2, window=1): case_timeout_new

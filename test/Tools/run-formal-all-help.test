@@ -5,6 +5,7 @@
 // CHECK: --fail-on-diff
 // CHECK: --strict-gate-no-drop-remarks
 // CHECK: --fail-on-new-bmc-timeout-cases
+// CHECK: --fail-on-new-bmc-timeout-case-ids
 // CHECK: --fail-on-new-lec-timeout-cases
 // CHECK: --fail-on-new-lec-timeout-case-ids
 // CHECK: --fail-on-new-lec-timeout-class-cases
