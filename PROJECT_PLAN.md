@@ -9,6 +9,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 21:45)
+
+1. Added sv-tests LEC front-end compile cache in
+   `utils/run_sv_tests_circt_lec.sh`:
+   - opt-in via `LEC_MLIR_CACHE_DIR`
+   - deterministic keying over tool identity, flags, include/define context, and
+     source content hashes.
+2. Added LEC cache telemetry:
+   - `sv-tests frontend cache summary: hits=... misses=... stores=...`
+3. Added regression lock:
+   - `test/Tools/run-sv-tests-lec-mlir-cache.test`
+4. Focused external sanity signal (`/home/thomas-ahle/sv-tests`, explicit
+   build-test tools):
+   - same filtered case run twice demonstrates compile cache reuse
+     (miss/store on run1, hit on run2).
+   - case still ends in `CIRCT_OPT_ERROR` in this workspace snapshot, indicating
+     a semantic/toolchain issue orthogonal to cache behavior.
+5. Remaining limitations and next long-term features:
+   - unify BMC/LEC cache key schema into shared helper to reduce runner drift
+     and tech debt.
+   - extend cache to verilator/yosys LEC runners for portfolio-scale closure
+     loops.
+   - add cache budget controls (max bytes/entries + eviction policy) and lane
+     telemetry roll-up in `run_formal_all.sh`.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 21:25)
 
 1. Added sv-tests BMC front-end compile cache in

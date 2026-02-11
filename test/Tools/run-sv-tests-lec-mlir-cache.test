@@ -1,0 +1,16 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin %t/sv-tests/tests/chapter-16 %t/cache
+// RUN: printf ':tags: cache\nmodule top;\nendmodule\n' > %t/sv-tests/tests/chapter-16/cache_case.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncntfile="${COUNTER_FILE:?}"\ncount=0\nif [[ -f "$cntfile" ]]; then\n  count=$(cat "$cntfile")\nfi\ncount=$((count + 1))\necho "$count" > "$cntfile"\necho "dummy-mlir"\n' > %t/bin/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncat "${@: -1}"\n' > %t/bin/fake-opt.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "LEC_RESULT=EQ"\n' > %t/bin/fake-lec.sh
+// RUN: chmod +x %t/bin/fake-verilog.sh %t/bin/fake-opt.sh %t/bin/fake-lec.sh
+// RUN: env COUNTER_FILE=%t/counter.txt LEC_MLIR_CACHE_DIR=%t/cache CIRCT_VERILOG=%t/bin/fake-verilog.sh CIRCT_OPT=%t/bin/fake-opt.sh CIRCT_LEC=%t/bin/fake-lec.sh Z3_BIN=/usr/bin/true TAG_REGEX='cache' OUT=%t/out1.tsv %S/../../utils/run_sv_tests_circt_lec.sh %t/sv-tests > %t/run1.out
+// RUN: env COUNTER_FILE=%t/counter.txt LEC_MLIR_CACHE_DIR=%t/cache CIRCT_VERILOG=%t/bin/fake-verilog.sh CIRCT_OPT=%t/bin/fake-opt.sh CIRCT_LEC=%t/bin/fake-lec.sh Z3_BIN=/usr/bin/true TAG_REGEX='cache' OUT=%t/out2.tsv %S/../../utils/run_sv_tests_circt_lec.sh %t/sv-tests > %t/run2.out
+// RUN: test "$(cat %t/counter.txt)" = "1"
+// RUN: FileCheck %s --check-prefix=RUN2 < %t/run2.out
+// RUN: FileCheck %s --check-prefix=OUT < %t/out1.tsv
+// RUN: FileCheck %s --check-prefix=OUT < %t/out2.tsv
+//
+// RUN2: sv-tests frontend cache summary: hits=1 misses=0 stores=0
+// OUT: PASS{{[[:space:]]+}}cache_case{{[[:space:]]+}}{{.*}}cache_case.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}EQ
