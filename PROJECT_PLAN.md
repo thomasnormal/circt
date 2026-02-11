@@ -177,6 +177,13 @@ See CHANGELOG.md on recent progress.
   bundles now gate provenance completeness directly by requiring both deficit
   counters above to stay zero, enabling native prequalification artifact
   hygiene enforcement without bespoke CI rule wiring.
+- Latest mutation-governance milestone (current): added dedicated matrix
+  provenance policy profiles for incremental rollout by lane class:
+  - `formal-regression-matrix-provenance-guard`
+  - `formal-regression-matrix-provenance-strict`
+  with explicit column-presence + deficit-zero gating on prequalify artifact
+  provenance metrics, so CI can adopt provenance enforcement independently from
+  broader guard/strict mutation quality bundles.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

@@ -35,6 +35,8 @@
 // CHECK: formal-regression-matrix-lane-drift-strict
 // CHECK: formal-regression-matrix-lane-trend-nightly
 // CHECK: formal-regression-matrix-lane-trend-strict
+// CHECK: formal-regression-matrix-provenance-guard
+// CHECK: formal-regression-matrix-provenance-strict
 // CHECK: formal-regression-matrix-runtime-smoke
 // CHECK: formal-regression-matrix-runtime-nightly
 // CHECK: formal-regression-matrix-runtime-trend

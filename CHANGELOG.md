@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1033 - February 11, 2026
+
+### `circt-mut report`: Dedicated Matrix Provenance Policy Profiles
+
+1. Added dedicated matrix provenance policy profiles in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-provenance-guard`
+   - `formal-regression-matrix-provenance-strict`
+2. Profiles gate provenance via explicit report keys:
+   - require `matrix.prequalify_results_pair_file_column_present = 1`
+   - require `matrix.prequalify_results_log_file_column_present = 1`
+   - require zero deficits:
+     - `matrix.prequalify_results_summary_present_missing_pair_file_lanes`
+     - `matrix.prequalify_results_summary_present_missing_log_file_lanes`
+   - strict profile additionally requires
+     `matrix.prequalify_results_summary_present_lanes >= 1`.
+3. Added/updated report metrics:
+   - `matrix.prequalify_results_pair_file_column_present`
+   - `matrix.prequalify_results_log_file_column_present`
+   alongside existing present-lane/deficit counters.
+4. Updated help/profile validation surfaces:
+   - `circt-mut report --help` now lists both provenance profiles.
+   - invalid-profile diagnostics now include the new profile names.
+5. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-provenance-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-provenance-guard-missing-columns-fail.test`
+   - updated `test/Tools/circt-mut-report-help.test`
+   - updated `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused provenance-profile slice:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-report-policy-matrix-provenance-guard-pass.test test/Tools/circt-mut-report-policy-matrix-provenance-guard-missing-columns-fail.test test/Tools/circt-mut-report-policy-matrix-guard-strict-prequalify-provenance-fail.test test/Tools/circt-mut-report-matrix-prequalify-path-completeness.test`: PASS (6/6)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (262/262)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-provenance-profiles ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s`
+  - FAIL (snapshot drift): AVIP compile `axi4Lite_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1032 - February 11, 2026
 
 ### `circt-mut report`: Policy-Gated Prequalify Provenance Hygiene
