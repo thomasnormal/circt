@@ -159,6 +159,13 @@ See CHANGELOG.md on recent progress.
   (`prequalify_pair_file`, `prequalify_log_file`) alongside numeric
   prequalification counters, enabling report/triage tooling to map per-lane
   metrics back to concrete prequalification artifacts without separate joins.
+- Latest mutation-governance milestone (current): `circt-mut report` now
+  consumes and re-emits per-lane prequalification traceability fields through
+  lane-budget keys (`matrix.lane_budget.lane.<id>.prequalify_pair_file`,
+  `.prequalify_log_file`) and aggregate availability counters
+  (`matrix.prequalify_results_pair_file_present_lanes`,
+  `matrix.prequalify_results_log_file_present_lanes`) for direct policy/trend
+  gating on provenance completeness.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

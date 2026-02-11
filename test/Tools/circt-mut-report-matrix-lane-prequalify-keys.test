@@ -1,5 +1,5 @@
 // RUN: rm -rf %t && mkdir -p %t/proj/out/matrix
-// RUN: printf 'lane_id\tstatus\tcoverage_percent\tgate_status\tprequalify_summary_present\tprequalify_total_mutants\tprequalify_not_propagated_mutants\tprequalify_propagated_mutants\tprequalify_create_mutated_error_mutants\tprequalify_probe_error_mutants\tprequalify_cmd_token_not_propagated_mutants\tprequalify_cmd_token_propagated_mutants\tprequalify_cmd_rc_not_propagated_mutants\tprequalify_cmd_rc_propagated_mutants\tprequalify_cmd_timeout_propagated_mutants\tprequalify_cmd_error_mutants\nlane1\tPASS\t80.0\tPASS\t1\t5\t2\t3\t1\t0\t2\t1\t0\t0\t0\t0\nlane2\tFAIL\t10.0\tFAIL\t0\t-\t0\t0\t0\t1\t0\t0\t1\t0\t0\t1\n' > %t/proj/out/matrix/results.tsv
+// RUN: printf 'lane_id\tstatus\tcoverage_percent\tgate_status\tprequalify_summary_present\tprequalify_pair_file\tprequalify_log_file\tprequalify_total_mutants\tprequalify_not_propagated_mutants\tprequalify_propagated_mutants\tprequalify_create_mutated_error_mutants\tprequalify_probe_error_mutants\tprequalify_cmd_token_not_propagated_mutants\tprequalify_cmd_token_propagated_mutants\tprequalify_cmd_rc_not_propagated_mutants\tprequalify_cmd_rc_propagated_mutants\tprequalify_cmd_timeout_propagated_mutants\tprequalify_cmd_error_mutants\nlane1\tPASS\t80.0\tPASS\t1\t%t/proj/out/matrix/lane1/native_global_filter_prequalify.tsv\t%t/proj/out/matrix/lane1/native_global_filter_prequalify.log\t5\t2\t3\t1\t0\t2\t1\t0\t0\t0\t0\nlane2\tFAIL\t10.0\tFAIL\t0\t-\t-\t-\t0\t0\t0\t1\t0\t0\t1\t0\t0\t1\n' > %t/proj/out/matrix/results.tsv
 // RUN: circt-mut report --project-dir %t/proj --mode matrix > %t/out.txt
 // RUN: FileCheck %s < %t/out.txt
 
@@ -7,15 +7,21 @@
 // CHECK-DAG: matrix.prequalify_results_lanes{{[[:space:]]}}2
 // CHECK-DAG: matrix.prequalify_results_summary_present_lanes{{[[:space:]]}}1
 // CHECK-DAG: matrix.prequalify_results_summary_missing_lanes{{[[:space:]]}}0
+// CHECK-DAG: matrix.prequalify_results_pair_file_present_lanes{{[[:space:]]}}1
+// CHECK-DAG: matrix.prequalify_results_log_file_present_lanes{{[[:space:]]}}1
 // CHECK-DAG: matrix.prequalify_results_total_mutants_sum{{[[:space:]]}}5
 // CHECK-DAG: matrix.prequalify_results_not_propagated_mutants_sum{{[[:space:]]}}2
 // CHECK-DAG: matrix.prequalify_results_propagated_mutants_sum{{[[:space:]]}}3
 // CHECK-DAG: matrix.lane_budget.lane.lane1.prequalify_summary_present{{[[:space:]]}}1
+// CHECK-DAG: matrix.lane_budget.lane.lane1.prequalify_pair_file{{[[:space:]]}}{{.*}}native_global_filter_prequalify.tsv
+// CHECK-DAG: matrix.lane_budget.lane.lane1.prequalify_log_file{{[[:space:]]}}{{.*}}native_global_filter_prequalify.log
 // CHECK-DAG: matrix.lane_budget.lane.lane1.prequalify_total_mutants{{[[:space:]]}}5
 // CHECK-DAG: matrix.lane_budget.lane.lane1.prequalify_not_propagated_mutants{{[[:space:]]}}2
 // CHECK-DAG: matrix.lane_budget.lane.lane1.prequalify_propagated_mutants{{[[:space:]]}}3
 // CHECK-DAG: matrix.lane_budget.lane.lane1.prequalify_probe_error_mutants{{[[:space:]]}}0
 // CHECK-DAG: matrix.lane_budget.lane.lane2.prequalify_summary_present{{[[:space:]]}}0
+// CHECK-DAG: matrix.lane_budget.lane.lane2.prequalify_pair_file{{[[:space:]]}}-
+// CHECK-DAG: matrix.lane_budget.lane.lane2.prequalify_log_file{{[[:space:]]}}-
 // CHECK-DAG: matrix.lane_budget.lane.lane2.prequalify_total_mutants{{[[:space:]]}}-
 // CHECK-DAG: matrix.lane_budget.lane.lane2.prequalify_probe_error_mutants{{[[:space:]]}}1
 // CHECK-DAG: matrix.lane_budget.lane.lane2.prequalify_cmd_error_mutants{{[[:space:]]}}1

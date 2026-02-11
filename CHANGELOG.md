@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1030 - February 11, 2026
+
+### `circt-mut report`: Prequalify Path Provenance in Lane-Budget Output
+
+1. Extended matrix report ingestion in `tools/circt-mut/circt-mut.cpp` to read
+   prequalification artifact columns from `results.tsv`:
+   - `prequalify_pair_file`
+   - `prequalify_log_file`
+2. Added lane-budget report key emission for per-lane provenance:
+   - `matrix.lane_budget.lane.<lane>.prequalify_pair_file`
+   - `matrix.lane_budget.lane.<lane>.prequalify_log_file`
+3. Added matrix-level provenance completeness counters:
+   - `matrix.prequalify_results_pair_file_present_lanes`
+   - `matrix.prequalify_results_log_file_present_lanes`
+4. Updated regression coverage:
+   - `test/Tools/circt-mut-report-matrix-lane-prequalify-keys.test`
+   to assert both lane-level keys and aggregate counters.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused report + prequalify integration:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-matrix-lane-prequalify-keys.test test/Tools/circt-mut-report-matrix-basic.test test/Tools/circt-mut-matrix-native-global-filter-prequalify-results-annotate.test test/Tools/circt-mut-matrix-native-dispatch-conflict.test`: PASS (4/4)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (258/258)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-report-prequalify-paths ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1029 - February 11, 2026
 
 ### `circt-mut matrix`: Lane-Level Prequalify Artifact Traceability

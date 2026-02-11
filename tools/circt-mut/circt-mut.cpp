@@ -7327,6 +7327,8 @@ struct MatrixLaneBudgetRow {
   std::string gateStatus;
   bool hasMetrics = false;
   bool hasPrequalifySummary = false;
+  std::string prequalifyPairFile = "-";
+  std::string prequalifyLogFile = "-";
   uint64_t prequalifyTotalMutants = 0;
   uint64_t prequalifyNotPropagatedMutants = 0;
   uint64_t prequalifyPropagatedMutants = 0;
@@ -8650,6 +8652,12 @@ static bool collectMatrixReport(
   if (auto it = colIndex.find("prequalify_summary_present");
       it != colIndex.end())
     prequalifySummaryPresentCol = it->second;
+  size_t prequalifyPairFileCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_pair_file"); it != colIndex.end())
+    prequalifyPairFileCol = it->second;
+  size_t prequalifyLogFileCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_log_file"); it != colIndex.end())
+    prequalifyLogFileCol = it->second;
   size_t prequalifyTotalMutantsCol = static_cast<size_t>(-1);
   if (auto it = colIndex.find("prequalify_total_mutants"); it != colIndex.end())
     prequalifyTotalMutantsCol = it->second;
@@ -8723,6 +8731,8 @@ static bool collectMatrixReport(
   uint64_t prequalifyResultsLanes = 0;
   uint64_t prequalifyResultsSummaryPresentLanes = 0;
   uint64_t prequalifyResultsSummaryMissingLanes = 0;
+  uint64_t prequalifyResultsPairFilePresentLanes = 0;
+  uint64_t prequalifyResultsLogFilePresentLanes = 0;
   uint64_t prequalifyResultsInvalidMetricValues = 0;
   uint64_t prequalifyResultsTotalMutantsSum = 0;
   uint64_t prequalifyResultsNotPropagatedMutantsSum = 0;
@@ -9034,6 +9044,16 @@ static bool collectMatrixReport(
     }
     if (hasResultsPrequalifyColumns) {
       ++prequalifyResultsLanes;
+      StringRef pairFileValue = getField(prequalifyPairFileCol);
+      StringRef logFileValue = getField(prequalifyLogFileCol);
+      if (!pairFileValue.empty() && pairFileValue != "-")
+        ++prequalifyResultsPairFilePresentLanes;
+      if (!logFileValue.empty() && logFileValue != "-")
+        ++prequalifyResultsLogFilePresentLanes;
+      laneBudgetRow.prequalifyPairFile =
+          (!pairFileValue.empty() ? pairFileValue.str() : std::string("-"));
+      laneBudgetRow.prequalifyLogFile =
+          (!logFileValue.empty() ? logFileValue.str() : std::string("-"));
       bool rowSummaryPresent = false;
       if (prequalifySummaryPresentCol != static_cast<size_t>(-1)) {
         StringRef presentValue = getField(prequalifySummaryPresentCol);
@@ -9338,6 +9358,12 @@ static bool collectMatrixReport(
                                              : std::string("-"));
       rows.emplace_back((Twine(laneBase) + ".prequalify_summary_present").str(),
                         lane.hasPrequalifySummary ? "1" : "0");
+      rows.emplace_back((Twine(laneBase) + ".prequalify_pair_file").str(),
+                        lane.prequalifyPairFile.empty() ? std::string("-")
+                                                        : lane.prequalifyPairFile);
+      rows.emplace_back((Twine(laneBase) + ".prequalify_log_file").str(),
+                        lane.prequalifyLogFile.empty() ? std::string("-")
+                                                       : lane.prequalifyLogFile);
       rows.emplace_back((Twine(laneBase) + ".prequalify_total_mutants").str(),
                         lane.hasPrequalifySummary
                             ? std::to_string(lane.prequalifyTotalMutants)
@@ -9409,6 +9435,10 @@ static bool collectMatrixReport(
                     std::to_string(prequalifyResultsSummaryPresentLanes));
   rows.emplace_back("matrix.prequalify_results_summary_missing_lanes",
                     std::to_string(prequalifyResultsSummaryMissingLanes));
+  rows.emplace_back("matrix.prequalify_results_pair_file_present_lanes",
+                    std::to_string(prequalifyResultsPairFilePresentLanes));
+  rows.emplace_back("matrix.prequalify_results_log_file_present_lanes",
+                    std::to_string(prequalifyResultsLogFilePresentLanes));
   rows.emplace_back("matrix.prequalify_results_invalid_metric_values",
                     std::to_string(prequalifyResultsInvalidMetricValues));
   rows.emplace_back("matrix.prequalify_results_total_mutants_sum",
