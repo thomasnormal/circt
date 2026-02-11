@@ -7485,6 +7485,27 @@ maybe_enforce_nonempty_filtered_lane() {
   echo "non-empty filter contract miss: ${lane_id} produced total=0 under explicit filters" >&2
 }
 
+append_filtered_min_total_violation() {
+  local total_ref="$1"
+  local summary_ref="$2"
+  local total="${!total_ref:-0}"
+  local violation=0
+  if [[ "$total" == "0" ]]; then
+    violation=1
+  fi
+  local updated_summary="${!summary_ref}"
+  if [[ "$updated_summary" =~ (^|[[:space:]])filtered_min_total_violation=[0-9]+($|[[:space:]]) ]]; then
+    updated_summary="$(echo "$updated_summary" | sed -E "s/(^|[[:space:]])filtered_min_total_violation=[0-9]+([[:space:]]|$)/\\1filtered_min_total_violation=${violation}\\2/")"
+  else
+    if [[ -n "$updated_summary" ]]; then
+      updated_summary="${updated_summary} filtered_min_total_violation=${violation}"
+    else
+      updated_summary="filtered_min_total_violation=${violation}"
+    fi
+  fi
+  printf -v "$summary_ref" '%s' "$updated_summary"
+}
+
 summarize_bmc_drop_remark_log() {
   local log_file="$1"
   if [[ ! -f "$log_file" ]]; then
@@ -9127,6 +9148,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
           summary="${summary} ${bmc_backend_parity_summary}"
         fi
       fi
+      append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "sv-tests/BMC" total error summary
       record_result_with_summary "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     else
@@ -9203,6 +9225,7 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
       fi
+      append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "sv-tests-uvm/BMC_SEMANTICS" total error summary
       record_result_with_summary "sv-tests-uvm" "BMC_SEMANTICS" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     else
@@ -9253,6 +9276,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
       if [[ -n "$lec_case_summary" ]]; then
         summary="${summary} ${lec_case_summary}"
       fi
+      append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "sv-tests/LEC" total error summary
       record_result_with_summary "sv-tests" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     else
@@ -9325,6 +9349,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
       fi
+      append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "verilator-verification/BMC" total error summary
       record_result_with_summary "verilator-verification" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     fi
@@ -9370,6 +9395,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
       if [[ -n "$lec_case_summary" ]]; then
         summary="${summary} ${lec_case_summary}"
       fi
+      append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "verilator-verification/LEC" total error summary
       record_result_with_summary "verilator-verification" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     fi
@@ -9458,6 +9484,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
       fi
+      append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "yosys/tests/sva/BMC" total error summary
       record_result_with_summary "yosys/tests/sva" "BMC" "$total" "$pass" "$failures" "$xfail" "$xpass" "$error" "$skipped" "$summary"
     fi
@@ -9503,6 +9530,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
       if [[ -n "$lec_case_summary" ]]; then
         summary="${summary} ${lec_case_summary}"
       fi
+      append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "yosys/tests/sva/LEC" total error summary
       record_result_with_summary "yosys/tests/sva" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     fi
