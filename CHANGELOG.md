@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1013 - February 11, 2026
+
+### `circt-mut run`: CLI Overrides for Compare/Trend History Governance
+
+1. Extended `circt-mut run` report controls in
+   `tools/circt-mut/circt-mut.cpp` with direct CLI overrides:
+   - `--report-compare FILE`
+   - `--report-compare-history-latest FILE`
+   - `--report-history FILE`
+   - `--report-append-history FILE`
+   - `--report-trend-history FILE`
+   - `--report-trend-window N`
+   - `--report-history-max-runs N`
+   - `--report-out FILE`
+   - `--report-history-bootstrap`
+   - `--report-no-history-bootstrap`
+2. Added CLI-over-config precedence in run->report forwarding:
+   - CLI now overrides `[run] report_compare`,
+     `report_compare_history_latest`, `report_history`,
+     `report_append_history`, `report_trend_history`,
+     `report_trend_window`, `report_history_max_runs`, `report_out`,
+     and `report_history_bootstrap`.
+   - Added conflict-safe compare forwarding: if CLI selects compare mode,
+     conflicting config compare mode is suppressed to avoid accidental
+     `--compare`/`--compare-history-latest` dual forwarding.
+3. Added regression coverage:
+   - `test/Tools/circt-mut-run-help.test`
+   - `test/Tools/circt-mut-run-report-override-requires-with-report.test`
+   - `test/Tools/circt-mut-run-with-report-cli-compare-trend-override-config.test`
+   - `test/Tools/circt-mut-run-with-report-cli-history-out-override-config.test`
+   - `test/Tools/circt-mut-run-with-report-cli-no-history-bootstrap-override.test`
+4. This improves long-term CI operability by allowing wrappers to route history
+   and compare/trend/report artifacts per-run without mutating project config.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused run/report slices:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-help.test test/Tools/circt-mut-run-report-override-requires-with-report.test test/Tools/circt-mut-run-with-report-cli-compare-trend-override-config.test`: PASS (3/3)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (238/238)
+- External filtered formal cadence:
+  - `LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-run-report-overrides ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1012 - February 11, 2026
 
 ### `circt-mut run`: CLI Overrides for Report History/Output + Bootstrap

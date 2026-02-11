@@ -1,5 +1,5 @@
 // RUN: rm -rf %t && mkdir -p %t/proj
 // RUN: printf '[run]\nwith_report = false\n' > %t/proj/circt-mut.toml
-// RUN: not circt-mut run --project-dir %t/proj --report-policy-profile formal-regression-matrix-guard-nightly 2>&1 | FileCheck %s
+// RUN: not circt-mut run --project-dir %t/proj --report-trend-history %t/proj/history.tsv 2>&1 | FileCheck %s
 //
 // CHECK: circt-mut run: report override options require --with-report or [run] with_report = true

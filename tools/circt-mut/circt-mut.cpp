@@ -139,7 +139,17 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --with-report            Run 'circt-mut report' after run completes\n";
   os << "  --with-report-on-fail    Run report even if run flow fails\n";
   os << "  --report-mode MODE       cover|matrix|all (default: same as --mode)\n";
+  os << "  --report-compare FILE    Override post-run report --compare\n";
+  os << "  --report-compare-history-latest FILE\n";
+  os << "                           Override post-run report --compare-history-latest\n";
   os << "  --report-history FILE    Override post-run report --history\n";
+  os << "  --report-append-history FILE\n";
+  os << "                           Override post-run report --append-history\n";
+  os << "  --report-trend-history FILE\n";
+  os << "                           Override post-run report --trend-history\n";
+  os << "  --report-trend-window N  Override post-run report --trend-window\n";
+  os << "  --report-history-max-runs N\n";
+  os << "                           Override post-run report --history-max-runs\n";
   os << "  --report-out FILE        Override post-run report --out\n";
   os << "  --report-history-bootstrap\n";
   os << "                           Enable post-run report --history-bootstrap\n";
@@ -5759,7 +5769,13 @@ struct RunOptions {
   bool withReport = false;
   bool withReportOnFail = false;
   std::string reportMode;
+  std::string reportCompare;
+  std::string reportCompareHistoryLatest;
   std::string reportHistory;
+  std::string reportAppendHistory;
+  std::string reportTrendHistory;
+  std::string reportTrendWindow;
+  std::string reportHistoryMaxRuns;
   std::string reportOut;
   std::optional<bool> reportHistoryBootstrap;
   SmallVector<std::string, 4> reportPolicyProfiles;
@@ -6064,11 +6080,58 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       result.opts.reportMode = v->str();
       continue;
     }
+    if (arg == "--report-compare" || arg.starts_with("--report-compare=")) {
+      auto v = consumeValue(i, arg, "--report-compare");
+      if (!v)
+        return result;
+      result.opts.reportCompare = v->str();
+      continue;
+    }
+    if (arg == "--report-compare-history-latest" ||
+        arg.starts_with("--report-compare-history-latest=")) {
+      auto v = consumeValue(i, arg, "--report-compare-history-latest");
+      if (!v)
+        return result;
+      result.opts.reportCompareHistoryLatest = v->str();
+      continue;
+    }
     if (arg == "--report-history" || arg.starts_with("--report-history=")) {
       auto v = consumeValue(i, arg, "--report-history");
       if (!v)
         return result;
       result.opts.reportHistory = v->str();
+      continue;
+    }
+    if (arg == "--report-append-history" ||
+        arg.starts_with("--report-append-history=")) {
+      auto v = consumeValue(i, arg, "--report-append-history");
+      if (!v)
+        return result;
+      result.opts.reportAppendHistory = v->str();
+      continue;
+    }
+    if (arg == "--report-trend-history" ||
+        arg.starts_with("--report-trend-history=")) {
+      auto v = consumeValue(i, arg, "--report-trend-history");
+      if (!v)
+        return result;
+      result.opts.reportTrendHistory = v->str();
+      continue;
+    }
+    if (arg == "--report-trend-window" ||
+        arg.starts_with("--report-trend-window=")) {
+      auto v = consumeValue(i, arg, "--report-trend-window");
+      if (!v)
+        return result;
+      result.opts.reportTrendWindow = v->str();
+      continue;
+    }
+    if (arg == "--report-history-max-runs" ||
+        arg.starts_with("--report-history-max-runs=")) {
+      auto v = consumeValue(i, arg, "--report-history-max-runs");
+      if (!v)
+        return result;
+      result.opts.reportHistoryMaxRuns = v->str();
       continue;
     }
     if (arg == "--report-out" || arg.starts_with("--report-out=")) {
@@ -6254,9 +6317,12 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     return 1;
   }
   if (!withReport) {
-    if (!opts.reportMode.empty() || !opts.reportHistory.empty() ||
-        !opts.reportOut.empty() || opts.reportHistoryBootstrap.has_value() ||
-        !opts.reportPolicyProfiles.empty() ||
+    if (!opts.reportMode.empty() || !opts.reportCompare.empty() ||
+        !opts.reportCompareHistoryLatest.empty() ||
+        !opts.reportHistory.empty() || !opts.reportAppendHistory.empty() ||
+        !opts.reportTrendHistory.empty() || !opts.reportTrendWindow.empty() ||
+        !opts.reportHistoryMaxRuns.empty() || !opts.reportOut.empty() ||
+        opts.reportHistoryBootstrap.has_value() || !opts.reportPolicyProfiles.empty() ||
         !opts.reportPolicyMode.empty() ||
         opts.reportPolicyStopOnFail.has_value() ||
         opts.reportFailOnPrequalifyDrift.has_value()) {
@@ -6376,11 +6442,24 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       }
     }
 
-    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_compare",
-                                "--compare", opts.projectDir);
-    appendOptionalConfigPathArg(reportArgsOwned, cfg.run,
-                                "report_compare_history_latest",
-                                "--compare-history-latest", opts.projectDir);
+    bool hasCLIReportCompare = !opts.reportCompare.empty();
+    bool hasCLIReportCompareHistoryLatest =
+        !opts.reportCompareHistoryLatest.empty();
+    if (hasCLIReportCompare) {
+      reportArgsOwned.push_back("--compare");
+      reportArgsOwned.push_back(opts.reportCompare);
+    } else if (!hasCLIReportCompareHistoryLatest) {
+      appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_compare",
+                                  "--compare", opts.projectDir);
+    }
+    if (hasCLIReportCompareHistoryLatest) {
+      reportArgsOwned.push_back("--compare-history-latest");
+      reportArgsOwned.push_back(opts.reportCompareHistoryLatest);
+    } else if (!hasCLIReportCompare) {
+      appendOptionalConfigPathArg(reportArgsOwned, cfg.run,
+                                  "report_compare_history_latest",
+                                  "--compare-history-latest", opts.projectDir);
+    }
     if (!opts.reportHistory.empty()) {
       reportArgsOwned.push_back("--history");
       reportArgsOwned.push_back(opts.reportHistory);
@@ -6388,14 +6467,36 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_history",
                                   "--history", opts.projectDir);
     }
-    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_append_history",
-                                "--append-history", opts.projectDir);
-    appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_trend_history",
-                                "--trend-history", opts.projectDir);
-    appendOptionalConfigArg(reportArgsOwned, cfg.run, "report_history_max_runs",
-                            "--history-max-runs");
-    appendOptionalConfigArg(reportArgsOwned, cfg.run, "report_trend_window",
-                            "--trend-window");
+    if (!opts.reportAppendHistory.empty()) {
+      reportArgsOwned.push_back("--append-history");
+      reportArgsOwned.push_back(opts.reportAppendHistory);
+    } else {
+      appendOptionalConfigPathArg(reportArgsOwned, cfg.run,
+                                  "report_append_history", "--append-history",
+                                  opts.projectDir);
+    }
+    if (!opts.reportTrendHistory.empty()) {
+      reportArgsOwned.push_back("--trend-history");
+      reportArgsOwned.push_back(opts.reportTrendHistory);
+    } else {
+      appendOptionalConfigPathArg(reportArgsOwned, cfg.run,
+                                  "report_trend_history", "--trend-history",
+                                  opts.projectDir);
+    }
+    if (!opts.reportHistoryMaxRuns.empty()) {
+      reportArgsOwned.push_back("--history-max-runs");
+      reportArgsOwned.push_back(opts.reportHistoryMaxRuns);
+    } else {
+      appendOptionalConfigArg(reportArgsOwned, cfg.run, "report_history_max_runs",
+                              "--history-max-runs");
+    }
+    if (!opts.reportTrendWindow.empty()) {
+      reportArgsOwned.push_back("--trend-window");
+      reportArgsOwned.push_back(opts.reportTrendWindow);
+    } else {
+      appendOptionalConfigArg(reportArgsOwned, cfg.run, "report_trend_window",
+                              "--trend-window");
+    }
     appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_cover_work_dir",
                                 "--cover-work-dir", opts.projectDir);
     appendOptionalConfigPathArg(reportArgsOwned, cfg.run, "report_matrix_out_dir",
