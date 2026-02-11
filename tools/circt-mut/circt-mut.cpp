@@ -6222,6 +6222,21 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
            << reportMode << "' (expected cover|matrix|all)\n";
     return 1;
   }
+  if (!withReport) {
+    if (!opts.reportMode.empty() || !opts.reportPolicyProfiles.empty() ||
+        !opts.reportPolicyMode.empty() ||
+        opts.reportPolicyStopOnFail.has_value() ||
+        opts.reportFailOnPrequalifyDrift.has_value()) {
+      errs() << "circt-mut run: report override options require "
+                "--with-report or [run] with_report = true\n";
+      return 1;
+    }
+    if (opts.withReportOnFail) {
+      errs() << "circt-mut run: --with-report-on-fail requires "
+                "--with-report or [run] with_report = true\n";
+      return 1;
+    }
+  }
   SmallVector<std::string, 48> reportArgsOwned;
   if (withReport) {
     reportArgsOwned.push_back("report");
