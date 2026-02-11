@@ -8177,6 +8177,7 @@ summarize_bmc_check_attribution_file() {
   BMC_CHECK_ATTRIBUTION_FILE="$check_file" python3 - <<'PY'
 import os
 import re
+import hashlib
 from collections import defaultdict
 from pathlib import Path
 
@@ -8195,8 +8196,42 @@ mode_case_sets = {
     "loc": set(),
     "fingerprint": set(),
 }
+fingerprint_set = set()
+key_set = set()
+key_mode_key_sets = {
+    "label": set(),
+    "loc": set(),
+    "fingerprint": set(),
+}
 case_keys = set()
 check_total = 0
+
+def compact_line(text: str) -> str:
+    return " ".join(text.strip().split())
+
+def compute_ir_check_fingerprint(kind: str, snippet: str) -> str:
+    canonical = f"{kind}\t{compact_line(snippet)}"
+    digest = hashlib.sha1(canonical.encode("utf-8")).hexdigest()
+    return f"chk_{digest[:12]}"
+
+def compute_ir_check_key(prefix: str, kind: str, payload: str) -> str:
+    canonical = f"{kind}\t{compact_line(payload)}"
+    digest = hashlib.sha1(canonical.encode("utf-8")).hexdigest()
+    return f"{prefix}_{digest[:12]}"
+
+def extract_ir_check_key(kind: str, snippet: str, fingerprint: str):
+    label_match = re.search(r'\blabel\s+"([^"]*)"', snippet)
+    if label_match:
+        label = label_match.group(1).strip()
+        if label:
+            return (compute_ir_check_key("k_lbl", kind, label), "label")
+    loc_matches = re.findall(r'loc\(([^)]*)\)', snippet)
+    if loc_matches:
+        loc_value = loc_matches[-1].strip()
+        if loc_value:
+            return (compute_ir_check_key("k_loc", kind, loc_value), "loc")
+    suffix = fingerprint.split("_", 1)[1] if "_" in fingerprint else fingerprint
+    return (f"k_fp_{suffix}", "fingerprint")
 
 for line in path.open(encoding="utf-8"):
     line = line.rstrip("\n")
@@ -8223,6 +8258,11 @@ for line in path.open(encoding="utf-8"):
     case_keys.add(case_key)
     mode_check_counts[mode] += 1
     mode_case_sets[mode].add(case_key)
+    fingerprint = compute_ir_check_fingerprint(kind, snippet)
+    key, key_mode = extract_ir_check_key(kind, snippet, fingerprint)
+    fingerprint_set.add(fingerprint)
+    key_set.add(key)
+    key_mode_key_sets[key_mode].add(key)
     check_total += 1
 
 if check_total <= 0:
@@ -8238,6 +8278,11 @@ parts = [
     f"bmc_ir_check_key_mode_fingerprint_cases={len(mode_case_sets['fingerprint'])}",
     f"bmc_ir_check_key_mode_label_cases={len(mode_case_sets['label'])}",
     f"bmc_ir_check_key_mode_loc_cases={len(mode_case_sets['loc'])}",
+    f"bmc_ir_check_fingerprint_cardinality={len(fingerprint_set)}",
+    f"bmc_ir_check_key_cardinality={len(key_set)}",
+    f"bmc_ir_check_key_mode_fingerprint_cardinality={len(key_mode_key_sets['fingerprint'])}",
+    f"bmc_ir_check_key_mode_label_cardinality={len(key_mode_key_sets['label'])}",
+    f"bmc_ir_check_key_mode_loc_cardinality={len(key_mode_key_sets['loc'])}",
 ]
 print(" ".join(parts))
 PY

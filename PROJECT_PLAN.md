@@ -9,6 +9,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++)
+
+1. Added BMC provenance/check identity trend governance:
+   - `formal-regression-matrix-external-formal-bmc-provenance-check-identity-trend-guard-v1`
+2. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v4`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v4`
+3. Current remaining limitations:
+   - BMC identity trend policy still does not directly gate case-level identity
+     sets for check/provenance (only cardinalities are tracked in `circt-mut`).
+   - targeted external cadence runs can still be operationally noisy due long
+     frontend phases and stale background contention if not aggressively bounded.
+   - OpenTitan bounded LEC cadence remains unstable (`missing_results` observed
+     under short bounded runs with `run_opentitan_formal_e2e.sh`).
+4. Next long-term features:
+   - export stable per-lane check/provenance identity-set digests from
+     `run_formal_all` and gate digest drift directly in `circt-mut`.
+   - add non-empty targeted-filter contracts for sv-tests/yosys/verilator lanes
+     to prevent filter-empty green runs.
+   - harden OpenTitan bounded LEC driver to guarantee results-file emission
+     (explicit failure classification instead of `missing_results`).
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++)
 
 1. Added BMC identity trend governance in `circt-mut`:
