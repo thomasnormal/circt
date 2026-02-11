@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1107 - February 11, 2026
+
+### Formal Governance: LEC Error-Bucket Case-ID Drift Gating
+
+1. Extended `utils/run_formal_all.sh` LEC telemetry with coarse error buckets
+   for `ERROR` rows:
+   - `infra_runner_command`
+   - `infra_timeout`
+   - `infra_oom`
+   - `tool_no_diag`
+   - `tool_pipeline`
+   - `semantic_other`
+2. Added baseline-tracked per-lane identity set:
+   - `lec_error_bucket_case_ids`
+   encoded as `bucket::case_id` tuples and persisted in baseline TSV rows.
+3. Added strict-gate control:
+   - `--fail-on-new-lec-error-bucket-case-ids`
+   and enabled it under `--strict-gate` defaults.
+4. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-error-bucket-case-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-error-bucket-case-ids-defaults.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-error-bucket-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-error-bucket-case-ids-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-case-reasons.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-cases.test`
+  - PASS (5/5)
+- External filtered cadence smoke (explicit `build-test/bin` toolchain):
+  - `sv-tests/LEC` (`16.15--property-iff-uvm|...-fail` filter): `pass=1 error=0`
+  - `verilator-verification/LEC` (filtered sample): `total=0 skip=17`
+  - `yosys/tests/sva/LEC` (filtered sample): `total=0 skip=0`
+
 ## Iteration 1104 - February 11, 2026
 
 ### `circt-mut` External Formal Summary Schema-Version Contract Hardening

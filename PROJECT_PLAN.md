@@ -9,6 +9,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 21:20)
+
+1. Added strict LEC error-bucket drift governance in `run_formal_all.sh`:
+   - new summary counters: `lec_error_bucket_*_cases`
+   - new baseline field: `lec_error_bucket_case_ids`
+   - new gate: `--fail-on-new-lec-error-bucket-case-ids`
+   - included in `--strict-gate` defaults.
+2. Long-term impact:
+   - separates infra/tool-pipeline churn from semantic LEC errors in baseline
+     drift checks, reducing false-positive gate noise.
+   - creates a stable bridge for mutation prioritization keyed by formal
+     reason-family deltas.
+3. Remaining limitations:
+   - `semantic_other` is still broad; we need finer stable semantic buckets
+     (for example, lowering, unsupported feature, and solver-model mismatch).
+   - external filtered samples still include many empty/skip selections, so
+     cadence runs need suite-specific non-empty target sets for stronger signal.
+4. Next features to build (best long-term ROI):
+   - split `semantic_other` into deterministic semantic families and gate new
+     case IDs per family.
+   - add BMC semantic bucket governance for multiclock and sequence-subroutine
+     closure (case-ID drift and parity checks).
+   - wire mutation scoring to formal bucket deltas so mutator profiles focus on
+     active failing semantic families.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 21:00)
 
 1. Hardened LEC runner wrapper-launch retries for `Permission denied` in
