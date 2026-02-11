@@ -437,9 +437,16 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   applyCompilationFlagOverride(
       slang::ast::CompilationFlags::AllowTopLevelIfacePorts,
       options.allowTopLevelIfacePorts);
-  applyCompilationFlagOverride(
-      slang::ast::CompilationFlags::AllowVirtualIfaceWithOverride,
-      options.allowVirtualIfaceWithOverride);
+  // `AllowVirtualIfaceWithOverride` exists only in newer slang versions.
+  // Use dependent lookup so older versions compile without this enum member.
+  auto applyAllowVirtualIfaceWithOverride = [&]<typename FlagEnum>() {
+    if constexpr (requires { FlagEnum::AllowVirtualIfaceWithOverride; }) {
+      applyCompilationFlagOverride(FlagEnum::AllowVirtualIfaceWithOverride,
+                                   options.allowVirtualIfaceWithOverride);
+    }
+  };
+  applyAllowVirtualIfaceWithOverride
+      .template operator()<slang::ast::CompilationFlags>();
 
   driver.options.compilationFlags.emplace(
       slang::ast::CompilationFlags::LintMode,
