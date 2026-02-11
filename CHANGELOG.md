@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1009 - February 11, 2026
+
+### `circt-mut run`: CLI Governance Overrides for Post-Run Report
+
+1. Extended `circt-mut run` CLI in `tools/circt-mut/circt-mut.cpp` with
+   direct post-run report governance controls:
+   - `--report-policy-mode smoke|nightly`
+   - `--report-policy-stop-on-fail <bool>`
+   - `--report-fail-on-prequalify-drift`
+   - `--report-no-fail-on-prequalify-drift`
+2. Added strict validation and precedence:
+   - `--report-policy-stop-on-fail` requires `--report-policy-mode`
+   - policy-mode requires effective report mode `matrix|all`
+   - CLI overrides take precedence over `[run] report_*` fallback keys.
+3. Integrated with existing run->report pass-through:
+   - policy-mode/stop flags map to concrete report policy profiles.
+   - drift gate CLI flags map to report `--fail-on-prequalify-drift` /
+     `--no-fail-on-prequalify-drift`.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-run-help.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-stop-on-fail.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-stop-on-fail-requires-mode.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-stop-on-fail-invalid.test`
+   - `test/Tools/circt-mut-run-with-report-cli-prequalify-drift-disable.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused run/report slices:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-help.test test/Tools/circt-mut-run-with-report-cli-*.test test/Tools/circt-mut-run-with-report-config-*.test test/Tools/circt-mut-run-with-report-on-fail-*.test test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-prequalify-drift-config-disable.test`: PASS (20/20)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (232/232)
+- External filtered formal cadence:
+  - `LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-run-cli-report-governance-20260211 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1008 - February 11, 2026
 
 ### `circt-mut report/run`: Explicit Drift-Gate Disable Path

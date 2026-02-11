@@ -139,6 +139,14 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --with-report            Run 'circt-mut report' after run completes\n";
   os << "  --with-report-on-fail    Run report even if run flow fails\n";
   os << "  --report-mode MODE       cover|matrix|all (default: same as --mode)\n";
+  os << "  --report-policy-mode MODE\n";
+  os << "                           smoke|nightly (maps to report policy profile)\n";
+  os << "  --report-policy-stop-on-fail BOOL\n";
+  os << "                           1|0|true|false|yes|no|on|off\n";
+  os << "  --report-fail-on-prequalify-drift\n";
+  os << "                           Force-enable report prequalify drift gate\n";
+  os << "  --report-no-fail-on-prequalify-drift\n";
+  os << "                           Force-disable report prequalify drift gate\n";
   os << "  -h, --help               Show help\n";
 }
 
@@ -5743,6 +5751,9 @@ struct RunOptions {
   bool withReport = false;
   bool withReportOnFail = false;
   std::string reportMode;
+  std::string reportPolicyMode;
+  std::optional<bool> reportPolicyStopOnFail;
+  std::optional<bool> reportFailOnPrequalifyDrift;
 };
 
 struct RunParseResult {
@@ -5982,6 +5993,21 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
     }
     return args[++index];
   };
+  auto parseBoolValue = [&](StringRef value, StringRef optName)
+      -> std::optional<bool> {
+    StringRef lowered = value.trim().lower();
+    if (lowered == "1" || lowered == "true" || lowered == "yes" ||
+        lowered == "on")
+      return true;
+    if (lowered == "0" || lowered == "false" || lowered == "no" ||
+        lowered == "off")
+      return false;
+    result.error =
+        (Twine("circt-mut run: invalid ") + optName + " value: " + value +
+         " (expected 1|0|true|false|yes|no|on|off)")
+            .str();
+    return std::nullopt;
+  };
 
   for (size_t i = 0; i < args.size(); ++i) {
     StringRef arg = args[i];
@@ -6026,6 +6052,41 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       result.opts.reportMode = v->str();
       continue;
     }
+    if (arg == "--report-policy-mode" ||
+        arg.starts_with("--report-policy-mode=")) {
+      auto v = consumeValue(i, arg, "--report-policy-mode");
+      if (!v)
+        return result;
+      std::string mode = StringRef(*v).trim().lower();
+      if (mode != "smoke" && mode != "nightly") {
+        result.error = (Twine("circt-mut run: invalid --report-policy-mode "
+                              "value: ") +
+                        *v + " (expected smoke|nightly)")
+                           .str();
+        return result;
+      }
+      result.opts.reportPolicyMode = mode;
+      continue;
+    }
+    if (arg == "--report-policy-stop-on-fail" ||
+        arg.starts_with("--report-policy-stop-on-fail=")) {
+      auto v = consumeValue(i, arg, "--report-policy-stop-on-fail");
+      if (!v)
+        return result;
+      auto parsed = parseBoolValue(*v, "--report-policy-stop-on-fail");
+      if (!parsed)
+        return result;
+      result.opts.reportPolicyStopOnFail = *parsed;
+      continue;
+    }
+    if (arg == "--report-fail-on-prequalify-drift") {
+      result.opts.reportFailOnPrequalifyDrift = true;
+      continue;
+    }
+    if (arg == "--report-no-fail-on-prequalify-drift") {
+      result.opts.reportFailOnPrequalifyDrift = false;
+      continue;
+    }
 
     if (arg.starts_with("-")) {
       result.error = (Twine("circt-mut run: unknown option: ") + arg).str();
@@ -6050,6 +6111,21 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
         (Twine("circt-mut run: invalid --report-mode value: ") +
          result.opts.reportMode + " (expected cover|matrix|all)")
             .str();
+    return result;
+  }
+  std::string effectiveReportMode =
+      result.opts.reportMode.empty() ? result.opts.mode : result.opts.reportMode;
+  if (!result.opts.reportPolicyMode.empty() &&
+      effectiveReportMode != "matrix" && effectiveReportMode != "all") {
+    result.error = "circt-mut run: --report-policy-mode requires "
+                   "--report-mode matrix|all (or --mode matrix|all when "
+                   "--report-mode is unset)";
+    return result;
+  }
+  if (result.opts.reportPolicyStopOnFail.has_value() &&
+      result.opts.reportPolicyMode.empty()) {
+    result.error = "circt-mut run: --report-policy-stop-on-fail requires "
+                   "--report-policy-mode";
     return result;
   }
 
@@ -6157,28 +6233,35 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       }
       return appended;
     };
-    bool hasExplicitPolicyProfile = appendRunReportCSV("report_policy_profile");
-    hasExplicitPolicyProfile |= appendRunReportCSV("report_policy_profiles");
+    bool hasCLIReportPolicyMode = !opts.reportPolicyMode.empty();
+    bool hasExplicitPolicyProfile = false;
+    if (!hasCLIReportPolicyMode) {
+      hasExplicitPolicyProfile = appendRunReportCSV("report_policy_profile");
+      hasExplicitPolicyProfile |= appendRunReportCSV("report_policy_profiles");
+    }
     if (!hasExplicitPolicyProfile) {
-      auto policyModeIt = cfg.run.find("report_policy_mode");
-      auto policyStopOnFailIt = cfg.run.find("report_policy_stop_on_fail");
-      bool hasPolicyMode =
-          policyModeIt != cfg.run.end() && !policyModeIt->second.empty();
-      bool hasPolicyStopOnFail = policyStopOnFailIt != cfg.run.end() &&
-                                 !policyStopOnFailIt->second.empty();
-      if (hasPolicyStopOnFail && !hasPolicyMode) {
-        errs() << "circt-mut run: [run] key 'report_policy_stop_on_fail' "
-                  "requires 'report_policy_mode'\n";
-        return 1;
-      }
-      if (hasPolicyMode) {
-        if (reportMode != "matrix" && reportMode != "all") {
-          errs() << "circt-mut run: [run] key 'report_policy_mode' requires "
-                    "'report_mode = matrix|all'\n";
+      bool hasPolicyMode = false;
+      std::string mode;
+      std::optional<bool> stopOnFail;
+      if (hasCLIReportPolicyMode) {
+        hasPolicyMode = true;
+        mode = opts.reportPolicyMode;
+        if (opts.reportPolicyStopOnFail.has_value())
+          stopOnFail = opts.reportPolicyStopOnFail;
+      } else {
+        auto policyModeIt = cfg.run.find("report_policy_mode");
+        auto policyStopOnFailIt = cfg.run.find("report_policy_stop_on_fail");
+        hasPolicyMode =
+            policyModeIt != cfg.run.end() && !policyModeIt->second.empty();
+        bool hasPolicyStopOnFail = policyStopOnFailIt != cfg.run.end() &&
+                                   !policyStopOnFailIt->second.empty();
+        if (hasPolicyStopOnFail && !hasPolicyMode) {
+          errs() << "circt-mut run: [run] key 'report_policy_stop_on_fail' "
+                    "requires 'report_policy_mode'\n";
           return 1;
         }
-        std::string mode = StringRef(policyModeIt->second).trim().lower();
-        bool stopOnFail = false;
+        if (hasPolicyMode)
+          mode = StringRef(policyModeIt->second).trim().lower();
         if (hasPolicyStopOnFail) {
           StringRef raw = StringRef(policyStopOnFailIt->second).trim().lower();
           if (raw == "1" || raw == "true" || raw == "yes" || raw == "on")
@@ -6194,19 +6277,26 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
             return 1;
           }
         }
+      }
+      if (hasPolicyMode) {
+        if (reportMode != "matrix" && reportMode != "all") {
+          errs() << "circt-mut run: report policy mode requires "
+                    "'report_mode = matrix|all'\n";
+          return 1;
+        }
+        bool stop = stopOnFail.value_or(false);
         std::string policyProfile;
         if (mode == "smoke") {
-          policyProfile = stopOnFail
+          policyProfile = stop
                               ? "formal-regression-matrix-stop-on-fail-guard-smoke"
                               : "formal-regression-matrix-guard-smoke";
         } else if (mode == "nightly") {
-          policyProfile = stopOnFail
+          policyProfile = stop
                               ? "formal-regression-matrix-stop-on-fail-guard-nightly"
                               : "formal-regression-matrix-guard-nightly";
         } else {
-          errs() << "circt-mut run: invalid [run] key 'report_policy_mode' "
-                    "value '"
-                 << policyModeIt->second << "' (expected smoke|nightly)\n";
+          errs() << "circt-mut run: invalid report policy mode value '" << mode
+                 << "' (expected smoke|nightly)\n";
           return 1;
         }
         reportArgsOwned.push_back("--policy-profile");
@@ -6242,12 +6332,18 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
 
     if (!appendOptionalConfigBoolFlagArg(reportArgsOwned, cfg.run,
                                          "report_history_bootstrap",
-                                         "--history-bootstrap", "run",
-                                         error) ||
-        !appendOptionalConfigBoolOptionArg(
-            reportArgsOwned, cfg.run, "report_fail_on_prequalify_drift",
-            "--fail-on-prequalify-drift", "--no-fail-on-prequalify-drift",
-            "run", error)) {
+                                         "--history-bootstrap", "run", error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    if (opts.reportFailOnPrequalifyDrift.has_value()) {
+      reportArgsOwned.push_back(*opts.reportFailOnPrequalifyDrift
+                                    ? "--fail-on-prequalify-drift"
+                                    : "--no-fail-on-prequalify-drift");
+    } else if (!appendOptionalConfigBoolOptionArg(
+                   reportArgsOwned, cfg.run, "report_fail_on_prequalify_drift",
+                   "--fail-on-prequalify-drift",
+                   "--no-fail-on-prequalify-drift", "run", error)) {
       errs() << error << "\n";
       return 1;
     }
