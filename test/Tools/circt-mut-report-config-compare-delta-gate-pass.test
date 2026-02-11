@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/cover
+// RUN: printf 'total_mutants\t10\nrelevant_mutants\t6\ndetected_mutants\t5\npropagated_not_detected_mutants\t1\nnot_propagated_mutants\t0\nnot_activated_mutants\t0\nerrors\t0\nmutation_coverage_percent\t83.33\n' > %t/proj/out/cover/metrics.tsv
+// RUN: printf 'key\tvalue\ncover.detected_mutants\t4\n' > %t/proj/baseline.tsv
+// RUN: printf '[report]\ncompare = "baseline.tsv"\nfail_if_delta_lt = "cover.detected_mutants=0"\n' > %t/proj/circt-mut.toml
+// RUN: circt-mut report --project-dir %t/proj --mode cover > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK-DAG: compare.baseline_file{{[[:space:]]}}{{.*}}baseline.tsv
+// CHECK-DAG: diff.cover.detected_mutants.delta{{[[:space:]]}}1.00
+// CHECK-DAG: compare.gate_status{{[[:space:]]}}pass
