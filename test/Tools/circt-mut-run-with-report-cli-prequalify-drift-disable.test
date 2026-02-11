@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t/proj %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nout_dir=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    --out-dir) out_dir=\"$2\"; shift 2 ;;\n    --out-dir=*) out_dir=\"${1#*=}\"; shift ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p \"$out_dir/lane1\"\nprintf \"total_mutants\\t4\\nrelevant_mutants\\t4\\ndetected_mutants\\t2\\npropagated_not_detected_mutants\\t1\\nnot_propagated_mutants\\t1\\nnot_activated_mutants\\t0\\nerrors\\t0\\nglobal_filter_timeout_mutants\\t0\\nglobal_filter_lec_unknown_mutants\\t0\\nglobal_filter_bmc_unknown_mutants\\t0\\n\" > \"$out_dir/lane1/metrics.tsv\"\nprintf \"lane_id\\tstatus\\texit_code\\tcoverage_percent\\tgate_status\\tlane_dir\\tmetrics_file\\tsummary_json\\n\" > \"$out_dir/results.tsv\"\nprintf \"lane1\\tPASS\\t0\\t50.00\\tPASS\\t$out_dir/lane1\\t$out_dir/lane1/metrics.tsv\\t-\\n\" >> \"$out_dir/results.tsv\"\n' > %t/scripts/run_mutation_matrix.sh
+// RUN: chmod +x %t/scripts/run_mutation_matrix.sh
+// RUN: printf 'lane1\tdesign.il\tmutations.txt\ttests.tsv\t-\t-\t-\n' > %t/proj/lanes.tsv
+// RUN: printf '[run]\nwith_report = true\nreport_mode = "matrix"\nreport_policy_profile = "formal-regression-matrix-guard"\n[matrix]\nlanes_tsv = "lanes.tsv"\nout_dir = "out/matrix"\n' > %t/proj/circt-mut.toml
+// RUN: env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut run --project-dir %t/proj --mode matrix --report-no-fail-on-prequalify-drift > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK: policy.profile_1{{[[:space:]]}}formal-regression-matrix-guard
+// CHECK-NOT: matrix.prequalify_drift_gate_status

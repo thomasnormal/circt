@@ -1,0 +1,3 @@
+// RUN: not circt-mut run --report-policy-mode smoke --report-policy-stop-on-fail maybe 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut run: invalid --report-policy-stop-on-fail value: maybe (expected 1|0|true|false|yes|no|on|off)
