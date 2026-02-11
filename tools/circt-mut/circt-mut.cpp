@@ -151,6 +151,10 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --report-history-max-runs N\n";
   os << "                           Override post-run report --history-max-runs\n";
   os << "  --report-out FILE        Override post-run report --out\n";
+  os << "  --report-fail-if-value-gt RULE\n";
+  os << "                           Repeatable override for report --fail-if-value-gt\n";
+  os << "  --report-fail-if-value-lt RULE\n";
+  os << "                           Repeatable override for report --fail-if-value-lt\n";
   os << "  --report-fail-if-delta-gt RULE\n";
   os << "                           Repeatable override for report --fail-if-delta-gt\n";
   os << "  --report-fail-if-delta-lt RULE\n";
@@ -212,7 +216,9 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-lane-drift-nightly|\n";
   os << "                           formal-regression-matrix-lane-drift-strict|\n";
   os << "                           formal-regression-matrix-lane-trend-nightly|\n";
-  os << "                           formal-regression-matrix-lane-trend-strict\n";
+  os << "                           formal-regression-matrix-lane-trend-strict|\n";
+  os << "                           formal-regression-matrix-runtime-nightly|\n";
+  os << "                           formal-regression-matrix-runtime-trend\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
   os << "  --fail-if-value-gt RULE  Fail if current numeric value exceeds threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
@@ -5850,6 +5856,8 @@ struct RunOptions {
   std::string reportTrendWindow;
   std::string reportHistoryMaxRuns;
   std::string reportOut;
+  SmallVector<std::string, 4> reportFailIfValueGt;
+  SmallVector<std::string, 4> reportFailIfValueLt;
   SmallVector<std::string, 4> reportFailIfDeltaGt;
   SmallVector<std::string, 4> reportFailIfDeltaLt;
   SmallVector<std::string, 4> reportFailIfTrendDeltaGt;
@@ -6218,6 +6226,22 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       result.opts.reportOut = v->str();
       continue;
     }
+    if (arg == "--report-fail-if-value-gt" ||
+        arg.starts_with("--report-fail-if-value-gt=")) {
+      auto v = consumeValue(i, arg, "--report-fail-if-value-gt");
+      if (!v)
+        return result;
+      result.opts.reportFailIfValueGt.push_back(v->str());
+      continue;
+    }
+    if (arg == "--report-fail-if-value-lt" ||
+        arg.starts_with("--report-fail-if-value-lt=")) {
+      auto v = consumeValue(i, arg, "--report-fail-if-value-lt");
+      if (!v)
+        return result;
+      result.opts.reportFailIfValueLt.push_back(v->str());
+      continue;
+    }
     if (arg == "--report-fail-if-delta-gt" ||
         arg.starts_with("--report-fail-if-delta-gt=")) {
       auto v = consumeValue(i, arg, "--report-fail-if-delta-gt");
@@ -6431,6 +6455,7 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         !opts.reportHistory.empty() || !opts.reportAppendHistory.empty() ||
         !opts.reportTrendHistory.empty() || !opts.reportTrendWindow.empty() ||
         !opts.reportHistoryMaxRuns.empty() || !opts.reportOut.empty() ||
+        !opts.reportFailIfValueGt.empty() || !opts.reportFailIfValueLt.empty() ||
         !opts.reportFailIfDeltaGt.empty() || !opts.reportFailIfDeltaLt.empty() ||
         !opts.reportFailIfTrendDeltaGt.empty() ||
         !opts.reportFailIfTrendDeltaLt.empty() ||
@@ -6651,6 +6676,12 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       }
       appendRulesFromCSV(configKey, optionFlag);
     };
+    appendRuleOverridesOrConfig(opts.reportFailIfValueGt,
+                                "report_fail_if_value_gt",
+                                "--fail-if-value-gt");
+    appendRuleOverridesOrConfig(opts.reportFailIfValueLt,
+                                "report_fail_if_value_lt",
+                                "--fail-if-value-lt");
     appendRuleOverridesOrConfig(opts.reportFailIfDeltaGt,
                                 "report_fail_if_delta_gt",
                                 "--fail-if-delta-gt");
@@ -7699,6 +7730,26 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.prequalify_drift_comparable", 0.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-runtime-nightly") {
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.runtime_summary_invalid_rows", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.runtime_ns_avg",
+                     120000000000.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.runtime_ns_max",
+                     600000000000.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.runtime_ns_sum",
+                     1800000000000.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-runtime-trend") {
+    appendUniqueRule(opts.failIfTrendDeltaGtRules, "matrix.runtime_ns_avg",
+                     60000000000.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules, "matrix.runtime_ns_max",
+                     180000000000.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules, "matrix.runtime_ns_sum",
+                     600000000000.0);
+    return true;
+  }
   error = (Twine("circt-mut report: unknown --policy-profile value: ") + profile +
            " (expected formal-regression-basic|formal-regression-trend|"
            "formal-regression-matrix-basic|formal-regression-matrix-trend|"
@@ -7718,7 +7769,9 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-lane-drift-nightly|"
            "formal-regression-matrix-lane-drift-strict|"
            "formal-regression-matrix-lane-trend-nightly|"
-           "formal-regression-matrix-lane-trend-strict)")
+           "formal-regression-matrix-lane-trend-strict|"
+           "formal-regression-matrix-runtime-nightly|"
+           "formal-regression-matrix-runtime-trend)")
               .str();
   return false;
 }
