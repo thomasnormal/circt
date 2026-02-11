@@ -11,4 +11,4 @@
 // RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
 //
 // SUMMARY: yosys LEC summary: total=1 pass=0 fail=0 error=1 skip=0
-// RESULTS: ERROR{{[[:space:]]+}}error_diag{{[[:space:]]+}}{{.*}}error_diag.sv{{[[:space:]]+}}yosys/tests/sva{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_VERILOG_ERROR
+// RESULTS: ERROR{{[[:space:]]+}}error_diag{{[[:space:]]+}}{{.*}}error_diag.sv{{[[:space:]]+}}yosys/tests/sva{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_VERILOG_ERROR{{[[:space:]]+}}no_diag
