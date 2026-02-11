@@ -263,6 +263,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-summary-guard|\n";
   os << "                           formal-regression-matrix-external-formal-summary-v1-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-guard|\n";
+  os << "                           formal-regression-matrix-external-formal-semantic-guard-yosys|\n";
   os << "                           formal-regression-matrix-provenance-guard|\n";
   os << "                           formal-regression-matrix-provenance-strict|\n";
   os << "                           formal-regression-matrix-native-lifecycle-strict|\n";
@@ -8900,6 +8901,13 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      0.0);
     return true;
   }
+  if (profile ==
+      "formal-regression-matrix-external-formal-semantic-guard-yosys") {
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_error_cases",
+                     0.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-provenance-guard") {
     appendMatrixPrequalifyProvenanceColumnPresenceRules(opts);
     appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
@@ -9067,6 +9075,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-summary-guard|"
            "formal-regression-matrix-external-formal-summary-v1-guard|"
            "formal-regression-matrix-external-formal-semantic-guard|"
+           "formal-regression-matrix-external-formal-semantic-guard-yosys|"
            "formal-regression-matrix-provenance-guard|"
            "formal-regression-matrix-provenance-strict|"
            "formal-regression-matrix-native-lifecycle-strict|"
