@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1112 - February 11, 2026
+
+### Mutation Integration: Surface External Formal Summary Counter Keys
+
+1. Extended `circt-mut report` external-formal aggregation to parse
+   `summary.tsv` `summary` column counters (`key=value` tokens) and emit
+   aggregated telemetry rows:
+   - `external_formal.summary_counter.<key>`
+2. This directly exposes formal semantic-bucket counters (BMC/LEC) to mutation
+   policy profiles without extra parsing glue.
+3. Added regression coverage:
+   - `test/Tools/circt-mut-report-external-formal-summary-counter-keys.test`
+   validates propagation of:
+   - `external_formal.summary_counter.lec_error_bucket_semantic_diag_error_cases`
+   - `external_formal.summary_counter.bmc_semantic_bucket_sequence_subroutine_cases`
+   - `external_formal.summary_counter.bmc_semantic_bucket_multiclock_cases`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/circt-mut-report-external-formal-summary-counter-keys.test`
+  - `build-test/test/Tools/run-formal-all-lec-error-bucket-semantic-diag-error.test`
+  - PASS (2/2)
+- Real sampled formal out-dir check:
+  - `circt-mut report --external-formal-out-dir /tmp/formal-verilator-lec-bucket-20260211-210703`
+  - emits:
+    - `external_formal.summary_counter.lec_error_bucket_semantic_diag_error_cases	1`
+
 ## Iteration 1111 - February 11, 2026
 
 ### Formal Telemetry: Decompose LEC `semantic_other` Error Bucket

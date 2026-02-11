@@ -9,6 +9,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 22:50)
+
+1. Mutation/reporting now consumes formal summary bucket counters natively:
+   - `circt-mut report` emits
+     `external_formal.summary_counter.<key>` from external `summary.tsv`.
+2. Long-term impact:
+   - enables mutation policy profiles to gate/prioritize directly on formal
+     semantic families (`lec_error_bucket_*`, `bmc_semantic_bucket_*`) without
+     ad-hoc parsers.
+3. Remaining limitations:
+   - counter export is global sum only; no per-suite/per-mode split yet in
+     `circt-mut` telemetry rows.
+   - semantic granularity still depends on upstream `run_formal_all.sh`
+     classifier quality.
+4. Next long-term features:
+   - add per-lane/per-suite prefixed counter exports in `circt-mut` for finer
+     mutator routing.
+   - define native mutation policy profiles keyed to
+     `external_formal.summary_counter.lec_error_bucket_semantic_diag_error_cases`
+     and BMC multiclock/subroutine counters.
+   - keep tightening LEC semantic decomposition so mutation deltas map to
+     actionable compiler subsystems.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 22:35)
 
 1. LEC semantic error telemetry now decomposes coarse `semantic_other`:
