@@ -4813,6 +4813,8 @@ static int runNativeMatrixDispatch(const char *argv0,
   uint64_t lanePass = 0;
   uint64_t laneFail = 0;
   uint64_t laneSkip = 0;
+  uint64_t laneExecuted = 0;
+  uint64_t laneRuntimeNanos = 0;
   bool stopOnFail = hasOptionFlag(args, "--stop-on-fail");
   uint64_t matrixJobs = 1;
   if (!cfg.matrixJobs.empty()) {
@@ -5146,8 +5148,15 @@ static int runNativeMatrixDispatch(const char *argv0,
 
     int coverRC = -1;
     std::string runError;
+    auto laneStart = std::chrono::steady_clock::now();
     if (!runArgvToLog(coverCmd, laneLog, /*timeoutSeconds=*/0, coverRC,
                       runError)) {
+      auto laneEnd = std::chrono::steady_clock::now();
+      laneRuntimeNanos += static_cast<uint64_t>(std::chrono::duration_cast<
+                                                    std::chrono::nanoseconds>(
+                                                    laneEnd - laneStart)
+                                                    .count());
+      ++laneExecuted;
       emitLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
                   "DISPATCH_ERROR", "cover_invocation_failed");
       ++laneFail;
@@ -5160,6 +5169,11 @@ static int runNativeMatrixDispatch(const char *argv0,
     std::string metricsPath = joinPath2(laneWorkDir, "metrics.tsv");
     std::string summaryPath = joinPath2(laneWorkDir, "summary.json");
     std::string coveragePercent = "-";
+    auto laneEnd = std::chrono::steady_clock::now();
+    laneRuntimeNanos += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(laneEnd - laneStart)
+            .count());
+    ++laneExecuted;
     if (sys::fs::exists(metricsPath)) {
       std::string metricsText = readTextFileOrEmpty(metricsPath);
       SmallVector<StringRef, 128> metricLines;
@@ -5200,6 +5214,7 @@ static int runNativeMatrixDispatch(const char *argv0,
       std::string row;
       bool pass = false;
       bool skip = false;
+      uint64_t runtimeNanos = 0;
     };
     std::vector<LaneJobOutcome> outcomes(pendingJobs.size());
     std::atomic<size_t> nextJob{0};
@@ -5228,8 +5243,14 @@ static int runNativeMatrixDispatch(const char *argv0,
       }
       int coverRC = -1;
       std::string runError;
+      auto laneStart = std::chrono::steady_clock::now();
       if (!runArgvToLog(job.coverCmd, job.laneLog, /*timeoutSeconds=*/0, coverRC,
                         runError)) {
+        auto laneEnd = std::chrono::steady_clock::now();
+        outcomes[idx].runtimeNanos = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(laneEnd -
+                                                                 laneStart)
+                .count());
         outcomes[idx].row =
             formatLaneRow(job.laneID, "FAIL", 1, "-", "FAIL", job.laneWorkDir,
                           "-", "-", "DISPATCH_ERROR",
@@ -5245,6 +5266,11 @@ static int runNativeMatrixDispatch(const char *argv0,
       std::string metricsPath = joinPath2(job.laneWorkDir, "metrics.tsv");
       std::string summaryPath = joinPath2(job.laneWorkDir, "summary.json");
       std::string coveragePercent = "-";
+      auto laneEnd = std::chrono::steady_clock::now();
+      outcomes[idx].runtimeNanos = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(laneEnd -
+                                                               laneStart)
+              .count());
       if (sys::fs::exists(metricsPath)) {
         std::string metricsText = readTextFileOrEmpty(metricsPath);
         SmallVector<StringRef, 128> metricLines;
@@ -5305,9 +5331,13 @@ static int runNativeMatrixDispatch(const char *argv0,
         ++laneSkip;
         gateCounts["SKIP"]++;
       } else if (outcomes[i].pass) {
+        ++laneExecuted;
+        laneRuntimeNanos += outcomes[i].runtimeNanos;
         ++lanePass;
         gateCounts["PASS"]++;
       } else {
+        ++laneExecuted;
+        laneRuntimeNanos += outcomes[i].runtimeNanos;
         ++laneFail;
         gateCounts["FAIL"]++;
       }
@@ -5342,6 +5372,11 @@ static int runNativeMatrixDispatch(const char *argv0,
   outs() << "native_matrix_dispatch_pass\t" << lanePass << "\n";
   outs() << "native_matrix_dispatch_fail\t" << laneFail << "\n";
   outs() << "native_matrix_dispatch_skip\t" << laneSkip << "\n";
+  outs() << "native_matrix_dispatch_executed_lanes\t" << laneExecuted << "\n";
+  outs() << "native_matrix_dispatch_runtime_ns\t" << laneRuntimeNanos << "\n";
+  uint64_t avgRuntime = laneExecuted ? (laneRuntimeNanos / laneExecuted) : 0;
+  outs() << "native_matrix_dispatch_avg_lane_runtime_ns\t" << avgRuntime
+         << "\n";
   return laneFail == 0 ? 0 : 1;
 }
 
