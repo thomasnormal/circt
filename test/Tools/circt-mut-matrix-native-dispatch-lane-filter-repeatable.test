@@ -16,6 +16,8 @@
 // RUN: test ! -d %t/out/skip_gamma
 //
 // LOG-DAG: native_matrix_dispatch_lanes{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_dispatch_filtered_include{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_dispatch_filtered_exclude{{[[:space:]]+}}1
 // LOG-DAG: native_matrix_dispatch_pass{{[[:space:]]+}}1
 // LOG-DAG: native_matrix_dispatch_fail{{[[:space:]]+}}0
 //
