@@ -57,6 +57,22 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 2. Added regression lock:
    - `test/Tools/run-formal-all-verilator-bmc-xfails-forwarding.test`
 
+### Formal Backend Hardening (February 11, 2026)
+
+1. Closed a VerifToSMT known-input modeling gap for alias-wrapped 4-state types:
+   - `lib/Conversion/VerifToSMT/VerifToSMT.cpp` now unwraps
+     `!hw.typealias<...>` when detecting `{value, unknown}` 4-state structs.
+   - `--assume-known-inputs` now consistently constrains aliased inputs
+     (`unknown == 0`) for both BMC and LEC lowering.
+2. Added conversion regressions:
+   - `test/Conversion/VerifToSMT/bmc-assume-known-inputs.mlir`
+   - `test/Conversion/VerifToSMT/lec-assume-known-inputs.mlir`
+   - `test/Conversion/VerifToSMT/four-state-input-warning.mlir`
+3. Remaining top semantic limiter remains unchanged:
+   - `verilator-verification` BMC `assert_stable` still fails while matching
+     LEC passes, so next semantic-closure patch should target `$stable`
+     lowering/evaluation directly.
+
 ### Test Results
 
 | Mode | Eligible | Pass | Fail | Rate |
