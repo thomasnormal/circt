@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 996 - February 11, 2026
+
+### `circt-mut report`: Always-On Skip-Budget Telemetry + Stop-On-Fail Policy Hardening
+
+1. Added always-on matrix skip-budget summary counters in
+   `tools/circt-mut/circt-mut.cpp` (no `--skip-budget-out` required):
+   - `matrix.skip_budget_rows_total`
+   - `matrix.skip_budget_rows_skip`
+   - `matrix.skip_budget_rows_non_skip`
+   - `matrix.skip_budget_rows_stop_on_fail`
+   - `matrix.skip_budget_rows_non_stop_on_fail`
+   - `matrix.skip_budget_rows_with_reason`
+2. Refactored skip accounting into shared `computeSkipBudgetSummary(...)` so
+   report rows and `--skip-budget-out` artifact stay consistent.
+3. Tightened `formal-regression-matrix-stop-on-fail-strict` policy:
+   - now explicitly enforces
+     `matrix.skip_budget_rows_non_stop_on_fail <= 0`
+   - preserves the intended behavior of allowing deterministic
+     `STOP_ON_FAIL` skips while failing non-budgeted skip causes.
+4. Added/updated regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-stop-on-fail-strict-skip-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-stop-on-fail-strict-non-stop-skip-fail.test` (new)
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-policy-matrix-stop-on-fail-strict-skip-pass.test test/Tools/circt-mut-report-policy-matrix-stop-on-fail-strict-non-stop-skip-fail.test test/Tools/circt-mut-report-skip-budget-out.test`: PASS (3/3)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (198/198)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-skip-budget-policy ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter 'rv_plic'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `opentitan/LEC`, AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 995 - February 10, 2026
 
 ### `circt-mut report`: Strict Profile Split for Stop-On-Fail vs Full-Lanes
