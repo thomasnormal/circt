@@ -10555,6 +10555,14 @@ static int runNativeReport(const ReportOptions &opts) {
     if (auto it = cfg.matrix.find("out_dir");
         it != cfg.matrix.end() && !it->second.empty())
       matrixOutDir = resolveRelativeTo(opts.projectDir, it->second);
+    if (compareFile.empty() && compareHistoryLatestFile.empty()) {
+      if (auto it = cfg.report.find("compare");
+          it != cfg.report.end() && !it->second.empty())
+        compareFile = it->second;
+      else if (auto it = cfg.report.find("compare_history_latest");
+               it != cfg.report.end() && !it->second.empty())
+        compareHistoryLatestFile = it->second;
+    }
     if (appendHistoryFile.empty()) {
       if (auto it = cfg.report.find("append_history");
           it != cfg.report.end() && !it->second.empty())
@@ -10628,6 +10636,74 @@ static int runNativeReport(const ReportOptions &opts) {
           return 1;
         }
       }
+    }
+    if (effectiveOpts.coverWorkDir.empty()) {
+      if (auto it = cfg.report.find("cover_work_dir");
+          it != cfg.report.end() && !it->second.empty())
+        effectiveOpts.coverWorkDir = it->second;
+    }
+    if (effectiveOpts.matrixOutDir.empty()) {
+      if (auto it = cfg.report.find("matrix_out_dir");
+          it != cfg.report.end() && !it->second.empty())
+        effectiveOpts.matrixOutDir = it->second;
+    }
+    if (effectiveOpts.laneBudgetOutFile.empty()) {
+      if (auto it = cfg.report.find("lane_budget_out");
+          it != cfg.report.end() && !it->second.empty())
+        effectiveOpts.laneBudgetOutFile = it->second;
+    }
+    if (effectiveOpts.skipBudgetOutFile.empty()) {
+      if (auto it = cfg.report.find("skip_budget_out");
+          it != cfg.report.end() && !it->second.empty())
+        effectiveOpts.skipBudgetOutFile = it->second;
+    }
+    if (effectiveOpts.outFile.empty()) {
+      if (auto it = cfg.report.find("out");
+          it != cfg.report.end() && !it->second.empty())
+        effectiveOpts.outFile = it->second;
+    }
+    auto appendRulesFromReportCSV =
+        [&](StringRef key, StringRef optionName,
+            SmallVectorImpl<DeltaGateRule> &dstRules) -> bool {
+      if (!dstRules.empty())
+        return true;
+      auto it = cfg.report.find(key);
+      if (it == cfg.report.end() || it->second.empty())
+        return true;
+      SmallVector<StringRef, 8> entries;
+      StringRef(it->second).split(entries, ',', /*MaxSplit=*/-1,
+                                  /*KeepEmpty=*/false);
+      for (StringRef raw : entries) {
+        StringRef token = raw.trim();
+        if (token.empty())
+          continue;
+        DeltaGateRule rule;
+        if (!parseDeltaGateRule(token, optionName, rule, error))
+          return false;
+        dstRules.push_back(rule);
+      }
+      return true;
+    };
+    if (!appendRulesFromReportCSV("fail_if_value_gt",
+                                  "[report] key 'fail_if_value_gt'",
+                                  effectiveOpts.failIfValueGtRules) ||
+        !appendRulesFromReportCSV("fail_if_value_lt",
+                                  "[report] key 'fail_if_value_lt'",
+                                  effectiveOpts.failIfValueLtRules) ||
+        !appendRulesFromReportCSV("fail_if_delta_gt",
+                                  "[report] key 'fail_if_delta_gt'",
+                                  effectiveOpts.failIfDeltaGtRules) ||
+        !appendRulesFromReportCSV("fail_if_delta_lt",
+                                  "[report] key 'fail_if_delta_lt'",
+                                  effectiveOpts.failIfDeltaLtRules) ||
+        !appendRulesFromReportCSV("fail_if_trend_delta_gt",
+                                  "[report] key 'fail_if_trend_delta_gt'",
+                                  effectiveOpts.failIfTrendDeltaGtRules) ||
+        !appendRulesFromReportCSV("fail_if_trend_delta_lt",
+                                  "[report] key 'fail_if_trend_delta_lt'",
+                                  effectiveOpts.failIfTrendDeltaLtRules)) {
+      errs() << error << "\n";
+      return 1;
     }
     if (policyProfiles.empty() && !hasCLIPolicyMode && !hasCLIPolicyProfile) {
       auto parseProfileCSV = [&](StringRef csv) {

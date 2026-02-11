@@ -1,0 +1,6 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/cover
+// RUN: printf 'detected_mutants\t1\n' > %t/proj/out/cover/metrics.tsv
+// RUN: printf '[report]\nfail_if_delta_gt = "oops"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut report --project-dir %t/proj --mode cover 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: invalid [report] key 'fail_if_delta_gt' value 'oops' (expected <metric>=<number>)
