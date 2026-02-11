@@ -6558,6 +6558,18 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
   }
   std::string effectiveReportMode =
       result.opts.reportMode.empty() ? result.opts.mode : result.opts.reportMode;
+  if (!result.opts.reportCompare.empty() &&
+      !result.opts.reportCompareHistoryLatest.empty()) {
+    result.error = "circt-mut run: --report-compare and "
+                   "--report-compare-history-latest are mutually exclusive";
+    return result;
+  }
+  if (!result.opts.reportPolicyMode.empty() &&
+      !result.opts.reportPolicyProfiles.empty()) {
+    result.error = "circt-mut run: --report-policy-mode and "
+                   "--report-policy-profile are mutually exclusive";
+    return result;
+  }
   if (!result.opts.reportPolicyMode.empty() &&
       effectiveReportMode != "matrix" && effectiveReportMode != "all") {
     result.error = "circt-mut run: --report-policy-mode requires "
@@ -6723,6 +6735,23 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     };
     bool hasCLIReportPolicyMode = !opts.reportPolicyMode.empty();
     bool hasCLIReportPolicyProfile = !opts.reportPolicyProfiles.empty();
+    auto runPolicyModeIt = cfg.run.find("report_policy_mode");
+    bool hasConfigReportPolicyMode =
+        runPolicyModeIt != cfg.run.end() && !runPolicyModeIt->second.empty();
+    auto runPolicyProfileIt = cfg.run.find("report_policy_profile");
+    bool hasConfigReportPolicyProfile =
+        runPolicyProfileIt != cfg.run.end() && !runPolicyProfileIt->second.empty();
+    auto runPolicyProfilesIt = cfg.run.find("report_policy_profiles");
+    bool hasConfigReportPolicyProfiles =
+        runPolicyProfilesIt != cfg.run.end() &&
+        !runPolicyProfilesIt->second.empty();
+    if (!hasCLIReportPolicyMode && !hasCLIReportPolicyProfile &&
+        hasConfigReportPolicyMode &&
+        (hasConfigReportPolicyProfile || hasConfigReportPolicyProfiles)) {
+      errs() << "circt-mut run: [run] keys 'report_policy_mode' and "
+                "'report_policy_profile(s)' are mutually exclusive\n";
+      return 1;
+    }
     bool hasExplicitPolicyProfile = false;
     if (hasCLIReportPolicyProfile) {
       for (const auto &profile : opts.reportPolicyProfiles) {
