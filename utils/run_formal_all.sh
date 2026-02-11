@@ -40,6 +40,8 @@ Options:
                          Fail when fail-like case IDs increase vs baseline
   --fail-on-new-bmc-timeout-cases
                          Fail when BMC timeout-case count increases vs baseline
+  --fail-on-new-lec-timeout-cases
+                         Fail when LEC timeout-case count increases vs baseline
   --fail-on-new-bmc-unknown-cases
                          Fail when BMC unknown-case count increases vs baseline
   --fail-on-new-bmc-drop-remark-cases
@@ -1811,6 +1813,7 @@ FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
 FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
+FAIL_ON_NEW_LEC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=0
@@ -2156,6 +2159,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_FAILURE_CASES=1; shift ;;
     --fail-on-new-bmc-timeout-cases)
       FAIL_ON_NEW_BMC_TIMEOUT_CASES=1; shift ;;
+    --fail-on-new-lec-timeout-cases)
+      FAIL_ON_NEW_LEC_TIMEOUT_CASES=1; shift ;;
     --fail-on-new-bmc-unknown-cases)
       FAIL_ON_NEW_BMC_UNKNOWN_CASES=1; shift ;;
     --fail-on-new-bmc-drop-remark-cases)
@@ -4233,6 +4238,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_PASSRATE_REGRESSION=1
   FAIL_ON_NEW_FAILURE_CASES=1
   FAIL_ON_NEW_BMC_TIMEOUT_CASES=1
+  FAIL_ON_NEW_LEC_TIMEOUT_CASES=1
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=1
@@ -7354,6 +7360,7 @@ for counter_key in (
     "lec_diag_missing_cases",
 ):
     counts[counter_key] += 0
+counts["lec_timeout_cases"] = counts.get("lec_status_timeout_cases", 0)
 
 parts = [f"{key}={counts[key]}" for key in sorted(counts)]
 print(" ".join(parts))
@@ -11425,6 +11432,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_PASSRATE_REGRESSION" == "1" || \
       "$FAIL_ON_NEW_FAILURE_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_TIMEOUT_CASES" == "1" || \
+      "$FAIL_ON_NEW_LEC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" == "1" || \
@@ -11467,6 +11475,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_PASSRATE_REGRESSION="$FAIL_ON_PASSRATE_REGRESSION" \
   FAIL_ON_NEW_FAILURE_CASES="$FAIL_ON_NEW_FAILURE_CASES" \
   FAIL_ON_NEW_BMC_TIMEOUT_CASES="$FAIL_ON_NEW_BMC_TIMEOUT_CASES" \
+  FAIL_ON_NEW_LEC_TIMEOUT_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CASES" \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES="$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" \
@@ -11791,6 +11800,9 @@ fail_on_passrate_regression = os.environ.get("FAIL_ON_PASSRATE_REGRESSION", "0")
 fail_on_new_failure_cases = os.environ.get("FAIL_ON_NEW_FAILURE_CASES", "0") == "1"
 fail_on_new_bmc_timeout_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_TIMEOUT_CASES", "0") == "1"
+)
+fail_on_new_lec_timeout_cases = (
+    os.environ.get("FAIL_ON_NEW_LEC_TIMEOUT_CASES", "0") == "1"
 )
 fail_on_new_bmc_unknown_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_UNKNOWN_CASES", "0") == "1"
@@ -12364,6 +12376,12 @@ for key, current_row in summary.items():
                     )
     if mode.startswith("LEC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
+        current_timeout = int(
+            current_counts.get(
+                "lec_timeout_cases",
+                current_counts.get("lec_status_timeout_cases", 0),
+            )
+        )
         current_drop_remark = int(
             current_counts.get(
                 "lec_drop_remark_cases",
@@ -12401,6 +12419,21 @@ for key, current_row in summary.items():
                 if current_drop_remark > baseline_drop_remark:
                     gate_errors.append(
                         f"{suite} {mode}: lec_drop_remark_cases increased ({baseline_drop_remark} -> {current_drop_remark}, window={baseline_window})"
+                    )
+        if fail_on_new_lec_timeout_cases:
+            baseline_timeout_values = []
+            for counts in parsed_counts:
+                if "lec_timeout_cases" in counts:
+                    baseline_timeout_values.append(int(counts["lec_timeout_cases"]))
+                elif "lec_status_timeout_cases" in counts:
+                    baseline_timeout_values.append(
+                        int(counts["lec_status_timeout_cases"])
+                    )
+            if baseline_timeout_values:
+                baseline_timeout = min(baseline_timeout_values)
+                if current_timeout > baseline_timeout:
+                    gate_errors.append(
+                        f"{suite} {mode}: lec_timeout_cases increased ({baseline_timeout} -> {current_timeout}, window={baseline_window})"
                     )
         if fail_on_new_lec_diag_path_fallback_cases:
             baseline_diag_path_fallback_values = []

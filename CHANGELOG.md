@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1077 - February 11, 2026
+
+### Formal Driver: Strict-Gate LEC Timeout Drift Control
+
+1. Added new strict-gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-new-lec-timeout-cases`
+2. Wired through full strict-gate stack:
+   - CLI parsing and usage text
+   - strict default activation under `--strict-gate`
+   - gate-env forwarding into the comparator pipeline
+   - baseline comparator logic for `LEC*` lanes
+3. LEC summary normalization:
+   - `summarize_lec_case_file()` now emits explicit
+     `lec_timeout_cases=<N>` (derived from `lec_status_timeout_cases`) to keep
+     timeout policy checks stable and legible in `summary.tsv`.
+4. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout.test`
+   - updated help coverage in `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test`
+  - `build-test/test/Tools/run-formal-all-timeout-forwarding.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - PASS (4/4)
+- External focused sanity:
+  - `run_formal_all.sh` on `yosys/tests/sva` BMC+LEC (`basic00|basic01`)
+    with `--bmc-timeout-secs 120 --lec-timeout-secs 120`: PASS (both lanes).
+
 ## Iteration 1076 - February 11, 2026
 
 ### Formal Driver: Lane-Specific BMC/LEC Timeout Controls In `run_formal_all`
