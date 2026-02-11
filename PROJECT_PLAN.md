@@ -9,6 +9,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++++++)
+
+1. Promoted BMC timeout-stage telemetry into mutation governance:
+   - new profile:
+     `formal-regression-matrix-external-formal-bmc-timeout-stage-trend-guard-v1`
+2. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v10`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v10`
+3. Contract impact:
+   - strict formal trend policies now fail on BMC timeout-stage drift
+     (frontend/solver/unknown), not just aggregate timeout totals.
+4. Validation highlights:
+   - dedicated pass/fail policy tests are green.
+   - real external-formal artifact check confirms frontend timeout-stage drift
+     is policy-visible and fails the new profile.
+5. Remaining limitations:
+   - v10 composites currently enforce timeout-stage trends for BMC only; LEC
+     and OpenTitan stage-trend policy families remain to be implemented.
+   - timeout stage attribution still depends on runner-level reason emission
+     consistency across suites.
+6. Next long-term features:
+   - add `lec_timeout_stage_*` counters and matching trend-guard profiles.
+   - extend timeout-stage policy coverage to OpenTitan LEC/E2E lanes and fold
+     into strict nightly composite modes.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++++++)
 
 1. Added stage-attributed BMC timeout telemetry:

@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1142 - February 11, 2026
+
+### Mutation Governance: BMC Timeout-Stage Trend Guard + v10 Strict Composites
+
+1. Added `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-bmc-timeout-stage-trend-guard-v1`
+2. Profile contract:
+   - trend-delta guards (`delta <= 0`) for BMC timeout stage counters:
+     - `bmc_timeout_stage_frontend_cases`
+     - `bmc_timeout_stage_solver_cases`
+     - `bmc_timeout_stage_unknown_cases`
+   across:
+     - `sv-tests/BMC`
+     - `sv-tests-uvm/BMC_SEMANTICS`
+     - `verilator-verification/BMC`
+     - `yosys/tests/sva/BMC`
+3. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v10`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v10`
+   (`v9` + BMC timeout-stage trend guard profile).
+4. Added/updated regressions:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-timeout-stage-trend-guard-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-timeout-stage-trend-guard-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v10-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v10-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v10-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v10-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+5. Validation:
+   - `ninja -C build-test circt-mut`: PASS
+   - focused lit slice (policy/help/invalid + timeout-stage runner tests): PASS (10/10)
+   - real policy sanity on external formal artifact:
+     - `formal-regression-matrix-external-formal-bmc-timeout-stage-trend-guard-v1`
+       correctly fails on `sv-tests/BMC` frontend timeout stage drift.
+
 ## Iteration 1141 - February 11, 2026
 
 ### BMC Timeout Taxonomy: Stage-Attributed Counters in Formal Summaries
