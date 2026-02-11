@@ -1,5 +1,88 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1103 - February 11, 2026
+
+### `circt-mut` Summary-TSV Row Consistency Gating for Strict Formal Summary Modes
+
+1. Extended external-formal summary telemetry in
+   `tools/circt-mut/circt-mut.cpp` with row-level consistency counters:
+   - `external_formal.summary_tsv_consistent_rows`
+   - `external_formal.summary_tsv_inconsistent_rows`
+2. Consistency semantics for `summary.tsv` rows:
+   - each parsed row is checked for:
+     - `total == pass + fail + xfail + xpass + error + skip`
+   - rows are classified as consistent vs inconsistent after successful parse.
+3. Tightened strict summary policy profile:
+   - `formal-regression-matrix-external-formal-summary-guard`
+   now also requires:
+   - `external_formal.summary_tsv_inconsistent_rows == 0`
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-summary-guard-inconsistent-rows-fail.test`
+   - updated
+     `test/Tools/circt-mut-report-policy-matrix-external-formal-summary-guard-pass.test`
+     to assert zero inconsistent rows.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused mutation summary-guard slice:
+  - `llvm-lit -sv -j 1` on:
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-pass.test`
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-fail.test`
+    - `circt-mut-report-policy-matrix-external-formal-summary-guard-inconsistent-rows-fail.test`
+    - `circt-mut-report-cli-policy-mode-strict-formal-summary-pass.test`
+    - `circt-mut-run-with-report-cli-policy-mode-strict-formal-summary.test`
+    - `circt-mut-report-help.test`
+    - `circt-mut-run-help.test`
+    - `circt-mut-init-help.test`
+  - PASS (8/8)
+- Full mutation suite:
+  - `llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (324/324 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-summary-consistency ...`
+  - summary snapshot emitted at:
+    - `/tmp/formal-all-summary-consistency/summary.tsv`
+  - snapshot status:
+    - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile
+      `ahb/apb/axi4/i2s/i3c/jtag`
+    - FAIL: `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC,
+      `opentitan` LEC, AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+  - runner exited non-zero with trailing script parse error:
+    - `utils/run_formal_all.sh: line 9799: syntax error near unexpected token 'fi'`
+
+
+## Iteration 1102 - February 11, 2026
+
+### Formal Governance: Dedicated LEC `runner_command_*` Reason-Key Drift Gates
+
+1. Added dedicated LEC summary counters in `run_formal_all.sh` for infra runner
+   failures across both `CIRCT_OPT_ERROR` and `CIRCT_VERILOG_ERROR` paths:
+   - `lec_runner_command_reason_<reason>_cases`
+2. Added strict-gate control for runner-command reason-key drift:
+   - new flag: `--fail-on-new-lec-runner-command-reason-keys`
+   - included in `--strict-gate` defaults
+3. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-runner-command-reason-keys.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-runner-command-reason-keys-defaults.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-reason-keys.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-reason-keys-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-reason-keys.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-reason-keys-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-reason-keys.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-verilog-error-reason-keys-defaults.test`
+  - PASS (6/6)
+- External filtered LEC smoke lanes (`sv-tests`, `verilator-verification`) with
+  explicit `build-test/bin` toolchain:
+  - `sv-tests/LEC` sampled case: `PASS` (`LEC_NOT_RUN` metadata flow)
+  - `verilator-verification/LEC` sampled case: `ERROR` (semantic/LEC-stage)
+  - infra runner-command key drift telemetry now emitted separately from generic
+    opt/verilog reason families.
+
 ## Iteration 1101 - February 11, 2026
 
 ### Formal Runner Hardening: LEC `circt-opt` Stable Infra Reasons + ETXTBSY Retry
