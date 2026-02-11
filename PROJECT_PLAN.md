@@ -443,6 +443,11 @@ See CHANGELOG.md on recent progress.
   `matrix.detected_mutants_sum`, `matrix.lanes_skip`, and runtime
   (`matrix.runtime_ns_{avg,max,sum}`), reducing false confidence from sparse
   strict trend windows with missing core-key history rows.
+- Latest mutation-governance milestone (current): strict matrix trend policy
+  now also enforces an explicit core-key full-history count floor:
+  - `trend.matrix_core_numeric_keys_full_history >= 5`
+  so strict gates fail clearly on missing core key history, even when users
+  only inspect percentages.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
