@@ -71,6 +71,9 @@ Options:
   --fail-on-new-lec-runner-command-case-reasons
                          Fail when new LEC runner-command case+reason tuples
                          appear vs baseline
+  --fail-on-new-lec-runner-command-cases
+                         Fail when LEC runner-command case count
+                         (`lec_runner_command_cases`) increases vs baseline
   --fail-on-new-lec-circt-verilog-error-case-ids
                          Fail when LEC `CIRCT_VERILOG_ERROR` case IDs increase
                          vs baseline
@@ -110,6 +113,9 @@ Options:
   --fail-on-any-lec-timeouts
                          Fail when any `LEC*` lane reports
                          `lec_timeout_cases > 0` in the current run
+  --fail-on-any-lec-runner-command-cases
+                         Fail when any `LEC*` lane reports
+                         `lec_runner_command_cases > 0` in the current run
   --fail-on-new-lec-counter KEY
                          Fail when LEC summary counter KEY increases vs baseline
                          for any `LEC*` lane (repeatable)
@@ -1872,6 +1878,7 @@ FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_REASON_KEYS=0
 FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS=0
 FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS=0
 FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS=0
+FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=0
 FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=0
@@ -1886,6 +1893,7 @@ FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS=0
 FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=0
 FAIL_ON_ANY_LEC_DROP_REMARKS=0
 FAIL_ON_ANY_LEC_TIMEOUTS=0
+FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES=0
 LEC_DROP_REMARK_PATTERN="${LEC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
 declare -a FAIL_ON_NEW_LEC_COUNTER_KEYS=()
 declare -a FAIL_ON_NEW_LEC_COUNTER_PREFIXES=()
@@ -2243,6 +2251,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS=1; shift ;;
     --fail-on-new-lec-runner-command-case-reasons)
       FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS=1; shift ;;
+    --fail-on-new-lec-runner-command-cases)
+      FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES=1; shift ;;
     --fail-on-new-lec-circt-verilog-error-case-ids)
       FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=1; shift ;;
     --fail-on-new-lec-circt-verilog-error-case-reasons)
@@ -2269,6 +2279,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_ANY_LEC_DROP_REMARKS=1; shift ;;
     --fail-on-any-lec-timeouts)
       FAIL_ON_ANY_LEC_TIMEOUTS=1; shift ;;
+    --fail-on-any-lec-runner-command-cases)
+      FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES=1; shift ;;
     --fail-on-new-lec-counter)
       FAIL_ON_NEW_LEC_COUNTER_KEYS+=("$2"); shift 2 ;;
     --fail-on-new-lec-counter-prefix)
@@ -4342,6 +4354,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS=1
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS=1
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS=1
+  FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=1
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=1
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1
@@ -7488,11 +7501,13 @@ with path.open(encoding="utf-8") as f:
                 counts[f"lec_circt_opt_error_reason_{reason_key}_cases"] += 1
                 if reason_key.startswith("runner_command_"):
                     counts[f"lec_runner_command_reason_{reason_key}_cases"] += 1
+                    counts["lec_runner_command_cases"] += 1
             if status == "error" and diag == "circt_verilog_error":
                 reason_key = normalize(reason_token) if reason_token else "missing"
                 counts[f"lec_circt_verilog_error_reason_{reason_key}_cases"] += 1
                 if reason_key.startswith("runner_command_"):
                     counts[f"lec_runner_command_reason_{reason_key}_cases"] += 1
+                    counts["lec_runner_command_cases"] += 1
             if explicit_diag:
                 counts["lec_diag_explicit_cases"] += 1
             elif used_path_fallback:
@@ -11936,6 +11951,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS" == "1" || \
       "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS" == "1" || \
+      "$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" == "1" || \
@@ -11954,6 +11970,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_DIAG_MISSING_CASES" == "1" || \
       "$FAIL_ON_ANY_LEC_DIAG_MISSING_CASES" == "1" || \
       "$FAIL_ON_ANY_LEC_TIMEOUTS" == "1" || \
+      "$FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES" == "1" || \
       "$FAIL_ON_ANY_LEC_DROP_REMARKS" == "1" || \
       -n "$LEC_COUNTER_KEYS_CSV" || \
       -n "$LEC_COUNTER_PREFIXES_CSV" || \
@@ -11994,6 +12011,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_REASON_KEYS" \
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_IDS" \
   FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS" \
+  FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES="$FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS" \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" \
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" \
@@ -12012,6 +12030,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_DIAG_MISSING_CASES="$FAIL_ON_NEW_LEC_DIAG_MISSING_CASES" \
   FAIL_ON_ANY_LEC_DIAG_MISSING_CASES="$FAIL_ON_ANY_LEC_DIAG_MISSING_CASES" \
   FAIL_ON_ANY_LEC_TIMEOUTS="$FAIL_ON_ANY_LEC_TIMEOUTS" \
+  FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES="$FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES" \
   FAIL_ON_ANY_LEC_DROP_REMARKS="$FAIL_ON_ANY_LEC_DROP_REMARKS" \
   LEC_COUNTER_KEYS="$LEC_COUNTER_KEYS_CSV" \
   LEC_COUNTER_PREFIXES="$LEC_COUNTER_PREFIXES_CSV" \
@@ -12644,6 +12663,9 @@ fail_on_new_lec_runner_command_case_ids = (
 fail_on_new_lec_runner_command_case_reasons = (
     os.environ.get("FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASE_REASONS", "0") == "1"
 )
+fail_on_new_lec_runner_command_cases = (
+    os.environ.get("FAIL_ON_NEW_LEC_RUNNER_COMMAND_CASES", "0") == "1"
+)
 fail_on_new_lec_circt_verilog_error_case_ids = (
     os.environ.get("FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS", "0") == "1"
 )
@@ -12697,6 +12719,9 @@ fail_on_any_lec_diag_missing_cases = (
 )
 fail_on_any_lec_timeouts = (
     os.environ.get("FAIL_ON_ANY_LEC_TIMEOUTS", "0") == "1"
+)
+fail_on_any_lec_runner_command_cases = (
+    os.environ.get("FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES", "0") == "1"
 )
 fail_on_any_lec_drop_remarks = (
     os.environ.get("FAIL_ON_ANY_LEC_DROP_REMARKS", "0") == "1"
@@ -13483,6 +13508,9 @@ for key, current_row in summary.items():
             current_counts.get("lec_diag_path_fallback_cases", 0)
         )
         current_diag_missing = int(current_counts.get("lec_diag_missing_cases", 0))
+        current_runner_command_cases = int(
+            current_counts.get("lec_runner_command_cases", 0)
+        )
         if fail_on_any_lec_drop_remarks and current_drop_remark > 0:
             gate_errors.append(
                 f"{suite} {mode}: lec_drop_remark_cases must be zero (current={current_drop_remark})"
@@ -13501,6 +13529,10 @@ for key, current_row in summary.items():
         if fail_on_any_lec_timeouts and current_timeout > 0:
             gate_errors.append(
                 f"{suite} {mode}: lec_timeout_cases must be zero (current={current_timeout})"
+            )
+        if fail_on_any_lec_runner_command_cases and current_runner_command_cases > 0:
+            gate_errors.append(
+                f"{suite} {mode}: lec_runner_command_cases must be zero (current={current_runner_command_cases})"
             )
         if fail_on_new_lec_drop_remark_cases:
             baseline_drop_remark_values = []
@@ -13529,6 +13561,19 @@ for key, current_row in summary.items():
                 if current_timeout > baseline_timeout:
                     gate_errors.append(
                         f"{suite} {mode}: lec_timeout_cases increased ({baseline_timeout} -> {current_timeout}, window={baseline_window})"
+                    )
+        if fail_on_new_lec_runner_command_cases:
+            baseline_runner_command_values = []
+            for counts in parsed_counts:
+                if "lec_runner_command_cases" in counts:
+                    baseline_runner_command_values.append(
+                        int(counts["lec_runner_command_cases"])
+                    )
+            if baseline_runner_command_values:
+                baseline_runner_command = min(baseline_runner_command_values)
+                if current_runner_command_cases > baseline_runner_command:
+                    gate_errors.append(
+                        f"{suite} {mode}: lec_runner_command_cases increased ({baseline_runner_command} -> {current_runner_command_cases}, window={baseline_window})"
                     )
         if fail_on_new_lec_timeout_class_cases:
             timeout_class_keys = [
