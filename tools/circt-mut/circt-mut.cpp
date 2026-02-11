@@ -6197,7 +6197,15 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         !appendOptionalConfigBoolFlagArg(args, cfg.matrix, "fail_on_errors",
                                          "--fail-on-errors", "matrix", error) ||
         !appendOptionalConfigBoolFlagArg(args, cfg.matrix, "stop_on_fail",
-                                         "--stop-on-fail", "matrix", error)) {
+                                         "--stop-on-fail", "matrix", error) ||
+        !appendOptionalConfigBoolFlagArg(args, cfg.matrix,
+                                         "native_global_filter_prequalify",
+                                         "--native-global-filter-prequalify",
+                                         "matrix", error) ||
+        !appendOptionalConfigBoolFlagArg(args, cfg.matrix,
+                                         "native_matrix_dispatch",
+                                         "--native-matrix-dispatch", "matrix",
+                                         error)) {
       errs() << error << "\n";
       return 1;
     }

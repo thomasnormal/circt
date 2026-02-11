@@ -1,0 +1,13 @@
+// RUN: rm -rf %t && mkdir -p %t/proj %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SCRIPT:run_mutation_matrix.sh\nfor a in \"$@\"; do\n  echo ARG:$a\n done\n' > %t/scripts/run_mutation_matrix.sh
+// RUN: chmod +x %t/scripts/run_mutation_matrix.sh
+// RUN: printf 'lane1\tdesign.il\tmutations.txt\ttests.tsv\t-\t-\t-\n' > %t/proj/lanes.tsv
+// RUN: printf '[matrix]\nlanes_tsv = "lanes.tsv"\nout_dir = "out/matrix"\nnative_global_filter_prequalify = true\n' > %t/proj/circt-mut.toml
+// RUN: env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut run --project-dir %t/proj --mode matrix > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK: SCRIPT:run_mutation_matrix.sh
+// CHECK-DAG: ARG:--lanes-tsv
+// CHECK-DAG: ARG:{{.*}}/native_global_filter_prequalify_lanes.tsv
+// CHECK-DAG: ARG:--out-dir
+// CHECK-DAG: ARG:{{.*}}/out/matrix

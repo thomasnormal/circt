@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1002 - February 11, 2026
+
+### `circt-mut run`: Matrix Config On-Ramp for Native Dispatch/Prequalify
+
+1. Extended `circt-mut run` matrix config forwarding in
+   `tools/circt-mut/circt-mut.cpp` to support:
+   - `[matrix] native_matrix_dispatch = <bool>` ->
+     `--native-matrix-dispatch`
+   - `[matrix] native_global_filter_prequalify = <bool>` ->
+     `--native-global-filter-prequalify`
+2. This closes a practical adoption gap for long-lived campaigns that run from
+   `circt-mut.toml`: native matrix dispatch and native prequalification can now
+   be enabled via config without CLI patching in wrappers.
+3. Added regression coverage:
+   - `test/Tools/circt-mut-run-matrix-config-native-dispatch.test`
+   - `test/Tools/circt-mut-run-matrix-config-native-dispatch-bool-invalid.test`
+   - `test/Tools/circt-mut-run-matrix-config-native-prequalify.test`
+4. Updated roadmap notes in `PROJECT_PLAN.md` to reflect that template defaults
+   are emitted by `circt-mut init`, and run-config wiring now exposes matrix
+   native dispatch/prequalify toggles for CI integration.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-matrix-config*.test test/Tools/circt-mut-matrix-native-dispatch-*.test`: PASS (12/12)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (212/212)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-run-config-native-dispatch-20260211 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter 'aes'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1001 - February 11, 2026
 
 ### `circt-mut init`: Report Policy Mode Defaults for Generated Campaigns
