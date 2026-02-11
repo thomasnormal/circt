@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1022 - February 11, 2026
+
+### `circt-mut report`: Composite Matrix Policy Bundles
+
+1. Added composite matrix policy profiles in `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-composite-smoke`
+   - `formal-regression-matrix-composite-nightly`
+   - `formal-regression-matrix-composite-strict`
+   - `formal-regression-matrix-composite-stop-on-fail-smoke`
+   - `formal-regression-matrix-composite-stop-on-fail-nightly`
+   - `formal-regression-matrix-composite-stop-on-fail-strict`
+2. Composite bundles expand to existing guard/runtime strict governance packs
+   internally, so CI can select one policy profile without manually composing
+   multiple profile flags.
+3. Updated report help/diagnostics surfaces:
+   - `circt-mut report --help` now lists composite profiles.
+   - invalid profile diagnostics now include composite profile names.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-composite-strict-skip-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-strict-skip-pass.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused policy/composite slice:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-report-policy-matrix-composite-*.test test/Tools/circt-mut-report-policy-matrix-stop-on-fail-strict-skip-pass.test test/Tools/circt-mut-report-policy-matrix-full-lanes-strict-skip-fail.test`: PASS (6/6)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (250/250)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-composite-policy-profiles ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'assert_fell' --verilator-lec-test-filter 'assert_fell' --yosys-bmc-test-filter 'basic02' --yosys-lec-test-filter 'basic02' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1021 - February 11, 2026
 
 ### `circt-mut report`: CLI Policy-Mode for Matrix Governance

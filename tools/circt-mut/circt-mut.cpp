@@ -223,7 +223,13 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-runtime-smoke|\n";
   os << "                           formal-regression-matrix-runtime-nightly|\n";
   os << "                           formal-regression-matrix-runtime-trend|\n";
-  os << "                           formal-regression-matrix-runtime-strict\n";
+  os << "                           formal-regression-matrix-runtime-strict|\n";
+  os << "                           formal-regression-matrix-composite-smoke|\n";
+  os << "                           formal-regression-matrix-composite-nightly|\n";
+  os << "                           formal-regression-matrix-composite-strict|\n";
+  os << "                           formal-regression-matrix-composite-stop-on-fail-smoke|\n";
+  os << "                           formal-regression-matrix-composite-stop-on-fail-nightly|\n";
+  os << "                           formal-regression-matrix-composite-stop-on-fail-strict\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
   os << "  --fail-if-value-gt RULE  Fail if current numeric value exceeds threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
@@ -7401,6 +7407,10 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
 
 static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                                std::string &error) {
+  auto applyComposite = [&](StringRef nested) -> bool {
+    return applyPolicyProfile(nested, opts, error);
+  };
+
   if (profile == "formal-regression-basic") {
     appendUniqueRule(opts.failIfDeltaGtRules,
                      "cover.global_filter_timeout_mutants", 0.0);
@@ -7809,6 +7819,30 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      720000000000.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-composite-smoke") {
+    return applyComposite("formal-regression-matrix-guard-smoke") &&
+           applyComposite("formal-regression-matrix-runtime-smoke");
+  }
+  if (profile == "formal-regression-matrix-composite-nightly") {
+    return applyComposite("formal-regression-matrix-guard-nightly") &&
+           applyComposite("formal-regression-matrix-runtime-nightly");
+  }
+  if (profile == "formal-regression-matrix-composite-strict") {
+    return applyComposite("formal-regression-matrix-full-lanes-strict") &&
+           applyComposite("formal-regression-matrix-runtime-strict");
+  }
+  if (profile == "formal-regression-matrix-composite-stop-on-fail-smoke") {
+    return applyComposite("formal-regression-matrix-stop-on-fail-guard-smoke") &&
+           applyComposite("formal-regression-matrix-runtime-smoke");
+  }
+  if (profile == "formal-regression-matrix-composite-stop-on-fail-nightly") {
+    return applyComposite("formal-regression-matrix-stop-on-fail-guard-nightly") &&
+           applyComposite("formal-regression-matrix-runtime-nightly");
+  }
+  if (profile == "formal-regression-matrix-composite-stop-on-fail-strict") {
+    return applyComposite("formal-regression-matrix-stop-on-fail-strict") &&
+           applyComposite("formal-regression-matrix-runtime-strict");
+  }
   error = (Twine("circt-mut report: unknown --policy-profile value: ") + profile +
            " (expected formal-regression-basic|formal-regression-trend|"
            "formal-regression-matrix-basic|formal-regression-matrix-trend|"
@@ -7832,7 +7866,13 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-runtime-smoke|"
            "formal-regression-matrix-runtime-nightly|"
            "formal-regression-matrix-runtime-trend|"
-           "formal-regression-matrix-runtime-strict)")
+           "formal-regression-matrix-runtime-strict|"
+           "formal-regression-matrix-composite-smoke|"
+           "formal-regression-matrix-composite-nightly|"
+           "formal-regression-matrix-composite-strict|"
+           "formal-regression-matrix-composite-stop-on-fail-smoke|"
+           "formal-regression-matrix-composite-stop-on-fail-nightly|"
+           "formal-regression-matrix-composite-stop-on-fail-strict)")
               .str();
   return false;
 }

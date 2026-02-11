@@ -119,6 +119,10 @@ See CHANGELOG.md on recent progress.
 - Latest mutation-governance milestone: `circt-mut report` now supports direct
   CLI matrix policy-mode selection (`--policy-mode` + optional
   `--policy-stop-on-fail`) with precedence over config policy profiles.
+- Latest mutation-governance milestone (this slice): composite matrix policy
+  bundles are now available for single-flag CI policy selection
+  (`formal-regression-matrix-composite-*`), reducing manual profile
+  composition drift between smoke/nightly/strict governance lanes.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
