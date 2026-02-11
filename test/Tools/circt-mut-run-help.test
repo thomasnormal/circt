@@ -33,6 +33,8 @@
 // CHECK: native-smoke
 // CHECK: native-nightly
 // CHECK: native-strict
+// CHECK: native-strict-formal
+// CHECK: --report-external-formal-results FILE
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --report-fail-on-prequalify-drift
 // CHECK: --report-no-fail-on-prequalify-drift

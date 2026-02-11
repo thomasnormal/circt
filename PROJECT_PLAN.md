@@ -683,6 +683,13 @@ See CHANGELOG.md on recent progress.
   `formal-regression-matrix-external-formal-guard` policy gating
   (`external_formal.files >= 1`, `external_formal.fail_like_sum == 0`) for
   direct matrix+formal closure checks in mutation CI.
+- Latest mutation-governance milestone (current): policy-mode now has a
+  first-class external-formal native strict rollout mode:
+  - `native-strict-formal`
+  and `circt-mut run` now forwards repeatable report external-formal inputs
+  via `--report-external-formal-results` / `[run] report_external_formal_results`.
+  This closes the last manual wiring gap for native strict matrix governance
+  + external formal closure in one mode invocation.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

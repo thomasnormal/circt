@@ -122,7 +122,8 @@ static void printInitHelp(raw_ostream &os) {
   os << "                            native-trend-nightly|native-trend-strict|\n";
   os << "                            provenance-guard|provenance-strict|\n";
   os << "                            native-lifecycle-strict|native-smoke|\n";
-  os << "                            native-nightly|native-strict,\n";
+  os << "                            native-nightly|native-strict|\n";
+  os << "                            native-strict-formal,\n";
   os << "                            default: smoke)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           Enable stop-on-fail report guard profile in\n";
@@ -179,8 +180,12 @@ static void printRunHelp(raw_ostream &os) {
   os << "                           native-trend-nightly|native-trend-strict|\n";
   os << "                           provenance-guard|provenance-strict|\n";
   os << "                           native-lifecycle-strict|native-smoke|\n";
-  os << "                           native-nightly|native-strict\n";
+  os << "                           native-nightly|native-strict|\n";
+  os << "                           native-strict-formal\n";
   os << "                           (maps to report policy profile)\n";
+  os << "  --report-external-formal-results FILE\n";
+  os << "                           Repeatable override for report\n";
+  os << "                           --external-formal-results\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
   os << "  --report-fail-on-prequalify-drift\n";
@@ -213,7 +218,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           native-trend-nightly|native-trend-strict|\n";
   os << "                           provenance-guard|provenance-strict|\n";
   os << "                           native-lifecycle-strict|native-smoke|\n";
-  os << "                           native-nightly|native-strict\n";
+  os << "                           native-nightly|native-strict|\n";
+  os << "                           native-strict-formal\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -5764,7 +5770,8 @@ static std::string resolveProjectFilePath(StringRef projectDir, StringRef file) 
 static constexpr StringLiteral kMatrixPolicyModeList =
     "smoke|nightly|strict|trend-nightly|trend-strict|native-trend-nightly|"
     "native-trend-strict|provenance-guard|provenance-strict|"
-    "native-lifecycle-strict|native-smoke|native-nightly|native-strict";
+    "native-lifecycle-strict|native-smoke|native-nightly|native-strict|"
+    "native-strict-formal";
 
 static bool isMatrixPolicyMode(StringRef mode);
 
@@ -6064,6 +6071,7 @@ struct RunOptions {
   SmallVector<std::string, 4> reportPolicyProfiles;
   std::string reportPolicyMode;
   std::optional<bool> reportPolicyStopOnFail;
+  SmallVector<std::string, 4> reportExternalFormalResultsFiles;
   std::optional<bool> reportFailOnPrequalifyDrift;
 };
 
@@ -6527,6 +6535,20 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       result.opts.reportPolicyStopOnFail = *parsed;
       continue;
     }
+    if (arg == "--report-external-formal-results" ||
+        arg.starts_with("--report-external-formal-results=")) {
+      auto v = consumeValue(i, arg, "--report-external-formal-results");
+      if (!v)
+        return result;
+      StringRef path = v->trim();
+      if (path.empty()) {
+        result.error = "circt-mut run: --report-external-formal-results "
+                       "requires non-empty value";
+        return result;
+      }
+      result.opts.reportExternalFormalResultsFiles.push_back(path.str());
+      continue;
+    }
     if (arg == "--report-fail-on-prequalify-drift") {
       result.opts.reportFailOnPrequalifyDrift = true;
       continue;
@@ -6688,6 +6710,7 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         opts.reportHistoryBootstrap.has_value() || !opts.reportPolicyProfiles.empty() ||
         !opts.reportPolicyMode.empty() ||
         opts.reportPolicyStopOnFail.has_value() ||
+        !opts.reportExternalFormalResultsFiles.empty() ||
         opts.reportFailOnPrequalifyDrift.has_value()) {
       errs() << "circt-mut run: report override options require "
                 "--with-report or [run] with_report = true\n";
@@ -6760,6 +6783,33 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     reportArgsOwned.push_back(std::string(configPath));
     reportArgsOwned.push_back("--mode");
     reportArgsOwned.push_back(reportMode);
+
+    if (!opts.reportExternalFormalResultsFiles.empty()) {
+      for (const auto &path : opts.reportExternalFormalResultsFiles) {
+        reportArgsOwned.push_back("--external-formal-results");
+        reportArgsOwned.push_back(path);
+      }
+    } else {
+      auto extFormalIt = cfg.run.find("report_external_formal_results");
+      if (extFormalIt != cfg.run.end() && !extFormalIt->second.empty()) {
+        SmallVector<StringRef, 8> tokens;
+        StringRef(extFormalIt->second)
+            .split(tokens, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+        for (StringRef raw : tokens) {
+          StringRef token = raw.trim();
+          if (token.empty())
+            continue;
+          std::string value = token.str();
+          if (!sys::path::is_absolute(value) && StringRef(value).contains('/')) {
+            SmallString<256> joined(opts.projectDir);
+            sys::path::append(joined, value);
+            value = std::string(joined.str());
+          }
+          reportArgsOwned.push_back("--external-formal-results");
+          reportArgsOwned.push_back(value);
+        }
+      }
+    }
 
     auto appendRunReportCSV = [&](StringRef key) -> bool {
       auto it = cfg.run.find(key);
@@ -7929,13 +7979,15 @@ static bool isMatrixPolicyMode(StringRef mode) {
          mode == "native-trend-nightly" || mode == "native-trend-strict" ||
          mode == "provenance-guard" || mode == "provenance-strict" ||
          mode == "native-lifecycle-strict" || mode == "native-smoke" ||
-         mode == "native-nightly" || mode == "native-strict";
+         mode == "native-nightly" || mode == "native-strict" ||
+         mode == "native-strict-formal";
 }
 
 static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
          mode == "trend-nightly" || mode == "trend-strict" ||
-         mode == "native-trend-nightly" || mode == "native-trend-strict";
+         mode == "native-trend-nightly" || mode == "native-trend-strict" ||
+         mode == "native-strict-formal";
 }
 
 static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
@@ -7944,6 +7996,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                                            StringRef errorPrefix) {
   std::string policyProfile;
   std::string provenanceProfile;
+  std::string externalFormalProfile;
   std::string modeContractProfile;
   if (mode == "smoke") {
     policyProfile = stopOnFail
@@ -8010,6 +8063,13 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                         : "formal-regression-matrix-composite-native-strict";
     modeContractProfile =
         "formal-regression-matrix-policy-mode-native-strict-contract";
+  } else if (mode == "native-strict-formal") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
+                        : "formal-regression-matrix-composite-native-strict";
+    externalFormalProfile = "formal-regression-matrix-external-formal-guard";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-strict-contract";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
              (Twine("' (expected ") + kMatrixPolicyModeList + ")"))
@@ -8019,6 +8079,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
   out.push_back(policyProfile);
   if (!provenanceProfile.empty())
     out.push_back(provenanceProfile);
+  if (!externalFormalProfile.empty())
+    out.push_back(externalFormalProfile);
   if (!modeContractProfile.empty())
     out.push_back(modeContractProfile);
   return true;
@@ -11383,7 +11445,10 @@ static int runNativeReport(const ReportOptions &opts) {
                         ? "1"
                         : "0");
   rows.emplace_back("policy.mode_is_native_strict",
-                    appliedPolicyMode == "native-strict" ? "1" : "0");
+                    (appliedPolicyMode == "native-strict" ||
+                     appliedPolicyMode == "native-strict-formal")
+                        ? "1"
+                        : "0");
   rows.emplace_back("policy.mode_source", appliedPolicyModeSource);
   rows.emplace_back("policy.stop_on_fail",
                     appliedPolicyStopOnFail.has_value()
