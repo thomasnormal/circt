@@ -166,6 +166,13 @@ See CHANGELOG.md on recent progress.
   (`matrix.prequalify_results_pair_file_present_lanes`,
   `matrix.prequalify_results_log_file_present_lanes`) for direct policy/trend
   gating on provenance completeness.
+- Latest mutation-governance milestone (current): report now emits explicit
+  completeness-deficit counters for summary-present lanes missing provenance
+  artifacts:
+  - `matrix.prequalify_results_summary_present_missing_pair_file_lanes`
+  - `matrix.prequalify_results_summary_present_missing_log_file_lanes`
+  enabling straightforward strict gates on native prequalification artifact
+  hygiene in CI.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`

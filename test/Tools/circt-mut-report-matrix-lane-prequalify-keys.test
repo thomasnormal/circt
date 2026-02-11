@@ -9,6 +9,8 @@
 // CHECK-DAG: matrix.prequalify_results_summary_missing_lanes{{[[:space:]]}}0
 // CHECK-DAG: matrix.prequalify_results_pair_file_present_lanes{{[[:space:]]}}1
 // CHECK-DAG: matrix.prequalify_results_log_file_present_lanes{{[[:space:]]}}1
+// CHECK-DAG: matrix.prequalify_results_summary_present_missing_pair_file_lanes{{[[:space:]]}}0
+// CHECK-DAG: matrix.prequalify_results_summary_present_missing_log_file_lanes{{[[:space:]]}}0
 // CHECK-DAG: matrix.prequalify_results_total_mutants_sum{{[[:space:]]}}5
 // CHECK-DAG: matrix.prequalify_results_not_propagated_mutants_sum{{[[:space:]]}}2
 // CHECK-DAG: matrix.prequalify_results_propagated_mutants_sum{{[[:space:]]}}3
