@@ -90,6 +90,21 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
      LEC passes, so next semantic-closure patch should target `$stable`
      lowering/evaluation directly.
 
+### MooreToCore `$past` Initialization Hardening (February 11, 2026)
+
+1. `moore.past` lowering now emits deterministic initialized delay registers in
+   clocked assertion contexts, rather than unconstrained startup state.
+2. Aggregate/4-state payloads are now handled via integer bitcast register
+   storage with deterministic integer initialization and bitcast-back.
+3. Regression lock:
+   - `test/Conversion/MooreToCore/past-assert-compare.sv` checks
+     `seq.compreg ... initial` appears in lowered IR.
+4. Post-change sanity:
+   - `sv-tests` BMC `16.10--property-local-var-uvm` remains PASS.
+5. Remaining limitation:
+   - `assert_stable` still SAT in BMC; root sampled-value parity mismatch is
+     not fully explained by startup-state nondeterminism and remains P0.
+
 ### BMC Provenance Hardening (February 11, 2026)
 
 1. `StripLLHDProcesses` now emits interface abstraction attrs for unresolved

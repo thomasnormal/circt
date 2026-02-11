@@ -13263,9 +13263,43 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
       if (!isa<seq::ClockType>(clockSignal.getType()))
         clockSignal = seq::ToClockOp::create(rewriter, loc, clockSignal);
 
-      Value current = input;
-      for (int64_t i = 0; i < delay; ++i)
-        current = seq::CompRegOp::create(rewriter, loc, current, clockSignal);
+      Type inputType = input.getType();
+      Value regInput = input;
+      Type regType = inputType;
+      bool castBack = false;
+      if (!isa<IntegerType>(inputType)) {
+        int64_t width = hw::getBitWidth(inputType);
+        if (width < 0) {
+          op.emitError(
+              "cannot lower moore.past for type without known bitwidth");
+          return failure();
+        }
+        regType = rewriter.getIntegerType(width);
+        regInput = hw::BitcastOp::create(rewriter, loc, regType, input);
+        castBack = true;
+      }
+
+      auto regIntType = dyn_cast<IntegerType>(regType);
+      if (!regIntType) {
+        op.emitError("cannot lower moore.past for non-integer register type");
+        return failure();
+      }
+
+      Value reset = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(),
+                                           /*value=*/0);
+      Value resetValue = hw::ConstantOp::create(
+          rewriter, loc, llvm::APInt(regIntType.getWidth(), 0));
+      Value initialValue = seq::createConstantInitialValue(
+          rewriter, loc, rewriter.getIntegerAttr(regIntType, 0));
+
+      Value current = regInput;
+      for (int64_t i = 0; i < delay; ++i) {
+        current = seq::CompRegOp::create(
+            rewriter, loc, current, clockSignal, reset, resetValue,
+            rewriter.getStringAttr("moore_past"), initialValue);
+      }
+      if (castBack)
+        current = hw::BitcastOp::create(rewriter, loc, inputType, current);
       rewriter.replaceOp(op, current);
       return success();
     }
