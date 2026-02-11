@@ -22,5 +22,6 @@
 // CHECK-DAG: formal-regression-matrix-composite-trend-strict
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-strict
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-native-strict
+// CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v1
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-trend-nightly
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-trend-strict

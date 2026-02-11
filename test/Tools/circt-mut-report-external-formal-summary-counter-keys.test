@@ -10,3 +10,7 @@
 // CHECK-DAG: external_formal.summary_counter.bmc_semantic_bucket_multiclock_cases{{[[:space:]]}}1
 // CHECK-DAG: external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_error_cases{{[[:space:]]}}1
 // CHECK-DAG: external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_semantic_bucket_sequence_subroutine_cases{{[[:space:]]}}1
+// CHECK-DAG: external_formal.summary_status_by_suite_mode.verilator_verification.LEC.error{{[[:space:]]}}1
+// CHECK-DAG: external_formal.summary_status_by_suite_mode.sv_tests.BMC.fail{{[[:space:]]}}1
+// CHECK-DAG: external_formal.summary_status_by_mode.LEC.total{{[[:space:]]}}1
+// CHECK-DAG: external_formal.summary_status_by_mode.BMC.pass{{[[:space:]]}}1

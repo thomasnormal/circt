@@ -1601,6 +1601,23 @@ See CHANGELOG.md on recent progress.
   now self-snapshots and re-execs from an immutable temp copy by default,
   eliminating tail parse failures observed when the script was edited
   concurrently during long runs.
+- Latest mutation-governance milestone (current): external-formal summary now
+  exports first-class status rollups by suite/mode and by mode:
+  - `external_formal.summary_status_by_suite_mode.<suite>.<mode>.<status>`
+  - `external_formal.summary_status_by_mode.<mode>.<status>`
+  (for `total/pass/fail/xfail/xpass/error/skip`), enabling direct policy
+  gating on compile/LEC/BMC status budgets without relying on summary-token
+  key parsing.
+- Latest mutation-governance milestone (current): added staged compile-lane
+  debt governance profile:
+  - `formal-regression-matrix-external-formal-compile-mode-budget-v1`
+  with gates:
+  - `compile.total >= 1`
+  - `compile.fail <= 3`
+  - `compile.error == 0`
+  - `compile.xpass == 0`
+  providing explicit policy budgeting for known AVIP compile debt while still
+  preventing regression drift.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
