@@ -7635,6 +7635,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
     return true;
@@ -7660,6 +7668,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 5.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 5.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
@@ -7673,6 +7689,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
@@ -7686,6 +7710,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 5.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 5.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.skip_budget_rows_non_stop_on_fail", 0.0);
@@ -7701,6 +7733,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.skip_budget_rows_non_stop_on_fail", 0.0);
@@ -7716,6 +7756,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
@@ -7734,6 +7782,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
@@ -7759,6 +7815,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
@@ -7817,6 +7881,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
@@ -7848,6 +7920,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_results_summary_present_missing_log_file_lanes",
+        0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
@@ -8658,6 +8738,10 @@ static bool collectMatrixReport(
   size_t prequalifyLogFileCol = static_cast<size_t>(-1);
   if (auto it = colIndex.find("prequalify_log_file"); it != colIndex.end())
     prequalifyLogFileCol = it->second;
+  bool hasPrequalifyPairFileColumn =
+      prequalifyPairFileCol != static_cast<size_t>(-1);
+  bool hasPrequalifyLogFileColumn =
+      prequalifyLogFileCol != static_cast<size_t>(-1);
   size_t prequalifyTotalMutantsCol = static_cast<size_t>(-1);
   if (auto it = colIndex.find("prequalify_total_mutants"); it != colIndex.end())
     prequalifyTotalMutantsCol = it->second;
@@ -9048,14 +9132,20 @@ static bool collectMatrixReport(
       ++prequalifyResultsLanes;
       StringRef pairFileValue = getField(prequalifyPairFileCol);
       StringRef logFileValue = getField(prequalifyLogFileCol);
-      if (!pairFileValue.empty() && pairFileValue != "-")
+      if (hasPrequalifyPairFileColumn && !pairFileValue.empty() &&
+          pairFileValue != "-")
         ++prequalifyResultsPairFilePresentLanes;
-      if (!logFileValue.empty() && logFileValue != "-")
+      if (hasPrequalifyLogFileColumn && !logFileValue.empty() &&
+          logFileValue != "-")
         ++prequalifyResultsLogFilePresentLanes;
       laneBudgetRow.prequalifyPairFile =
-          (!pairFileValue.empty() ? pairFileValue.str() : std::string("-"));
+          (hasPrequalifyPairFileColumn && !pairFileValue.empty()
+               ? pairFileValue.str()
+               : std::string("-"));
       laneBudgetRow.prequalifyLogFile =
-          (!logFileValue.empty() ? logFileValue.str() : std::string("-"));
+          (hasPrequalifyLogFileColumn && !logFileValue.empty()
+               ? logFileValue.str()
+               : std::string("-"));
       bool rowSummaryPresent = false;
       if (prequalifySummaryPresentCol != static_cast<size_t>(-1)) {
         StringRef presentValue = getField(prequalifySummaryPresentCol);
@@ -9068,10 +9158,11 @@ static bool collectMatrixReport(
       }
       if (rowSummaryPresent)
         ++prequalifyResultsSummaryPresentLanes;
-      if (rowSummaryPresent &&
+      if (rowSummaryPresent && hasPrequalifyPairFileColumn &&
           (pairFileValue.empty() || pairFileValue == "-"))
         ++prequalifyResultsSummaryPresentMissingPairFileLanes;
-      if (rowSummaryPresent && (logFileValue.empty() || logFileValue == "-"))
+      if (rowSummaryPresent && hasPrequalifyLogFileColumn &&
+          (logFileValue.empty() || logFileValue == "-"))
         ++prequalifyResultsSummaryPresentMissingLogFileLanes;
       if (prequalifyTotalMutantsCol != static_cast<size_t>(-1)) {
         StringRef totalValue = getField(prequalifyTotalMutantsCol);
