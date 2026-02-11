@@ -44,6 +44,27 @@
   - PASS: `ahb_avip`, `apb_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`
   - FAIL: `axi4Lite_avip`, `axi4_avip`, `spi_avip`, `uart_avip`
 
+### BMC Harness Hardening: Frontend Timeout Classification for Semantic-Closure Lanes
+
+1. Fixed `run_sv_tests_circt_bmc.sh` timeout classification for frontend
+   (`circt-verilog`) failures:
+   - compile-stage timeout/killed exits (`124`/`137`) now produce `TIMEOUT`
+     instead of generic `ERROR`.
+   - summary counters correctly increment:
+     - `timeout`
+     - `error` (timeout remains failure-severity accounting).
+2. Added regression:
+   - `test/Tools/run-sv-tests-bmc-frontend-timeout.test`
+   validating frontend timeout emits a `TIMEOUT` row and `timeout=1`.
+3. Validation:
+   - focused lit:
+     - `run-sv-tests-bmc-frontend-timeout.test`
+     - `run-sv-tests-circt-bmc-unknown-timeout.test`
+     - PASS (2/2)
+   - real harness probe (forced short timeout):
+     - `16.11--sequence-subroutine-uvm` classified as `TIMEOUT`
+     - summary reports `timeout=1`.
+
 ## Iteration 1139 - February 11, 2026
 
 ### Formal Driver + Mutation Governance: Filtered-Lane Min-Total Violation Signals + v9 Composites

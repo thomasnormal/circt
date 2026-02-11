@@ -9,6 +9,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++++)
+
+1. Hardened BMC harness timeout accounting at compile stage:
+   - frontend (`circt-verilog`) timeout exits are now classified as `TIMEOUT`
+     instead of generic `ERROR`.
+2. Added regression coverage:
+   - `test/Tools/run-sv-tests-bmc-frontend-timeout.test`
+3. Validation highlights:
+   - focused lit (`frontend-timeout` + `unknown-timeout`) is green.
+   - real forced-timeout probe on `16.11--sequence-subroutine-uvm` now emits:
+     - result row: `TIMEOUT`
+     - summary: `timeout=1` (with `error=1` severity accounting).
+4. Remaining limitations:
+   - frontend timeout classification is currently local to sv-tests BMC harness;
+     parallel LEC/OpenTitan runners still need uniform timeout taxonomy keys.
+   - UVM-heavy multiclock/subroutine semantic probes remain frontend-expensive,
+     so semantic closure cadence still depends on bounded probe windows.
+5. Next long-term features:
+   - propagate stage-specific timeout counters into `run_formal_all` summaries
+     (e.g., frontend vs solver), then gate via `circt-mut` trend policies.
+   - add focused mini-benchmark lane for multiclock/sequence-subroutine SVA to
+     de-risk semantic closure from UVM frontend cost.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++++)
 
 1. Added filtered-lane min-volume violation telemetry in `run_formal_all`:
