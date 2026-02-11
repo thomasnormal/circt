@@ -22,6 +22,7 @@
 // CHECK: --fail-on-any-lec-diag-missing-cases
 // CHECK: --fail-on-new-bmc-backend-parity-mismatch-cases
 // CHECK: --fail-on-new-bmc-semantic-bucket-cases
+// CHECK: --fail-on-new-bmc-semantic-bucket-case-ids
 // CHECK: --fail-on-new-bmc-semantic-bucket-unclassified-cases
 // CHECK: --fail-on-bmc-semantic-tagged-cases-regression
 // CHECK: --fail-on-new-lec-mode-diff-strict-only-fail

@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1087 - February 11, 2026
+
+### Formal Driver: BMC Semantic-Bucket Case-ID Drift Gate
+
+1. Added new strict-gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-new-bmc-semantic-bucket-case-ids`
+2. Added baseline telemetry for semantic-bucket identity drift:
+   - baseline TSV now stores `bmc_semantic_bucket_case_ids`
+   - identity format: `bucket::case_id`
+3. Strict-gate default hardening:
+   - `--strict-gate` now enables semantic-bucket case-ID drift checks.
+4. Legacy baseline compatibility:
+   - case-ID drift is enforced only when baseline rows carry
+     `bmc_semantic_bucket_case_ids` telemetry.
+5. Added regression locks:
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids-defaults.test`
+6. Updated help surface:
+   - `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases-sampled-value.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-unclassified-cases.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-timeout-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-timeout-case-ids-defaults.test`
+  - PASS (8/8)
+- External focused sanity (explicit `build-test/bin` tools):
+  - `verilator-verification`:
+    - BMC filtered (`assert_past|assert_stable`):
+      `total=2 pass=2 fail=0 xfail=0 xpass=0 error=0 skip=15 unknown=0 timeout=0`
+    - LEC filtered (`assert_past|assert_stable`):
+      `total=2 pass=2 fail=0 error=0 skip=15`
+  - `yosys/tests/sva`:
+    - BMC filtered (`basic00|basic01`): PASS (pass/fail profile rows).
+    - LEC filtered (`basic00|basic01`): PASS.
+  - `sv-tests`/AVIP full-smoke attempts in this slice were compile-time heavy;
+    earlier same-day focused sv-tests runs remain the latest semantic signal.
+
 ## Iteration 1086 - February 11, 2026
 
 ### `circt-mut` Policy-Mode Expansion: Strict Formal (Non-Native)
