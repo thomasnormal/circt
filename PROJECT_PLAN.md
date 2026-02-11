@@ -9,6 +9,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 22:05)
+
+1. Added deterministic BMC e2e micro-tests for sequence-subroutine semantics:
+   - `sva-sequence-subroutine-call-unsat-e2e.sv`
+   - `sva-sequence-subroutine-call-sat-e2e.sv`
+2. Concrete signal now available:
+   - JIT and SMT-LIB both agree on expected UNSAT/SAT outcomes for this
+     subroutine family.
+3. Remaining limitations:
+   - these tests currently rely on solver-enabled environments and are marked
+     unsupported in this local lit configuration.
+   - multiclock semantic closure still lacks the same compact SAT/UNSAT pairing
+     style used here for subroutine semantics.
+4. Next long-term features:
+   - add deterministic multiclock UNSAT/SAT pair tests with explicit
+     backend-parity checks.
+   - evolve from remark-based “ignored subroutine” behavior toward structured
+     accounting (for example counters/reason families) so we can measure
+     semantic impact vs benign ignored side-effect calls.
+   - connect these deterministic BMC families to mutation profile scoring so
+     mutator priorities track active formal semantic debt.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 21:35)
 
 1. Added focused BMC semantic drift governance:
