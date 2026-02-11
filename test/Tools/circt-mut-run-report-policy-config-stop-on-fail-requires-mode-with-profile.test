@@ -1,0 +1,5 @@
+// RUN: rm -rf %t && mkdir -p %t/proj
+// RUN: printf '[run]\nwith_report = true\nreport_mode = "matrix"\nreport_policy_profile = "formal-regression-matrix-guard"\nreport_policy_stop_on_fail = "true"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut run --project-dir %t/proj --mode matrix 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut run: [run] key 'report_policy_stop_on_fail' requires 'report_policy_mode'
