@@ -1,0 +1,15 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-16
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-16/16.15--xfail-override.sv <<\"EOF\"\n/*\n:name: xfail_override\n:description: simulation-negative test with lane-side xfail override\n:should_fail_because: intentionally marked should-fail by metadata\n:type: simulation\n:tags: 16.15\n:unsynthesizable: 1\n*/\nmodule top(input logic clk, input logic a);\n  assert property (@(posedge clk) a);\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/expect.txt <<\"EOF\"\n16.15--xfail-override\txfail\tlane-side quarantine for metadata mismatch\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/fake-verilog.sh <<\"EOF\"\n#!/usr/bin/env bash\ncat <<\"MLIR\"\nmodule {\n  hw.module @top(in %clk : i1, in %a : i1) {\n    %c1 = hw.constant true : i1\n    verif.assert %c1 : i1\n    hw.output\n  }\n}\nMLIR\nEOF\nchmod +x %t/fake-verilog.sh\n'
+// RUN: bash -eu -c $'cat > %t/fake-bmc-unsat.sh <<\"EOF\"\n#!/usr/bin/env bash\necho \"BMC_RESULT=UNSAT\"\nEOF\nchmod +x %t/fake-bmc-unsat.sh\n'
+// RUN: env OUT=%t/out-unsat.txt EXPECT_FILE=%t/expect.txt CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc-unsat.sh Z3_LIB=/dev/null DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX='16.15' %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s --check-prefix=UNSAT
+// RUN: cat %t/out-unsat.txt | FileCheck %s --check-prefix=UNSAT-OUT
+// RUN: bash -eu -c $'cat > %t/fake-bmc-sat.sh <<\"EOF\"\n#!/usr/bin/env bash\necho \"BMC_RESULT=SAT\"\nEOF\nchmod +x %t/fake-bmc-sat.sh\n'
+// RUN: env OUT=%t/out-sat.txt EXPECT_FILE=%t/expect.txt CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc-sat.sh Z3_LIB=/dev/null DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX='16.15' %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s --check-prefix=SAT
+// RUN: cat %t/out-sat.txt | FileCheck %s --check-prefix=SAT-OUT
+
+// UNSAT: sv-tests SVA summary: total=1 pass=0 fail=0 xfail=1 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// UNSAT-OUT: XFAIL{{[[:space:]]+}}16.15--xfail-override{{[[:space:]]+}}
+// SAT: sv-tests SVA summary: total=1 pass=0 fail=0 xfail=0 xpass=1 error=0 skip=0 unknown=0 timeout=0
+// SAT-OUT: XPASS{{[[:space:]]+}}16.15--xfail-override{{[[:space:]]+}}
