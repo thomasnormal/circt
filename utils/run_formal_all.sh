@@ -116,7 +116,7 @@ Options:
                          Fail when BMC semantic-bucket fail-like case counts
                          increase vs baseline across tracked buckets
                          (disable_iff/local_var/multiclock/four_state/
-                         sampled_value/property_named/implication_timing/
+                         sequence_subroutine/sampled_value/property_named/implication_timing/
                          hierarchical_net)
   --fail-on-new-bmc-semantic-bucket-case-ids
                          Fail when BMC semantic-bucket case IDs increase vs
@@ -7608,6 +7608,7 @@ bucket_case_sets = {
     "local_var": set(),
     "multiclock": set(),
     "four_state": set(),
+    "sequence_subroutine": set(),
     "sampled_value": set(),
     "property_named": set(),
     "implication_timing": set(),
@@ -7623,6 +7624,7 @@ disable_iff_re = re.compile(r"(disable[-_ ]iff|(^|[^a-z0-9])iff([^a-z0-9]|$))")
 local_var_re = re.compile(r"(local[-_ ]var|local[-_ ]variable|localvar)")
 multiclock_re = re.compile(r"(multi[-_ ]clock|multiclock)")
 four_state_re = re.compile(r"(xprop|x[-_ ]prop|4[-_ ]state|four[-_ ]state|x[_-]z)")
+sequence_subroutine_re = re.compile(r"(sequence[-_ ]subroutine|sequence_subroutine|subroutine)")
 
 bucket_aliases = {
     "disable_iff": "disable_iff",
@@ -7640,6 +7642,11 @@ bucket_aliases = {
     "xprop": "four_state",
     "x_prop": "four_state",
     "x-prop": "four_state",
+    "sequence_subroutine": "sequence_subroutine",
+    "sequence-subroutine": "sequence_subroutine",
+    "sequence_subr": "sequence_subroutine",
+    "seq_subroutine": "sequence_subroutine",
+    "subroutine": "sequence_subroutine",
     "sampled_value": "sampled_value",
     "sampledvalue": "sampled_value",
     "sampled-value": "sampled_value",
@@ -7749,6 +7756,9 @@ for line in path.open(encoding="utf-8"):
     if four_state_re.search(haystack):
         add_bucket(case_key, "four_state", "regex")
         matched_regex_bucket = True
+    if sequence_subroutine_re.search(haystack):
+        add_bucket(case_key, "sequence_subroutine", "regex")
+        matched_regex_bucket = True
     if matched_regex_bucket:
         regex_classified_cases += 1
 
@@ -7807,6 +7817,7 @@ parts = [
     f"bmc_semantic_bucket_local_var_cases={len(bucket_case_sets['local_var'])}",
     f"bmc_semantic_bucket_multiclock_cases={len(bucket_case_sets['multiclock'])}",
     f"bmc_semantic_bucket_four_state_cases={len(bucket_case_sets['four_state'])}",
+    f"bmc_semantic_bucket_sequence_subroutine_cases={len(bucket_case_sets['sequence_subroutine'])}",
     f"bmc_semantic_bucket_sampled_value_cases={len(bucket_case_sets['sampled_value'])}",
     f"bmc_semantic_bucket_property_named_cases={len(bucket_case_sets['property_named'])}",
     f"bmc_semantic_bucket_implication_timing_cases={len(bucket_case_sets['implication_timing'])}",
@@ -12649,6 +12660,7 @@ for key, current_row in summary.items():
                 "bmc_semantic_bucket_local_var_cases",
                 "bmc_semantic_bucket_multiclock_cases",
                 "bmc_semantic_bucket_four_state_cases",
+                "bmc_semantic_bucket_sequence_subroutine_cases",
                 "bmc_semantic_bucket_sampled_value_cases",
                 "bmc_semantic_bucket_property_named_cases",
                 "bmc_semantic_bucket_implication_timing_cases",

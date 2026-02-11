@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1088 - February 11, 2026
+
+### Formal Driver: Add BMC `sequence_subroutine` Semantic Bucket
+
+1. Extended BMC semantic-bucket classification in `utils/run_formal_all.sh`:
+   - new bucket: `sequence_subroutine`
+   - supported explicit aliases:
+     - `sequence_subroutine`, `sequence-subroutine`, `sequence_subr`,
+       `seq_subroutine`, `subroutine`
+   - regex fallback now classifies subroutine-labeled failures into this bucket.
+2. Extended BMC semantic-bucket telemetry:
+   - `bmc_semantic_bucket_sequence_subroutine_cases`
+3. Extended strict-gate semantic bucket drift checks:
+   - `--fail-on-new-bmc-semantic-bucket-cases` now also gates
+     `bmc_semantic_bucket_sequence_subroutine_cases`.
+4. Added regression lock:
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases-sequence-subroutine.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases-sequence-subroutine.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases-sampled-value.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-unclassified-cases.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - PASS (7/7)
+- External focused sanity:
+  - `verilator-verification` BMC/LEC filtered slices: PASS.
+  - `yosys/tests/sva` BMC/LEC filtered slices: PASS.
+  - `sv-tests` UVM sequence-subroutine/multiclock focused rerun remains
+    compile-time heavy in this environment and was interrupted; no new semantic
+    regression signal was produced in this slice.
+
 ## Iteration 1087 - February 11, 2026
 
 ### Formal Driver: BMC Semantic-Bucket Case-ID Drift Gate
