@@ -1,0 +1,13 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: \"${OUT:?}\"\nmkdir -p \"$(dirname \"$OUT\")\"\nprintf \"TIMEOUT\\tpre_case\\t/tests/pre.sv\\tsv-tests\\tLEC\\tCIRCT_VERILOG_TIMEOUT\\tpreprocess\\nTIMEOUT\\tsolver_case\\t/tests/solver.sv\\tsv-tests\\tLEC\\tTIMEOUT\\tsolver_budget\\n\" > \"$OUT\"\necho \"sv-tests LEC summary: total=2 pass=0 fail=0 error=2 skip=0\"\n' > %t/utils/run_sv_tests_circt_lec.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_sv_tests_circt_lec.sh
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^sv-tests/LEC$' --sv-tests-lec-tag-regex 'tag_lec' --sv-tests-lec-test-filter 'filter_lec'
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+//
+// SUMMARY: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}2{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}2{{[[:space:]]+}}0
+// SUMMARY: lec_timeout_cases=2
+// SUMMARY: lec_timeout_stage_frontend_cases=1
+// SUMMARY: lec_timeout_stage_solver_cases=1
+// SUMMARY: lec_timeout_stage_unknown_cases=0
