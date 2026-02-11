@@ -9,6 +9,7 @@
 // CHECK: key{{[[:space:]]}}value
 // CHECK: report.mode{{[[:space:]]}}matrix
 // CHECK: policy.profile_source{{[[:space:]]}}none
+// CHECK: policy.profile_resolved_csv{{[[:space:]]}}-
 // CHECK: matrix.out_dir{{[[:space:]]}}{{.*}}/out/matrix
 // CHECK: matrix.runtime_summary_present{{[[:space:]]}}1
 // CHECK: matrix.runtime_summary_rows{{[[:space:]]}}2

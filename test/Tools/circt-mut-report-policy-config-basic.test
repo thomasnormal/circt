@@ -6,6 +6,7 @@
 // RUN: FileCheck %s < %t/out.txt
 //
 // CHECK: policy.profile_source{{[[:space:]]}}config
+// CHECK: policy.profile_resolved_csv{{[[:space:]]}}formal-regression-basic
 // CHECK: policy.profile_count{{[[:space:]]}}1
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-basic
 // CHECK: compare.gate_status{{[[:space:]]}}pass

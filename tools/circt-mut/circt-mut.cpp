@@ -10748,6 +10748,16 @@ static int runNativeReport(const ReportOptions &opts) {
                                                            : std::string("0"))
                         : std::string("-"));
   rows.emplace_back("policy.profile_source", appliedPolicyProfileSource);
+  std::string policyProfileResolvedCSV = "-";
+  if (!policyProfiles.empty()) {
+    policyProfileResolvedCSV.clear();
+    for (size_t i = 0; i < policyProfiles.size(); ++i) {
+      if (i)
+        policyProfileResolvedCSV.append(",");
+      policyProfileResolvedCSV.append(policyProfiles[i]);
+    }
+  }
+  rows.emplace_back("policy.profile_resolved_csv", policyProfileResolvedCSV);
   if (!policyProfiles.empty()) {
     rows.emplace_back("policy.profile_count",
                       std::to_string(policyProfiles.size()));
