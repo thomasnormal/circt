@@ -7,6 +7,10 @@
 // CHECK: --with-report
 // CHECK: --with-report-on-fail
 // CHECK: --report-mode MODE
+// CHECK: --report-history FILE
+// CHECK: --report-out FILE
+// CHECK: --report-history-bootstrap
+// CHECK: --report-no-history-bootstrap
 // CHECK: --report-policy-profile NAME
 // CHECK: --report-policy-mode MODE
 // CHECK: --report-policy-stop-on-fail BOOL
