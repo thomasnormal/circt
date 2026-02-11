@@ -47,6 +47,16 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - P1: add strict lane-level formal closure report artifact generation
    - P2: extend mutation report trend governance with prequalify/bucket deltas
 
+### Recent Formal Infra Upgrade (February 11, 2026)
+
+1. Added explicit Verilator BMC expected-failure forwarding in
+   `utils/run_formal_all.sh`:
+   - new option: `--verilator-bmc-xfails FILE`
+   - forwards as runner env: `XFAILS=FILE`
+   - validates missing files early and includes value in lane-state config hash
+2. Added regression lock:
+   - `test/Tools/run-formal-all-verilator-bmc-xfails-forwarding.test`
+
 ### Test Results
 
 | Mode | Eligible | Pass | Fail | Rate |
