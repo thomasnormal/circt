@@ -7812,6 +7812,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return true;
   }
   if (profile == "formal-regression-trend") {
+    appendTrendHistoryQualityRules(opts, 2.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
                      "cover.global_filter_timeout_mutants", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
@@ -7837,6 +7838,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
   }
   if (profile == "formal-regression-matrix-trend") {
     opts.failOnPrequalifyDrift = true;
+    appendTrendHistoryQualityRules(opts, 2.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
                      "matrix.global_filter_timeout_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
@@ -7863,6 +7865,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
   }
   if (profile == "formal-regression-matrix-trend-guard") {
     opts.failOnPrequalifyDrift = true;
+    appendTrendHistoryQualityRules(opts, 2.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
                      "matrix.global_filter_timeout_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
@@ -8026,6 +8029,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
   }
   if (profile == "formal-regression-matrix-stop-on-fail-trend") {
     opts.failOnPrequalifyDrift = true;
+    appendTrendHistoryQualityRules(opts, 2.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
                      "matrix.global_filter_timeout_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
@@ -8135,6 +8139,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
   }
   if (profile == "formal-regression-matrix-lane-trend-nightly") {
     opts.failOnPrequalifyDrift = true;
+    appendTrendHistoryQualityRules(opts, 2.0);
     appendUniqueRule(
         opts.failIfTrendDeltaGtRules,
         "matrix.lane_budget.worst_global_filter_timeout_mutants_value", 0.0);
@@ -8155,6 +8160,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
   }
   if (profile == "formal-regression-matrix-lane-trend-strict") {
     opts.failOnPrequalifyDrift = true;
+    appendTrendHistoryQualityRules(opts, 2.0);
     appendUniqueRule(
         opts.failIfTrendDeltaGtRules,
         "matrix.lane_budget.worst_global_filter_timeout_mutants_value", 0.0);

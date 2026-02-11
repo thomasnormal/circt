@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1058 - February 11, 2026
+
+### `circt-mut report`: Trend History Quality Enforced Across Direct Profiles
+
+1. Extended trend-history quality contracts in
+   `tools/circt-mut/circt-mut.cpp` to all direct trend profiles, not only
+   composite bundles:
+   - `formal-regression-trend`
+   - `formal-regression-matrix-trend`
+   - `formal-regression-matrix-trend-guard`
+   - `formal-regression-matrix-stop-on-fail-trend`
+   - `formal-regression-matrix-lane-trend-nightly`
+   - `formal-regression-matrix-lane-trend-strict`
+   - `formal-regression-matrix-runtime-trend` (already gated, kept consistent)
+2. Direct trend profile policy gates now require:
+   - `trend.history_runs_selected >= 2`
+   - `trend.numeric_keys >= 1`
+   preventing one-run trend snapshots from silently passing when users select
+   direct trend profiles instead of composite profile bundles.
+3. Added focused regression:
+   - `test/Tools/circt-mut-report-policy-trend-history-quality-fail.test`
+   verifies `formal-regression-trend` fails value gates on one-run history even
+   when trend-delta gates would otherwise pass.
+4. Updated trend config pass fixture for cover mode to two-run history:
+   - `test/Tools/circt-mut-report-policy-config-trend-history-cover-pass.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused direct-trend quality slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 --filter 'circt-mut-report-policy-trend-history-quality-fail\\.test|circt-mut-report-policy-trend-gate-fail\\.test|circt-mut-report-policy-config-trend-history-cover-pass\\.test|circt-mut-report-policy-matrix-trend-skip-delta-fail\\.test|circt-mut-report-policy-matrix-trend-guard-skip-delta-fail\\.test|circt-mut-report-policy-matrix-stop-on-fail-trend-non-stop-skip-delta-fail\\.test|circt-mut-report-policy-matrix-lane-trend-strict-fail\\.test|circt-mut-report-policy-matrix-composite-trend-nightly-history-quality-fail\\.test|circt-mut-report-cli-policy-mode-trend-nightly-default\\.test|circt-mut-run-with-report-cli-policy-mode-trend-nightly\\.test|circt-mut-run-with-report-cli-policy-mode-native-trend-strict\\.test' build-test/test/Tools`: PASS (11/11)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 --filter 'circt-mut-.*\\.test' build-test/test/Tools`: PASS (304/304)
+- External filtered formal cadence rerun:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-trend-quality-profiles-2 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb_avip` + `apb_avip`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC (`assert_fell` ERROR), `opentitan` LEC (`aes_sbox` missing_results), AVIP compile `axi4Lite_avip` FAIL
+
 ## Iteration 1057 - February 11, 2026
 
 ### `circt-mut report`: Matrix Trend History Quality Contract
