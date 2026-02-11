@@ -5,6 +5,7 @@
 // CHECK-SAME: formal-regression-matrix-provenance-strict
 // CHECK-SAME: formal-regression-matrix-native-lifecycle-strict
 // CHECK-SAME: formal-regression-matrix-policy-mode-native-strict-contract
+// CHECK-SAME: formal-regression-matrix-policy-mode-native-family-contract
 // CHECK-SAME: formal-regression-matrix-runtime-strict
 // CHECK-SAME: formal-regression-matrix-composite-native-strict
 // CHECK-SAME: formal-regression-matrix-composite-trend-strict
