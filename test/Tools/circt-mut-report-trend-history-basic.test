@@ -22,4 +22,6 @@
 // CHECK-DAG: trend.numeric_keys_full_history_pct{{[[:space:]]}}100.00
 // CHECK-DAG: trend.matrix_core_numeric_keys_current{{[[:space:]]}}0
 // CHECK-DAG: trend.matrix_core_numeric_keys_full_history{{[[:space:]]}}0
+// CHECK-DAG: trend.matrix_core_numeric_keys_missing_history{{[[:space:]]}}0
+// CHECK-DAG: trend.matrix_core_numeric_keys_missing_history_list{{[[:space:]]}}-
 // CHECK-DAG: trend.matrix_core_numeric_keys_full_history_pct{{[[:space:]]}}0.00

@@ -12,5 +12,7 @@
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-matrix-composite-trend-strict
 // CHECK: policy.profile_2{{[[:space:]]}}formal-regression-matrix-provenance-strict
 // CHECK: policy.profile_3{{[[:space:]]}}formal-regression-matrix-policy-mode-native-family-contract
+// CHECK: trend.matrix_core_numeric_keys_missing_history{{[[:space:]]}}0
+// CHECK: trend.matrix_core_numeric_keys_missing_history_list{{[[:space:]]}}-
 // CHECK: value_gate.status{{[[:space:]]}}pass
 // CHECK: trend.gate_status{{[[:space:]]}}pass
