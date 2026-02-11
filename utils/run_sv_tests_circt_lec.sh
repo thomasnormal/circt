@@ -19,6 +19,7 @@ run_limited() {
 TEST_FILTER="${TEST_FILTER:-}"
 CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
+LEC_MLIR_CACHE_DIR="${LEC_MLIR_CACHE_DIR:-}"
 CIRCT_OPT="${CIRCT_OPT:-build/bin/circt-opt}"
 CIRCT_LEC="${CIRCT_LEC:-build/bin/circt-lec}"
 CIRCT_OPT_ARGS="${CIRCT_OPT_ARGS:-}"
@@ -114,6 +115,9 @@ error=0
 skip=0
 total=0
 drop_remark_cases=0
+cache_hits=0
+cache_misses=0
+cache_stores=0
 
 declare -A drop_remark_seen_cases
 declare -A drop_remark_seen_case_reasons
@@ -189,6 +193,28 @@ normalize_paths() {
     fi
   done
   printf '%s\n' "${out[@]}"
+}
+
+hash_key() {
+  local payload="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf "%s" "$payload" | sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    printf "%s" "$payload" | shasum -a 256 | awk '{print $1}'
+  else
+    printf "%s" "$payload" | cksum | awk '{print $1}'
+  fi
+}
+
+hash_file() {
+  local path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+  else
+    cksum "$path" | awk '{print $1}'
+  fi
 }
 
 save_logs() {
@@ -340,21 +366,65 @@ while IFS= read -r -d '' sv; do
   fi
   cmd+=("${files[@]}")
 
-  if run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
-    :
-  else
-    verilog_status=$?
-    record_drop_remark_case "$base" "$sv" "$verilog_log"
-    if [[ "$verilog_status" -eq 124 || "$verilog_status" -eq 137 ]]; then
-      printf "TIMEOUT\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
+  cache_hit=0
+  cache_file=""
+  if [[ -n "$LEC_MLIR_CACHE_DIR" ]]; then
+    mkdir -p "$LEC_MLIR_CACHE_DIR"
+    cache_payload="circt_verilog=${CIRCT_VERILOG}
+circt_verilog_args=${CIRCT_VERILOG_ARGS}
+disable_uvm_auto_include=${DISABLE_UVM_AUTO_INCLUDE}
+use_uvm=${use_uvm}
+uvm_path=${UVM_PATH}
+top_module=${top_module}
+"
+    for inc in "${incdirs[@]}"; do
+      cache_payload+="incdir=${inc}
+"
+    done
+    for def in "${defines[@]}"; do
+      cache_payload+="define=${def}
+"
+    done
+    for f in "${files[@]}"; do
+      cache_payload+="file=${f} hash=$(hash_file "$f")
+"
+    done
+    cache_key="$(hash_key "$cache_payload")"
+    cache_file="$LEC_MLIR_CACHE_DIR/${cache_key}.mlir"
+    if [[ -s "$cache_file" ]]; then
+      cp -f "$cache_file" "$mlir"
+      : > "$verilog_log"
+      echo "[run_sv_tests_circt_lec] cache-hit key=$cache_key case=$base" >> "$verilog_log"
+      cache_hit=1
+      cache_hits=$((cache_hits + 1))
     else
-      printf "ERROR\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_ERROR\n" "$base" "$sv" >> "$results_tmp"
+      cache_misses=$((cache_misses + 1))
     fi
-    error=$((error + 1))
-    save_logs
-    continue
   fi
-  record_drop_remark_case "$base" "$sv" "$verilog_log"
+
+  if [[ "$cache_hit" != "1" ]]; then
+    if run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+      :
+    else
+      verilog_status=$?
+      record_drop_remark_case "$base" "$sv" "$verilog_log"
+      if [[ "$verilog_status" -eq 124 || "$verilog_status" -eq 137 ]]; then
+        printf "TIMEOUT\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_TIMEOUT\tpreprocess\n" "$base" "$sv" >> "$results_tmp"
+      else
+        printf "ERROR\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_ERROR\n" "$base" "$sv" >> "$results_tmp"
+      fi
+      error=$((error + 1))
+      save_logs
+      continue
+    fi
+    record_drop_remark_case "$base" "$sv" "$verilog_log"
+    if [[ -n "$cache_file" && -s "$mlir" ]]; then
+      cache_tmp="$cache_file.tmp.$$.$RANDOM"
+      cp -f "$mlir" "$cache_tmp" 2>/dev/null || true
+      mv -f "$cache_tmp" "$cache_file" 2>/dev/null || true
+      cache_stores=$((cache_stores + 1))
+    fi
+  fi
 
   opt_cmd=("$CIRCT_OPT" --lower-llhd-ref-ports --strip-llhd-processes
     --strip-llhd-interface-signals --lower-ltl-to-core
@@ -488,4 +558,5 @@ fi
 
 echo "sv-tests LEC summary: total=$total pass=$pass fail=$fail error=$error skip=$skip"
 echo "sv-tests LEC dropped-syntax summary: drop_remark_cases=$drop_remark_cases pattern='$DROP_REMARK_PATTERN'"
+echo "sv-tests frontend cache summary: hits=$cache_hits misses=$cache_misses stores=$cache_stores"
 echo "results: $OUT"

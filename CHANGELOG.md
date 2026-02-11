@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1090 - February 11, 2026
+
+### Formal Runner Performance: sv-tests LEC Front-End MLIR Cache
+
+1. Extended the front-end cache pattern to `utils/run_sv_tests_circt_lec.sh`:
+   - env switch: `LEC_MLIR_CACHE_DIR`
+   - deterministic cache key over tool/config identity and source hashes
+   - reuse cached MLIR to skip repeated `circt-verilog` invocations.
+2. Added cache telemetry parity with BMC runner:
+   - `sv-tests frontend cache summary: hits=... misses=... stores=...`
+3. Added regression lock:
+   - `test/Tools/run-sv-tests-lec-mlir-cache.test`
+   - verifies two identical runs compile once and second run is a cache hit.
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-sv-tests-lec-mlir-cache.test`
+  - `build-test/test/Tools/run-sv-tests-circt-lec-diag-fallback.test`
+  - `build-test/test/Tools/run-sv-tests-circt-lec-drop-remarks.test`
+  - `build-test/test/Tools/run-sv-tests-circt-lec-not-run-diag.test`
+  - `build-test/test/Tools/run-sv-tests-lec-silent-opt-diagnostic.test`
+  - `build-test/test/Tools/run-sv-tests-lec-z3-validation.test`
+  - `build-test/test/Tools/run-sv-tests-lec-require-filter.test`
+  - PASS (7/7)
+- Focused external sanity (`/home/thomas-ahle/sv-tests`, explicit build-test tools):
+  - `16.15--property-iff-uvm` run pair with `LEC_MLIR_CACHE_DIR`:
+    - run1 cache summary: `hits=0 misses=1 stores=1`
+    - run2 cache summary: `hits=1 misses=0 stores=0`
+  - case outcome in this snapshot remains `CIRCT_OPT_ERROR` (non-cache semantic/tool issue).
+
 ## Iteration 1089 - February 11, 2026
 
 ### Formal Runner Performance: sv-tests BMC Front-End MLIR Cache
