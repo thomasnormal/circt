@@ -8733,6 +8733,8 @@ static bool collectMatrixReport(
   uint64_t prequalifyResultsSummaryMissingLanes = 0;
   uint64_t prequalifyResultsPairFilePresentLanes = 0;
   uint64_t prequalifyResultsLogFilePresentLanes = 0;
+  uint64_t prequalifyResultsSummaryPresentMissingPairFileLanes = 0;
+  uint64_t prequalifyResultsSummaryPresentMissingLogFileLanes = 0;
   uint64_t prequalifyResultsInvalidMetricValues = 0;
   uint64_t prequalifyResultsTotalMutantsSum = 0;
   uint64_t prequalifyResultsNotPropagatedMutantsSum = 0;
@@ -9066,6 +9068,11 @@ static bool collectMatrixReport(
       }
       if (rowSummaryPresent)
         ++prequalifyResultsSummaryPresentLanes;
+      if (rowSummaryPresent &&
+          (pairFileValue.empty() || pairFileValue == "-"))
+        ++prequalifyResultsSummaryPresentMissingPairFileLanes;
+      if (rowSummaryPresent && (logFileValue.empty() || logFileValue == "-"))
+        ++prequalifyResultsSummaryPresentMissingLogFileLanes;
       if (prequalifyTotalMutantsCol != static_cast<size_t>(-1)) {
         StringRef totalValue = getField(prequalifyTotalMutantsCol);
         if (rowSummaryPresent && (totalValue.empty() || totalValue == "-"))
@@ -9439,6 +9446,12 @@ static bool collectMatrixReport(
                     std::to_string(prequalifyResultsPairFilePresentLanes));
   rows.emplace_back("matrix.prequalify_results_log_file_present_lanes",
                     std::to_string(prequalifyResultsLogFilePresentLanes));
+  rows.emplace_back("matrix.prequalify_results_summary_present_missing_pair_file_lanes",
+                    std::to_string(
+                        prequalifyResultsSummaryPresentMissingPairFileLanes));
+  rows.emplace_back("matrix.prequalify_results_summary_present_missing_log_file_lanes",
+                    std::to_string(
+                        prequalifyResultsSummaryPresentMissingLogFileLanes));
   rows.emplace_back("matrix.prequalify_results_invalid_metric_values",
                     std::to_string(prequalifyResultsInvalidMetricValues));
   rows.emplace_back("matrix.prequalify_results_total_mutants_sum",

@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1031 - February 11, 2026
+
+### `circt-mut report`: Prequalify Provenance Completeness Deficit Counters
+
+1. Extended matrix report aggregation in `tools/circt-mut/circt-mut.cpp` with
+   strict provenance completeness deficit counters:
+   - `matrix.prequalify_results_summary_present_missing_pair_file_lanes`
+   - `matrix.prequalify_results_summary_present_missing_log_file_lanes`
+2. Deficit counters are evaluated only for `prequalify_summary_present = 1`
+   rows, so gates can target actionable native-prequalify provenance gaps
+   without penalizing non-prequalified lanes.
+3. Added focused regression coverage:
+   - `test/Tools/circt-mut-report-matrix-prequalify-path-completeness.test`
+   - updated `test/Tools/circt-mut-report-matrix-lane-prequalify-keys.test`
+   to assert zero-deficit behavior for complete rows.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused report provenance slice:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-matrix-lane-prequalify-keys.test test/Tools/circt-mut-report-matrix-prequalify-path-completeness.test test/Tools/circt-mut-report-matrix-basic.test`: PASS (3/3)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (259/259)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-report-prequalify-completeness ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC, `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1030 - February 11, 2026
 
 ### `circt-mut report`: Prequalify Path Provenance in Lane-Budget Output
