@@ -3,4 +3,5 @@
 // RUN: printf 'run_id\ttimestamp_utc\tkey\tvalue\n1\t2026-02-10T00:00:00Z\tcover.detected_mutants\t2\n1\t2026-02-10T00:00:00Z\tcover.global_filter_timeout_mutants\t0\n1\t2026-02-10T00:00:00Z\tcover.global_filter_lec_unknown_mutants\t0\n1\t2026-02-10T00:00:00Z\tcover.global_filter_bmc_unknown_mutants\t0\n2\t2026-02-10T01:00:00Z\tcover.detected_mutants\t2\n2\t2026-02-10T01:00:00Z\tcover.global_filter_timeout_mutants\t0\n2\t2026-02-10T01:00:00Z\tcover.global_filter_lec_unknown_mutants\t0\n2\t2026-02-10T01:00:00Z\tcover.global_filter_bmc_unknown_mutants\t0\n' > %t/proj/history.tsv
 // RUN: not circt-mut report --project-dir %t/proj --mode cover --trend-history history.tsv --policy-profile formal-regression-trend 2>&1 | FileCheck %s
 //
-// CHECK: circt-mut report: trend delta missing for gate rule key 'cover.global_filter_timeout_mutants'
+// CHECK: trend.gate_status{{[[:space:]]}}fail
+// CHECK: trend.gate_failure_{{[0-9]+}}{{[[:space:]]}}cover.global_filter_timeout_mutants trend_delta=1.00 > 0.00

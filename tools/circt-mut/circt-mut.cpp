@@ -10965,8 +10965,9 @@ static int runNativeReport(const ReportOptions &opts) {
         errs() << error << "\n";
         return 1;
       }
-      appendTrendRows(rows, snapshots, historyPath, trendWindowRuns, rows,
-                      trendDeltas);
+      auto trendBaseRows = rows;
+      appendTrendRows(trendBaseRows, snapshots, historyPath, trendWindowRuns,
+                      rows, trendDeltas);
     }
   }
 
