@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1093 - February 11, 2026
+
+### Formal Governance: LEC `CIRCT_OPT_ERROR` Case-ID Drift Gate
+
+1. Added new strict-gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-new-lec-circt-opt-error-case-ids`
+2. Added baseline telemetry field:
+   - `lec_circt_opt_error_case_ids`
+3. Strict-gate hardening:
+   - `--strict-gate` now enables `CIRCT_OPT_ERROR` case-ID drift checks by
+     default for `LEC*` lanes.
+4. Legacy baseline compatibility:
+   - case-ID drift enforcement activates only when baseline rows already carry
+     `lec_circt_opt_error_case_ids`.
+5. Added regression locks:
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-ids-defaults.test`
+   - updated help coverage in `test/Tools/run-formal-all-help.test`.
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-ids-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-diag-keys-defaults.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - PASS (5/5)
+
 ## Iteration 1092 - February 11, 2026
 
 ### `circt-mut` External Formal Out-Dir Auto-Discovery

@@ -8,6 +8,7 @@
 // CHECK: --fail-on-new-bmc-timeout-case-ids
 // CHECK: --fail-on-new-lec-timeout-cases
 // CHECK: --fail-on-new-lec-timeout-case-ids
+// CHECK: --fail-on-new-lec-circt-opt-error-case-ids
 // CHECK: --fail-on-new-lec-timeout-class-cases
 // CHECK: --fail-on-new-bmc-unknown-cases
 // CHECK: --fail-on-new-lec-drop-remark-cases
