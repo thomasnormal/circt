@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1143 - February 11, 2026
+
+### LEC Timeout Taxonomy + Mutation Governance: Stage Counters and v11 Composites
+
+1. Extended `run_formal_all.sh` LEC summary synthesis with stage counters:
+   - `lec_timeout_stage_frontend_cases`
+   - `lec_timeout_stage_solver_cases`
+   - `lec_timeout_stage_unknown_cases`
+   (derived from existing timeout classes:
+   `preprocess -> frontend`, `solver_budget/model_size -> solver`,
+   `unknown -> unknown`).
+2. Added `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-lec-timeout-stage-trend-guard-v1`
+   with trend-delta guards (`delta <= 0`) on LEC timeout-stage counters for:
+   - `sv-tests/LEC`
+   - `verilator-verification/LEC`
+   - `yosys/tests/sva/LEC`
+   - `opentitan/LEC`
+   - `opentitan/LEC_STRICT`
+3. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v11`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v11`
+   (`v10` + LEC timeout-stage trend guard profile).
+4. Added/updated regressions:
+   - `test/Tools/run-formal-all-lec-timeout-stage-summary.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-timeout-stage-trend-guard-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-timeout-stage-trend-guard-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v11-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v11-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v11-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v11-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+5. Validation:
+   - `ninja -C build-test circt-mut`: PASS
+   - focused lit slice (10 targeted tests): PASS
+   - real targeted external run:
+     - `sv-tests/LEC` with `--lec-timeout-secs 1` emits
+       `lec_timeout_stage_frontend_cases=1` in `summary.tsv`.
+
 ## Iteration 1142 - February 11, 2026
 
 ### Mutation Governance: BMC Timeout-Stage Trend Guard + v10 Strict Composites

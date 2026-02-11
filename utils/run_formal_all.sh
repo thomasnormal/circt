@@ -7777,6 +7777,16 @@ for counter_key in (
 ):
     counts[counter_key] += 0
 counts["lec_timeout_cases"] = counts.get("lec_status_timeout_cases", 0)
+counts["lec_timeout_stage_frontend_cases"] = counts.get(
+    "lec_timeout_class_preprocess_cases", 0
+)
+counts["lec_timeout_stage_solver_cases"] = (
+    counts.get("lec_timeout_class_solver_budget_cases", 0)
+    + counts.get("lec_timeout_class_model_size_cases", 0)
+)
+counts["lec_timeout_stage_unknown_cases"] = counts.get(
+    "lec_timeout_class_unknown_cases", 0
+)
 counts["lec_timeout_case_ids_cardinality"] = len(timeout_case_ids)
 counts["lec_circt_opt_error_case_ids_cardinality"] = len(circt_opt_error_case_ids)
 counts["lec_circt_opt_error_case_reasons_cardinality"] = len(circt_opt_error_case_reasons)

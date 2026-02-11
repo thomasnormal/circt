@@ -9,6 +9,32 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++++++++)
+
+1. Added LEC timeout-stage counters to formal summaries:
+   - `lec_timeout_stage_frontend_cases`
+   - `lec_timeout_stage_solver_cases`
+   - `lec_timeout_stage_unknown_cases`
+2. Promoted LEC timeout-stage drift to mutation policy:
+   - new profile:
+     `formal-regression-matrix-external-formal-lec-timeout-stage-trend-guard-v1`
+3. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v11`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v11`
+4. Validation highlights:
+   - focused lit for new summary counters + policy/composites is green.
+   - real `sv-tests/LEC` forced-timeout run confirms
+     `lec_timeout_stage_frontend_cases=1` propagation to `summary.tsv`.
+5. Remaining limitations:
+   - OpenTitan timeout-stage counters are policy-visible but still depend on
+     stable timeout-class emission quality from the OpenTitan runner stack.
+   - LEC timeout-stage contracts currently gate trends, but no explicit
+     per-lane minimum-volume contracts exist for LEC stage-specific slices.
+6. Next long-term features:
+   - add OpenTitan-specific timeout-stage quality gates once bounded LEC mode
+     is stable (reduce `missing_results` drift first).
+   - add lane-scoped min-volume policy profiles for LEC stage-sensitive slices.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++++++)
 
 1. Promoted BMC timeout-stage telemetry into mutation governance:
