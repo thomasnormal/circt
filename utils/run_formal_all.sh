@@ -8135,6 +8135,7 @@ summarize_bmc_abstraction_provenance_file() {
   fi
   BMC_ABSTRACTION_PROVENANCE_FILE="$provenance_file" python3 - <<'PY'
 import os
+import hashlib
 from pathlib import Path
 
 path = Path(os.environ["BMC_ABSTRACTION_PROVENANCE_FILE"])
@@ -8157,11 +8158,17 @@ with path.open(encoding="utf-8") as f:
             tokens.add(token)
             records += 1
 
+digest_u64 = 0
+if tokens:
+    canonical = "\n".join(sorted(tokens)).encode("utf-8")
+    digest_u64 = int(hashlib.sha1(canonical).hexdigest()[:16], 16)
+
 print(
     " ".join(
         [
             f"bmc_abstraction_provenance_tokens={len(tokens)}",
             f"bmc_abstraction_provenance_records={records}",
+            f"bmc_abstraction_provenance_identity_digest_u64={digest_u64}",
         ]
     )
 )
@@ -8284,6 +8291,21 @@ parts = [
     f"bmc_ir_check_key_mode_label_cardinality={len(key_mode_key_sets['label'])}",
     f"bmc_ir_check_key_mode_loc_cardinality={len(key_mode_key_sets['loc'])}",
 ]
+
+key_digest_u64 = 0
+if key_set:
+    canonical_keys = "\n".join(sorted(key_set)).encode("utf-8")
+    key_digest_u64 = int(hashlib.sha1(canonical_keys).hexdigest()[:16], 16)
+fingerprint_digest_u64 = 0
+if fingerprint_set:
+    canonical_fingerprints = "\n".join(sorted(fingerprint_set)).encode("utf-8")
+    fingerprint_digest_u64 = int(hashlib.sha1(canonical_fingerprints).hexdigest()[:16], 16)
+parts.extend(
+    [
+        f"bmc_ir_check_key_identity_digest_u64={key_digest_u64}",
+        f"bmc_ir_check_fingerprint_identity_digest_u64={fingerprint_digest_u64}",
+    ]
+)
 print(" ".join(parts))
 PY
 }

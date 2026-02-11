@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1134 - February 11, 2026
+
+### Formal Governance: BMC Provenance/IR-Check Identity Digest Trend Gates (v1) + v5 Composites
+
+1. Extended `run_formal_all` BMC summaries with stable identity-set digests:
+   - `bmc_abstraction_provenance_identity_digest_u64`
+   - `bmc_ir_check_key_identity_digest_u64`
+   - `bmc_ir_check_fingerprint_identity_digest_u64`
+2. Added `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-bmc-provenance-check-identity-digest-trend-guard-v1`
+   enforcing no drift (`delta == 0`) for digest keys across BMC suites
+   (`sv_tests`, `sv_tests_uvm`, `verilator_verification`, `yosys_tests_sva`).
+3. Added staged strict composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v5`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v5`
+4. Added/updated regressions:
+   - `test/Tools/run-formal-all-bmc-ir-check-fingerprints.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-provenance-check-identity-digest-trend-guard-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-provenance-check-identity-digest-trend-guard-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v5-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v5-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v5-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v5-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
 ## Iteration 1133 - February 11, 2026
 
 ### Formal Governance: BMC Provenance/IR-Check Identity Trend Gates (v1) + v4 Composites
