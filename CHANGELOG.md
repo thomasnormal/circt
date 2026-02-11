@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1124 - February 11, 2026
+
+### Mutation + Formal Reliability: Native Strict Flag Hardening and Stable Runner Snapshot
+
+1. Hardened native strict policy-mode classification in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `policy.mode_is_native_strict` now uses prefix matching
+     (`native-strict*`) instead of an enumerated mode list.
+   - this removes mode-list drift risk as new native strict variants are added.
+2. Added regression assertions for the strict-flag contract:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-nightly-pass.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-nightly.test`
+   now assert `policy.mode_is_native_strict = 0`.
+   - existing native strict v1 tests continue to assert
+     `policy.mode_is_native_strict = 1`.
+3. Fixed long-run formal runner stability in `utils/run_formal_all.sh`:
+   - script now self-snapshots to an immutable temp copy and re-execs by
+     default, preventing tail parse failures when the source file changes
+     during long cadence runs.
+   - added debug/override controls:
+     - `RUN_FORMAL_ALL_DEBUG_SNAPSHOT=1`
+     - `RUN_FORMAL_ALL_DISABLE_SNAPSHOT=1`
+4. Added runner regression:
+   - `test/Tools/run-formal-all-self-snapshot-help.test`
+   validates snapshot-enabled and snapshot-disabled startup behavior.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Focused lit slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1`
+    `build-test/test/Tools/run-formal-all-self-snapshot-help.test`
+    `build-test/test/Tools/run-formal-all-lec-error-bucket-semantic-diag-subfamilies.test`
+    `build-test/test/Tools/circt-mut-report-cli-policy-mode-native-nightly-pass.test`
+    `build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-nightly.test`
+    `build-test/test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-summary-v1-pass.test`
+    `build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-summary-v1.test`
+  - PASS (6/6)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (342/342 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-self-snapshot-fix ...`
+  - completed with clean summary output and no tail parse error:
+    - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator` LEC,
+      `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+    - FAIL: `verilator` BMC, `opentitan` LEC, AVIP compile
+      `axi4Lite/spi/uart`
+
 ## Iteration 1123 - February 11, 2026
 
 ### Mutation Governance: Budgeted Semantic-Diag Trend Profile (v1)

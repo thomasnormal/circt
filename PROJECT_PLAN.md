@@ -1521,6 +1521,17 @@ See CHANGELOG.md on recent progress.
   asserting native strict contract compatibility
   (`policy.mode_is_native_strict = 1`) and full profile-chain wiring through
   `formal-regression-matrix-external-formal-summary-v1-guard`.
+- Latest mutation-governance milestone (current): native strict policy-mode
+  classification is now prefix-based (`native-strict*`) rather than enumerated:
+  - keeps `policy.mode_is_native_strict` future-proof for new native strict
+    mode variants without requiring manual list updates.
+  - regression coverage now explicitly asserts:
+    - `native-nightly => policy.mode_is_native_strict = 0`
+    - `native-strict-formal-summary-v1 => policy.mode_is_native_strict = 1`
+- Latest formal-cadence reliability milestone (current): `run_formal_all.sh`
+  now self-snapshots and re-execs from an immutable temp copy by default,
+  eliminating tail parse failures observed when the script was edited
+  concurrently during long runs.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
