@@ -1418,6 +1418,14 @@ See CHANGELOG.md on recent progress.
   with strict gate `external_formal.summary_tsv_schema_version_max <= 1`,
   enabling deterministic schema-v1 pinning while keeping existing
   `strict-formal-summary*` modes available for broader compatibility.
+- Latest mutation-governance milestone (current): native summary-schema v1
+  strict rollout now has explicit regression coverage for both report and run
+  entrypoints:
+  - `circt-mut report --policy-mode native-strict-formal-summary-v1`
+  - `circt-mut run --report-policy-mode native-strict-formal-summary-v1`
+  asserting native strict contract compatibility
+  (`policy.mode_is_native_strict = 1`) and full profile-chain wiring through
+  `formal-regression-matrix-external-formal-summary-v1-guard`.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
