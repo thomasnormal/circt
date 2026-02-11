@@ -1,0 +1,7 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/matrix/lane1
+// RUN: printf 'total_mutants\t1\nrelevant_mutants\t1\ndetected_mutants\t1\npropagated_not_detected_mutants\t0\nnot_propagated_mutants\t0\nnot_activated_mutants\t0\nerrors\t0\n' > %t/proj/out/matrix/lane1/metrics.tsv
+// RUN: printf 'lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\tconfig_error_code\tconfig_error_reason\nlane1\tPASS\t0\t100.00\tPASS\t%t/proj/out/matrix/lane1\t%t/proj/out/matrix/lane1/metrics.tsv\t-\tdisabled\t0\t0\t0\t0\t0\t-\t-\n' > %t/proj/out/matrix/results.tsv
+// RUN: printf '[report]\npolicy_mode = "weird"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut report --project-dir %t/proj --mode matrix 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: invalid [report] key 'policy_mode' value 'weird' (expected smoke|nightly)

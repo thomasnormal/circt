@@ -1,0 +1,3 @@
+// RUN: not circt-mut report --mode cover --skip-budget-out skip_budget.tsv 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: --skip-budget-out requires --mode matrix or --mode all
