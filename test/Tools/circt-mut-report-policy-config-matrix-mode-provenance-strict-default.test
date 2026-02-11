@@ -6,6 +6,8 @@
 // RUN: circt-mut report --project-dir %t/proj --mode matrix > %t/out.txt
 // RUN: FileCheck %s < %t/out.txt
 //
+// CHECK: policy.mode{{[[:space:]]}}provenance-strict
+// CHECK: policy.stop_on_fail{{[[:space:]]}}1
 // CHECK: policy.profile_count{{[[:space:]]}}1
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-matrix-provenance-strict
 // CHECK: value_gate.status{{[[:space:]]}}pass

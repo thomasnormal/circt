@@ -5,6 +5,8 @@
 // RUN: circt-mut report --project-dir %t/proj --mode cover --policy-profile formal-regression-trend --trend-history history.tsv > %t/out.txt
 // RUN: FileCheck %s < %t/out.txt
 //
+// CHECK: policy.mode{{[[:space:]]}}-
+// CHECK: policy.stop_on_fail{{[[:space:]]}}-
 // CHECK: policy.profile_count{{[[:space:]]}}1
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-trend
 // CHECK-NOT: formal-regression-basic
