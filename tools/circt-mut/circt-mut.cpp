@@ -10506,6 +10506,11 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
         "circt-mut report: --policy-stop-on-fail requires --policy-mode";
     return result;
   }
+  if (!result.opts.policyMode.empty() && !result.opts.policyProfiles.empty()) {
+    result.error = "circt-mut report: --policy-mode and --policy-profile are "
+                   "mutually exclusive";
+    return result;
+  }
   if (!result.opts.policyMode.empty() &&
       result.opts.mode != "matrix" && result.opts.mode != "all") {
     result.error = "circt-mut report: --policy-mode requires --mode matrix or "
@@ -10692,6 +10697,23 @@ static int runNativeReport(const ReportOptions &opts) {
           return 1;
         }
       }
+    }
+    auto configPolicyModeIt = cfg.report.find("policy_mode");
+    bool hasConfigPolicyMode =
+        configPolicyModeIt != cfg.report.end() && !configPolicyModeIt->second.empty();
+    auto configPolicyProfileIt = cfg.report.find("policy_profile");
+    bool hasConfigPolicyProfile =
+        configPolicyProfileIt != cfg.report.end() &&
+        !configPolicyProfileIt->second.empty();
+    auto configPolicyProfilesIt = cfg.report.find("policy_profiles");
+    bool hasConfigPolicyProfiles =
+        configPolicyProfilesIt != cfg.report.end() &&
+        !configPolicyProfilesIt->second.empty();
+    if (!hasCLIPolicyMode && !hasCLIPolicyProfile && hasConfigPolicyMode &&
+        (hasConfigPolicyProfile || hasConfigPolicyProfiles)) {
+      errs() << "circt-mut report: [report] keys 'policy_mode' and "
+                "'policy_profile(s)' are mutually exclusive\n";
+      return 1;
     }
     if (effectiveOpts.coverWorkDir.empty()) {
       if (auto it = cfg.report.find("cover_work_dir");
