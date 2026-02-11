@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1063 - February 11, 2026
+
+### MooreToCore BMC Hardening: Deterministic `$past` Register Initialization
+
+1. Fixed `moore.past` lowering in `lib/Conversion/MooreToCore/MooreToCore.cpp`:
+   - when a clocked assertion clock is discovered, lowered past-state registers
+     now use deterministic zero initialization (`initial` + reset value) instead
+     of unconstrained startup state.
+2. For non-integer past payload types (e.g. 4-state struct forms), lowering now:
+   - bitcasts payload to an integer register type,
+   - applies deterministic integer init,
+   - bitcasts back to the original type after the delay chain.
+3. Added/updated regression:
+   - `test/Conversion/MooreToCore/past-assert-compare.sv`
+   now checks that lowered `$past` uses `seq.compreg ... initial`.
+4. Focused external sanity check:
+   - `sv-tests` BMC `16.10--property-local-var-uvm` remains PASS after change.
+
+### Remaining P0 Semantic Limitation
+
+1. `verilator-verification/tests/asserts/assert_stable.sv` still reports
+   `BMC_RESULT=SAT`; this indicates the primary sampled-value parity gap is
+   deeper than startup-state initialization and remains the next direct target.
+
 ## Iteration 1062 - February 11, 2026
 
 ### Formal Driver Stabilization: Default Verilator-BMC Expected-Failure Forwarding
