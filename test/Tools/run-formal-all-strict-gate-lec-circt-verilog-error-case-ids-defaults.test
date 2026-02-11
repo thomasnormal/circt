@@ -1,0 +1,12 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "PASS\tcase_pass\t/tests/pass.sv\tsv-tests\tLEC\tEQ\nERROR\tcase_vlog_error\t/tests/vlog.sv\tsv-tests\tLEC\tCIRCT_VERILOG_ERROR\tparse_failed\n" > "$OUT"\necho "sv-tests LEC summary: total=2 pass=1 fail=0 error=1 skip=0"\n' > %t/utils/run_sv_tests_circt_lec.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_sv_tests_circt_lec.sh
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-base --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^sv-tests/LEC$' --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --baseline-file %t/formal-baselines.tsv --update-baselines
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "PASS\tcase_pass\t/tests/pass.sv\tsv-tests\tLEC\tEQ\nERROR\tcase_vlog_error\t/tests/vlog.sv\tsv-tests\tLEC\tCIRCT_VERILOG_ERROR\tparse_failed\nERROR\tcase_vlog_error_new\t/tests/vlog_new.sv\tsv-tests\tLEC\tCIRCT_VERILOG_ERROR\timport_failed\n" > "$OUT"\necho "sv-tests LEC summary: total=3 pass=1 fail=0 error=2 skip=0"\n' > %t/utils/run_sv_tests_circt_lec.sh
+// RUN: chmod +x %t/utils/run_sv_tests_circt_lec.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-new --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/LEC$" --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --baseline-file %t/formal-baselines.tsv --strict-gate' 2>&1 | FileCheck %s
+//
+// CHECK: strict gate failures:
+// CHECK: sv-tests LEC: new LEC CIRCT_VERILOG_ERROR case IDs observed (baseline=1 current=2, window=1): case_vlog_error_new#CIRCT_VERILOG_ERROR
