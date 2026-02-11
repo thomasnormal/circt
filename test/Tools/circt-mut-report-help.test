@@ -6,6 +6,7 @@
 // CHECK: --mode
 // CHECK: --cover-work-dir
 // CHECK: --matrix-out-dir
+// CHECK: --external-formal-results
 // CHECK: --compare
 // CHECK: --compare-history-latest
 // CHECK: --history
@@ -43,6 +44,7 @@
 // CHECK: formal-regression-matrix-lane-drift-strict
 // CHECK: formal-regression-matrix-lane-trend-nightly
 // CHECK: formal-regression-matrix-lane-trend-strict
+// CHECK: formal-regression-matrix-external-formal-guard
 // CHECK: formal-regression-matrix-provenance-guard
 // CHECK: formal-regression-matrix-provenance-strict
 // CHECK: formal-regression-matrix-native-lifecycle-strict

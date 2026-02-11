@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/matrix/lane1
+// RUN: printf 'total_mutants\t1\nrelevant_mutants\t1\ndetected_mutants\t1\npropagated_not_detected_mutants\t0\nnot_propagated_mutants\t0\nnot_activated_mutants\t0\nerrors\t0\nglobal_filter_timeout_mutants\t0\nglobal_filter_lec_unknown_mutants\t0\nglobal_filter_bmc_unknown_mutants\t0\n' > %t/proj/out/matrix/lane1/metrics.tsv
+// RUN: printf 'lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\nlane1\tPASS\t0\t100.00\tPASS\t%t/proj/out/matrix/lane1\t%t/proj/out/matrix/lane1/metrics.tsv\t-\n' > %t/proj/out/matrix/results.tsv
+// RUN: printf 'PASS\ttest_ok\t/tmp/a.sv\nFAIL\ttest_fail\t/tmp/b.sv\n' > %t/ext.txt
+// RUN: not circt-mut report --project-dir %t/proj --mode matrix --external-formal-results %t/ext.txt --policy-profile formal-regression-matrix-external-formal-guard > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+
+// CHECK-DAG: policy.profile_1{{[[:space:]]}}formal-regression-matrix-external-formal-guard
+// CHECK-DAG: external_formal.fail_like_sum{{[[:space:]]}}1
+// CHECK-DAG: value_gate.failure_{{[0-9]+}}{{[[:space:]]}}external_formal.fail_like_sum value=1.00 > 0.00
+// CHECK-DAG: value_gate.status{{[[:space:]]}}fail

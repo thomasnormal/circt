@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1078 - February 11, 2026
+
+### `circt-mut report`: External Formal Result Ingestion + Guard Policy
+
+1. Added repeatable external formal ingest option in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `--external-formal-results FILE`
+   - config fallback: `[report] external_formal_results` (CSV)
+2. Added report aggregation for external formal snapshots:
+   - parses row-style status lines (`PASS|FAIL|ERROR|SKIP|XFAIL|XPASS`)
+   - parses summary-style counters (`total=... pass=... fail=... ...`)
+   - emits normalized `external_formal.*` metrics, including:
+     - `external_formal.files`
+     - `external_formal.parsed_status_lines`
+     - `external_formal.parsed_summary_lines`
+     - `external_formal.fail_like_sum`
+3. Added dedicated matrix policy profile:
+   - `formal-regression-matrix-external-formal-guard`
+   with gates:
+   - `external_formal.files >= 1`
+   - `external_formal.fail_like_sum <= 0`
+4. Updated report help/profile diagnostics to include:
+   - `--external-formal-results`
+   - `formal-regression-matrix-external-formal-guard`
+5. Added regression coverage:
+   - `test/Tools/circt-mut-report-external-formal-results-basic.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-guard-fail.test`
+   - updated `test/Tools/circt-mut-report-help.test`
+   - updated `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused external-formal/report-policy slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-report-policy-invalid-profile.test build-test/test/Tools/circt-mut-report-external-formal-results-basic.test build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-guard-pass.test build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-guard-fail.test`: PASS (5/5)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter 'circt-mut-.*\\.test' build-test/test/Tools`: PASS (310/310)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-external-formal-ingest ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - Summary snapshot produced in `summary.tsv`:
+    - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+    - FAIL/ERROR: `verilator-verification` BMC (`error=1`), `opentitan` LEC (`fail=1,error=1,missing_results=1`), AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+  - Known harness issue after snapshot generation:
+    - `utils/run_formal_all.sh: line 9637: syntax error near unexpected token '('`
+
 ## Iteration 1077 - February 11, 2026
 
 ### Formal Driver: Strict-Gate LEC Timeout Drift Control

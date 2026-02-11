@@ -198,6 +198,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --mode MODE              cover|matrix|all (default: all)\n";
   os << "  --cover-work-dir DIR     Override cover work directory\n";
   os << "  --matrix-out-dir DIR     Override matrix output directory\n";
+  os << "  --external-formal-results FILE\n";
+  os << "                           Repeatable external formal results file\n";
   os << "  --compare FILE           Compare against baseline report TSV\n";
   os << "  --compare-history-latest FILE\n";
   os << "                           Compare against latest snapshot in history TSV\n";
@@ -235,6 +237,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-lane-drift-strict|\n";
   os << "                           formal-regression-matrix-lane-trend-nightly|\n";
   os << "                           formal-regression-matrix-lane-trend-strict|\n";
+  os << "                           formal-regression-matrix-external-formal-guard|\n";
   os << "                           formal-regression-matrix-provenance-guard|\n";
   os << "                           formal-regression-matrix-provenance-strict|\n";
   os << "                           formal-regression-matrix-native-lifecycle-strict|\n";
@@ -7431,6 +7434,7 @@ struct ReportOptions {
   SmallVector<std::string, 4> policyProfiles;
   std::string policyMode;
   std::optional<bool> policyStopOnFail;
+  SmallVector<std::string, 4> externalFormalResultsFiles;
   std::string appendHistoryFile;
   SmallVector<DeltaGateRule, 8> failIfValueGtRules;
   SmallVector<DeltaGateRule, 8> failIfValueLtRules;
@@ -7443,6 +7447,27 @@ struct ReportOptions {
   std::string laneBudgetOutFile;
   std::string skipBudgetOutFile;
   std::string outFile;
+};
+
+struct ExternalFormalSummary {
+  uint64_t files = 0;
+  uint64_t lines = 0;
+  uint64_t parsedStatusLines = 0;
+  uint64_t parsedSummaryLines = 0;
+  uint64_t unparsedLines = 0;
+  uint64_t pass = 0;
+  uint64_t fail = 0;
+  uint64_t error = 0;
+  uint64_t skip = 0;
+  uint64_t xfail = 0;
+  uint64_t xpass = 0;
+  uint64_t summaryTotal = 0;
+  uint64_t summaryPass = 0;
+  uint64_t summaryFail = 0;
+  uint64_t summaryError = 0;
+  uint64_t summarySkip = 0;
+  uint64_t summaryXFail = 0;
+  uint64_t summaryXPass = 0;
 };
 
 struct MatrixLaneBudgetRow {
@@ -7545,6 +7570,196 @@ static bool parseKeyValueTSV(StringRef path, StringMap<std::string> &values,
       continue;
     values[key] = value.str();
   }
+  return true;
+}
+
+static void splitWhitespace(StringRef line, SmallVectorImpl<StringRef> &tokens) {
+  tokens.clear();
+  size_t idx = 0;
+  while (idx < line.size()) {
+    while (idx < line.size() &&
+           std::isspace(static_cast<unsigned char>(line[idx])))
+      ++idx;
+    if (idx >= line.size())
+      break;
+    size_t start = idx;
+    while (idx < line.size() &&
+           !std::isspace(static_cast<unsigned char>(line[idx])))
+      ++idx;
+    tokens.push_back(line.slice(start, idx));
+  }
+}
+
+static std::optional<uint64_t> parseUnsignedTokenValue(StringRef token) {
+  token = token.trim();
+  while (!token.empty() &&
+         !std::isdigit(static_cast<unsigned char>(token.back())))
+    token = token.drop_back();
+  while (!token.empty() &&
+         !std::isdigit(static_cast<unsigned char>(token.front())))
+    token = token.drop_front();
+  if (token.empty())
+    return std::nullopt;
+  uint64_t value = 0;
+  if (token.getAsInteger(10, value))
+    return std::nullopt;
+  return value;
+}
+
+static bool parseSummaryTokenCount(StringRef token, StringRef key,
+                                   uint64_t &valueOut) {
+  if (!token.consume_front(key))
+    return false;
+  if (!token.consume_front("="))
+    return false;
+  auto parsed = parseUnsignedTokenValue(token);
+  if (!parsed)
+    return false;
+  valueOut = *parsed;
+  return true;
+}
+
+static bool collectExternalFormalSummary(
+    ArrayRef<std::string> files, std::vector<std::pair<std::string, std::string>> &rows,
+    std::string &error) {
+  ExternalFormalSummary summary;
+  SmallVector<StringRef, 32> tokens;
+  for (const auto &path : files) {
+    auto bufferOrErr = MemoryBuffer::getFile(path);
+    if (!bufferOrErr) {
+      error = (Twine("circt-mut report: unable to read external formal results file: ") +
+               path)
+                  .str();
+      return false;
+    }
+    ++summary.files;
+    SmallVector<StringRef, 256> lines;
+    bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                         /*KeepEmpty=*/false);
+    for (StringRef rawLine : lines) {
+      StringRef line = rawLine.rtrim("\r").trim();
+      if (line.empty() || line.starts_with("#"))
+        continue;
+      ++summary.lines;
+      splitWhitespace(line, tokens);
+      if (tokens.empty())
+        continue;
+
+      bool hasSummaryCounts = false;
+      uint64_t total = 0, pass = 0, fail = 0, errorCount = 0, skip = 0;
+      uint64_t xfail = 0, xpass = 0;
+      for (StringRef token : tokens) {
+        uint64_t value = 0;
+        if (parseSummaryTokenCount(token, "total", value)) {
+          total += value;
+          hasSummaryCounts = true;
+          continue;
+        }
+        if (parseSummaryTokenCount(token, "pass", value)) {
+          pass += value;
+          hasSummaryCounts = true;
+          continue;
+        }
+        if (parseSummaryTokenCount(token, "fail", value)) {
+          fail += value;
+          hasSummaryCounts = true;
+          continue;
+        }
+        if (parseSummaryTokenCount(token, "error", value)) {
+          errorCount += value;
+          hasSummaryCounts = true;
+          continue;
+        }
+        if (parseSummaryTokenCount(token, "skip", value)) {
+          skip += value;
+          hasSummaryCounts = true;
+          continue;
+        }
+        if (parseSummaryTokenCount(token, "xfail", value)) {
+          xfail += value;
+          hasSummaryCounts = true;
+          continue;
+        }
+        if (parseSummaryTokenCount(token, "xpass", value)) {
+          xpass += value;
+          hasSummaryCounts = true;
+          continue;
+        }
+      }
+      if (hasSummaryCounts) {
+        ++summary.parsedSummaryLines;
+        summary.summaryTotal += total;
+        summary.summaryPass += pass;
+        summary.summaryFail += fail;
+        summary.summaryError += errorCount;
+        summary.summarySkip += skip;
+        summary.summaryXFail += xfail;
+        summary.summaryXPass += xpass;
+        continue;
+      }
+
+      StringRef status;
+      for (StringRef token : tokens) {
+        if (token == "PASS" || token == "FAIL" || token == "ERROR" ||
+            token == "SKIP" || token == "XFAIL" || token == "XPASS") {
+          status = token;
+          break;
+        }
+      }
+      if (status.empty()) {
+        ++summary.unparsedLines;
+        continue;
+      }
+
+      ++summary.parsedStatusLines;
+      if (status == "PASS")
+        ++summary.pass;
+      else if (status == "FAIL")
+        ++summary.fail;
+      else if (status == "ERROR")
+        ++summary.error;
+      else if (status == "SKIP")
+        ++summary.skip;
+      else if (status == "XFAIL")
+        ++summary.xfail;
+      else if (status == "XPASS")
+        ++summary.xpass;
+    }
+  }
+
+  rows.emplace_back("external_formal.files", std::to_string(summary.files));
+  rows.emplace_back("external_formal.lines", std::to_string(summary.lines));
+  rows.emplace_back("external_formal.parsed_status_lines",
+                    std::to_string(summary.parsedStatusLines));
+  rows.emplace_back("external_formal.parsed_summary_lines",
+                    std::to_string(summary.parsedSummaryLines));
+  rows.emplace_back("external_formal.unparsed_lines",
+                    std::to_string(summary.unparsedLines));
+  rows.emplace_back("external_formal.pass", std::to_string(summary.pass));
+  rows.emplace_back("external_formal.fail", std::to_string(summary.fail));
+  rows.emplace_back("external_formal.error", std::to_string(summary.error));
+  rows.emplace_back("external_formal.skip", std::to_string(summary.skip));
+  rows.emplace_back("external_formal.xfail", std::to_string(summary.xfail));
+  rows.emplace_back("external_formal.xpass", std::to_string(summary.xpass));
+  rows.emplace_back("external_formal.summary_total",
+                    std::to_string(summary.summaryTotal));
+  rows.emplace_back("external_formal.summary_pass",
+                    std::to_string(summary.summaryPass));
+  rows.emplace_back("external_formal.summary_fail",
+                    std::to_string(summary.summaryFail));
+  rows.emplace_back("external_formal.summary_error",
+                    std::to_string(summary.summaryError));
+  rows.emplace_back("external_formal.summary_skip",
+                    std::to_string(summary.summarySkip));
+  rows.emplace_back("external_formal.summary_xfail",
+                    std::to_string(summary.summaryXFail));
+  rows.emplace_back("external_formal.summary_xpass",
+                    std::to_string(summary.summaryXPass));
+
+  uint64_t failLikeSum = summary.fail + summary.error + summary.xpass +
+                         summary.summaryFail + summary.summaryError +
+                         summary.summaryXPass;
+  rows.emplace_back("external_formal.fail_like_sum", std::to_string(failLikeSum));
   return true;
 }
 
@@ -8197,6 +8412,12 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.prequalify_drift_comparable", 0.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-external-formal-guard") {
+    appendUniqueRule(opts.failIfValueLtRules, "external_formal.files", 1.0);
+    appendUniqueRule(opts.failIfValueGtRules, "external_formal.fail_like_sum",
+                     0.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-provenance-guard") {
     appendMatrixPrequalifyProvenanceColumnPresenceRules(opts);
     appendMatrixPrequalifyProvenanceDeficitZeroRules(opts);
@@ -8360,6 +8581,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-lane-drift-strict|"
            "formal-regression-matrix-lane-trend-nightly|"
            "formal-regression-matrix-lane-trend-strict|"
+           "formal-regression-matrix-external-formal-guard|"
            "formal-regression-matrix-provenance-guard|"
            "formal-regression-matrix-provenance-strict|"
            "formal-regression-matrix-native-lifecycle-strict|"
@@ -10422,6 +10644,20 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.matrixOutDir = v->str();
       continue;
     }
+    if (arg == "--external-formal-results" ||
+        arg.starts_with("--external-formal-results=")) {
+      auto v = consumeValue(i, arg, "--external-formal-results");
+      if (!v)
+        return result;
+      StringRef file = v->trim();
+      if (file.empty()) {
+        result.error = "circt-mut report: --external-formal-results requires "
+                       "non-empty value";
+        return result;
+      }
+      result.opts.externalFormalResultsFiles.push_back(file.str());
+      continue;
+    }
     if (arg == "--compare" || arg.starts_with("--compare=")) {
       auto v = consumeValue(i, arg, "--compare");
       if (!v)
@@ -10718,6 +10954,8 @@ static int runNativeReport(const ReportOptions &opts) {
   std::string compareHistoryLatestFile = effectiveOpts.compareHistoryLatestFile;
   std::string historyFile = effectiveOpts.historyFile;
   std::string trendHistoryFile = effectiveOpts.trendHistoryFile;
+  SmallVector<std::string, 4> externalFormalResultsFiles =
+      effectiveOpts.externalFormalResultsFiles;
   uint64_t trendWindowRuns = effectiveOpts.trendWindowRuns;
   std::string appendHistoryFile = effectiveOpts.appendHistoryFile;
   uint64_t historyMaxRuns = effectiveOpts.historyMaxRuns;
@@ -10932,6 +11170,19 @@ static int runNativeReport(const ReportOptions &opts) {
       if (auto it = cfg.report.find("out");
           it != cfg.report.end() && !it->second.empty())
         effectiveOpts.outFile = it->second;
+    }
+    if (externalFormalResultsFiles.empty()) {
+      if (auto it = cfg.report.find("external_formal_results");
+          it != cfg.report.end() && !it->second.empty()) {
+        SmallVector<StringRef, 8> elems;
+        StringRef(it->second).split(elems, ',', /*MaxSplit=*/-1,
+                                    /*KeepEmpty=*/false);
+        for (StringRef raw : elems) {
+          StringRef token = raw.trim();
+          if (!token.empty())
+            externalFormalResultsFiles.push_back(token.str());
+        }
+      }
     }
     auto appendRulesFromReportCSV =
         [&](StringRef key, StringRef optionName,
@@ -11167,6 +11418,21 @@ static int runNativeReport(const ReportOptions &opts) {
       rows.emplace_back((Twine("policy.profile_") + Twine(i + 1)).str(),
                         policyProfiles[i]);
   }
+  SmallVector<std::string, 4> resolvedExternalFormalResultsFiles;
+  for (const auto &path : externalFormalResultsFiles) {
+    if (path.empty())
+      continue;
+    std::string resolved = resolveRelativeTo(opts.projectDir, path);
+    if (llvm::is_contained(resolvedExternalFormalResultsFiles, resolved))
+      continue;
+    resolvedExternalFormalResultsFiles.push_back(std::move(resolved));
+  }
+  rows.emplace_back("external_formal.files_configured",
+                    std::to_string(resolvedExternalFormalResultsFiles.size()));
+  for (size_t i = 0; i < resolvedExternalFormalResultsFiles.size(); ++i) {
+    rows.emplace_back((Twine("external_formal.file_") + Twine(i + 1)).str(),
+                      resolvedExternalFormalResultsFiles[i]);
+  }
   int finalRC = 0;
   std::string error;
   uint64_t prequalifyDriftNonZero = 0;
@@ -11216,6 +11482,33 @@ static int runNativeReport(const ReportOptions &opts) {
                       std::to_string(skipSummary.nonStopOnFailSkipRows));
     rows.emplace_back("matrix.skip_budget_rows_with_reason",
                       std::to_string(skipSummary.rowsWithReason));
+  }
+  if (!resolvedExternalFormalResultsFiles.empty()) {
+    if (!collectExternalFormalSummary(resolvedExternalFormalResultsFiles, rows,
+                                      error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+  } else {
+    rows.emplace_back("external_formal.files", "0");
+    rows.emplace_back("external_formal.lines", "0");
+    rows.emplace_back("external_formal.parsed_status_lines", "0");
+    rows.emplace_back("external_formal.parsed_summary_lines", "0");
+    rows.emplace_back("external_formal.unparsed_lines", "0");
+    rows.emplace_back("external_formal.pass", "0");
+    rows.emplace_back("external_formal.fail", "0");
+    rows.emplace_back("external_formal.error", "0");
+    rows.emplace_back("external_formal.skip", "0");
+    rows.emplace_back("external_formal.xfail", "0");
+    rows.emplace_back("external_formal.xpass", "0");
+    rows.emplace_back("external_formal.summary_total", "0");
+    rows.emplace_back("external_formal.summary_pass", "0");
+    rows.emplace_back("external_formal.summary_fail", "0");
+    rows.emplace_back("external_formal.summary_error", "0");
+    rows.emplace_back("external_formal.summary_skip", "0");
+    rows.emplace_back("external_formal.summary_xfail", "0");
+    rows.emplace_back("external_formal.summary_xpass", "0");
+    rows.emplace_back("external_formal.fail_like_sum", "0");
   }
   if (!effectiveOpts.laneBudgetOutFile.empty()) {
     std::string laneBudgetOut =
