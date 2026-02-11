@@ -1,0 +1,5 @@
+// RUN: rm -rf %t && mkdir -p %t/proj
+// RUN: printf '[report]\npolicy_mode = "smoke"\npolicy_profile = "formal-regression-matrix-guard"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut report --project-dir %t/proj --mode matrix 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: [report] keys 'policy_mode' and 'policy_profile(s)' are mutually exclusive
