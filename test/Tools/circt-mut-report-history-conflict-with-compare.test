@@ -1,0 +1,3 @@
+// RUN: not circt-mut report --mode cover --history h.tsv --compare b.tsv 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: --history is mutually exclusive with --compare, --compare-history-latest, --trend-history, and --append-history
