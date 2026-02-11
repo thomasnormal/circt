@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1114 - February 11, 2026
+
+### Mutation Policy: Scoped External Formal Semantic Guard Profile
+
+1. Added a new report policy profile in `circt-mut`:
+   - `formal-regression-matrix-external-formal-semantic-guard`
+2. Current guard rule:
+   - enforces
+     `external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_error_cases <= 0`
+3. Why this matters:
+   - this is the first built-in policy that directly consumes scoped formal
+     semantic counters, enabling targeted strictness for known high-noise lanes
+     without globally constraining all suites.
+4. Integrated profile into help/validation lists and unknown-profile reporting.
+5. Added regression tests:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-guard-fail.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-guard-pass.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-guard-fail.test`
+  - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-summary-guard-pass.test`
+  - `build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`
+  - `build-test/test/Tools/circt-mut-report-external-formal-summary-counter-keys.test`
+  - PASS (5/5)
+- Real sampled strict check:
+  - `circt-mut report ... --external-formal-out-dir /tmp/formal-verilator-lec-bucket-20260211-210703 --policy-profile formal-regression-matrix-external-formal-semantic-guard`
+  - expected fail with value gate:
+    - `...verilator_verification.LEC.lec_error_bucket_semantic_diag_error_cases value=1.00 > 0.00`
+
 ## Iteration 1113 - February 11, 2026
 
 ### Mutation Integration: Per-Suite/Mode External Formal Counter Export

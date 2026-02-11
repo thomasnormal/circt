@@ -9,6 +9,25 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:20)
+
+1. Added first native scoped formal-semantic policy profile in `circt-mut`:
+   - `formal-regression-matrix-external-formal-semantic-guard`
+   - currently targets `verilator_verification/LEC`
+     `lec_error_bucket_semantic_diag_error_cases`.
+2. Long-term impact:
+   - moves mutation governance from global external-formal budgets toward
+     lane-aware semantic debt enforcement.
+3. Remaining limitations:
+   - profile currently gates one scoped key; broader suite coverage and trend
+     semantics are still needed.
+   - BMC multiclock deterministic parity anchor still pending.
+4. Next long-term features:
+   - add companion scoped guards for `yosys/tests/sva/LEC` and selected BMC
+     semantic counters.
+   - add trend-aware variants for scoped formal semantic keys.
+   - couple policy outcomes to mutator-family budget reallocation.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:05)
 
 1. `circt-mut report` now exports per-suite/per-mode external formal counters:
