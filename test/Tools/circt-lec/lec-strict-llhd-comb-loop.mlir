@@ -17,3 +17,4 @@ module {
 }
 
 // CHECK: LLHD combinational control flow requires abstraction; rerun without --strict-llhd
+// CHECK: failed to lower llhd.combinational for LEC

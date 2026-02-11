@@ -3764,13 +3764,20 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
   });
   for (auto combOp : combinationalOps) {
     auto parentModule = combOp->getParentOfType<hw::HWModuleOp>();
-    if (!parentModule)
+    if (!parentModule) {
+      combOp.emitError("expected llhd.combinational in hw.module for LEC");
       return signalPassFailure();
+    }
     auto stateIt = moduleStates.find(parentModule.getOperation());
-    if (stateIt == moduleStates.end())
+    if (stateIt == moduleStates.end()) {
+      combOp.emitError("missing per-module state while lowering "
+                       "llhd.combinational for LEC");
       return signalPassFailure();
-    if (failed(lowerCombinationalOp(combOp, stateIt->second, this->strict)))
+    }
+    if (failed(lowerCombinationalOp(combOp, stateIt->second, this->strict))) {
+      combOp.emitError("failed to lower llhd.combinational for LEC");
       return signalPassFailure();
+    }
   }
 
   SmallVector<llhd::SignalOp> signals;
@@ -3778,14 +3785,21 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
 
   for (auto sigOp : signals) {
     auto parentModule = sigOp->getParentOfType<hw::HWModuleOp>();
-    if (!parentModule)
+    if (!parentModule) {
+      sigOp.emitError("expected llhd.signal in hw.module for LEC");
       return signalPassFailure();
+    }
     auto stateIt = moduleStates.find(parentModule.getOperation());
-    if (stateIt == moduleStates.end())
+    if (stateIt == moduleStates.end()) {
+      sigOp.emitError(
+          "missing per-module state while stripping llhd.signal for LEC");
       return signalPassFailure();
+    }
     if (failed(stripInterfaceSignal(sigOp, dom, stateIt->second, this->strict,
-                                    this->requireNoLLHD)))
+                                    this->requireNoLLHD))) {
+      sigOp.emitError("failed to strip llhd.signal for LEC");
       return signalPassFailure();
+    }
   }
 
   SmallVector<llhd::ConstantTimeOp> times;

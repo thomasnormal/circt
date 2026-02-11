@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1072 - February 11, 2026
+
+### LEC Pass Hardening: Non-Silent `strip-llhd-interface-signals` Failures
+
+1. Strengthened pass-level diagnostics in
+   `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`:
+   - `runOnOperation()` now emits explicit op-local errors before signaling
+     pass failure for combinational/signal lowering state failures.
+   - added contextual failure emission for failed combinational and signal
+     lowering paths.
+2. Updated regression coverage:
+   - `test/Tools/circt-lec/lec-strict-llhd-comb-loop.mlir`
+   now checks for pass-level context:
+   - `failed to lower llhd.combinational for LEC`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-opt`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/circt-lec/lec-strict-llhd-comb-loop.mlir`
+  - `build-test/test/Tools/run-sv-tests-lec-silent-opt-diagnostic.test`
+  - `build-test/test/Tools/run-sv-tests-lec-z3-validation.test`
+  - PASS (3/3)
+- External focused repro (`/home/thomas-ahle/sv-tests`,
+  `16.11--sequence-subroutine-uvm`, explicit build-test tools):
+  - `circt-opt` log now contains explicit pass diagnostic:
+    `error: expected llhd.signal in hw.module for LEC`
+  - runner still classifies row as `CIRCT_OPT_ERROR`, but root-cause context is
+    now actionable.
+
 ## Iteration 1071 - February 11, 2026
 
 ### `circt-mut report`: Close Direct Strict Lane-Trend History-Quality Bypass
