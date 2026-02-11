@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1104 - February 11, 2026
+
+### Formal Governance: LEC `runner_command_*` Case Identity Drift Gates
+
+1. Extended `run_formal_all.sh` strict governance with runner-command identity
+   telemetry columns:
+   - `lec_runner_command_case_ids`
+   - `lec_runner_command_case_reasons`
+2. Added new strict-gate flags:
+   - `--fail-on-new-lec-runner-command-case-ids`
+   - `--fail-on-new-lec-runner-command-case-reasons`
+3. Included both new gates in `--strict-gate` defaults and baseline TSV
+   schema updates, closing infra drift governance at key, case-id, and
+   case+reason levels.
+4. Added dedicated regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-runner-command-case-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-runner-command-case-ids-defaults.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-runner-command-case-reasons.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-runner-command-case-reasons-defaults.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-case-ids-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-case-reasons.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-case-reasons-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-reason-keys.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-reason-keys-defaults.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-circt-opt-error-case-reasons.test`
+  - PASS (8/8)
+
 ## Iteration 1103 - February 11, 2026
 
 ### `circt-mut` Summary-TSV Row Consistency Gating for Strict Formal Summary Modes
