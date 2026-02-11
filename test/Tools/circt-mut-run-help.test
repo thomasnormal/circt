@@ -27,6 +27,8 @@
 // CHECK: --report-policy-mode MODE
 // CHECK: trend-nightly
 // CHECK: trend-strict
+// CHECK: native-trend-nightly
+// CHECK: native-trend-strict
 // CHECK: native-lifecycle-strict
 // CHECK: native-smoke
 // CHECK: native-nightly

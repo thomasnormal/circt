@@ -119,6 +119,7 @@ static void printInitHelp(raw_ostream &os) {
   os << "  --report-policy-mode MODE\n";
   os << "                           Report policy mode for generated config\n";
   os << "                           (smoke|nightly|strict|trend-nightly|trend-strict|\n";
+  os << "                            native-trend-nightly|native-trend-strict|\n";
   os << "                            provenance-guard|provenance-strict|\n";
   os << "                            native-lifecycle-strict|native-smoke|\n";
   os << "                            native-nightly|native-strict,\n";
@@ -175,6 +176,7 @@ static void printRunHelp(raw_ostream &os) {
   os << "                           Repeatable post-run report policy profile\n";
   os << "  --report-policy-mode MODE\n";
   os << "                           smoke|nightly|strict|trend-nightly|trend-strict|\n";
+  os << "                           native-trend-nightly|native-trend-strict|\n";
   os << "                           provenance-guard|provenance-strict|\n";
   os << "                           native-lifecycle-strict|native-smoke|\n";
   os << "                           native-nightly|native-strict\n";
@@ -206,6 +208,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --trend-window N         Use latest N history runs for trends (0=all)\n";
   os << "  --policy-profile NAME    Apply built-in report policy profile\n";
   os << "  --policy-mode MODE       smoke|nightly|strict|trend-nightly|trend-strict|\n";
+  os << "                           native-trend-nightly|native-trend-strict|\n";
   os << "                           provenance-guard|provenance-strict|\n";
   os << "                           native-lifecycle-strict|native-smoke|\n";
   os << "                           native-nightly|native-strict\n";
@@ -5754,9 +5757,9 @@ static std::string resolveProjectFilePath(StringRef projectDir, StringRef file) 
 }
 
 static constexpr StringLiteral kMatrixPolicyModeList =
-    "smoke|nightly|strict|trend-nightly|trend-strict|provenance-guard|"
-    "provenance-strict|native-lifecycle-strict|native-smoke|native-nightly|"
-    "native-strict";
+    "smoke|nightly|strict|trend-nightly|trend-strict|native-trend-nightly|"
+    "native-trend-strict|provenance-guard|provenance-strict|"
+    "native-lifecycle-strict|native-smoke|native-nightly|native-strict";
 
 static bool isMatrixPolicyMode(StringRef mode);
 
@@ -7589,6 +7592,7 @@ static void appendMatrixNativeLifecycleStrictRules(ReportOptions &opts) {
 static bool isMatrixPolicyMode(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
          mode == "trend-nightly" || mode == "trend-strict" ||
+         mode == "native-trend-nightly" || mode == "native-trend-strict" ||
          mode == "provenance-guard" || mode == "provenance-strict" ||
          mode == "native-lifecycle-strict" || mode == "native-smoke" ||
          mode == "native-nightly" || mode == "native-strict";
@@ -7596,7 +7600,8 @@ static bool isMatrixPolicyMode(StringRef mode) {
 
 static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
-         mode == "trend-nightly" || mode == "trend-strict";
+         mode == "trend-nightly" || mode == "trend-strict" ||
+         mode == "native-trend-nightly" || mode == "native-trend-strict";
 }
 
 static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
@@ -7631,6 +7636,20 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                         ? "formal-regression-matrix-composite-stop-on-fail-trend-strict"
                         : "formal-regression-matrix-composite-trend-strict";
     provenanceProfile = "formal-regression-matrix-provenance-strict";
+  } else if (mode == "native-trend-nightly") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-trend-nightly"
+                        : "formal-regression-matrix-composite-trend-nightly";
+    provenanceProfile = "formal-regression-matrix-provenance-guard";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-family-contract";
+  } else if (mode == "native-trend-strict") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-trend-strict"
+                        : "formal-regression-matrix-composite-trend-strict";
+    provenanceProfile = "formal-regression-matrix-provenance-strict";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-family-contract";
   } else if (mode == "provenance-guard") {
     policyProfile = "formal-regression-matrix-provenance-guard";
   } else if (mode == "provenance-strict") {
