@@ -9,6 +9,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++)
+
+1. Promoted non-empty filtered-lane contracts into mutation governance:
+   - new profile:
+     `formal-regression-matrix-external-formal-nonempty-filter-contract-v1`
+2. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v6`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v6`
+3. Contract impact:
+   - filter-empty targeted runs are now policy-visible in `circt-mut report`
+     via `nonempty_filter_miss` counters, not only lane-local runner logs.
+4. Remaining limitations:
+   - OpenTitan lanes are not yet wired into this non-empty counter contract.
+   - profile currently enforces zero-only misses; no lane-specific `min_total`
+     budgets yet.
+   - no direct lane-diff explainer yet in mutation reports when contract fails.
+5. Next long-term features:
+   - extend `nonempty_filter_miss` contract keys to OpenTitan LEC/E2E modes.
+   - add per-lane minimum volume policy keys (`min_total`) for semantic slices.
+   - add rich policy failure explanations (lane-id + filter context) in
+     `circt-mut report` rows.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++)
 
 1. Added targeted-filter non-empty contract support in `run_formal_all`:
@@ -1780,6 +1802,15 @@ See CHANGELOG.md on recent progress.
   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v3`
   enabling stricter drift control for BMC failure-identity growth while keeping
   rollout incremental via explicit composite versioning.
+- Latest mutation-governance milestone (current): formal trend rollout now
+  includes non-empty filter-contract governance for targeted external formal
+  slices:
+  - `formal-regression-matrix-external-formal-nonempty-filter-contract-v1`
+  - `formal-regression-matrix-composite-native-strict-formal-trend-v6`
+  - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v6`
+  and native-strict formal trend v1 fixture coverage now includes explicit
+  compile rows, preserving compile-budget contract checks during staged policy
+  evolution.
 - Future iterations should add:
   - concise outcome and planning impact in `PROJECT_PLAN.md`
   - detailed implementation + validation data in `CHANGELOG.md`
