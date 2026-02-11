@@ -139,6 +139,8 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --with-report            Run 'circt-mut report' after run completes\n";
   os << "  --with-report-on-fail    Run report even if run flow fails\n";
   os << "  --report-mode MODE       cover|matrix|all (default: same as --mode)\n";
+  os << "  --report-policy-profile NAME\n";
+  os << "                           Repeatable post-run report policy profile\n";
   os << "  --report-policy-mode MODE\n";
   os << "                           smoke|nightly (maps to report policy profile)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
@@ -5751,6 +5753,7 @@ struct RunOptions {
   bool withReport = false;
   bool withReportOnFail = false;
   std::string reportMode;
+  SmallVector<std::string, 4> reportPolicyProfiles;
   std::string reportPolicyMode;
   std::optional<bool> reportPolicyStopOnFail;
   std::optional<bool> reportFailOnPrequalifyDrift;
@@ -6052,6 +6055,20 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       result.opts.reportMode = v->str();
       continue;
     }
+    if (arg == "--report-policy-profile" ||
+        arg.starts_with("--report-policy-profile=")) {
+      auto v = consumeValue(i, arg, "--report-policy-profile");
+      if (!v)
+        return result;
+      StringRef profile = StringRef(*v).trim();
+      if (profile.empty()) {
+        result.error =
+            "circt-mut run: --report-policy-profile requires non-empty value";
+        return result;
+      }
+      result.opts.reportPolicyProfiles.push_back(profile.str());
+      continue;
+    }
     if (arg == "--report-policy-mode" ||
         arg.starts_with("--report-policy-mode=")) {
       auto v = consumeValue(i, arg, "--report-policy-mode");
@@ -6234,8 +6251,15 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       return appended;
     };
     bool hasCLIReportPolicyMode = !opts.reportPolicyMode.empty();
+    bool hasCLIReportPolicyProfile = !opts.reportPolicyProfiles.empty();
     bool hasExplicitPolicyProfile = false;
-    if (!hasCLIReportPolicyMode) {
+    if (hasCLIReportPolicyProfile) {
+      for (const auto &profile : opts.reportPolicyProfiles) {
+        reportArgsOwned.push_back("--policy-profile");
+        reportArgsOwned.push_back(profile);
+      }
+      hasExplicitPolicyProfile = true;
+    } else if (!hasCLIReportPolicyMode) {
       hasExplicitPolicyProfile = appendRunReportCSV("report_policy_profile");
       hasExplicitPolicyProfile |= appendRunReportCSV("report_policy_profiles");
     }

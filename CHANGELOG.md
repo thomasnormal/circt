@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1010 - February 11, 2026
+
+### `circt-mut run`: Repeatable CLI `--report-policy-profile` Overrides
+
+1. Extended `circt-mut run` with repeatable direct profile forwarding:
+   - `--report-policy-profile <name>` (repeatable)
+2. Added precedence behavior:
+   - explicit CLI policy profiles now override `[run] report_policy_profile(s)`
+     and policy-mode mapping fallback.
+   - preserves deterministic profile order for report application.
+3. Kept strict governance interactions:
+   - existing policy-mode / stop-on-fail / drift-gate CLI controls continue to
+     enforce validation and mode constraints.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-run-help.test` (new option in help)
+   - `test/Tools/circt-mut-run-with-report-cli-policy-profile-override-config.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- Focused run/report slices:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-help.test test/Tools/circt-mut-run-with-report-cli-*.test test/Tools/circt-mut-run-with-report-config-*.test test/Tools/circt-mut-run-with-report-on-fail-*.test`: PASS (19/19)
+- Full mutation suite:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (233/233)
+- External filtered formal cadence:
+  - `LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-run-cli-policy-profile-override-20260211 ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` LEC, `yosys/tests/sva` LEC, `opentitan` LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known/ongoing): `verilator-verification` BMC (sampled-value bucket), `yosys/tests/sva` BMC (implication-timing bucket), AVIP compile `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 1009 - February 11, 2026
 
 ### `circt-mut run`: CLI Governance Overrides for Post-Run Report
