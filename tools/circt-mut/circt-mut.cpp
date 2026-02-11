@@ -7561,6 +7561,8 @@ struct ExternalFormalSummary {
   uint64_t summaryTSVSchemaValidFiles = 0;
   uint64_t summaryTSVSchemaInvalidFiles = 0;
   uint64_t summaryTSVParseErrors = 0;
+  uint64_t summaryTSVConsistentRows = 0;
+  uint64_t summaryTSVInconsistentRows = 0;
 };
 
 struct MatrixLaneBudgetRow {
@@ -7810,6 +7812,12 @@ static bool collectExternalFormalSummary(
         }
         ++summary.summaryTSVRows;
         ++summary.parsedSummaryLines;
+        uint64_t statusSum =
+            pass + fail + xfail + xpass + errorCount + skip;
+        if (total == statusSum)
+          ++summary.summaryTSVConsistentRows;
+        else
+          ++summary.summaryTSVInconsistentRows;
         summary.summaryTotal += total;
         summary.summaryPass += pass;
         summary.summaryFail += fail;
@@ -7953,6 +7961,10 @@ static bool collectExternalFormalSummary(
                     std::to_string(summary.summaryTSVSchemaInvalidFiles));
   rows.emplace_back("external_formal.summary_tsv_parse_errors",
                     std::to_string(summary.summaryTSVParseErrors));
+  rows.emplace_back("external_formal.summary_tsv_consistent_rows",
+                    std::to_string(summary.summaryTSVConsistentRows));
+  rows.emplace_back("external_formal.summary_tsv_inconsistent_rows",
+                    std::to_string(summary.summaryTSVInconsistentRows));
 
   uint64_t failLikeSum = summary.fail + summary.error + summary.xpass +
                          summary.summaryFail + summary.summaryError +
@@ -8711,6 +8723,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "external_formal.summary_tsv_parse_errors", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "external_formal.summary_tsv_rows",
                      1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_tsv_inconsistent_rows", 0.0);
     return true;
   }
   if (profile == "formal-regression-matrix-provenance-guard") {
@@ -11863,6 +11877,8 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("external_formal.summary_tsv_schema_valid_files", "0");
     rows.emplace_back("external_formal.summary_tsv_schema_invalid_files", "0");
     rows.emplace_back("external_formal.summary_tsv_parse_errors", "0");
+    rows.emplace_back("external_formal.summary_tsv_consistent_rows", "0");
+    rows.emplace_back("external_formal.summary_tsv_inconsistent_rows", "0");
     rows.emplace_back("external_formal.fail_like_sum", "0");
   }
   if (!effectiveOpts.laneBudgetOutFile.empty()) {
