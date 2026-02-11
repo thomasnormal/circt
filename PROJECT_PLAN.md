@@ -9,6 +9,22 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 17:05)
+
+1. Verilator sampled-value closure:
+   - `verilator-verification/tests/asserts/assert_stable.sv` now passes in BMC
+     (`BMC_RESULT=UNSAT`) with explicit `build-test/bin` tools.
+   - filtered suite run (`assert_stable$`) now reports:
+     `total=1 pass=1 fail=0 xfail=0`.
+2. Root-cause closure:
+   - fixed LLHD register-state probe stripping in
+     `StripLLHDInterfaceSignals.cpp` (single unguarded zero-time
+     register-backed signal drives now resolve probes to register state).
+3. Debt retirement:
+   - removed `assert_stable` from `utils/verilator-bmc-xfails.txt`.
+4. New regression lock:
+   - `test/Tools/circt-bmc/sva-stable-toggling-unsat-e2e.sv`.
+
 ### Formal Closure Snapshot (February 11, 2026, 16:22)
 
 1. sv-tests focused semantic closure (SMT-LIB lane mode, explicit build-test tools):
@@ -19,7 +35,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - PASS `16.15--property-iff-uvm`
    - XFAIL `16.15--property-iff-uvm-fail` (known metadata/content mismatch)
 2. verilator-verification targeted formal slice:
-   - BMC: `assert_past` PASS, `assert_stable` FAIL (`BMC_RESULT=SAT`)
+   - BMC: `assert_past` PASS, `assert_stable` PASS (`BMC_RESULT=UNSAT`)
    - LEC: `assert_past` PASS, `assert_stable` PASS (`LEC_RESULT=EQ`)
 3. yosys/tests/sva targeted formal slice:
    - BMC mode check: `basic00` PASS, `basic01` mismatch in pass-profile
@@ -32,7 +48,6 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 ### Formal Limitations And Long-Term Build Targets
 
 1. BMC semantic limits still open:
-   - `$stable` semantics mismatch on verilator slice (`assert_stable`)
    - Yosys SVA expectation drift around `basic01 pass` profile handling
    - mixed 4-state/2-state expectations still leak into targeted external lanes
 2. LEC hardening limits still open:
@@ -42,7 +57,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - complete native matrix scheduling migration (script parity -> native parity)
    - strengthen lane-level trend drift guardrails for nightly/strict policy bundles
 4. Priority implementation order (formal-only tracks):
-   - P0: fix BMC `$stable` lowering/semantics parity and add dedicated e2e test
+   - P0: close yosys `basic01` pass-profile expectation drift with strict, lane-owned rule checks
    - P1: normalize yosys `basic01` pass/fail profile expectation accounting
    - P1: add strict lane-level formal closure report artifact generation
    - P2: extend mutation report trend governance with prequalify/bucket deltas
@@ -61,18 +76,18 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 1. Added default Verilator-BMC expected-failure file:
    - `utils/verilator-bmc-xfails.txt`
-   - current seeded case: `assert_stable` (sampled-value semantic mismatch)
+   - originally seeded with sampled-value mismatch cases; now intentionally
+     kept minimal (current file is empty after `assert_stable` closure).
 2. `utils/run_formal_all.sh` now auto-loads that default list when present
    alongside the script, while keeping explicit override support:
    - `--verilator-bmc-xfails FILE`
 3. Added coverage:
    - `test/Tools/run-formal-all-verilator-bmc-default-xfails-forwarding.test`
 4. External validation:
-   - filtered lane `verilator-verification/BMC` (`assert_stable$`) now reports
-     `xfail=1` and keeps lane status green for strict trend tracking.
+   - forwarding path remains validated via
+     `test/Tools/run-formal-all-verilator-bmc-default-xfails-forwarding.test`.
 5. Semantic closure status:
-   - this is an infra containment step only; the root `$stable` BMC parity gap
-     remains open and stays P0 for direct lowering/modeling work.
+   - this infra path is now in steady state; `$stable` parity is closed.
 
 ### Formal Backend Hardening (February 11, 2026)
 
@@ -86,9 +101,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - `test/Conversion/VerifToSMT/lec-assume-known-inputs.mlir`
    - `test/Conversion/VerifToSMT/four-state-input-warning.mlir`
 3. Remaining top semantic limiter remains unchanged:
-   - `verilator-verification` BMC `assert_stable` still fails while matching
-     LEC passes, so next semantic-closure patch should target `$stable`
-     lowering/evaluation directly.
+   - superseded: `assert_stable` is now closed in BMC and LEC.
 
 ### MooreToCore `$past` Initialization Hardening (February 11, 2026)
 
@@ -102,8 +115,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 4. Post-change sanity:
    - `sv-tests` BMC `16.10--property-local-var-uvm` remains PASS.
 5. Remaining limitation:
-   - `assert_stable` still SAT in BMC; root sampled-value parity mismatch is
-     not fully explained by startup-state nondeterminism and remains P0.
+   - superseded: `$stable` mismatch is now closed; next BMC P0 is yosys
+     expectation drift (`basic01` pass-profile accounting).
 
 ### BMC Provenance Hardening (February 11, 2026)
 
@@ -119,9 +132,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
    - `test/Tools/circt-lec/lec-strip-llhd-interface-abstraction-attr.mlir`
 4. Remaining high-priority limitation:
-   - `assert_stable` BMC still fails in verilator slice; abstraction metadata
-     is now available earlier in the LLHD strip pipeline, but end-to-end
-     `circt-bmc` CLI provenance surfacing for this path remains incomplete.
+   - LLHD abstraction metadata is in place; next work is provenance surfacing
+     and drift diagnostics for yosys/verilator formal lanes.
 
 ### Test Results
 
