@@ -6,6 +6,9 @@
 // RUN: env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut run --project-dir %t/proj --mode matrix > %t/out.txt
 // RUN: FileCheck %s < %t/out.txt
 //
+// CHECK: policy.mode{{[[:space:]]}}provenance-guard
+// CHECK: policy.mode_source{{[[:space:]]}}cli
+// CHECK: policy.stop_on_fail{{[[:space:]]}}1
 // CHECK: policy.profile_count{{[[:space:]]}}1
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-matrix-provenance-guard
 // CHECK: value_gate.status{{[[:space:]]}}pass

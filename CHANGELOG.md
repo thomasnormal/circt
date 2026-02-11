@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1044 - February 11, 2026
+
+### `circt-mut report`: Policy Mode Source Audit Key
+
+1. Extended report policy audit surface in `tools/circt-mut/circt-mut.cpp` with
+   `policy.mode_source` to distinguish mode provenance:
+   - `cli`: policy-mode mapping applied from CLI report options
+   - `config`: policy-mode mapping applied from config policy mode
+   - `none`: explicit policy profiles used without mode mapping
+2. Retained existing `policy.mode` and `policy.stop_on_fail` output and made
+   source attribution explicit for governance/debug workflows.
+3. Added/updated regression coverage across direct report and run-with-report
+   entrypoints:
+   - `test/Tools/circt-mut-report-cli-policy-mode-smoke-stop-on-fail.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-nightly-default.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-provenance-strict-default.test`
+   - `test/Tools/circt-mut-report-policy-config-cli-precedence.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-stop-on-fail.test`
+   - `test/Tools/circt-mut-run-with-report-config-policy-mode-provenance-guard.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-profile-override-config.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused policy source-audit slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-report-cli-policy-mode-smoke-stop-on-fail|circt-mut-report-policy-config-matrix-mode-provenance-strict-default|circt-mut-report-policy-config-matrix-mode-nightly-default|circt-mut-report-policy-config-cli-precedence|circt-mut-run-with-report-cli-policy-mode-stop-on-fail|circt-mut-run-with-report-config-policy-mode-provenance-guard|circt-mut-run-with-report-cli-policy-profile-override-config|circt-mut-report-cli-policy-mode-strict-default|circt-mut-report-cli-policy-mode-trend-nightly-default|circt-mut-run-with-report-cli-policy-mode-provenance-strict'`: PASS (10/10)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter 'circt-mut-.*\\.test'`: PASS (269/269)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-mode-source-audit ... --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'basic02|assert_fell' --verilator-lec-test-filter 'basic02|assert_fell' --yosys-bmc-test-filter 'basic02|assert_fell' --yosys-lec-test-filter 'basic02|assert_fell' --opentitan-lec-impl-filter '.*'`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL/ERROR snapshot: `verilator-verification` BMC+LEC, `yosys/tests/sva` BMC+LEC, `opentitan` LEC, AVIP compile `axi4Lite/spi/uart`
+
 ## Iteration 1043 - February 11, 2026
 
 ### `circt-mut report`: Policy-Mode Audit Rows
