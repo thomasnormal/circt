@@ -9,6 +9,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 22:20)
+
+1. OpenTitan LEC filtered no-match handling is now explicit and non-failing:
+   - when no AES S-Box implementations match an impl filter, lane emits
+     `SKIP` with `no_matching_impl_filter` instead of synthetic
+     `missing_results` failure.
+2. Real sampled cadence signal across target suites:
+   - `avip/apb_avip` compile: PASS
+   - `sv-tests/LEC` (selected non-UVM filter): empty/skip slice
+   - `verilator-verification/LEC`: still `ERROR` with
+     `lec_error_bucket_semantic_other_cases=1`
+   - `opentitan/LEC` (`rv_timer|otp_ctrl` filter): now clean skip classification.
+3. Remaining limitations:
+   - `verilator` LEC semantic failures are still in the coarse
+     `semantic_other` bucket and need finer reason-family decomposition.
+   - BMC deterministic multiclock parity pair still missing.
+4. Next long-term features:
+   - split `lec_error_bucket_semantic_other_cases` into stable semantic
+     subfamilies and add per-family case-ID drift gates.
+   - add deterministic multiclock SAT/UNSAT e2e pair and wire it into strict
+     formal cadence.
+   - feed per-family BMC/LEC drift deltas into mutation profile ranking.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 22:05)
 
 1. Added deterministic BMC e2e micro-tests for sequence-subroutine semantics:

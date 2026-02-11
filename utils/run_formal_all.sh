@@ -9280,6 +9280,14 @@ run_opentitan_lec_lane() {
     utils/run_opentitan_circt_lec.py --workdir "$workdir" "${opentitan_lec_args[@]}" || true
 
   if [[ ! -s "$case_results" ]]; then
+    local suite_log="$OUT_DIR/${suite_name}.log"
+    if [[ -f "$suite_log" ]] && \
+       grep -q "No AES S-Box implementations selected." "$suite_log"; then
+      printf "SKIP\taes_sbox\tno_matching_impl_filter\topentitan\t%s\t\n" "$mode_name" > "$case_results"
+      local no_impl_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=0 skip=1 no_matching_impl_filter=1"
+      record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 0 1 "$no_impl_summary"
+      return
+    fi
     printf "FAIL\taes_sbox\tmissing_results\topentitan\t%s\t\n" "$mode_name" > "$case_results"
     local missing_summary="total=1 pass=0 fail=1 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
     record_result_with_summary "opentitan" "$mode_name" 1 0 1 0 0 1 0 "$missing_summary"

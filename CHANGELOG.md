@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1110 - February 11, 2026
+
+### Formal Runner Hygiene: OpenTitan LEC Empty-Selection Becomes Explicit SKIP
+
+1. Updated OpenTitan LEC lane handling in `utils/run_formal_all.sh` for empty
+   result files:
+   - if lane log contains `No AES S-Box implementations selected.`, emit
+     `SKIP	aes_sbox	no_matching_impl_filter	opentitan	LEC*`
+     instead of synthetic `missing_results` failure.
+2. Why this matters:
+   - filtered cadence runs should not report false failures when the selected
+     implementation filter intentionally matches nothing.
+   - keeps strict-gate and dashboard signals focused on real semantic or infra
+     regressions.
+3. Added regression test:
+   - `test/Tools/run-formal-all-opentitan-lec-no-impl-skip.test`
+4. Preserved fallback behavior:
+   - empty-result scenarios without the explicit no-selection marker still map
+     to existing `missing_results` failure classification.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-opentitan-lec-no-impl-skip.test`
+  - `build-test/test/Tools/run-formal-all-opentitan-lec-fallback-diag.test`
+  - PASS (2/2)
+- Real filtered OpenTitan LEC cadence check:
+  - `--opentitan-lec-impl-filter '^(rv_timer|otp_ctrl)$'`
+  - summary: `total=1 pass=0 fail=0 error=0 skip=1 no_matching_impl_filter=1`
+  - case row: `SKIP	aes_sbox	no_matching_impl_filter	opentitan	LEC`
+
 ## Iteration 1105 - February 11, 2026
 
 ### `circt-mut` Strict Summary Gating: Duplicate Row Detection
