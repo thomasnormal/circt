@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1082 - February 11, 2026
+
+### Formal Driver: LEC Timeout Class Taxonomy + Strict Drift Gate
+
+1. Added normalized timeout-class counters in `utils/run_formal_all.sh`:
+   - `lec_timeout_class_solver_budget_cases`
+   - `lec_timeout_class_preprocess_cases`
+   - `lec_timeout_class_model_size_cases`
+   - `lec_timeout_class_unknown_cases`
+2. Added new strict-gate option:
+   - `--fail-on-new-lec-timeout-class-cases`
+   to fail when timeout-class counters increase vs baseline for `LEC*` lanes.
+3. Strict-gate default wiring:
+   - `--strict-gate` now enables timeout-class drift checks.
+4. Legacy baseline compatibility:
+   - strict mode skips timeout-class drift enforcement when baseline rows do
+     not yet contain timeout-class telemetry.
+5. Added regression lock:
+   - `test/Tools/run-formal-all-strict-gate-lec-timeout-class-cases.test`
+6. Updated help regression surface:
+   - `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv`:
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-class-cases.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-diag-keys.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-any.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout-case-ids.test`
+  - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout.test`
+  - `build-test/test/Tools/run-formal-all-help.test`
+  - PASS (6/6)
+- External focused sanity:
+  - `run_formal_all.sh` on `/home/thomas-ahle/verilator-verification` LEC
+    filtered slice (`assert_past|assert_stable`) with
+    `--fail-on-any-lec-timeouts`: PASS; summary includes zeroed timeout class
+    counters and `lec_timeout_diag_missing_cases=0`.
+
 ## Iteration 1081 - February 11, 2026
 
 ### Formal Driver: LEC Timeout Provenance Keys + Strict Gate
