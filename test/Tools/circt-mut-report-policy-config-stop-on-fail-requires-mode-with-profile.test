@@ -1,0 +1,7 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/matrix/lane1
+// RUN: printf 'detected_mutants\t1\nerrors\t0\n' > %t/proj/out/matrix/lane1/metrics.tsv
+// RUN: printf 'lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\nlane1\tPASS\t0\t100.00\tPASS\t%t/proj/out/matrix/lane1\t%t/proj/out/matrix/lane1/metrics.tsv\t-\n' > %t/proj/out/matrix/results.tsv
+// RUN: printf '[report]\npolicy_profile = "formal-regression-matrix-guard"\npolicy_stop_on_fail = "true"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut report --project-dir %t/proj --mode matrix 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: [report] key 'policy_stop_on_fail' requires 'policy_mode'

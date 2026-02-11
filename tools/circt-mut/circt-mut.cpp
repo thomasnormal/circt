@@ -6735,6 +6735,10 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     };
     bool hasCLIReportPolicyMode = !opts.reportPolicyMode.empty();
     bool hasCLIReportPolicyProfile = !opts.reportPolicyProfiles.empty();
+    auto runPolicyStopOnFailIt = cfg.run.find("report_policy_stop_on_fail");
+    bool hasConfigReportPolicyStopOnFail =
+        runPolicyStopOnFailIt != cfg.run.end() &&
+        !runPolicyStopOnFailIt->second.empty();
     auto runPolicyModeIt = cfg.run.find("report_policy_mode");
     bool hasConfigReportPolicyMode =
         runPolicyModeIt != cfg.run.end() && !runPolicyModeIt->second.empty();
@@ -6750,6 +6754,12 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         (hasConfigReportPolicyProfile || hasConfigReportPolicyProfiles)) {
       errs() << "circt-mut run: [run] keys 'report_policy_mode' and "
                 "'report_policy_profile(s)' are mutually exclusive\n";
+      return 1;
+    }
+    if (!hasCLIReportPolicyMode && hasConfigReportPolicyStopOnFail &&
+        !hasConfigReportPolicyMode) {
+      errs() << "circt-mut run: [run] key 'report_policy_stop_on_fail' "
+                "requires 'report_policy_mode'\n";
       return 1;
     }
     bool hasExplicitPolicyProfile = false;
@@ -10701,6 +10711,10 @@ static int runNativeReport(const ReportOptions &opts) {
     auto configPolicyModeIt = cfg.report.find("policy_mode");
     bool hasConfigPolicyMode =
         configPolicyModeIt != cfg.report.end() && !configPolicyModeIt->second.empty();
+    auto configPolicyStopOnFailIt = cfg.report.find("policy_stop_on_fail");
+    bool hasConfigPolicyStopOnFail =
+        configPolicyStopOnFailIt != cfg.report.end() &&
+        !configPolicyStopOnFailIt->second.empty();
     auto configPolicyProfileIt = cfg.report.find("policy_profile");
     bool hasConfigPolicyProfile =
         configPolicyProfileIt != cfg.report.end() &&
@@ -10713,6 +10727,12 @@ static int runNativeReport(const ReportOptions &opts) {
         (hasConfigPolicyProfile || hasConfigPolicyProfiles)) {
       errs() << "circt-mut report: [report] keys 'policy_mode' and "
                 "'policy_profile(s)' are mutually exclusive\n";
+      return 1;
+    }
+    if (!hasCLIPolicyMode && hasConfigPolicyStopOnFail &&
+        !hasConfigPolicyMode) {
+      errs() << "circt-mut report: [report] key 'policy_stop_on_fail' "
+                "requires 'policy_mode'\n";
       return 1;
     }
     if (effectiveOpts.coverWorkDir.empty()) {
