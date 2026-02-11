@@ -1,0 +1,12 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "FAIL\tcase_base\t/tests/base_fail.sv\n" > "$OUT"\necho "sv-tests SVA summary: total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0"\n' > %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-base --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^sv-tests/BMC$' --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --baseline-file %t/formal-baselines.tsv --update-baselines
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "FAIL\t16.15--property-iff-uvm\t/tests/16.15--property-iff-uvm.sv\n" > "$OUT"\necho "sv-tests SVA summary: total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0"\n' > %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: chmod +x %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-new --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/BMC$" --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --baseline-file %t/formal-baselines.tsv --strict-gate' 2>&1 | FileCheck %s
+//
+// CHECK: strict gate failures:
+// CHECK: sv-tests BMC: new BMC semantic-bucket case IDs observed (baseline=1 current=1, window=1): disable_iff::16.15--property-iff-uvm

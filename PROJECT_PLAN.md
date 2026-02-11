@@ -9,6 +9,35 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 20:45)
+
+1. Added semantic-bucket identity drift governance in `run_formal_all.sh`:
+   - new gate: `--fail-on-new-bmc-semantic-bucket-case-ids`
+   - new baseline field: `bmc_semantic_bucket_case_ids`
+   - identity format: `bucket::case_id`
+2. Strict-gate hardening:
+   - `--strict-gate` now enables BMC semantic-bucket case-ID drift checks by
+     default.
+3. Legacy baseline compatibility:
+   - semantic-bucket case-ID drift enforcement activates only when baseline rows
+     already carry `bmc_semantic_bucket_case_ids`.
+4. New regression locks:
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-case-ids-defaults.test`
+5. Focused validation:
+   - lit strict-gate semantic bucket stack: PASS (8/8).
+   - external filtered smokes:
+     - `/home/thomas-ahle/verilator-verification` BMC/LEC: PASS.
+     - `/home/thomas-ahle/yosys/tests/sva` BMC/LEC: PASS.
+6. Remaining long-term limitations and next features:
+   - BMC still needs semantic closure implementation for multiclock and
+     sequence-subroutine lowering/runtime behavior (beyond drift governance).
+   - LEC timeout taxonomy still needs model-size/proof-shape provenance to
+     reduce `unknown` class.
+   - Mutation generation/reporting still needs deterministic
+     shard+cache lineage (IR hash + policy profile + external-formal digest),
+     plus profile-aware incremental invalidation to keep AVIP-scale runs fast.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 20:20)
 
 1. Added BMC timeout identity telemetry and drift gating in

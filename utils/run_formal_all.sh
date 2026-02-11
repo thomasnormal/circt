@@ -118,6 +118,9 @@ Options:
                          (disable_iff/local_var/multiclock/four_state/
                          sampled_value/property_named/implication_timing/
                          hierarchical_net)
+  --fail-on-new-bmc-semantic-bucket-case-ids
+                         Fail when BMC semantic-bucket case IDs increase vs
+                         baseline (bucket::case_id identity tuples)
   --fail-on-new-bmc-semantic-bucket-unclassified-cases
                          Fail when BMC semantic-bucket unclassified fail-like
                          case count increases vs baseline
@@ -1855,6 +1858,7 @@ FAIL_ON_ANY_LEC_DIAG_MISSING_CASES=0
 FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
+FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES=0
 FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION=0
 FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=0
@@ -2229,6 +2233,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1; shift ;;
     --fail-on-new-bmc-semantic-bucket-cases)
       FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1; shift ;;
+    --fail-on-new-bmc-semantic-bucket-case-ids)
+      FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS=1; shift ;;
     --fail-on-new-bmc-semantic-bucket-unclassified-cases)
       FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES=1; shift ;;
     --fail-on-bmc-semantic-tagged-cases-regression)
@@ -4286,6 +4292,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1
+  FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES=1
   FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1
@@ -11322,6 +11329,43 @@ def collect_bmc_timeout_case_ids(out_dir: Path):
                     timeout_case_ids.setdefault(key, set()).add(case_id)
     return {key: ";".join(sorted(values)) for key, values in timeout_case_ids.items()}
 
+def collect_bmc_semantic_bucket_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-semantic-buckets.tsv"),
+        (
+            "sv-tests-uvm",
+            "BMC_SEMANTICS",
+            out_dir / "sv-tests-bmc-uvm-semantics-semantic-buckets.tsv",
+        ),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-semantic-buckets.tsv"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-semantic-buckets.tsv"),
+    ]
+    case_ids = {}
+    for default_suite, default_mode, path in sources:
+        if not path.exists():
+            continue
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 6:
+                    continue
+                case_id = parts[1].strip()
+                case_path = parts[2].strip()
+                suite = parts[3].strip() if len(parts) > 3 and parts[3].strip() else default_suite
+                mode = parts[4].strip() if len(parts) > 4 and parts[4].strip() else default_mode
+                bucket = parts[5].strip()
+                if not suite or not mode or not bucket:
+                    continue
+                key = (suite, mode)
+                identity_case = case_id if case_id else case_path
+                if not identity_case:
+                    identity_case = "__aggregate__"
+                case_ids.setdefault(key, set()).add(f"{bucket}::{identity_case}")
+    return {key: ";".join(sorted(values)) for key, values in case_ids.items()}
+
 def collect_lec_drop_remark_cases(out_dir: Path):
     sources = [
         ("sv-tests", "LEC", out_dir / "sv-tests-lec-drop-remark-cases.tsv"),
@@ -11436,6 +11480,7 @@ bmc_abstraction_provenance = collect_bmc_abstraction_provenance(out_dir)
 bmc_drop_remark_case_ids = collect_bmc_drop_remark_cases(out_dir)
 bmc_drop_remark_case_reason_ids = collect_bmc_drop_remark_case_reasons(out_dir)
 bmc_timeout_case_ids = collect_bmc_timeout_case_ids(out_dir)
+bmc_semantic_bucket_case_ids = collect_bmc_semantic_bucket_case_ids(out_dir)
 lec_drop_remark_case_ids = collect_lec_drop_remark_cases(out_dir)
 lec_drop_remark_case_reason_ids = collect_lec_drop_remark_case_reasons(out_dir)
 lec_timeout_case_ids = collect_lec_timeout_case_ids(out_dir)
@@ -11475,6 +11520,7 @@ if baseline_path.exists():
                 'bmc_drop_remark_case_ids': row.get('bmc_drop_remark_case_ids', ''),
                 'bmc_drop_remark_case_reason_ids': row.get('bmc_drop_remark_case_reason_ids', ''),
                 'bmc_timeout_case_ids': row.get('bmc_timeout_case_ids', ''),
+                'bmc_semantic_bucket_case_ids': row.get('bmc_semantic_bucket_case_ids', ''),
                 'lec_drop_remark_case_ids': row.get('lec_drop_remark_case_ids', ''),
                 'lec_drop_remark_case_reason_ids': row.get('lec_drop_remark_case_reason_ids', ''),
                 'lec_timeout_case_ids': row.get('lec_timeout_case_ids', ''),
@@ -11508,6 +11554,7 @@ for row in rows:
         'bmc_drop_remark_case_ids': bmc_drop_remark_case_ids.get((row['suite'], row['mode']), ''),
         'bmc_drop_remark_case_reason_ids': bmc_drop_remark_case_reason_ids.get((row['suite'], row['mode']), ''),
         'bmc_timeout_case_ids': bmc_timeout_case_ids.get((row['suite'], row['mode']), ''),
+        'bmc_semantic_bucket_case_ids': bmc_semantic_bucket_case_ids.get((row['suite'], row['mode']), ''),
         'lec_drop_remark_case_ids': lec_drop_remark_case_ids.get((row['suite'], row['mode']), ''),
         'lec_drop_remark_case_reason_ids': lec_drop_remark_case_reason_ids.get((row['suite'], row['mode']), ''),
         'lec_timeout_case_ids': lec_timeout_case_ids.get((row['suite'], row['mode']), ''),
@@ -11535,6 +11582,7 @@ with baseline_path.open('w', newline='') as f:
             'bmc_drop_remark_case_ids',
             'bmc_drop_remark_case_reason_ids',
             'bmc_timeout_case_ids',
+            'bmc_semantic_bucket_case_ids',
             'lec_drop_remark_case_ids',
             'lec_drop_remark_case_reason_ids',
             'lec_timeout_case_ids',
@@ -11619,6 +11667,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES" == "1" || \
       "$FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION" == "1" || \
       "$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" == "1" || \
@@ -11667,6 +11716,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES="$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" \
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" \
+  FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES" \
   FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION="$FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION" \
   FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE="$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" \
@@ -11906,6 +11956,43 @@ def collect_bmc_timeout_case_ids(out_dir: Path):
                     case_ids.setdefault(key, set()).add(case_id)
     return case_ids
 
+def collect_bmc_semantic_bucket_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-semantic-buckets.tsv"),
+        (
+            "sv-tests-uvm",
+            "BMC_SEMANTICS",
+            out_dir / "sv-tests-bmc-uvm-semantics-semantic-buckets.tsv",
+        ),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-semantic-buckets.tsv"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-semantic-buckets.tsv"),
+    ]
+    case_ids = {}
+    for default_suite, default_mode, path in sources:
+        if not path.exists():
+            continue
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 6:
+                    continue
+                case_id = parts[1].strip()
+                case_path = parts[2].strip()
+                suite = parts[3].strip() if len(parts) > 3 and parts[3].strip() else default_suite
+                mode = parts[4].strip() if len(parts) > 4 and parts[4].strip() else default_mode
+                bucket = parts[5].strip()
+                if not suite or not mode or not bucket:
+                    continue
+                key = (suite, mode)
+                identity_case = case_id if case_id else case_path
+                if not identity_case:
+                    identity_case = "__aggregate__"
+                case_ids.setdefault(key, set()).add(f"{bucket}::{identity_case}")
+    return case_ids
+
 def collect_lec_timeout_case_ids(out_dir: Path):
     sources = [
         ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
@@ -12009,6 +12096,9 @@ current_bmc_drop_remark_case_reasons = collect_bmc_drop_remark_case_reasons(
     Path(os.environ["OUT_DIR"])
 )
 current_bmc_timeout_case_ids = collect_bmc_timeout_case_ids(
+    Path(os.environ["OUT_DIR"])
+)
+current_bmc_semantic_bucket_case_ids = collect_bmc_semantic_bucket_case_ids(
     Path(os.environ["OUT_DIR"])
 )
 current_lec_drop_remark_cases = collect_lec_drop_remark_cases(
@@ -12120,6 +12210,9 @@ fail_on_new_bmc_ir_check_fingerprint_cases = (
 )
 fail_on_new_bmc_semantic_bucket_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES", "0") == "1"
+)
+fail_on_new_bmc_semantic_bucket_case_ids = (
+    os.environ.get("FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_IDS", "0") == "1"
 )
 fail_on_new_bmc_semantic_bucket_unclassified_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES", "0")
@@ -12573,6 +12666,32 @@ for key, current_row in summary.items():
                 if current_semantic > baseline_semantic:
                     gate_errors.append(
                         f"{suite} {mode}: {semantic_key} increased ({baseline_semantic} -> {current_semantic}, window={baseline_window})"
+                    )
+        if fail_on_new_bmc_semantic_bucket_case_ids:
+            baseline_semantic_case_ids_raw = [
+                row.get("bmc_semantic_bucket_case_ids") for row in compare_rows
+            ]
+            if any(raw is not None for raw in baseline_semantic_case_ids_raw):
+                baseline_semantic_case_ids = set()
+                for raw in baseline_semantic_case_ids_raw:
+                    if raw is None or raw == "":
+                        continue
+                    for token in raw.split(";"):
+                        token = token.strip()
+                        if token:
+                            baseline_semantic_case_ids.add(token)
+                current_semantic_case_ids = current_bmc_semantic_bucket_case_ids.get(
+                    key, set()
+                )
+                new_semantic_case_ids = sorted(
+                    current_semantic_case_ids - baseline_semantic_case_ids
+                )
+                if new_semantic_case_ids:
+                    sample = ", ".join(new_semantic_case_ids[:2])
+                    if len(new_semantic_case_ids) > 2:
+                        sample += ", ..."
+                    gate_errors.append(
+                        f"{suite} {mode}: new BMC semantic-bucket case IDs observed (baseline={len(baseline_semantic_case_ids)} current={len(current_semantic_case_ids)}, window={baseline_window}): {sample}"
                     )
         if fail_on_new_bmc_semantic_bucket_unclassified_cases:
             baseline_unclassified_values = []
