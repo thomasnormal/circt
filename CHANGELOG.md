@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1145 - February 11, 2026
+
+### Mutation Governance: LEC Core-Minimum Volume Gate + v12 Strict Composites
+
+1. Added `circt-mut` profile:
+   - `formal-regression-matrix-external-formal-lec-core-min-total-v1`
+2. Profile contract:
+   - requires `external_formal.summary_status_by_suite_mode.<suite>.LEC.total >= 1`
+   for core LEC suites:
+   - `sv-tests`
+   - `verilator-verification`
+   - `yosys/tests/sva`
+3. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v12`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v12`
+   (`v11` + LEC core-minimum volume profile).
+4. Added/updated regressions:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-core-min-total-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-core-min-total-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v12-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v12-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v12-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v12-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+5. Validation:
+   - `ninja -C build-test circt-mut`: PASS
+   - focused lit slice (v12/help/invalid + core-min profile tests): PASS (8/8)
+   - policy sanity probe:
+     - `formal-regression-matrix-external-formal-lec-core-min-total-v1`
+       fails as expected when `verilator-verification/LEC` and
+       `yosys/tests/sva/LEC` totals are absent (`value=0.00 < 1.00`).
+
 ## Iteration 1144 - February 11, 2026
 
 ### Mutation Governance: Policy-Mode Compile Rollout Modes (Debt/Strict, Native/Non-Native)

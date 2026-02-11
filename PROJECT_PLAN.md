@@ -9,6 +9,33 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++++++++)
+
+1. Added LEC core minimum-volume governance in mutation policy:
+   - `formal-regression-matrix-external-formal-lec-core-min-total-v1`
+2. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v12`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v12`
+3. Contract impact:
+   - strict formal trend profiles now require non-empty LEC evidence from all
+     core suites (`sv-tests`, `verilator-verification`, `yosys/tests/sva`) and
+     fail fast on missing suite totals.
+4. Validation highlights:
+   - focused lit for new profile/composites/help diagnostics is green.
+   - direct policy probe confirms expected failures on missing
+     `verilator-verification/LEC` and `yosys/tests/sva/LEC` totals.
+5. Remaining limitations:
+   - the gate currently enforces minimum volume only (`total>=1`), not quality
+     or per-bucket distribution of LEC outcomes.
+   - OpenTitan LEC remains out of the core-min profile to avoid coupling this
+     contract to current OpenTitan runner stability noise.
+6. Next long-term features:
+   - add `lec-core-min-total-v2` with per-suite floor budgets (`>=N`) tuned for
+     nightly and weekly lanes.
+   - pair min-volume checks with counter budgets on
+     `lec_timeout_stage_{frontend,solver,unknown}_cases` and key error buckets
+     to prevent regressions hidden behind minimal totals.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++++++++)
 
 1. Added LEC timeout-stage counters to formal summaries:
