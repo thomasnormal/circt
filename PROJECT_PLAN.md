@@ -9,6 +9,37 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, cadence-aware quality debt modes)
+
+1. Added cadence-aware quality debt policy modes:
+   - `native-strict-formal-quality-debt-nightly`
+   - `strict-formal-quality-debt-nightly`
+   - `native-strict-formal-quality-debt-strict`
+   - `strict-formal-quality-debt-strict`
+2. Mode contract:
+   - quality debt mode families now couple timeout debt envelopes
+     (`debt-v3-nightly` / `debt-v3-strict`) with semantic diagnostic-family
+     guard and core BMC/LEC minimum totals in one mode entry point.
+3. Validation highlights:
+   - focused policy/help/invalid slice: PASS (10/10).
+   - full mutation suite:
+     `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+     PASS (459/459 selected).
+   - external cadence:
+     PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+     BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+     FAIL (known): `opentitan` LEC (`missing_results=1`), AVIP compile
+     `axi4Lite_avip`, `spi_avip`, `uart_avip`.
+4. Remaining limitations:
+   - quality debt is cadence-aware now, but still operator-selected via explicit
+     mode names instead of lane-class aliases.
+   - recurring OpenTitan/AVIP failures continue to limit strict-default rollout.
+5. Next long-term features:
+   - add lane-class policy aliases that auto-select cadence-specific quality
+     debt modes.
+   - introduce BMC semantic-family budget profiles and fold them into quality
+     debt/strict families.
+
 ### Formal Closure Snapshot Update (February 12, 2026, cadence-aware timeout debt v3)
 
 1. Added cadence-aware core timeout debt profiles:
