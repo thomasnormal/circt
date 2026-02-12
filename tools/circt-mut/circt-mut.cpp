@@ -368,6 +368,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-semantic-guard-yosys|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-guard|\n";
   os << "                           formal-regression-matrix-external-formal-bmc-semantic-family-guard|\n";
+  os << "                           formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-nightly|\n";
+  os << "                           formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-strict|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1|\n";
   os << "                           formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1|\n";
@@ -421,6 +423,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-composite-native-strict-formal-trend-v13|\n";
   os << "                           formal-regression-matrix-composite-native-strict-formal-trend-v14|\n";
   os << "                           formal-regression-matrix-composite-native-strict-formal-trend-v15|\n";
+  os << "                           formal-regression-matrix-composite-native-strict-formal-trend-v16|\n";
   os << "                           formal-regression-matrix-composite-trend-nightly|\n";
   os << "                           formal-regression-matrix-composite-trend-strict|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-smoke|\n";
@@ -442,6 +445,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v13|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v14|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v15|\n";
+  os << "                           formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v16|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-trend-nightly|\n";
   os << "                           formal-regression-matrix-composite-stop-on-fail-trend-strict\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
@@ -9763,6 +9767,30 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return true;
   }
   if (profile ==
+      "formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-nightly") {
+    for (StringRef key : {
+             "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_semantic_bucket_fail_like_cases",
+             "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_semantic_bucket_fail_like_cases",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_semantic_bucket_fail_like_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_semantic_bucket_fail_like_cases",
+         }) {
+      appendUniqueRule(opts.failIfTrendDeltaGtRules, key, 1.0);
+    }
+    return applyComposite("formal-regression-matrix-trend-history-quality");
+  }
+  if (profile ==
+      "formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-strict") {
+    for (StringRef key : {
+             "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_semantic_bucket_fail_like_cases",
+             "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_semantic_bucket_fail_like_cases",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_semantic_bucket_fail_like_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_semantic_bucket_fail_like_cases",
+         }) {
+      appendUniqueRule(opts.failIfTrendDeltaGtRules, key, 0.0);
+    }
+    return applyComposite("formal-regression-matrix-trend-history-quality");
+  }
+  if (profile ==
       "formal-regression-matrix-external-formal-semantic-diag-family-trend-guard") {
     for (StringRef key : {
              "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_error_bucket_semantic_diag_parser_cases",
@@ -10510,6 +10538,13 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            applyComposite(
                "formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1");
   }
+  if (profile ==
+      "formal-regression-matrix-composite-native-strict-formal-trend-v16") {
+    return applyComposite(
+               "formal-regression-matrix-composite-native-strict-formal-trend-v15") &&
+           applyComposite(
+               "formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-strict");
+  }
   if (profile == "formal-regression-matrix-composite-trend-nightly") {
     return applyComposite("formal-regression-matrix-lane-trend-nightly") &&
            applyComposite("formal-regression-matrix-runtime-trend") &&
@@ -10649,6 +10684,13 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                "formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1");
   }
   if (profile ==
+      "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v16") {
+    return applyComposite(
+               "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v15") &&
+           applyComposite(
+               "formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-strict");
+  }
+  if (profile ==
       "formal-regression-matrix-composite-stop-on-fail-trend-nightly") {
     return applyComposite("formal-regression-matrix-stop-on-fail-trend") &&
            applyComposite("formal-regression-matrix-lane-trend-nightly") &&
@@ -10691,6 +10733,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-semantic-guard-yosys|"
            "formal-regression-matrix-external-formal-semantic-diag-family-guard|"
            "formal-regression-matrix-external-formal-bmc-semantic-family-guard|"
+           "formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-nightly|"
+           "formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-strict|"
            "formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|"
            "formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1|"
            "formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1|"
@@ -10744,6 +10788,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-composite-native-strict-formal-trend-v13|"
            "formal-regression-matrix-composite-native-strict-formal-trend-v14|"
            "formal-regression-matrix-composite-native-strict-formal-trend-v15|"
+           "formal-regression-matrix-composite-native-strict-formal-trend-v16|"
            "formal-regression-matrix-composite-trend-nightly|"
            "formal-regression-matrix-composite-trend-strict|"
            "formal-regression-matrix-composite-stop-on-fail-smoke|"
@@ -10765,6 +10810,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v13|"
            "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v14|"
            "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v15|"
+           "formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v16|"
            "formal-regression-matrix-composite-stop-on-fail-trend-nightly|"
            "formal-regression-matrix-composite-stop-on-fail-trend-strict)")
               .str();

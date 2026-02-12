@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1169 - February 12, 2026
+
+### Mutation Governance: BMC Semantic-Family Trend Budgets (`v16`)
+
+1. Added staged BMC semantic-family trend-budget policy profiles in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-nightly`
+   - `formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-strict`
+2. Added strict composite promotions:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v16`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v16`
+3. Strict composite `v16` extends `v15` with strict BMC semantic trend gating
+   (`trend_delta == 0` on fail-like semantic buckets).
+4. Updated policy surface discovery:
+   - `circt-mut report --help` now lists the new trend-budget profiles and
+     both `v16` composites.
+   - invalid-profile diagnostics include the new names.
+5. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v16-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v16-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v16-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v16-fail.test`
+   - updated `test/Tools/circt-mut-report-help.test`
+   - updated `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused policy/help + new v16 composites:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-report-policy-invalid-profile.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v16-pass.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v16-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v16-pass.test build-test/test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v16-fail.test`
+  - PASS (6/6)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (479/479 selected)
+- External filtered cadence snapshot (`/tmp/formal-all-bmc-semantic-trend-v16`):
+  - PASS: `sv-tests` BMC/LEC lanes completed, AVIP compile `ahb/apb`
+  - FAIL/DRIFT: `axi4Lite_avip` compile fail, `opentitan` LEC missing-results,
+    `yosys/tests/sva` BMC known-fail rows + LEC error rows, `verilator-verification`
+    filtered rows reported as errors
+  - NOTE: run did not produce a final `axi4_avip` exit marker (partial AVIP
+    tail completion state captured in output dir)
+
 ## Iteration 1168 - February 12, 2026
 
 ### Mutation Governance: Run-Path Quality Mode Parity (Nightly Debt Family)

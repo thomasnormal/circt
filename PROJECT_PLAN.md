@@ -60,6 +60,37 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, BMC semantic-family trend budgets)
+
+1. Added staged BMC semantic-family trend-budget policy profiles in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-nightly`
+   - `formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-strict`
+2. Trend-budget profile contracts:
+   - nightly: allows `trend_delta <= 1` for BMC semantic fail-like counters
+     across `sv-tests`, `sv-tests-uvm/BMC_SEMANTICS`,
+     `verilator-verification`, `yosys/tests/sva`.
+   - strict: requires `trend_delta == 0` on the same key family.
+3. Promoted strict trend budget into new composite formal profiles:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v16`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v16`
+4. Validation highlights:
+   - focused policy/help + new v16 composites: PASS (6/6).
+   - full mutation suite:
+     `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+     PASS (479/479 selected).
+5. Remaining limitations:
+   - quality policy modes still consume BMC semantic value-guard profiles by
+     default; trend-budget rollout is currently profile-driven (`v16`) rather
+     than default mode-driven.
+   - external formal cadence remains noisy/unstable across OpenTitan and AVIP
+     lanes, which limits strict-default rollout.
+6. Next long-term features:
+   - bind BMC semantic trend budgets into quality mode families
+     (nightly/debt/strict) with lane-class defaults.
+   - graduate additional strict/debt composite generations that co-govern BMC
+     semantic trend deltas with timeout-stage trend budgets.
+
 ### Formal Closure Snapshot Update (February 12, 2026, run-path quality parity)
 
 1. Closed `run-with-report` test gap for quality nightly debt families by
