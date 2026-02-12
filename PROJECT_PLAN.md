@@ -62,6 +62,23 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, OpenTitan no-impl `LEC_NOT_RUN` reason parity)
+
+1. Updated `run_formal_all.sh` OpenTitan no-impl lane handling to emit explicit reasoned case rows:
+   - `SKIP ... LEC_NOT_RUN impl_filter`
+2. OpenTitan no-impl branch now runs shared `summarize_lec_case_file` synthesis, so reason-family counters are exported consistently:
+   - `lec_diag_lec_not_run_cases`
+   - `lec_not_run_reason_impl_filter_cases`
+   - `lec_not_run_reason_missing_cases`
+3. Strengthened regression:
+   - `test/Tools/run-formal-all-opentitan-lec-no-impl-skip.test`
+4. Remaining limitations:
+   - OpenTitan `missing_results` fallback still reports generic infrastructure failure rows rather than structured runner/diag taxonomy.
+   - Verilator wrapper still has no dedicated `LEC_NOT_RUN` reason families for lane-level no-run classes.
+5. Next long-term features:
+   - classify OpenTitan `missing_results` path into explicit infra reason families (runner missing/empty output/parse failure) with stable counters.
+   - propagate explicit `LEC_NOT_RUN` reason contracts to remaining wrapper-level no-run paths where applicable, then tighten strict profile defaults to require `lec_not_run_reason_missing_cases=0` for all enabled LEC lanes.
+
 ### Formal Closure Snapshot Update (February 12, 2026, Yosys VHDL `LEC_NOT_RUN` reason parity)
 
 1. Updated `utils/run_yosys_sva_circt_lec.sh` VHDL skip flow (`SKIP_VHDL=1`) to emit explicit reasoned no-run rows:
