@@ -330,12 +330,13 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
   log_tag="${log_tag//\//__}"
   if [[ "$SKIP_VHDL" == "1" && -f "$YOSYS_SVA_DIR/$base.vhd" ]]; then
     echo "SKIP(vhdl): $base"
+    total=$((total + 1))
     skip=$((skip + 1))
+    printf "SKIP\t%s\t%s\tyosys/tests/sva\tLEC\tLEC_NOT_RUN\tvhdl\n" "$base" "$sv" >> "$results_tmp"
     continue
   fi
 
   total=$((total + 1))
-
   mlir="$tmpdir/${base}.mlir"
   opt_mlir="$tmpdir/${base}.opt.mlir"
   verilog_log="$tmpdir/${base}.circt-verilog.log"

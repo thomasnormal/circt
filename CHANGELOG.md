@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1182 - February 12, 2026
+
+### Formal LEC Telemetry: Yosys VHDL `LEC_NOT_RUN` Reason Parity
+
+1. Updated `utils/run_yosys_sva_circt_lec.sh` VHDL skip handling (`SKIP_VHDL=1`) to emit explicit result rows:
+   - `SKIP ... LEC_NOT_RUN vhdl`
+2. Updated `utils/run_formal_all.sh` LEC summarization to always materialize:
+   - `lec_not_run_reason_missing_cases`
+   when any `LEC_NOT_RUN` row is present (including zero-valued missing buckets).
+3. Added/updated focused regression coverage:
+   - `test/Tools/run-yosys-sva-circt-lec-not-run-vhdl-reason.test`
+   - `test/Tools/run-formal-all-yosys-lec-not-run-reason-summary.test`
+4. Outcome:
+   - reason-family telemetry is now stable for Yosys VHDL no-run paths,
+     enabling consistent strict policy checks across suites.
+
+### Tests and Validation
+
+- `bash -n utils/run_yosys_sva_circt_lec.sh`
+  - PASS
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test --filter='(run-yosys-sva-circt-lec-not-run-vhdl-reason|run-formal-all-yosys-lec-not-run-reason-summary|run-formal-all-strict-gate-lec-not-run-reason-keys|run-formal-all-baselines|run-formal-all-strict-gate-lec-diag-missing-any|run-formal-all-strict-gate-lec-diag-missing-defaults)'`
+  - PASS (6/6)
+- `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test --filter='run-yosys-sva-circt-lec-'`
+  - PASS (14/14)
+
 ## Iteration 1181 - February 12, 2026
 
 ### Mutation Governance: Multi-Suite `LEC_NOT_RUN` Reason-Coverage Guard

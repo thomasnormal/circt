@@ -7825,6 +7825,7 @@ runner_command_case_reasons = set()
 error_bucket_case_ids = set()
 semantic_diag_subfamily_case_ids = set()
 semantic_diag_subfamily_case_reasons = set()
+saw_lec_not_run = False
 rows = 0
 with path.open(encoding="utf-8") as f:
     for line in f:
@@ -7858,6 +7859,7 @@ with path.open(encoding="utf-8") as f:
             counts[f"lec_diag_{diag}_cases"] += 1
             counts[f"lec_status_{status}_diag_{diag}_cases"] += 1
             if diag == "lec_not_run":
+                saw_lec_not_run = True
                 reason_key = normalize(reason_token) if reason_token else "missing"
                 counts[f"lec_not_run_reason_{reason_key}_cases"] += 1
             if status == "timeout":
@@ -7949,6 +7951,8 @@ for counter_key in (
     "lec_timeout_class_unknown_cases",
 ):
     counts[counter_key] += 0
+if saw_lec_not_run:
+    counts["lec_not_run_reason_missing_cases"] += 0
 counts["lec_timeout_cases"] = counts.get("lec_status_timeout_cases", 0)
 counts["lec_timeout_stage_frontend_cases"] = counts.get(
     "lec_timeout_class_preprocess_cases", 0
