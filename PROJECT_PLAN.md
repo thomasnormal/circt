@@ -9,6 +9,32 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++++++++++++)
+
+1. Added mode-level rollout for timeout budgets:
+   - `native-strict-formal-timeout-debt`
+   - `strict-formal-timeout-debt`
+   - `native-strict-formal-timeout-strict`
+   - `strict-formal-timeout-strict`
+2. Contract impact:
+   - timeout budget governance now has first-class policy-mode entry points for
+     both native and non-native strict families (no manual profile composition
+     needed for this policy layer).
+3. Validation highlights:
+   - focused policy-mode and invalid-mode diagnostics tests are green.
+   - mode wiring confirms debt vs strict timeout-stage behavior remains
+     explicit and stable under CLI-driven report/run paths.
+4. Remaining limitations:
+   - timeout budget modes currently use shared thresholds across all core
+     suites; per-suite budget tuning is still pending.
+   - these modes cover timeout-stage quality only; semantic-diagnostic/error
+     bucket mode variants are not yet exposed.
+5. Next long-term features:
+   - add per-suite timeout debt ceilings (e.g., tighter `sv-tests-uvm` budget)
+     with explicit profile versions and mode aliases.
+   - add mode-level semantic quality budgets (diagnostic buckets) and roll into
+     next strict composite generation (`v16`+).
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++++++++++++)
 
 1. Added mode-ready core timeout-stage budget profiles:
