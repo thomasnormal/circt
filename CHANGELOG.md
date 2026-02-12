@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1148 - February 11, 2026
+
+### Mutation Governance: Core Timeout Budget Modes (Strict/Debt) + v15 Composites
+
+1. Split core timeout-stage budget semantics into explicit profiles:
+   - `formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1`
+   - `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1`
+   and kept compatibility alias:
+   - `formal-regression-matrix-external-formal-core-timeout-stage-budget-v1`
+     (maps to strict `<= 0` behavior).
+2. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v15`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v15`
+   (`v13` + explicit strict timeout-stage budget profile).
+3. Added/updated regressions:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-core-timeout-stage-budget-strict-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-core-timeout-stage-budget-strict-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-core-timeout-stage-budget-debt-v1-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-core-timeout-stage-budget-debt-v1-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v15-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-native-strict-formal-trend-v15-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v15-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-composite-stop-on-fail-native-strict-formal-trend-v15-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+4. Validation:
+   - `ninja -C build-test circt-mut`: PASS
+   - focused lit slice (10 targeted tests): PASS (10/10)
+   - direct runtime sanity probe confirms:
+     - strict profile fails on `bmc_timeout_stage_frontend_cases=1`
+     - debt profile passes on `bmc_timeout_stage_frontend_cases=1`.
+
 ## Iteration 1147 - February 11, 2026
 
 ### Mutation Governance: Core Timeout-Stage Quality Budget + v14 Strict Composites
