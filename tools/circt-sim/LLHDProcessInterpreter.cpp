@@ -6050,12 +6050,6 @@ arith_dispatch:
     Value calleeValue = callIndirectOp.getCallee();
     InterpretedValue funcPtrVal = getValue(procId, calleeValue);
 
-    // Debug: trace all call_indirect from config_db get wrappers
-    if (!funcPtrVal.isX() && funcPtrVal.getUInt64() != 0) {
-      uint64_t fAddr = funcPtrVal.getUInt64();
-      auto it2 = addressToFunction.find(fAddr);
-    }
-
     // Throttle vtable dispatch warnings to prevent flooding stderr during
     // UVM initialization. Both X function pointers and unmapped addresses
     // share a single counter.
@@ -12130,10 +12124,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       std::memcpy(&arrayAddr, block->data.data() + blockOff, 8);
       if (arrayAddr == 0)
         return nullptr;
-      // Validate it's a real assoc array
-      constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
-      if (!validAssocArrayAddresses.contains(arrayAddr) &&
-          arrayAddr < kNativeHeapThreshold)
+      // Validate it's a real assoc array (must have been created via __moore_assoc_create)
+      if (!validAssocArrayAddresses.contains(arrayAddr))
         return nullptr;
       return reinterpret_cast<void *>(arrayAddr);
     };
@@ -12412,12 +12404,16 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
-  // Intercept uvm_phase::get_objection to bypass the interpreted version
-  // which fails because get_name() virtual dispatch crashes during objection
-  // object creation. We use a native objection handle map instead.
+  // Intercept uvm_phase::get_objection and uvm_phase_hopper::get_objection
+  // to bypass the interpreted version which fails because get_name() virtual
+  // dispatch crashes during objection object creation. We use a native
+  // objection handle map instead.
   // This is critical for run_phase: without working objections, raise_objection
   // fails → phase completes immediately → simulation stays at time 0.
-  if (calleeName.contains("uvm_phase::get_objection") &&
+  // The phase_hopper variant is needed for newer UVM versions that use a
+  // separate phase hopper class with its own get_objection/raise/drop/wait_for.
+  if ((calleeName.contains("uvm_phase::get_objection") ||
+       calleeName.contains("phase_hopper::get_objection")) &&
       !calleeName.contains("get_objection_count") &&
       !calleeName.contains("get_objection_total")) {
     InterpretedValue phaseVal = args[0]; // %arg0 = this (phase pointer)
@@ -12453,11 +12449,14 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
-  // Intercept uvm_phase::raise_objection and drop_objection to use native
-  // objection handles from the get_objection interceptor above.
+  // Intercept uvm_phase::raise_objection and drop_objection (and their
+  // phase_hopper variants) to use native objection handles from the
+  // get_objection interceptor above.
   if ((calleeName.contains("uvm_phase::raise_objection") ||
-       calleeName.contains("uvm_phase::drop_objection")) &&
-      !calleeName.contains("phase_hopper")) {
+       calleeName.contains("uvm_phase::drop_objection") ||
+       calleeName.contains("phase_hopper::raise_objection") ||
+       calleeName.contains("phase_hopper::drop_objection")) &&
+      !calleeName.contains("uvm_objection::")) {
     InterpretedValue phaseVal = args[0]; // %arg0 = this (phase pointer)
     // %arg2 = description string (struct<(ptr,i64)>), %arg3 = count (i32)
     InterpretedValue countVal = args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
@@ -12547,7 +12546,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
     // wait_for: phase engine waits until all objections are dropped.
     // We poll the objection count periodically using delta steps (like
-    // wait_condition). When count reaches 0, the phase can proceed.
+    // wait_condition). When count reaches 0 AND at least one objection
+    // was raised at some point, the phase can proceed.
+    // This is critical: the count starts at 0, but we must NOT return
+    // until objections have been raised AND then dropped (e.g., run_phase
+    // raises objections, then eventually drops them all).
     if (calleeName.contains("wait_for")) {
       // Get the objection handle from the synthetic self pointer.
       InterpretedValue selfVal = args[0];
@@ -12560,22 +12563,31 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       if (handle != MOORE_OBJECTION_INVALID_HANDLE)
         count = __moore_objection_get_count(handle);
 
-      // Track yield count per-proc for this wait_for cycle.
-      // We yield at least a few times to let forked processes raise objections
-      // before returning for count==0.
-      static std::map<ProcessId, int> waitForYieldCount;
-      if (count <= 0) {
-        int &yields = waitForYieldCount[procId];
-        if (yields >= 3) {
-          // Already yielded enough times with count==0 — return.
-          yields = 0;
+      // Track per-proc state: whether objections were ever raised and
+      // how many yields with count==0 after that.
+      struct WaitForState {
+        bool wasEverRaised = false;
+        int zeroYields = 0;
+      };
+      static std::map<ProcessId, WaitForState> waitForState;
+      auto &wfs = waitForState[procId];
+
+      if (count > 0) {
+        // Objections are currently raised — mark as seen.
+        wfs.wasEverRaised = true;
+        wfs.zeroYields = 0;
+      } else if (wfs.wasEverRaised) {
+        // Count is 0 and objections were raised before — they've been
+        // dropped. Yield a few times to let any pending drops settle,
+        // then return.
+        if (wfs.zeroYields >= 3) {
+          wfs = WaitForState{}; // Reset for next use.
           return success();
         }
-        ++yields;
-      } else {
-        // Objection raised — reset yield counter.
-        waitForYieldCount[procId] = 0;
+        ++wfs.zeroYields;
       }
+      // If wasEverRaised is false and count==0, keep polling — forked
+      // processes haven't raised objections yet.
 
       // Suspend this process and poll via delta/time steps.
       auto &state = processStates[procId];
@@ -14697,14 +14709,6 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
     llvm::errs() << "\n";
   }
 
-  // Mark termination requested
-  terminationRequested = true;
-
-  // Call the terminate callback if set
-  if (terminateCallback) {
-    terminateCallback(success, verbose);
-  }
-
   // During global initialization (e.g., UVM global constructors), do not halt
   // the process. UVM's m_uvm_get_root() can be called re-entrantly during
   // uvm_root::new(), which triggers uvm_fatal -> die() -> sim.terminate.
@@ -14712,10 +14716,40 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
   // uvm_top, causing the m_inst != uvm_top check to fail permanently.
   // Instead, record termination was requested but let the init code finish.
   if (inGlobalInit) {
+    terminationRequested = true;
+    if (terminateCallback)
+      terminateCallback(success, verbose);
     LLVM_DEBUG(llvm::dbgs()
                << "  sim.terminate during global init - not halting process "
                << procId << " (termination deferred to after init)\n");
     return mlir::success();
+  }
+
+  // In dual-top mode (HVL + HDL), a successful $finish from UVM's run_test()
+  // should NOT kill the entire simulation if the HDL side still has pending
+  // events (clock generator, BFMs, etc.). Set terminationRequested so fork
+  // branches die when they try to execute functions (checked in
+  // interpretFuncBody), but DON'T call terminateCallback so the main
+  // simulation loop continues running. LLHD base processes (clock gen,
+  // always blocks) aren't affected because they run < 1000 steps per
+  // activation and don't call interpretFuncBody from the process body.
+  if (success && !scheduler.getEventScheduler().isComplete()) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  sim.terminate(success) - scheduler has pending events, "
+               << "setting terminationRequested but keeping sim alive\n");
+    terminationRequested = true;
+    // DON'T call terminateCallback — the main loop should keep running
+    // so the scheduler can advance time for HDL processes.
+    finalizeProcess(procId, /*killed=*/false);
+    return mlir::success();
+  }
+
+  // Mark termination requested
+  terminationRequested = true;
+
+  // Call the terminate callback if set
+  if (terminateCallback) {
+    terminateCallback(success, verbose);
   }
 
   finalizeProcess(procId, /*killed=*/false);
@@ -18304,10 +18338,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         int32_t valueSize = static_cast<int32_t>(valueSizeVal.getUInt64());
 
         // Check if arrayAddr is null or not a valid associative array address.
-        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
-        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
         bool isInValidSet = validAssocArrayAddresses.contains(arrayAddr);
-        if (arrayAddr == 0 || (!isInValidSet && !isValidNativeAddr)) {
+        if (arrayAddr == 0 || !isInValidSet) {
           // Auto-create the associative array on first access (SystemVerilog semantics).
           int32_t keySize = 8; // default: 8-byte integer key
           if (auto allocaOp = callOp.getOperand(1).getDefiningOp<LLVM::AllocaOp>()) {
@@ -18451,10 +18483,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
 
         // Validate that the array address is a properly initialized associative array.
-        // Accept addresses tracked in validAssocArrayAddresses OR native C++ heap addresses.
-        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
-        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
-        if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValidNativeAddr)) {
+        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_exists - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
@@ -18518,10 +18547,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t keyOutAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
 
         // Validate that the array address is a properly initialized associative array.
-        // Accept addresses tracked in validAssocArrayAddresses OR native C++ heap addresses.
-        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
-        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
-        if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValidNativeAddr)) {
+        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 1));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_first - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
@@ -18587,10 +18613,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t keyRefAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
 
         // Validate that the array address is a properly initialized associative array.
-        // Accept addresses tracked in validAssocArrayAddresses OR native C++ heap addresses.
-        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
-        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
-        if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValidNativeAddr)) {
+        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 1));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_next - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
@@ -18672,12 +18695,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
 
         // Validate that the array address is a properly initialized associative array.
-        // Accept addresses tracked in validAssocArrayAddresses OR native C++ heap addresses.
-        // Native heap addresses (> 0x10000000000) may be created in global constructors
-        // before the interpreter starts tracking, so we allow them through.
-        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
-        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
-        if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValidNativeAddr)) {
+        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_size - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning 0\n");
@@ -19220,6 +19238,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         int32_t keyCount = static_cast<int32_t>(
             getValue(procId, callOp.getOperand(1)).getUInt64());
         auto semId = static_cast<SemaphoreId>(semAddr);
+
+        // Auto-create the semaphore if it doesn't exist yet. This handles
+        // cases where the SV constructor chain didn't properly store the
+        // semaphore handle (e.g., different class hierarchy struct layouts
+        // cause the GEP to read uninitialized memory). The auto-created
+        // semaphore starts with keyCount keys, so the first try_get succeeds
+        // and subsequent re-entrant calls correctly fail with 0 keys.
+        if (!syncPrimitivesManager.getSemaphore(semId)) {
+          syncPrimitivesManager.getOrCreateSemaphore(semId, keyCount);
+        }
 
         bool success = syncPrimitivesManager.semaphoreTryGet(semId, keyCount);
 
@@ -20960,10 +20988,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     if (calleeName == "__moore_assoc_delete") {
       if (callOp.getNumOperands() >= 1) {
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
-        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
-        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
-        if (arrayAddr != 0 &&
-            (validAssocArrayAddresses.contains(arrayAddr) || isValidNativeAddr)) {
+        if (arrayAddr != 0 && validAssocArrayAddresses.contains(arrayAddr)) {
           void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
           __moore_assoc_delete(arrayPtr);
         }
@@ -20980,13 +21005,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (callOp.getNumOperands() >= 2) {
         uint64_t dstAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t srcAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
-        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
         bool dstValid = dstAddr != 0 &&
-            (validAssocArrayAddresses.contains(dstAddr) ||
-             dstAddr >= kNativeHeapThreshold);
+            validAssocArrayAddresses.contains(dstAddr);
         bool srcValid = srcAddr != 0 &&
-            (validAssocArrayAddresses.contains(srcAddr) ||
-             srcAddr >= kNativeHeapThreshold);
+            validAssocArrayAddresses.contains(srcAddr);
         if (dstValid && srcValid) {
           void *dstPtr = reinterpret_cast<void *>(dstAddr);
           void *srcPtr = reinterpret_cast<void *>(srcAddr);
@@ -21005,10 +21027,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (callOp.getNumOperands() >= 2) {
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
-        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
-        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
-        if (arrayAddr != 0 &&
-            (validAssocArrayAddresses.contains(arrayAddr) || isValidNativeAddr)) {
+        if (arrayAddr != 0 && validAssocArrayAddresses.contains(arrayAddr)) {
           void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
           // Read key from interpreter memory
           uint64_t keyOffset = 0;
@@ -21526,11 +21545,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t keyOutAddr =
             getValue(procId, callOp.getOperand(1)).getUInt64();
 
-        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
-        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
-        if (arrayAddr == 0 ||
-            (!validAssocArrayAddresses.contains(arrayAddr) &&
-             !isValidNativeAddr)) {
+        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
           setValue(procId, callOp.getResult(),
                    InterpretedValue(0ULL, 1));
           return success();
@@ -21596,11 +21611,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t keyRefAddr =
             getValue(procId, callOp.getOperand(1)).getUInt64();
 
-        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
-        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
-        if (arrayAddr == 0 ||
-            (!validAssocArrayAddresses.contains(arrayAddr) &&
-             !isValidNativeAddr)) {
+        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
           setValue(procId, callOp.getResult(),
                    InterpretedValue(0ULL, 1));
           return success();

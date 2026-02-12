@@ -88,6 +88,7 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <sys/resource.h>
 #include <cstdlib>
 #include <fstream>
 #include <memory>
@@ -1607,6 +1608,21 @@ static LogicalResult processInput(MLIRContext &context,
 
 int main(int argc, char **argv) {
   llvm::InitLLVM y(argc, argv);
+
+  // Increase stack size to 64 MB to handle deep UVM call chains.
+  // The interpreter uses C++ recursion for func.call/call_indirect, and UVM
+  // patterns (test → virtual_seq → sub_seq → start → body → ...) can nest
+  // very deeply, overflowing the default 8 MB stack.
+  {
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_STACK, &rl) == 0) {
+      constexpr rlim_t kDesiredStack = 64ULL * 1024 * 1024; // 64 MB
+      if (rl.rlim_cur < kDesiredStack) {
+        rl.rlim_cur = std::min(kDesiredStack, rl.rlim_max);
+        setrlimit(RLIMIT_STACK, &rl);
+      }
+    }
+  }
 
   // Set up signal handling for clean shutdown
   std::signal(SIGINT, signalHandler);
