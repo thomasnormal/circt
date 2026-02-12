@@ -53,6 +53,42 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, lane-class auto policy mode binding)
+
+1. Added matrix lane-manifest policy-class auto-binding in `circt-mut report`:
+   - when no explicit `policy_mode` / `--policy-mode` and no profile list is
+     provided, report now inspects lane-manifest metadata and auto-selects a
+     quality policy mode.
+2. New lane-manifest metadata:
+   - optional tail column `report_policy_lane_class` in `lanes.tsv`.
+   - supported classes: `quality-smoke`, `quality-nightly` (or `quality`),
+     `quality-strict`, `quality-debt-nightly`, `quality-debt-strict`, or an
+     explicit matrix policy mode literal.
+3. Auto-binding policy behavior:
+   - class values map to strict quality aliases by default
+     (`strict-formal-quality-*`).
+   - mixed quality classes in one manifest resolve to the stricter mode.
+   - conflicting non-quality explicit mode literals remain rejected.
+4. Validation highlights:
+   - focused lane-class auto policy slice: PASS (5/5).
+   - full mutation suite:
+     `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+     PASS (469/469 selected).
+   - external cadence:
+     PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+     BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile
+     `ahb/apb/axi4/i2s/i3c/jtag`
+     FAIL (known): `opentitan` LEC (`missing_results=1`), AVIP compile
+     `axi4Lite_avip`, `spi_avip`, `uart_avip`.
+5. Remaining limitations:
+   - auto-binding currently applies in report resolution; CI wrappers should
+     still standardize lane metadata population across manifests.
+   - OpenTitan LEC + AVIP compile failures remain recurring blockers.
+6. Next long-term features:
+   - expand lane-class auto-binding to dedicated native/non-native class
+     families when manifests require native strict-contract guarantees.
+   - add cadence-specific BMC semantic debt ceilings per lane class.
+
 ### Formal Closure Snapshot Update (February 12, 2026, BMC semantic-family quality guard)
 
 1. Added a dedicated BMC semantic-family policy profile:

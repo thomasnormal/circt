@@ -8571,6 +8571,99 @@ static bool isMatrixPolicyMode(StringRef mode) {
          mode == "strict-formal-quality-strict";
 }
 
+static bool isLaneClassQualityMode(StringRef mode) {
+  return mode == "strict-formal-quality-smoke" ||
+         mode == "strict-formal-quality-nightly" ||
+         mode == "strict-formal-quality-debt-nightly" ||
+         mode == "strict-formal-quality-debt-strict" ||
+         mode == "strict-formal-quality-strict";
+}
+
+static unsigned laneClassQualityModeRank(StringRef mode) {
+  if (mode == "strict-formal-quality-smoke")
+    return 0;
+  if (mode == "strict-formal-quality-nightly" ||
+      mode == "strict-formal-quality-debt-nightly")
+    return 1;
+  if (mode == "strict-formal-quality-debt-strict" ||
+      mode == "strict-formal-quality-strict")
+    return 2;
+  return 0;
+}
+
+static std::optional<std::string> mapLanePolicyClassToMode(StringRef laneClass) {
+  std::string lowered = laneClass.trim().lower();
+  StringRef normalized(lowered);
+  if (normalized.empty() || normalized == "-")
+    return std::nullopt;
+  if (isMatrixPolicyMode(normalized))
+    return normalized.str();
+  if (normalized == "quality" || normalized == "quality-nightly")
+    return std::string("strict-formal-quality-nightly");
+  if (normalized == "quality-smoke")
+    return std::string("strict-formal-quality-smoke");
+  if (normalized == "quality-strict")
+    return std::string("strict-formal-quality-strict");
+  if (normalized == "quality-debt-nightly")
+    return std::string("strict-formal-quality-debt-nightly");
+  if (normalized == "quality-debt-strict")
+    return std::string("strict-formal-quality-debt-strict");
+  return std::nullopt;
+}
+
+static std::optional<std::string>
+inferMatrixPolicyModeFromLaneManifest(StringRef lanesTSVPath,
+                                      std::string &error) {
+  auto bufferOrErr = MemoryBuffer::getFile(lanesTSVPath);
+  if (!bufferOrErr) {
+    error = (Twine("unable to read matrix lanes_tsv for policy auto mode: ") +
+             lanesTSVPath)
+                .str();
+    return std::nullopt;
+  }
+  std::optional<std::string> selectedMode;
+  SmallVector<StringRef, 64> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  SmallVector<StringRef, 64> fields;
+  for (size_t lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
+    StringRef rawLine = lines[lineIdx];
+    StringRef trimmed = rawLine.trim();
+    if (trimmed.empty() || trimmed.starts_with("#"))
+      continue;
+    splitTSVLine(rawLine, fields);
+    if (fields.size() <= 46)
+      continue;
+    std::optional<std::string> mappedMode =
+        mapLanePolicyClassToMode(fields[46]);
+    if (!mappedMode)
+      continue;
+    if (!selectedMode.has_value()) {
+      selectedMode = *mappedMode;
+      continue;
+    }
+    if (*selectedMode == *mappedMode)
+      continue;
+    if (isLaneClassQualityMode(*selectedMode) &&
+        isLaneClassQualityMode(*mappedMode)) {
+      if (laneClassQualityModeRank(*mappedMode) >
+          laneClassQualityModeRank(*selectedMode))
+        selectedMode = *mappedMode;
+      continue;
+    }
+    StringRef laneID = fields[0].trim();
+    if (laneID.empty())
+      laneID = "<unknown>";
+    error = (Twine("conflicting lane policy class modes in lanes_tsv at line ") +
+             Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+             laneID + "): inferred both '" + *selectedMode + "' and '" +
+             *mappedMode + "'")
+                .str();
+    return std::nullopt;
+  }
+  return selectedMode;
+}
+
 static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
   return mode == "smoke" || mode == "nightly" || mode == "strict" ||
          mode == "trend-nightly" || mode == "trend-strict" ||
@@ -13049,7 +13142,8 @@ static int runNativeReport(const ReportOptions &opts) {
       return 1;
     }
     if (!hasCLIPolicyMode && hasConfigPolicyStopOnFail &&
-        !hasConfigPolicyMode) {
+        !hasConfigPolicyMode &&
+        (hasConfigPolicyProfile || hasConfigPolicyProfiles)) {
       errs() << "circt-mut report: [report] key 'policy_stop_on_fail' "
                 "requires 'policy_mode'\n";
       return 1;
@@ -13162,6 +13256,7 @@ static int runNativeReport(const ReportOptions &opts) {
     if (policyProfiles.empty()) {
       std::string mode;
       std::optional<bool> stopOnFail;
+      bool modeInferredFromLaneClass = false;
       if (hasCLIPolicyMode) {
         mode = effectiveOpts.policyMode;
         stopOnFail = effectiveOpts.policyStopOnFail;
@@ -13172,11 +13267,6 @@ static int runNativeReport(const ReportOptions &opts) {
             policyModeIt != cfg.report.end() && !policyModeIt->second.empty();
         bool hasPolicyStopOnFail = policyStopOnFailIt != cfg.report.end() &&
                                    !policyStopOnFailIt->second.empty();
-        if (hasPolicyStopOnFail && !hasPolicyMode) {
-          errs() << "circt-mut report: [report] key 'policy_stop_on_fail' "
-                    "requires 'policy_mode'\n";
-          return 1;
-        }
         if (hasPolicyMode)
           mode = StringRef(policyModeIt->second).trim().lower();
         if (hasPolicyStopOnFail) {
@@ -13193,6 +13283,30 @@ static int runNativeReport(const ReportOptions &opts) {
                    << "' (expected 1|0|true|false|yes|no|on|off)\n";
             return 1;
           }
+        }
+        if (mode.empty() && !hasPolicyMode && !hasCLIPolicyMode &&
+            (opts.mode == "matrix" || opts.mode == "all")) {
+          auto lanesTSVIt = cfg.matrix.find("lanes_tsv");
+          if (lanesTSVIt != cfg.matrix.end() && !lanesTSVIt->second.empty()) {
+            std::string lanesTSVPath =
+                resolveRelativeTo(opts.projectDir, lanesTSVIt->second);
+            std::string inferError;
+            std::optional<std::string> inferredMode =
+                inferMatrixPolicyModeFromLaneManifest(lanesTSVPath, inferError);
+            if (!inferError.empty()) {
+              errs() << "circt-mut report: " << inferError << "\n";
+              return 1;
+            }
+            if (inferredMode) {
+              mode = *inferredMode;
+              modeInferredFromLaneClass = true;
+            }
+          }
+        }
+        if (hasPolicyStopOnFail && mode.empty()) {
+          errs() << "circt-mut report: [report] key 'policy_stop_on_fail' "
+                    "requires 'policy_mode' (or inferable lane policy class)\n";
+          return 1;
         }
       }
       if (!mode.empty()) {
@@ -13219,7 +13333,12 @@ static int runNativeReport(const ReportOptions &opts) {
           return 1;
         }
         appliedPolicyMode = mode;
-        appliedPolicyModeSource = hasCLIPolicyMode ? "cli" : "config";
+        if (hasCLIPolicyMode)
+          appliedPolicyModeSource = "cli";
+        else if (modeInferredFromLaneClass)
+          appliedPolicyModeSource = "lane_class_auto";
+        else
+          appliedPolicyModeSource = "config";
         bool requestedStopOnFail = stopOnFail.value_or(false);
         bool usesStopOnFail = matrixPolicyModeUsesStopOnFail(mode);
         appliedPolicyStopOnFail = requestedStopOnFail;
