@@ -197,6 +197,13 @@ Options:
   --fail-on-any-lec-runner-command-cases
                          Fail when any `LEC*` lane reports
                          `lec_runner_command_cases > 0` in the current run
+  --fail-on-new-bmc-counter KEY
+                         Fail when BMC summary counter KEY increases vs baseline
+                         for any `BMC*` lane (repeatable)
+  --fail-on-new-bmc-counter-prefix PREFIX
+                         Fail when any BMC summary counter starting with PREFIX
+                         increases vs baseline for any `BMC*` lane
+                         (repeatable)
   --fail-on-new-lec-counter KEY
                          Fail when LEC summary counter KEY increases vs baseline
                          for any `LEC*` lane (repeatable)
@@ -2076,6 +2083,8 @@ FAIL_ON_ANY_LEC_DROP_REMARKS=0
 FAIL_ON_ANY_LEC_TIMEOUTS=0
 FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES=0
 LEC_DROP_REMARK_PATTERN="${LEC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
+declare -a FAIL_ON_NEW_BMC_COUNTER_KEYS=()
+declare -a FAIL_ON_NEW_BMC_COUNTER_PREFIXES=()
 declare -a FAIL_ON_NEW_LEC_COUNTER_KEYS=()
 declare -a FAIL_ON_NEW_LEC_COUNTER_PREFIXES=()
 FAIL_ON_NEW_LEC_DIAG_KEYS=0
@@ -2519,6 +2528,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_ANY_LEC_TIMEOUTS=1; shift ;;
     --fail-on-any-lec-runner-command-cases)
       FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES=1; shift ;;
+    --fail-on-new-bmc-counter)
+      FAIL_ON_NEW_BMC_COUNTER_KEYS+=("$2"); shift 2 ;;
+    --fail-on-new-bmc-counter-prefix)
+      FAIL_ON_NEW_BMC_COUNTER_PREFIXES+=("$2"); shift 2 ;;
     --fail-on-new-lec-counter)
       FAIL_ON_NEW_LEC_COUNTER_KEYS+=("$2"); shift 2 ;;
     --fail-on-new-lec-counter-prefix)
@@ -4775,6 +4788,8 @@ dedupe_array() {
 dedupe_array FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS
 dedupe_array FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES
 dedupe_array FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES
+dedupe_array FAIL_ON_NEW_BMC_COUNTER_KEYS
+dedupe_array FAIL_ON_NEW_BMC_COUNTER_PREFIXES
 dedupe_array FAIL_ON_NEW_LEC_COUNTER_KEYS
 dedupe_array FAIL_ON_NEW_LEC_COUNTER_PREFIXES
 dedupe_array FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASE_ID_BUCKETS
@@ -4794,6 +4809,18 @@ done
 for xprop_key_prefix in "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES[@]}"; do
   if [[ ! "$xprop_key_prefix" =~ ^[a-z][a-z0-9_]*$ ]]; then
     echo "invalid --fail-on-new-opentitan-lec-strict-xprop-key-prefix: expected [a-z][a-z0-9_]*, got '$xprop_key_prefix'" >&2
+    exit 1
+  fi
+done
+for bmc_key in "${FAIL_ON_NEW_BMC_COUNTER_KEYS[@]}"; do
+  if [[ ! "$bmc_key" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "invalid --fail-on-new-bmc-counter: expected [a-z][a-z0-9_]*, got '$bmc_key'" >&2
+    exit 1
+  fi
+done
+for bmc_prefix in "${FAIL_ON_NEW_BMC_COUNTER_PREFIXES[@]}"; do
+  if [[ ! "$bmc_prefix" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "invalid --fail-on-new-bmc-counter-prefix: expected [a-z][a-z0-9_]*, got '$bmc_prefix'" >&2
     exit 1
   fi
 done
@@ -4827,6 +4854,14 @@ fi
 OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV=""
 if [[ "${#FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES[@]}" -gt 0 ]]; then
   OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV="$(IFS=,; echo "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES[*]}")"
+fi
+BMC_COUNTER_KEYS_CSV=""
+if [[ "${#FAIL_ON_NEW_BMC_COUNTER_KEYS[@]}" -gt 0 ]]; then
+  BMC_COUNTER_KEYS_CSV="$(IFS=,; echo "${FAIL_ON_NEW_BMC_COUNTER_KEYS[*]}")"
+fi
+BMC_COUNTER_PREFIXES_CSV=""
+if [[ "${#FAIL_ON_NEW_BMC_COUNTER_PREFIXES[@]}" -gt 0 ]]; then
+  BMC_COUNTER_PREFIXES_CSV="$(IFS=,; echo "${FAIL_ON_NEW_BMC_COUNTER_PREFIXES[*]}")"
 fi
 LEC_COUNTER_KEYS_CSV=""
 if [[ "${#FAIL_ON_NEW_LEC_COUNTER_KEYS[@]}" -gt 0 ]]; then
@@ -13722,6 +13757,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_ANY_LEC_TIMEOUTS" == "1" || \
       "$FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES" == "1" || \
       "$FAIL_ON_ANY_LEC_DROP_REMARKS" == "1" || \
+      -n "$BMC_COUNTER_KEYS_CSV" || \
+      -n "$BMC_COUNTER_PREFIXES_CSV" || \
       -n "$LEC_COUNTER_KEYS_CSV" || \
       -n "$LEC_COUNTER_PREFIXES_CSV" || \
       "$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" == "1" || \
@@ -13797,6 +13834,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_ANY_LEC_TIMEOUTS="$FAIL_ON_ANY_LEC_TIMEOUTS" \
   FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES="$FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES" \
   FAIL_ON_ANY_LEC_DROP_REMARKS="$FAIL_ON_ANY_LEC_DROP_REMARKS" \
+  BMC_COUNTER_KEYS="$BMC_COUNTER_KEYS_CSV" \
+  BMC_COUNTER_PREFIXES="$BMC_COUNTER_PREFIXES_CSV" \
   LEC_COUNTER_KEYS="$LEC_COUNTER_KEYS_CSV" \
   LEC_COUNTER_PREFIXES="$LEC_COUNTER_PREFIXES_CSV" \
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES="$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" \
@@ -15236,6 +15275,20 @@ fail_on_any_lec_runner_command_cases = (
 fail_on_any_lec_drop_remarks = (
     os.environ.get("FAIL_ON_ANY_LEC_DROP_REMARKS", "0") == "1"
 )
+bmc_counter_keys = sorted(
+    {
+        token.strip()
+        for token in os.environ.get("BMC_COUNTER_KEYS", "").split(",")
+        if token.strip()
+    }
+)
+bmc_counter_prefixes = sorted(
+    {
+        token.strip()
+        for token in os.environ.get("BMC_COUNTER_PREFIXES", "").split(",")
+        if token.strip()
+    }
+)
 lec_counter_keys = sorted(
     {
         token.strip()
@@ -16661,6 +16714,54 @@ for key, current_row in summary.items():
                             f"{counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window}, prefix={counter_prefix})",
                             rule_id=(
                                 f"strict_gate.lec.counter.prefix.{counter_prefix_rule_key}."
+                                f"key.{counter_rule_key}.regression"
+                            ),
+                        )
+    if mode.startswith("BMC"):
+        current_counts = parse_result_summary(current_row.get("summary", ""))
+        if bmc_counter_keys:
+            for counter_key in bmc_counter_keys:
+                baseline_values = []
+                for counts in parsed_counts:
+                    if counter_key in counts:
+                        baseline_values.append(int(counts[counter_key]))
+                if not baseline_values:
+                    continue
+                baseline_counter = min(baseline_values)
+                current_counter = int(current_counts.get(counter_key, 0))
+                if current_counter > baseline_counter:
+                    counter_rule_key = normalize_rule_id_token(counter_key)
+                    gate_errors.add(
+                        suite,
+                        mode,
+                        f"{counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window})",
+                        rule_id=f"strict_gate.bmc.counter.key.{counter_rule_key}.regression",
+                    )
+        if bmc_counter_prefixes:
+            for counter_prefix in bmc_counter_prefixes:
+                candidate_keys = {
+                    key
+                    for key in current_counts.keys()
+                    if key.startswith(counter_prefix)
+                }
+                for counts in parsed_counts:
+                    for key in counts.keys():
+                        if key.startswith(counter_prefix):
+                            candidate_keys.add(key)
+                for counter_key in sorted(candidate_keys):
+                    baseline_counter = min(
+                        int(counts.get(counter_key, 0)) for counts in parsed_counts
+                    )
+                    current_counter = int(current_counts.get(counter_key, 0))
+                    if current_counter > baseline_counter:
+                        counter_rule_key = normalize_rule_id_token(counter_key)
+                        counter_prefix_rule_key = normalize_rule_id_token(counter_prefix)
+                        gate_errors.add(
+                            suite,
+                            mode,
+                            f"{counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window}, prefix={counter_prefix})",
+                            rule_id=(
+                                f"strict_gate.bmc.counter.prefix.{counter_prefix_rule_key}."
                                 f"key.{counter_rule_key}.regression"
                             ),
                         )
