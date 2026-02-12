@@ -62,6 +62,36 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, strict rule-ID coverage expansion)
+
+1. Expanded strict-gate report classification in `utils/run_formal_all.sh` to assign explicit rule IDs across all currently emitted strict diagnostics:
+   - baseline quality contracts (missing/insufficient/filtered baseline)
+   - quality regressions (`fail`, `error`, `xpass`, pass-rate)
+   - BMC/LEC case-ID + case-reason drift families
+   - LEC diag/timeout/runner-command nonzero + regression gates
+   - OpenTitan mode-diff and `LEC_STRICT` X-prop counter drift classes
+   - BMC semantic/provenance + generic counter/prefix drift checks.
+2. Strict report classification is now suite/mode-aware, so mode-diff and lane-family diagnostics map to stable rule IDs rather than fallback `strict_gate.legacy_text`.
+3. Added/updated focused unit coverage:
+   - `test/Tools/run-formal-all-strict-gate-report-json.test`
+   - `test/Tools/run-formal-all-strict-gate-fail-on-legacy-rule-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-report-json-missing-baseline-rule-id.test`
+   - focused lit slice: PASS (8/8).
+4. External cadence checks in this pass (filtered):
+   - `sv-tests/BMC` filter (`16.9--sequence-goto-repetition`): `error=1`, `drop_remark_cases=0`
+   - `verilator-verification/BMC` filter (`assert_fell`): `error=1`, `drop_remark_cases=0`
+   - `yosys/tests/sva/BMC` filter (`basic02`): `fail=2`, `drop_remark_cases=0`
+   - `opentitan/LEC` filtered `canright`: PASS (`OK`, `drop_remark_cases=0`)
+   - `mbit/apb_avip` compile check: PASS (exit `0`).
+5. Remaining limitations:
+   - strict rule IDs are still derived from diagnostic text matching; emitter-side rule-code assignment is not yet first-class.
+   - generic counter/prefix rule IDs still collapse multiple semantic families under shared buckets in strict artifacts.
+   - strict artifacts remain lane-flat; mutation provenance lineage and cross-lane causal links are not yet modeled.
+6. Next long-term features (BMC/LEC/mutation focus):
+   - move rule-ID assignment to strict-gate emit sites (structured rule codes), keeping text only as human detail.
+   - add per-family schema contract tests + compatibility checks so new strict counters cannot silently fall back.
+   - integrate mutation generation provenance artifacts (generator config, seed lineage, equivalence deltas) into strict gates and report schema.
+
 ### Formal Closure Snapshot Update (February 12, 2026, native strict-quality LEC reason coverage)
 
 1. Extended native strict-quality policy bundles in `circt-mut` to include
