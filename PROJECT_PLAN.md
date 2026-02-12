@@ -53,6 +53,42 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, policy-lane-class CLI/config wiring)
+
+1. Added explicit policy-lane-class entrypoints for matrix report governance:
+   - `circt-mut report --policy-lane-class <class>`
+   - `circt-mut run --report-policy-lane-class <class>`
+2. Added config-level rollout keys:
+   - `[report] policy_lane_class = "<class>"`
+   - `[run] report_policy_lane_class = "<class>"`
+3. Mapping behavior:
+   - class values map through lane-class policy mapping
+     (`quality-*` / `native-quality-*` / explicit mode literals) into
+     `policy_mode` expansion, preserving existing policy profiles and gates.
+4. Source transparency:
+   - report summaries now expose lane-class driven explicit selection via
+     `policy.mode_source = lane_class_cli` (CLI) or
+     `policy.mode_source = lane_class_config` (config).
+5. Validation highlights:
+   - focused policy-lane-class surface: PASS (5/5).
+   - full mutation suite:
+     `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+     PASS (474/474 selected).
+   - external cadence (`/tmp/formal-all-policy-lane-class-config`):
+     PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+     BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4`
+     FAIL (known): `opentitan` LEC (`missing_results=1`), AVIP compile
+     `axi4Lite_avip`.
+6. Remaining limitations:
+   - CI wrappers still rely on mixed legacy profile wiring; lane-class keys are
+     now available but not fully rolled out.
+   - external AVIP/OpenTitan instability continues to gate strict defaults.
+7. Next long-term features:
+   - migrate CI lane families from explicit profile stacks to
+     `report_policy_lane_class` defaults per cadence.
+   - add bounded-history bootstrap defaults for matrix governance jobs using
+     lane-class policy classes as the primary selector.
+
 ### Formal Closure Snapshot Update (February 12, 2026, native lane-class policy auto-binding)
 
 1. Extended lane-manifest policy-class auto-binding with native quality classes:

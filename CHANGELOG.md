@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1162 - February 12, 2026
+
+### Mutation Governance: Policy-Lane-Class CLI and Config Wiring
+
+1. Extended `tools/circt-mut/circt-mut.cpp` with explicit lane-class policy
+   selectors:
+   - report CLI: `--policy-lane-class <class>`
+   - run CLI: `--report-policy-lane-class <class>`
+2. Added config-level lane-class policy selectors:
+   - `[report] policy_lane_class = "<class>"`
+   - `[run] report_policy_lane_class = "<class>"`
+3. Mapping and compatibility behavior:
+   - lane-class values map through existing lane-class mode mapping into
+     policy-mode profile expansion.
+   - `policy_lane_class` / `report_policy_lane_class` are mutually exclusive
+     with mode/profile selectors.
+   - stop-on-fail validation now accepts either mode or lane-class selectors.
+4. Report source telemetry extension:
+   - added explicit source values:
+     - `policy.mode_source = lane_class_cli`
+     - `policy.mode_source = lane_class_config`
+5. Added regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-lane-class-quality-nightly-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-lane-class-mode-mutually-exclusive.test`
+   - `test/Tools/circt-mut-run-with-report-config-policy-lane-class-provenance-guard.test`
+   - updated compatibility checks:
+     - `test/Tools/circt-mut-run-report-policy-config-mutually-exclusive.test`
+     - `test/Tools/circt-mut-report-policy-config-profile-mode-mutually-exclusive.test`
+6. Documentation updates:
+   - `docs/FormalRegression.md` now documents config-level lane-class policy
+     keys for report/run wiring.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused policy-lane-class slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-report-cli-policy-lane-class-quality-nightly-pass.test build-test/test/Tools/circt-mut-report-cli-policy-lane-class-mode-mutually-exclusive.test build-test/test/Tools/circt-mut-run-with-report-config-policy-lane-class-provenance-guard.test build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`
+  - PASS (5/5)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (474/474 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-lane-class-config ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+    BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4`
+  - FAIL (known/ongoing): `opentitan` LEC (`missing_results=1`), AVIP compile
+    `axi4Lite_avip`
+
 ## Iteration 1161 - February 12, 2026
 
 ### Mutation Governance: Native Lane-Class Auto Policy Binding

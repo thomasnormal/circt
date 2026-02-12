@@ -2,4 +2,4 @@
 // RUN: printf '[run]\nwith_report = true\nreport_mode = "matrix"\nreport_policy_mode = "smoke"\nreport_policy_profile = "formal-regression-matrix-guard"\n' > %t/proj/circt-mut.toml
 // RUN: not circt-mut run --project-dir %t/proj --mode matrix 2>&1 | FileCheck %s
 //
-// CHECK: circt-mut run: [run] keys 'report_policy_mode' and 'report_policy_profile(s)' are mutually exclusive
+// CHECK: circt-mut run: [run] keys 'report_policy_mode', 'report_policy_lane_class', and 'report_policy_profile(s)' are mutually exclusive

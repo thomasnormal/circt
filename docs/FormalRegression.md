@@ -1086,14 +1086,17 @@ Notes:
   `--default-mutations-mode-counts` for a generated-mutation lane.
 - `mutations_mode_weights` (optional) overrides
   `--default-mutations-mode-weights` for a generated-mutation lane.
-- `report_policy_lane_class` (optional) enables policy-mode auto-binding in
-  `circt-mut report` / `circt-mut run --with-report` when no explicit
-  `policy_mode` / `report_policy_mode` is set. Supported values:
+- `report_policy_lane_class` (optional lane tail) enables policy-mode
+  auto-binding in `circt-mut report` / `circt-mut run --with-report` when no
+  explicit `policy_mode` / `report_policy_mode` is set. Supported values:
   `quality-smoke`, `quality-nightly` (or `quality`), `quality-strict`,
   `quality-debt-nightly`, `quality-debt-strict`,
   `native-quality-smoke`, `native-quality-nightly` (or `native-quality`),
   `native-quality-strict`, `native-quality-debt-nightly`,
   `native-quality-debt-strict`, or any explicit matrix policy mode literal.
+- Config-level equivalents are also supported for non-lane-manifest wiring:
+  - `[report] policy_lane_class = "<class>"`
+  - `[run] report_policy_lane_class = "<class>"` (for `circt-mut run --with-report`)
 - `mutations_yosys` (optional) overrides `--default-mutations-yosys` for a
   generated-mutation lane.
 - `global_propagate_cmd` (optional) overrides

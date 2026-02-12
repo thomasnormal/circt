@@ -243,6 +243,14 @@ static void printRunHelp(raw_ostream &os) {
   os << "                           native-strict-formal-quality-strict|\n";
   os << "                           strict-formal-quality-strict\n";
   os << "                           (maps to report policy profile)\n";
+  os << "  --report-policy-lane-class CLASS\n";
+  os << "                           quality-smoke|quality-nightly|quality-strict|\n";
+  os << "                           quality-debt-nightly|quality-debt-strict|\n";
+  os << "                           native-quality-smoke|native-quality-nightly|\n";
+  os << "                           native-quality-strict|\n";
+  os << "                           native-quality-debt-nightly|\n";
+  os << "                           native-quality-debt-strict\n";
+  os << "                           (maps to report policy mode)\n";
   os << "  --report-external-formal-results FILE\n";
   os << "                           Repeatable override for report\n";
   os << "                           --external-formal-results\n";
@@ -315,6 +323,14 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           native-strict-formal-quality-strict|\n";
   os << "                           strict-formal-quality-strict\n";
   os << "                           (maps to report policy profile)\n";
+  os << "  --policy-lane-class CLASS\n";
+  os << "                           quality-smoke|quality-nightly|quality-strict|\n";
+  os << "                           quality-debt-nightly|quality-debt-strict|\n";
+  os << "                           native-quality-smoke|native-quality-nightly|\n";
+  os << "                           native-quality-strict|\n";
+  os << "                           native-quality-debt-nightly|\n";
+  os << "                           native-quality-debt-strict\n";
+  os << "                           (maps to policy mode)\n";
   os << "  --policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
   os << "                           formal-regression-basic|formal-regression-trend|\n";
@@ -6243,6 +6259,7 @@ struct RunOptions {
   std::optional<bool> reportHistoryBootstrap;
   SmallVector<std::string, 4> reportPolicyProfiles;
   std::string reportPolicyMode;
+  std::string reportPolicyLaneClass;
   std::optional<bool> reportPolicyStopOnFail;
   SmallVector<std::string, 4> reportExternalFormalResultsFiles;
   std::string reportExternalFormalOutDir;
@@ -6421,6 +6438,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                                            SmallVectorImpl<std::string> &out,
                                            std::string &error,
                                            StringRef errorPrefix);
+static std::optional<std::string> mapLanePolicyClassToMode(StringRef laneClass);
 
 static bool appendOptionalConfigBoolFlagArg(
     SmallVectorImpl<std::string> &args, const StringMap<std::string> &sectionMap,
@@ -6698,6 +6716,26 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
       result.opts.reportPolicyMode = mode;
       continue;
     }
+    if (arg == "--report-policy-lane-class" ||
+        arg.starts_with("--report-policy-lane-class=")) {
+      auto v = consumeValue(i, arg, "--report-policy-lane-class");
+      if (!v)
+        return result;
+      StringRef laneClass = StringRef(*v).trim();
+      if (laneClass.empty()) {
+        result.error = "circt-mut run: --report-policy-lane-class requires "
+                       "non-empty value";
+        return result;
+      }
+      if (!mapLanePolicyClassToMode(laneClass)) {
+        result.error = (Twine("circt-mut run: invalid --report-policy-lane-class value: ") +
+                        *v)
+                           .str();
+        return result;
+      }
+      result.opts.reportPolicyLaneClass = laneClass.str();
+      continue;
+    }
     if (arg == "--report-policy-stop-on-fail" ||
         arg.starts_with("--report-policy-stop-on-fail=")) {
       auto v = consumeValue(i, arg, "--report-policy-stop-on-fail");
@@ -6795,6 +6833,14 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
                    "--report-policy-profile are mutually exclusive";
     return result;
   }
+  if (!result.opts.reportPolicyLaneClass.empty() &&
+      (!result.opts.reportPolicyProfiles.empty() ||
+       !result.opts.reportPolicyMode.empty())) {
+    result.error = "circt-mut run: --report-policy-lane-class is mutually "
+                   "exclusive with --report-policy-mode and "
+                   "--report-policy-profile";
+    return result;
+  }
   if (!result.opts.reportPolicyMode.empty() &&
       effectiveReportMode != "matrix" && effectiveReportMode != "all") {
     result.error = "circt-mut run: --report-policy-mode requires "
@@ -6802,10 +6848,18 @@ static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
                    "--report-mode is unset)";
     return result;
   }
+  if (!result.opts.reportPolicyLaneClass.empty() &&
+      effectiveReportMode != "matrix" && effectiveReportMode != "all") {
+    result.error = "circt-mut run: --report-policy-lane-class requires "
+                   "--report-mode matrix|all (or --mode matrix|all when "
+                   "--report-mode is unset)";
+    return result;
+  }
   if (result.opts.reportPolicyStopOnFail.has_value() &&
-      result.opts.reportPolicyMode.empty()) {
+      result.opts.reportPolicyMode.empty() &&
+      result.opts.reportPolicyLaneClass.empty()) {
     result.error = "circt-mut run: --report-policy-stop-on-fail requires "
-                   "--report-policy-mode";
+                   "--report-policy-mode or --report-policy-lane-class";
     return result;
   }
 
@@ -7029,6 +7083,7 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     };
     bool hasCLIReportPolicyMode = !opts.reportPolicyMode.empty();
     bool hasCLIReportPolicyProfile = !opts.reportPolicyProfiles.empty();
+    bool hasCLIReportPolicyLaneClass = !opts.reportPolicyLaneClass.empty();
     auto runPolicyStopOnFailIt = cfg.run.find("report_policy_stop_on_fail");
     bool hasConfigReportPolicyStopOnFail =
         runPolicyStopOnFailIt != cfg.run.end() &&
@@ -7036,6 +7091,10 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     auto runPolicyModeIt = cfg.run.find("report_policy_mode");
     bool hasConfigReportPolicyMode =
         runPolicyModeIt != cfg.run.end() && !runPolicyModeIt->second.empty();
+    auto runPolicyLaneClassIt = cfg.run.find("report_policy_lane_class");
+    bool hasConfigReportPolicyLaneClass =
+        runPolicyLaneClassIt != cfg.run.end() &&
+        !runPolicyLaneClassIt->second.empty();
     auto runPolicyProfileIt = cfg.run.find("report_policy_profile");
     bool hasConfigReportPolicyProfile =
         runPolicyProfileIt != cfg.run.end() && !runPolicyProfileIt->second.empty();
@@ -7044,16 +7103,23 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         runPolicyProfilesIt != cfg.run.end() &&
         !runPolicyProfilesIt->second.empty();
     if (!hasCLIReportPolicyMode && !hasCLIReportPolicyProfile &&
-        hasConfigReportPolicyMode &&
-        (hasConfigReportPolicyProfile || hasConfigReportPolicyProfiles)) {
-      errs() << "circt-mut run: [run] keys 'report_policy_mode' and "
-                "'report_policy_profile(s)' are mutually exclusive\n";
+        !hasCLIReportPolicyLaneClass &&
+        ((hasConfigReportPolicyMode && hasConfigReportPolicyLaneClass) ||
+         (hasConfigReportPolicyMode &&
+          (hasConfigReportPolicyProfile || hasConfigReportPolicyProfiles)) ||
+         (hasConfigReportPolicyLaneClass &&
+          (hasConfigReportPolicyProfile || hasConfigReportPolicyProfiles)))) {
+      errs() << "circt-mut run: [run] keys 'report_policy_mode', "
+                "'report_policy_lane_class', and 'report_policy_profile(s)' "
+                "are mutually exclusive\n";
       return 1;
     }
-    if (!hasCLIReportPolicyMode && hasConfigReportPolicyStopOnFail &&
-        !hasConfigReportPolicyMode) {
+    if (!hasCLIReportPolicyMode && !hasCLIReportPolicyLaneClass &&
+        hasConfigReportPolicyStopOnFail && !hasConfigReportPolicyMode &&
+        !hasConfigReportPolicyLaneClass) {
       errs() << "circt-mut run: [run] key 'report_policy_stop_on_fail' "
-                "requires 'report_policy_mode'\n";
+                "requires 'report_policy_mode' or "
+                "'report_policy_lane_class'\n";
       return 1;
     }
     bool hasExplicitPolicyProfile = false;
@@ -7063,7 +7129,7 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
         reportArgsOwned.push_back(profile);
       }
       hasExplicitPolicyProfile = true;
-    } else if (!hasCLIReportPolicyMode) {
+    } else if (!hasCLIReportPolicyMode && !hasCLIReportPolicyLaneClass) {
       hasExplicitPolicyProfile = appendRunReportCSV("report_policy_profile");
       hasExplicitPolicyProfile |= appendRunReportCSV("report_policy_profiles");
     }
@@ -7071,25 +7137,56 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       bool hasPolicyMode = false;
       std::string mode;
       std::optional<bool> stopOnFail;
-      if (hasCLIReportPolicyMode) {
+      if (hasCLIReportPolicyMode || hasCLIReportPolicyLaneClass) {
         hasPolicyMode = true;
-        mode = opts.reportPolicyMode;
+        if (hasCLIReportPolicyMode) {
+          mode = opts.reportPolicyMode;
+        } else {
+          auto mappedMode = mapLanePolicyClassToMode(opts.reportPolicyLaneClass);
+          if (!mappedMode) {
+            errs() << "circt-mut run: invalid --report-policy-lane-class value '"
+                   << opts.reportPolicyLaneClass << "'\n";
+            return 1;
+          }
+          mode = *mappedMode;
+        }
         if (opts.reportPolicyStopOnFail.has_value())
           stopOnFail = opts.reportPolicyStopOnFail;
       } else {
         auto policyModeIt = cfg.run.find("report_policy_mode");
+        auto policyLaneClassIt = cfg.run.find("report_policy_lane_class");
         auto policyStopOnFailIt = cfg.run.find("report_policy_stop_on_fail");
-        hasPolicyMode =
+        bool hasPolicyModeKey =
             policyModeIt != cfg.run.end() && !policyModeIt->second.empty();
+        bool hasPolicyLaneClassKey = policyLaneClassIt != cfg.run.end() &&
+                                     !policyLaneClassIt->second.empty();
+        hasPolicyMode = hasPolicyModeKey || hasPolicyLaneClassKey;
         bool hasPolicyStopOnFail = policyStopOnFailIt != cfg.run.end() &&
                                    !policyStopOnFailIt->second.empty();
         if (hasPolicyStopOnFail && !hasPolicyMode) {
           errs() << "circt-mut run: [run] key 'report_policy_stop_on_fail' "
-                    "requires 'report_policy_mode'\n";
+                    "requires 'report_policy_mode' or "
+                    "'report_policy_lane_class'\n";
           return 1;
         }
-        if (hasPolicyMode)
+        if (hasPolicyModeKey && hasPolicyLaneClassKey) {
+          errs() << "circt-mut run: [run] keys 'report_policy_mode' and "
+                    "'report_policy_lane_class' are mutually exclusive\n";
+          return 1;
+        }
+        if (hasPolicyModeKey)
           mode = StringRef(policyModeIt->second).trim().lower();
+        else if (hasPolicyLaneClassKey) {
+          auto mappedMode =
+              mapLanePolicyClassToMode(StringRef(policyLaneClassIt->second));
+          if (!mappedMode) {
+            errs() << "circt-mut run: invalid [run] key "
+                      "'report_policy_lane_class' value '"
+                   << policyLaneClassIt->second << "'\n";
+            return 1;
+          }
+          mode = *mappedMode;
+        }
         if (hasPolicyStopOnFail) {
           StringRef raw = StringRef(policyStopOnFailIt->second).trim().lower();
           if (raw == "1" || raw == "true" || raw == "yes" || raw == "on")
@@ -7681,6 +7778,7 @@ struct ReportOptions {
   uint64_t trendWindowRuns = 0;
   SmallVector<std::string, 4> policyProfiles;
   std::string policyMode;
+  std::string policyLaneClass;
   std::optional<bool> policyStopOnFail;
   SmallVector<std::string, 4> externalFormalResultsFiles;
   std::string externalFormalOutDir;
@@ -12776,6 +12874,25 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.policyMode = mode;
       continue;
     }
+    if (arg == "--policy-lane-class" || arg.starts_with("--policy-lane-class=")) {
+      auto v = consumeValue(i, arg, "--policy-lane-class");
+      if (!v)
+        return result;
+      StringRef laneClass = StringRef(*v).trim();
+      if (laneClass.empty()) {
+        result.error = "circt-mut report: --policy-lane-class requires "
+                       "non-empty value";
+        return result;
+      }
+      if (!mapLanePolicyClassToMode(laneClass)) {
+        result.error =
+            (Twine("circt-mut report: invalid --policy-lane-class value: ") + *v)
+                .str();
+        return result;
+      }
+      result.opts.policyLaneClass = laneClass.str();
+      continue;
+    }
     if (arg == "--policy-stop-on-fail" ||
         arg.starts_with("--policy-stop-on-fail=")) {
       auto v = consumeValue(i, arg, "--policy-stop-on-fail");
@@ -12930,9 +13047,16 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
     return result;
   }
   if (result.opts.policyStopOnFail.has_value() &&
-      result.opts.policyMode.empty()) {
+      result.opts.policyMode.empty() && result.opts.policyLaneClass.empty()) {
     result.error =
-        "circt-mut report: --policy-stop-on-fail requires --policy-mode";
+        "circt-mut report: --policy-stop-on-fail requires --policy-mode or "
+        "--policy-lane-class";
+    return result;
+  }
+  if (!result.opts.policyLaneClass.empty() &&
+      (!result.opts.policyMode.empty() || !result.opts.policyProfiles.empty())) {
+    result.error = "circt-mut report: --policy-lane-class is mutually exclusive "
+                   "with --policy-mode and --policy-profile";
     return result;
   }
   if (!result.opts.policyMode.empty() && !result.opts.policyProfiles.empty()) {
@@ -12944,6 +13068,12 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.mode != "matrix" && result.opts.mode != "all") {
     result.error = "circt-mut report: --policy-mode requires --mode matrix or "
                    "--mode all";
+    return result;
+  }
+  if (!result.opts.policyLaneClass.empty() &&
+      result.opts.mode != "matrix" && result.opts.mode != "all") {
+    result.error =
+        "circt-mut report: --policy-lane-class requires --mode matrix or --mode all";
     return result;
   }
   if (!result.opts.historyFile.empty()) {
@@ -12996,6 +13126,7 @@ static int runNativeReport(const ReportOptions &opts) {
   bool historyBootstrap = effectiveOpts.historyBootstrap;
   SmallVector<std::string, 4> policyProfiles = effectiveOpts.policyProfiles;
   bool hasCLIPolicyMode = !effectiveOpts.policyMode.empty();
+  bool hasCLIPolicyLaneClass = !effectiveOpts.policyLaneClass.empty();
   bool hasCLIPolicyProfile = !effectiveOpts.policyProfiles.empty();
   std::string appliedPolicyProfileSource =
       hasCLIPolicyProfile ? "cli" : "none";
@@ -13156,6 +13287,9 @@ static int runNativeReport(const ReportOptions &opts) {
     auto configPolicyModeIt = cfg.report.find("policy_mode");
     bool hasConfigPolicyMode =
         configPolicyModeIt != cfg.report.end() && !configPolicyModeIt->second.empty();
+    auto configPolicyLaneClassIt = cfg.report.find("policy_lane_class");
+    bool hasConfigPolicyLaneClass = configPolicyLaneClassIt != cfg.report.end() &&
+                                    !configPolicyLaneClassIt->second.empty();
     auto configPolicyStopOnFailIt = cfg.report.find("policy_stop_on_fail");
     bool hasConfigPolicyStopOnFail =
         configPolicyStopOnFailIt != cfg.report.end() &&
@@ -13168,17 +13302,23 @@ static int runNativeReport(const ReportOptions &opts) {
     bool hasConfigPolicyProfiles =
         configPolicyProfilesIt != cfg.report.end() &&
         !configPolicyProfilesIt->second.empty();
-    if (!hasCLIPolicyMode && !hasCLIPolicyProfile && hasConfigPolicyMode &&
-        (hasConfigPolicyProfile || hasConfigPolicyProfiles)) {
-      errs() << "circt-mut report: [report] keys 'policy_mode' and "
-                "'policy_profile(s)' are mutually exclusive\n";
+    if (!hasCLIPolicyMode && !hasCLIPolicyLaneClass && !hasCLIPolicyProfile &&
+        ((hasConfigPolicyMode && hasConfigPolicyLaneClass) ||
+         (hasConfigPolicyMode &&
+          (hasConfigPolicyProfile || hasConfigPolicyProfiles)) ||
+         (hasConfigPolicyLaneClass &&
+          (hasConfigPolicyProfile || hasConfigPolicyProfiles)))) {
+      errs() << "circt-mut report: [report] keys 'policy_mode', "
+                "'policy_lane_class', and 'policy_profile(s)' are mutually "
+                "exclusive\n";
       return 1;
     }
-    if (!hasCLIPolicyMode && hasConfigPolicyStopOnFail &&
-        !hasConfigPolicyMode &&
+    if (!hasCLIPolicyMode && !hasCLIPolicyLaneClass &&
+        hasConfigPolicyStopOnFail && !hasConfigPolicyMode &&
+        !hasConfigPolicyLaneClass &&
         (hasConfigPolicyProfile || hasConfigPolicyProfiles)) {
       errs() << "circt-mut report: [report] key 'policy_stop_on_fail' "
-                "requires 'policy_mode'\n";
+                "requires 'policy_mode' or 'policy_lane_class'\n";
       return 1;
     }
     if (effectiveOpts.coverWorkDir.empty()) {
@@ -13267,7 +13407,8 @@ static int runNativeReport(const ReportOptions &opts) {
       errs() << error << "\n";
       return 1;
     }
-    if (policyProfiles.empty() && !hasCLIPolicyMode && !hasCLIPolicyProfile) {
+    if (policyProfiles.empty() && !hasCLIPolicyMode && !hasCLIPolicyLaneClass &&
+        !hasCLIPolicyProfile) {
       auto parseProfileCSV = [&](StringRef csv) {
         SmallVector<StringRef, 8> elems;
         csv.split(elems, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
@@ -13290,18 +13431,50 @@ static int runNativeReport(const ReportOptions &opts) {
       std::string mode;
       std::optional<bool> stopOnFail;
       bool modeInferredFromLaneClass = false;
-      if (hasCLIPolicyMode) {
-        mode = effectiveOpts.policyMode;
+      bool modeExplicitFromLaneClass = false;
+      if (hasCLIPolicyMode || hasCLIPolicyLaneClass) {
+        if (hasCLIPolicyMode) {
+          mode = effectiveOpts.policyMode;
+        } else {
+          auto mappedMode = mapLanePolicyClassToMode(effectiveOpts.policyLaneClass);
+          if (!mappedMode) {
+            errs() << "circt-mut report: invalid --policy-lane-class value '"
+                   << effectiveOpts.policyLaneClass << "'\n";
+            return 1;
+          }
+          mode = *mappedMode;
+          modeExplicitFromLaneClass = true;
+        }
         stopOnFail = effectiveOpts.policyStopOnFail;
       } else {
         auto policyModeIt = cfg.report.find("policy_mode");
+        auto policyLaneClassIt = cfg.report.find("policy_lane_class");
         auto policyStopOnFailIt = cfg.report.find("policy_stop_on_fail");
         bool hasPolicyMode =
             policyModeIt != cfg.report.end() && !policyModeIt->second.empty();
+        bool hasPolicyLaneClass = policyLaneClassIt != cfg.report.end() &&
+                                  !policyLaneClassIt->second.empty();
         bool hasPolicyStopOnFail = policyStopOnFailIt != cfg.report.end() &&
                                    !policyStopOnFailIt->second.empty();
+        if (hasPolicyMode && hasPolicyLaneClass) {
+          errs() << "circt-mut report: [report] keys 'policy_mode' and "
+                    "'policy_lane_class' are mutually exclusive\n";
+          return 1;
+        }
         if (hasPolicyMode)
           mode = StringRef(policyModeIt->second).trim().lower();
+        if (hasPolicyLaneClass) {
+          auto mappedMode =
+              mapLanePolicyClassToMode(StringRef(policyLaneClassIt->second));
+          if (!mappedMode) {
+            errs() << "circt-mut report: invalid [report] key "
+                      "'policy_lane_class' value '"
+                   << policyLaneClassIt->second << "'\n";
+            return 1;
+          }
+          mode = *mappedMode;
+          modeExplicitFromLaneClass = true;
+        }
         if (hasPolicyStopOnFail) {
           StringRef raw = StringRef(policyStopOnFailIt->second).trim().lower();
           if (raw == "1" || raw == "true" || raw == "yes" || raw == "on")
@@ -13317,7 +13490,8 @@ static int runNativeReport(const ReportOptions &opts) {
             return 1;
           }
         }
-        if (mode.empty() && !hasPolicyMode && !hasCLIPolicyMode &&
+        if (mode.empty() && !hasPolicyMode && !hasPolicyLaneClass &&
+            !hasCLIPolicyMode && !hasCLIPolicyLaneClass &&
             (opts.mode == "matrix" || opts.mode == "all")) {
           auto lanesTSVIt = cfg.matrix.find("lanes_tsv");
           if (lanesTSVIt != cfg.matrix.end() && !lanesTSVIt->second.empty()) {
@@ -13338,20 +13512,29 @@ static int runNativeReport(const ReportOptions &opts) {
         }
         if (hasPolicyStopOnFail && mode.empty()) {
           errs() << "circt-mut report: [report] key 'policy_stop_on_fail' "
-                    "requires 'policy_mode' (or inferable lane policy class)\n";
+                    "requires 'policy_mode' or 'policy_lane_class' (or inferable "
+                    "lane policy class)\n";
           return 1;
         }
       }
       if (!mode.empty()) {
         if (opts.mode != "matrix" && opts.mode != "all") {
-          errs() << (hasCLIPolicyMode
-                         ? "circt-mut report: --policy-mode requires --mode "
-                           "matrix or --mode all\n"
-                         : "circt-mut report: [report] key 'policy_mode' "
-                           "requires --mode matrix or --mode all\n");
+          if (hasCLIPolicyMode)
+            errs() << "circt-mut report: --policy-mode requires --mode matrix "
+                      "or --mode all\n";
+          else if (hasCLIPolicyLaneClass)
+            errs() << "circt-mut report: --policy-lane-class requires --mode "
+                      "matrix or --mode all\n";
+          else if (modeExplicitFromLaneClass)
+            errs() << "circt-mut report: [report] key 'policy_lane_class' "
+                      "requires --mode matrix or --mode all\n";
+          else
+            errs() << "circt-mut report: [report] key 'policy_mode' requires "
+                      "--mode matrix or --mode all\n";
           return 1;
         }
-        if (!hasCLIPolicyMode && !isMatrixPolicyMode(mode)) {
+        if (!hasCLIPolicyMode && !hasCLIPolicyLaneClass &&
+            !modeExplicitFromLaneClass && !isMatrixPolicyMode(mode)) {
           errs() << "circt-mut report: invalid [report] key 'policy_mode' "
                     "value '"
                  << mode << "' (expected " << kMatrixPolicyModeList << ")\n";
@@ -13360,14 +13543,23 @@ static int runNativeReport(const ReportOptions &opts) {
         std::string modeError;
         if (!appendMatrixPolicyModeProfiles(mode, stopOnFail.value_or(false),
                                             policyProfiles, modeError,
-                                            hasCLIPolicyMode ? "circt-mut report:"
-                                                             : "circt-mut report: [report] key 'policy_mode'")) {
+                                            hasCLIPolicyMode
+                                                ? "circt-mut report:"
+                                            : (hasCLIPolicyLaneClass
+                                                   ? "circt-mut report:"
+                                            : (modeExplicitFromLaneClass
+                                                   ? "circt-mut report: [report] key 'policy_lane_class'"
+                                                   : "circt-mut report: [report] key 'policy_mode'")))) {
           errs() << modeError << "\n";
           return 1;
         }
         appliedPolicyMode = mode;
         if (hasCLIPolicyMode)
           appliedPolicyModeSource = "cli";
+        else if (hasCLIPolicyLaneClass)
+          appliedPolicyModeSource = "lane_class_cli";
+        else if (modeExplicitFromLaneClass)
+          appliedPolicyModeSource = "lane_class_config";
         else if (modeInferredFromLaneClass)
           appliedPolicyModeSource = "lane_class_auto";
         else
@@ -13382,23 +13574,37 @@ static int runNativeReport(const ReportOptions &opts) {
       }
     }
   }
-  if (policyProfiles.empty() && hasCLIPolicyMode) {
+  if (policyProfiles.empty() && (hasCLIPolicyMode || hasCLIPolicyLaneClass)) {
     if (opts.mode != "matrix" && opts.mode != "all") {
-      errs() << "circt-mut report: --policy-mode requires --mode matrix or "
-                "--mode all\n";
+      errs() << (hasCLIPolicyMode
+                     ? "circt-mut report: --policy-mode requires --mode matrix or "
+                       "--mode all\n"
+                     : "circt-mut report: --policy-lane-class requires --mode "
+                       "matrix or --mode all\n");
       return 1;
+    }
+    std::string cliMode = effectiveOpts.policyMode;
+    if (hasCLIPolicyLaneClass) {
+      auto mappedMode = mapLanePolicyClassToMode(effectiveOpts.policyLaneClass);
+      if (!mappedMode) {
+        errs() << "circt-mut report: invalid --policy-lane-class value '"
+               << effectiveOpts.policyLaneClass << "'\n";
+        return 1;
+      }
+      cliMode = *mappedMode;
     }
     std::string modeError;
     if (!appendMatrixPolicyModeProfiles(
-            effectiveOpts.policyMode, effectiveOpts.policyStopOnFail.value_or(false),
+            cliMode, effectiveOpts.policyStopOnFail.value_or(false),
             policyProfiles, modeError, "circt-mut report:")) {
       errs() << modeError << "\n";
       return 1;
     }
-    appliedPolicyMode = effectiveOpts.policyMode;
-    appliedPolicyModeSource = "cli";
+    appliedPolicyMode = cliMode;
+    appliedPolicyModeSource =
+        hasCLIPolicyLaneClass ? "lane_class_cli" : "cli";
     bool requestedStopOnFail = effectiveOpts.policyStopOnFail.value_or(false);
-    bool usesStopOnFail = matrixPolicyModeUsesStopOnFail(effectiveOpts.policyMode);
+    bool usesStopOnFail = matrixPolicyModeUsesStopOnFail(cliMode);
     appliedPolicyStopOnFail = requestedStopOnFail;
     appliedPolicyStopOnFailEffective =
         usesStopOnFail ? requestedStopOnFail : false;
