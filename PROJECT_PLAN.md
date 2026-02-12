@@ -62,6 +62,34 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, strict-gate JSON diagnostics artifact)
+
+1. Added first machine-readable strict policy artifact in `utils/run_formal_all.sh`:
+   - new option `--strict-gate-report-json FILE`
+   - strict-gate default report path: `OUT_DIR/strict-gate-report.json`
+   - strict-mode guardrail: `--strict-gate-report-json` requires `--strict-gate`.
+2. Introduced strict diagnostics JSON schema (v1):
+   - top-level status + baseline-window metadata
+   - lane-keyed diagnostics (`suite`, `mode`) with rule identifiers (`rule_id`).
+3. Implemented first stable rule-ID mapping:
+   - `strict_gate.filtered_lane.nonempty_filter_miss` for non-empty filtered-lane drift.
+4. Added and validated focused unit coverage:
+   - `test/Tools/run-formal-all-strict-gate-report-json.test`
+   - `test/Tools/run-formal-all-strict-gate-report-json-requires-strict.test`
+   - help visibility update in `test/Tools/run-formal-all-help.test`
+   - focused lit slice: PASS (7/7).
+5. External strict replay sanity (seeded baseline):
+   - `sv-tests/LEC` + `yosys/tests/sva/LEC` filtered lanes: PASS (1/1 + 1/1)
+   - strict artifact emitted with `status=pass`, `diagnostics=0`.
+6. Remaining limitations:
+   - strict diagnostics JSON currently assigns explicit rule IDs to non-empty filtered-lane drift only; many legacy strict checks still map to fallback `strict_gate.legacy_text`.
+   - strict artifact is JSON-only today (no TSV companion for low-overhead shell/CI diffs).
+   - mutation generation/provenance artifacts are not yet integrated into strict policy evaluation.
+7. Next long-term features (BMC/LEC/mutation focus):
+   - expand stable rule-ID mapping across all strict gates (timeouts, drop-remarks, diag buckets, mode-diff rules).
+   - emit a TSV companion (`strict-gate-report.tsv`) derived from JSON schema for deterministic textual diffing.
+   - add mutation campaign provenance artifact generation and strict drift checks (generator config, seed-set lineage, equivalence outcome deltas).
+
 ### Formal Closure Snapshot Update (February 12, 2026, strict-gate lane-keyed non-empty diagnostics)
 
 1. Hardened strict-gate triage quality in `utils/run_formal_all.sh`:

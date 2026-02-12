@@ -1,0 +1,3 @@
+// RUN: not %S/../../utils/run_formal_all.sh --strict-gate-report-json %t/report.json 2>&1 | FileCheck %s
+//
+// CHECK: --strict-gate-report-json requires --strict-gate
