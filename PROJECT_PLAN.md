@@ -74,19 +74,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - strict preflight now enforces required OpenTitan BMC runner executable
    - lane now records summary + case rows in the same strict-gate data plane
    - explicit no-impl skip synthesis + missing-results fallback diagnostics.
-4. Added focused regression coverage for generic runner + OpenTitan lane wiring:
+4. Hardened generic BMC frontend normalization and OpenTitan controls:
+   - pairwise runner default pre-BMC normalization:
+     - `circt-opt --lower-lec-llvm --reconcile-unrealized-casts`
+   - added dedicated OpenTitan BMC masked control:
+     - `--opentitan-bmc-include-masked`
+   - this removed prior OpenTitan BMC SMT-LIB tool-error noise and restored
+     actionable semantic outcomes.
+5. Added focused regression coverage for generic runner + OpenTitan lane wiring:
    - `run-pairwise-circt-bmc-basic.test`
+   - `run-pairwise-circt-bmc-opt-prep.test`
    - `run-opentitan-bmc-mode-label.test`
    - `run-formal-all-opentitan-bmc*.test`
    - strict preflight missing-runner coverage and help/filter validation updates.
-5. Validation snapshot:
-   - focused lit slice for all touched BMC tests: PASS (7/7).
-6. Remaining limitations:
-   - no dedicated `--opentitan-bmc-include-masked` knob yet.
+6. Validation snapshot:
+   - focused lit slice for all touched BMC tests: PASS (8/8).
+   - real filtered OpenTitan BMC milestone (`aes_sbox_canright`, bound=2):
+     - default mode: `FAIL` (`SAT`)
+     - `--bmc-assume-known-inputs`: `PASS` (`UNSAT`)
+7. Remaining limitations:
    - no BMC strict/default mode-diff synthesis lane for OpenTitan.
    - generic pairwise manifest schema is intentionally minimal; no per-case
      backend override fields yet.
-7. Next long-term features (BMC/LEC/mutation focus):
+8. Next long-term features (BMC/LEC/mutation focus):
    - add dedicated OpenTitan BMC strict + mode-diff lanes (mirror LEC governance).
    - extend pairwise manifest schema with per-case solver/backend/timeout
      contracts for large-corpus runs.

@@ -696,6 +696,8 @@ Options:
                          Regex filter for OpenTitan BMC implementations
   --opentitan-bmc-bound N
                          Bound passed to OpenTitan BMC runner (default: 1)
+  --opentitan-bmc-include-masked
+                         Include masked OpenTitan BMC implementations
   --opentitan-lec-impl-filter REGEX
                          Regex filter for OpenTitan LEC implementations
   --opentitan-lec-include-masked
@@ -2259,6 +2261,7 @@ SV_TESTS_BMC_BACKEND_PARITY=0
 WITH_AVIP=0
 OPENTITAN_BMC_IMPL_FILTER=""
 OPENTITAN_BMC_BOUND="1"
+OPENTITAN_BMC_INCLUDE_MASKED=0
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
 OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES=0
@@ -2334,6 +2337,8 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_BMC_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-bmc-bound)
       OPENTITAN_BMC_BOUND="$2"; shift 2 ;;
+    --opentitan-bmc-include-masked)
+      OPENTITAN_BMC_INCLUDE_MASKED=1; shift ;;
     --opentitan-lec-impl-filter)
       OPENTITAN_LEC_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-lec-include-masked)
@@ -6743,6 +6748,7 @@ compute_lane_state_config_hash() {
     printf "opentitan_dir=%s\n" "$OPENTITAN_DIR"
     printf "opentitan_bmc_impl_filter=%s\n" "$OPENTITAN_BMC_IMPL_FILTER"
     printf "opentitan_bmc_bound=%s\n" "$OPENTITAN_BMC_BOUND"
+    printf "opentitan_bmc_include_masked=%s\n" "$OPENTITAN_BMC_INCLUDE_MASKED"
     printf "avip_glob=%s\n" "$AVIP_GLOB"
     printf "lane_state_hmac_mode=%s\n" "$LANE_STATE_HMAC_MODE"
     printf "lane_state_hmac_key_id=%s\n" "$LANE_STATE_HMAC_KEY_ID"
@@ -10124,7 +10130,7 @@ run_opentitan_bmc_lane() {
   if [[ -n "$OPENTITAN_BMC_IMPL_FILTER" ]]; then
     opentitan_bmc_args+=(--impl-filter "$OPENTITAN_BMC_IMPL_FILTER")
   fi
-  if [[ "$OPENTITAN_LEC_INCLUDE_MASKED" == "1" ]]; then
+  if [[ "$OPENTITAN_BMC_INCLUDE_MASKED" == "1" ]]; then
     opentitan_bmc_args+=(--include-masked)
   fi
 

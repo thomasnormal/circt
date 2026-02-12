@@ -22,12 +22,25 @@
    - missing-results fallback diagnostics (`CIRCT_BMC_ERROR/<reason>`).
 4. Added/updated focused regression coverage:
    - `test/Tools/run-pairwise-circt-bmc-basic.test`
+   - `test/Tools/run-pairwise-circt-bmc-opt-prep.test`
    - `test/Tools/run-opentitan-bmc-mode-label.test`
    - `test/Tools/run-formal-all-opentitan-bmc.test`
    - `test/Tools/run-formal-all-opentitan-bmc-no-impl-skip.test`
    - `test/Tools/run-formal-all-strict-tool-preflight-missing-opentitan-bmc-runner.test`
    - `test/Tools/run-formal-all-opentitan-filter-invalid.test` (adds BMC filter validation)
    - `test/Tools/run-formal-all-help.test` (help visibility checks).
+5. Extended OpenTitan BMC lane controls and generic preprocessing:
+   - added dedicated CLI knob:
+     - `--opentitan-bmc-include-masked`
+   - pairwise runner now performs a default `circt-opt` prepare stage before BMC:
+     - `--lower-lec-llvm --reconcile-unrealized-casts`
+     - converts frontend LLVM/unrealized-cast remnants into BMC-exportable IR
+       for SMT-LIB execution.
+6. Real OpenTitan milestone benchmark (filtered `aes_sbox_canright`, bound=2):
+   - default run: `FAIL` (`SAT`)
+   - with `--bmc-assume-known-inputs`: `PASS` (`UNSAT`)
+   - this replaces prior `CIRCT_BMC_ERROR` tooling noise with actionable
+     semantic signal.
 
 ### Tests and Validation
 
@@ -42,13 +55,12 @@
   - `run-formal-all-opentitan-bmc-no-impl-skip.test`
   - `run-formal-all-strict-tool-preflight-missing-opentitan-bmc-runner.test`
   - `run-pairwise-circt-bmc-basic.test`
+  - `run-pairwise-circt-bmc-opt-prep.test`
   - `run-opentitan-bmc-mode-label.test`
-  - PASS (7/7)
+  - PASS (8/8)
 
 ### Remaining Limitations
 
-- OpenTitan BMC masked-impl inclusion currently reuses the LEC include-masked
-  control surface; a dedicated BMC include-masked CLI knob is still missing.
 - OpenTitan BMC has no strict/default mode-diff synthesis lane yet
   (unlike LEC/E2E mode-diff governance).
 - Generic pairwise manifest is intentionally minimal (TSV + global env knobs);

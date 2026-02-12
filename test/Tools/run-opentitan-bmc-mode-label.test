@@ -7,7 +7,7 @@
 // RUN: chmod +x %t/bin/circt-verilog
 // RUN: printf '#!/usr/bin/env bash\necho \"BMC_RESULT=UNSAT\"\nexit 0\n' > %t/bin/circt-bmc
 // RUN: chmod +x %t/bin/circt-bmc
-// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc BMC_MODE_LABEL=BMC_STRICT BMC_RUN_SMTLIB=0 OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_bmc.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir | FileCheck %s
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc BMC_MODE_LABEL=BMC_STRICT BMC_RUN_SMTLIB=0 BMC_PREPARE_CORE_WITH_CIRCT_OPT=0 OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_bmc.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir | FileCheck %s
 // RUN: FileCheck %s --check-prefix=RESULTPASS < %t/results.tsv
 //
 // CHECK: Running BMC on 1 pairwise case(s)...
