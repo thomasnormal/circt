@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1155 - February 12, 2026
+
+### Mutation Governance: Cadence-Aware Quality Debt Mode Families
+
+1. Added cadence-aware quality debt policy modes in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `native-strict-formal-quality-debt-nightly`
+   - `strict-formal-quality-debt-nightly`
+   - `native-strict-formal-quality-debt-strict`
+   - `strict-formal-quality-debt-strict`
+2. Mode wiring now combines:
+   - timeout debt envelopes:
+     `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly`
+     / `...-debt-v3-strict`
+   - semantic family guard:
+     `formal-regression-matrix-external-formal-semantic-diag-family-guard`
+   - core floor guards:
+     `formal-regression-matrix-external-formal-bmc-core-min-total-v1`,
+     `formal-regression-matrix-external-formal-lec-core-min-total-v1`
+   - while preserving native/strict baseline contracts.
+3. Updated policy-mode surfaces/diagnostics:
+   - help output in `init/run/report`
+   - invalid-mode diagnostics in:
+     - `test/Tools/circt-mut-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-init-report-policy-invalid.test`
+     - `test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test`
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-quality-debt-nightly-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-debt-nightly-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-debt-strict-fail.test`
+   - plus help surface updates:
+     - `test/Tools/circt-mut-init-help.test`
+     - `test/Tools/circt-mut-run-help.test`
+     - `test/Tools/circt-mut-report-help.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused cadence-aware quality debt slice: PASS (10/10)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (459/459 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-quality-debt-cadence ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+    BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL (known/ongoing): `opentitan` LEC (`missing_results=1`), AVIP compile
+    `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1154 - February 12, 2026
 
 ### Mutation Governance: Cadence-Aware Timeout Debt v3 + Mode Rollout

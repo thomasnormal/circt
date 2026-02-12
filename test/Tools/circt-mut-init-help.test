@@ -29,5 +29,7 @@
 // CHECK: strict-formal-timeout-debt-nightly
 // CHECK: native-strict-formal-timeout-debt-strict
 // CHECK: strict-formal-timeout-debt-strict
+// CHECK: native-strict-formal-quality-debt-nightly
+// CHECK: strict-formal-quality-debt-strict
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --force

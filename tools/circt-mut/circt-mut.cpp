@@ -142,6 +142,10 @@ static void printInitHelp(raw_ostream &os) {
   os << "                            strict-formal-timeout-strict|\n";
   os << "                            native-strict-formal-quality-debt|\n";
   os << "                            strict-formal-quality-debt|\n";
+  os << "                            native-strict-formal-quality-debt-nightly|\n";
+  os << "                            strict-formal-quality-debt-nightly|\n";
+  os << "                            native-strict-formal-quality-debt-strict|\n";
+  os << "                            strict-formal-quality-debt-strict|\n";
   os << "                            native-strict-formal-quality-strict|\n";
   os << "                            strict-formal-quality-strict,\n";
   os << "                            default: smoke)\n";
@@ -220,6 +224,10 @@ static void printRunHelp(raw_ostream &os) {
   os << "                           strict-formal-timeout-strict|\n";
   os << "                           native-strict-formal-quality-debt|\n";
   os << "                           strict-formal-quality-debt|\n";
+  os << "                           native-strict-formal-quality-debt-nightly|\n";
+  os << "                           strict-formal-quality-debt-nightly|\n";
+  os << "                           native-strict-formal-quality-debt-strict|\n";
+  os << "                           strict-formal-quality-debt-strict|\n";
   os << "                           native-strict-formal-quality-strict|\n";
   os << "                           strict-formal-quality-strict\n";
   os << "                           (maps to report policy profile)\n";
@@ -282,6 +290,10 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           strict-formal-timeout-strict|\n";
   os << "                           native-strict-formal-quality-debt|\n";
   os << "                           strict-formal-quality-debt|\n";
+  os << "                           native-strict-formal-quality-debt-nightly|\n";
+  os << "                           strict-formal-quality-debt-nightly|\n";
+  os << "                           native-strict-formal-quality-debt-strict|\n";
+  os << "                           strict-formal-quality-debt-strict|\n";
   os << "                           native-strict-formal-quality-strict|\n";
   os << "                           strict-formal-quality-strict\n";
   os << "                           (maps to report policy profile)\n";
@@ -5905,8 +5917,11 @@ static constexpr StringLiteral kMatrixPolicyModeList =
     "strict-formal-timeout-debt-strict|"
     "native-strict-formal-timeout-strict|"
     "strict-formal-timeout-strict|native-strict-formal-quality-debt|"
-    "strict-formal-quality-debt|native-strict-formal-quality-strict|"
-    "strict-formal-quality-strict";
+    "strict-formal-quality-debt|native-strict-formal-quality-debt-nightly|"
+    "strict-formal-quality-debt-nightly|"
+    "native-strict-formal-quality-debt-strict|"
+    "strict-formal-quality-debt-strict|"
+    "native-strict-formal-quality-strict|strict-formal-quality-strict";
 
 static bool isMatrixPolicyMode(StringRef mode);
 
@@ -8519,6 +8534,10 @@ static bool isMatrixPolicyMode(StringRef mode) {
          mode == "strict-formal-timeout-strict" ||
          mode == "native-strict-formal-quality-debt" ||
          mode == "strict-formal-quality-debt" ||
+         mode == "native-strict-formal-quality-debt-nightly" ||
+         mode == "strict-formal-quality-debt-nightly" ||
+         mode == "native-strict-formal-quality-debt-strict" ||
+         mode == "strict-formal-quality-debt-strict" ||
          mode == "native-strict-formal-quality-strict" ||
          mode == "strict-formal-quality-strict";
 }
@@ -8546,6 +8565,10 @@ static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
          mode == "strict-formal-timeout-strict" ||
          mode == "native-strict-formal-quality-debt" ||
          mode == "strict-formal-quality-debt" ||
+         mode == "native-strict-formal-quality-debt-nightly" ||
+         mode == "strict-formal-quality-debt-nightly" ||
+         mode == "native-strict-formal-quality-debt-strict" ||
+         mode == "strict-formal-quality-debt-strict" ||
          mode == "native-strict-formal-quality-strict" ||
          mode == "strict-formal-quality-strict";
 }
@@ -8829,6 +8852,62 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     externalFormalProfile = "formal-regression-matrix-external-formal-guard";
     externalFormalTimeoutProfile =
         "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2";
+    externalFormalSemanticProfile =
+        "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcCoreMinProfile =
+        "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
+    externalFormalLecCoreMinProfile =
+        "formal-regression-matrix-external-formal-lec-core-min-total-v1";
+  } else if (mode == "native-strict-formal-quality-debt-nightly") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
+                        : "formal-regression-matrix-composite-native-strict";
+    externalFormalTimeoutProfile =
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly";
+    externalFormalSemanticProfile =
+        "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcCoreMinProfile =
+        "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
+    externalFormalLecCoreMinProfile =
+        "formal-regression-matrix-external-formal-lec-core-min-total-v1";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-strict-contract";
+  } else if (mode == "strict-formal-quality-debt-nightly") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-strict"
+                        : "formal-regression-matrix-composite-strict";
+    provenanceProfile = "formal-regression-matrix-provenance-strict";
+    externalFormalProfile = "formal-regression-matrix-external-formal-guard";
+    externalFormalTimeoutProfile =
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly";
+    externalFormalSemanticProfile =
+        "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcCoreMinProfile =
+        "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
+    externalFormalLecCoreMinProfile =
+        "formal-regression-matrix-external-formal-lec-core-min-total-v1";
+  } else if (mode == "native-strict-formal-quality-debt-strict") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
+                        : "formal-regression-matrix-composite-native-strict";
+    externalFormalTimeoutProfile =
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict";
+    externalFormalSemanticProfile =
+        "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcCoreMinProfile =
+        "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
+    externalFormalLecCoreMinProfile =
+        "formal-regression-matrix-external-formal-lec-core-min-total-v1";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-strict-contract";
+  } else if (mode == "strict-formal-quality-debt-strict") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-strict"
+                        : "formal-regression-matrix-composite-strict";
+    provenanceProfile = "formal-regression-matrix-provenance-strict";
+    externalFormalProfile = "formal-regression-matrix-external-formal-guard";
+    externalFormalTimeoutProfile =
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict";
     externalFormalSemanticProfile =
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
     externalFormalBmcCoreMinProfile =
