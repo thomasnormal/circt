@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1181 - February 12, 2026
+
+### Mutation Governance: Multi-Suite `LEC_NOT_RUN` Reason-Coverage Guard
+
+1. Strengthened `formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard` in `tools/circt-mut/circt-mut.cpp`.
+2. The profile now enforces `lec_not_run_reason_missing_cases == 0` for all core LEC suites, not only `sv-tests`:
+   - `sv-tests/LEC`
+   - `verilator-verification/LEC`
+   - `yosys/tests/sva/LEC`
+3. Updated regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-reason-coverage-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-reason-coverage-guard-fail.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`
+  - PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-reason-coverage-guard-pass.test build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-reason-coverage-guard-fail.test build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`
+  - PASS (4/4)
+
 ## Iteration 1180 - February 12, 2026
 
 ### Formal Runner Reliability: Strict AVIP Runner Preflight

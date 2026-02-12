@@ -8930,6 +8930,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
   std::string externalFormalSemanticProfile;
   std::string externalFormalBmcSemanticProfile;
   std::string externalFormalLecNotRunProfile;
+  std::string externalFormalLecNotRunReasonCoverageProfile;
   std::string externalFormalBmcCoreMinProfile;
   std::string externalFormalLecCoreMinProfile;
   std::string externalFormalSummaryProfile;
@@ -9207,6 +9208,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalLecNotRunProfile =
         "formal-regression-matrix-external-formal-lec-not-run-family-guard";
+    externalFormalLecNotRunReasonCoverageProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9247,6 +9250,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalLecNotRunProfile =
         "formal-regression-matrix-external-formal-lec-not-run-family-guard";
+    externalFormalLecNotRunReasonCoverageProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9281,6 +9286,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalLecNotRunProfile =
         "formal-regression-matrix-external-formal-lec-not-run-family-guard";
+    externalFormalLecNotRunReasonCoverageProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9315,6 +9322,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalLecNotRunProfile =
         "formal-regression-matrix-external-formal-lec-not-run-family-guard";
+    externalFormalLecNotRunReasonCoverageProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9340,6 +9349,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     out.push_back(externalFormalBmcSemanticProfile);
   if (!externalFormalLecNotRunProfile.empty())
     out.push_back(externalFormalLecNotRunProfile);
+  if (!externalFormalLecNotRunReasonCoverageProfile.empty())
+    out.push_back(externalFormalLecNotRunReasonCoverageProfile);
   if (!externalFormalBmcCoreMinProfile.empty())
     out.push_back(externalFormalBmcCoreMinProfile);
   if (!externalFormalLecCoreMinProfile.empty())
@@ -9827,10 +9838,13 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
   }
   if (profile ==
       "formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard") {
-    appendUniqueRule(
-        opts.failIfValueGtRules,
-        "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_not_run_reason_missing_cases",
-        0.0);
+    for (StringRef key : {
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_not_run_reason_missing_cases",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_not_run_reason_missing_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_not_run_reason_missing_cases",
+         }) {
+      appendUniqueRule(opts.failIfValueGtRules, key, 0.0);
+    }
     return true;
   }
   if (profile ==

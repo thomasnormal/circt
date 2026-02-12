@@ -62,6 +62,20 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, multi-suite `LEC_NOT_RUN` reason guard)
+
+1. Strengthened `circt-mut` policy profile:
+   - `formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard`
+2. The guard now enforces missing-reason budget closure across all core LEC suites:
+   - `external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_not_run_reason_missing_cases`
+   - `external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_not_run_reason_missing_cases`
+   - `external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_not_run_reason_missing_cases`
+3. Updated policy tests for multi-suite behavior:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-reason-coverage-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-reason-coverage-guard-fail.test`
+4. Remaining limitations:
+   - some suite wrappers still do not intentionally classify parse-only lanes into explicit `LEC_NOT_RUN <reason>` rows as broadly as `sv-tests`; guard coverage is now in place for when those rows appear.
+
 ### Formal Closure Snapshot Update (February 12, 2026, strict AVIP runner preflight)
 
 1. Extended `--strict-tool-preflight` in `utils/run_formal_all.sh` to include AVIP compile-lane runner preflight.
