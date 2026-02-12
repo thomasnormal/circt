@@ -633,6 +633,10 @@ Options:
                          Tag filter passed to sv-tests LEC runner
   --sv-tests-lec-test-filter REGEX
                          Base-name regex filter passed to sv-tests LEC runner
+  --sv-tests-lec-force-lec-test-filter REGEX
+                         Base-name regex filter forwarded as
+                         FORCE_LEC_TEST_FILTER to sv-tests LEC runner
+                         (selectively promotes `:type: Parsing` cases)
   --sv-tests-uvm-bmc-semantics-tag-regex REGEX
                          Tag filter passed to sv-tests UVM semantics BMC lane
   --sv-tests-uvm-bmc-semantics-test-filter REGEX
@@ -2268,6 +2272,7 @@ SV_TESTS_BMC_TAG_REGEX=""
 SV_TESTS_BMC_TEST_FILTER=""
 SV_TESTS_LEC_TAG_REGEX=""
 SV_TESTS_LEC_TEST_FILTER=""
+SV_TESTS_LEC_FORCE_LEC_TEST_FILTER=""
 SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX=""
 SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER=""
 VERILATOR_BMC_TEST_FILTER=""
@@ -2775,6 +2780,8 @@ while [[ $# -gt 0 ]]; do
       SV_TESTS_LEC_TAG_REGEX="$2"; shift 2 ;;
     --sv-tests-lec-test-filter)
       SV_TESTS_LEC_TEST_FILTER="$2"; shift 2 ;;
+    --sv-tests-lec-force-lec-test-filter)
+      SV_TESTS_LEC_FORCE_LEC_TEST_FILTER="$2"; shift 2 ;;
     --sv-tests-uvm-bmc-semantics-tag-regex)
       SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX="$2"; shift 2 ;;
     --sv-tests-uvm-bmc-semantics-test-filter)
@@ -2881,6 +2888,16 @@ if [[ -n "$SV_TESTS_LEC_TEST_FILTER" ]]; then
   set -e
   if [[ "$lane_regex_ec" == "2" ]]; then
     echo "invalid --sv-tests-lec-test-filter: $SV_TESTS_LEC_TEST_FILTER" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$SV_TESTS_LEC_FORCE_LEC_TEST_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$SV_TESTS_LEC_FORCE_LEC_TEST_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --sv-tests-lec-force-lec-test-filter: $SV_TESTS_LEC_FORCE_LEC_TEST_FILTER" >&2
     exit 1
   fi
 fi
@@ -6790,6 +6807,7 @@ compute_lane_state_config_hash() {
     printf "sv_tests_bmc_test_filter=%s\n" "$SV_TESTS_BMC_TEST_FILTER"
     printf "sv_tests_lec_tag_regex=%s\n" "$SV_TESTS_LEC_TAG_REGEX"
     printf "sv_tests_lec_test_filter=%s\n" "$SV_TESTS_LEC_TEST_FILTER"
+    printf "sv_tests_lec_force_lec_test_filter=%s\n" "$SV_TESTS_LEC_FORCE_LEC_TEST_FILTER"
     printf "sv_tests_uvm_bmc_semantics_tag_regex=%s\n" "$SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX"
     printf "sv_tests_uvm_bmc_semantics_test_filter=%s\n" "$SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER"
     printf "verilator_bmc_test_filter=%s\n" "$VERILATOR_BMC_TEST_FILTER"
@@ -9710,6 +9728,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
       TAG_REGEX="$SV_TESTS_LEC_TAG_REGEX" \
       TEST_FILTER="$SV_TESTS_LEC_TEST_FILTER" \
+      FORCE_LEC_TEST_FILTER="$SV_TESTS_LEC_FORCE_LEC_TEST_FILTER" \
       Z3_BIN="$Z3_BIN" \
       utils/run_sv_tests_circt_lec.sh "$SV_TESTS_DIR" || true
     line=$(grep -E "sv-tests LEC summary:" "$OUT_DIR/sv-tests-lec.log" | tail -1 || true)

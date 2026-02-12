@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1203 - February 12, 2026
+
+### Formal Lane UX: Forward Selective Parsing-Case LEC Promotion via CLI
+
+1. Extended `utils/run_formal_all.sh` with:
+   - `--sv-tests-lec-force-lec-test-filter REGEX`
+2. The new option forwards to sv-tests LEC runner env:
+   - `FORCE_LEC_TEST_FILTER=<REGEX>`
+3. Added regex validation guardrail:
+   - invalid `--sv-tests-lec-force-lec-test-filter` now fails early with a
+     targeted error.
+4. Included the new option in run-state fingerprint material to preserve
+   resumable-lane reproducibility.
+5. Added/updated regression coverage:
+   - `test/Tools/run-formal-all-sv-tests-tag-regex-forwarding.test`
+     (asserts forwarding of `FORCE_LEC_TEST_FILTER`)
+   - `test/Tools/run-formal-all-help.test`
+     (asserts help visibility).
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh utils/run_sv_tests_circt_lec.sh`
+  - PASS
+- Focused lit slice:
+  - `run-formal-all-help.test`
+  - `run-formal-all-sv-tests-tag-regex-forwarding.test`
+  - `run-formal-all-circt-toolchain-forwarding.test`
+  - `run-sv-tests-lec-force-lec-test-filter.test`
+  - `run-sv-tests-lec-toolchain-derived-from-circt-verilog.test`
+  - `run-sv-tests-lec-require-filter.test`
+  - PASS (6/6)
+
 ## Iteration 1202 - February 12, 2026
 
 ### LEC Semantic Closure: Selective Promotion of `:type: Parsing` sv-tests
