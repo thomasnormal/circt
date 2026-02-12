@@ -612,7 +612,7 @@ top_module=${top_module}
   fi
 
   if [[ "$run_lec" == "0" ]]; then
-    printf "PASS\t%s\t%s\tsv-tests\tLEC\tLEC_NOT_RUN\n" "$base" "$sv" >> "$results_tmp"
+    printf "PASS\t%s\t%s\tsv-tests\tLEC\tLEC_NOT_RUN\tparsing\n" "$base" "$sv" >> "$results_tmp"
     pass=$((pass + 1))
     save_logs
     continue

@@ -64,6 +64,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, `LEC_NOT_RUN` reason taxonomy)
+
+1. Added reason-level `LEC_NOT_RUN` accounting in formal lane summaries:
+   - runner emits explicit reason token: `LEC_NOT_RUN parsing`
+   - summary emits per-reason counters:
+     - `lec_not_run_reason_<reason>_cases`
+2. Added strict-gate regression to catch new reason-key drift:
+   - `test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys.test`
+3. Strengthened unit coverage for sv-tests LEC not-run shape:
+   - `test/Tools/run-sv-tests-circt-lec-not-run-diag.test`
+4. Remaining limitations:
+   - only sv-tests currently emits explicit `LEC_NOT_RUN` reason strings;
+     other suites may still report `missing` until their runners adopt the
+     same reason-column contract.
+   - reason taxonomy is currently single-class (`parsing`) for sv-tests;
+     future work should split additional no-run causes into stable families.
+5. Next long-term features:
+   - propagate reason-column emission to verilator/yosys/opentitan LEC wrappers
+     where applicable.
+   - add strict profiles that gate on per-reason budgets (not only aggregate
+     `lec_diag_lec_not_run_cases`).
+
 ### Formal Closure Snapshot Update (February 12, 2026, strict LEC_NOT_RUN governance)
 
 1. Added an explicit external-formal policy profile to govern LEC

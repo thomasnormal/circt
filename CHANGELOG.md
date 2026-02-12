@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1174 - February 12, 2026
+
+### Formal LEC Governance: Reason-Level `LEC_NOT_RUN` Counters
+
+1. Added explicit reason emission for `LEC_NOT_RUN` in the sv-tests LEC runner:
+   - `utils/run_sv_tests_circt_lec.sh` now emits:
+     - `PASS ... LEC_NOT_RUN parsing`
+2. Extended `run_formal_all.sh` LEC summarization with reason-level counters:
+   - `lec_not_run_reason_<reason>_cases`
+   - includes backward-compatible fallback:
+     - `lec_not_run_reason_missing_cases` for older 6-column rows
+3. Added strict-gate regression coverage for reason-key drift:
+   - `test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys.test`
+4. Tightened not-run unit expectation:
+   - `test/Tools/run-sv-tests-circt-lec-not-run-diag.test` now checks
+     `LEC_NOT_RUN parsing`.
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-circt-lec-not-run-diag.test build-test/test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys.test`
+  - PASS (2/2)
+
 ## Iteration 1173 - February 12, 2026
 
 ### Mutation Governance: Strict Quality `LEC_NOT_RUN` Family Guard

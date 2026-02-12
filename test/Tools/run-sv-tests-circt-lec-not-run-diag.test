@@ -9,4 +9,4 @@
 // RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
 //
 // SUMMARY: sv-tests LEC summary: total=1 pass=1 fail=0 error=0
-// RESULTS: PASS{{[[:space:]]+}}not_run_diag{{[[:space:]]+}}{{.*}}not_run_diag.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}LEC_NOT_RUN
+// RESULTS: PASS{{[[:space:]]+}}not_run_diag{{[[:space:]]+}}{{.*}}not_run_diag.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}LEC_NOT_RUN{{[[:space:]]+}}parsing
