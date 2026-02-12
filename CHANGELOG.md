@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1185 - February 12, 2026
+
+### Formal LEC Telemetry: First-Class `CIRCT_LEC_ERROR` Reason-Key Governance
+
+1. Added first-class LEC summary counters in `utils/run_formal_all.sh` for typed `CIRCT_LEC_ERROR` rows:
+   - `lec_circt_lec_error_reason_<reason>_cases`
+2. Fixed strict-gate wiring for `--fail-on-new-lec-circt-lec-error-reason-keys`:
+   - included it in strict-gate activation conditions
+   - fixed shell->Python env forwarding for both LEC reason-key gates
+3. Kept strict defaults aligned with long-term governance:
+   - `--strict-gate` now reliably enforces new `CIRCT_LEC_ERROR` reason-key drift checks (when baseline emits these keys)
+4. Regression coverage:
+   - new `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-reason-keys.test`
+   - new `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-reason-keys-defaults.test`
+   - updated `test/Tools/run-formal-all-help.test`
+   - updated `test/Tools/run-formal-all-opentitan-lec-missing-results-reason.test`
+   - updated `test/Tools/run-formal-all-opentitan-lec-fallback-diag.test`
+5. Outcome:
+   - OpenTitan `missing_results` fallback reasons are now first-class reason-key telemetry that can be policy-gated for drift, instead of relying only on broader diag/error-bucket counters.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test --filter='run-formal-all-(help|opentitan-lec-fallback-diag|opentitan-lec-missing-results-reason|strict-gate-lec-circt-lec-error-reason-keys)'`
+  - PASS (5/5)
+- `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test --filter='run-formal-all-strict-gate-lec-circt-(opt|verilog|lec)-error-reason-keys'`
+  - PASS (6/6)
+
 ## Iteration 1184 - February 12, 2026
 
 ### Formal LEC Telemetry: Typed OpenTitan `missing_results` Error Reasons

@@ -13,6 +13,7 @@
 // CHECK: --fail-on-new-lec-circt-opt-error-reason-keys
 // CHECK: --fail-on-new-lec-circt-opt-error-case-reasons
 // CHECK: --fail-on-new-lec-circt-verilog-error-reason-keys
+// CHECK: --fail-on-new-lec-circt-lec-error-reason-keys
 // CHECK: --fail-on-new-lec-circt-verilog-error-case-ids
 // CHECK: --fail-on-new-lec-circt-verilog-error-case-reasons
 // CHECK: --fail-on-new-lec-timeout-class-cases
