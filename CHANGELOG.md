@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1170 - February 12, 2026
+
+### Mutation Governance: Strict Run-Path Quality Parity + External Smoke Revalidation
+
+1. Added strict-side run-path policy-mode regressions to close the remaining
+   quality parity gap between native and strict families:
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-strict-formal-quality-nightly.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-strict-formal-quality-debt-nightly.test`
+2. New strict run contracts assert full strict stack expansion for
+   `circt-mut run --report-policy-mode`:
+   - strict composite + strict provenance profiles
+   - external-formal guard
+   - timeout debt-v3 nightly budget profile
+   - semantic diagnostic family guard
+   - BMC semantic family guard
+   - BMC/LEC core minimum-volume guard profiles
+3. Revalidated external formal smoke slices after rebuilding missing formal
+   binaries in `build-test/bin`:
+   - Verilator BMC smoke (`assert_changed`): PASS
+   - Verilator LEC smoke (`assert_changed`): PASS
+   - Yosys SVA BMC smoke (`basic00`): PASS
+   - Yosys SVA LEC smoke (`basic00`): PASS
+
+### Tests and Validation
+
+- Focused strict/native run/report policy slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-nightly.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-debt-nightly.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-strict-formal-quality-nightly.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-strict-formal-quality-debt-nightly.test build-test/test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-quality-nightly-pass.test build-test/test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-quality-debt-nightly-pass.test`
+  - PASS (6/6)
+- Rebuilt formal binaries:
+  - `ninja -C build-test circt-opt circt-bmc circt-lec`
+  - PASS
+- External smoke commands (filtered):
+  - `utils/run_verilator_verification_circt_bmc.sh` with `TEST_FILTER='^assert_changed$'` and `BMC_SMOKE_ONLY=1`: PASS
+  - `utils/run_verilator_verification_circt_lec.sh` with `TEST_FILTER='^assert_changed$'` and `LEC_SMOKE_ONLY=1`: PASS
+  - `utils/run_yosys_sva_circt_bmc.sh` with `TEST_FILTER='^basic00$'` and `BMC_SMOKE_ONLY=1`: PASS
+  - `utils/run_yosys_sva_circt_lec.sh` with `TEST_FILTER='^basic00$'` and `LEC_SMOKE_ONLY=1`: PASS
+
 ## Iteration 1169 - February 12, 2026
 
 ### Mutation Governance: BMC Semantic-Family Trend Budgets (`v16`)

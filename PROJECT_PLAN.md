@@ -60,6 +60,36 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, strict run-path parity + smoke revalidation)
+
+1. Closed strict run-path quality parity gap for policy-mode regressions:
+   - added strict `circt-mut run --report-policy-mode` regressions for
+     `strict-formal-quality-nightly` and
+     `strict-formal-quality-debt-nightly`.
+2. Strict run-path contracts now explicitly pinned in tests:
+   - strict composite + strict provenance
+   - external formal guard
+   - timeout-stage debt-v3 nightly budget
+   - semantic diag family guard
+   - BMC semantic family guard
+   - BMC/LEC minimum-volume guards
+3. External smoke revalidation after rebuilding formal binaries in
+   `build-test/bin`:
+   - Verilator BMC/LEC filtered smokes: PASS (`assert_changed`)
+   - Yosys SVA BMC/LEC filtered smokes: PASS (`basic00`)
+4. Remaining limitations:
+   - strict quality modes still require explicit `policy_mode` selection in
+     most call sites; lane-class driven defaults are not consistently used by
+     existing campaigns.
+   - formal runner preflight checks do not yet fail fast on non-executable
+     CIRCT tools, which can surface as late per-case errors instead of one
+     setup diagnostic.
+5. Next long-term features:
+   - migrate strict quality policies into lane-class defaults for run/report
+     flows and campaign templates.
+   - add runner-level tool executability preflight checks across formal suite
+     harnesses to eliminate silent toolchain drift.
+
 ### Formal Closure Snapshot Update (February 12, 2026, BMC semantic-family trend budgets)
 
 1. Added staged BMC semantic-family trend-budget policy profiles in
