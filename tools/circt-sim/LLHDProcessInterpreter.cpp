@@ -4227,6 +4227,15 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     LLVM_DEBUG(llvm::dbgs()
                << "  Overriding innermost frame for sequencer get retry\n");
     state.sequencerGetRetryCallOp = nullptr;
+  } else if (state.sequencerGetRetryCallOp && state.callStack.empty()) {
+    // At process top level (no function call stack): override currentOp
+    // directly so the call_indirect is re-executed on the next activation.
+    state.currentOp = state.sequencerGetRetryCallOp->getIterator();
+    state.currentBlock = state.sequencerGetRetryCallOp->getBlock();
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Overriding process-level currentOp for sequencer "
+               << "get/finish_item retry\n");
+    state.sequencerGetRetryCallOp = nullptr;
   }
 
   // Handle call stack frames: if we have saved call frames from a wait inside
@@ -7276,26 +7285,48 @@ arith_dispatch:
       return success();
     }
 
-    // finish_item: Push item to sequencer FIFO and return immediately.
+    // finish_item: Push item to sequencer FIFO and block until the driver
+    // calls item_done for this item. This implements the standard UVM
+    // handshake where finish_item blocks until the driver completes.
     // Args: (self, item, priority).
     if (calleeName.contains("::finish_item") && args.size() >= 2) {
       uint64_t itemAddr = args[1].isX() ? 0 : args[1].getUInt64();
       if (itemAddr != 0) {
-        auto sqrIt = itemToSequencer.find(itemAddr);
-        uint64_t sqrAddr = 0;
-        if (sqrIt != itemToSequencer.end()) {
-          sqrAddr = sqrIt->second;
-        } else {
-          // Fallback: use a global default FIFO (key=0).
-          sqrAddr = 0;
+        // Check if item_done was already received (re-poll after wake)
+        if (itemDoneReceived.count(itemAddr)) {
+          itemDoneReceived.erase(itemAddr);
+          finishItemWaiters.erase(itemAddr);
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  call_indirect: finish_item completed: item 0x"
+                     << llvm::format_hex(itemAddr, 16) << " got item_done\n");
+          return success();
         }
-        sequencerItemFifo[sqrAddr].push_back(itemAddr);
+
+        // First call (not a re-poll): push item to FIFO
+        if (!finishItemWaiters.count(itemAddr)) {
+          auto sqrIt = itemToSequencer.find(itemAddr);
+          uint64_t sqrAddr =
+              sqrIt != itemToSequencer.end() ? sqrIt->second : 0;
+          sequencerItemFifo[sqrAddr].push_back(itemAddr);
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  call_indirect: finish_item intercepted: item 0x"
+                     << llvm::format_hex(itemAddr, 16) << " pushed to "
+                     << "sequencer FIFO 0x"
+                     << llvm::format_hex(sqrAddr, 16) << " (depth "
+                     << sequencerItemFifo[sqrAddr].size() << ")\n");
+        }
+
+        // Record waiter and suspend. The item_done interceptor will
+        // directly resume this process when the driver completes.
+        finishItemWaiters[itemAddr] = procId;
+        auto &pState = processStates[procId];
+        pState.waiting = true;
+        pState.sequencerGetRetryCallOp = callIndirectOp.getOperation();
         LLVM_DEBUG(llvm::dbgs()
-                   << "  call_indirect: finish_item intercepted: item 0x"
-                   << llvm::format_hex(itemAddr, 16) << " pushed to "
-                   << "sequencer FIFO 0x"
-                   << llvm::format_hex(sqrAddr, 16) << " (depth "
-                   << sequencerItemFifo[sqrAddr].size() << ")\n");
+                   << "  call_indirect: finish_item blocking proc=" << procId
+                   << " on item 0x" << llvm::format_hex(itemAddr, 16)
+                   << "\n");
+        return success();
       }
       return success();
     }
@@ -7346,6 +7377,8 @@ arith_dispatch:
         }
       }
       if (found && itemAddr != 0) {
+        // Track which item was dequeued by this port (for item_done)
+        lastDequeuedItem[portAddr] = itemAddr;
         // Write item address to output ref (args[1]).
         // The output ref is an llhd.ref or alloca-backed ptr.
         uint64_t refAddr = args[1].isX() ? 0 : args[1].getUInt64();
@@ -7393,13 +7426,41 @@ arith_dispatch:
       return success();
     }
 
-    // seq_item_pull_port/imp::item_done: No-op in our native implementation.
-    // The item was already dequeued in get/get_next_item. The UVM
-    // implementation would signal back to the sequencer, but since we
-    // handle the FIFO natively, we just return immediately.
+    // seq_item_pull_port/imp::item_done: Signal completion of the current
+    // transaction item. This unblocks the sequence's finish_item wait.
     if ((calleeName.contains("seq_item_pull_port") ||
          calleeName.contains("seq_item_pull_imp")) &&
         calleeName.ends_with("::item_done")) {
+      uint64_t portAddr =
+          args.size() > 0 && !args[0].isX() ? args[0].getUInt64() : 0;
+      // Find which item was last dequeued by this port
+      auto lastIt = lastDequeuedItem.find(portAddr);
+      if (lastIt != lastDequeuedItem.end()) {
+        uint64_t itemAddr = lastIt->second;
+        itemDoneReceived.insert(itemAddr);
+        lastDequeuedItem.erase(lastIt);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  call_indirect: item_done: item 0x"
+                   << llvm::format_hex(itemAddr, 16)
+                   << " marked done (port 0x"
+                   << llvm::format_hex(portAddr, 16) << ")\n");
+
+        // Directly resume the process blocked in finish_item for this item.
+        auto waiterIt = finishItemWaiters.find(itemAddr);
+        if (waiterIt != finishItemWaiters.end()) {
+          ProcessId waiterProcId = waiterIt->second;
+          auto waiterStateIt = processStates.find(waiterProcId);
+          if (waiterStateIt != processStates.end() &&
+              waiterStateIt->second.waiting) {
+            waiterStateIt->second.waiting = false;
+            scheduler.scheduleProcess(waiterProcId,
+                                      SchedulingRegion::Active);
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  item_done: resuming finish_item waiter proc="
+                       << waiterProcId << "\n");
+          }
+        }
+      }
       return success();
     }
 

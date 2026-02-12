@@ -1291,6 +1291,19 @@ private:
   /// sequencer FIFO to push the item into.
   llvm::DenseMap<uint64_t, uint64_t> itemToSequencer;
 
+  /// Maps item address to the process waiting for item_done.
+  /// Set during finish_item() when the sequence suspends waiting for the
+  /// driver to complete the transaction via item_done().
+  llvm::DenseMap<uint64_t, ProcessId> finishItemWaiters;
+
+  /// Set of item addresses that have received item_done from the driver.
+  /// Checked by finish_item poll to determine when to resume.
+  llvm::DenseSet<uint64_t> itemDoneReceived;
+
+  /// Maps port address to the last item dequeued by get/get_next_item.
+  /// Used by item_done to know which item the driver is completing.
+  llvm::DenseMap<uint64_t, uint64_t> lastDequeuedItem;
+
   /// Tracks valid associative array base addresses returned by __moore_assoc_create.
   /// Used to distinguish properly-initialized arrays from uninitialized class members.
   llvm::DenseSet<uint64_t> validAssocArrayAddresses;
