@@ -53,6 +53,41 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, native lane-class policy auto-binding)
+
+1. Extended lane-manifest policy-class auto-binding with native quality classes:
+   - `native-quality-smoke`
+   - `native-quality-nightly` (and `native-quality`)
+   - `native-quality-strict`
+   - `native-quality-debt-nightly`
+   - `native-quality-debt-strict`
+2. Native class contract:
+   - native classes map to `native-strict-formal-quality-*` policy modes so
+     native strict-contract profile gates are preserved for those lanes.
+3. Conflict handling:
+   - quality-family mixes still resolve to stricter mode within family.
+   - mixed native-quality and non-native quality classes are now rejected as
+     manifest conflicts (explicit operator decision required).
+4. Validation highlights:
+   - focused native lane-class auto slice: PASS (4/4).
+   - full mutation suite:
+     `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+     PASS (471/471 selected).
+   - external cadence:
+     PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+     BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile
+     `ahb/apb/axi4/i2s/i3c/jtag`
+     FAIL (known): `opentitan` LEC (`missing_results=1`), AVIP compile
+     `axi4Lite_avip`, `spi_avip`, `uart_avip`.
+5. Remaining limitations:
+   - lane metadata rollout is still incomplete; many manifests still rely on
+     explicit policy-mode wiring.
+   - known OpenTitan/AVIP failures continue to limit strict rollout.
+6. Next long-term features:
+   - add native/non-native lane-class defaults directly in generated
+     `lanes.tsv` templates for first-class adoption.
+   - introduce per-class cadence budgets for BMC semantic debt (nightly/strict).
+
 ### Formal Closure Snapshot Update (February 12, 2026, lane-class auto policy mode binding)
 
 1. Added matrix lane-manifest policy-class auto-binding in `circt-mut report`:

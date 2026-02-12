@@ -823,7 +823,7 @@ Core input formats:
   `lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<...>`.
   Optional tail column `report_policy_lane_class` can auto-select report
   policy mode when no explicit mode is provided (for example
-  `quality-smoke|quality-nightly|quality-strict`).
+  `quality-smoke|quality-nightly|quality-strict|native-quality-nightly`).
   Generated-mutation lanes can leave `mutations_yosys` as `-` to inherit
   matrix `--default-mutations-yosys`.
   with optional tail override `global_propagate_timeout_seconds` to set

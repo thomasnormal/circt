@@ -8579,6 +8579,14 @@ static bool isLaneClassQualityMode(StringRef mode) {
          mode == "strict-formal-quality-strict";
 }
 
+static bool isLaneClassNativeQualityMode(StringRef mode) {
+  return mode == "native-strict-formal-quality-smoke" ||
+         mode == "native-strict-formal-quality-nightly" ||
+         mode == "native-strict-formal-quality-debt-nightly" ||
+         mode == "native-strict-formal-quality-debt-strict" ||
+         mode == "native-strict-formal-quality-strict";
+}
+
 static unsigned laneClassQualityModeRank(StringRef mode) {
   if (mode == "strict-formal-quality-smoke")
     return 0;
@@ -8587,6 +8595,14 @@ static unsigned laneClassQualityModeRank(StringRef mode) {
     return 1;
   if (mode == "strict-formal-quality-debt-strict" ||
       mode == "strict-formal-quality-strict")
+    return 2;
+  if (mode == "native-strict-formal-quality-smoke")
+    return 0;
+  if (mode == "native-strict-formal-quality-nightly" ||
+      mode == "native-strict-formal-quality-debt-nightly")
+    return 1;
+  if (mode == "native-strict-formal-quality-debt-strict" ||
+      mode == "native-strict-formal-quality-strict")
     return 2;
   return 0;
 }
@@ -8608,6 +8624,16 @@ static std::optional<std::string> mapLanePolicyClassToMode(StringRef laneClass) 
     return std::string("strict-formal-quality-debt-nightly");
   if (normalized == "quality-debt-strict")
     return std::string("strict-formal-quality-debt-strict");
+  if (normalized == "native-quality" || normalized == "native-quality-nightly")
+    return std::string("native-strict-formal-quality-nightly");
+  if (normalized == "native-quality-smoke")
+    return std::string("native-strict-formal-quality-smoke");
+  if (normalized == "native-quality-strict")
+    return std::string("native-strict-formal-quality-strict");
+  if (normalized == "native-quality-debt-nightly")
+    return std::string("native-strict-formal-quality-debt-nightly");
+  if (normalized == "native-quality-debt-strict")
+    return std::string("native-strict-formal-quality-debt-strict");
   return std::nullopt;
 }
 
@@ -8646,6 +8672,13 @@ inferMatrixPolicyModeFromLaneManifest(StringRef lanesTSVPath,
       continue;
     if (isLaneClassQualityMode(*selectedMode) &&
         isLaneClassQualityMode(*mappedMode)) {
+      if (laneClassQualityModeRank(*mappedMode) >
+          laneClassQualityModeRank(*selectedMode))
+        selectedMode = *mappedMode;
+      continue;
+    }
+    if (isLaneClassNativeQualityMode(*selectedMode) &&
+        isLaneClassNativeQualityMode(*mappedMode)) {
       if (laneClassQualityModeRank(*mappedMode) >
           laneClassQualityModeRank(*selectedMode))
         selectedMode = *mappedMode;
