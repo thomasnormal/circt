@@ -60,6 +60,34 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, run-path quality parity)
+
+1. Closed `run-with-report` test gap for quality nightly debt families by
+   adding native run-path regressions:
+   - `native-strict-formal-quality-nightly`
+   - `native-strict-formal-quality-debt-nightly`
+2. Policy guarantees now asserted in both report and run paths:
+   - timeout debt-v3 nightly budget
+   - LEC semantic diagnostic-family guard
+   - BMC semantic-family guard
+   - BMC/LEC core minimum-volume guards
+3. Validation highlights:
+   - focused lit quality run/report slice: PASS (`6/6`, serial)
+   - focused external `sv-tests` formal smoke:
+     - BMC (uvm filtered case): PASS
+     - LEC (uvm filtered case): PASS
+4. Remaining limitations:
+   - strict-side run-path quality family coverage is still less exhaustive
+     than native-side coverage.
+   - large-suite cadence checks (`verilator-verification`, `yosys/tests`,
+     `opentitan`, AVIP full slices) remain periodic/manual instead of fully
+     policy-driven.
+5. Next long-term features:
+   - add strict-side run-path quality family regressions mirroring native
+     nightly/debt variants.
+   - promote periodic external-suite cadence checks into policy-gated
+     scheduled lanes (nightly + strict).
+
 ### Formal Closure Snapshot Update (February 12, 2026, init lane-class bootstrap)
 
 1. Extended `circt-mut init` bootstrap policy wiring with lane-class defaults:

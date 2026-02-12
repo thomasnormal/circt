@@ -1,5 +1,60 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1168 - February 12, 2026
+
+### Mutation Governance: Run-Path Quality Mode Parity (Nightly Debt Family)
+
+1. Added missing `circt-mut run --report-policy-mode` regression coverage for:
+   - `native-strict-formal-quality-nightly`
+   - `native-strict-formal-quality-debt-nightly`
+2. New tests:
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-nightly.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-debt-nightly.test`
+3. Contracts asserted:
+   - mode expansion includes timeout debt-v3 nightly budget, LEC semantic
+     family guard, BMC semantic family guard, BMC/LEC core minimum-volume
+     guards, and native strict mode contract.
+4. Validation:
+   - focused run/report quality slice: PASS (`6/6`, serial).
+   - focused external formal smoke:
+     - `sv-tests` BMC filtered case: PASS (`total=1 pass=1`)
+     - `sv-tests` LEC filtered case: PASS (`total=1 pass=1`)
+
+## Iteration 1167 - February 12, 2026
+
+### Fix: randomize() no longer corrupts object metadata (vtable, class_id)
+
+**Root Cause**: `__moore_randomize_basic` filled the entire class object memory
+with random bytes, including non-rand metadata (class_id at bytes 0-3, vtable
+pointer at bytes 4-11, string pointers, UVM base class fields like m_sequencer,
+m_parent, m_name). This corrupted the vtable pointer so subsequent virtual method
+calls dispatched to the base class instead of the derived class.
+
+**Impact**: Factory-created UVM sequence objects (via `type_id::create()`) had
+their vtable corrupted by `randomize()` called from the constructor. When
+`uvm_sequence_base::start()` called `body()` via vtable dispatch, it resolved
+to the base class `uvm_sequence_base::body()` which prints "Body definition
+undefined" instead of the derived class body. This blocked all sub-sequence
+execution in the APB AVIP dual-top simulation.
+
+**Fix**: Made `__moore_randomize_basic` a no-op that only advances the per-object
+RNG for determinism. Individual rand fields are set by subsequent
+`__moore_randomize_with_range` / `__moore_randomize_with_dist` calls that follow
+the basic call. This preserves all non-rand object metadata while still correctly
+randomizing the declared `rand` fields.
+
+**Result**: APB AVIP dual-top simulation now has working BFM drivers — sequences
+dispatch to correct derived body(), start_item/finish_item fire correctly, BFM
+transitions through IDLE→SETUP APB protocol states, simulation reaches 415ns+.
+
+### Files Changed
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: `__moore_randomize_basic` no-op fix,
+  removed 21 temporary DIAG-* diagnostic logging statements
+- `test/Tools/circt-sim/randomize-basic.mlir`: Updated test to verify memory
+  preservation (was: verify random fill; now: verify no-op preserves values)
+- `test/Tools/circt-sim/randomize-preserves-vtable.sv`: New test verifying vtable
+  survives randomize()
+
 ## Iteration 1166 - February 12, 2026
 
 ### Mutation Governance: `circt-mut init` Lane-Class Policy Bootstrap
