@@ -62,6 +62,26 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, OpenTitan `missing_results` typed reason telemetry)
+
+1. Upgraded `run_formal_all.sh` OpenTitan missing-results fallback rows from untyped fail rows to typed infra error rows:
+   - `ERROR ... CIRCT_LEC_ERROR <runner_reason>`
+2. Added explicit reason classification for missing-results fallback:
+   - `runner_command_missing_out`, `runner_command_bad_workdir`,
+     `runner_command_not_found`, `runner_command_permission_denied`,
+     `runner_command_exception`, `runner_command_failures_reported`,
+     `runner_command_no_log`, `runner_command_no_results`.
+3. Missing-results fallback now reuses `summarize_lec_case_file`, exporting structured LEC counters (diag + error-bucket telemetry) in lane summary rows.
+4. Added/updated regressions:
+   - `test/Tools/run-formal-all-opentitan-lec-fallback-diag.test`
+   - `test/Tools/run-formal-all-opentitan-lec-missing-results-reason.test`
+5. Remaining limitations:
+   - `CIRCT_LEC_ERROR` reason-family counters are currently represented via error-bucket/diag counters rather than dedicated `lec_circt_lec_error_reason_*` keys.
+   - Verilator wrapper still lacks dedicated wrapper-level `LEC_NOT_RUN` reason taxonomy for lane no-run classes.
+6. Next long-term features:
+   - add first-class `lec_circt_lec_error_reason_*` counters + strict-gate drift checks.
+   - propagate wrapper-level no-run reason contracts to remaining lanes, then harden strict profiles around `lec_not_run_reason_missing_cases=0` across all enabled LEC suites.
+
 ### Formal Closure Snapshot Update (February 12, 2026, OpenTitan no-impl `LEC_NOT_RUN` reason parity)
 
 1. Updated `run_formal_all.sh` OpenTitan no-impl lane handling to emit explicit reasoned case rows:

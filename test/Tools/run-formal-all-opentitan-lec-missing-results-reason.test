@@ -1,0 +1,14 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
+// RUN: printf '#!/usr/bin/env python3\nimport sys\nprint("missing_OUT")\nsys.exit(6)\n' > %t/utils/run_opentitan_circt_lec.py
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_opentitan_circt_lec.py %t/fake-circt-verilog-opentitan
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/LEC$' --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --opentitan-lec-impl-filter ".*"
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=CASE < %t/out/opentitan-lec-results.txt
+//
+// SUMMARY: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1
+// SUMMARY: lec_diag_circt_lec_error_cases=1
+// SUMMARY: lec_error_bucket_infra_runner_command_cases=1
+// CASE: ERROR{{[[:space:]]+}}aes_sbox{{[[:space:]]+}}missing_results{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_LEC_ERROR{{[[:space:]]+}}runner_command_missing_out
