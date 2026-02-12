@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1157 - February 12, 2026
+
+### Mutation Governance: Quality Policy Lane-Class Aliases
+
+1. Added quality lane-class alias policy modes in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `native-strict-formal-quality-smoke`
+   - `strict-formal-quality-smoke`
+   - `native-strict-formal-quality-nightly`
+   - `strict-formal-quality-nightly`
+2. Alias contract:
+   - smoke/nightly aliases map to cadence-aware quality debt envelope:
+     `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly`
+     plus `formal-regression-matrix-external-formal-semantic-diag-family-guard`
+     and core BMC/LEC minimum-total guards.
+3. Updated mode surfaces/diagnostics:
+   - help output for `init/run/report`
+   - invalid mode diagnostics:
+     - `test/Tools/circt-mut-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-init-report-policy-invalid.test`
+     - `test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test`
+4. Added alias regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-quality-smoke-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-quality-nightly-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-smoke-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-nightly-pass.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused quality-alias slice: PASS (13/13)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (463/463 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-quality-aliases ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+    BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL (known/ongoing): `opentitan` LEC (`missing_results=1`), AVIP compile
+    `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1156 - February 12, 2026
 
 ### circt-sim: Die() Absorption During UVM Phase Execution

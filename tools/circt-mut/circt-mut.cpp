@@ -142,6 +142,10 @@ static void printInitHelp(raw_ostream &os) {
   os << "                            strict-formal-timeout-strict|\n";
   os << "                            native-strict-formal-quality-debt|\n";
   os << "                            strict-formal-quality-debt|\n";
+  os << "                            native-strict-formal-quality-smoke|\n";
+  os << "                            strict-formal-quality-smoke|\n";
+  os << "                            native-strict-formal-quality-nightly|\n";
+  os << "                            strict-formal-quality-nightly|\n";
   os << "                            native-strict-formal-quality-debt-nightly|\n";
   os << "                            strict-formal-quality-debt-nightly|\n";
   os << "                            native-strict-formal-quality-debt-strict|\n";
@@ -224,6 +228,10 @@ static void printRunHelp(raw_ostream &os) {
   os << "                           strict-formal-timeout-strict|\n";
   os << "                           native-strict-formal-quality-debt|\n";
   os << "                           strict-formal-quality-debt|\n";
+  os << "                           native-strict-formal-quality-smoke|\n";
+  os << "                           strict-formal-quality-smoke|\n";
+  os << "                           native-strict-formal-quality-nightly|\n";
+  os << "                           strict-formal-quality-nightly|\n";
   os << "                           native-strict-formal-quality-debt-nightly|\n";
   os << "                           strict-formal-quality-debt-nightly|\n";
   os << "                           native-strict-formal-quality-debt-strict|\n";
@@ -290,6 +298,10 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           strict-formal-timeout-strict|\n";
   os << "                           native-strict-formal-quality-debt|\n";
   os << "                           strict-formal-quality-debt|\n";
+  os << "                           native-strict-formal-quality-smoke|\n";
+  os << "                           strict-formal-quality-smoke|\n";
+  os << "                           native-strict-formal-quality-nightly|\n";
+  os << "                           strict-formal-quality-nightly|\n";
   os << "                           native-strict-formal-quality-debt-nightly|\n";
   os << "                           strict-formal-quality-debt-nightly|\n";
   os << "                           native-strict-formal-quality-debt-strict|\n";
@@ -5917,7 +5929,10 @@ static constexpr StringLiteral kMatrixPolicyModeList =
     "strict-formal-timeout-debt-strict|"
     "native-strict-formal-timeout-strict|"
     "strict-formal-timeout-strict|native-strict-formal-quality-debt|"
-    "strict-formal-quality-debt|native-strict-formal-quality-debt-nightly|"
+    "strict-formal-quality-debt|native-strict-formal-quality-smoke|"
+    "strict-formal-quality-smoke|native-strict-formal-quality-nightly|"
+    "strict-formal-quality-nightly|"
+    "native-strict-formal-quality-debt-nightly|"
     "strict-formal-quality-debt-nightly|"
     "native-strict-formal-quality-debt-strict|"
     "strict-formal-quality-debt-strict|"
@@ -8534,6 +8549,10 @@ static bool isMatrixPolicyMode(StringRef mode) {
          mode == "strict-formal-timeout-strict" ||
          mode == "native-strict-formal-quality-debt" ||
          mode == "strict-formal-quality-debt" ||
+         mode == "native-strict-formal-quality-smoke" ||
+         mode == "strict-formal-quality-smoke" ||
+         mode == "native-strict-formal-quality-nightly" ||
+         mode == "strict-formal-quality-nightly" ||
          mode == "native-strict-formal-quality-debt-nightly" ||
          mode == "strict-formal-quality-debt-nightly" ||
          mode == "native-strict-formal-quality-debt-strict" ||
@@ -8565,6 +8584,10 @@ static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
          mode == "strict-formal-timeout-strict" ||
          mode == "native-strict-formal-quality-debt" ||
          mode == "strict-formal-quality-debt" ||
+         mode == "native-strict-formal-quality-smoke" ||
+         mode == "strict-formal-quality-smoke" ||
+         mode == "native-strict-formal-quality-nightly" ||
+         mode == "strict-formal-quality-nightly" ||
          mode == "native-strict-formal-quality-debt-nightly" ||
          mode == "strict-formal-quality-debt-nightly" ||
          mode == "native-strict-formal-quality-debt-strict" ||
@@ -8858,7 +8881,9 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
         "formal-regression-matrix-external-formal-lec-core-min-total-v1";
-  } else if (mode == "native-strict-formal-quality-debt-nightly") {
+  } else if (mode == "native-strict-formal-quality-smoke" ||
+             mode == "native-strict-formal-quality-nightly" ||
+             mode == "native-strict-formal-quality-debt-nightly") {
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
                         : "formal-regression-matrix-composite-native-strict";
@@ -8872,7 +8897,9 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-lec-core-min-total-v1";
     modeContractProfile =
         "formal-regression-matrix-policy-mode-native-strict-contract";
-  } else if (mode == "strict-formal-quality-debt-nightly") {
+  } else if (mode == "strict-formal-quality-smoke" ||
+             mode == "strict-formal-quality-nightly" ||
+             mode == "strict-formal-quality-debt-nightly") {
     policyProfile = stopOnFail
                         ? "formal-regression-matrix-composite-stop-on-fail-strict"
                         : "formal-regression-matrix-composite-strict";
