@@ -62,6 +62,36 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, structured strict diagnostics + counter-key rule IDs)
+
+1. Refactored strict-gate diagnostics in `utils/run_formal_all.sh` to use a structured collector (`GateErrorCollector`) while preserving existing append-style emission paths.
+2. Added explicit emit-site rule-ID assignment for high-volume counter families:
+   - BMC semantic bucket counter drift
+   - LEC timeout-class counter drift
+   - LEC custom counter / counter-prefix drift (`--fail-on-new-lec-counter*`)
+   - OpenTitan `LEC_STRICT` X-prop counter and prefix drift.
+3. Added deterministic token normalization for dynamic rule-ID suffixes (`normalize_rule_id_token`) to keep IDs schema-safe and stable.
+4. Added focused regression:
+   - `test/Tools/run-formal-all-strict-gate-report-json-lec-counter-rule-id.test`
+   - validates key-specific rule ID emission for `lec_diag_xprop_only_cases` and `legacy_rule_id_count=0`.
+5. Validation snapshot:
+   - `bash -n utils/run_formal_all.sh`: PASS
+   - focused strict lit slice including new rule-id test: PASS (10/10)
+   - external filtered cadence:
+     - `sv-tests/BMC` (`16.9--sequence-goto-repetition`): `error=1`, `drop_remark_cases=0`
+     - `verilator-verification/BMC` (`assert_fell`): `error=1`, `drop_remark_cases=0`
+     - `yosys/tests/sva/BMC` (`basic02`): `fail=2`, `drop_remark_cases=0`
+     - `opentitan/LEC` (`canright`): PASS (`OK`, `drop_remark_cases=0`)
+     - `mbit/apb_avip` compile check: PASS (exit `0`).
+6. Remaining limitations:
+   - strict rule-ID assignment is still mixed-mode (some emit-site explicit, many legacy text-classified).
+   - dynamic counter-key rule IDs increase cardinality and still need a compatibility policy for downstream CI contracts.
+   - strict artifacts still lack first-class mutation provenance lineage and cross-lane causality links.
+7. Next long-term features (BMC/LEC/mutation focus):
+   - complete emit-site rule-ID assignment for all strict checks and retire text-classifier fallback to compatibility-only mode.
+   - add schema compatibility tooling for dynamic rule families (allowlists, deprecation windows, migration checks).
+   - integrate mutation generator provenance (config hash, seed lineage, equivalence deltas) into strict artifacts/gates.
+
 ### Formal Closure Snapshot Update (February 12, 2026, strict rule-ID coverage expansion)
 
 1. Expanded strict-gate report classification in `utils/run_formal_all.sh` to assign explicit rule IDs across all currently emitted strict diagnostics:
