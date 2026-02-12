@@ -62,6 +62,27 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, `CIRCT_LEC_ERROR` case-identity strict governance)
+
+1. Added first-class `CIRCT_LEC_ERROR` case-identity exports in `run_formal_all.sh` baseline telemetry:
+   - `lec_circt_lec_error_case_ids`
+   - `lec_circt_lec_error_case_reasons`
+2. Added strict-gate controls for identity drift:
+   - `--fail-on-new-lec-circt-lec-error-case-ids`
+   - `--fail-on-new-lec-circt-lec-error-case-reasons`
+3. Added focused regressions and help coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-case-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-case-ids-defaults.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-case-reasons.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-case-reasons-defaults.test`
+   - `test/Tools/run-formal-all-help.test`
+4. Remaining limitations:
+   - `lec_runner_command_case_ids` / `lec_runner_command_case_reasons` still aggregate from selected error families and do not yet fully absorb `CIRCT_LEC_ERROR` family identities.
+   - wrapper-level `LEC_NOT_RUN` reason taxonomy propagation is still incomplete for remaining lane wrappers.
+5. Next long-term features:
+   - unify runner-command identity rollups across all typed LEC error families (`CIRCT_OPT_ERROR`, `CIRCT_VERILOG_ERROR`, `CIRCT_LEC_ERROR`) and tighten strict budgets around those aggregate identities.
+   - continue wrapper-level `LEC_NOT_RUN` reason-contract rollout and keep `missing` reason budgets pinned at zero in strict profiles.
+
 ### Formal Closure Snapshot Update (February 12, 2026, first-class `CIRCT_LEC_ERROR` reason-key governance)
 
 1. Added first-class reason-family counters for LEC typed infra errors in `run_formal_all.sh`:
