@@ -80,7 +80,7 @@ to commercial simulators like Cadence Xcelium.
 | `$cast` / RTTI | WORKS | Parent table, type hierarchy checking |
 | VTable dispatch | WORKS | Inherited methods, virtual calls across class hierarchy; runtime vtable override in all 3 call_indirect paths (X-fallback, direct, static) |
 | `process::self()` | WORKS | Intercepted for both old and new compilations |
-| Sequencer interface | WORKS | `start_item`/`finish_item`/`seq_item_pull_port::get` native interceptors; per-sequencer FIFO with call stack frame override for blocking get retry |
+| Sequencer interface | WORKS | `start_item`/`finish_item`/`seq_item_pull_port::get`/`item_done` native interceptors; `finish_item` blocks until `item_done`; per-sequencer FIFO with direct-wake handshake |
 | Analysis ports | WORKS | `connect()`/`write()` interceptors; chain-following BFS dispatch via vtable slot 11 |
 | **Data Structures** | | |
 | Associative arrays | WORKS | Auto-create on null, integer and string keys; deep-copy on whole-assignment (`aa1 = aa2`) via `__moore_assoc_copy_into` |
@@ -96,7 +96,6 @@ to commercial simulators like Cadence Xcelium.
 | Function phase IMP sequencing | WORKS | Intercepts `process_phase` to block function phase IMPs until predecessor completes; `finish_phase` marks IMP done; currentOp-reset pattern for correct re-execution |
 | Phase hopper objections | WORKS | `get_objection`/`raise`/`drop`/`wait_for` interceptors for `uvm_phase_hopper::` variants; `wasEverRaised` tracking prevents premature phase completion |
 | Sub-sequence body dispatch | MISSING | Factory-created sub-sequences (`create_by_type`) get base class `uvm_sequence_base::body` instead of derived body; causes "Body definition undefined" warnings |
-| seq_item_port connection | MISSING | Driver proxy `seq_item_port` not connected to sequencer during `connect_phase`; prevents driver from obtaining sequences |
 | Shutdown cleanup | WORKS | `_exit(0)` skips expensive destructors for large designs |
 | Signal driving (`llhd.drv`) | WORKS | Blocking assignments via epsilon delay |
 | Signal probing (`llhd.prb`) | WORKS | Read signal values |
