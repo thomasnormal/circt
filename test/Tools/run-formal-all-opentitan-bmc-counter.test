@@ -1,0 +1,16 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
+// RUN: printf '#!/usr/bin/env python3\nimport os,sys\nout = os.environ.get("OUT", "")\nif not out:\n  sys.exit(9)\ncount = int(os.environ.get("OT_BMC_UNKNOWN_CASES", "1"))\nmode = os.environ.get("BMC_MODE_LABEL", "BMC")\nos.makedirs(os.path.dirname(out), exist_ok=True)\nwith open(out, "w", encoding="utf-8") as f:\n  for i in range(count):\n    name = f"aes_sbox_unknown_{i}"\n    f.write(f"UNKNOWN\\t{name}\\tmode/{mode}/{name}\\topentitan\\t{mode}\\tUNKNOWN\\n")\nprint(f"Running BMC on {count} AES S-Box implementation(s)...")\nprint("BMC completed with unknown results.")\nsys.exit(0)\n' > %t/utils/run_opentitan_circt_bmc.py
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_opentitan_circt_bmc.py %t/fake-circt-verilog-opentitan
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-base --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-bmc --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/BMC$' --baseline-file %t/formal-baselines.tsv --update-baselines --opentitan-bmc-impl-filter '.*'
+// RUN: FileCheck %s --check-prefix=BASE < %t/formal-baselines.tsv
+// RUN: not sh -c 'cd %t && OT_BMC_UNKNOWN_CASES=2 utils/run_formal_all.sh --out-dir %t/out-new-key --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-bmc --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex "^opentitan/BMC$" --baseline-file %t/formal-baselines.tsv --fail-on-new-bmc-counter bmc_unknown_cases --opentitan-bmc-impl-filter ".*"' 2>&1 | FileCheck %s --check-prefix=KEY
+// RUN: not sh -c 'cd %t && OT_BMC_UNKNOWN_CASES=2 utils/run_formal_all.sh --out-dir %t/out-new-prefix --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-bmc --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex "^opentitan/BMC$" --baseline-file %t/formal-baselines.tsv --fail-on-new-bmc-counter-prefix bmc_unknown_ --opentitan-bmc-impl-filter ".*"' 2>&1 | FileCheck %s --check-prefix=PREFIX
+//
+// BASE: opentitan{{[[:space:]]+}}BMC{{.*}}bmc_unknown_cases=1
+// KEY: strict gate failures:
+// KEY: opentitan BMC: bmc_unknown_cases increased (1 -> 2, window=1)
+// PREFIX: strict gate failures:
+// PREFIX: opentitan BMC: bmc_unknown_cases increased (1 -> 2, window=1, prefix=bmc_unknown_)

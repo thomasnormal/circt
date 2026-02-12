@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1209 - February 12, 2026
+
+### Formal Strict-Gate Platforming: Generic BMC Counter Regressions
+
+1. Extended `utils/run_formal_all.sh` strict-gate surface with generic BMC counter gates:
+   - `--fail-on-new-bmc-counter KEY`
+   - `--fail-on-new-bmc-counter-prefix PREFIX`
+2. Added full lifecycle wiring for BMC counter gates:
+   - CLI parsing + validation (`[a-z][a-z0-9_]*`)
+   - de-duplication + CSV env export
+   - strict-gate activation predicates
+   - strict-gate Python ingestion and regression checks.
+3. Implemented `BMC*` lane counter regression checks parallel to existing LEC counter checks:
+   - applies to all `mode.startswith("BMC")` lanes (including OpenTitan `BMC_MODE_DIFF`).
+   - emits granular rule IDs:
+     - `strict_gate.bmc.counter.key.<key>.regression`
+     - `strict_gate.bmc.counter.prefix.<prefix>.key.<key>.regression`
+4. Added regression coverage for both key and prefix forms.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- added regression test:
+  - `test/Tools/run-formal-all-opentitan-bmc-counter.test`
+- focused lit slice:
+  - `run-formal-all-opentitan-bmc-counter.test`
+  - `run-formal-all-opentitan-bmc-mode-diff.test`
+  - `run-formal-all-strict-gate-bmc-mode-diff-counters.test`
+  - `run-formal-all-opentitan-mode-diff-lane-deps.test`
+  - PASS (4/4)
+
+### Remaining Limitations
+
+- BMC counter gates are summary-key based; case-level reason-key regression controls are still specialized (no generic BMC reason-key gate yet).
+
 ## Iteration 1208 - February 12, 2026
 
 ### Formal Lane Contract Hardening: OpenTitan Mode-Diff Dependency Enforcement
