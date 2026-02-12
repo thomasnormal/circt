@@ -62,6 +62,33 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, first-class `LEC_NOT_RUN` reason-key strict governance)
+
+1. Added a dedicated no-run reason-key strict gate in `utils/run_formal_all.sh`:
+   - `--fail-on-new-lec-not-run-reason-keys`
+2. Wired complete strict flow for that gate:
+   - option parsing + env forwarding
+   - strict-gate Python evaluator support
+   - default-on under `--strict-gate`
+3. Added/updated coverage:
+   - updated `test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys.test`
+   - new `test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys-defaults.test`
+   - updated `test/Tools/run-formal-all-help.test`
+4. External suite smoke status (filtered lanes):
+   - `sv-tests/LEC`: PASS (1/1)
+   - `verilator-verification/LEC`: PASS (1/1)
+   - `yosys/tests/sva/LEC`: PASS (1/1)
+   - `opentitan/LEC` no-impl filter path: PASS (skip reason telemetry intact)
+   - `avip/apb_avip/compile`: PASS (1/1)
+5. Remaining limitations:
+   - no structured (versioned) provenance schema yet for no-run/runner-command root-cause records; strict policy still consumes summarized counters.
+   - `--yosys` path contract is still easy to misconfigure (`.../yosys/tests/sva` works; broader roots can silently produce zero-case runs).
+6. Next long-term features:
+   - introduce a versioned formal-provenance artifact (per case) and migrate strict-gate + mutation policy checks to it.
+   - harden lane path contracts with explicit path-shape validation (fail fast on empty discovery for enabled filtered lanes).
+   - keep tightening strict defaults around no-run/runner-command taxonomies so unknown/missing reason budgets remain pinned at zero.
+
+
 ### Formal Closure Snapshot Update (February 12, 2026, `LEC_NOT_RUN` case-identity strict governance)
 
 1. Added first-class `LEC_NOT_RUN` identity exports in `utils/run_formal_all.sh` baseline telemetry:
