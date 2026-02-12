@@ -37,11 +37,14 @@
 // CHECK: strict-formal-timeout-debt-nightly
 // CHECK: native-strict-formal-timeout-debt-strict
 // CHECK: strict-formal-timeout-debt-strict
+// CHECK: native-strict-formal-quality|
+// CHECK: strict-formal-quality|
 // CHECK: native-strict-formal-quality-smoke
 // CHECK: strict-formal-quality-smoke
 // CHECK: native-strict-formal-quality-nightly
 // CHECK: strict-formal-quality-nightly
 // CHECK: native-strict-formal-quality-debt-nightly
+// CHECK: strict-formal-quality-debt-nightly
 // CHECK: strict-formal-quality-debt-strict
 // CHECK: --policy-stop-on-fail
 // CHECK: formal-regression-matrix-guard

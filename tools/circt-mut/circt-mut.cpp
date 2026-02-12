@@ -142,6 +142,8 @@ static void printInitHelp(raw_ostream &os) {
   os << "                            strict-formal-timeout-strict|\n";
   os << "                            native-strict-formal-quality-debt|\n";
   os << "                            strict-formal-quality-debt|\n";
+  os << "                            native-strict-formal-quality|\n";
+  os << "                            strict-formal-quality|\n";
   os << "                            native-strict-formal-quality-smoke|\n";
   os << "                            strict-formal-quality-smoke|\n";
   os << "                            native-strict-formal-quality-nightly|\n";
@@ -228,6 +230,8 @@ static void printRunHelp(raw_ostream &os) {
   os << "                           strict-formal-timeout-strict|\n";
   os << "                           native-strict-formal-quality-debt|\n";
   os << "                           strict-formal-quality-debt|\n";
+  os << "                           native-strict-formal-quality|\n";
+  os << "                           strict-formal-quality|\n";
   os << "                           native-strict-formal-quality-smoke|\n";
   os << "                           strict-formal-quality-smoke|\n";
   os << "                           native-strict-formal-quality-nightly|\n";
@@ -298,6 +302,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           strict-formal-timeout-strict|\n";
   os << "                           native-strict-formal-quality-debt|\n";
   os << "                           strict-formal-quality-debt|\n";
+  os << "                           native-strict-formal-quality|\n";
+  os << "                           strict-formal-quality|\n";
   os << "                           native-strict-formal-quality-smoke|\n";
   os << "                           strict-formal-quality-smoke|\n";
   os << "                           native-strict-formal-quality-nightly|\n";
@@ -5929,7 +5935,8 @@ static constexpr StringLiteral kMatrixPolicyModeList =
     "strict-formal-timeout-debt-strict|"
     "native-strict-formal-timeout-strict|"
     "strict-formal-timeout-strict|native-strict-formal-quality-debt|"
-    "strict-formal-quality-debt|native-strict-formal-quality-smoke|"
+    "strict-formal-quality-debt|native-strict-formal-quality|"
+    "strict-formal-quality|native-strict-formal-quality-smoke|"
     "strict-formal-quality-smoke|native-strict-formal-quality-nightly|"
     "strict-formal-quality-nightly|"
     "native-strict-formal-quality-debt-nightly|"
@@ -8549,6 +8556,8 @@ static bool isMatrixPolicyMode(StringRef mode) {
          mode == "strict-formal-timeout-strict" ||
          mode == "native-strict-formal-quality-debt" ||
          mode == "strict-formal-quality-debt" ||
+         mode == "native-strict-formal-quality" ||
+         mode == "strict-formal-quality" ||
          mode == "native-strict-formal-quality-smoke" ||
          mode == "strict-formal-quality-smoke" ||
          mode == "native-strict-formal-quality-nightly" ||
@@ -8584,6 +8593,8 @@ static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
          mode == "strict-formal-timeout-strict" ||
          mode == "native-strict-formal-quality-debt" ||
          mode == "strict-formal-quality-debt" ||
+         mode == "native-strict-formal-quality" ||
+         mode == "strict-formal-quality" ||
          mode == "native-strict-formal-quality-smoke" ||
          mode == "strict-formal-quality-smoke" ||
          mode == "native-strict-formal-quality-nightly" ||
@@ -8881,7 +8892,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
         "formal-regression-matrix-external-formal-lec-core-min-total-v1";
-  } else if (mode == "native-strict-formal-quality-smoke" ||
+  } else if (mode == "native-strict-formal-quality" ||
+             mode == "native-strict-formal-quality-smoke" ||
              mode == "native-strict-formal-quality-nightly" ||
              mode == "native-strict-formal-quality-debt-nightly") {
     policyProfile = stopOnFail
@@ -8897,7 +8909,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-lec-core-min-total-v1";
     modeContractProfile =
         "formal-regression-matrix-policy-mode-native-strict-contract";
-  } else if (mode == "strict-formal-quality-smoke" ||
+  } else if (mode == "strict-formal-quality" ||
+             mode == "strict-formal-quality-smoke" ||
              mode == "strict-formal-quality-nightly" ||
              mode == "strict-formal-quality-debt-nightly") {
     policyProfile = stopOnFail
