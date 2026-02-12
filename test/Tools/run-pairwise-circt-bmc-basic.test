@@ -1,0 +1,14 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin %t/src
+// RUN: touch %t/src/a.sv %t/src/b.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nout=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -o) out=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n: \"${out:?}\"\n: > \"$out\"\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nmod=\"\"\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --module=*) mod=\"${arg#--module=}\" ;;\n  esac\ndone\nif [[ \"$mod\" == \"top_pass\" ]]; then\n  echo \"BMC_RESULT=UNSAT\"\n  exit 0\nfi\necho \"BMC_RESULT=SAT\"\nexit 0\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-bmc
+// RUN: printf 'pass_case\ttop_pass\t%t/src/a.sv;%t/src/b.sv\t%t/src\t%t/work/pass\nfail_case\ttop_fail\t%t/src/a.sv\t%t/src\t%t/work/fail\n' > %t/cases.tsv
+// RUN: not sh -c 'env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc BMC_RUN_SMTLIB=0 OUT=%t/results.tsv %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --workdir %t/work' 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RES < %t/results.tsv
+//
+// LOG: Running BMC on 2 pairwise case(s)...
+// LOG: pairwise BMC summary: total=2 pass=1 fail=1 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// RES: FAIL{{[[:space:]]+}}fail_case{{[[:space:]]+}}{{.*}}work/fail#SAT{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}SAT
+// RES: PASS{{[[:space:]]+}}pass_case{{[[:space:]]+}}{{.*}}work/pass{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT

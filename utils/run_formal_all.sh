@@ -682,6 +682,7 @@ Options:
   --lec-assume-known-inputs  Add --assume-known-inputs to LEC runs
   --lec-accept-xprop-only    Treat XPROP_ONLY mismatches as equivalent in LEC runs
   --with-opentitan       Run OpenTitan LEC script
+  --with-opentitan-bmc   Run OpenTitan BMC script
   --with-opentitan-lec-strict
                          Run strict OpenTitan LEC lane (LEC_X_OPTIMISTIC=0)
                          and synthesize `opentitan/LEC_MODE_DIFF` when
@@ -691,6 +692,10 @@ Options:
                          Run strict OpenTitan non-smoke E2E audit lane
                          (LEC strict-x)
   --opentitan DIR        OpenTitan root (default: ~/opentitan)
+  --opentitan-bmc-impl-filter REGEX
+                         Regex filter for OpenTitan BMC implementations
+  --opentitan-bmc-bound N
+                         Bound passed to OpenTitan BMC runner (default: 1)
   --opentitan-lec-impl-filter REGEX
                          Regex filter for OpenTitan LEC implementations
   --opentitan-lec-include-masked
@@ -2245,12 +2250,15 @@ LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_MODE="none"
 INCLUDE_LANE_REGEX=""
 EXCLUDE_LANE_REGEX=""
 WITH_OPENTITAN=0
+WITH_OPENTITAN_BMC=0
 WITH_OPENTITAN_LEC_STRICT=0
 WITH_OPENTITAN_E2E=0
 WITH_OPENTITAN_E2E_STRICT=0
 WITH_SV_TESTS_UVM_BMC_SEMANTICS=0
 SV_TESTS_BMC_BACKEND_PARITY=0
 WITH_AVIP=0
+OPENTITAN_BMC_IMPL_FILTER=""
+OPENTITAN_BMC_BOUND="1"
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
 OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES=0
@@ -2310,6 +2318,8 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_DIR="$2"; WITH_OPENTITAN=1; shift 2 ;;
     --with-opentitan)
       WITH_OPENTITAN=1; shift ;;
+    --with-opentitan-bmc)
+      WITH_OPENTITAN_BMC=1; shift ;;
     --with-opentitan-lec-strict)
       WITH_OPENTITAN_LEC_STRICT=1; shift ;;
     --with-opentitan-e2e)
@@ -2320,6 +2330,10 @@ while [[ $# -gt 0 ]]; do
       WITH_SV_TESTS_UVM_BMC_SEMANTICS=1; shift ;;
     --sv-tests-bmc-backend-parity)
       SV_TESTS_BMC_BACKEND_PARITY=1; shift ;;
+    --opentitan-bmc-impl-filter)
+      OPENTITAN_BMC_IMPL_FILTER="$2"; shift 2 ;;
+    --opentitan-bmc-bound)
+      OPENTITAN_BMC_BOUND="$2"; shift 2 ;;
     --opentitan-lec-impl-filter)
       OPENTITAN_LEC_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-lec-include-masked)
@@ -2990,6 +3004,20 @@ if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
     echo "invalid --opentitan-lec-impl-filter: $OPENTITAN_LEC_IMPL_FILTER" >&2
     exit 1
   fi
+fi
+if [[ -n "$OPENTITAN_BMC_IMPL_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$OPENTITAN_BMC_IMPL_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --opentitan-bmc-impl-filter: $OPENTITAN_BMC_IMPL_FILTER" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$OPENTITAN_BMC_BOUND" && ! "$OPENTITAN_BMC_BOUND" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-bmc-bound: expected non-negative integer" >&2
+  exit 1
 fi
 if [[ -n "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
   set +e
@@ -4588,6 +4616,7 @@ if [[ -n "$LEC_TIMEOUT_SECS" ]]; then
 fi
 
 if [[ "$WITH_OPENTITAN" == "1" || \
+      "$WITH_OPENTITAN_BMC" == "1" || \
       "$WITH_OPENTITAN_LEC_STRICT" == "1" || \
       "$WITH_OPENTITAN_E2E" == "1" || \
       "$WITH_OPENTITAN_E2E_STRICT" == "1" ]]; then
@@ -6692,6 +6721,7 @@ compute_lane_state_config_hash() {
     printf "lec_accept_xprop_only=%s\n" "$LEC_ACCEPT_XPROP_ONLY"
     printf "lec_timeout_secs=%s\n" "$LEC_TIMEOUT_SECS"
     printf "with_opentitan=%s\n" "$WITH_OPENTITAN"
+    printf "with_opentitan_bmc=%s\n" "$WITH_OPENTITAN_BMC"
     printf "with_opentitan_lec_strict=%s\n" "$WITH_OPENTITAN_LEC_STRICT"
     printf "with_opentitan_e2e=%s\n" "$WITH_OPENTITAN_E2E"
     printf "with_opentitan_e2e_strict=%s\n" "$WITH_OPENTITAN_E2E_STRICT"
@@ -6711,6 +6741,8 @@ compute_lane_state_config_hash() {
     printf "verilator_dir=%s\n" "$VERILATOR_DIR"
     printf "yosys_dir=%s\n" "$YOSYS_DIR"
     printf "opentitan_dir=%s\n" "$OPENTITAN_DIR"
+    printf "opentitan_bmc_impl_filter=%s\n" "$OPENTITAN_BMC_IMPL_FILTER"
+    printf "opentitan_bmc_bound=%s\n" "$OPENTITAN_BMC_BOUND"
     printf "avip_glob=%s\n" "$AVIP_GLOB"
     printf "lane_state_hmac_mode=%s\n" "$LANE_STATE_HMAC_MODE"
     printf "lane_state_hmac_key_id=%s\n" "$LANE_STATE_HMAC_KEY_ID"
@@ -7623,6 +7655,12 @@ if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
     exit 1
   fi
 fi
+if [[ "$WITH_OPENTITAN_BMC" == "1" ]] && lane_enabled "opentitan/BMC"; then
+  if [[ -z "$OPENTITAN_BMC_IMPL_FILTER" ]]; then
+    echo "opentitan/BMC requires explicit filter: set --opentitan-bmc-impl-filter" >&2
+    exit 1
+  fi
+fi
 if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRICT"; then
   if [[ -z "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
     echo "opentitan/LEC_STRICT requires explicit filter: set --opentitan-lec-impl-filter" >&2
@@ -7665,6 +7703,7 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   need_verilator_lec_runner=0
   need_yosys_bmc_runner=0
   need_yosys_lec_runner=0
+  need_opentitan_bmc_runner=0
   need_opentitan_lec_runner=0
   need_opentitan_e2e_runner=0
   need_avip_runner=0
@@ -7706,6 +7745,10 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     need_core_bmc_lanes=1
     need_yosys_bmc_runner=1
+  fi
+  if [[ "$WITH_OPENTITAN_BMC" == "1" ]] && lane_enabled "opentitan/BMC"; then
+    need_core_bmc_lanes=1
+    need_opentitan_bmc_runner=1
   fi
 
   if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
@@ -7782,6 +7825,9 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   fi
   if [[ "$need_yosys_lec_runner" == "1" ]]; then
     require_executable_tool "yosys SVA LEC runner" "utils/run_yosys_sva_circt_lec.sh"
+  fi
+  if [[ "$need_opentitan_bmc_runner" == "1" ]]; then
+    require_executable_tool "OpenTitan BMC runner" "utils/run_opentitan_circt_bmc.py"
   fi
   if [[ "$need_opentitan_lec_runner" == "1" ]]; then
     require_executable_tool "OpenTitan LEC runner" "utils/run_opentitan_circt_lec.py"
@@ -10012,6 +10058,196 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
       record_result_with_summary "yosys/tests/sva" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     fi
   fi
+fi
+
+classify_opentitan_bmc_missing_results_reason() {
+  local suite_log="$1"
+  if [[ ! -f "$suite_log" ]]; then
+    printf "runner_command_no_log\n"
+    return
+  fi
+  if grep -Fq "missing_OUT" "$suite_log"; then
+    printf "runner_command_missing_out\n"
+    return
+  fi
+  if grep -Fq "bad_workdir=" "$suite_log"; then
+    printf "runner_command_bad_workdir\n"
+    return
+  fi
+  if grep -Eq "No such file or directory|not found" "$suite_log"; then
+    printf "runner_command_not_found\n"
+    return
+  fi
+  if grep -Fq "Permission denied" "$suite_log"; then
+    printf "runner_command_permission_denied\n"
+    return
+  fi
+  if grep -Eq "timed out|timeout" "$suite_log"; then
+    printf "runner_command_timeout\n"
+    return
+  fi
+  if grep -Eq "Traceback \(most recent call last\)|CalledProcessError|Exception" "$suite_log"; then
+    printf "runner_command_exception\n"
+    return
+  fi
+  if grep -Eq "BMC failures:[[:space:]]*[1-9]" "$suite_log"; then
+    printf "runner_command_failures_reported\n"
+    return
+  fi
+  printf "runner_command_no_results\n"
+}
+
+run_opentitan_bmc_lane() {
+  local lane_id="$1"
+  local mode_name="$2"
+  local suite_name="$3"
+  local case_results="$4"
+  local workdir="$5"
+  local drop_remark_cases_file="$6"
+  local drop_remark_reasons_file="$7"
+  local timeout_reasons_file="$8"
+
+  if ! lane_enabled "$lane_id"; then
+    return
+  fi
+  if lane_resume_from_state "$lane_id"; then
+    return
+  fi
+
+  : > "$case_results"
+  : > "$drop_remark_cases_file"
+  : > "$drop_remark_reasons_file"
+  : > "$timeout_reasons_file"
+  rm -rf "$workdir"
+
+  local opentitan_bmc_args=(--opentitan-root "$OPENTITAN_DIR")
+  if [[ -n "$OPENTITAN_BMC_IMPL_FILTER" ]]; then
+    opentitan_bmc_args+=(--impl-filter "$OPENTITAN_BMC_IMPL_FILTER")
+  fi
+  if [[ "$OPENTITAN_LEC_INCLUDE_MASKED" == "1" ]]; then
+    opentitan_bmc_args+=(--include-masked)
+  fi
+
+  local opentitan_bmc_env=(OUT="$case_results"
+    BMC_DROP_REMARK_CASES_OUT="$drop_remark_cases_file"
+    BMC_DROP_REMARK_REASONS_OUT="$drop_remark_reasons_file"
+    BMC_TIMEOUT_REASON_CASES_OUT="$timeout_reasons_file"
+    CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN"
+    CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN"
+    CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN"
+    CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN"
+    BMC_MODE_LABEL="$mode_name"
+    BOUND="$OPENTITAN_BMC_BOUND"
+    BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
+    BMC_ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
+    BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS"
+    Z3_BIN="$Z3_BIN")
+  if [[ ${#FORMAL_BMC_TIMEOUT_ENV[@]} -gt 0 ]]; then
+    opentitan_bmc_env+=("${FORMAL_BMC_TIMEOUT_ENV[@]}")
+  fi
+
+  run_suite "$suite_name" \
+    env "${opentitan_bmc_env[@]}" \
+    utils/run_opentitan_circt_bmc.py --workdir "$workdir" "${opentitan_bmc_args[@]}" || true
+
+  if [[ ! -s "$case_results" ]]; then
+    local suite_log="$OUT_DIR/${suite_name}.log"
+    if [[ -f "$suite_log" ]] && \
+       grep -q "No AES S-Box implementations selected." "$suite_log"; then
+      printf "SKIP\taes_sbox\tno_matching_impl_filter\topentitan\t%s\tBMC_NOT_RUN\timpl_filter\n" "$mode_name" > "$case_results"
+      local no_impl_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=0 skip=1 no_matching_impl_filter=1"
+      local bmc_case_summary
+      bmc_case_summary="$(summarize_bmc_case_file "$case_results" "$timeout_reasons_file")"
+      if [[ -n "$bmc_case_summary" ]]; then
+        no_impl_summary="${no_impl_summary} ${bmc_case_summary}"
+      fi
+      record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 0 1 "$no_impl_summary"
+      return
+    fi
+    local missing_reason
+    missing_reason="$(classify_opentitan_bmc_missing_results_reason "$suite_log")"
+    printf "ERROR\taes_sbox\tmissing_results\topentitan\t%s\tCIRCT_BMC_ERROR\t%s\n" "$mode_name" "$missing_reason" > "$case_results"
+    local missing_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
+    local bmc_case_summary
+    bmc_case_summary="$(summarize_bmc_case_file "$case_results" "$timeout_reasons_file")"
+    if [[ -n "$bmc_case_summary" ]]; then
+      missing_summary="${missing_summary} ${bmc_case_summary}"
+    fi
+    record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$missing_summary"
+    return
+  fi
+
+  local counts total pass fail xfail xpass error skip
+  counts="$(
+    OPENTITAN_CASE_RESULTS_FILE="$case_results" python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["OPENTITAN_CASE_RESULTS_FILE"])
+counts = {
+    "total": 0,
+    "pass": 0,
+    "fail": 0,
+    "xfail": 0,
+    "xpass": 0,
+    "error": 0,
+    "skip": 0,
+}
+for line in path.read_text().splitlines():
+  parts = line.split("\t")
+  if not parts or not parts[0]:
+    continue
+  status = parts[0].strip().upper()
+  counts["total"] += 1
+  if status == "PASS":
+    counts["pass"] += 1
+  elif status == "FAIL":
+    counts["fail"] += 1
+  elif status == "XFAIL":
+    counts["xfail"] += 1
+  elif status == "XPASS":
+    counts["xpass"] += 1
+  elif status == "SKIP":
+    counts["skip"] += 1
+  elif status in ("UNKNOWN", "TIMEOUT", "ERROR"):
+    counts["error"] += 1
+  else:
+    counts["error"] += 1
+print(
+    f"{counts['total']}\t{counts['pass']}\t{counts['fail']}\t"
+    f"{counts['xfail']}\t{counts['xpass']}\t{counts['error']}\t{counts['skip']}"
+)
+PY
+  )"
+  IFS=$'\t' read -r total pass fail xfail xpass error skip <<< "$counts"
+
+  local summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
+  local bmc_drop_summary
+  bmc_drop_summary="$(summarize_bmc_drop_remark_log "$OUT_DIR/${suite_name}.log")"
+  if [[ -n "$bmc_drop_summary" ]]; then
+    summary="${summary} ${bmc_drop_summary}"
+  fi
+  local bmc_case_summary
+  bmc_case_summary="$(summarize_bmc_case_file "$case_results" "$timeout_reasons_file")"
+  if [[ -n "$bmc_case_summary" ]]; then
+    summary="${summary} ${bmc_case_summary}"
+  fi
+  append_filtered_min_total_violation total summary
+  maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
+  record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
+}
+
+# OpenTitan BMC (optional)
+if [[ "$WITH_OPENTITAN_BMC" == "1" ]]; then
+  run_opentitan_bmc_lane \
+    "opentitan/BMC" \
+    "BMC" \
+    "opentitan-bmc" \
+    "$OUT_DIR/opentitan-bmc-results.txt" \
+    "$OUT_DIR/opentitan-bmc-work" \
+    "$OUT_DIR/opentitan-bmc-drop-remark-cases.tsv" \
+    "$OUT_DIR/opentitan-bmc-drop-remark-reasons.tsv" \
+    "$OUT_DIR/opentitan-bmc-timeout-reasons.tsv"
 fi
 
 classify_opentitan_lec_missing_results_reason() {

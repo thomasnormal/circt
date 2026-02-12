@@ -2,8 +2,10 @@
 // RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
 // RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
 // RUN: chmod +x %t/utils/run_formal_all.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-bmc --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^$" --opentitan-bmc-impl-filter "["' 2>&1 | FileCheck %s --check-prefix=BMC
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-lec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^$" --opentitan-lec-impl-filter "["' 2>&1 | FileCheck %s --check-prefix=LEC
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-e2e --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^$" --opentitan-e2e-impl-filter "["' 2>&1 | FileCheck %s --check-prefix=E2E
 //
+// BMC: invalid --opentitan-bmc-impl-filter: [
 // LEC: invalid --opentitan-lec-impl-filter: [
 // E2E: invalid --opentitan-e2e-impl-filter: [
