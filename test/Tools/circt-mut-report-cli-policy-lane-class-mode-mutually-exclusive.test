@@ -1,0 +1,3 @@
+// RUN: not circt-mut report --mode matrix --policy-lane-class quality-nightly --policy-mode smoke 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: --policy-lane-class is mutually exclusive with --policy-mode and --policy-profile
