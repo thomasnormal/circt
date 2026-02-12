@@ -28,6 +28,8 @@
 // CHECK-DAG: formal-regression-matrix-external-formal-lec-core-min-total-v1
 // CHECK-DAG: formal-regression-matrix-external-formal-bmc-core-min-total-v1
 // CHECK-DAG: formal-regression-matrix-external-formal-core-timeout-stage-budget-v1
+// CHECK-DAG: formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1
+// CHECK-DAG: formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1
 // CHECK-DAG: formal-regression-matrix-external-formal-compile-mode-budget-debt-v1
 // CHECK-DAG: formal-regression-matrix-external-formal-compile-mode-budget-strict-v1
 // CHECK-DAG: formal-regression-matrix-composite-native-strict
@@ -45,6 +47,7 @@
 // CHECK-DAG: formal-regression-matrix-composite-native-strict-formal-trend-v12
 // CHECK-DAG: formal-regression-matrix-composite-native-strict-formal-trend-v13
 // CHECK-DAG: formal-regression-matrix-composite-native-strict-formal-trend-v14
+// CHECK-DAG: formal-regression-matrix-composite-native-strict-formal-trend-v15
 // CHECK-DAG: formal-regression-matrix-composite-trend-strict
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-strict
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-native-strict
@@ -62,5 +65,6 @@
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v12
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v13
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v14
+// CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v15
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-trend-nightly
 // CHECK-DAG: formal-regression-matrix-composite-stop-on-fail-trend-strict

@@ -9,6 +9,37 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 11, 2026, 23:59++++++++++++++++++++++)
+
+1. Added mode-ready core timeout-stage budget profiles:
+   - strict:
+     `formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1`
+   - debt:
+     `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1`
+   - compatibility alias retained:
+     `formal-regression-matrix-external-formal-core-timeout-stage-budget-v1`
+2. Added strict rollout composites:
+   - `formal-regression-matrix-composite-native-strict-formal-trend-v15`
+   - `formal-regression-matrix-composite-stop-on-fail-native-strict-formal-trend-v15`
+3. Contract impact:
+   - strict formal trend path now references explicit strict timeout budget
+     semantics; debt profile is available for mode-aware rollout paths.
+4. Validation highlights:
+   - focused lit coverage for strict/debt + v15 composites is green.
+   - direct policy probe confirms intended mode split:
+     - strict fails on single timeout-stage event
+     - debt passes on single timeout-stage event.
+5. Remaining limitations:
+   - profile-mode integration still does not route `native-strict-formal*` via
+     versioned strict/debt composite families; policy users must pass explicit
+     profiles for mode-aware timeout-stage budgets today.
+   - debt profile currently uses uniform `<=1` threshold across all core lanes;
+     it is not yet suite-specific or cadence-specific.
+6. Next long-term features:
+   - add explicit policy modes for formal timeout budgets
+     (e.g., `native-strict-formal-timeout-debt/strict`) that map to v15+.
+   - introduce suite-specific debt ceilings and promote to `v16` composites.
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++++++++++)
 
 1. Added core timeout-stage quality-budget governance:
