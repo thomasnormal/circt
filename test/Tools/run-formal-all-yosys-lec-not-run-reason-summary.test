@@ -1,0 +1,12 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "SKIP\\tcase_vhdl\\t/tests/case_vhdl.sv\\tyosys/tests/sva\\tLEC\\tLEC_NOT_RUN\\tvhdl\\n" > "$OUT"\necho "yosys LEC summary: total=1 pass=0 fail=0 error=0 skip=1"\n' > %t/utils/run_yosys_sva_circt_lec.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_yosys_sva_circt_lec.sh
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^yosys/tests/sva/LEC$' --yosys-lec-test-filter '.*' --yosys-bmc-test-filter '.*' --verilator-lec-test-filter '.*' --verilator-bmc-test-filter '.*' --sv-tests-uvm-bmc-semantics-test-filter '.*' --sv-tests-lec-test-filter '.*' --sv-tests-bmc-test-filter '.*'
+// RUN: FileCheck %s < %t/out/summary.tsv
+//
+// CHECK: yosys/tests/sva{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}1
+// CHECK: lec_diag_lec_not_run_cases=1
+// CHECK: lec_not_run_reason_missing_cases=0
+// CHECK: lec_not_run_reason_vhdl_cases=1

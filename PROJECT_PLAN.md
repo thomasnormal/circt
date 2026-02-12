@@ -62,6 +62,20 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, Yosys VHDL `LEC_NOT_RUN` reason parity)
+
+1. Updated `utils/run_yosys_sva_circt_lec.sh` VHDL skip flow (`SKIP_VHDL=1`) to emit explicit reasoned no-run rows:
+   - `SKIP ... LEC_NOT_RUN vhdl`
+2. Updated `utils/run_formal_all.sh` LEC summarization so `lec_not_run_reason_missing_cases` is always materialized whenever any `LEC_NOT_RUN` row exists (zero-valued when no missing reasons are observed).
+3. Added regression coverage:
+   - `test/Tools/run-yosys-sva-circt-lec-not-run-vhdl-reason.test`
+   - `test/Tools/run-formal-all-yosys-lec-not-run-reason-summary.test`
+4. Remaining limitations:
+   - not all non-`sv-tests` wrappers classify all no-run classes with explicit stable reason families yet.
+5. Next long-term features:
+   - propagate explicit `LEC_NOT_RUN` reason taxonomy to remaining wrappers (`verilator` and `opentitan` paths where applicable).
+   - tighten strict-quality defaults to require complete reason-family telemetry (`missing=0`) for every enabled core LEC suite.
+
 ### Formal Closure Snapshot Update (February 12, 2026, multi-suite `LEC_NOT_RUN` reason guard)
 
 1. Strengthened `circt-mut` policy profile:
