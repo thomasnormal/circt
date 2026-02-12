@@ -1,0 +1,7 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --strict-tool-preflight --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/missing-yosys --include-lane-regex "^yosys/tests/sva/LEC$" --yosys-lec-test-filter "basic00"' 2>&1 | FileCheck %s
+//
+// CHECK: strict yosys preflight: explicit --yosys path not found: {{.*}}/missing-yosys (resolved: {{.*}}/missing-yosys)

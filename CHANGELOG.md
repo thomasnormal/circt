@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1191 - February 12, 2026
+
+### Formal Orchestration Hardening: Strict Yosys Layout Preflight for Explicit `--yosys`
+
+1. Extended `utils/run_formal_all.sh` yosys path normalization internals to track layout status explicitly:
+   - `direct_sva_root`
+   - `normalized_sva_subdir`
+   - `normalized_tests_sva_subdir`
+   - `missing_dir`
+   - `unresolved_dir`
+2. Fixed a normalization metadata correctness bug by removing command-substitution side effects.
+   - `normalize_yosys_sva_dir` now updates global resolution state directly.
+   - `YOSYS_DIR` is assigned from `YOSYS_DIR_NORMALIZED` after normalization.
+3. Added strict preflight enforcement for explicit yosys roots.
+   - Under `--strict-tool-preflight`, when `--yosys` is explicitly provided and a yosys lane is selected:
+     - fail fast if the path does not exist (`missing_dir`)
+     - fail fast if no `.sv` tests are found under checked roots (`raw`, `raw/sva`, `raw/tests/sva`).
+   - This prevents silent zero-case behavior from mis-rooted explicit `--yosys` inputs.
+4. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-tool-preflight-yosys-layout-unresolved.test`
+   - `test/Tools/run-formal-all-strict-tool-preflight-yosys-layout-missing.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(help|strict-tool-preflight-yosys-layout-(unresolved|missing)|strict-tool-preflight-(derived-opt|missing-sv-lec-runner|missing-opentitan-e2e-runner|missing-avip-runner)|yosys-dir-normalize-(root|tests-root)|yosys-bmc-default-semantic-tag-map)\.test'`
+  - PASS (10/10)
+- External filtered cadence:
+  - `sv-tests/LEC` (`16.11--sequence-subroutine-uvm`) -> PASS (1/1)
+  - `verilator-verification/LEC` (`assert_changed`) -> PASS (1/1)
+  - `yosys/tests/sva/LEC` with `--yosys /home/thomas-ahle/yosys` + `--strict-tool-preflight` -> PASS (1/1)
+  - `opentitan/LEC` no-impl filtered lane -> PASS (skip telemetry intact)
+  - `avip/apb_avip/compile` -> PASS (1/1)
+
+
 ## Iteration 1190 - February 12, 2026
 
 ### Formal Orchestration Hardening: Yosys Root Normalization + Snapshot Source Fidelity

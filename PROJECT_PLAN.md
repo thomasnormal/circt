@@ -62,6 +62,34 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, strict explicit-yosys layout preflight)
+
+1. Closed a key formal orchestration contract gap in `utils/run_formal_all.sh`:
+   - explicit `--yosys` roots now carry first-class layout status (`direct`, normalized subdir, missing, unresolved).
+   - `--strict-tool-preflight` now fails fast for selected yosys lanes when explicit `--yosys` is invalid:
+     - missing root path
+     - root exists but no `.sv` tests under `raw`, `raw/sva`, `raw/tests/sva`.
+2. Fixed normalization metadata correctness so strict checks consume real state:
+   - removed command-substitution side-effect dependency for yosys layout status.
+   - normalization now updates global state directly before strict preflight.
+3. Added focused unit coverage:
+   - `test/Tools/run-formal-all-strict-tool-preflight-yosys-layout-unresolved.test`
+   - `test/Tools/run-formal-all-strict-tool-preflight-yosys-layout-missing.test`
+4. External cadence confirmation (filtered):
+   - `sv-tests/LEC`: PASS (1/1)
+   - `verilator-verification/LEC`: PASS (1/1)
+   - `yosys/tests/sva/LEC` with explicit yosys repo root under strict preflight: PASS (1/1)
+   - `opentitan/LEC` no-impl filter path: PASS (skip reason telemetry intact)
+   - `avip/apb_avip/compile`: PASS (1/1)
+5. Remaining limitations:
+   - explicit yosys layout validity is currently enforced only in strict preflight mode; non-strict runs still allow unresolved explicit roots to continue.
+   - zero-case filtered-lane detection remains opt-in (`--require-nonempty-filtered-lanes`) rather than strict-default for core formal lanes.
+   - strict policy and mutation governance still operate primarily on summary counters instead of versioned per-case provenance.
+6. Next long-term features (BMC/LEC/mutation focus):
+   - promote non-empty filtered-lane guarantees to strict-default behavior for core formal lanes.
+   - introduce a versioned case-level formal provenance schema and migrate strict-gate + mutation policies to artifact-level diff checks.
+   - add first-class mutation campaign orchestration lanes in `run_formal_all.sh` (generation, replay, equivalence triage) with shared provenance and strict governance hooks.
+
 ### Formal Closure Snapshot Update (February 12, 2026, Yosys root normalization + snapshot-safe defaults)
 
 1. Hardened `utils/run_formal_all.sh` `--yosys` path contract for real-world invocation patterns:
