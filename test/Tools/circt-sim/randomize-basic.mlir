@@ -1,13 +1,16 @@
 // RUN: circt-sim %s --top test 2>&1 | FileCheck %s
-// Test that __moore_randomize_basic actually fills memory with random bytes
-// instead of leaving it zeroed (the old stub behavior).
+// Test that __moore_randomize_basic is a no-op that preserves object memory.
 //
-// We allocate a 16-byte block, zero it, call __moore_randomize_basic,
-// then check that at least one of the 4-byte words is non-zero.
-// The probability of all 16 random bytes being zero is (1/256)^16 ≈ 0.
+// __moore_randomize_basic no longer fills the entire object with random bytes
+// because that would corrupt non-rand metadata (class_id, vtable pointer,
+// string pointers, etc.).  Instead, each rand field is individually set by
+// subsequent __moore_randomize_with_range / _with_dist calls.
+//
+// We allocate a 16-byte block, write known values, call __moore_randomize_basic,
+// then verify the values are preserved (not overwritten with random data).
 
 // CHECK: randomize_returned = 1
-// CHECK: at_least_one_nonzero = 1
+// CHECK: values_preserved = 1
 // CHECK: [circt-sim] Simulation completed
 
 module {
@@ -24,22 +27,22 @@ module {
       %c16 = arith.constant 16 : i64
       %ptr = llvm.call @malloc(%c16) : (i64) -> !llvm.ptr
 
-      // Zero-initialize all 16 bytes
-      %zero32 = arith.constant 0 : i32
+      // Write known sentinel values to all 4 words
+      %sentinel = arith.constant 305419896 : i32
       %f0 = llvm.getelementptr %ptr[0, 0]
           : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i32, i32, i32, i32)>
-      llvm.store %zero32, %f0 : i32, !llvm.ptr
+      llvm.store %sentinel, %f0 : i32, !llvm.ptr
       %f1 = llvm.getelementptr %ptr[0, 1]
           : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i32, i32, i32, i32)>
-      llvm.store %zero32, %f1 : i32, !llvm.ptr
+      llvm.store %sentinel, %f1 : i32, !llvm.ptr
       %f2 = llvm.getelementptr %ptr[0, 2]
           : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i32, i32, i32, i32)>
-      llvm.store %zero32, %f2 : i32, !llvm.ptr
+      llvm.store %sentinel, %f2 : i32, !llvm.ptr
       %f3 = llvm.getelementptr %ptr[0, 3]
           : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i32, i32, i32, i32)>
-      llvm.store %zero32, %f3 : i32, !llvm.ptr
+      llvm.store %sentinel, %f3 : i32, !llvm.ptr
 
-      // Call __moore_randomize_basic
+      // Call __moore_randomize_basic (should be a no-op preserving memory)
       %rc = llvm.call @__moore_randomize_basic(%ptr, %c16) : (!llvm.ptr, i64) -> i32
 
       // Print return code
@@ -49,28 +52,28 @@ module {
       %fmt_rc = sim.fmt.concat (%lit_rc, %d_rc, %nl)
       sim.proc.print %fmt_rc
 
-      // Load all 4 words and OR them together - at least one should be nonzero
+      // Load all 4 words and check they still have the sentinel value
       %v0 = llvm.load %f0 : !llvm.ptr -> i32
       %v1 = llvm.load %f1 : !llvm.ptr -> i32
       %v2 = llvm.load %f2 : !llvm.ptr -> i32
       %v3 = llvm.load %f3 : !llvm.ptr -> i32
-      %or01 = comb.or %v0, %v1 : i32
-      %or23 = comb.or %v2, %v3 : i32
-      %or_all = comb.or %or01, %or23 : i32
+      %eq0 = comb.icmp eq %v0, %sentinel : i32
+      %eq1 = comb.icmp eq %v1, %sentinel : i32
+      %eq2 = comb.icmp eq %v2, %sentinel : i32
+      %eq3 = comb.icmp eq %v3, %sentinel : i32
+      %all_eq01 = comb.and %eq0, %eq1 : i1
+      %all_eq23 = comb.and %eq2, %eq3 : i1
+      %all_eq = comb.and %all_eq01, %all_eq23 : i1
 
-      // Check if nonzero
-      %zero = hw.constant 0 : i32
-      %c_true = hw.constant 1 : i1
-      %is_nonzero = comb.icmp ne %or_all, %zero : i32
-      %nz_i32 = comb.concat %c_true : i1
-      // Use select to produce 1 if any word is nonzero
+      // Convert i1 to i32 for printing
+      %zero32 = arith.constant 0 : i32
       %one32 = arith.constant 1 : i32
-      %result = arith.select %is_nonzero, %one32, %zero32 : i32
+      %result = arith.select %all_eq, %one32, %zero32 : i32
 
-      %lit_nz = sim.fmt.literal "at_least_one_nonzero = "
-      %d_nz = sim.fmt.dec %result signed : i32
-      %fmt_nz = sim.fmt.concat (%lit_nz, %d_nz, %nl)
-      sim.proc.print %fmt_nz
+      %lit_pres = sim.fmt.literal "values_preserved = "
+      %d_pres = sim.fmt.dec %result signed : i32
+      %fmt_pres = sim.fmt.concat (%lit_pres, %d_pres, %nl)
+      sim.proc.print %fmt_pres
 
       llvm.call @free(%ptr) : (!llvm.ptr) -> ()
 
