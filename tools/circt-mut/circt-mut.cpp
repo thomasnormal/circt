@@ -9188,6 +9188,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
     externalFormalBmcSemanticProfile =
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
+    externalFormalLecNotRunReasonCoverageProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9227,6 +9229,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
     externalFormalBmcSemanticProfile =
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
+    externalFormalLecNotRunReasonCoverageProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9266,6 +9270,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
     externalFormalBmcSemanticProfile =
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
+    externalFormalLecNotRunReasonCoverageProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9302,6 +9308,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
     externalFormalBmcSemanticProfile =
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
+    externalFormalLecNotRunReasonCoverageProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =

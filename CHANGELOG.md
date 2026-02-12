@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1198 - February 12, 2026
+
+### `circt-mut` Native Strict-Quality: Enforce LEC `NOT_RUN` Reason Coverage
+
+1. Extended native strict-quality policy bundles in `tools/circt-mut/circt-mut.cpp`
+   to include:
+   - `formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard`
+2. Native strict bundles now enforce the same LEC `NOT_RUN` reason-governance
+   contract already present in non-native strict-quality modes:
+   - `native-strict-formal-quality*`
+   - `native-strict-formal-quality-debt*`
+   - `native-strict-formal-quality-strict`
+3. Updated native strict policy expectation tests (run-with-report and report CLI)
+   for profile ordering/count changes introduced by the new guard profile.
+4. Added explicit failure coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-quality-reason-coverage-fail.test`
+   - verifies native strict-quality fails when
+     `sv-tests/LEC.lec_not_run_reason_missing_cases > 0`.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`
+  - PASS
+- Focused lit slice (12 tests, native strict-quality policy/report paths)
+  - PASS (12/12)
+
 ## Iteration 1197 - February 12, 2026
 
 ### Formal Strict-Gate Quality Gate: Legacy Rule-ID Enforcement + Metadata
