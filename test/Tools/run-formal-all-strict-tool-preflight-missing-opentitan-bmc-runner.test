@@ -7,5 +7,6 @@
 // RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
 // RUN: chmod +x %t/utils/run_formal_all.sh %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --strict-tool-preflight --with-opentitan-bmc --circt-verilog %t/bin/circt-verilog --opentitan %t/opentitan --include-lane-regex "^opentitan/BMC$" --opentitan-bmc-impl-filter "aes_sbox.*"' 2>&1 | FileCheck %s
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-strict --strict-tool-preflight --with-opentitan-bmc-strict --circt-verilog %t/bin/circt-verilog --opentitan %t/opentitan --include-lane-regex "^opentitan/BMC_STRICT$" --opentitan-bmc-impl-filter "aes_sbox.*"' 2>&1 | FileCheck %s
 
 // CHECK: OpenTitan BMC runner not executable: utils/run_opentitan_circt_bmc.py

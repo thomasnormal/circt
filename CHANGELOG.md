@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1207 - February 12, 2026
+
+### Formal BMC Governance: OpenTitan Strict Lane + Mode-Diff Contracts
+
+1. Extended `utils/run_formal_all.sh` OpenTitan BMC orchestration with a strict lane:
+   - new CLI: `--with-opentitan-bmc-strict`
+   - strict lane id/mode: `opentitan/BMC_STRICT`
+   - lane-level `BMC_ASSUME_KNOWN_INPUTS` override support in `run_opentitan_bmc_lane`.
+2. Added synthesized OpenTitan BMC mode-diff lane:
+   - lane id/mode: `opentitan/BMC_MODE_DIFF`
+   - emits:
+     - `opentitan-bmc-mode-diff.tsv`
+     - `opentitan-bmc-mode-diff-results.txt`
+     - `opentitan-bmc-mode-diff-metrics.tsv`
+   - tracks counters: `same_status`, `strict_only_fail`, `strict_only_pass`,
+     `status_diff`, `missing_in_bmc`, `missing_in_bmc_strict`.
+3. Added strict-gate regression controls for BMC mode-diff counters:
+   - `--fail-on-new-bmc-mode-diff-strict-only-fail`
+   - `--fail-on-new-bmc-mode-diff-status-diff`
+   - `--fail-on-new-bmc-mode-diff-strict-only-pass`
+   - `--fail-on-new-bmc-mode-diff-missing-in-bmc`
+   - `--fail-on-new-bmc-mode-diff-missing-in-bmc-strict`
+4. Wired BMC mode-diff counters into strict-gate rule classification/reporting:
+   - new rule-id family `strict_gate.bmc_mode_diff.*`.
+5. Extended expected-failure / refresh / failure-case collectors to ingest:
+   - `opentitan/BMC`
+   - `opentitan/BMC_STRICT`
+   - `opentitan/BMC_MODE_DIFF`.
+6. Added explicit-filter and strict-tool-preflight coverage for new BMC strict/diff lanes.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- Added/updated tests:
+  - `test/Tools/run-formal-all-opentitan-bmc-mode-diff.test`
+  - `test/Tools/run-formal-all-strict-gate-bmc-mode-diff-counters.test`
+  - `test/Tools/run-formal-all-help.test`
+  - `test/Tools/run-formal-all-require-explicit-sv-tests-filters.test`
+  - `test/Tools/run-formal-all-strict-tool-preflight-missing-opentitan-bmc-runner.test`
+
+### Remaining Limitations
+
+- BMC mode-diff currently compares status at `base` granularity; detailed diagnosis parity (per-diag token drift) is not yet tracked.
+
 ## Iteration 1206 - February 12, 2026
 
 ### Formal BMC Platforming: Per-Case Pairwise Execution Contracts

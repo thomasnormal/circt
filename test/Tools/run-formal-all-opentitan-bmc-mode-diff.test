@@ -1,0 +1,21 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
+// RUN: printf '#!/usr/bin/env python3\nimport os,sys\nif os.environ.get("CIRCT_VERILOG") != "%t/fake-circt-verilog-opentitan":\n  print("bad_CIRCT_VERILOG=" + str(os.environ.get("CIRCT_VERILOG")))\n  sys.exit(9)\nout = os.environ.get("OUT", "")\nif not out:\n  print("missing_OUT")\n  sys.exit(8)\nmode = os.environ.get("BMC_MODE_LABEL", "BMC")\nassume_known = os.environ.get("BMC_ASSUME_KNOWN_INPUTS", "")\nif mode == "BMC" and assume_known != "0":\n  print("bad_BMC_ASSUME_KNOWN_INPUTS_default=" + assume_known)\n  sys.exit(7)\nif mode == "BMC_STRICT" and assume_known != "1":\n  print("bad_BMC_ASSUME_KNOWN_INPUTS_strict=" + assume_known)\n  sys.exit(6)\nworkdir = ""\nargs = sys.argv[1:]\nfor i, arg in enumerate(args):\n  if arg == "--workdir" and i + 1 < len(args):\n    workdir = args[i + 1]\nos.makedirs(os.path.dirname(out), exist_ok=True)\nwith open(out, "w", encoding="utf-8") as f:\n  f.write("PASS\\taes_sbox_canright\\t" + workdir + "/aes_sbox_canright\\topentitan\\t" + mode + "\\n")\n  if mode == "BMC_STRICT":\n    f.write("FAIL\\taes_sbox_lut\\t" + workdir + "/aes_sbox_lut#ASSERT\\topentitan\\t" + mode + "\\tASSERT\\n")\n  else:\n    f.write("PASS\\taes_sbox_lut\\t" + workdir + "/aes_sbox_lut\\topentitan\\t" + mode + "\\tUNSAT\\n")\nprint("Running BMC on 2 AES S-Box implementation(s)...")\nif mode == "BMC_STRICT":\n  print("BMC failures: 1")\n  sys.exit(1)\nprint("BMC completed successfully.")\nsys.exit(0)\n' > %t/utils/run_opentitan_circt_bmc.py
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_opentitan_circt_bmc.py %t/fake-circt-verilog-opentitan
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-bmc --with-opentitan-bmc-strict --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/(BMC|BMC_STRICT|BMC_MODE_DIFF)$' --opentitan-bmc-impl-filter '.*'
+// RUN: FileCheck %s --check-prefix=SUM < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=DIFFTSV < %t/out/opentitan-bmc-mode-diff.tsv
+// RUN: FileCheck %s --check-prefix=DIFFRES < %t/out/opentitan-bmc-mode-diff-results.txt
+// RUN: FileCheck %s --check-prefix=DIFFMETRICS < %t/out/opentitan-bmc-mode-diff-metrics.tsv
+//
+// SUM: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
+// SUM: opentitan{{[[:space:]]+}}BMC{{[[:space:]]+}}2{{[[:space:]]+}}2{{[[:space:]]+}}0
+// SUM: opentitan{{[[:space:]]+}}BMC_STRICT{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}1
+// SUM: opentitan{{[[:space:]]+}}BMC_MODE_DIFF{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}1{{.*}}same_status=1{{.*}}strict_only_fail=1
+// DIFFTSV: FAIL{{[[:space:]]+}}aes_sbox_lut{{[[:space:]]+}}strict_only_fail{{[[:space:]]+}}PASS{{[[:space:]]+}}FAIL
+// DIFFRES: FAIL{{[[:space:]]+}}aes_sbox_lut{{[[:space:]]+}}strict_only_fail;bmc=PASS;bmc_strict=FAIL{{[[:space:]]+}}opentitan{{[[:space:]]+}}BMC_MODE_DIFF
+// DIFFMETRICS: metric{{[[:space:]]+}}value
+// DIFFMETRICS: same_status{{[[:space:]]+}}1
+// DIFFMETRICS: strict_only_fail{{[[:space:]]+}}1
