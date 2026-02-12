@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1152 - February 12, 2026
+
+### Mutation Governance: Formal Quality-Strict Policy Modes
+
+1. Added stricter quality policy modes:
+   - `native-strict-formal-quality-strict`
+   - `strict-formal-quality-strict`
+2. Mode composition:
+   - strict timeout budget:
+     `formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1`
+   - semantic diagnostic family gate:
+     `formal-regression-matrix-external-formal-semantic-diag-family-guard`
+   - core volume floors:
+     - `formal-regression-matrix-external-formal-bmc-core-min-total-v1`
+     - `formal-regression-matrix-external-formal-lec-core-min-total-v1`
+3. Added regressions:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-quality-strict-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-strict-fail.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-strict.test`
+4. Updated mode-list diagnostics tests to include quality-strict modes.
+
 ## Iteration 1151 - February 12, 2026
 
 ### Mutation Governance: Formal Quality-Debt Policy Modes
