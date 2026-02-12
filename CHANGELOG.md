@@ -1,5 +1,88 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1180 - February 12, 2026
+
+### Formal Runner Reliability: Strict AVIP Runner Preflight
+
+1. Extended `--strict-tool-preflight` in `utils/run_formal_all.sh` to include lane-aware AVIP runner preflight.
+2. Strict preflight now fail-fast validates `utils/run_avip_circt_verilog.sh` when `--with-avip` selects at least one enabled `avip/<name>/compile` lane.
+3. Added regression:
+   - `test/Tools/run-formal-all-strict-tool-preflight-missing-avip-runner.test`
+4. Kept default behavior unchanged: strict preflight remains opt-in (`--strict-tool-preflight`).
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-strict-tool-preflight-derived-opt.test build-test/test/Tools/run-formal-all-strict-tool-preflight-missing-sv-lec-runner.test build-test/test/Tools/run-formal-all-strict-tool-preflight-missing-opentitan-e2e-runner.test build-test/test/Tools/run-formal-all-strict-tool-preflight-missing-avip-runner.test build-test/test/Tools/run-formal-all-explicit-circt-opt-preflight.test build-test/test/Tools/run-formal-all-circt-toolchain-forwarding.test build-test/test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys.test build-test/test/Tools/run-formal-all-baselines.test`
+  - PASS (9/9)
+
+## Iteration 1179 - February 12, 2026
+
+### Formal Runner Reliability: Strict Preflight for Lane Runner Entrypoints
+
+1. Extended `--strict-tool-preflight` in `utils/run_formal_all.sh` to fail fast on missing or non-executable runner entrypoints for enabled formal lanes.
+2. Added lane-aware strict preflight checks for:
+   - `utils/run_sv_tests_circt_bmc.sh` and `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_bmc.sh` and `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_bmc.sh` and `utils/run_yosys_sva_circt_lec.sh`
+   - `utils/run_opentitan_circt_lec.py` and `utils/run_opentitan_formal_e2e.sh`
+3. Added regressions:
+   - `test/Tools/run-formal-all-strict-tool-preflight-missing-sv-lec-runner.test`
+   - `test/Tools/run-formal-all-strict-tool-preflight-missing-opentitan-e2e-runner.test`
+   - updated `test/Tools/run-formal-all-help.test` for option coverage
+4. Behavior remains opt-in (`--strict-tool-preflight`) and backward compatible by default.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/run-formal-all-strict-tool-preflight-derived-opt.test build-test/test/Tools/run-formal-all-strict-tool-preflight-missing-sv-lec-runner.test build-test/test/Tools/run-formal-all-strict-tool-preflight-missing-opentitan-e2e-runner.test build-test/test/Tools/run-formal-all-explicit-circt-opt-preflight.test build-test/test/Tools/run-formal-all-circt-toolchain-forwarding.test build-test/test/Tools/run-formal-all-help.test`
+  - PASS (6/6)
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys.test build-test/test/Tools/run-formal-all-baselines.test`
+  - PASS (2/2)
+
+## Iteration 1178 - February 12, 2026
+
+### Formal Runner Reliability: Optional Default-Derived Tool Preflight
+
+1. Added `--strict-tool-preflight` to `utils/run_formal_all.sh`.
+2. When enabled, `run_formal_all.sh` now fail-fast validates default-derived CIRCT tools for enabled core formal lanes:
+   - `circt-verilog`
+   - `circt-bmc` (BMC lanes)
+   - `circt-opt` + `circt-lec` (LEC lanes)
+3. Validation is lane-aware for core suites (`sv-tests`, `verilator-verification`, `yosys/tests/sva`) and does not change default behavior unless the flag is passed.
+4. Added regression:
+   - `test/Tools/run-formal-all-strict-tool-preflight-derived-opt.test`
+
+### Tests and Validation
+
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/run-formal-all-strict-tool-preflight-derived-opt.test build-test/test/Tools/run-formal-all-explicit-circt-opt-preflight.test build-test/test/Tools/run-formal-all-circt-toolchain-forwarding.test build-test/test/Tools/run-formal-all-help.test`
+  - PASS (4/4)
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys.test build-test/test/Tools/run-formal-all-baselines.test`
+  - PASS (2/2)
+
+
+## Iteration 1177 - February 12, 2026
+
+### Formal Runner Reliability: Explicit CIRCT Tool Preflight for `run_formal_all.sh`
+
+1. Added fail-fast executability preflight in `utils/run_formal_all.sh` for explicitly configured tool paths:
+   - `--circt-verilog`
+   - `--circt-verilog-avip`
+   - `--circt-verilog-opentitan`
+   - env overrides `CIRCT_OPT`, `CIRCT_BMC`, `CIRCT_LEC`
+2. Preflight now errors once at startup instead of surfacing late per-case runner-command failures when an overridden tool path is non-executable.
+3. Added regression:
+   - `test/Tools/run-formal-all-explicit-circt-opt-preflight.test`
+
+### Tests and Validation
+
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/run-formal-all-explicit-circt-opt-preflight.test build-test/test/Tools/run-formal-all-circt-toolchain-forwarding.test build-test/test/Tools/run-formal-all-help.test`
+  - PASS (3/3)
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys.test build-test/test/Tools/run-formal-all-baselines.test`
+  - PASS (2/2)
+
 ## Iteration 1176 - February 12, 2026
 
 ### Mutation Governance: `LEC_NOT_RUN` Reason-Coverage Policy Profile

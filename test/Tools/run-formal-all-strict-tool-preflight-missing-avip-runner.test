@@ -1,0 +1,8 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/mbit/myavip
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog-avip
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/bin/circt-verilog-avip
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --strict-tool-preflight --with-avip --avip-glob %t/mbit/*avip* --circt-verilog-avip %t/bin/circt-verilog-avip --include-lane-regex "^avip/myavip/compile$"' 2>&1 | FileCheck %s
+//
+// CHECK: AVIP compile runner not executable: utils/run_avip_circt_verilog.sh
