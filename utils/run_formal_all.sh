@@ -9808,6 +9808,38 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
   fi
 fi
 
+classify_opentitan_lec_missing_results_reason() {
+  local suite_log="$1"
+  if [[ ! -f "$suite_log" ]]; then
+    printf "runner_command_no_log\n"
+    return
+  fi
+  if grep -Fq "missing_OUT" "$suite_log"; then
+    printf "runner_command_missing_out\n"
+    return
+  fi
+  if grep -Fq "bad_workdir=" "$suite_log"; then
+    printf "runner_command_bad_workdir\n"
+    return
+  fi
+  if grep -Eq "No such file or directory|not found" "$suite_log"; then
+    printf "runner_command_not_found\n"
+    return
+  fi
+  if grep -Fq "Permission denied" "$suite_log"; then
+    printf "runner_command_permission_denied\n"
+    return
+  fi
+  if grep -Eq "Traceback \(most recent call last\)|CalledProcessError|Exception" "$suite_log"; then
+    printf "runner_command_exception\n"
+    return
+  fi
+  if grep -Eq "LEC failures:[[:space:]]*[1-9]" "$suite_log"; then
+    printf "runner_command_failures_reported\n"
+    return
+  fi
+  printf "runner_command_no_results\n"
+}
 run_opentitan_lec_lane() {
   local lane_id="$1"
   local mode_name="$2"
@@ -9873,9 +9905,16 @@ run_opentitan_lec_lane() {
       record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 0 1 "$no_impl_summary"
       return
     fi
-    printf "FAIL\taes_sbox\tmissing_results\topentitan\t%s\t\n" "$mode_name" > "$case_results"
-    local missing_summary="total=1 pass=0 fail=1 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
-    record_result_with_summary "opentitan" "$mode_name" 1 0 1 0 0 1 0 "$missing_summary"
+    local missing_reason
+    missing_reason="$(classify_opentitan_lec_missing_results_reason "$suite_log")"
+    printf "ERROR\taes_sbox\tmissing_results\topentitan\t%s\tCIRCT_LEC_ERROR\t%s\n" "$mode_name" "$missing_reason" > "$case_results"
+    local missing_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
+    local lec_case_summary
+    lec_case_summary="$(summarize_lec_case_file "$case_results")"
+    if [[ -n "$lec_case_summary" ]]; then
+      missing_summary="${missing_summary} ${lec_case_summary}"
+    fi
+    record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$missing_summary"
     return
   fi
 

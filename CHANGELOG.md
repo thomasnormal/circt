@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1184 - February 12, 2026
+
+### Formal LEC Telemetry: Typed OpenTitan `missing_results` Error Reasons
+
+1. Upgraded OpenTitan LEC `missing_results` fallback handling in `utils/run_formal_all.sh` from untyped fail rows to explicit typed error rows:
+   - `ERROR ... CIRCT_LEC_ERROR <runner_reason>`
+2. Added reason-classification for missing-results fallback via log heuristics:
+   - `runner_command_missing_out`
+   - `runner_command_bad_workdir`
+   - `runner_command_not_found`
+   - `runner_command_permission_denied`
+   - `runner_command_exception`
+   - `runner_command_failures_reported`
+   - `runner_command_no_log`
+   - `runner_command_no_results` (default)
+3. Missing-results fallback summary now includes shared LEC case telemetry counters by reusing `summarize_lec_case_file`.
+4. Regression coverage:
+   - updated `test/Tools/run-formal-all-opentitan-lec-fallback-diag.test`
+   - new `test/Tools/run-formal-all-opentitan-lec-missing-results-reason.test`
+5. Outcome:
+   - OpenTitan runner-output failures now surface stable, diagnosable infra reasons instead of opaque missing-diag rows.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test --filter='run-formal-all-opentitan-lec'`
+  - PASS (9/9)
+- `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys.test`
+  - PASS (1/1)
+- External smoke (OpenTitan no-impl reason path):
+  - `run_formal_all --with-opentitan --include-lane-regex '^opentitan/LEC$' --opentitan-lec-impl-filter '^__no_impl_should_match__$'`
+  - PASS with `LEC_NOT_RUN impl_filter` and `lec_not_run_reason_missing_cases=0`
+- External smoke (Yosys LEC filtered):
+  - `run_formal_all --include-lane-regex '^yosys/tests/sva/LEC$' --yosys-lec-test-filter 'basic00'`
+  - PASS (`total=1 pass=1 error=0`)
+- External smoke (sv-tests LEC filtered):
+  - `run_formal_all --include-lane-regex '^sv-tests/LEC$' --sv-tests-lec-test-filter '16\.11--sequence-subroutine-uvm'`
+  - PASS (`total=1 pass=1 error=0`)
+
 ## Iteration 1183 - February 12, 2026
 
 ### Formal LEC Telemetry: OpenTitan No-Impl `LEC_NOT_RUN` Reason Contract

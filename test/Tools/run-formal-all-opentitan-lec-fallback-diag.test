@@ -2,7 +2,7 @@
 // RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
 // RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
 // RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
-// RUN: printf '#!/usr/bin/env python3\nimport os,sys\nmode = os.environ.get(\"LEC_MODE_LABEL\", \"LEC\")\nprint(\"Running LEC on 1 AES S-Box implementation(s)...\")\nif mode == \"LEC_STRICT\":\n  print(\"aes_sbox_canright        FAIL (NEQ) (logs in strict/aes_sbox_canright)\")\n  print(\"LEC failures: 1\")\n  sys.exit(1)\nprint(\"aes_sbox_canright        OK\")\nprint(\"LEC completed successfully.\")\nsys.exit(0)\n' > %t/utils/run_opentitan_circt_lec.py
+// RUN: printf '#!/usr/bin/env python3\nimport os,sys\nmode = os.environ.get("LEC_MODE_LABEL", "LEC")\nprint("Running LEC on 1 AES S-Box implementation(s)...")\nif mode == "LEC_STRICT":\n  print("aes_sbox_canright        FAIL (NEQ) (logs in strict/aes_sbox_canright)")\n  print("LEC failures: 1")\n  sys.exit(1)\nprint("aes_sbox_canright        OK")\nprint("LEC completed successfully.")\nsys.exit(0)\n' > %t/utils/run_opentitan_circt_lec.py
 // RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_opentitan_circt_lec.py %t/fake-circt-verilog-opentitan
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-lec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/LEC$' --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --opentitan-lec-impl-filter ".*"
 // RUN: FileCheck %s --check-prefix=LECSUM < %t/out-lec/summary.tsv
@@ -12,8 +12,12 @@
 // RUN: FileCheck %s --check-prefix=STRICTCASE < %t/out-strict/opentitan-lec-strict-results.txt
 
 // LECSUM: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
-// LECSUM: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}total=1 pass=0 fail=1 xfail=0 xpass=0 error=1 skip=0 missing_results=1
-// LECCASE: FAIL{{[[:space:]]+}}aes_sbox{{[[:space:]]+}}missing_results{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC
+// LECSUM: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1
+// LECSUM: lec_diag_circt_lec_error_cases=1
+// LECSUM: lec_error_bucket_infra_runner_command_cases=1
+// LECCASE: ERROR{{[[:space:]]+}}aes_sbox{{[[:space:]]+}}missing_results{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_LEC_ERROR{{[[:space:]]+}}runner_command_no_results
 // STRICTSUM: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
-// STRICTSUM: opentitan{{[[:space:]]+}}LEC_STRICT{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}total=1 pass=0 fail=1 xfail=0 xpass=0 error=1 skip=0 missing_results=1
-// STRICTCASE: FAIL{{[[:space:]]+}}aes_sbox{{[[:space:]]+}}missing_results{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC_STRICT
+// STRICTSUM: opentitan{{[[:space:]]+}}LEC_STRICT{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1
+// STRICTSUM: lec_diag_circt_lec_error_cases=1
+// STRICTSUM: lec_error_bucket_infra_runner_command_cases=1
+// STRICTCASE: ERROR{{[[:space:]]+}}aes_sbox{{[[:space:]]+}}missing_results{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC_STRICT{{[[:space:]]+}}CIRCT_LEC_ERROR{{[[:space:]]+}}runner_command_failures_reported
