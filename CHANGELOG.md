@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1208 - February 12, 2026
+
+### Formal Lane Contract Hardening: OpenTitan Mode-Diff Dependency Enforcement
+
+1. Hardened `utils/run_formal_all.sh` mode-diff lane selection semantics to avoid silent no-op runs when source lanes are excluded by lane filters.
+2. Added explicit dependency contracts:
+   - `opentitan/BMC_MODE_DIFF` now requires both source lanes in active filter set:
+     - `opentitan/BMC`
+     - `opentitan/BMC_STRICT`
+   - `opentitan/LEC_MODE_DIFF` now requires:
+     - `opentitan/LEC`
+     - `opentitan/LEC_STRICT`
+   - `opentitan/E2E_MODE_DIFF` now requires:
+     - `opentitan/E2E`
+     - `opentitan/E2E_STRICT`
+3. Added explicit diagnostics for violated contracts so mode-diff requests fail fast with actionable guidance instead of producing empty/omitted summaries.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- added regression test:
+  - `test/Tools/run-formal-all-opentitan-mode-diff-lane-deps.test`
+- focused lit slice:
+  - `run-formal-all-opentitan-mode-diff-lane-deps.test`
+  - `run-formal-all-opentitan-bmc-mode-diff.test`
+  - `run-formal-all-strict-gate-bmc-mode-diff-counters.test`
+  - PASS (3/3)
+
+### Remaining Limitations
+
+- Mode-diff lanes still compare status-level outcomes only; detailed per-diagnostic/token drift counters are not yet exported.
+
 ## Iteration 1207 - February 12, 2026
 
 ### Formal BMC Governance: OpenTitan Strict Lane + Mode-Diff Contracts

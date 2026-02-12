@@ -7723,6 +7723,10 @@ if [[ "$WITH_OPENTITAN_BMC" == "1" && "$WITH_OPENTITAN_BMC_STRICT" == "1" ]] && 
     echo "opentitan/BMC_MODE_DIFF requires explicit filter: set --opentitan-bmc-impl-filter" >&2
     exit 1
   fi
+  if ! lane_enabled "opentitan/BMC" || ! lane_enabled "opentitan/BMC_STRICT"; then
+    echo "opentitan/BMC_MODE_DIFF requires source lanes in filter: include opentitan/BMC and opentitan/BMC_STRICT" >&2
+    exit 1
+  fi
 fi
 if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRICT"; then
   if [[ -z "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
@@ -7734,6 +7738,10 @@ if [[ "$WITH_OPENTITAN" == "1" && "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && \
    lane_enabled "opentitan/LEC_MODE_DIFF"; then
   if [[ -z "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
     echo "opentitan/LEC_MODE_DIFF requires explicit filter: set --opentitan-lec-impl-filter" >&2
+    exit 1
+  fi
+  if ! lane_enabled "opentitan/LEC" || ! lane_enabled "opentitan/LEC_STRICT"; then
+    echo "opentitan/LEC_MODE_DIFF requires source lanes in filter: include opentitan/LEC and opentitan/LEC_STRICT" >&2
     exit 1
   fi
 fi
@@ -7755,8 +7763,11 @@ if [[ "$WITH_OPENTITAN_E2E" == "1" && "$WITH_OPENTITAN_E2E_STRICT" == "1" ]] && 
     echo "opentitan/E2E_MODE_DIFF requires explicit filter: set --opentitan-e2e-impl-filter" >&2
     exit 1
   fi
+  if ! lane_enabled "opentitan/E2E" || ! lane_enabled "opentitan/E2E_STRICT"; then
+    echo "opentitan/E2E_MODE_DIFF requires source lanes in filter: include opentitan/E2E and opentitan/E2E_STRICT" >&2
+    exit 1
+  fi
 fi
-
 if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   need_core_bmc_lanes=0
   need_core_lec_lanes=0
