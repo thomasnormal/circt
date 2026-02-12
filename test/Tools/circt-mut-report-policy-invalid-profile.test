@@ -30,6 +30,7 @@
 // CHECK-DAG: formal-regression-matrix-external-formal-core-timeout-stage-budget-v1
 // CHECK-DAG: formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1
 // CHECK-DAG: formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1
+// CHECK-DAG: formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2
 // CHECK-DAG: formal-regression-matrix-external-formal-compile-mode-budget-debt-v1
 // CHECK-DAG: formal-regression-matrix-external-formal-compile-mode-budget-strict-v1
 // CHECK-DAG: formal-regression-matrix-composite-native-strict

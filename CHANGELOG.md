@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1150 - February 12, 2026
+
+### Mutation Governance: Timeout Debt v2 (Suite-Aware) + Mode Remap
+
+1. Added suite-aware timeout debt profile:
+   - `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2`
+2. Policy behavior:
+   - keeps core BMC/LEC suites (`sv-tests`, `verilator-verification`,
+     `yosys/tests/sva`) at debt ceiling `<= 1` per timeout-stage counter.
+   - tightens `sv-tests-uvm/BMC_SEMANTICS` timeout-stage counters to `<= 0`.
+3. Remapped timeout debt policy modes to `debt-v2`:
+   - `native-strict-formal-timeout-debt`
+   - `strict-formal-timeout-debt`
+4. Added/updated regressions:
+   - added:
+     - `test/Tools/circt-mut-report-policy-matrix-external-formal-core-timeout-stage-budget-debt-v2-pass.test`
+     - `test/Tools/circt-mut-report-policy-matrix-external-formal-core-timeout-stage-budget-debt-v2-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-timeout-debt-pass.test`
+     - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-timeout-debt-pass.test`
+     - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-timeout-debt.test`
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
 ## Iteration 1149 - February 11, 2026
 
 ### Mutation Governance: Policy-Mode Timeout Budget Rollout (Native + Strict)
