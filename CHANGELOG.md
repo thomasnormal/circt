@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1183 - February 12, 2026
+
+### Formal LEC Telemetry: OpenTitan No-Impl `LEC_NOT_RUN` Reason Contract
+
+1. Updated the OpenTitan no-implementation lane path in `utils/run_formal_all.sh` to emit explicit reasoned case rows instead of bare skip rows:
+   - `SKIP ... LEC_NOT_RUN impl_filter`
+2. Wired the no-impl branch through shared LEC case summarization so OpenTitan LEC no-impl runs now publish standard counters, including:
+   - `lec_diag_lec_not_run_cases`
+   - `lec_not_run_reason_impl_filter_cases`
+   - `lec_not_run_reason_missing_cases`
+3. Strengthened regression coverage:
+   - `test/Tools/run-formal-all-opentitan-lec-no-impl-skip.test`
+   - now verifies both reasoned case-row shape and summary counters.
+4. Outcome:
+   - OpenTitan no-impl lanes no longer fall into `lec_diag_missing_cases` noise and are now first-class reason-governed `LEC_NOT_RUN` telemetry.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test --filter='run-formal-all-opentitan-lec'`
+  - PASS (8/8)
+- `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys.test`
+  - PASS (1/1)
+- External smoke (OpenTitan no-impl path):
+  - `run_formal_all --with-opentitan --include-lane-regex '^opentitan/LEC$' --opentitan-lec-impl-filter '^__no_impl_should_match__$'`
+  - PASS with summary counters:
+    - `lec_diag_lec_not_run_cases=1`
+    - `lec_not_run_reason_impl_filter_cases=1`
+    - `lec_not_run_reason_missing_cases=0`
+- External smoke (Verilator LEC lane):
+  - `run_formal_all --include-lane-regex '^verilator-verification/LEC$' --verilator-lec-test-filter 'assert_changed'`
+  - PASS (`total=1 pass=1 error=0`)
+
 ## Iteration 1182 - February 12, 2026
 
 ### Formal LEC Telemetry: Yosys VHDL `LEC_NOT_RUN` Reason Parity

@@ -9863,8 +9863,13 @@ run_opentitan_lec_lane() {
     local suite_log="$OUT_DIR/${suite_name}.log"
     if [[ -f "$suite_log" ]] && \
        grep -q "No AES S-Box implementations selected." "$suite_log"; then
-      printf "SKIP\taes_sbox\tno_matching_impl_filter\topentitan\t%s\t\n" "$mode_name" > "$case_results"
+      printf "SKIP\taes_sbox\tno_matching_impl_filter\topentitan\t%s\tLEC_NOT_RUN\timpl_filter\n" "$mode_name" > "$case_results"
       local no_impl_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=0 skip=1 no_matching_impl_filter=1"
+      local lec_case_summary
+      lec_case_summary="$(summarize_lec_case_file "$case_results")"
+      if [[ -n "$lec_case_summary" ]]; then
+        no_impl_summary="${no_impl_summary} ${lec_case_summary}"
+      fi
       record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 0 1 "$no_impl_summary"
       return
     fi
