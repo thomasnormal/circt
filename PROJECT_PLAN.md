@@ -62,6 +62,32 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, `LEC_NOT_RUN` case-identity strict governance)
+
+1. Added first-class `LEC_NOT_RUN` identity exports in `utils/run_formal_all.sh` baseline telemetry:
+   - `lec_not_run_case_ids`
+   - `lec_not_run_case_reasons`
+2. Added no-run identity cardinality counters in per-lane summary telemetry:
+   - `lec_not_run_case_ids_cardinality`
+   - `lec_not_run_case_reasons_cardinality`
+3. Added strict-gate controls for no-run identity drift:
+   - `--fail-on-new-lec-not-run-case-ids`
+   - `--fail-on-new-lec-not-run-case-reasons`
+   - both are now default-enabled by `--strict-gate`.
+4. Added focused regressions and help coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-not-run-case-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-not-run-case-ids-defaults.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-not-run-case-reasons.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-not-run-case-reasons-defaults.test`
+   - `test/Tools/run-formal-all-help.test`
+5. Remaining limitations:
+   - wrapper-level `LEC_NOT_RUN` reason taxonomy is still partially heuristic and string-derived for some lanes.
+   - no versioned structured provenance schema yet for no-run/runner-command root-cause records.
+6. Next long-term features:
+   - move wrapper no-run and runner-command classification to structured, versioned provenance artifacts consumed by strict policy and mutation governance.
+   - continue tightening strict defaults so missing/unknown no-run reasons remain budgeted at zero across all enabled core LEC suites.
+
+
 ### Formal Closure Snapshot Update (February 12, 2026, runner-command identity parity across typed LEC errors)
 
 1. Completed aggregate runner-command parity for `CIRCT_LEC_ERROR` in `utils/run_formal_all.sh`:
