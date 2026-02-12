@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/matrix/lane1 %t/proj/out/matrix/lane2
+// RUN: printf 'detected_mutants\t1\nerrors\t0\n' > %t/proj/out/matrix/lane1/metrics.tsv
+// RUN: printf 'detected_mutants\t1\nerrors\t0\n' > %t/proj/out/matrix/lane2/metrics.tsv
+// RUN: printf 'lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\nlane1\tPASS\t0\t100.00\tPASS\t%t/proj/out/matrix/lane1\t%t/proj/out/matrix/lane1/metrics.tsv\t-\nlane2\tPASS\t0\t100.00\tPASS\t%t/proj/out/matrix/lane2\t%t/proj/out/matrix/lane2/metrics.tsv\t-\n' > %t/proj/out/matrix/results.tsv
+// RUN: bash -lc 'row1="lane1\t%t/proj/design.il\t%t/proj/mutations.txt\t%t/proj/tests.tsv\t-\t-\t-"; for _ in $(seq 1 39); do row1="${row1}\t-"; done; row1="${row1}\tquality-nightly"; row2="lane2\t%t/proj/design.il\t%t/proj/mutations.txt\t%t/proj/tests.tsv\t-\t-\t-"; for _ in $(seq 1 39); do row2="${row2}\t-"; done; row2="${row2}\tnative-quality-nightly"; printf "%b\n%b\n" "$row1" "$row2" > %t/proj/lanes.tsv'
+// RUN: printf '[matrix]\nlanes_tsv = "lanes.tsv"\nout_dir = "out/matrix"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut report --project-dir %t/proj --mode matrix > %t/out.txt 2>&1
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK: circt-mut report: conflicting lane policy class modes in lanes_tsv

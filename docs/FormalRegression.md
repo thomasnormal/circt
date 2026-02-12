@@ -1090,8 +1090,10 @@ Notes:
   `circt-mut report` / `circt-mut run --with-report` when no explicit
   `policy_mode` / `report_policy_mode` is set. Supported values:
   `quality-smoke`, `quality-nightly` (or `quality`), `quality-strict`,
-  `quality-debt-nightly`, `quality-debt-strict`, or any explicit matrix
-  policy mode literal.
+  `quality-debt-nightly`, `quality-debt-strict`,
+  `native-quality-smoke`, `native-quality-nightly` (or `native-quality`),
+  `native-quality-strict`, `native-quality-debt-nightly`,
+  `native-quality-debt-strict`, or any explicit matrix policy mode literal.
 - `mutations_yosys` (optional) overrides `--default-mutations-yosys` for a
   generated-mutation lane.
 - `global_propagate_cmd` (optional) overrides

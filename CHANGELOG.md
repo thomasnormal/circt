@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1161 - February 12, 2026
+
+### Mutation Governance: Native Lane-Class Auto Policy Binding
+
+1. Extended lane-manifest policy-class auto-binding in
+   `tools/circt-mut/circt-mut.cpp` with native quality classes:
+   - `native-quality-smoke`
+   - `native-quality-nightly` (and `native-quality`)
+   - `native-quality-strict`
+   - `native-quality-debt-nightly`
+   - `native-quality-debt-strict`
+2. Native class mapping behavior:
+   - maps to `native-strict-formal-quality-*` policy modes so
+     native strict-contract policy profiles are enforced automatically.
+3. Conflict semantics:
+   - non-native quality classes still fold to stricter mode within family.
+   - native quality classes fold to stricter mode within native family.
+   - mixed native-quality and non-native quality classes now fail fast as
+     manifest policy conflicts.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-mode-lane-class-auto-native-quality-nightly-pass.test`
+   - `test/Tools/circt-mut-report-policy-mode-lane-class-auto-conflict-native-vs-non-native-fail.test`
+5. Documentation updates:
+   - `docs/FormalRegression.md` lane schema now documents native quality class
+     values for `report_policy_lane_class`.
+   - `README.md` lane schema summary now includes native quality class usage.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused native lane-class auto slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-mut-report-policy-mode-lane-class-auto-quality-nightly-pass.test build-test/test/Tools/circt-mut-run-with-report-policy-mode-lane-class-auto-quality-nightly.test build-test/test/Tools/circt-mut-report-policy-mode-lane-class-auto-native-quality-nightly-pass.test build-test/test/Tools/circt-mut-report-policy-mode-lane-class-auto-conflict-native-vs-non-native-fail.test`
+  - PASS (4/4)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (471/471 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-lane-class-policy ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+    BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile
+    `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL (known/ongoing): `opentitan` LEC (`missing_results=1`), AVIP compile
+    `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1160 - February 12, 2026
 
 ### Mutation Governance: Lane-Class Auto Policy Mode Binding
