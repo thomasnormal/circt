@@ -1,0 +1,8 @@
+// RUN: FileCheck %s < %S/../../utils/sv-tests-bmc-semantic-tags.tsv
+
+// CHECK-DAG: 16.10--property-local-var-uvm{{[[:space:]]+}}local_var
+// CHECK-DAG: 16.10--sequence-local-var-uvm{{[[:space:]]+}}local_var
+// CHECK-DAG: 16.11--sequence-subroutine-uvm{{[[:space:]]+}}local_var
+// CHECK-DAG: 16.13--sequence-multiclock-uvm{{[[:space:]]+}}multiclock
+// CHECK-DAG: 16.15--property-iff-uvm{{[[:space:]]+}}disable_iff
+// CHECK-DAG: 16.15--property-iff-uvm-fail{{[[:space:]]+}}disable_iff

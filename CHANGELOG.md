@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1172 - February 12, 2026
+
+### BMC Semantic Closure: UVM Subroutine/Multiclock Edge Revalidation
+
+1. Revalidated targeted `sv-tests` UVM edge cases with explicit CIRCT tool
+   paths (`build-test/bin`) and case-level filters:
+   - BMC:
+     - `16.11--sequence-subroutine-uvm`: PASS
+     - `16.13--sequence-multiclock-uvm`: PASS
+   - LEC:
+     - `16.11--sequence-subroutine-uvm`: PASS (`LEC_NOT_RUN`)
+     - `16.13--sequence-multiclock-uvm`: PASS (`LEC_NOT_RUN`)
+2. Added regression coverage to lock semantic bucket mapping for these UVM
+   closure cases:
+   - `test/Tools/sv-tests-bmc-semantic-tags-uvm-closure.test`
+3. Closure signal impact:
+   - critical UVM closure buckets (`local_var`, `multiclock`, `disable_iff`)
+     remain explicitly tracked in `utils/sv-tests-bmc-semantic-tags.tsv`.
+   - mutation/report policy stacks that consume semantic bucket rollups retain
+     deterministic case-to-bucket linkage for these edges.
+
+### Tests and Validation
+
+- Focused BMC case probes:
+  - `utils/run_sv_tests_circt_bmc.sh` with `TEST_FILTER='16\\.11--sequence-subroutine-uvm$'`: PASS
+  - `utils/run_sv_tests_circt_bmc.sh` with `TEST_FILTER='16\\.13--sequence-multiclock-uvm$'`: PASS
+- Focused LEC case probes:
+  - `utils/run_sv_tests_circt_lec.sh` with `TEST_FILTER='16\\.11--sequence-subroutine-uvm$'`: PASS (`LEC_NOT_RUN`)
+  - `utils/run_sv_tests_circt_lec.sh` with `TEST_FILTER='16\\.13--sequence-multiclock-uvm$'`: PASS (`LEC_NOT_RUN`)
+- New semantic-tag regression:
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/sv-tests-bmc-semantic-tags-uvm-closure.test`: PASS
+
 ## Iteration 1171 - February 12, 2026
 
 ### Fix: randomize() no longer corrupts object metadata (vtable, class_id)
