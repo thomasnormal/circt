@@ -1,5 +1,87 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1205 - February 12, 2026
+
+### Formal BMC Platforming: Generic Pairwise Runner + OpenTitan Lane Closure
+
+1. Added a new reusable BMC backend runner:
+   - `utils/run_pairwise_circt_bmc.py`
+   - manifest-driven case execution (case/top/files/include-dirs/case-path)
+   - standardized result TSV rows + dropped-syntax and timeout-reason artifacts
+   - standardized suite summary output (`<suite> BMC summary: ...`).
+2. Refactored OpenTitan BMC flow to keep project-specific logic thin:
+   - `utils/run_opentitan_circt_bmc.py` now focuses on OpenTitan AES S-Box
+     case discovery/miter generation and delegates execution to the generic
+     pairwise runner.
+3. Completed `run_formal_all.sh` OpenTitan BMC lane integration:
+   - strict preflight wiring (`opentitan/BMC` now requires executable
+     `utils/run_opentitan_circt_bmc.py` when selected)
+   - tool-preflight inclusion for BMC toolchain when `opentitan/BMC` is active
+   - lane execution + summary recording (`opentitan/BMC`)
+   - explicit no-matching-impl skip synthesis (`BMC_NOT_RUN/impl_filter`)
+   - missing-results fallback diagnostics (`CIRCT_BMC_ERROR/<reason>`).
+4. Added/updated focused regression coverage:
+   - `test/Tools/run-pairwise-circt-bmc-basic.test`
+   - `test/Tools/run-opentitan-bmc-mode-label.test`
+   - `test/Tools/run-formal-all-opentitan-bmc.test`
+   - `test/Tools/run-formal-all-opentitan-bmc-no-impl-skip.test`
+   - `test/Tools/run-formal-all-strict-tool-preflight-missing-opentitan-bmc-runner.test`
+   - `test/Tools/run-formal-all-opentitan-filter-invalid.test` (adds BMC filter validation)
+   - `test/Tools/run-formal-all-help.test` (help visibility checks).
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py utils/run_opentitan_circt_bmc.py`
+  - PASS
+- focused lit slice:
+  - `run-formal-all-help.test`
+  - `run-formal-all-opentitan-filter-invalid.test`
+  - `run-formal-all-opentitan-bmc.test`
+  - `run-formal-all-opentitan-bmc-no-impl-skip.test`
+  - `run-formal-all-strict-tool-preflight-missing-opentitan-bmc-runner.test`
+  - `run-pairwise-circt-bmc-basic.test`
+  - `run-opentitan-bmc-mode-label.test`
+  - PASS (7/7)
+
+### Remaining Limitations
+
+- OpenTitan BMC masked-impl inclusion currently reuses the LEC include-masked
+  control surface; a dedicated BMC include-masked CLI knob is still missing.
+- OpenTitan BMC has no strict/default mode-diff synthesis lane yet
+  (unlike LEC/E2E mode-diff governance).
+- Generic pairwise manifest is intentionally minimal (TSV + global env knobs);
+  per-case backend/solver override schema is not yet implemented.
+
+## Iteration 1204 - February 12, 2026
+
+### circt-sim config_db dynamic-array/native-memory write correctness
+
+1. Hardened `tools/circt-sim/LLHDProcessInterpreter.cpp` config-db `get` writeback paths to handle native-memory references safely and consistently:
+   - added bounded native write helper (`writeConfigDbBytesToNativeMemory`)
+   - applies to `call_indirect` config-db interceptor (`llhd.ref` + pointer outputs)
+   - applies to func-level config-db wrapper interceptor
+   - applies to config_db_implementation interceptor path.
+2. Fixed a latent correctness gap where one config-db interceptor path did not fall back to native-memory writes at all when output refs pointed into heap-backed dynamic-array storage.
+3. Added native-write bounds handling that respects offset within tracked native blocks and avoids overrunning near block tails.
+4. Added regression coverage:
+   - `test/Tools/circt-sim/config-db-dynamic-array-native.sv`
+   - verifies `uvm_config_db#(my_cfg)::get(...)` writes into dynamic-array slots (`new[2]`) and preserves retrieved object handles/fields.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-sim circt-verilog`
+  - PASS
+- Direct scenario checks with `build-test/bin/circt-verilog` + `build-test/bin/circt-sim`:
+  - `test/Tools/circt-sim/config-db.sv`: PASS
+  - `test/Tools/circt-sim/config-db-dual-top.sv`: PASS
+  - `test/Tools/circt-sim/config-db-dynamic-array-native.sv`: PASS
+
+### Remaining Limitations
+
+- Config-db native write paths are now unified and bounded, but broader native-memory accounting remains linear-scan (`nativeMemoryBlocks`) and can still be optimized for large UVM heaps.
+
 ## Iteration 1203 - February 12, 2026
 
 ### Formal Lane UX: Forward Selective Parsing-Case LEC Promotion via CLI

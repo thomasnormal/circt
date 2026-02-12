@@ -24,6 +24,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 5. **Dual-top sim.terminate handling**: Graceful shutdown when HVL finishes before HDL.
 6. **Stack size increase**: 64MB stack for deep UVM sequence nesting.
 7. **Diagnostic cleanup**: Removed all 21 DIAG-* debug logging blocks.
+8. **config_db native write fix for dynamic arrays**: `uvm_config_db::get` writeback now reliably updates heap-backed dynamic-array slots (`new[]`) across all interpreter interception paths; added `test/Tools/circt-sim/config-db-dynamic-array-native.sv`.
 
 ### Feature Gap Table (Simulation)
 
@@ -61,6 +62,36 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 ---
 
 ## Formal Workstream (circt-mut) — February 12, 2026
+
+### Formal Closure Snapshot Update (February 12, 2026, OpenTitan BMC lane generalized backend)
+
+1. Added a reusable pairwise BMC execution backend:
+   - `utils/run_pairwise_circt_bmc.py` (manifest-driven, suite-agnostic).
+2. Reworked OpenTitan BMC runner into a thin front-end:
+   - `utils/run_opentitan_circt_bmc.py` now only discovers/generates OpenTitan
+     AES S-Box pairwise cases and delegates execution to the generic runner.
+3. Completed `run_formal_all.sh` `opentitan/BMC` lane:
+   - strict preflight now enforces required OpenTitan BMC runner executable
+   - lane now records summary + case rows in the same strict-gate data plane
+   - explicit no-impl skip synthesis + missing-results fallback diagnostics.
+4. Added focused regression coverage for generic runner + OpenTitan lane wiring:
+   - `run-pairwise-circt-bmc-basic.test`
+   - `run-opentitan-bmc-mode-label.test`
+   - `run-formal-all-opentitan-bmc*.test`
+   - strict preflight missing-runner coverage and help/filter validation updates.
+5. Validation snapshot:
+   - focused lit slice for all touched BMC tests: PASS (7/7).
+6. Remaining limitations:
+   - no dedicated `--opentitan-bmc-include-masked` knob yet.
+   - no BMC strict/default mode-diff synthesis lane for OpenTitan.
+   - generic pairwise manifest schema is intentionally minimal; no per-case
+     backend override fields yet.
+7. Next long-term features (BMC/LEC/mutation focus):
+   - add dedicated OpenTitan BMC strict + mode-diff lanes (mirror LEC governance).
+   - extend pairwise manifest schema with per-case solver/backend/timeout
+     contracts for large-corpus runs.
+   - feed OpenTitan BMC case IDs into strict-gate baseline drift keys and
+     expected-failure governance with explicit reason namespaces.
 
 ### Formal Closure Snapshot Update (February 12, 2026, CLI-forwarded selective LEC parsing promotions)
 

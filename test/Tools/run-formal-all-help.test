@@ -54,5 +54,8 @@
 // CHECK: --sv-tests-lec-force-lec-test-filter
 // CHECK: --require-nonempty-filtered-lanes
 // CHECK: --bmc-allow-multi-clock
+// CHECK: --with-opentitan-bmc
 // CHECK: --with-opentitan-lec-strict
+// CHECK: --opentitan-bmc-impl-filter
+// CHECK: --opentitan-bmc-bound
 // CHECK: --opentitan-lec-impl-filter
