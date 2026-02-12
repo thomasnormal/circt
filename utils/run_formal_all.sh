@@ -6,12 +6,14 @@ set -euo pipefail
 if [[ "${RUN_FORMAL_ALL_SNAPSHOT_ACTIVE:-0}" != "1" &&
       "${RUN_FORMAL_ALL_DISABLE_SNAPSHOT:-0}" != "1" ]]; then
   run_formal_all_script_source="${BASH_SOURCE[0]:-$0}"
+  run_formal_all_script_dir="$(cd "$(dirname "$run_formal_all_script_source")" && pwd)"
   if [[ -f "$run_formal_all_script_source" ]]; then
     run_formal_all_snapshot="$(mktemp "${TMPDIR:-/tmp}/run_formal_all.XXXXXX.sh")"
     cp "$run_formal_all_script_source" "$run_formal_all_snapshot"
     chmod +x "$run_formal_all_snapshot"
     export RUN_FORMAL_ALL_SNAPSHOT_ACTIVE=1
     export RUN_FORMAL_ALL_SNAPSHOT_PATH="$run_formal_all_snapshot"
+    export RUN_FORMAL_ALL_SOURCE_DIR="$run_formal_all_script_dir"
     exec /usr/bin/env bash "$run_formal_all_snapshot" "$@"
   fi
 fi
@@ -36,7 +38,7 @@ Options:
   --out-dir DIR          Output directory for logs/results (default: formal-results-YYYYMMDD)
   --sv-tests DIR         sv-tests root (default: ~/sv-tests)
   --verilator DIR        verilator-verification root (default: ~/verilator-verification)
-  --yosys DIR            yosys/tests/sva root (default: ~/yosys/tests/sva)
+  --yosys DIR            yosys SVA root or yosys repo root (default: ~/yosys/tests/sva)
   --z3-bin PATH          Path to z3 binary (optional)
   --baseline-file FILE   Baseline TSV file (default: utils/formal-baselines.tsv)
   --plan-file FILE       Project plan file to update (default: PROJECT_PLAN.md)
@@ -695,6 +697,26 @@ Options:
   --avip-glob GLOB       Glob for AVIP dirs (default: ~/mbit/*avip*)
   -h, --help             Show this help
 USAGE
+}
+
+normalize_yosys_sva_dir() {
+  local raw_dir="$1"
+  local candidate=""
+  if [[ ! -d "$raw_dir" ]]; then
+    printf "%s\n" "$raw_dir"
+    return
+  fi
+  if compgen -G "$raw_dir/*.sv" > /dev/null; then
+    printf "%s\n" "$raw_dir"
+    return
+  fi
+  for candidate in "$raw_dir/sva" "$raw_dir/tests/sva"; do
+    if [[ -d "$candidate" ]] && compgen -G "$candidate/*.sv" > /dev/null; then
+      printf "%s\n" "$candidate"
+      return
+    fi
+  done
+  printf "%s\n" "$raw_dir"
 }
 
 normalize_auto_uri_allowed_schemes() {
@@ -1910,7 +1932,7 @@ print(ocsp_issuer_cert_sha_resolved)
 PY
 }
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${RUN_FORMAL_ALL_SOURCE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DATE_STR="$(date +%Y-%m-%d)"
 RUN_ID="${DATE_STR}-$$-$(date +%H%M%S)"
@@ -2739,6 +2761,8 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+YOSYS_DIR="$(normalize_yosys_sva_dir "$YOSYS_DIR")"
 
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="$PWD/formal-results-${DATE_STR//-/}"
