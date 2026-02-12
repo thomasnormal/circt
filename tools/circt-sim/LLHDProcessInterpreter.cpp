@@ -16386,22 +16386,31 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         driveVal = InterpretedValue(apVal);
       }
 
-      pendingEpsilonDrives[fieldSigId] = driveVal;
-      scheduler.updateSignal(fieldSigId, driveVal.toSignalValue());
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  llvm.store: drove interface shadow signal "
-                 << fieldSigId << " at 0x"
-                 << llvm::format_hex(storeAddr, 16) << "\n");
+      // Only drive if the value actually changed — prevents zero-delta loops
+      // in always_comb processes that copy interface fields bidirectionally.
+      SignalValue newSigVal = driveVal.toSignalValue();
+      if (current == newSigVal) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.store: shadow signal " << fieldSigId
+                   << " unchanged, skipping drive\n");
+      } else {
+        pendingEpsilonDrives[fieldSigId] = driveVal;
+        scheduler.updateSignal(fieldSigId, newSigVal);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.store: drove interface shadow signal "
+                   << fieldSigId << " at 0x"
+                   << llvm::format_hex(storeAddr, 16) << "\n");
 
-      // Propagate to linked child BFM interface field signals.
-      auto propIt = interfaceFieldPropagation.find(fieldSigId);
-      if (propIt != interfaceFieldPropagation.end()) {
-        for (SignalId childSigId : propIt->second) {
-          pendingEpsilonDrives[childSigId] = driveVal;
-          scheduler.updateSignal(childSigId, driveVal.toSignalValue());
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  llvm.store: propagated to child signal "
-                     << childSigId << "\n");
+        // Propagate to linked child BFM interface field signals.
+        auto propIt = interfaceFieldPropagation.find(fieldSigId);
+        if (propIt != interfaceFieldPropagation.end()) {
+          for (SignalId childSigId : propIt->second) {
+            pendingEpsilonDrives[childSigId] = driveVal;
+            scheduler.updateSignal(childSigId, newSigVal);
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  llvm.store: propagated to child signal "
+                       << childSigId << "\n");
+          }
         }
       }
 
