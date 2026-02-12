@@ -369,6 +369,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-guard|\n";
   os << "                           formal-regression-matrix-external-formal-bmc-semantic-family-guard|\n";
   os << "                           formal-regression-matrix-external-formal-lec-not-run-family-guard|\n";
+  os << "                           formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard|\n";
   os << "                           formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-nightly|\n";
   os << "                           formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-strict|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|\n";
@@ -9825,6 +9826,14 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return true;
   }
   if (profile ==
+      "formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard") {
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_not_run_reason_missing_cases",
+        0.0);
+    return true;
+  }
+  if (profile ==
       "formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-nightly") {
     for (StringRef key : {
              "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_semantic_bucket_fail_like_cases",
@@ -10792,6 +10801,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-semantic-diag-family-guard|"
            "formal-regression-matrix-external-formal-bmc-semantic-family-guard|"
            "formal-regression-matrix-external-formal-lec-not-run-family-guard|"
+           "formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard|"
            "formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-nightly|"
            "formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-strict|"
            "formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|"
