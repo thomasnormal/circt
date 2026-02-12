@@ -9,5 +9,6 @@
 //
 // GATE: non-empty filter contract miss: sv-tests/BMC produced total=0 under explicit filters
 // GATE: strict gate failures:
+// GATE: sv-tests BMC: nonempty_filter_miss increased (0 -> 1, window=1); lane failed non-empty filtered-lane contract
 // SUMMARY: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}5
 // SUMMARY: nonempty_filter_miss=1
