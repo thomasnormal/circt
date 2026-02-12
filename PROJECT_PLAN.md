@@ -53,6 +53,37 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, BMC semantic-family quality guard)
+
+1. Added a dedicated BMC semantic-family policy profile:
+   - `formal-regression-matrix-external-formal-bmc-semantic-family-guard`
+2. Profile contract:
+   - enforces zero fail-like BMC semantic buckets across supported suites:
+     `sv-tests` BMC, `sv-tests-uvm` BMC_SEMANTICS,
+     `verilator-verification` BMC, and `yosys/tests/sva` BMC.
+3. Quality-mode integration:
+   - folded this guard into quality debt/strict mode families (including
+     lane-class and default aliases), so quality envelopes now include timeout
+     budgets + LEC semantic diagnostics + BMC semantic-family hygiene.
+4. Validation highlights:
+   - focused profile/mode/help surface: PASS (4/4 in this tranche rerun).
+   - full mutation suite:
+     `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+     PASS (467/467 selected).
+   - external cadence:
+     PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+     BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+     FAIL (known): `opentitan` LEC (`missing_results=1`), AVIP compile
+     `axi4Lite_avip`, `spi_avip`, `uart_avip`.
+5. Remaining limitations:
+   - quality policy still requires explicit mode selection in lane manifests/CI
+     (aliases reduce complexity, but are not yet auto-bound from lane metadata).
+   - recurring OpenTitan/AVIP failures continue to limit strict-default rollout.
+6. Next long-term features:
+   - auto-bind quality aliases from lane-class metadata in matrix manifests/CI.
+   - add cadence-specific BMC semantic debt ceilings (nightly/strict) rather
+     than only zero-budget strict guards.
+
 ### Formal Closure Snapshot Update (February 12, 2026, default quality aliases)
 
 1. Added default quality policy aliases:

@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1159 - February 12, 2026
+
+### Mutation Governance: BMC Semantic-Family Guard in Quality Modes
+
+1. Added a new matrix policy profile in `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-external-formal-bmc-semantic-family-guard`
+2. New profile behavior:
+   - enforces `<= 0` fail-like semantic bucket counters for:
+     - `external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_semantic_bucket_fail_like_cases`
+     - `external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_semantic_bucket_fail_like_cases`
+     - `external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_semantic_bucket_fail_like_cases`
+     - `external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_semantic_bucket_fail_like_cases`
+3. Integrated this profile into quality mode families so quality envelopes now
+   include timeout debt/strict budgets + LEC semantic guards + BMC semantic-family guard.
+4. Updated profile discovery/diagnostics:
+   - help output lists the new profile.
+   - invalid-profile diagnostics include the new profile.
+5. Added/updated regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-semantic-family-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-semantic-family-guard-fail.test`
+   - `test/Tools/circt-mut-report-help.test`
+   - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+   - updated quality-mode `run-with-report` checks:
+     - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-debt.test`
+     - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-strict.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused BMC-semantic guard slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-debt.test test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-strict.test test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-semantic-family-guard-pass.test test/Tools/circt-mut-report-policy-matrix-external-formal-bmc-semantic-family-guard-fail.test`
+  - PASS (4/4)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (467/467 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-bmc-semantic-profile ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+    BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL (known/ongoing): `opentitan` LEC (`missing_results=1`), AVIP compile
+    `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1158 - February 12, 2026
 
 ### Mutation Governance: Default Quality Alias Modes

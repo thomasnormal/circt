@@ -69,6 +69,7 @@
 // CHECK: formal-regression-matrix-external-formal-summary-v1-guard
 // CHECK: formal-regression-matrix-external-formal-semantic-guard-yosys
 // CHECK: formal-regression-matrix-external-formal-semantic-diag-family-guard
+// CHECK: formal-regression-matrix-external-formal-bmc-semantic-family-guard
 // CHECK: formal-regression-matrix-external-formal-semantic-diag-family-trend-guard
 // CHECK: formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1
 // CHECK: formal-regression-matrix-external-formal-bmc-identity-cardinality-trend-guard-v1
