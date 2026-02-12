@@ -11,7 +11,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ### Current Status
 - **sv-tests simulation**: 856 pass, 0 xfail, 1 compile-only, 9 skip, 7 xpass (Feb 10)
-- **circt-sim unit tests**: 230/230 (161 pass, 64 timeout-UVM, 5 pre-existing failures)
+- **circt-sim unit tests**: 230/230 (165 pass, 65 timeout-UVM, 0 failures)
 - **ImportVerilog tests**: 268/268 (100%)
 - **AVIP dual-top**: APB runs with full virtual sequence + sub-sequence dispatch, 0 UVM_FATAL, 0 UVM_ERROR, BFM drives IDLE→SETUP. Coverage 0% (BFM stuck at SETUP→ACCESS transition).
 - **Performance**: ~171 ns/s simulated time
@@ -49,20 +49,38 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 ### Next Steps (Simulation)
 1. **Fix BFM SETUP→ACCESS transition**: The APB BFM drives IDLE→SETUP but never transitions to ACCESS (penable=1). Investigate whether a clock edge wait or signal drive is being missed in the interpreter.
 2. **Recompile AVIPs**: All AVIPs (APB, AHB, SPI, I2S, I3C, JTAG, AXI4, AXI4Lite, UART) need recompilation with latest circt-verilog to include all recent fixes. Then run end-to-end to verify coverage.
-3. **Fix 5 pre-existing lit test failures**: bytecode-input, bytecode-skip-passes, llhd-child-module-drive, llhd-probe-block-arg-output, module-drive-enable (correct output but exit code 1).
-4. **Performance optimization**: Target >500 ns/s for practical AVIP runs.
-5. **SVA concurrent assertions**: Needed for 26 compile-only SVA tests.
+3. **Performance optimization**: Target >500 ns/s for practical AVIP runs.
+4. **SVA concurrent assertions**: Needed for 26 compile-only SVA tests.
 
 ### Known Limitations (Simulation)
 - BFM APB state machine: SETUP→ACCESS transition not completing (coverage remains 0%)
 - AVIPs need recompilation with latest circt-verilog for end-to-end coverage testing
-- 5 pre-existing lit test failures (correct output, exit code 1)
 - SVA concurrent assertions not simulated (26 tests compile-only)
 - Xcelium APB reference: 21-30% coverage, 130ns sim time — our target baseline
 
 ---
 
 ## Formal Workstream (circt-mut) — February 12, 2026
+
+### Formal Closure Snapshot Update (February 12, 2026, `LEC_NOT_RUN` reason coverage policy)
+
+1. Added a dedicated matrix policy profile:
+   - `formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard`
+2. Guard semantics:
+   - fails if
+     `external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_not_run_reason_missing_cases > 0`.
+3. Why this matters:
+   - keeps `LEC_NOT_RUN` governance from regressing into opaque rows without
+     reason taxonomy, which would weaken strict policy signal.
+4. Added/updated tests:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-reason-coverage-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-reason-coverage-guard-fail.test`
+   - `test/Tools/circt-mut-report-help.test`
+   - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+5. Remaining limitations:
+   - only `sv-tests` currently emits explicit `LEC_NOT_RUN` reasons.
+   - next step is reason-column contract propagation to other LEC suite runners
+     and staged policy expansion from sv-tests-only to full-suite coverage.
 
 ### Formal Closure Snapshot Update (February 12, 2026, `LEC_NOT_RUN` reason taxonomy)
 

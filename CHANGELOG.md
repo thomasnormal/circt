@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1176 - February 12, 2026
+
+### Mutation Governance: `LEC_NOT_RUN` Reason-Coverage Policy Profile
+
+1. Added a new external-formal policy profile in `circt-mut`:
+   - `formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard`
+2. Profile contract:
+   - fails if `sv-tests/LEC` reports non-zero
+     `lec_not_run_reason_missing_cases`.
+3. Purpose:
+   - ensures `LEC_NOT_RUN` rows keep explicit reason taxonomy coverage rather
+     than drifting back to missing reason fields.
+4. Added dedicated regression tests:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-reason-coverage-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-reason-coverage-guard-fail.test`
+5. Updated profile discoverability and diagnostics:
+   - `test/Tools/circt-mut-report-help.test`
+   - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused lit set:
+  - `circt-mut-report-help.test`
+  - `circt-mut-report-policy-invalid-profile.test`
+  - `circt-mut-report-policy-matrix-external-formal-lec-not-run-reason-coverage-guard-{pass,fail}.test`
+  - `run-sv-tests-circt-lec-not-run-diag.test`
+  - `run-formal-all-strict-gate-lec-not-run-reason-keys.test`
+  - PASS (6/6)
+
+## Iteration 1175 - February 12, 2026
+
+### Fix sim.terminate success not stopping single-top simulations
+
+1. Root cause: The deferred `sim.terminate` guard (added for dual-top UVM mode) was
+   deferring ALL successful terminates when the scheduler had pending events, even in
+   single-module tests. This caused 3 lit tests to hang until timeout:
+   - `llhd-child-module-drive.mlir`
+   - `llhd-probe-block-arg-output.mlir`
+   - `module-drive-enable.mlir`
+2. Fix: Added `topModuleCount` tracking in `LLHDProcessInterpreter.h`. The deferred
+   terminate now only activates when `topModuleCount > 1` (multi-top/dual-top mode).
+3. Also fixed 2 bytecode tests (`bytecode-input.mlir`, `bytecode-skip-passes.mlir`)
+   by building the missing `circt-as` binary.
+4. Result: 230 total lit tests, 165 pass, 65 timeout (UVM), **0 failures** (was 5).
+
+### Tests and Validation
+
+- `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v`: 230 tests, 0 failures
+- APB AVIP dual-top regression: 0 UVM_FATAL, terminate correctly deferred in multi-top mode
+
 ## Iteration 1174 - February 12, 2026
 
 ### Formal LEC Governance: Reason-Level `LEC_NOT_RUN` Counters
