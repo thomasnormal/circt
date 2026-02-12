@@ -38,5 +38,6 @@
 // CHECK: native-strict-formal-quality-debt-nightly
 // CHECK: strict-formal-quality-debt-nightly
 // CHECK: strict-formal-quality-debt-strict
+// CHECK: --report-policy-lane-class CLASS
 // CHECK: --report-policy-stop-on-fail BOOL
 // CHECK: --force
