@@ -9,6 +9,26 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, quality-strict modes)
+
+1. Added strict counterpart to quality debt policy modes:
+   - `native-strict-formal-quality-strict`
+   - `strict-formal-quality-strict`
+2. Contract impact:
+   - quality governance now has explicit debt and strict envelopes:
+     - debt: timeout `debt-v2` + semantic-family guard
+     - strict: timeout `strict-v1` + semantic-family guard
+3. Remaining limitations:
+   - quality mode variants are not yet cadence-specific; nightly vs strict mode
+     rollouts still depend on manual mode selection instead of family aliases.
+   - semantic family governance still covers only selected LEC suites; BMC
+     semantic-family budgets are not yet unified into these modes.
+4. Next long-term features:
+   - introduce cadence aliases mapping to debt/strict quality envelopes to
+     reduce operator-side mode complexity.
+   - add BMC semantic-family budget profiles and include them in both quality
+     debt/strict mode families.
+
 ### Formal Closure Snapshot Update (February 12, 2026, quality-debt modes)
 
 1. Added mode-level formal quality debt governance:
