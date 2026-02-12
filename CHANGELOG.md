@@ -29,6 +29,16 @@
 4. Validation:
    - `ninja -C build-test circt-mut`: PASS
    - focused lit slice (10 targeted tests): PASS (10/10)
+   - full mutation suite:
+     - `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+     - PASS (418/418 selected)
+   - external filtered formal cadence:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-all-v12-lec-core-min-total ...`
+     - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+       BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile
+       `ahb/apb/axi4/i2s/i3c/jtag`
+     - FAIL (known/ongoing): `opentitan` LEC (`missing_results=1`),
+       AVIP compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
    - direct runtime sanity probe confirms:
      - strict profile fails on `bmc_timeout_stage_frontend_cases=1`
      - debt profile passes on `bmc_timeout_stage_frontend_cases=1`.

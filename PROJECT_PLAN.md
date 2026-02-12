@@ -29,6 +29,12 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - direct policy probe confirms intended mode split:
      - strict fails on single timeout-stage event
      - debt passes on single timeout-stage event.
+   - external filtered formal cadence snapshot:
+     - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+       BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile
+       `ahb/apb/axi4/i2s/i3c/jtag`
+     - FAIL (known/ongoing): `opentitan` LEC `missing_results=1`, AVIP compile
+       `axi4Lite_avip`, `spi_avip`, `uart_avip`.
 5. Remaining limitations:
    - profile-mode integration still does not route `native-strict-formal*` via
      versioned strict/debt composite families; policy users must pass explicit
