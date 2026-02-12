@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1186 - February 12, 2026
+
+### Formal LEC Telemetry: `CIRCT_LEC_ERROR` Case-Identity Governance
+
+1. Added first-class `CIRCT_LEC_ERROR` identity counters in `utils/run_formal_all.sh` LEC summarization:
+   - `lec_circt_lec_error_case_ids_cardinality`
+   - `lec_circt_lec_error_case_reasons_cardinality`
+2. Extended baseline identity exports to include stable `CIRCT_LEC_ERROR` case telemetry columns:
+   - `lec_circt_lec_error_case_ids`
+   - `lec_circt_lec_error_case_reasons`
+3. Added strict-gate controls for `CIRCT_LEC_ERROR` identity drift:
+   - `--fail-on-new-lec-circt-lec-error-case-ids`
+   - `--fail-on-new-lec-circt-lec-error-case-reasons`
+   - both are now enabled by `--strict-gate` defaults.
+4. Regression coverage:
+   - new `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-case-ids.test`
+   - new `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-case-ids-defaults.test`
+   - new `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-case-reasons.test`
+   - new `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-case-reasons-defaults.test`
+   - updated `test/Tools/run-formal-all-help.test`
+5. Outcome:
+   - `CIRCT_LEC_ERROR` now has parity with existing typed LEC error families for both reason-key and case-identity strict governance.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test --filter='run-formal-all-(help|strict-gate-lec-circt-(opt|verilog|lec)-error-(case-ids|case-reasons|reason-keys)(-defaults)?|opentitan-lec-(fallback-diag|missing-results-reason))'`
+  - PASS (21/21)
+- `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test --filter='run-formal-all-(baselines|strict-gate-lec-runner-command-case-(ids|reasons)(-defaults)?|strict-gate-lec-circt-lec-error-case-(ids|reasons)(-defaults)?)'`
+  - PASS (9/9)
+
 ## Iteration 1185 - February 12, 2026
 
 ### Formal LEC Telemetry: First-Class `CIRCT_LEC_ERROR` Reason-Key Governance
