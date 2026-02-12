@@ -62,6 +62,35 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, strict-gate TSV companion + expanded rule IDs)
+
+1. Extended strict policy artifact surface in `utils/run_formal_all.sh`:
+   - added `--strict-gate-report-tsv FILE`
+   - strict default TSV artifact path: `OUT_DIR/strict-gate-report.tsv`
+   - strict guardrail: `--strict-gate-report-tsv` requires `--strict-gate`.
+2. Expanded stable strict rule taxonomy beyond non-empty filtered-lane drift:
+   - pass-rate regression, new failure case IDs, BMC/LEC timeout regressions, and BMC/LEC drop-remarks regressions/nonzero checks now map to explicit rule IDs.
+3. Strict report emission now produces paired machine-readable artifacts from one diagnostics source:
+   - JSON (`strict-gate-report.json`)
+   - TSV (`strict-gate-report.tsv`)
+4. Added/updated focused unit coverage:
+   - `test/Tools/run-formal-all-strict-gate-report-json-pass-rate-rule-id.test`
+   - `test/Tools/run-formal-all-strict-gate-report-json.test`
+   - `test/Tools/run-formal-all-strict-gate-report-json-requires-strict.test`
+   - `test/Tools/run-formal-all-help.test`
+   - focused lit slice: PASS (8/8).
+5. External strict replay sanity (seeded baseline):
+   - `sv-tests/LEC` + `yosys/tests/sva/LEC` filtered lanes: PASS (1/1 + 1/1)
+   - both strict artifacts emitted; report status `pass`, diagnostics `0`.
+6. Remaining limitations:
+   - many strict diagnostics still map to `strict_gate.legacy_text` and need explicit long-term rule IDs.
+   - strict artifacts currently provide flat diagnostics; no explicit provenance linkage yet to mutation campaign configuration/seed lineage.
+   - no strict-policy schema-version migration utilities yet (forward/backward compatibility handling for CI consumers).
+7. Next long-term features (BMC/LEC/mutation focus):
+   - finish explicit rule-ID coverage for remaining strict checks and enforce no-legacy-ID mode in CI.
+   - add mutation provenance artifacts and strict drift checks keyed by mutation generator config, seed lineage, and equivalence outcomes.
+   - add schema migration/compatibility utilities and a stable strict-policy contract test suite for downstream CI consumers.
+
 ### Formal Closure Snapshot Update (February 12, 2026, strict-gate JSON diagnostics artifact)
 
 1. Added first machine-readable strict policy artifact in `utils/run_formal_all.sh`:
