@@ -1,0 +1,7 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/src
+// RUN: touch %t/src/a.sv
+// RUN: printf 'bad_case\ttop\t%t/src/a.sv\t%t/src\t%t/work/bad\t\tbogus\n' > %t/cases.tsv
+// RUN: not %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv 2>&1 | FileCheck %s
+//
+// CHECK: invalid cases file row 1: backend_mode must be one of default|jit|smtlib|smoke

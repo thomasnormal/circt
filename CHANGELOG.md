@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1206 - February 12, 2026
+
+### Formal BMC Platforming: Per-Case Pairwise Execution Contracts
+
+1. Extended `utils/run_pairwise_circt_bmc.py` manifest schema with optional per-case contract columns:
+   - `timeout_secs`
+   - `backend_mode` (`default|jit|smtlib|smoke`)
+2. Added strict manifest validation for per-case backend mode values with targeted diagnostics.
+3. Added per-case timeout override support for verilog/opt/bmc stage execution.
+4. Added per-case backend override support while preserving global defaults:
+   - `jit`: force native/JIT backend (no `--run-smtlib`)
+   - `smtlib`: force external SMT-LIB backend (`--run-smtlib`)
+   - `smoke`: force smoke-only mode (`--emit-mlir`)
+   - `default`: inherit global `BMC_RUN_SMTLIB`/`BMC_SMOKE_ONLY`
+5. Updated SMT-LIB preflight logic to require `z3` when any selected case contract requires SMT-LIB execution.
+
+### Tests and Validation
+
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+  - PASS
+- focused lit slice (`build-test/test/Tools`):
+  - `run-pairwise-circt-bmc-basic.test`
+  - `run-pairwise-circt-bmc-opt-prep.test`
+  - `run-pairwise-circt-bmc-case-timeout-override.test`
+  - `run-pairwise-circt-bmc-case-backend-override.test`
+  - `run-pairwise-circt-bmc-case-backend-invalid.test`
+  - PASS (5/5)
+- OpenTitan BMC compatibility slice:
+  - `run-opentitan-bmc-mode-label.test`
+  - `run-formal-all-opentitan-bmc.test`
+  - `run-formal-all-opentitan-bmc-no-impl-skip.test`
+  - PASS (3/3)
+
+### Remaining Limitations
+
+- Pairwise manifest still lacks per-case solver-argument and per-case include-dir policy contracts (current overrides focus on timeout + backend mode only).
+
 ## Iteration 1205 - February 12, 2026
 
 ### Formal BMC Platforming: Generic Pairwise Runner + OpenTitan Lane Closure
@@ -80,6 +117,10 @@
 4. Added regression coverage:
    - `test/Tools/circt-sim/config-db-dynamic-array-native.sv`
    - verifies `uvm_config_db#(my_cfg)::get(...)` writes into dynamic-array slots (`new[2]`) and preserves retrieved object handles/fields.
+5. Aligned the direct `config_db_implementation::get` `llhd.ref` path with other interceptors:
+   - it now writes through to backing memory even when `resolveSignalId(outputRef)` is also non-zero, preventing signal/memory dual-mapped refs from dropping native writes.
+6. Extended the dynamic-array regression to scalar outputs:
+   - verifies `uvm_config_db#(int)::get(...)` into `int` dynamic-array elements in native memory.
 
 ### Tests and Validation
 
