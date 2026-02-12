@@ -368,6 +368,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-semantic-guard-yosys|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-guard|\n";
   os << "                           formal-regression-matrix-external-formal-bmc-semantic-family-guard|\n";
+  os << "                           formal-regression-matrix-external-formal-lec-not-run-family-guard|\n";
   os << "                           formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-nightly|\n";
   os << "                           formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-strict|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|\n";
@@ -7036,12 +7037,20 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     auto runHistoryIt = cfg.run.find("report_history");
     auto runAppendHistoryIt = cfg.run.find("report_append_history");
     auto runTrendHistoryIt = cfg.run.find("report_trend_history");
+    auto runHistoryMaxRunsIt = cfg.run.find("report_history_max_runs");
+    auto runHistoryBootstrapIt = cfg.run.find("report_history_bootstrap");
     bool hasConfigReportHistory =
         runHistoryIt != cfg.run.end() && !runHistoryIt->second.empty();
     bool hasConfigReportAppendHistory =
         runAppendHistoryIt != cfg.run.end() && !runAppendHistoryIt->second.empty();
     bool hasConfigReportTrendHistory =
         runTrendHistoryIt != cfg.run.end() && !runTrendHistoryIt->second.empty();
+    bool hasConfigReportHistoryMaxRuns =
+        runHistoryMaxRunsIt != cfg.run.end() &&
+        !runHistoryMaxRunsIt->second.empty();
+    bool hasConfigReportHistoryBootstrap =
+        runHistoryBootstrapIt != cfg.run.end() &&
+        !runHistoryBootstrapIt->second.empty();
     if (!hasCLIReportCompare && !hasCLIReportCompareHistoryLatest &&
         hasConfigReportCompare && hasConfigReportCompareHistory) {
       errs() << "circt-mut run: [run] keys 'report_compare' and "
@@ -7172,6 +7181,7 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       return 1;
     }
     bool hasExplicitPolicyProfile = false;
+    bool hasEffectivePolicyMode = false;
     if (hasCLIReportPolicyProfile) {
       for (const auto &profile : opts.reportPolicyProfiles) {
         reportArgsOwned.push_back("--policy-profile");
@@ -7264,11 +7274,23 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
           return 1;
         }
         bool stop = stopOnFail.value_or(false);
+        hasEffectivePolicyMode = true;
         reportArgsOwned.push_back("--policy-mode");
         reportArgsOwned.push_back(mode);
         reportArgsOwned.push_back("--policy-stop-on-fail");
         reportArgsOwned.push_back(stop ? "true" : "false");
       }
+    }
+
+    bool autoBoundedMatrixHistory = false;
+    std::string autoBoundedMatrixHistoryPath;
+    if (hasEffectivePolicyMode &&
+        (reportMode == "matrix" || reportMode == "all") &&
+        !hasAnyReportHistoryShorthand) {
+      SmallString<256> joined(opts.projectDir);
+      sys::path::append(joined, "out", "report-history.tsv");
+      autoBoundedMatrixHistoryPath = std::string(joined.str());
+      autoBoundedMatrixHistory = true;
     }
 
     if (hasCLIReportCompare) {
@@ -7300,6 +7322,10 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       appendOptionalConfigPathArg(reportArgsOwned, cfg.run,
                                   "report_append_history", "--append-history",
                                   opts.projectDir);
+      if (!hasConfigReportAppendHistory && autoBoundedMatrixHistory) {
+        reportArgsOwned.push_back("--append-history");
+        reportArgsOwned.push_back(autoBoundedMatrixHistoryPath);
+      }
     }
     if (!opts.reportTrendHistory.empty()) {
       reportArgsOwned.push_back("--trend-history");
@@ -7308,6 +7334,10 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       appendOptionalConfigPathArg(reportArgsOwned, cfg.run,
                                   "report_trend_history", "--trend-history",
                                   opts.projectDir);
+      if (!hasConfigReportTrendHistory && autoBoundedMatrixHistory) {
+        reportArgsOwned.push_back("--trend-history");
+        reportArgsOwned.push_back(autoBoundedMatrixHistoryPath);
+      }
     }
     if (!opts.reportHistoryMaxRuns.empty()) {
       reportArgsOwned.push_back("--history-max-runs");
@@ -7315,6 +7345,10 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     } else {
       appendOptionalConfigArg(reportArgsOwned, cfg.run, "report_history_max_runs",
                               "--history-max-runs");
+      if (!hasConfigReportHistoryMaxRuns && autoBoundedMatrixHistory) {
+        reportArgsOwned.push_back("--history-max-runs");
+        reportArgsOwned.push_back("200");
+      }
     }
     if (!opts.reportTrendWindow.empty()) {
       reportArgsOwned.push_back("--trend-window");
@@ -7393,6 +7427,8 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
                                                 error)) {
       errs() << error << "\n";
       return 1;
+    } else if (!hasConfigReportHistoryBootstrap && autoBoundedMatrixHistory) {
+      reportArgsOwned.push_back("--history-bootstrap");
     }
     if (opts.reportFailOnPrequalifyDrift.has_value()) {
       reportArgsOwned.push_back(*opts.reportFailOnPrequalifyDrift
@@ -8892,6 +8928,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
   std::string externalFormalTimeoutProfile;
   std::string externalFormalSemanticProfile;
   std::string externalFormalBmcSemanticProfile;
+  std::string externalFormalLecNotRunProfile;
   std::string externalFormalBmcCoreMinProfile;
   std::string externalFormalLecCoreMinProfile;
   std::string externalFormalSummaryProfile;
@@ -9167,6 +9204,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
     externalFormalBmcSemanticProfile =
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
+    externalFormalLecNotRunProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9205,6 +9244,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
     externalFormalBmcSemanticProfile =
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
+    externalFormalLecNotRunProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9237,6 +9278,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
     externalFormalBmcSemanticProfile =
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
+    externalFormalLecNotRunProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9269,6 +9312,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
     externalFormalBmcSemanticProfile =
         "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
+    externalFormalLecNotRunProfile =
+        "formal-regression-matrix-external-formal-lec-not-run-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9292,6 +9337,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     out.push_back(externalFormalSemanticProfile);
   if (!externalFormalBmcSemanticProfile.empty())
     out.push_back(externalFormalBmcSemanticProfile);
+  if (!externalFormalLecNotRunProfile.empty())
+    out.push_back(externalFormalLecNotRunProfile);
   if (!externalFormalBmcCoreMinProfile.empty())
     out.push_back(externalFormalBmcCoreMinProfile);
   if (!externalFormalLecCoreMinProfile.empty())
@@ -9761,6 +9808,17 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
              "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_semantic_bucket_fail_like_cases",
              "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_semantic_bucket_fail_like_cases",
              "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_semantic_bucket_fail_like_cases",
+         }) {
+      appendUniqueRule(opts.failIfValueGtRules, key, 0.0);
+    }
+    return true;
+  }
+  if (profile ==
+      "formal-regression-matrix-external-formal-lec-not-run-family-guard") {
+    for (StringRef key : {
+             "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_diag_lec_not_run_cases",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_diag_lec_not_run_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_diag_lec_not_run_cases",
          }) {
       appendUniqueRule(opts.failIfValueGtRules, key, 0.0);
     }
@@ -10733,6 +10791,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-semantic-guard-yosys|"
            "formal-regression-matrix-external-formal-semantic-diag-family-guard|"
            "formal-regression-matrix-external-formal-bmc-semantic-family-guard|"
+           "formal-regression-matrix-external-formal-lec-not-run-family-guard|"
            "formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-nightly|"
            "formal-regression-matrix-external-formal-bmc-semantic-family-trend-budget-v1-strict|"
            "formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|"
