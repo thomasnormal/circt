@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1188 - February 12, 2026
+
+### Formal LEC Telemetry: `LEC_NOT_RUN` Case-Identity Governance
+
+1. Extended `utils/run_formal_all.sh` LEC identity telemetry to track explicit no-run identities:
+   - `lec_not_run_case_ids_cardinality`
+   - `lec_not_run_case_reasons_cardinality`
+2. Added baseline columns for stable no-run identity history:
+   - `lec_not_run_case_ids`
+   - `lec_not_run_case_reasons`
+3. Added strict-gate controls for no-run identity drift:
+   - `--fail-on-new-lec-not-run-case-ids`
+   - `--fail-on-new-lec-not-run-case-reasons`
+   - both are now enabled by `--strict-gate` defaults.
+4. Regression coverage:
+   - new `test/Tools/run-formal-all-strict-gate-lec-not-run-case-ids.test`
+   - new `test/Tools/run-formal-all-strict-gate-lec-not-run-case-ids-defaults.test`
+   - new `test/Tools/run-formal-all-strict-gate-lec-not-run-case-reasons.test`
+   - new `test/Tools/run-formal-all-strict-gate-lec-not-run-case-reasons-defaults.test`
+   - updated `test/Tools/run-formal-all-help.test`
+5. Outcome:
+   - `LEC_NOT_RUN` now has first-class case-identity strict governance parity with typed LEC error families.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(help|strict-gate-lec-not-run-case-(ids|reasons)(-defaults)?|strict-gate-lec-not-run-reason-keys)\.test'`
+  - PASS
+
 ## Iteration 1187 - February 12, 2026
 
 ### Formal LEC Telemetry: Runner-Command Aggregate Parity for `CIRCT_LEC_ERROR`

@@ -16,6 +16,8 @@
 // CHECK: --fail-on-new-lec-circt-lec-error-reason-keys
 // CHECK: --fail-on-new-lec-circt-lec-error-case-ids
 // CHECK: --fail-on-new-lec-circt-lec-error-case-reasons
+// CHECK: --fail-on-new-lec-not-run-case-ids
+// CHECK: --fail-on-new-lec-not-run-case-reasons
 // CHECK: --fail-on-new-lec-circt-verilog-error-case-ids
 // CHECK: --fail-on-new-lec-circt-verilog-error-case-reasons
 // CHECK: --fail-on-new-lec-timeout-class-cases
