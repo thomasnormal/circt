@@ -64,6 +64,34 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, strict LEC_NOT_RUN governance)
+
+1. Added an explicit external-formal policy profile to govern LEC
+   `LEC_NOT_RUN` diagnostics:
+   - `formal-regression-matrix-external-formal-lec-not-run-family-guard`
+2. Profile contract:
+   - fails when any of these counters is non-zero:
+     - `external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_diag_lec_not_run_cases`
+     - `external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_diag_lec_not_run_cases`
+     - `external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_diag_lec_not_run_cases`
+3. Strict quality mode rollout:
+   - wired into strict quality families:
+     - `strict-formal-quality*`
+     - `strict-formal-quality-debt*`
+   - intentionally not yet enabled for native quality families to keep rollout
+     staged while we gather more external cadence signal.
+4. Added dedicated regression tests:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-family-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-family-guard-fail.test`
+5. Remaining limitations:
+   - real external formal cadence still has known `LEC_NOT_RUN` rows (notably
+     assertion-heavy UVM LEC cases), so strict quality modes now surface these
+     as first-class gating failures.
+6. Next long-term features:
+   - reduce `LEC_NOT_RUN` incidence by promoting currently skipped LEC
+     assertion-heavy paths into explicit, diagnosable subclasses.
+   - after stabilization, roll this guard into native quality families.
+
 ### BMC Semantic Closure Update (February 12, 2026, UVM edge-case revalidation)
 
 1. Revalidated focused UVM edge cases with explicit `build-test/bin` tool paths:

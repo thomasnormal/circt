@@ -7,14 +7,15 @@
 // RUN: FileCheck %s < %t/out.txt
 //
 // CHECK: policy.mode{{[[:space:]]}}strict-formal-quality-debt
-// CHECK: policy.profile_count{{[[:space:]]}}8
+// CHECK: policy.profile_count{{[[:space:]]}}9
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-matrix-composite-strict
 // CHECK: policy.profile_2{{[[:space:]]}}formal-regression-matrix-provenance-strict
 // CHECK: policy.profile_3{{[[:space:]]}}formal-regression-matrix-external-formal-guard
 // CHECK: policy.profile_4{{[[:space:]]}}formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2
 // CHECK: policy.profile_5{{[[:space:]]}}formal-regression-matrix-external-formal-semantic-diag-family-guard
 // CHECK: policy.profile_6{{[[:space:]]}}formal-regression-matrix-external-formal-bmc-semantic-family-guard
-// CHECK: policy.profile_7{{[[:space:]]}}formal-regression-matrix-external-formal-bmc-core-min-total-v1
-// CHECK: policy.profile_8{{[[:space:]]}}formal-regression-matrix-external-formal-lec-core-min-total-v1
+// CHECK: policy.profile_7{{[[:space:]]}}formal-regression-matrix-external-formal-lec-not-run-family-guard
+// CHECK: policy.profile_8{{[[:space:]]}}formal-regression-matrix-external-formal-bmc-core-min-total-v1
+// CHECK: policy.profile_9{{[[:space:]]}}formal-regression-matrix-external-formal-lec-core-min-total-v1
 // CHECK: value_gate.status{{[[:space:]]}}fail
 // CHECK: value_gate.failure_{{[0-9]+}}{{[[:space:]]}}external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_parser_cases value=1.00 > 0.00

@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1173 - February 12, 2026
+
+### Mutation Governance: Strict Quality `LEC_NOT_RUN` Family Guard
+
+1. Added a new external-formal policy profile in `circt-mut`:
+   - `formal-regression-matrix-external-formal-lec-not-run-family-guard`
+2. Guard semantics:
+   - fails on non-zero `lec_diag_lec_not_run_cases` counters for:
+     - `sv-tests` LEC
+     - `verilator-verification` LEC
+     - `yosys/tests/sva` LEC
+3. Wired this guard into strict quality mode families:
+   - `strict-formal-quality*`
+   - `strict-formal-quality-debt*`
+4. Kept rollout staged:
+   - native quality families are unchanged in this step.
+5. Added dedicated profile regressions:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-family-guard-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-family-guard-fail.test`
+6. Updated policy discoverability and diagnostics:
+   - `circt-mut report --help` profile listing
+   - invalid-profile expected list coverage
+7. Updated strict quality mode regression expectations (run+report) to account
+   for the additional strict-side guard profile.
+
+### Tests and Validation
+
+- Rebuild:
+  - `ninja -C build-test circt-mut`: PASS
+- Focused policy/mode lit slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-report-policy-invalid-profile.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-strict-formal-quality-nightly.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-strict-formal-quality-debt-nightly.test build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-pass.test build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-smoke-pass.test build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-nightly-pass.test build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-debt-fail.test build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-debt-nightly-pass.test build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-debt-strict-fail.test build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-strict-fail.test build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-family-guard-pass.test build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-lec-not-run-family-guard-fail.test`
+  - PASS (13/13)
+
 ## Iteration 1172 - February 12, 2026
 
 ### BMC Semantic Closure: UVM Subroutine/Multiclock Edge Revalidation
