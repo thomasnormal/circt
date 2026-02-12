@@ -7,7 +7,7 @@
 // RUN: FileCheck %s < %t/out.txt
 //
 // CHECK: policy.mode{{[[:space:]]}}strict-formal-quality-smoke
-// CHECK: policy.profile_count{{[[:space:]]}}9
+// CHECK: policy.profile_count{{[[:space:]]}}10
 // CHECK: policy.profile_1{{[[:space:]]}}formal-regression-matrix-composite-strict
 // CHECK: policy.profile_2{{[[:space:]]}}formal-regression-matrix-provenance-strict
 // CHECK: policy.profile_3{{[[:space:]]}}formal-regression-matrix-external-formal-guard
@@ -15,7 +15,8 @@
 // CHECK: policy.profile_5{{[[:space:]]}}formal-regression-matrix-external-formal-semantic-diag-family-guard
 // CHECK: policy.profile_6{{[[:space:]]}}formal-regression-matrix-external-formal-bmc-semantic-family-guard
 // CHECK: policy.profile_7{{[[:space:]]}}formal-regression-matrix-external-formal-lec-not-run-family-guard
-// CHECK: policy.profile_8{{[[:space:]]}}formal-regression-matrix-external-formal-bmc-core-min-total-v1
-// CHECK: policy.profile_9{{[[:space:]]}}formal-regression-matrix-external-formal-lec-core-min-total-v1
+// CHECK: policy.profile_8{{[[:space:]]}}formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard
+// CHECK: policy.profile_9{{[[:space:]]}}formal-regression-matrix-external-formal-bmc-core-min-total-v1
+// CHECK: policy.profile_10{{[[:space:]]}}formal-regression-matrix-external-formal-lec-core-min-total-v1
 // CHECK: value_gate.failure_count{{[[:space:]]}}0
 // CHECK: value_gate.status{{[[:space:]]}}pass
