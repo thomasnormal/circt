@@ -343,6 +343,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-semantic-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-guard-yosys|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-guard|\n";
+  os << "                           formal-regression-matrix-external-formal-bmc-semantic-family-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|\n";
   os << "                           formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1|\n";
   os << "                           formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1|\n";
@@ -8617,6 +8618,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
   std::string externalFormalCompileProfile;
   std::string externalFormalTimeoutProfile;
   std::string externalFormalSemanticProfile;
+  std::string externalFormalBmcSemanticProfile;
   std::string externalFormalBmcCoreMinProfile;
   std::string externalFormalLecCoreMinProfile;
   std::string externalFormalSummaryProfile;
@@ -8872,6 +8874,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2";
     externalFormalSemanticProfile =
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcSemanticProfile =
+        "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -8888,6 +8892,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2";
     externalFormalSemanticProfile =
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcSemanticProfile =
+        "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -8903,6 +8909,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly";
     externalFormalSemanticProfile =
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcSemanticProfile =
+        "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -8922,6 +8930,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly";
     externalFormalSemanticProfile =
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcSemanticProfile =
+        "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -8934,6 +8944,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict";
     externalFormalSemanticProfile =
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcSemanticProfile =
+        "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -8950,6 +8962,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict";
     externalFormalSemanticProfile =
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcSemanticProfile =
+        "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -8962,6 +8976,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1";
     externalFormalSemanticProfile =
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcSemanticProfile =
+        "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -8978,6 +8994,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1";
     externalFormalSemanticProfile =
         "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcSemanticProfile =
+        "formal-regression-matrix-external-formal-bmc-semantic-family-guard";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -8999,6 +9017,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     out.push_back(externalFormalTimeoutProfile);
   if (!externalFormalSemanticProfile.empty())
     out.push_back(externalFormalSemanticProfile);
+  if (!externalFormalBmcSemanticProfile.empty())
+    out.push_back(externalFormalBmcSemanticProfile);
   if (!externalFormalBmcCoreMinProfile.empty())
     out.push_back(externalFormalBmcCoreMinProfile);
   if (!externalFormalLecCoreMinProfile.empty())
@@ -9456,6 +9476,18 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
              "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_parser_cases",
              "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_lowering_cases",
              "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_error_bucket_semantic_diag_solver_cases",
+         }) {
+      appendUniqueRule(opts.failIfValueGtRules, key, 0.0);
+    }
+    return true;
+  }
+  if (profile ==
+      "formal-regression-matrix-external-formal-bmc-semantic-family-guard") {
+    for (StringRef key : {
+             "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_semantic_bucket_fail_like_cases",
+             "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_semantic_bucket_fail_like_cases",
+             "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_semantic_bucket_fail_like_cases",
+             "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_semantic_bucket_fail_like_cases",
          }) {
       appendUniqueRule(opts.failIfValueGtRules, key, 0.0);
     }
@@ -10389,6 +10421,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-semantic-guard|"
            "formal-regression-matrix-external-formal-semantic-guard-yosys|"
            "formal-regression-matrix-external-formal-semantic-diag-family-guard|"
+           "formal-regression-matrix-external-formal-bmc-semantic-family-guard|"
            "formal-regression-matrix-external-formal-semantic-diag-family-trend-guard|"
            "formal-regression-matrix-external-formal-semantic-diag-family-trend-budget-v1|"
            "formal-regression-matrix-external-formal-identity-cardinality-trend-guard-v1|"
