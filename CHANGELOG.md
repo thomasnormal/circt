@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1149 - February 11, 2026
+
+### Mutation Governance: Policy-Mode Timeout Budget Rollout (Native + Strict)
+
+1. Added report policy modes:
+   - `native-strict-formal-timeout-debt`
+   - `strict-formal-timeout-debt`
+   - `native-strict-formal-timeout-strict`
+   - `strict-formal-timeout-strict`
+2. Mode mapping:
+   - native timeout debt:
+     - `formal-regression-matrix-composite-native-strict`
+     - `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1`
+     - core min-total guards (BMC + LEC)
+     - native strict mode contract
+   - native timeout strict:
+     - `formal-regression-matrix-composite-native-strict`
+     - `formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1`
+     - core min-total guards (BMC + LEC)
+     - native strict mode contract
+   - strict timeout debt/strict:
+     - strict composite + provenance strict + external formal guard
+     - timeout budget debt/strict profile
+     - core min-total guards (BMC + LEC)
+3. Added regressions:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-timeout-debt-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-timeout-strict-fail.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-timeout-debt.test`
+4. Updated mode-list diagnostics/help:
+   - `test/Tools/circt-mut-report-cli-policy-mode-invalid.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test`
+   - `test/Tools/circt-mut-init-report-policy-invalid.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test`
+   - `test/Tools/circt-mut-report-help.test`
+5. Validation:
+   - `ninja -C build-test circt-mut`: PASS
+   - focused lit policy slice (16 tests): PASS (16/16, serial).
+
 ## Iteration 1148 - February 11, 2026
 
 ### Mutation Governance: Core Timeout Budget Modes (Strict/Debt) + v15 Composites
