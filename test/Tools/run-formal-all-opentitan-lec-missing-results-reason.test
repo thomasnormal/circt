@@ -12,4 +12,6 @@
 // SUMMARY: lec_circt_lec_error_reason_runner_command_missing_out_cases=1
 // SUMMARY: lec_diag_circt_lec_error_cases=1
 // SUMMARY: lec_error_bucket_infra_runner_command_cases=1
+// SUMMARY: lec_runner_command_cases=1
+// SUMMARY: lec_runner_command_reason_runner_command_missing_out_cases=1
 // CASE: ERROR{{[[:space:]]+}}aes_sbox{{[[:space:]]+}}missing_results{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_LEC_ERROR{{[[:space:]]+}}runner_command_missing_out

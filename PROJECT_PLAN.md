@@ -62,6 +62,27 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, runner-command identity parity across typed LEC errors)
+
+1. Completed aggregate runner-command parity for `CIRCT_LEC_ERROR` in `utils/run_formal_all.sh`:
+   - typed `CIRCT_LEC_ERROR` rows with `runner_command_*` reasons now feed
+     `lec_runner_command_cases`, `lec_runner_command_reason_*_cases`, and
+     aggregate case identity sets.
+2. Baseline and strict-gate aggregate rollups now include all typed LEC error families when deriving:
+   - `lec_runner_command_case_ids`
+   - `lec_runner_command_case_reasons`
+3. Added focused coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-runner-command-case-ids-circt-lec-error.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-runner-command-case-reasons-circt-lec-error.test`
+   - updated OpenTitan fallback telemetry checks for aggregate runner-command counters.
+4. Remaining limitations:
+   - runner-command reason taxonomy is still log-derived (string-parsed), not emitted as structured lowering/runner provenance.
+   - wrapper-level `LEC_NOT_RUN` reason taxonomy propagation is still incomplete for some lanes.
+5. Next long-term features:
+   - move runner-command/no-run reason emission to structured, versioned provenance records and gate strict policy on those records.
+   - finish wrapper-level `LEC_NOT_RUN` reason propagation so `*_reason_missing_cases` can remain pinned to zero across all enabled LEC suites.
+
+
 ### Formal Closure Snapshot Update (February 12, 2026, `CIRCT_LEC_ERROR` case-identity strict governance)
 
 1. Added first-class `CIRCT_LEC_ERROR` case-identity exports in `run_formal_all.sh` baseline telemetry:

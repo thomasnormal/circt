@@ -7934,6 +7934,12 @@ with path.open(encoding="utf-8") as f:
                 if case_id:
                     circt_lec_error_case_ids.add(case_id)
                     circt_lec_error_case_reasons.add(f"{case_id}::{reason_key}")
+                if reason_key.startswith("runner_command_"):
+                    counts[f"lec_runner_command_reason_{reason_key}_cases"] += 1
+                    counts["lec_runner_command_cases"] += 1
+                    if case_id:
+                        runner_command_case_ids.add(case_id)
+                        runner_command_case_reasons.add(f"{case_id}::{reason_key}")
             if status == "error" and diag not in {"circt_opt_error", "circt_verilog_error"}:
                 reason_key = normalize(reason_token) if reason_token else ""
                 error_bucket = classify_error_bucket(diag, reason_key)
@@ -12465,10 +12471,16 @@ def collect_lec_circt_lec_error_case_reasons(out_dir: Path):
     return {key: ";".join(sorted(values)) for key, values in case_reason_ids.items()}
 
 def collect_lec_runner_command_case_reasons(
-    lec_circt_opt_error_case_reasons: dict, lec_circt_verilog_error_case_reasons: dict
+    lec_circt_opt_error_case_reasons: dict,
+    lec_circt_verilog_error_case_reasons: dict,
+    lec_circt_lec_error_case_reasons: dict,
 ):
     case_reason_ids = {}
-    for source in (lec_circt_opt_error_case_reasons, lec_circt_verilog_error_case_reasons):
+    for source in (
+        lec_circt_opt_error_case_reasons,
+        lec_circt_verilog_error_case_reasons,
+        lec_circt_lec_error_case_reasons,
+    ):
         for key, raw_values in source.items():
             if not raw_values:
                 continue
@@ -12711,7 +12723,9 @@ lec_circt_verilog_error_case_reasons = collect_lec_circt_verilog_error_case_reas
 lec_circt_lec_error_case_ids = collect_lec_circt_lec_error_case_ids(out_dir)
 lec_circt_lec_error_case_reasons = collect_lec_circt_lec_error_case_reasons(out_dir)
 lec_runner_command_case_reasons = collect_lec_runner_command_case_reasons(
-    lec_circt_opt_error_case_reasons, lec_circt_verilog_error_case_reasons
+    lec_circt_opt_error_case_reasons,
+    lec_circt_verilog_error_case_reasons,
+    lec_circt_lec_error_case_reasons,
 )
 lec_runner_command_case_ids = collect_lec_runner_command_case_ids(
     lec_runner_command_case_reasons
@@ -13644,10 +13658,16 @@ current_lec_circt_lec_error_case_reasons = (
 )
 
 def collect_lec_runner_command_case_reasons(
-    lec_circt_opt_error_case_reasons: dict, lec_circt_verilog_error_case_reasons: dict
+    lec_circt_opt_error_case_reasons: dict,
+    lec_circt_verilog_error_case_reasons: dict,
+    lec_circt_lec_error_case_reasons: dict,
 ):
     case_reasons = {}
-    for source in (lec_circt_opt_error_case_reasons, lec_circt_verilog_error_case_reasons):
+    for source in (
+        lec_circt_opt_error_case_reasons,
+        lec_circt_verilog_error_case_reasons,
+        lec_circt_lec_error_case_reasons,
+    ):
         for key, reason_tokens in source.items():
             for token in reason_tokens:
                 if "::" not in token:
@@ -13834,6 +13854,7 @@ def collect_lec_semantic_diag_subfamily_case_reasons(out_dir: Path):
 current_lec_runner_command_case_reasons = collect_lec_runner_command_case_reasons(
     current_lec_circt_opt_error_case_reasons,
     current_lec_circt_verilog_error_case_reasons,
+    current_lec_circt_lec_error_case_reasons,
 )
 current_lec_runner_command_case_ids = collect_lec_runner_command_case_ids(
     current_lec_runner_command_case_reasons
