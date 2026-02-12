@@ -13299,21 +13299,46 @@ def parse_gate_error_line(message: str):
         return lane_parts[0], lane_parts[1], detail
     return "", "", message
 
-def classify_gate_rule_id(detail: str):
+def classify_gate_rule_id(suite: str, mode: str, detail: str):
+    if detail.startswith("classification gap:"):
+        return "strict_gate.report.legacy_rule_id.present"
+
+    if detail.startswith("missing baseline row"):
+        return "strict_gate.baseline.missing_row"
+    if detail.startswith("insufficient baseline history"):
+        return "strict_gate.baseline.insufficient_history"
+    if detail.startswith("no baseline rows remain after baseline-window-days="):
+        return "strict_gate.baseline.window_days_filtered_empty"
+
     if detail.startswith("nonempty_filter_miss increased"):
         return "strict_gate.filtered_lane.nonempty_filter_miss"
+    if detail.startswith("fail increased"):
+        return "strict_gate.quality.fail_regression"
+    if detail.startswith("error increased"):
+        return "strict_gate.quality.error_regression"
+    if detail.startswith("xpass increased"):
+        return "strict_gate.quality.xpass_regression"
     if detail.startswith("pass_rate regressed"):
         return "strict_gate.quality.pass_rate_regression"
     if detail.startswith("new failure cases observed"):
         return "strict_gate.failures.new_case_ids"
+
+    if detail.startswith("new dropped-syntax cases observed") and mode.startswith("BMC"):
+        return "strict_gate.bmc.drop_remarks.case_ids.new"
+    if detail.startswith("new dropped-syntax case-reason tuples observed") and mode.startswith("BMC"):
+        return "strict_gate.bmc.drop_remarks.case_reasons.new"
+
     if detail.startswith("bmc_timeout_cases increased"):
         return "strict_gate.bmc.timeout_cases.regression"
     if detail.startswith("new BMC timeout case IDs observed"):
         return "strict_gate.bmc.timeout_case_ids.new"
+    if detail.startswith("bmc_unknown_cases increased"):
+        return "strict_gate.bmc.unknown_cases.regression"
     if detail.startswith("lec_timeout_cases increased"):
         return "strict_gate.lec.timeout_cases.regression"
     if detail.startswith("new LEC timeout case IDs observed"):
         return "strict_gate.lec.timeout_case_ids.new"
+
     if detail.startswith("bmc_drop_remark_cases must be zero"):
         return "strict_gate.bmc.drop_remarks.nonzero"
     if detail.startswith("lec_drop_remark_cases must be zero"):
@@ -13322,8 +13347,129 @@ def classify_gate_rule_id(detail: str):
         return "strict_gate.bmc.drop_remarks.regression"
     if detail.startswith("lec_drop_remark_cases increased"):
         return "strict_gate.lec.drop_remarks.regression"
-    if detail.startswith("classification gap:"):
-        return "strict_gate.report.legacy_rule_id.present"
+    if detail.startswith("new LEC dropped-syntax cases observed"):
+        return "strict_gate.lec.drop_remarks.case_ids.new"
+    if detail.startswith("new LEC dropped-syntax case-reason tuples observed"):
+        return "strict_gate.lec.drop_remarks.case_reasons.new"
+
+    if detail.startswith("lec_diag_path_fallback_cases must be zero"):
+        return "strict_gate.lec.diag_path_fallback.nonzero"
+    if detail.startswith("lec_diag_path_fallback_cases increased"):
+        return "strict_gate.lec.diag_path_fallback.regression"
+    if detail.startswith("lec_diag_missing_cases must be zero"):
+        return "strict_gate.lec.diag_missing.nonzero"
+    if detail.startswith("lec_diag_missing_cases increased"):
+        return "strict_gate.lec.diag_missing.regression"
+    if detail.startswith("lec_timeout_cases must be zero"):
+        return "strict_gate.lec.timeout_cases.nonzero"
+    if detail.startswith("lec_runner_command_cases must be zero"):
+        return "strict_gate.lec.runner_command_cases.nonzero"
+    if detail.startswith("lec_runner_command_cases increased"):
+        return "strict_gate.lec.runner_command_cases.regression"
+
+    if detail.startswith("new LEC_NOT_RUN case IDs observed"):
+        return "strict_gate.lec.not_run.case_ids.new"
+    if detail.startswith("new LEC_NOT_RUN case+reason tuples observed"):
+        return "strict_gate.lec.not_run.case_reasons.new"
+
+    if detail.startswith("new LEC CIRCT_OPT_ERROR case IDs observed"):
+        return "strict_gate.lec.circt_opt_error.case_ids.new"
+    if detail.startswith("new LEC CIRCT_OPT_ERROR case+reason tuples observed"):
+        return "strict_gate.lec.circt_opt_error.case_reasons.new"
+    if detail.startswith("new LEC CIRCT_VERILOG_ERROR case IDs observed"):
+        return "strict_gate.lec.circt_verilog_error.case_ids.new"
+    if detail.startswith("new LEC CIRCT_VERILOG_ERROR case+reason tuples observed"):
+        return "strict_gate.lec.circt_verilog_error.case_reasons.new"
+    if detail.startswith("new LEC CIRCT_LEC_ERROR case IDs observed"):
+        return "strict_gate.lec.circt_lec_error.case_ids.new"
+    if detail.startswith("new LEC CIRCT_LEC_ERROR case+reason tuples observed"):
+        return "strict_gate.lec.circt_lec_error.case_reasons.new"
+    if detail.startswith("new LEC runner-command case IDs observed"):
+        return "strict_gate.lec.runner_command.case_ids.new"
+    if detail.startswith("new LEC runner-command case+reason tuples observed"):
+        return "strict_gate.lec.runner_command.case_reasons.new"
+    if detail.startswith("new LEC error-bucket case IDs observed"):
+        return "strict_gate.lec.error_bucket.case_ids.new"
+    if detail.startswith("new LEC semantic-diag subfamily case IDs observed"):
+        return "strict_gate.lec.semantic_diag_subfamily.case_ids.new"
+    if detail.startswith("new LEC semantic-diag subfamily case+reason tuples observed"):
+        return "strict_gate.lec.semantic_diag_subfamily.case_reasons.new"
+
+    if detail.startswith("new LEC diagnostic keys observed"):
+        return "strict_gate.lec.diag_keys.new"
+    if detail.startswith("new LEC timeout diagnostic keys observed"):
+        return "strict_gate.lec.timeout_diag_keys.new"
+    if detail.startswith("new LEC CIRCT_OPT_ERROR reason keys observed"):
+        return "strict_gate.lec.circt_opt_error.reason_keys.new"
+    if detail.startswith("new LEC CIRCT_VERILOG_ERROR reason keys observed"):
+        return "strict_gate.lec.circt_verilog_error.reason_keys.new"
+    if detail.startswith("new LEC CIRCT_LEC_ERROR reason keys observed"):
+        return "strict_gate.lec.circt_lec_error.reason_keys.new"
+    if detail.startswith("new LEC_NOT_RUN reason keys observed"):
+        return "strict_gate.lec.not_run.reason_keys.new"
+    if detail.startswith("new LEC runner-command reason keys observed"):
+        return "strict_gate.lec.runner_command.reason_keys.new"
+
+    if detail.startswith("bmc_backend_parity_mismatch_cases increased"):
+        return "strict_gate.bmc.backend_parity.mismatch_cases.regression"
+    if detail.startswith("bmc_ir_check_key_mode_fingerprint_cases increased"):
+        return "strict_gate.bmc.ir_check.fingerprint_cases.regression"
+    if detail.startswith("new BMC semantic-bucket case IDs observed for "):
+        return "strict_gate.bmc.semantic.bucket_case_ids_by_bucket.new"
+    if detail.startswith("new BMC semantic-bucket case IDs observed"):
+        return "strict_gate.bmc.semantic.bucket_case_ids.new"
+    if detail.startswith("bmc_semantic_bucket_unclassified_cases increased"):
+        return "strict_gate.bmc.semantic.bucket_unclassified_cases.regression"
+    if detail.startswith("bmc_semantic_bucket_tagged_cases regressed"):
+        return "strict_gate.bmc.semantic.tagged_cases.regression"
+    if detail.startswith("bmc_abstraction_provenance_records increased"):
+        return "strict_gate.bmc.abstraction_provenance.records.regression"
+    if detail.startswith("new abstraction provenance tokens observed"):
+        return "strict_gate.bmc.abstraction_provenance.tokens.new"
+    if detail.startswith("bmc_semantic_") and " increased (" in detail:
+        return "strict_gate.bmc.semantic.counter.regression"
+
+    if mode == "E2E_MODE_DIFF":
+        if detail.startswith("strict_only_fail increased"):
+            return "strict_gate.e2e_mode_diff.strict_only_fail.regression"
+        if detail.startswith("status_diff increased"):
+            return "strict_gate.e2e_mode_diff.status_diff.regression"
+        if detail.startswith("strict_only_pass increased"):
+            return "strict_gate.e2e_mode_diff.strict_only_pass.regression"
+        if detail.startswith("missing_in_e2e increased"):
+            return "strict_gate.e2e_mode_diff.missing_in_e2e.regression"
+        if detail.startswith("missing_in_e2e_strict increased"):
+            return "strict_gate.e2e_mode_diff.missing_in_e2e_strict.regression"
+    if mode == "LEC_MODE_DIFF":
+        if detail.startswith("strict_only_fail increased"):
+            return "strict_gate.lec_mode_diff.strict_only_fail.regression"
+        if detail.startswith("status_diff increased"):
+            return "strict_gate.lec_mode_diff.status_diff.regression"
+        if detail.startswith("strict_only_pass increased"):
+            return "strict_gate.lec_mode_diff.strict_only_pass.regression"
+        if detail.startswith("missing_in_lec increased"):
+            return "strict_gate.lec_mode_diff.missing_in_lec.regression"
+        if detail.startswith("missing_in_lec_strict increased"):
+            return "strict_gate.lec_mode_diff.missing_in_lec_strict.regression"
+
+    if detail.startswith("lec_timeout_class_") and " increased (" in detail:
+        return "strict_gate.lec.timeout_class.counter.regression"
+
+    if " increased (" in detail and ", prefix=" in detail:
+        if suite == "opentitan" and mode == "LEC_STRICT":
+            return "strict_gate.opentitan.lec_strict.xprop.counter_prefix.regression"
+        if mode.startswith("LEC"):
+            return "strict_gate.lec.counter_prefix.regression"
+        if mode.startswith("BMC"):
+            return "strict_gate.bmc.counter_prefix.regression"
+    if " increased (" in detail:
+        if suite == "opentitan" and mode == "LEC_STRICT":
+            return "strict_gate.opentitan.lec_strict.xprop.counter.regression"
+        if mode.startswith("LEC"):
+            return "strict_gate.lec.counter.regression"
+        if mode.startswith("BMC"):
+            return "strict_gate.bmc.counter.regression"
+
     return "strict_gate.legacy_text"
 
 def build_strict_gate_report_diagnostics(gate_errors):
@@ -13334,7 +13480,7 @@ def build_strict_gate_report_diagnostics(gate_errors):
             {
                 "suite": suite,
                 "mode": mode,
-                "rule_id": classify_gate_rule_id(detail),
+                "rule_id": classify_gate_rule_id(suite, mode, detail),
                 "detail": detail,
                 "message": message,
             }

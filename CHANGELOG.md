@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1199 - February 12, 2026
+
+### Formal Strict-Gate Rule-ID Closure: Baseline/Quality/Drift Coverage Expansion
+
+1. Expanded `utils/run_formal_all.sh` strict report rule-ID coverage to classify all currently emitted strict-gate diagnostics, including:
+   - baseline contract failures (`missing baseline row`, insufficient baseline history, baseline-window-days exhaustion)
+   - quality regressions (`fail`, `error`, `xpass`, pass-rate)
+   - BMC/LEC case-ID and case-reason drift families
+   - LEC diagnostic/timeout/runner-command nonzero + regression gates
+   - OpenTitan `E2E_MODE_DIFF` / `LEC_MODE_DIFF` counters and `LEC_STRICT` X-prop counter drift
+   - BMC semantic/provenance and generic counter-prefix drift paths.
+2. Updated strict report classification call sites to be suite/mode-aware so mode-specific diagnostics map to stable families instead of fallback text.
+3. Updated and added focused regression coverage:
+   - updated `test/Tools/run-formal-all-strict-gate-report-json.test`
+   - updated `test/Tools/run-formal-all-strict-gate-fail-on-legacy-rule-ids.test`
+   - added `test/Tools/run-formal-all-strict-gate-report-json-missing-baseline-rule-id.test`
+   - all three now assert explicit rule-ID behavior with `legacy_rule_id_count=0` on mapped paths.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(help|strict-gate-fail-on-legacy-rule-ids|strict-gate-report-json(-missing-baseline-rule-id|-pass-rate-rule-id|-requires-strict)?|strict-gate-nonempty-filtered-lanes-defaults|strict-gate-failure-cases)\.test'`
+  - PASS (8/8)
+- External cadence checks (filtered):
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+    - summary: `total=1 pass=0 fail=0 error=1`, `drop_remark_cases=0`
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+    - summary: `total=1 pass=0 fail=0 error=1`, `drop_remark_cases=0`
+  - `TEST_FILTER='basic02' BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - summary: `total=2 pass=0 fail=2`, `drop_remark_cases=0`
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build-test/bin/circt-verilog CIRCT_OPT=/home/thomas-ahle/circt/build-test/bin/circt-opt CIRCT_LEC=/home/thomas-ahle/circt/build-test/bin/circt-lec LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+    - `aes_sbox_canright OK`, `drop_remark_cases=0`
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build-test/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`
+    - exit `0`
+
 ## Iteration 1198 - February 12, 2026
 
 ### `circt-mut` Native Strict-Quality: Enforce LEC `NOT_RUN` Reason Coverage
