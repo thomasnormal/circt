@@ -62,6 +62,37 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, rule-ID allowlist strict contracts)
+
+1. Added strict rule-ID compatibility contract support in `utils/run_formal_all.sh`:
+   - new option: `--strict-gate-rule-id-allowlist FILE`
+   - supports `exact:`, `prefix:`, `regex:` entries (default `exact:`).
+2. Added strict enforcement diagnostic for unknown rule IDs against allowlist:
+   - explicit rule ID: `strict_gate.report.rule_id_allowlist.violation`
+   - emits global strict diagnostic with allowlist file reference.
+3. Added strict artifact metadata to improve CI compatibility auditing:
+   - JSON now includes `rule_id_allowlist_file`.
+4. Updated focused unit coverage:
+   - `test/Tools/run-formal-all-strict-gate-rule-id-allowlist.test`
+   - help + strict-requires guardrail tests updated.
+5. Validation snapshot:
+   - `bash -n utils/run_formal_all.sh`: PASS
+   - focused strict lit slice: PASS (11/11)
+   - external filtered cadence:
+     - `sv-tests/BMC` (`16.9--sequence-goto-repetition`): `error=1`, `drop_remark_cases=0`
+     - `verilator-verification/BMC` (`assert_fell`): `error=1`, `drop_remark_cases=0`
+     - `yosys/tests/sva/BMC` (`basic02`): `fail=2`, `drop_remark_cases=0`
+     - `opentitan/LEC` (`canright`): PASS (`OK`, `drop_remark_cases=0`)
+     - `mbit/apb_avip` compile check: PASS (exit `0`).
+6. Remaining limitations:
+   - allowlist policy is opt-in and not yet integrated into strict default CI profiles.
+   - dynamic rule-family compatibility still lacks first-class migration/deprecation tooling.
+   - strict artifacts still do not encode mutation provenance lineage and cross-lane causal links.
+7. Next long-term features (BMC/LEC/mutation focus):
+   - add strict-profile defaults for rule-ID allowlist enforcement (smoke/nightly/strict variants).
+   - add schema migration checks for rule-family evolution (stable allowlist profiles + compatibility windows).
+   - integrate mutation provenance artifact drift checks under the same strict compatibility policy contract.
+
 ### Formal Closure Snapshot Update (February 12, 2026, structured strict diagnostics + counter-key rule IDs)
 
 1. Refactored strict-gate diagnostics in `utils/run_formal_all.sh` to use a structured collector (`GateErrorCollector`) while preserving existing append-style emission paths.
