@@ -60,7 +60,7 @@ All tests properly categorized in `utils/sv-tests-sim-expect.txt`:
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 225 | 225 | 0 | All pass; sequencer interface, analysis ports, resolveSignalId cast+probe tracing, VIF shadow signals, resolveDrivers multi-bit fix, randomize(null/var_list), stream unpack, constraint solver, per-object RNG, parametric coverage, VIF clock propagation, function phase IMP sequencing, abort→failure() propagation audit, call-depth-protection fix |
+| circt-sim | 225+ | 225+ | 0 | All pass; sequencer interface, analysis ports, resolveSignalId cast+probe tracing, VIF shadow signals, resolveDrivers multi-bit fix, randomize(null/var_list), stream unpack, constraint solver, per-object RNG, parametric coverage, VIF clock propagation, function phase IMP sequencing, abort→failure() propagation audit, call-depth-protection fix, die-absorption |
 | MooreToCore | 124 | 122 | 2 | All pass; 2 XFAIL (array-locator-func-call, interface-timing-after-inlining) |
 | ImportVerilog | 268 | 268 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past, covergroup iff-no-parens |
 
@@ -92,8 +92,10 @@ to commercial simulators like Cadence Xcelium.
 | `$fopen` / `$fwrite` | WORKS | Basic file operations |
 | Malloc / free | WORKS | Heap allocation with unaligned struct layout |
 | **Simulation Infrastructure** | | |
-| Combined HdlTop+HvlTop | WORKS | Multi-top simulation; APB AVIP dual-top all 9 IMP phases complete (build→connect→eoe→sos→run→extract→check→report→final); die() absorption during phase execution; 0 UVM_FATAL |
+| Combined HdlTop+HvlTop | WORKS | Multi-top simulation; APB AVIP dual-top runs to ~60ns with virtual sequence execution; phase hopper objection fix ensures run_phase blocks correctly; graceful sim.terminate in dual-top mode; 64MB stack for deep UVM nesting; 0 UVM_FATAL, 0 UVM_ERROR |
 | Function phase IMP sequencing | WORKS | Intercepts `process_phase` to block function phase IMPs until predecessor completes; `finish_phase` marks IMP done; currentOp-reset pattern for correct re-execution |
+| Phase hopper objections | WORKS | `get_objection`/`raise`/`drop`/`wait_for` interceptors for `uvm_phase_hopper::` variants; `wasEverRaised` tracking prevents premature phase completion |
+| Sub-sequence body dispatch | MISSING | Factory-created sub-sequences (`create_by_type`) get base class `uvm_sequence_base::body` instead of derived body; causes "Body definition undefined" warnings |
 | seq_item_port connection | MISSING | Driver proxy `seq_item_port` not connected to sequencer during `connect_phase`; prevents driver from obtaining sequences |
 | Shutdown cleanup | WORKS | `_exit(0)` skips expensive destructors for large designs |
 | Signal driving (`llhd.drv`) | WORKS | Blocking assignments via epsilon delay |
@@ -128,19 +130,19 @@ to commercial simulators like Cadence Xcelium.
 All 9 AVIPs use a proxy-BFM split architecture where `hvl_top` (UVM test/env/agents)
 communicates with `hdl_top` (clock/reset/BFM interfaces) via `uvm_config_db` virtual
 interface handles. APB has been recompiled for dual-top simulation and **all 9 UVM
-phases complete** (build→connect→eoe→sos→run→extract→check→report→final). The die()
+phases complete** with time advancing to 10ns (run_phase `#10` delay works). The die()
 absorption fix ensures that scoreboard errors in check_phase don't kill the simulator.
-**No real bus transactions flow yet** because driver proxy's `seq_item_port` is not
-connected to the sequencer, preventing the driver from obtaining sequences.
+Coverage collection is functional with covergroup registration. The base test runs no
+sequences, so 0% coverage and 4 UVM_ERRORs from check_phase are expected.
 
 Xcelium reference: APB `apb_8b_write_test` achieves 21-30% coverage with real SETUP/ACCESS
-bus transactions at 130ns sim time, 0 UVM errors. Our output: 0% coverage, ~70 ns sim
-time, 0 UVM_FATAL, 4 UVM_ERROR from scoreboard (expected — no transactions), coverage
-report runs in report_phase.
+bus transactions at 130ns sim time, 0 UVM errors. Our output: 0% coverage at 10ns sim
+time, 0 UVM_FATAL, 4 UVM_ERROR from scoreboard (expected — base test runs no sequences),
+coverage report with 8 coverpoints runs in report_phase.
 
 | AVIP | HvlTop | HdlTop | Combined | Status | Notes |
 |------|--------|--------|----------|--------|-------|
-| APB | Full topology | ✅ Dual-top | ✅ EXIT 0 | seq_item_port gap | BFM driver active; 42.4 ns sim time; 0 UVM errors; 0% coverage (no transactions) |
+| APB | Full topology | ✅ Dual-top | ✅ All phases + sequences | Virtual seq runs | ~60ns sim time; 0 UVM_ERROR; BFM idle; "Body undefined" from sub-seqs |
 | AHB | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | No MLIR file available |
 | UART | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | hvl_top-only exits 0 |
 | I2S | UVM_FATAL (stale) | Needs compile | Not tested | Stale MLIR | Pre-compiled MLIR has parse errors |

@@ -1,5 +1,57 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1163 - February 12, 2026
+
+### Simulation: Phase Hopper Objection Fix + Dual-Top Stability
+
+1. **Phase hopper objection interceptors**: Broadened `get_objection`,
+   `raise_objection`, `drop_objection` interceptors to match
+   `uvm_phase_hopper::` variants (not just `uvm_phase::`). Root cause:
+   the UVM phase hopper class has its own objection methods that bypassed
+   existing interceptors, causing `run_phases` to return immediately
+   (simulation completed at 0 fs instead of advancing time).
+
+2. **`wait_for` wasEverRaised tracking**: Added per-process state tracking
+   to the `wait_for` interceptor. The objection count starts at 0, but we
+   must NOT return until objections have been raised AND then dropped.
+   Previously, `wait_for` would return after 3 yields with count==0,
+   causing premature phase completion before forked processes could raise
+   objections.
+
+3. **Dual-top `sim.terminate` handling**: In dual-top mode (HVL + HDL),
+   a successful `$finish` from UVM's `run_test()` no longer kills the
+   entire simulation if the HDL side still has pending events. Sets
+   `terminationRequested` but doesn't call `terminateCallback`, so clock
+   generators and BFMs keep running.
+
+4. **Stack size increase**: Added `setrlimit(RLIMIT_STACK)` for 64MB
+   stack in `main()`. Deep UVM sequence nesting (test → virtual_seq →
+   sub_seq → start → body → ...) overflows the default 8MB C++ stack
+   due to interpreter recursion in `interpretFuncBody`.
+
+5. **Assoc array validation cleanup**: Removed fragile
+   `kNativeHeapThreshold` address heuristic (0x10000000000); now uses
+   only the `validAssocArrayAddresses` set for address validation.
+
+6. **Diagnostic cleanup**: Removed all DIAG-* debug logging blocks
+   (DIAG-FUNCBODY, DIAG-WAITEVENT, DIAG-ASSOC-SKIP, DIAG-SLOT43,
+   DIAG-VTABLE, DIAG-BODY).
+
+### Files Modified
+
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Objection interceptor
+  broadening, wasEverRaised tracking, sim.terminate dual-top handling,
+  assoc array validation, diagnostic removal
+- `tools/circt-sim/circt-sim.cpp`: 64MB stack via setrlimit + include
+
+### AVIP Results
+
+- APB dual-top: 0 UVM_FATAL, 0 UVM_ERROR, sim runs to ~60ns
+- Virtual sequences execute (factory creates sub-sequences)
+- BFM drives idle state, monitor proxies initialize
+- Coverage: 0% (sub-sequence body dispatch returns to base → no transactions)
+- Remaining: "Body definition undefined" warnings from factory-created sub-sequences
+
 ## Iteration 1162 - February 12, 2026
 
 ### Mutation Governance: Policy-Lane-Class CLI and Config Wiring
