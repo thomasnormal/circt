@@ -60,6 +60,8 @@ Options:
   --strict-tool-preflight
                          Fail fast when enabled lanes depend on non-executable
                          default-derived CIRCT tools or lane runner entrypoints
+                         Also enables non-empty filtered-lane enforcement
+                         (`--require-nonempty-filtered-lanes`) for selected lanes.
   --baseline-window N    Baseline rows per suite/mode used for gate comparison
                          (default: 1, latest baseline only)
   --baseline-window-days N
@@ -4528,6 +4530,9 @@ if [[ "$WITH_AVIP" == "1" ]]; then
     echo "circt-verilog for AVIP not executable: $CIRCT_VERILOG_BIN_AVIP" >&2
     exit 1
   fi
+fi
+if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
+  REQUIRE_NONEMPTY_FILTERED_LANES=1
 fi
 if [[ "$STRICT_GATE" == "1" ]]; then
   REQUIRE_NONEMPTY_FILTERED_LANES=1
