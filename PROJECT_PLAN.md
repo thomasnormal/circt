@@ -11,18 +11,19 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ### Current Status
 - **sv-tests simulation**: 856 pass, 0 xfail, 1 compile-only, 9 skip, 7 xpass (Feb 10)
-- **circt-sim unit tests**: 225/225 (100%)
+- **circt-sim unit tests**: 230/230 (161 pass, 64 timeout-UVM, 5 pre-existing failures)
 - **ImportVerilog tests**: 268/268 (100%)
-- **AVIP dual-top**: APB runs to ~60ns with full virtual sequence execution, 0 UVM_FATAL, 0 UVM_ERROR, drive_apb_idle BFM output visible
+- **AVIP dual-top**: APB runs with full virtual sequence + sub-sequence dispatch, 0 UVM_FATAL, 0 UVM_ERROR, BFM drives IDLE→SETUP. Coverage 0% (BFM stuck at SETUP→ACCESS transition).
 - **Performance**: ~171 ns/s simulated time
 
-### Recently Completed (Iteration 1165, Feb 12, 2026)
-1. **Blocking finish_item / item_done handshake**: `finish_item` now blocks the sequence until the driver calls `item_done`. Direct-wake mechanism (no polling). Process-level retry fix for `sequencerGetRetryCallOp` when call stack is empty.
-2. **Phase hopper objection fix**: Broadened objection interceptors to match `uvm_phase_hopper::` variants.
-3. **`wait_for` wasEverRaised tracking**: Prevents premature phase completion.
-4. **Dual-top sim.terminate handling**: Graceful shutdown when HVL finishes before HDL.
-5. **Stack size increase**: 64MB stack for deep UVM sequence nesting.
-6. **Diagnostic cleanup**: Removed all DIAG-* debug logging blocks.
+### Recently Completed (Iteration 1171, Feb 12, 2026)
+1. **randomize() vtable corruption fix**: `__moore_randomize_basic` was filling entire class object memory with random bytes, corrupting class_id (bytes 0-3) and vtable pointer (bytes 4-11). Now a no-op — individual rand fields set by `_with_range`/`_with_dist`. This fixed sub-sequence body dispatch (factory-created sequences now call derived body()).
+2. **Blocking finish_item / item_done handshake** (iter 1165): Direct-wake mechanism, process-level retry fix.
+3. **Phase hopper objection fix**: Broadened interceptors for `uvm_phase_hopper::` variants.
+4. **`wait_for` wasEverRaised tracking**: Prevents premature phase completion.
+5. **Dual-top sim.terminate handling**: Graceful shutdown when HVL finishes before HDL.
+6. **Stack size increase**: 64MB stack for deep UVM sequence nesting.
+7. **Diagnostic cleanup**: Removed all 21 DIAG-* debug logging blocks.
 
 ### Feature Gap Table (Simulation)
 
@@ -39,26 +40,52 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Coverage collection | DONE | Covergroups + coverpoints + iff guards |
 | Constraint solver | DONE | Soft/hard, inheritance, inline, dynamic bounds |
 | Stack size (64MB) | DONE | Handles deep UVM sequence nesting |
-| SVA concurrent assertions | NOT STARTED | 26 compile-only tests (deferred) |
+| Sub-sequence body dispatch | DONE | Fixed by randomize_basic no-op (vtable preservation) |
 | BFM/driver transactions | DONE | finish_item blocks until item_done; direct-wake handshake |
-| Sub-sequence body dispatch | IN PROGRESS | Factory-created sequences get base body() |
+| SVA concurrent assertions | NOT STARTED | 26 compile-only tests (deferred) |
+| BFM APB state machine | IN PROGRESS | IDLE→SETUP works, SETUP→ACCESS blocked (investigating) |
 | Multi-AVIP coverage | IN PROGRESS | Handshake done; needs AVIP recompile + end-to-end test |
 
 ### Next Steps (Simulation)
-1. **Recompile AVIPs**: All AVIPs (APB, AHB, SPI, I2S, I3C, JTAG, AXI4, AXI4Lite, UART) need recompilation with latest circt-verilog to include the finish_item/item_done handshake and other recent fixes. Then run end-to-end to verify coverage.
-2. **Sub-sequence body dispatch**: Factory-created sub-sequences (via `create_by_type`) get base class `uvm_sequence_base::body` instead of derived body. Causes "Body definition undefined" warnings. Fix vtable initialization in factory create path.
-3. **Performance optimization**: Target >500 ns/s for practical AVIP runs.
-4. **SVA concurrent assertions**: Needed for 26 compile-only SVA tests.
+1. **Fix BFM SETUP→ACCESS transition**: The APB BFM drives IDLE→SETUP but never transitions to ACCESS (penable=1). Investigate whether a clock edge wait or signal drive is being missed in the interpreter.
+2. **Recompile AVIPs**: All AVIPs (APB, AHB, SPI, I2S, I3C, JTAG, AXI4, AXI4Lite, UART) need recompilation with latest circt-verilog to include all recent fixes. Then run end-to-end to verify coverage.
+3. **Fix 5 pre-existing lit test failures**: bytecode-input, bytecode-skip-passes, llhd-child-module-drive, llhd-probe-block-arg-output, module-drive-enable (correct output but exit code 1).
+4. **Performance optimization**: Target >500 ns/s for practical AVIP runs.
+5. **SVA concurrent assertions**: Needed for 26 compile-only SVA tests.
 
 ### Known Limitations (Simulation)
-- Sub-sequence body() dispatch: factory-created objects use base vtable → "Body definition undefined"
+- BFM APB state machine: SETUP→ACCESS transition not completing (coverage remains 0%)
 - AVIPs need recompilation with latest circt-verilog for end-to-end coverage testing
+- 5 pre-existing lit test failures (correct output, exit code 1)
 - SVA concurrent assertions not simulated (26 tests compile-only)
 - Xcelium APB reference: 21-30% coverage, 130ns sim time — our target baseline
 
 ---
 
 ## Formal Workstream (circt-mut) — February 12, 2026
+
+### BMC Semantic Closure Update (February 12, 2026, UVM edge-case revalidation)
+
+1. Revalidated focused UVM edge cases with explicit `build-test/bin` tool paths:
+   - BMC:
+     - `16.11--sequence-subroutine-uvm`: PASS
+     - `16.13--sequence-multiclock-uvm`: PASS
+   - LEC:
+     - `16.11--sequence-subroutine-uvm`: PASS (`LEC_NOT_RUN`)
+     - `16.13--sequence-multiclock-uvm`: PASS (`LEC_NOT_RUN`)
+2. Added semantic-tag regression coverage to prevent accidental drift of these
+   critical closure buckets:
+   - `test/Tools/sv-tests-bmc-semantic-tags-uvm-closure.test`
+3. Remaining limitations:
+   - these UVM-heavy sources are frontend-expensive; full filtered slices can
+     still be slow/noisy without careful case-level targeting.
+   - LEC currently classifies assertion-heavy UVM cases as `LEC_NOT_RUN`,
+     so semantic closure signal for those tests remains BMC-primary.
+4. Next long-term features:
+   - add a dedicated fast semantic-closure lane that executes these buckets
+     case-by-case (rather than broad regex scans) to reduce frontend churn.
+   - investigate promoting `LEC_NOT_RUN` assertion-heavy rows into explicit
+     governance buckets so strict modes can track this class separately.
 
 ### Formal Closure Snapshot Update (February 12, 2026, strict run-path parity + smoke revalidation)
 
@@ -2247,13 +2274,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ### AVIP Status
 
-**APB dual-top: SEQBDYZMB fixed, 0 UVM errors, phases run correctly.** Feb 11.
-Sequences now execute body() properly; blocks on BFM/driver `finish_item`.
-Performance: ~171 ns/s (APB 10us in 59s).
+**APB dual-top: Sub-sequence dispatch FIXED, BFM drives IDLE→SETUP, 0 UVM errors.** Feb 12.
+randomize_basic no-op fix restored vtable integrity → factory-created sequences now call derived body().
+BFM stuck at SETUP→ACCESS transition — coverage remains 0%. Performance: ~171 ns/s.
 
 | AVIP | Compilation | Blocker | Notes |
 |------|------------|---------|-------|
-| APB | **RUNNING** (494K lines LLHD) | BFM/driver transaction completion (finish_item blocks) | 0 SEQBDYZMB, 0 UVM errors, phases run correctly |
+| APB | **RUNNING** (494K lines LLHD) | BFM SETUP→ACCESS transition | 0 UVM errors, sub-sequence dispatch fixed, BFM drives IDLE→SETUP |
 | AHB | Fails | Missing `\`timescale` directives | All packages/interfaces/modules |
 | UART | Fails | Missing `\`timescale` directives | Also has escape sequence warnings |
 | SPI | Fails | Missing `\`timescale` directives | Same as AHB |
@@ -2270,7 +2297,7 @@ Performance: ~171 ns/s (APB 10us in 59s).
 | **Track 1: Constraint Solver** | Agent | **DONE** | All FAIL tests fixed; implication_0 and randomize_3 pass |
 | **Track 2: AVIP Recompilation** | Agent | **DONE** | APB recompiled; AHB/SPI/UART need timescale fixes |
 | **Track 3: Interpreter Robustness** | Agent | **DONE** | abort→failure audit (6 sites), get_root short-circuit, join type fix |
-| **Track 4: AVIP Transaction Flow** | Agent | Active | SEQBDYZMB fixed; next: BFM driver `item_done` path for transaction completion |
+| **Track 4: AVIP Transaction Flow** | Agent | Active | Sub-sequence dispatch FIXED (randomize_basic no-op); next: BFM SETUP→ACCESS transition |
 | **Track 5: Coverage + SVA** | Agent | Pending | iff guard runtime eval, auto-sampling, SVA concurrent assertions |
 | **BMC/LEC** | Codex | Active | Structured Slang event-expression metadata (DO NOT TOUCH) |
 
