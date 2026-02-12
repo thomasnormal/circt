@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1187 - February 12, 2026
+
+### Formal LEC Telemetry: Runner-Command Aggregate Parity for `CIRCT_LEC_ERROR`
+
+1. Extended `utils/run_formal_all.sh` LEC summarization so `CIRCT_LEC_ERROR` rows with `runner_command_*` reasons now contribute to aggregate runner-command telemetry:
+   - `lec_runner_command_cases`
+   - `lec_runner_command_reason_*_cases`
+   - `lec_runner_command_case_ids_cardinality`
+   - `lec_runner_command_case_reasons_cardinality`
+2. Extended baseline rollups so aggregate runner-command identities now absorb all typed LEC error families when deriving:
+   - `lec_runner_command_case_ids`
+   - `lec_runner_command_case_reasons`
+3. Extended strict-gate current-state rollups to include `CIRCT_LEC_ERROR` sources for:
+   - `--fail-on-new-lec-runner-command-case-ids`
+   - `--fail-on-new-lec-runner-command-case-reasons`
+4. Regression coverage:
+   - new `test/Tools/run-formal-all-strict-gate-lec-runner-command-case-ids-circt-lec-error.test`
+   - new `test/Tools/run-formal-all-strict-gate-lec-runner-command-case-reasons-circt-lec-error.test`
+   - updated `test/Tools/run-formal-all-opentitan-lec-missing-results-reason.test`
+   - updated `test/Tools/run-formal-all-opentitan-lec-fallback-diag.test`
+5. Outcome:
+   - aggregate runner-command strict governance is now consistent across `CIRCT_OPT_ERROR`, `CIRCT_VERILOG_ERROR`, and `CIRCT_LEC_ERROR` typed error families.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(strict-gate-lec-runner-command-case-ids-circt-lec-error|strict-gate-lec-runner-command-case-reasons-circt-lec-error|opentitan-lec-missing-results-reason|opentitan-lec-fallback-diag|strict-gate-lec-runner-command-case-ids|strict-gate-lec-runner-command-case-reasons)\.test'`
+  - PASS (6/6)
+
+
 ## Iteration 1186 - February 12, 2026
 
 ### Formal LEC Telemetry: `CIRCT_LEC_ERROR` Case-Identity Governance
