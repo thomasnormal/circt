@@ -62,6 +62,32 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, Yosys root normalization + snapshot-safe defaults)
+
+1. Hardened `utils/run_formal_all.sh` `--yosys` path contract for real-world invocation patterns:
+   - accepts direct SVA roots (`*.sv` in dir), `<root>/sva`, and `<root>/tests/sva`
+   - normalizes once after argument parsing so both BMC and LEC yosys lanes consume a stable SVA root.
+2. Fixed snapshot re-exec default-path fidelity for formal helper artifacts:
+   - snapshot launcher now exports `RUN_FORMAL_ALL_SOURCE_DIR`
+   - `SCRIPT_DIR` now resolves from that original source dir when present
+   - keeps default semantic-tag map resolution stable under immutable `/tmp` snapshot execution.
+3. Added focused regression coverage and revalidated the affected yosys formal lanes:
+   - new tests:
+     - `test/Tools/run-formal-all-yosys-dir-normalize-root.test`
+     - `test/Tools/run-formal-all-yosys-dir-normalize-tests-root.test`
+   - focused lit slice: PASS (7/7)
+   - external filtered checks with `--yosys /home/thomas-ahle/yosys`:
+     - `yosys/tests/sva/LEC`: PASS (1/1)
+     - `yosys/tests/sva/BMC`: PASS (1/1)
+4. Remaining limitations:
+   - yosys root normalization is still heuristic (path-shape based) and does not yet emit explicit diagnostics when normalization falls back to an unresolved/non-SVA layout.
+   - enabled filtered lanes can still report `total=0` unless `--require-nonempty-filtered-lanes` is explicitly set.
+   - strict policy and mutation governance still consume summarized counters, not a versioned per-case provenance schema.
+5. Next long-term features (BMC/LEC/mutation focus):
+   - make non-empty filtered-lane guarantees a strict default policy for core formal lanes.
+   - introduce a versioned formal provenance artifact (case-level status, reason taxonomy, runner command, semantic buckets) and gate strict checks on artifact diffs instead of summary strings.
+   - add first-class mutation campaign integration in `run_formal_all.sh` (generation, replay, and equivalence triage lanes) with shared provenance and strict regression gates.
+
 ### Formal Closure Snapshot Update (February 12, 2026, first-class `LEC_NOT_RUN` reason-key strict governance)
 
 1. Added a dedicated no-run reason-key strict gate in `utils/run_formal_all.sh`:

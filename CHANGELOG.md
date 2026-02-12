@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1190 - February 12, 2026
+
+### Formal Orchestration Hardening: Yosys Root Normalization + Snapshot Source Fidelity
+
+1. Added `normalize_yosys_sva_dir` in `utils/run_formal_all.sh` and normalize `--yosys` immediately after arg parsing.
+   - Accepts direct SVA roots (`*.sv` in directory), `<root>/sva`, and `<root>/tests/sva`.
+   - Preserves original input when no known SVA layout is found.
+2. Fixed snapshot-mode default resource resolution drift.
+   - Snapshot re-exec now exports `RUN_FORMAL_ALL_SOURCE_DIR` before jumping to the immutable `/tmp` copy.
+   - `SCRIPT_DIR` now prefers `RUN_FORMAL_ALL_SOURCE_DIR` so default helper artifacts (including `yosys-sva-bmc-semantic-tags.tsv`) stay repo-relative under snapshot execution.
+3. Updated `--yosys` CLI contract text in help output:
+   - `yosys SVA root or yosys repo root`.
+4. Added regression coverage for path normalization:
+   - `test/Tools/run-formal-all-yosys-dir-normalize-root.test`
+   - `test/Tools/run-formal-all-yosys-dir-normalize-tests-root.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(yosys-dir-normalize-(root|tests-root)|yosys-bmc-(profile-forwarding|default-semantic-tag-map|xfail-summary)|yosys-lec-not-run-reason-summary|help)\.test'`
+  - PASS (7/7)
+- External filtered sanity:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-yosys-root-lec-<ts> --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys --include-lane-regex '^yosys/tests/sva/LEC$' --yosys-lec-test-filter 'basic00' --yosys-bmc-test-filter '.*' --verilator-lec-test-filter '.*' --verilator-bmc-test-filter '.*' --sv-tests-uvm-bmc-semantics-test-filter '.*' --sv-tests-lec-test-filter '.*' --sv-tests-bmc-test-filter '.*' --circt-verilog /home/thomas-ahle/circt/build-test/bin/circt-verilog`
+    - PASS (`yosys/tests/sva/LEC`: total=1 pass=1 fail=0)
+  - `CIRCT_OPT=/home/thomas-ahle/circt/build-test/bin/circt-opt CIRCT_BMC=/home/thomas-ahle/circt/build-test/bin/circt-bmc CIRCT_LEC=/home/thomas-ahle/circt/build-test/bin/circt-lec utils/run_formal_all.sh --out-dir /tmp/formal-all-yosys-root-bmc-<ts> --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys --include-lane-regex '^yosys/tests/sva/BMC$' --yosys-bmc-test-filter 'basic01' --yosys-lec-test-filter '.*' --verilator-lec-test-filter '.*' --verilator-bmc-test-filter '.*' --sv-tests-uvm-bmc-semantics-test-filter '.*' --sv-tests-lec-test-filter '.*' --sv-tests-bmc-test-filter '.*' --circt-verilog /home/thomas-ahle/circt/build-test/bin/circt-verilog`
+    - PASS (`yosys/tests/sva/BMC`: total=1 pass=1 fail=0)
+
+
 ## Iteration 1189 - February 12, 2026
 
 ### Formal LEC Telemetry: First-Class `LEC_NOT_RUN` Reason-Key Governance
