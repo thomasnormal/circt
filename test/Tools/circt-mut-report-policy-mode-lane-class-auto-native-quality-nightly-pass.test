@@ -11,6 +11,6 @@
 // CHECK: policy.mode{{[[:space:]]}}native-strict-formal-quality-nightly
 // CHECK: policy.mode_is_native_strict{{[[:space:]]}}1
 // CHECK: policy.mode_source{{[[:space:]]}}lane_class_auto
-// CHECK: policy.profile_count{{[[:space:]]}}7
+// CHECK: policy.profile_count{{[[:space:]]}}8
 // CHECK: value_gate.failure_count{{[[:space:]]}}0
 // CHECK: value_gate.status{{[[:space:]]}}pass

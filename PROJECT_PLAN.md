@@ -62,6 +62,30 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, native strict-quality LEC reason coverage)
+
+1. Extended native strict-quality policy bundles in `circt-mut` to include
+   `formal-regression-matrix-external-formal-lec-not-run-reason-coverage-guard`.
+2. This aligns native strict-quality governance with non-native strict-quality
+   contracts for LEC `NOT_RUN` reason completeness.
+3. Added and validated focused regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-quality-reason-coverage-fail.test`
+   - updated native strict-quality run-with-report and report-cli pass tests for
+     profile ordering/count changes (`7 -> 8`).
+4. Validation:
+   - `ninja -C build-test circt-mut`: PASS
+   - focused native strict-quality lit slice: PASS (12/12).
+5. Remaining limitations:
+   - strict-quality governance still does not enforce bounded drift per reason
+     category (e.g., reason-specific regression budgets by suite/mode).
+   - policy telemetry is profile-list based and lacks first-class reason-level
+     trend artifacts for CI diffs.
+6. Next long-term features (BMC/LEC/mutation focus):
+   - add reason-category trend budgets and history-window guards for LEC
+     `NOT_RUN` reason families.
+   - emit machine-readable reason lineage artifacts that can be correlated with
+     mutation generator config/seed provenance.
+
 ### Formal Closure Snapshot Update (February 12, 2026, strict legacy rule-ID enforcement)
 
 1. Added strict quality enforcement option in `utils/run_formal_all.sh`:
