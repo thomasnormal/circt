@@ -291,6 +291,8 @@ def main() -> int:
 
     circt_verilog = os.environ.get("CIRCT_VERILOG", "build/bin/circt-verilog")
     circt_verilog_args = shlex.split(os.environ.get("CIRCT_VERILOG_ARGS", ""))
+    circt_opt = os.environ.get("CIRCT_OPT", "build/bin/circt-opt")
+    circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
     circt_bmc = os.environ.get("CIRCT_BMC", "build/bin/circt-bmc")
     circt_bmc_args = shlex.split(os.environ.get("CIRCT_BMC_ARGS", ""))
     z3_lib = os.environ.get("Z3_LIB", str(Path.home() / "z3-install/lib64/libz3.so"))
@@ -298,6 +300,15 @@ def main() -> int:
     bmc_smoke_only = os.environ.get("BMC_SMOKE_ONLY", "0") == "1"
     bmc_assume_known_inputs = os.environ.get("BMC_ASSUME_KNOWN_INPUTS", "0") == "1"
     bmc_allow_multi_clock = os.environ.get("BMC_ALLOW_MULTI_CLOCK", "0") == "1"
+    bmc_prepare_core_with_circt_opt = (
+        os.environ.get("BMC_PREPARE_CORE_WITH_CIRCT_OPT", "1") == "1"
+    )
+    bmc_prepare_core_passes = shlex.split(
+        os.environ.get(
+            "BMC_PREPARE_CORE_PASSES",
+            "--lower-lec-llvm --reconcile-unrealized-casts",
+        )
+    )
     drop_remark_pattern = os.environ.get(
         "BMC_DROP_REMARK_PATTERN",
         os.environ.get("DROP_REMARK_PATTERN", "will be dropped during lowering"),
@@ -358,9 +369,11 @@ def main() -> int:
             case_path = case.case_path or str(case_dir)
 
             verilog_log_path = case_dir / "circt-verilog.log"
+            opt_log_path = case_dir / "circt-opt.log"
             bmc_log_path = case_dir / "circt-bmc.log"
             bmc_out_path = case_dir / "circt-bmc.out"
             out_mlir = case_dir / "pairwise_bmc.mlir"
+            prepped_mlir = case_dir / "pairwise_bmc.prepared.mlir"
 
             include_dirs = global_include_dirs + case.include_dirs
             verilog_cmd = [
@@ -377,9 +390,14 @@ def main() -> int:
             verilog_cmd += circt_verilog_args
             verilog_cmd += case.source_files
 
+            opt_cmd = [circt_opt, str(out_mlir)]
+            opt_cmd += bmc_prepare_core_passes
+            opt_cmd += circt_opt_args
+            opt_cmd += ["-o", str(prepped_mlir)]
+
             bmc_cmd = [
                 circt_bmc,
-                str(out_mlir),
+                str(prepped_mlir if bmc_prepare_core_with_circt_opt else out_mlir),
                 f"--module={case.top_module}",
                 "-b",
                 str(bound),
@@ -432,6 +450,26 @@ def main() -> int:
                             continue
                         drop_remark_seen_case_reasons.add(key)
                         drop_remark_reason_rows.append((case.case_id, case_path, reason))
+
+                if bmc_prepare_core_with_circt_opt:
+                    stage = "opt"
+                    opt_result = run_and_log(opt_cmd, opt_log_path, None, timeout_secs)
+                    if opt_result.returncode != 0:
+                        reason = normalize_error_reason(opt_log_path.read_text())
+                        rows.append(
+                            (
+                                "ERROR",
+                                case.case_id,
+                                case_path,
+                                suite_name,
+                                mode_label,
+                                "CIRCT_OPT_ERROR",
+                                reason,
+                            )
+                        )
+                        errored += 1
+                        print(f"{case.case_id:32} ERROR (CIRCT_OPT_ERROR)", flush=True)
+                        continue
 
                 stage = "bmc"
                 bmc_result = run_and_log(
@@ -528,6 +566,9 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 if stage == "verilog":
                     timeout_diag = "CIRCT_VERILOG_TIMEOUT"
+                    timeout_reason = "frontend_command_timeout"
+                elif stage == "opt":
+                    timeout_diag = "CIRCT_OPT_TIMEOUT"
                     timeout_reason = "frontend_command_timeout"
                 else:
                     timeout_diag = "BMC_TIMEOUT"

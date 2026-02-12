@@ -58,4 +58,5 @@
 // CHECK: --with-opentitan-lec-strict
 // CHECK: --opentitan-bmc-impl-filter
 // CHECK: --opentitan-bmc-bound
+// CHECK: --opentitan-bmc-include-masked
 // CHECK: --opentitan-lec-impl-filter
