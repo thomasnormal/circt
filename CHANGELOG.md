@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1193 - February 12, 2026
+
+### Formal Quality Tightening: Non-Empty Filtered Lanes Are Now Strict-Tool-Preflight Defaults
+
+1. Updated `utils/run_formal_all.sh` so `--strict-tool-preflight` now implicitly enables:
+   - `--require-nonempty-filtered-lanes`
+2. Updated CLI help text for `--strict-tool-preflight` to document the strict default non-empty filtered-lane contract.
+3. Added focused regression coverage:
+   - `test/Tools/run-formal-all-strict-tool-preflight-nonempty-filtered-lanes-defaults.test`
+   - verifies strict-tool-preflight run marks `total=0` filtered lane outputs with `error=1` and `nonempty_filter_miss=1`.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(require-nonempty-filtered-lanes|strict-gate-nonempty-filtered-lanes-defaults|strict-tool-preflight-(nonempty-filtered-lanes-defaults|derived-opt|missing-sv-lec-runner|yosys-layout-(unresolved|missing))|help)\.test'`
+  - PASS (8/8)
+
+
 ## Iteration 1192 - February 12, 2026
 
 ### Formal Quality Tightening: Non-Empty Filtered Lanes Are Now Strict-Gate Defaults
