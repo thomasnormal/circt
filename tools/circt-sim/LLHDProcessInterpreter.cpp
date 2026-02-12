@@ -4572,6 +4572,7 @@ bool LLHDProcessInterpreter::executeStep(ProcessId procId) {
     return false;
   }
 
+
   return !state.halted && !state.waiting;
 }
 
@@ -6399,6 +6400,7 @@ arith_dispatch:
         if (funcIt2 == addressToFunction.end())
           break;
         StringRef resolvedName = funcIt2->second;
+
         LLVM_DEBUG(llvm::dbgs()
                    << "  func.call_indirect: static fallback: "
                    << vtableGlobalName << "[" << methodIndex << "] -> "
@@ -20048,7 +20050,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
     // ---- __moore_randomize_basic ----
     // Signature: (classPtr: ptr, classSize: i64) -> i32
-    // Fills the object's memory with random bytes using per-object RNG.
+    // No-op: individual rand fields are set by subsequent _with_range/_with_dist
+    // calls.  We only track the object address and advance the RNG seed.
     if (calleeName == "__moore_randomize_basic") {
       if (callOp.getNumOperands() >= 2) {
         uint64_t classAddr =
@@ -20064,32 +20067,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           pendingSrandomSeed.reset();
         }
 
+        // Do NOT fill the entire object with random bytes.  The object
+        // contains non-rand metadata (class_id, vtable pointer, UVM base
+        // class fields like m_sequencer, m_parent, m_name, etc.) that must
+        // be preserved.  Each rand field gets its own constrained random
+        // value from __moore_randomize_with_range / _with_dist calls that
+        // follow this basic call.  Advance the RNG once to maintain
+        // deterministic sequencing.
         if (classAddr != 0 && classSize > 0) {
-          uint64_t offset = 0;
-          auto *block =
-              findMemoryBlockByAddress(classAddr, procId, &offset);
-          if (block) {
-            auto &rng = getObjectRng(classAddr);
-            size_t avail = block->data.size() - offset;
-            size_t fillSize = std::min<size_t>(classSize, avail);
-            // Fill in 4-byte chunks for efficiency
-            size_t fullWords = fillSize / 4;
-            for (size_t i = 0; i < fullWords; ++i) {
-              uint32_t rval = rng();
-              for (int b = 0; b < 4; ++b)
-                block->data[offset + i * 4 + b] =
-                    static_cast<uint8_t>((rval >> (b * 8)) & 0xFF);
-            }
-            // Fill remaining bytes
-            size_t remaining = fillSize % 4;
-            if (remaining > 0) {
-              uint32_t rval = rng();
-              for (size_t b = 0; b < remaining; ++b)
-                block->data[offset + fullWords * 4 + b] =
-                    static_cast<uint8_t>((rval >> (b * 8)) & 0xFF);
-            }
-            block->initialized = true;
-          }
+          auto &rng = getObjectRng(classAddr);
+          (void)rng(); // Advance RNG for determinism
         }
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.call: __moore_randomize_basic(0x"

@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1171 - February 12, 2026
+
+### Fix: randomize() no longer corrupts object metadata (vtable, class_id)
+
+**Root Cause**: `__moore_randomize_basic` filled the entire class object memory
+with random bytes, including non-rand metadata (class_id at bytes 0-3, vtable
+pointer at bytes 4-11, string pointers, UVM base class fields). This corrupted
+the vtable pointer so subsequent virtual method calls dispatched to the base
+class instead of the derived class.
+
+**Fix**: Made `__moore_randomize_basic` a no-op that only advances the per-object
+RNG. Individual rand fields are set by subsequent `__moore_randomize_with_range`
+/ `__moore_randomize_with_dist` calls.
+
+**Result**: APB AVIP dual-top sub-sequences now dispatch to correct derived
+body(). BFM drives IDLE→SETUP. 0 UVM_ERROR, 0 UVM_FATAL.
+
+### Files Changed
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: randomize_basic no-op fix,
+  removed 21 temporary DIAG-* diagnostics
+- `test/Tools/circt-sim/randomize-basic.mlir`: Updated for no-op behavior
+- `test/Tools/circt-sim/randomize-preserves-vtable.sv`: New vtable preservation test
+- `FEATURES.md`: Updated randomize_basic description
+
 ## Iteration 1170 - February 12, 2026
 
 ### Mutation Governance: Strict Run-Path Quality Parity + External Smoke Revalidation

@@ -103,7 +103,7 @@ to commercial simulators like Cadence Xcelium.
 | `$test$plusargs` | WORKS | Runtime `__moore_test_plusargs` checks `CIRCT_UVM_ARGS`/`UVM_ARGS` env var |
 | `$value$plusargs` | WORKS | Runtime `__moore_value_plusargs` reads from `CIRCT_UVM_ARGS`/`UVM_ARGS` env var; supports `%d`, `%h`, `%o`, `%b` formats |
 | `$urandom` / `$random` | WORKS | mt19937-based RNG via `__moore_urandom()` interceptors |
-| `randomize()` (basic) | WORKS | `__moore_randomize_basic()` fills object memory with random bytes |
+| `randomize()` (basic) | WORKS | `__moore_randomize_basic()` preserves object metadata; individual rand fields set by _with_range/_with_dist |
 | `randomize()` (with dist) | WORKS | `__moore_randomize_with_dist()` implements weighted distribution constraints |
 | `randomize()` (with ranges) | WORKS | `__moore_randomize_with_ranges()` generates uniform random within range pairs |
 | `randomize(null)` check-only | WORKS | IEEE 18.11.1: check-only mode returns 1 if constraints satisfiable without modifying state |
@@ -172,7 +172,7 @@ coverage report with 8 coverpoints runs in report_phase.
 | Static vtable fallback | Eliminates dispatch warnings for corrupt pointers |
 | Native store OOB fallback | Falls through when native block too small |
 | Shutdown `_exit` | Placed in `processInput()` before destructor runs |
-| `randomize_basic` | Fills object memory with random bytes instead of no-op |
+| `randomize_basic` | No-op: preserves object metadata (vtable, class_id); each rand field set by _with_range/_with_dist |
 | `randomize_with_dist` | Weighted distribution constraints with range/weight arrays |
 | `randomize_with_ranges` | Uniform random within range pairs for constrained random |
 | `$finish` exit code | Propagates exit code; checks error count for UVM `die()` → `$finish` |
