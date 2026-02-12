@@ -41,6 +41,7 @@ fi
 LEC_SMOKE_ONLY="${LEC_SMOKE_ONLY:-0}"
 # LEC_FAIL_ON_INEQ removed - circt-lec no longer has --fail-on-inequivalent flag
 FORCE_LEC="${FORCE_LEC:-0}"
+FORCE_LEC_TEST_FILTER="${FORCE_LEC_TEST_FILTER:-}"
 SKIP_SHOULD_FAIL="${SKIP_SHOULD_FAIL:-1}"
 Z3_BIN="${Z3_BIN:-}"
 OUT="${OUT:-$PWD/sv-tests-lec-results.txt}"
@@ -401,6 +402,8 @@ while IFS= read -r -d '' sv; do
   if [[ "$type" =~ [Pp]arsing ]]; then
     run_lec=0
     if [[ "$FORCE_LEC" == "1" ]]; then
+      run_lec=1
+    elif [[ -n "$FORCE_LEC_TEST_FILTER" && "$base" =~ $FORCE_LEC_TEST_FILTER ]]; then
       run_lec=1
     fi
   fi

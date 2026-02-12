@@ -1,0 +1,14 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests %t/bin
+// RUN: printf ':tags: smoke\n:type: Parsing\nmodule top; endmodule\n' > %t/sv-tests/tests/parse-force.sv
+// RUN: printf ':tags: smoke\n:type: Parsing\nmodule top; endmodule\n' > %t/sv-tests/tests/parse-skip.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "module {}"\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncat "${@: -1}"\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "LEC_RESULT=EQ"\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-lec
+// RUN: env TAG_REGEX='smoke' TEST_FILTER='parse-force|parse-skip' FORCE_LEC_TEST_FILTER='^parse-force$' LEC_SMOKE_ONLY=1 CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec OUT=%t/results.tsv /usr/bin/bash %S/../../utils/run_sv_tests_circt_lec.sh %t/sv-tests > %t/out.log
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out.log
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+//
+// SUMMARY: sv-tests LEC summary: total=2 pass=2 fail=0 error=0 skip=0
+// RESULTS: PASS{{[[:space:]]+}}parse-force{{[[:space:]]+}}{{.*}}parse-force.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}EQ
+// RESULTS: PASS{{[[:space:]]+}}parse-skip{{[[:space:]]+}}{{.*}}parse-skip.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}LEC_NOT_RUN{{[[:space:]]+}}parsing
