@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1158 - February 12, 2026
+
+### Mutation Governance: Default Quality Alias Modes
+
+1. Added default quality alias modes in `tools/circt-mut/circt-mut.cpp`:
+   - `native-strict-formal-quality`
+   - `strict-formal-quality`
+2. Alias mapping:
+   - both defaults map to cadence-aware nightly quality envelope:
+     `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly`
+     + `formal-regression-matrix-external-formal-semantic-diag-family-guard`
+     + core floor guards (`...bmc-core-min-total-v1`, `...lec-core-min-total-v1`).
+3. Updated mode surfaces/diagnostics:
+   - help output for `init/run/report`
+   - invalid-mode diagnostics:
+     - `test/Tools/circt-mut-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-init-report-policy-invalid.test`
+     - `test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test`
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-quality-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-pass.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused default-quality alias slice: PASS (11/11)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (465/465 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-quality-default-aliases ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+    BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL (known/ongoing): `opentitan` LEC (`missing_results=1`), AVIP compile
+    `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1157 - February 12, 2026
 
 ### Mutation Governance: Quality Policy Lane-Class Aliases

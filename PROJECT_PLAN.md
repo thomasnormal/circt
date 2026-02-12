@@ -53,6 +53,35 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, default quality aliases)
+
+1. Added default quality policy aliases:
+   - `native-strict-formal-quality`
+   - `strict-formal-quality`
+2. Default alias contract:
+   - both aliases map to the lane-class nightly quality envelope:
+     timeout debt `debt-v3-nightly` + semantic diagnostic-family guard + core
+     BMC/LEC minimum totals.
+   - strict/debt explicit variants remain available for fine-grained rollouts.
+3. Validation highlights:
+   - focused alias/help/invalid slice: PASS (11/11).
+   - full mutation suite:
+     `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+     PASS (465/465 selected).
+   - external cadence:
+     PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+     BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+     FAIL (known): `opentitan` LEC (`missing_results=1`), AVIP compile
+     `axi4Lite_avip`, `spi_avip`, `uart_avip`.
+4. Remaining limitations:
+   - lane manifests/CI still need an explicit policy-mode assignment step
+     (aliases now simplify the value, but do not auto-bind by lane metadata).
+   - recurring OpenTitan/AVIP failures remain.
+5. Next long-term features:
+   - auto-bind these default aliases from lane-class metadata in manifests/CI.
+   - add BMC semantic-family budget profiles and include them in quality
+     families.
+
 ### Formal Closure Snapshot Update (February 12, 2026, quality policy lane-class aliases)
 
 1. Added quality lane-class alias policy modes in `circt-mut`:
