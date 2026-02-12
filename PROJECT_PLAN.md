@@ -62,6 +62,25 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, strict-gate lane-keyed non-empty diagnostics)
+
+1. Hardened strict-gate triage quality in `utils/run_formal_all.sh`:
+   - BMC and LEC strict checks now emit explicit lane-keyed non-empty contract drift diagnostics (`nonempty_filter_miss increased ...`).
+   - diagnostics include suite/mode identity and a stable contract suffix for log parsing (`lane failed non-empty filtered-lane contract`).
+2. Expanded focused unit coverage:
+   - `test/Tools/run-formal-all-strict-gate-nonempty-filtered-lanes-defaults.test` now asserts the explicit strict-gate diagnostic line.
+3. Focused validation status:
+   - `bash -n utils/run_formal_all.sh`: PASS
+   - strict-gate/preflight/nonempty lit slice: PASS (9/9).
+4. Remaining limitations:
+   - non-empty filtered-lane enforcement remains opt-in in non-strict profiles.
+   - strict diagnostics are lane-keyed but still emitted only in stderr text; no versioned strict-policy artifact exists yet for machine-diff governance.
+   - mutation governance still lacks first-class campaign provenance artifacts integrated with strict gate decisions.
+5. Next long-term features (BMC/LEC/mutation focus):
+   - emit structured strict-policy diagnostics (JSON/TSV) with stable lane+rule identifiers for CI diffing.
+   - add strict policy rules for mutation campaign provenance drift (generator config, seed set, equivalence status deltas).
+   - compose strict-gate, strict-tool-preflight, and mutation provenance checks into a single CI admission profile with deterministic rule ordering.
+
 ### Formal Closure Snapshot Update (February 12, 2026, strict-tool-preflight default non-empty filtered lanes)
 
 1. Tightened strict formal preflight policy in `utils/run_formal_all.sh`:

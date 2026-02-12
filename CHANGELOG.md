@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1194 - February 12, 2026
+
+### Formal Strict-Gate Diagnostics: Lane-Keyed Non-Empty Contract Drift
+
+1. Extended strict-gate evaluation in `utils/run_formal_all.sh` with explicit lane-keyed diagnostics for non-empty filtered-lane misses.
+   - For BMC and LEC lanes, strict gate now emits:
+     - `nonempty_filter_miss increased (baseline -> current, window=...)`
+     - plus a clear contract suffix (`lane failed non-empty filtered-lane contract`).
+2. Updated strict-gate regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-nonempty-filtered-lanes-defaults.test`
+   - now asserts the new strict-gate diagnostic line, not only aggregate strict failure output.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(require-nonempty-filtered-lanes|strict-gate-(nonempty-filtered-lanes-defaults|failure-cases|test)|strict-tool-preflight-(nonempty-filtered-lanes-defaults|derived-opt|missing-sv-lec-runner|yosys-layout-(unresolved|missing))|help)\.test'`
+  - PASS (9/9)
+
+
 ## Iteration 1193 - February 12, 2026
 
 ### Formal Quality Tightening: Non-Empty Filtered Lanes Are Now Strict-Tool-Preflight Defaults

@@ -14975,6 +14975,23 @@ for key, current_row in summary.items():
                 len(current_bmc_drop_remark_cases.get(key, set())),
             )
         )
+        if strict_gate:
+            baseline_nonempty_miss_values = []
+            for counts in parsed_counts:
+                if "nonempty_filter_miss" in counts:
+                    baseline_nonempty_miss_values.append(
+                        int(counts["nonempty_filter_miss"])
+                    )
+            baseline_nonempty_miss = (
+                min(baseline_nonempty_miss_values)
+                if baseline_nonempty_miss_values
+                else 0
+            )
+            current_nonempty_miss = int(current_counts.get("nonempty_filter_miss", 0))
+            if current_nonempty_miss > baseline_nonempty_miss:
+                gate_errors.append(
+                    f"{suite} {mode}: nonempty_filter_miss increased ({baseline_nonempty_miss} -> {current_nonempty_miss}, window={baseline_window}); lane failed non-empty filtered-lane contract"
+                )
         if fail_on_any_bmc_drop_remarks and current_drop_remark > 0:
             gate_errors.append(
                 f"{suite} {mode}: bmc_drop_remark_cases must be zero (current={current_drop_remark})"
@@ -15258,6 +15275,23 @@ for key, current_row in summary.items():
         current_runner_command_cases = int(
             current_counts.get("lec_runner_command_cases", 0)
         )
+        if strict_gate:
+            baseline_nonempty_miss_values = []
+            for counts in parsed_counts:
+                if "nonempty_filter_miss" in counts:
+                    baseline_nonempty_miss_values.append(
+                        int(counts["nonempty_filter_miss"])
+                    )
+            baseline_nonempty_miss = (
+                min(baseline_nonempty_miss_values)
+                if baseline_nonempty_miss_values
+                else 0
+            )
+            current_nonempty_miss = int(current_counts.get("nonempty_filter_miss", 0))
+            if current_nonempty_miss > baseline_nonempty_miss:
+                gate_errors.append(
+                    f"{suite} {mode}: nonempty_filter_miss increased ({baseline_nonempty_miss} -> {current_nonempty_miss}, window={baseline_window}); lane failed non-empty filtered-lane contract"
+                )
         if fail_on_any_lec_drop_remarks and current_drop_remark > 0:
             gate_errors.append(
                 f"{suite} {mode}: lec_drop_remark_cases must be zero (current={current_drop_remark})"
