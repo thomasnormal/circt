@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1202 - February 12, 2026
+
+### LEC Semantic Closure: Selective Promotion of `:type: Parsing` sv-tests
+
+1. Extended `utils/run_sv_tests_circt_lec.sh` with a selective override:
+   - new env knob: `FORCE_LEC_TEST_FILTER`.
+2. Parsing-tag cases (`:type: Parsing`) can now be promoted to real LEC runs on a
+   per-case regex basis, without global `FORCE_LEC=1`.
+3. This enables incremental closure for high-value parsing-tag UVM cases while
+   preserving default runtime behavior for the full sv-tests corpus.
+4. Added focused regression coverage:
+   - `test/Tools/run-sv-tests-lec-force-lec-test-filter.test`
+   - verifies only matching parsing-tag cases run LEC and non-matching parsing
+     cases remain `LEC_NOT_RUN/parsing`.
+
+### Tests and Validation
+
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-sv-tests-lec-.*\\.test'`
+  - PASS (13 passed, 1 unsupported)
+- Focused real sv-tests slices (explicit `build-test/bin` tools):
+  - BMC `16.11--sequence-subroutine-uvm`, `16.13--sequence-multiclock-uvm`: PASS
+  - LEC baseline for same cases: `LEC_NOT_RUN/parsing` (identified closure gap)
+
 ## Iteration 1201 - February 12, 2026
 
 ### Formal Strict-Gate Compatibility Contracts: Rule-ID Allowlist Enforcement

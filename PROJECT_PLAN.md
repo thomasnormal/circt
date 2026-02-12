@@ -62,6 +62,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, selective LEC parsing-case promotion)
+
+1. Added selective parsing-case promotion in `utils/run_sv_tests_circt_lec.sh`:
+   - new env knob: `FORCE_LEC_TEST_FILTER`.
+2. Parsing-tag sv-tests (`:type: Parsing`) can now be promoted to real LEC runs
+   by case regex, without globally forcing all parsing-tag tests via `FORCE_LEC=1`.
+3. Added focused regression coverage:
+   - `test/Tools/run-sv-tests-lec-force-lec-test-filter.test`
+   - validates selective promotion and non-matching fallback to
+     `LEC_NOT_RUN/parsing`.
+4. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-sv-tests-lec-.*\\.test'`: PASS (13 passed, 1 unsupported).
+   - focused real sv-tests baselines (explicit tool paths):
+     - BMC: `16.11--sequence-subroutine-uvm`, `16.13--sequence-multiclock-uvm` PASS
+     - LEC baseline: both remain `LEC_NOT_RUN/parsing` without selective promotion.
+5. Remaining limitations:
+   - promoted cases can still be solver-heavy (not yet production-viable as strict defaults).
+   - no first-class per-case promotion list in `run_formal_all.sh` CLI yet; currently env-driven at runner level.
+6. Next long-term features (BMC/LEC/mutation focus):
+   - add CLI-level forwarding of selective LEC parsing promotions into formal lanes.
+   - introduce staged strict policy for promoted parsing cases (budget/timeout and reason-drift contracts).
+   - continue reducing `LEC_NOT_RUN/parsing` population by migrating high-signal cases to promoted cohorts.
+
 ### Formal Closure Snapshot Update (February 12, 2026, rule-ID allowlist strict contracts)
 
 1. Added strict rule-ID compatibility contract support in `utils/run_formal_all.sh`:
