@@ -1,5 +1,61 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1165 - February 12, 2026
+
+### Simulation: Blocking finish_item / item_done Handshake
+
+1. **Blocking `finish_item`**: The `finish_item` interceptor now suspends the
+   calling process until the driver calls `item_done` for the same transaction
+   item. This implements the standard UVM sequence-driver handshake:
+   - Sequence: `start_item` → `finish_item` (blocks until item_done)
+   - Driver: `get_next_item` → drive pins → `item_done`
+   Previously, `finish_item` returned immediately without waiting, and
+   `item_done` was a no-op. This caused 0% coverage on AVIPs because no
+   transactions ever completed.
+
+2. **Direct wake from `item_done`**: Instead of polling via delta callbacks,
+   `item_done` directly resumes the blocked `finish_item` process. This avoids
+   thousands of wasted delta polls between the sequence (time 0) and driver
+   completion (potentially nanoseconds later).
+
+3. **Process-level retry for `sequencerGetRetryCallOp`**: Fixed the retry
+   mechanism to work at the process top level (empty call stack), not just
+   inside function bodies. The `executeStep()` function advances `currentOp`
+   BEFORE executing the operation, so when the interceptor suspends, `currentOp`
+   already points past the `call_indirect`. The retry mechanism previously only
+   overrode `callStack` frames (requiring a function context). Now it also
+   directly resets `state.currentOp` when the call stack is empty.
+
+4. **`lastDequeuedItem` tracking**: `get_next_item`/`get` now records which
+   item address was dequeued by each port. When `item_done` fires, it uses this
+   mapping to find the correct item and signal completion.
+
+### Files Modified
+
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: finish_item blocking,
+  item_done wake, process-level retry
+- `tools/circt-sim/LLHDProcessInterpreter.h`: `finishItemWaiters`,
+  `itemDoneReceived`, `lastDequeuedItem` data structures
+- `test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir`: New test
+
+## Iteration 1164 - February 12, 2026
+
+### Mutation Governance: Quality-Mode Regression Realignment
+
+1. Realigned quality-mode report regressions to the current policy stack,
+   which now includes BMC semantic-family governance in addition to timeout
+   budgets, LEC semantic family, and BMC/LEC core minimum-volume guards.
+2. Updated profile-order/count assertions across quality families:
+   - `strict-formal-quality-*`
+   - `native-strict-formal-quality-*`
+3. Regression hardening impact:
+   - quality-mode tests now explicitly verify inclusion of
+     `formal-regression-matrix-external-formal-bmc-semantic-family-guard`
+     in mode expansion, reducing drift between policy wiring and test
+     expectations.
+4. Validation:
+   - focused quality-mode lit filter: PASS (`13/13`, serial).
+
 ## Iteration 1163 - February 12, 2026
 
 ### Simulation: Phase Hopper Objection Fix + Dual-Top Stability

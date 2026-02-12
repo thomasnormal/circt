@@ -16,12 +16,12 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **AVIP dual-top**: APB runs to ~60ns with full virtual sequence execution, 0 UVM_FATAL, 0 UVM_ERROR, drive_apb_idle BFM output visible
 - **Performance**: ~171 ns/s simulated time
 
-### Recently Completed (Iteration 1163, Feb 12, 2026)
-1. **Phase hopper objection fix**: Broadened `get_objection`, `raise_objection`, `drop_objection` interceptors to match `uvm_phase_hopper::` variants (not just `uvm_phase::`). The phase hopper class has its own objection methods that bypassed existing interceptors, causing `run_phases` to return immediately (sim completed at 0 fs).
-2. **`wait_for` wasEverRaised tracking**: Added per-process state tracking to `wait_for` interceptor. Count starts at 0 but we must NOT return until objections have been raised AND then dropped. Prevents premature phase completion.
-3. **Dual-top sim.terminate handling**: In dual-top mode, a successful `$finish` from UVM's `run_test()` no longer kills the entire simulation if the HDL side still has pending events. Sets `terminationRequested` but doesn't call `terminateCallback`, so clock generators and BFMs keep running.
-4. **Stack size increase**: Added `setrlimit(RLIMIT_STACK)` for 64MB stack in `main()`. Deep UVM sequence nesting (test → virtual_seq → sub_seq → start → body) overflows the default 8MB stack.
-5. **Assoc array validation cleanup**: Removed fragile `kNativeHeapThreshold` address heuristic; now uses only the `validAssocArrayAddresses` set for validation.
+### Recently Completed (Iteration 1165, Feb 12, 2026)
+1. **Blocking finish_item / item_done handshake**: `finish_item` now blocks the sequence until the driver calls `item_done`. Direct-wake mechanism (no polling). Process-level retry fix for `sequencerGetRetryCallOp` when call stack is empty.
+2. **Phase hopper objection fix**: Broadened objection interceptors to match `uvm_phase_hopper::` variants.
+3. **`wait_for` wasEverRaised tracking**: Prevents premature phase completion.
+4. **Dual-top sim.terminate handling**: Graceful shutdown when HVL finishes before HDL.
+5. **Stack size increase**: 64MB stack for deep UVM sequence nesting.
 6. **Diagnostic cleanup**: Removed all DIAG-* debug logging blocks.
 
 ### Feature Gap Table (Simulation)
@@ -31,7 +31,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | UVM phase sequencing | DONE | All 9 function phase IMPs complete in order |
 | Phase hopper objections | DONE | get/raise/drop/wait_for for uvm_phase_hopper |
 | VIF shadow signals | DONE | Interface field propagation + store interception |
-| Sequencer interface | DONE | start_item/finish_item/get native interceptors |
+| Sequencer interface | DONE | start_item/finish_item(blocking)/get/item_done; direct-wake handshake |
 | Analysis port write | DONE | Chain-following BFS dispatch via vtable |
 | Associative array deep copy | DONE | Prevents UVM phase livelock |
 | Runtime vtable override | DONE | All 3 call_indirect paths check runtime vtable |
@@ -40,26 +40,49 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Constraint solver | DONE | Soft/hard, inheritance, inline, dynamic bounds |
 | Stack size (64MB) | DONE | Handles deep UVM sequence nesting |
 | SVA concurrent assertions | NOT STARTED | 26 compile-only tests (deferred) |
+| BFM/driver transactions | DONE | finish_item blocks until item_done; direct-wake handshake |
 | Sub-sequence body dispatch | IN PROGRESS | Factory-created sequences get base body() |
-| BFM/driver transactions | IN PROGRESS | seq_item_port not connected → no item_done |
-| Multi-AVIP coverage | BLOCKED | Needs BFM/driver transaction completion |
+| Multi-AVIP coverage | IN PROGRESS | Handshake done; needs AVIP recompile + end-to-end test |
 
 ### Next Steps (Simulation)
-1. **Sub-sequence body dispatch**: Factory-created sub-sequences (via `create_by_type`) get base class `uvm_sequence_base::body` instead of derived body. Causes "Body definition undefined" warnings. Fix vtable initialization in factory create path.
-2. **BFM/driver transaction completion**: Fix DRVCONNECT warning — driver's `seq_item_port` not connected to sequencer. This is the last gap for actual bus transactions and coverage on AVIPs.
-3. **Recompile AVIPs**: Other AVIPs (AHB, SPI, I2S, I3C, JTAG, AXI4, AXI4Lite, UART) need recompilation with latest circt-verilog to include recent fixes.
-4. **Performance optimization**: Target >500 ns/s for practical AVIP runs.
-5. **SVA concurrent assertions**: Needed for 26 compile-only SVA tests.
+1. **Recompile AVIPs**: All AVIPs (APB, AHB, SPI, I2S, I3C, JTAG, AXI4, AXI4Lite, UART) need recompilation with latest circt-verilog to include the finish_item/item_done handshake and other recent fixes. Then run end-to-end to verify coverage.
+2. **Sub-sequence body dispatch**: Factory-created sub-sequences (via `create_by_type`) get base class `uvm_sequence_base::body` instead of derived body. Causes "Body definition undefined" warnings. Fix vtable initialization in factory create path.
+3. **Performance optimization**: Target >500 ns/s for practical AVIP runs.
+4. **SVA concurrent assertions**: Needed for 26 compile-only SVA tests.
 
 ### Known Limitations (Simulation)
 - Sub-sequence body() dispatch: factory-created objects use base vtable → "Body definition undefined"
-- AVIP BFM/driver gap: sequences block on `finish_item` waiting for driver `item_done`
+- AVIPs need recompilation with latest circt-verilog for end-to-end coverage testing
 - SVA concurrent assertions not simulated (26 tests compile-only)
 - Xcelium APB reference: 21-30% coverage, 130ns sim time — our target baseline
 
 ---
 
 ## Formal Workstream (circt-mut) — February 12, 2026
+
+### Formal Closure Snapshot Update (February 12, 2026, quality-mode regression hardening)
+
+1. Hardened quality-mode regression contracts to reflect the current formal
+   governance stack:
+   - timeout budget profile
+   - LEC semantic diagnostic-family guard
+   - BMC semantic-family guard
+   - BMC/LEC core minimum-volume floors
+2. Quality families covered:
+   - `strict-formal-quality-*`
+   - `native-strict-formal-quality-*`
+3. Validation highlight:
+   - focused quality-mode lit filter: PASS (`13/13`, serial).
+4. Remaining limitations:
+   - quality governance still relies on explicit mode families; lane-class
+     defaults are available but higher-level CI defaults are not yet unified.
+   - BMC semantic-family trend-budget policy (delta-aware, history-backed) is
+     still less mature than LEC semantic trend governance.
+5. Next long-term features:
+   - add BMC semantic-family trend-budget profiles with staged debt/strict
+     rollouts.
+   - compose lane-class quality defaults into ready-to-use CI presets for
+     nightly/strict formal cadences.
 
 ### Formal Closure Snapshot Update (February 12, 2026, policy-lane-class CLI/config wiring)
 
