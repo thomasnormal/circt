@@ -62,6 +62,27 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, first-class `CIRCT_LEC_ERROR` reason-key governance)
+
+1. Added first-class reason-family counters for LEC typed infra errors in `run_formal_all.sh`:
+   - `lec_circt_lec_error_reason_<reason>_cases`
+2. Wired strict gating so `--fail-on-new-lec-circt-lec-error-reason-keys` is fully functional end-to-end:
+   - strict-gate activation includes the flag
+   - env forwarding into the strict-gate Python evaluator is fixed
+3. Added focused regressions and help coverage:
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-reason-keys.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-circt-lec-error-reason-keys-defaults.test`
+   - `test/Tools/run-formal-all-help.test`
+   - updated OpenTitan missing-results/fallback diagnostics tests
+4. Remaining limitations:
+   - no dedicated `CIRCT_LEC_ERROR` case-ID / case-reason cardinality counters yet (parity gap vs `CIRCT_OPT_ERROR` and `CIRCT_VERILOG_ERROR`).
+   - cross-family `lec_runner_command_reason_*` aggregation still covers only selected error families; `CIRCT_LEC_ERROR` reasons are currently tracked in their own family only.
+   - wrapper-level `LEC_NOT_RUN` reason taxonomy still needs full propagation for remaining lane wrappers.
+5. Next long-term features:
+   - add `CIRCT_LEC_ERROR` case-ID and case-reason cardinality families plus strict-gate options for drift on those identities.
+   - unify runner-command reason-family rollups across all typed LEC error families for cleaner infra observability.
+   - continue wrapper-level `LEC_NOT_RUN` reason-contract propagation and tighten strict policy defaults around missing-reason budgets.
+
 ### Formal Closure Snapshot Update (February 12, 2026, OpenTitan `missing_results` typed reason telemetry)
 
 1. Upgraded `run_formal_all.sh` OpenTitan missing-results fallback rows from untyped fail rows to typed infra error rows:
