@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1160 - February 12, 2026
+
+### Mutation Governance: Lane-Class Auto Policy Mode Binding
+
+1. Added lane-manifest policy-class auto-binding in `circt-mut report`:
+   - when no explicit `policy_mode` / `--policy-mode` and no policy profiles
+     are provided, report inspects matrix `lanes.tsv` metadata and derives a
+     policy mode automatically.
+2. Added lane-manifest class mapping support in `tools/circt-mut/circt-mut.cpp`:
+   - optional tail column `report_policy_lane_class` in `lanes.tsv`.
+   - recognized classes:
+     `quality-smoke`, `quality-nightly` (or `quality`), `quality-strict`,
+     `quality-debt-nightly`, `quality-debt-strict`, or an explicit matrix mode
+     literal.
+   - quality class mixes resolve to the strictest quality mode.
+   - conflicting non-quality explicit mode mixes are rejected.
+3. Auto-binding source visibility:
+   - report output now uses `policy.mode_source = lane_class_auto` when this
+     path is taken.
+4. Regression coverage added:
+   - `test/Tools/circt-mut-report-policy-mode-lane-class-auto-quality-nightly-pass.test`
+   - `test/Tools/circt-mut-run-with-report-policy-mode-lane-class-auto-quality-nightly.test`
+5. Documentation updates:
+   - `docs/FormalRegression.md` lane TSV schema now includes
+     `report_policy_lane_class` and supported class values.
+   - `README.md` lane TSV section now documents policy-class auto selection.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused lane-class auto policy slice:
+  - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-mut-report-policy-mode-lane-class-auto-quality-nightly-pass.test build-test/test/Tools/circt-mut-run-with-report-policy-mode-lane-class-auto-quality-nightly.test build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-nightly-pass.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-debt.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-strict.test`
+  - PASS (5/5)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (469/469 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-lane-class-auto-policy ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+    BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile
+    `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL (known/ongoing): `opentitan` LEC (`missing_results=1`), AVIP compile
+    `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1159 - February 12, 2026
 
 ### Mutation Governance: BMC Semantic-Family Guard in Quality Modes
@@ -152,7 +196,10 @@ Even after absorbing `sim.terminate`, the `llvm.unreachable` that follows
 
 ### Tests and Validation
 
-- APB AVIP dual-top: all 9 IMP phases complete, 0 UVM_FATAL
+- APB AVIP dual-top: all 9 IMP phases complete at 10ns sim time, 0 UVM_FATAL
+- Time advances correctly: run_phase `#10` delay → 10ns, clock generator toggles
+- Coverage collection: covergroup registered with 8 coverpoints (0% — no transactions)
+- 4 UVM_ERROR from check_phase scoreboard (expected for base test with no sequences)
 - Coverage report from report_phase runs correctly
 - All diagnostic logging removed for clean output
 

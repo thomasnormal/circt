@@ -1061,7 +1061,7 @@ Script preflight now validates:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]    [bmc_orig_cache_max_age_seconds]    [bmc_orig_cache_eviction_policy]    [skip_baseline]    [fail_on_undetected]    [fail_on_errors]    [global_propagate_timeout_seconds]    [global_propagate_lec_timeout_seconds]    [global_propagate_bmc_timeout_seconds]    [mutations_mode_weights]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]    [bmc_orig_cache_max_age_seconds]    [bmc_orig_cache_eviction_policy]    [skip_baseline]    [fail_on_undetected]    [fail_on_errors]    [global_propagate_timeout_seconds]    [global_propagate_lec_timeout_seconds]    [global_propagate_bmc_timeout_seconds]    [mutations_mode_weights]    [report_policy_lane_class]
 ```
 
 Notes:
@@ -1086,6 +1086,12 @@ Notes:
   `--default-mutations-mode-counts` for a generated-mutation lane.
 - `mutations_mode_weights` (optional) overrides
   `--default-mutations-mode-weights` for a generated-mutation lane.
+- `report_policy_lane_class` (optional) enables policy-mode auto-binding in
+  `circt-mut report` / `circt-mut run --with-report` when no explicit
+  `policy_mode` / `report_policy_mode` is set. Supported values:
+  `quality-smoke`, `quality-nightly` (or `quality`), `quality-strict`,
+  `quality-debt-nightly`, `quality-debt-strict`, or any explicit matrix
+  policy mode literal.
 - `mutations_yosys` (optional) overrides `--default-mutations-yosys` for a
   generated-mutation lane.
 - `global_propagate_cmd` (optional) overrides
