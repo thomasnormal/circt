@@ -1,0 +1,11 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-otbmc-diff-only --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-bmc --with-opentitan-bmc-strict --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/BMC_MODE_DIFF$" --opentitan-bmc-impl-filter ".*"' 2>&1 | FileCheck %s --check-prefix=OTBMCDIFFSRC
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-otlec-diff-only --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --with-opentitan-lec-strict --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/LEC_MODE_DIFF$" --opentitan-lec-impl-filter ".*"' 2>&1 | FileCheck %s --check-prefix=OTLECDIFFSRC
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ote2e-diff-only --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/E2E_MODE_DIFF$" --opentitan-e2e-impl-filter ".*"' 2>&1 | FileCheck %s --check-prefix=OTE2EDIFFSRC
+//
+// OTBMCDIFFSRC: opentitan/BMC_MODE_DIFF requires source lanes in filter: include opentitan/BMC and opentitan/BMC_STRICT
+// OTLECDIFFSRC: opentitan/LEC_MODE_DIFF requires source lanes in filter: include opentitan/LEC and opentitan/LEC_STRICT
+// OTE2EDIFFSRC: opentitan/E2E_MODE_DIFF requires source lanes in filter: include opentitan/E2E and opentitan/E2E_STRICT
