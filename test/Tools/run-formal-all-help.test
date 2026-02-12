@@ -5,6 +5,7 @@
 // CHECK: --fail-on-diff
 // CHECK: --strict-gate-no-drop-remarks
 // CHECK: --strict-gate-report-json
+// CHECK: --strict-gate-report-tsv
 // CHECK: --strict-tool-preflight
 // CHECK: --fail-on-new-bmc-timeout-cases
 // CHECK: --fail-on-new-bmc-timeout-case-ids

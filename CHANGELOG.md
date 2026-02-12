@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1196 - February 12, 2026
+
+### Formal Strict-Gate Artifact Expansion: TSV Companion + Rule-ID Coverage
+
+1. Extended strict artifact outputs in `utils/run_formal_all.sh`:
+   - new CLI option: `--strict-gate-report-tsv FILE`
+   - validation guard: `--strict-gate-report-tsv` now requires `--strict-gate`
+   - default under strict-gate: `OUT_DIR/strict-gate-report.tsv`
+2. Upgraded strict diagnostic taxonomy with additional stable rule IDs:
+   - `strict_gate.quality.pass_rate_regression`
+   - `strict_gate.failures.new_case_ids`
+   - `strict_gate.bmc.timeout_cases.regression`
+   - `strict_gate.bmc.timeout_case_ids.new`
+   - `strict_gate.lec.timeout_cases.regression`
+   - `strict_gate.lec.timeout_case_ids.new`
+   - `strict_gate.bmc.drop_remarks.nonzero`
+   - `strict_gate.lec.drop_remarks.nonzero`
+   - `strict_gate.bmc.drop_remarks.regression`
+   - `strict_gate.lec.drop_remarks.regression`
+   - existing: `strict_gate.filtered_lane.nonempty_filter_miss`
+3. Added TSV emission from the same strict diagnostics set (`status`, lane IDs, `rule_id`, detail/message, baseline window metadata).
+4. Added/updated focused regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-report-json-pass-rate-rule-id.test`
+   - `test/Tools/run-formal-all-strict-gate-report-json.test` (now validates default TSV emission)
+   - `test/Tools/run-formal-all-strict-gate-report-json-requires-strict.test` (now validates JSON + TSV strict guardrails)
+   - `test/Tools/run-formal-all-help.test` (new option visibility)
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(help|strict-gate-report-json(-requires-strict|-pass-rate-rule-id)?|strict-gate-(nonempty-filtered-lanes-defaults|failure-cases|test)|strict-tool-preflight-nonempty-filtered-lanes-defaults|require-nonempty-filtered-lanes)\.test'`
+  - PASS (8/8)
+- External strict replay sanity (seeded baseline + strict gate, explicit CIRCT tools):
+  - lanes: `sv-tests/LEC` (`16.11--sequence-subroutine-uvm`), `yosys/tests/sva/LEC` (`basic00`)
+  - artifacts emitted: `strict-gate-report.json`, `strict-gate-report.tsv`
+  - strict report status: `pass`, diagnostics: `0`
+
+
 ## Iteration 1195 - February 12, 2026
 
 ### Formal Strict-Gate Artifacts: Machine-Readable JSON Diagnostics

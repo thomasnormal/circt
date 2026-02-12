@@ -6,7 +6,9 @@
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-base --baseline-file %t/formal-baselines.tsv --update-baselines --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^sv-tests/BMC$' --sv-tests-bmc-tag-regex 'tag_bmc' --sv-tests-bmc-test-filter 'filter_bmc'
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-new --strict-gate --baseline-file %t/formal-baselines.tsv --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/BMC$" --sv-tests-bmc-tag-regex "tag_bmc" --sv-tests-bmc-test-filter "filter_bmc"' 2>&1 | FileCheck %s --check-prefix=GATE
 // RUN: test -f %t/out-new/strict-gate-report.json
+// RUN: test -f %t/out-new/strict-gate-report.tsv
 // RUN: FileCheck %s --check-prefix=REPORT < %t/out-new/strict-gate-report.json
+// RUN: FileCheck %s --check-prefix=REPORT-TSV < %t/out-new/strict-gate-report.tsv
 //
 // GATE: strict gate failures:
 // REPORT: {
@@ -16,3 +18,5 @@
 // REPORT-DAG: "mode": "BMC"
 // REPORT-DAG: "rule_id": "strict_gate.filtered_lane.nonempty_filter_miss"
 // REPORT-DAG: "detail": "nonempty_filter_miss increased (0 -> 1, window=1); lane failed non-empty filtered-lane contract"
+// REPORT-TSV: status{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}rule_id{{[[:space:]]+}}detail{{[[:space:]]+}}message{{[[:space:]]+}}baseline_window{{[[:space:]]+}}baseline_window_days
+// REPORT-TSV-DAG: fail{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}strict_gate.filtered_lane.nonempty_filter_miss{{[[:space:]]+}}nonempty_filter_miss increased (0 -> 1, window=1); lane failed non-empty filtered-lane contract{{[[:space:]]+}}sv-tests BMC: nonempty_filter_miss increased (0 -> 1, window=1); lane failed non-empty filtered-lane contract{{[[:space:]]+}}1{{[[:space:]]+}}0

@@ -61,6 +61,10 @@ Options:
                          With `--strict-gate`, write machine-readable strict
                          diagnostics JSON (default:
                          OUT_DIR/strict-gate-report.json).
+  --strict-gate-report-tsv FILE
+                         With `--strict-gate`, write machine-readable strict
+                         diagnostics TSV (default:
+                         OUT_DIR/strict-gate-report.tsv).
   --strict-tool-preflight
                          Fail fast when enabled lanes depend on non-executable
                          default-derived CIRCT tools or lane runner entrypoints
@@ -1987,6 +1991,7 @@ FAIL_ON_DIFF=0
 STRICT_GATE=0
 STRICT_GATE_NO_DROP_REMARKS=0
 STRICT_GATE_REPORT_JSON=""
+STRICT_GATE_REPORT_TSV=""
 STRICT_TOOL_PREFLIGHT=0
 BASELINE_WINDOW=1
 BASELINE_WINDOW_DAYS=0
@@ -2364,6 +2369,8 @@ while [[ $# -gt 0 ]]; do
       STRICT_GATE_NO_DROP_REMARKS=1; shift ;;
     --strict-gate-report-json)
       STRICT_GATE_REPORT_JSON="$2"; shift 2 ;;
+    --strict-gate-report-tsv)
+      STRICT_GATE_REPORT_TSV="$2"; shift 2 ;;
     --strict-tool-preflight)
       STRICT_TOOL_PREFLIGHT=1; shift ;;
     --baseline-window)
@@ -4478,8 +4485,15 @@ if [[ -n "$STRICT_GATE_REPORT_JSON" && "$STRICT_GATE" != "1" ]]; then
   echo "--strict-gate-report-json requires --strict-gate" >&2
   exit 1
 fi
+if [[ -n "$STRICT_GATE_REPORT_TSV" && "$STRICT_GATE" != "1" ]]; then
+  echo "--strict-gate-report-tsv requires --strict-gate" >&2
+  exit 1
+fi
 if [[ "$STRICT_GATE" == "1" && -z "$STRICT_GATE_REPORT_JSON" ]]; then
   STRICT_GATE_REPORT_JSON="$OUT_DIR/strict-gate-report.json"
+fi
+if [[ "$STRICT_GATE" == "1" && -z "$STRICT_GATE_REPORT_TSV" ]]; then
+  STRICT_GATE_REPORT_TSV="$OUT_DIR/strict-gate-report.tsv"
 fi
 
 if [[ -z "$CIRCT_VERILOG_BIN_AVIP" ]]; then
@@ -13243,6 +13257,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES="$OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES_CSV" \
   OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES="$OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV" \
   STRICT_GATE_REPORT_JSON="$STRICT_GATE_REPORT_JSON" \
+  STRICT_GATE_REPORT_TSV="$STRICT_GATE_REPORT_TSV" \
   STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
 import csv
 import datetime as dt
@@ -13254,6 +13269,7 @@ from pathlib import Path
 summary_path = Path(os.environ["OUT_DIR"]) / "summary.tsv"
 baseline_path = Path(os.environ["BASELINE_FILE"])
 strict_gate_report_json = os.environ.get("STRICT_GATE_REPORT_JSON", "").strip()
+strict_gate_report_tsv = os.environ.get("STRICT_GATE_REPORT_TSV", "").strip()
 
 if not baseline_path.exists():
     raise SystemExit(f"baseline file not found: {baseline_path}")
@@ -13272,6 +13288,26 @@ def parse_gate_error_line(message: str):
 def classify_gate_rule_id(detail: str):
     if detail.startswith("nonempty_filter_miss increased"):
         return "strict_gate.filtered_lane.nonempty_filter_miss"
+    if detail.startswith("pass_rate regressed"):
+        return "strict_gate.quality.pass_rate_regression"
+    if detail.startswith("new failure cases observed"):
+        return "strict_gate.failures.new_case_ids"
+    if detail.startswith("bmc_timeout_cases increased"):
+        return "strict_gate.bmc.timeout_cases.regression"
+    if detail.startswith("new BMC timeout case IDs observed"):
+        return "strict_gate.bmc.timeout_case_ids.new"
+    if detail.startswith("lec_timeout_cases increased"):
+        return "strict_gate.lec.timeout_cases.regression"
+    if detail.startswith("new LEC timeout case IDs observed"):
+        return "strict_gate.lec.timeout_case_ids.new"
+    if detail.startswith("bmc_drop_remark_cases must be zero"):
+        return "strict_gate.bmc.drop_remarks.nonzero"
+    if detail.startswith("lec_drop_remark_cases must be zero"):
+        return "strict_gate.lec.drop_remarks.nonzero"
+    if detail.startswith("bmc_drop_remark_cases increased"):
+        return "strict_gate.bmc.drop_remarks.regression"
+    if detail.startswith("lec_drop_remark_cases increased"):
+        return "strict_gate.lec.drop_remarks.regression"
     return "strict_gate.legacy_text"
 
 def build_strict_gate_report_diagnostics(gate_errors):
@@ -13290,21 +13326,53 @@ def build_strict_gate_report_diagnostics(gate_errors):
     return diagnostics
 
 def write_strict_gate_report(status: str, gate_errors, baseline_window: int, baseline_window_days: int):
-    if not strict_gate_report_json:
-        return
-    report_path = Path(strict_gate_report_json)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "schema_version": 1,
-        "status": status,
-        "generated_at_utc": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-        "baseline_window": baseline_window,
-        "baseline_window_days": baseline_window_days,
-        "diagnostics": build_strict_gate_report_diagnostics(gate_errors),
-    }
-    with report_path.open("w") as report_file:
-        json.dump(payload, report_file, indent=2, sort_keys=True)
-        report_file.write("\n")
+    diagnostics = build_strict_gate_report_diagnostics(gate_errors)
+    if strict_gate_report_json:
+        report_path = Path(strict_gate_report_json)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": 1,
+            "status": status,
+            "generated_at_utc": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "baseline_window": baseline_window,
+            "baseline_window_days": baseline_window_days,
+            "diagnostics": diagnostics,
+        }
+        with report_path.open("w") as report_file:
+            json.dump(payload, report_file, indent=2, sort_keys=True)
+            report_file.write("\n")
+    if strict_gate_report_tsv:
+        tsv_path = Path(strict_gate_report_tsv)
+        tsv_path.parent.mkdir(parents=True, exist_ok=True)
+        with tsv_path.open("w", newline="") as report_file:
+            writer = csv.DictWriter(
+                report_file,
+                delimiter="	",
+                fieldnames=[
+                    "status",
+                    "suite",
+                    "mode",
+                    "rule_id",
+                    "detail",
+                    "message",
+                    "baseline_window",
+                    "baseline_window_days",
+                ],
+            )
+            writer.writeheader()
+            for diagnostic in diagnostics:
+                writer.writerow(
+                    {
+                        "status": status,
+                        "suite": diagnostic["suite"],
+                        "mode": diagnostic["mode"],
+                        "rule_id": diagnostic["rule_id"],
+                        "detail": diagnostic["detail"],
+                        "message": diagnostic["message"],
+                        "baseline_window": baseline_window,
+                        "baseline_window_days": baseline_window_days,
+                    }
+                )
 
 def parse_result_summary(summary: str):
     parsed = {}
