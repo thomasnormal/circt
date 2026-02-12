@@ -62,6 +62,34 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, CLI-forwarded selective LEC parsing promotions)
+
+1. Added `run_formal_all.sh` CLI forwarding for selective parsing-case LEC promotion:
+   - new option: `--sv-tests-lec-force-lec-test-filter REGEX`
+   - forwarded to sv-tests LEC runner as `FORCE_LEC_TEST_FILTER`.
+2. Added early regex validation for the new option to fail invalid filters
+   before lane execution.
+3. Included the option in formal run-state/fingerprint material to preserve
+   resumable-lane reproducibility semantics.
+4. Added and validated focused coverage:
+   - `test/Tools/run-formal-all-sv-tests-tag-regex-forwarding.test`
+   - `test/Tools/run-formal-all-help.test`
+   - plus compatibility checks with `run-formal-all-circt-toolchain-forwarding`
+     and LEC runner focused tests.
+5. Validation:
+   - `bash -n utils/run_formal_all.sh utils/run_sv_tests_circt_lec.sh`: PASS
+   - focused lit slice: PASS (6/6).
+6. Remaining limitations:
+   - promoted parsing-case cohorts are still manually curated regexes; no stable
+     tracked manifest/allowlist artifact yet.
+   - promoted cohorts are not yet connected to strict-gate policy defaults
+     (budgeted rollout profiles still pending).
+7. Next long-term features (BMC/LEC/mutation focus):
+   - add manifest-driven promoted parsing cohorts with schema and compatibility checks.
+   - add strict-policy profiles that enforce promoted-cohort execution and bounded
+     timeout/diagnostic drift.
+   - feed promoted-cohort outcomes into mutation/provenance-aware strict gates.
+
 ### Formal Closure Snapshot Update (February 12, 2026, selective LEC parsing-case promotion)
 
 1. Added selective parsing-case promotion in `utils/run_sv_tests_circt_lec.sh`:
