@@ -9,6 +9,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, quality-debt modes)
+
+1. Added mode-level formal quality debt governance:
+   - `native-strict-formal-quality-debt`
+   - `strict-formal-quality-debt`
+2. Contract impact:
+   - timeout debt (`debt-v2`) and semantic diagnostic-family gates are now
+     exposed as a single mode entry point for matrix report/run.
+   - this reduces operator error from manual profile stacking and keeps formal
+     quality policy reproducible across CI surfaces.
+3. Remaining limitations:
+   - quality debt mode is currently static (single threshold set) and not yet
+     cadence-specific across smoke/nightly/weekly paths.
+   - semantic family guards currently focus on LEC diagnostic families in
+     `verilator-verification` and `yosys/tests/sva`; `sv-tests` semantic family
+     coverage is still narrower.
+4. Next long-term features:
+   - introduce cadence-aware quality debt modes (`quality-debt-nightly`,
+     `quality-debt-strict`) with explicit per-suite ceilings.
+   - add BMC semantic diagnostic-family budget profiles and roll them into
+     unified quality modes for BMC + LEC symmetry.
+
 ### Formal Closure Snapshot Update (February 12, 2026)
 
 1. Added suite-aware core timeout debt profile:

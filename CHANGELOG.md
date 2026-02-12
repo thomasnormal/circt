@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1151 - February 12, 2026
+
+### Mutation Governance: Formal Quality-Debt Policy Modes
+
+1. Added new policy modes:
+   - `native-strict-formal-quality-debt`
+   - `strict-formal-quality-debt`
+2. Mode composition:
+   - timeout debt:
+     `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2`
+   - semantic diagnostic family gate:
+     `formal-regression-matrix-external-formal-semantic-diag-family-guard`
+   - core formal floor guards:
+     - `formal-regression-matrix-external-formal-bmc-core-min-total-v1`
+     - `formal-regression-matrix-external-formal-lec-core-min-total-v1`
+   - native/strict baseline contracts remain intact.
+3. Added regressions:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-quality-debt-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-debt-fail.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-debt.test`
+4. Updated mode-list diagnostics tests:
+   - `test/Tools/circt-mut-report-cli-policy-mode-invalid.test`
+   - `test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test`
+   - `test/Tools/circt-mut-init-report-policy-invalid.test`
+   - `test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test`
+
 ## Iteration 1150 - February 12, 2026
 
 ### Mutation Governance: Timeout Debt v2 (Suite-Aware) + Mode Remap
