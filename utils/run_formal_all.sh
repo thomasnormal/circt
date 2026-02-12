@@ -702,21 +702,28 @@ USAGE
 normalize_yosys_sva_dir() {
   local raw_dir="$1"
   local candidate=""
+  YOSYS_DIR_NORMALIZED="$raw_dir"
   if [[ ! -d "$raw_dir" ]]; then
-    printf "%s\n" "$raw_dir"
+    YOSYS_SVA_LAYOUT_STATUS="missing_dir"
     return
   fi
   if compgen -G "$raw_dir/*.sv" > /dev/null; then
-    printf "%s\n" "$raw_dir"
+    YOSYS_SVA_LAYOUT_STATUS="direct_sva_root"
     return
   fi
-  for candidate in "$raw_dir/sva" "$raw_dir/tests/sva"; do
-    if [[ -d "$candidate" ]] && compgen -G "$candidate/*.sv" > /dev/null; then
-      printf "%s\n" "$candidate"
-      return
-    fi
-  done
-  printf "%s\n" "$raw_dir"
+  candidate="$raw_dir/sva"
+  if [[ -d "$candidate" ]] && compgen -G "$candidate/*.sv" > /dev/null; then
+    YOSYS_SVA_LAYOUT_STATUS="normalized_sva_subdir"
+    YOSYS_DIR_NORMALIZED="$candidate"
+    return
+  fi
+  candidate="$raw_dir/tests/sva"
+  if [[ -d "$candidate" ]] && compgen -G "$candidate/*.sv" > /dev/null; then
+    YOSYS_SVA_LAYOUT_STATUS="normalized_tests_sva_subdir"
+    YOSYS_DIR_NORMALIZED="$candidate"
+    return
+  fi
+  YOSYS_SVA_LAYOUT_STATUS="unresolved_dir"
 }
 
 normalize_auto_uri_allowed_schemes() {
@@ -1940,6 +1947,10 @@ OUT_DIR=""
 SV_TESTS_DIR="${HOME}/sv-tests"
 VERILATOR_DIR="${HOME}/verilator-verification"
 YOSYS_DIR="${HOME}/yosys/tests/sva"
+YOSYS_DIR_EXPLICIT=0
+YOSYS_DIR_RAW="$YOSYS_DIR"
+YOSYS_SVA_LAYOUT_STATUS="unknown"
+YOSYS_DIR_NORMALIZED="$YOSYS_DIR"
 OPENTITAN_DIR="${HOME}/opentitan"
 AVIP_GLOB="${HOME}/mbit/*avip*"
 CIRCT_VERILOG_BIN="$REPO_ROOT/build/bin/circt-verilog"
@@ -2259,7 +2270,7 @@ while [[ $# -gt 0 ]]; do
     --verilator)
       VERILATOR_DIR="$2"; shift 2 ;;
     --yosys)
-      YOSYS_DIR="$2"; shift 2 ;;
+      YOSYS_DIR="$2"; YOSYS_DIR_EXPLICIT=1; shift 2 ;;
     --z3-bin)
       Z3_BIN="$2"; shift 2 ;;
     --baseline-file)
@@ -2762,7 +2773,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-YOSYS_DIR="$(normalize_yosys_sva_dir "$YOSYS_DIR")"
+YOSYS_DIR_RAW="$YOSYS_DIR"
+normalize_yosys_sva_dir "$YOSYS_DIR"
+YOSYS_DIR="$YOSYS_DIR_NORMALIZED"
 
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="$PWD/formal-results-${DATE_STR//-/}"
@@ -7575,6 +7588,27 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   need_opentitan_lec_runner=0
   need_opentitan_e2e_runner=0
   need_avip_runner=0
+
+  yosys_bmc_lane_selected=0
+  yosys_lec_lane_selected=0
+  if lane_enabled "yosys/tests/sva/BMC"; then
+    yosys_bmc_lane_selected=1
+  fi
+  if lane_enabled "yosys/tests/sva/LEC"; then
+    yosys_lec_lane_selected=1
+  fi
+  if [[ "$YOSYS_DIR_EXPLICIT" == "1" && ( "$yosys_bmc_lane_selected" == "1" || "$yosys_lec_lane_selected" == "1" ) ]]; then
+    case "$YOSYS_SVA_LAYOUT_STATUS" in
+      missing_dir)
+        echo "strict yosys preflight: explicit --yosys path not found: $YOSYS_DIR_RAW (resolved: $YOSYS_DIR)" >&2
+        exit 1
+        ;;
+      unresolved_dir)
+        echo "strict yosys preflight: explicit --yosys path does not contain .sv tests (checked: $YOSYS_DIR_RAW, $YOSYS_DIR_RAW/sva, $YOSYS_DIR_RAW/tests/sva)" >&2
+        exit 1
+        ;;
+    esac
+  fi
 
   if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     need_core_bmc_lanes=1
