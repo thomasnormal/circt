@@ -1,0 +1,11 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --strict-tool-preflight --with-opentitan-e2e --circt-verilog %t/bin/circt-verilog --opentitan %t/opentitan --include-lane-regex "^opentitan/E2E$" --opentitan-e2e-impl-filter "aes_sbox.*"' 2>&1 | FileCheck %s
+
+// CHECK: OpenTitan E2E runner not executable: utils/run_opentitan_formal_e2e.sh

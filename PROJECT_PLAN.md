@@ -62,6 +62,59 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, strict AVIP runner preflight)
+
+1. Extended `--strict-tool-preflight` in `utils/run_formal_all.sh` to include AVIP compile-lane runner preflight.
+2. In strict mode, when `--with-avip` selects at least one enabled `avip/<name>/compile` lane, the driver now fail-fast validates:
+   - `utils/run_avip_circt_verilog.sh`
+3. Added regression:
+   - `test/Tools/run-formal-all-strict-tool-preflight-missing-avip-runner.test`
+4. Remaining limitations:
+   - strict preflight is still opt-in (`--strict-tool-preflight`).
+   - default-on rollout needs staged migration because many local/formal lit harnesses intentionally execute from isolated temp trees without full default-derived tool layouts.
+
+### Formal Closure Snapshot Update (February 12, 2026, strict lane-runner preflight)
+
+1. Extended `--strict-tool-preflight` in `utils/run_formal_all.sh` to fail fast when enabled lanes reference missing or non-executable direct runner entrypoints.
+2. Added strict preflight coverage for core suite harnesses:
+   - `utils/run_sv_tests_circt_{bmc,lec}.sh`
+   - `utils/run_verilator_verification_circt_{bmc,lec}.sh`
+   - `utils/run_yosys_sva_circt_{bmc,lec}.sh`
+   - `utils/run_opentitan_circt_lec.py`
+   - `utils/run_opentitan_formal_e2e.sh`
+3. Added regressions:
+   - `test/Tools/run-formal-all-strict-tool-preflight-missing-sv-lec-runner.test`
+   - `test/Tools/run-formal-all-strict-tool-preflight-missing-opentitan-e2e-runner.test`
+4. Remaining limitations:
+   - strict preflight remains opt-in (`--strict-tool-preflight`).
+   - AVIP compile wrapper preflight gap is now closed in the strict AVIP runner preflight snapshot above.
+
+### Formal Closure Snapshot Update (February 12, 2026, strict default-derived lane preflight)
+
+1. Added `--strict-tool-preflight` in `utils/run_formal_all.sh`.
+2. In strict preflight mode, enabled core formal lanes now fail fast if default-derived CIRCT tools are non-executable:
+   - core verilog lane dependency: `circt-verilog`
+   - BMC lanes: `circt-bmc`
+   - LEC lanes: `circt-opt`, `circt-lec`
+3. Added coverage:
+   - `test/Tools/run-formal-all-strict-tool-preflight-derived-opt.test`
+4. Remaining limitations:
+   - strict preflight is currently opt-in (`--strict-tool-preflight`), not default-on.
+   - AVIP compile wrapper preflight gap has been closed in the strict AVIP runner preflight snapshot above.
+
+
+### Formal Closure Snapshot Update (February 12, 2026, explicit CIRCT tool preflight)
+
+1. Added fail-fast executability preflight in utils/run_formal_all.sh for explicitly configured CIRCT tool paths:
+   - --circt-verilog / --circt-verilog-avip / --circt-verilog-opentitan
+   - env overrides: CIRCT_OPT, CIRCT_BMC, CIRCT_LEC
+2. This prevents late per-case runner_command_not_found noise when an override is non-executable by failing once before lane execution.
+3. Added coverage:
+   - test/Tools/run-formal-all-explicit-circt-opt-preflight.test
+4. Remaining limitation:
+   - default derived CIRCT tool paths are still validated lazily in lane runners unless explicitly overridden.
+
+
 ### Formal Closure Snapshot Update (February 12, 2026, `LEC_NOT_RUN` reason coverage policy)
 
 1. Added a dedicated matrix policy profile:
@@ -176,14 +229,16 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - strict quality modes still require explicit `policy_mode` selection in
      most call sites; lane-class driven defaults are not consistently used by
      existing campaigns.
-   - formal runner preflight checks do not yet fail fast on non-executable
-     CIRCT tools, which can surface as late per-case errors instead of one
-     setup diagnostic.
+   - `--strict-tool-preflight` adds lane-aware fail-fast checks for
+     default-derived core CIRCT tools, but this remains opt-in and
+     default behavior is unchanged.
 5. Next long-term features:
    - migrate strict quality policies into lane-class defaults for run/report
      flows and campaign templates.
-   - add runner-level tool executability preflight checks across formal suite
-     harnesses to eliminate silent toolchain drift.
+   - promote strict tool preflight toward default-on rollout once downstream
+     lane harnesses and campaigns are aligned.
+   - add direct per-suite harness-level fail-fast executability preflight
+     consistency for non-matrix entrypoints.
 
 ### Formal Closure Snapshot Update (February 12, 2026, BMC semantic-family trend budgets)
 

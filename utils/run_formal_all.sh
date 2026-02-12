@@ -53,6 +53,9 @@ Options:
                          dropped-syntax remarks for BMC and LEC lanes
                          (`--fail-on-any-bmc-drop-remarks` and
                          `--fail-on-any-lec-drop-remarks`).
+  --strict-tool-preflight
+                         Fail fast when enabled lanes depend on non-executable
+                         default-derived CIRCT tools or lane runner entrypoints
   --baseline-window N    Baseline rows per suite/mode used for gate comparison
                          (default: 1, latest baseline only)
   --baseline-window-days N
@@ -1900,6 +1903,21 @@ AVIP_GLOB="${HOME}/mbit/*avip*"
 CIRCT_VERILOG_BIN="$REPO_ROOT/build/bin/circt-verilog"
 CIRCT_VERILOG_BIN_AVIP=""
 CIRCT_VERILOG_BIN_OPENTITAN=""
+CIRCT_VERILOG_BIN_EXPLICIT=0
+CIRCT_VERILOG_BIN_AVIP_EXPLICIT=0
+CIRCT_VERILOG_BIN_OPENTITAN_EXPLICIT=0
+CIRCT_OPT_ENV_EXPLICIT=0
+CIRCT_BMC_ENV_EXPLICIT=0
+CIRCT_LEC_ENV_EXPLICIT=0
+if [[ -n "${CIRCT_OPT+x}" ]]; then
+  CIRCT_OPT_ENV_EXPLICIT=1
+fi
+if [[ -n "${CIRCT_BMC+x}" ]]; then
+  CIRCT_BMC_ENV_EXPLICIT=1
+fi
+if [[ -n "${CIRCT_LEC+x}" ]]; then
+  CIRCT_LEC_ENV_EXPLICIT=1
+fi
 BASELINE_FILE="utils/formal-baselines.tsv"
 PLAN_FILE="PROJECT_PLAN.md"
 Z3_BIN="${Z3_BIN:-}"
@@ -1907,6 +1925,7 @@ UPDATE_BASELINES=0
 FAIL_ON_DIFF=0
 STRICT_GATE=0
 STRICT_GATE_NO_DROP_REMARKS=0
+STRICT_TOOL_PREFLIGHT=0
 BASELINE_WINDOW=1
 BASELINE_WINDOW_DAYS=0
 FAIL_ON_NEW_XPASS=0
@@ -2238,11 +2257,17 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT=$((OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT + 1))
       shift ;;
     --circt-verilog)
-      CIRCT_VERILOG_BIN="$2"; shift 2 ;;
+      CIRCT_VERILOG_BIN="$2"
+      CIRCT_VERILOG_BIN_EXPLICIT=1
+      shift 2 ;;
     --circt-verilog-avip)
-      CIRCT_VERILOG_BIN_AVIP="$2"; shift 2 ;;
+      CIRCT_VERILOG_BIN_AVIP="$2"
+      CIRCT_VERILOG_BIN_AVIP_EXPLICIT=1
+      shift 2 ;;
     --circt-verilog-opentitan)
-      CIRCT_VERILOG_BIN_OPENTITAN="$2"; shift 2 ;;
+      CIRCT_VERILOG_BIN_OPENTITAN="$2"
+      CIRCT_VERILOG_BIN_OPENTITAN_EXPLICIT=1
+      shift 2 ;;
     --with-avip)
       WITH_AVIP=1; shift ;;
     --avip-glob)
@@ -2269,6 +2294,8 @@ while [[ $# -gt 0 ]]; do
       STRICT_GATE=1; shift ;;
     --strict-gate-no-drop-remarks)
       STRICT_GATE_NO_DROP_REMARKS=1; shift ;;
+    --strict-tool-preflight)
+      STRICT_TOOL_PREFLIGHT=1; shift ;;
     --baseline-window)
       BASELINE_WINDOW="$2"; shift 2 ;;
     --baseline-window-days)
@@ -4375,6 +4402,32 @@ CIRCT_TOOL_DIR="$(dirname "$CIRCT_VERILOG_BIN")"
 FORMAL_CIRCT_OPT_BIN="${CIRCT_OPT:-$CIRCT_TOOL_DIR/circt-opt}"
 FORMAL_CIRCT_BMC_BIN="${CIRCT_BMC:-$CIRCT_TOOL_DIR/circt-bmc}"
 FORMAL_CIRCT_LEC_BIN="${CIRCT_LEC:-$CIRCT_TOOL_DIR/circt-lec}"
+require_executable_tool() {
+  local label="$1"
+  local path="$2"
+  if [[ ! -x "$path" ]]; then
+    echo "$label not executable: $path" >&2
+    exit 1
+  fi
+}
+if [[ "$CIRCT_VERILOG_BIN_EXPLICIT" == "1" ]]; then
+  require_executable_tool "circt-verilog" "$CIRCT_VERILOG_BIN"
+fi
+if [[ "$CIRCT_VERILOG_BIN_AVIP_EXPLICIT" == "1" ]]; then
+  require_executable_tool "circt-verilog for AVIP" "$CIRCT_VERILOG_BIN_AVIP"
+fi
+if [[ "$CIRCT_VERILOG_BIN_OPENTITAN_EXPLICIT" == "1" ]]; then
+  require_executable_tool "circt-verilog for OpenTitan" "$CIRCT_VERILOG_BIN_OPENTITAN"
+fi
+if [[ "$CIRCT_OPT_ENV_EXPLICIT" == "1" ]]; then
+  require_executable_tool "circt-opt" "$FORMAL_CIRCT_OPT_BIN"
+fi
+if [[ "$CIRCT_BMC_ENV_EXPLICIT" == "1" ]]; then
+  require_executable_tool "circt-bmc" "$FORMAL_CIRCT_BMC_BIN"
+fi
+if [[ "$CIRCT_LEC_ENV_EXPLICIT" == "1" ]]; then
+  require_executable_tool "circt-lec" "$FORMAL_CIRCT_LEC_BIN"
+fi
 FORMAL_BMC_TIMEOUT_ENV=()
 FORMAL_LEC_TIMEOUT_ENV=()
 if [[ -n "$BMC_TIMEOUT_SECS" ]]; then
@@ -7439,6 +7492,123 @@ if [[ "$WITH_OPENTITAN_E2E" == "1" && "$WITH_OPENTITAN_E2E_STRICT" == "1" ]] && 
   if [[ -z "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
     echo "opentitan/E2E_MODE_DIFF requires explicit filter: set --opentitan-e2e-impl-filter" >&2
     exit 1
+  fi
+fi
+
+if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
+  need_core_bmc_lanes=0
+  need_core_lec_lanes=0
+  need_sv_bmc_runner=0
+  need_sv_lec_runner=0
+  need_verilator_bmc_runner=0
+  need_verilator_lec_runner=0
+  need_yosys_bmc_runner=0
+  need_yosys_lec_runner=0
+  need_opentitan_lec_runner=0
+  need_opentitan_e2e_runner=0
+  need_avip_runner=0
+
+  if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
+    need_core_bmc_lanes=1
+    need_sv_bmc_runner=1
+  fi
+  if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
+     [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests-uvm/BMC_SEMANTICS"; then
+    need_core_bmc_lanes=1
+    need_sv_bmc_runner=1
+  fi
+  if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
+    need_core_bmc_lanes=1
+    need_verilator_bmc_runner=1
+  fi
+  if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
+    need_core_bmc_lanes=1
+    need_yosys_bmc_runner=1
+  fi
+
+  if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
+    need_core_lec_lanes=1
+    need_sv_lec_runner=1
+  fi
+  if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
+    need_core_lec_lanes=1
+    need_verilator_lec_runner=1
+  fi
+  if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
+    need_core_lec_lanes=1
+    need_yosys_lec_runner=1
+  fi
+  if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
+    need_opentitan_lec_runner=1
+  fi
+  if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRICT"; then
+    need_opentitan_lec_runner=1
+  fi
+  if [[ "$WITH_OPENTITAN_E2E" == "1" ]] && lane_enabled "opentitan/E2E"; then
+    need_opentitan_e2e_runner=1
+  fi
+  if [[ "$WITH_OPENTITAN_E2E_STRICT" == "1" ]] && lane_enabled "opentitan/E2E_STRICT"; then
+    need_opentitan_e2e_runner=1
+  fi
+  if [[ "$WITH_AVIP" == "1" ]]; then
+    for avip in $AVIP_GLOB; do
+      if [[ ! -d "$avip" ]]; then
+        continue
+      fi
+      avip_name="$(basename "$avip")"
+      avip_lane_id="avip/${avip_name}/compile"
+      if lane_enabled "$avip_lane_id"; then
+        need_avip_runner=1
+        break
+      fi
+    done
+  fi
+
+  if [[ "$need_core_bmc_lanes" == "1" || "$need_core_lec_lanes" == "1" ]]; then
+    if [[ "$CIRCT_VERILOG_BIN_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-verilog (default-derived)" "$CIRCT_VERILOG_BIN"
+    fi
+  fi
+  if [[ "$need_core_bmc_lanes" == "1" ]]; then
+    if [[ "$CIRCT_BMC_ENV_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-bmc (default-derived)" "$FORMAL_CIRCT_BMC_BIN"
+    fi
+  fi
+  if [[ "$need_core_lec_lanes" == "1" ]]; then
+    if [[ "$CIRCT_OPT_ENV_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-opt (default-derived)" "$FORMAL_CIRCT_OPT_BIN"
+    fi
+    if [[ "$CIRCT_LEC_ENV_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-lec (default-derived)" "$FORMAL_CIRCT_LEC_BIN"
+    fi
+  fi
+
+  if [[ "$need_sv_bmc_runner" == "1" ]]; then
+    require_executable_tool "sv-tests BMC runner" "utils/run_sv_tests_circt_bmc.sh"
+  fi
+  if [[ "$need_sv_lec_runner" == "1" ]]; then
+    require_executable_tool "sv-tests LEC runner" "utils/run_sv_tests_circt_lec.sh"
+  fi
+  if [[ "$need_verilator_bmc_runner" == "1" ]]; then
+    require_executable_tool "verilator-verification BMC runner" "utils/run_verilator_verification_circt_bmc.sh"
+  fi
+  if [[ "$need_verilator_lec_runner" == "1" ]]; then
+    require_executable_tool "verilator-verification LEC runner" "utils/run_verilator_verification_circt_lec.sh"
+  fi
+  if [[ "$need_yosys_bmc_runner" == "1" ]]; then
+    require_executable_tool "yosys SVA BMC runner" "utils/run_yosys_sva_circt_bmc.sh"
+  fi
+  if [[ "$need_yosys_lec_runner" == "1" ]]; then
+    require_executable_tool "yosys SVA LEC runner" "utils/run_yosys_sva_circt_lec.sh"
+  fi
+  if [[ "$need_opentitan_lec_runner" == "1" ]]; then
+    require_executable_tool "OpenTitan LEC runner" "utils/run_opentitan_circt_lec.py"
+  fi
+  if [[ "$need_opentitan_e2e_runner" == "1" ]]; then
+    require_executable_tool "OpenTitan E2E runner" "utils/run_opentitan_formal_e2e.sh"
+  fi
+  if [[ "$need_avip_runner" == "1" ]]; then
+    require_executable_tool "AVIP compile runner" "utils/run_avip_circt_verilog.sh"
   fi
 fi
 
