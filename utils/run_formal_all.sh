@@ -7687,6 +7687,9 @@ with path.open(encoding="utf-8") as f:
             diag = normalize(maybe_diag)
             counts[f"lec_diag_{diag}_cases"] += 1
             counts[f"lec_status_{status}_diag_{diag}_cases"] += 1
+            if diag == "lec_not_run":
+                reason_key = normalize(reason_token) if reason_token else "missing"
+                counts[f"lec_not_run_reason_{reason_key}_cases"] += 1
             if status == "timeout":
                 counts[f"lec_timeout_diag_{diag}_cases"] += 1
                 timeout_class = (
