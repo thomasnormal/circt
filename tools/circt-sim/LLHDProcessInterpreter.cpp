@@ -36,6 +36,7 @@ unsigned g_lastProcId = 0;
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 
@@ -136,6 +137,27 @@ static bool getMaskedUInt64(const InterpretedValue &value,
   }
   out = v;
   return true;
+}
+
+static unsigned writeConfigDbBytesToNativeMemory(
+    uint64_t addr, uint64_t nativeOffset, size_t nativeSize,
+    const std::vector<uint8_t> &valueData, unsigned requestedBytes,
+    bool zeroFillMissing) {
+  if (requestedBytes == 0 || nativeOffset >= nativeSize)
+    return 0;
+
+  size_t availableBytes = nativeSize - static_cast<size_t>(nativeOffset);
+  unsigned maxWritable =
+      static_cast<unsigned>(std::min<size_t>(requestedBytes, availableBytes));
+  unsigned copyBytes =
+      std::min(maxWritable, static_cast<unsigned>(valueData.size()));
+
+  if (copyBytes > 0)
+    std::memcpy(reinterpret_cast<void *>(addr), valueData.data(), copyBytes);
+  if (zeroFillMissing && maxWritable > copyBytes)
+    std::memset(reinterpret_cast<void *>(addr + copyBytes), 0,
+                maxWritable - copyBytes);
+  return maxWritable;
 }
 
 //===----------------------------------------------------------------------===//
@@ -7058,6 +7080,16 @@ arith_dispatch:
                   for (unsigned i = 0; i < wb; ++i)
                     blk->data[off3 + i] =
                         valueData.size() > i ? valueData[i] : 0;
+                } else {
+                  // Fallback: write to native memory (heap-allocated blocks)
+                  uint64_t nativeOff = 0;
+                  size_t nativeSize = 0;
+                  if (findNativeMemoryBlockByAddress(addr, &nativeOff,
+                                                     &nativeSize)) {
+                    writeConfigDbBytesToNativeMemory(
+                        addr, nativeOff, nativeSize, valueData, innerBytes,
+                        /*zeroFillMissing=*/true);
+                  }
                 }
               }
             } else if (isa<LLVM::LLVMPointerType>(refType)) {
@@ -7072,6 +7104,17 @@ arith_dispatch:
                                (unsigned)(outBlock->data.size() - outOff));
                   for (unsigned i = 0; i < writeBytes; ++i)
                     outBlock->data[outOff + i] = valueData[i];
+                } else {
+                  // Fallback: write to native memory
+                  uint64_t nativeOff = 0;
+                  size_t nativeSize = 0;
+                  if (findNativeMemoryBlockByAddress(outputAddr, &nativeOff,
+                                                     &nativeSize)) {
+                    writeConfigDbBytesToNativeMemory(
+                        outputAddr, nativeOff, nativeSize, valueData,
+                        static_cast<unsigned>(valueData.size()),
+                        /*zeroFillMissing=*/false);
+                  }
                 }
               }
             }
@@ -11794,6 +11837,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
               for (unsigned i = 0; i < wb; ++i)
                 blk->data[off3 + i] =
                     valueData.size() > i ? valueData[i] : 0;
+            } else {
+              // Fallback: write directly to native memory (heap-allocated
+              // blocks from __moore_dyn_array_new, malloc, etc.)
+              uint64_t nativeOff = 0;
+              size_t nativeSize = 0;
+              if (findNativeMemoryBlockByAddress(addr, &nativeOff,
+                                                 &nativeSize)) {
+                writeConfigDbBytesToNativeMemory(
+                    addr, nativeOff, nativeSize, valueData, innerBytes,
+                    /*zeroFillMissing=*/true);
+              }
             }
           }
           setValue(procId, callOp.getResult(0),
@@ -12832,6 +12886,15 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                        ++i)
                     block->data[offset + i] =
                         valueData.size() > i ? valueData[i] : 0;
+                } else {
+                  uint64_t nativeOffset = 0;
+                  size_t nativeSize = 0;
+                  if (findNativeMemoryBlockByAddress(addr, &nativeOffset,
+                                                     &nativeSize)) {
+                    writeConfigDbBytesToNativeMemory(
+                        addr, nativeOffset, nativeSize, valueData, innerBytes,
+                        /*zeroFillMissing=*/true);
+                  }
                 }
               }
             }
@@ -12846,6 +12909,16 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                                   (unsigned)(block->data.size() - offset));
                      ++i)
                   block->data[offset + i] = valueData[i];
+              } else {
+                uint64_t nativeOffset = 0;
+                size_t nativeSize = 0;
+                if (findNativeMemoryBlockByAddress(addr, &nativeOffset,
+                                                   &nativeSize)) {
+                  writeConfigDbBytesToNativeMemory(
+                      addr, nativeOffset, nativeSize, valueData,
+                      static_cast<unsigned>(valueData.size()),
+                      /*zeroFillMissing=*/false);
+                }
               }
             }
           }
