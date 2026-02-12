@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1153 - February 12, 2026
+
+### Mutation Governance: Native Timeout-Strict Policy-Mode Coverage Closure
+
+1. Added missing regression coverage for native timeout-strict policy mode:
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-timeout-strict-pass.test`
+2. Coverage contract:
+   - validates `--policy-mode native-strict-formal-timeout-strict` emits the
+     expected native strict profile stack and passes on zero timeout-stage
+     counters with core BMC/LEC minimum totals present.
+3. Validation:
+   - focused timeout policy-mode + diagnostics slice: PASS
+   - full mutation suite:
+     - `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+     - PASS (443/443 selected)
+   - external filtered formal cadence:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-all-timeout-modes-v16 ...`
+     - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+       BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile
+       `ahb/apb/axi4/i2s/i3c/jtag`
+     - FAIL (known/ongoing): `opentitan` LEC (`missing_results=1`), AVIP
+       compile `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1152 - February 12, 2026
 
 ### Mutation Governance: Formal Quality-Strict Policy Modes

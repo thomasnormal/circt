@@ -9,6 +9,25 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, timeout-mode coverage closure)
+
+1. Closed a policy-mode regression gap by adding dedicated coverage for:
+   - `native-strict-formal-timeout-strict`
+2. Validation impact:
+   - policy-mode timeout rollouts now have explicit report-mode coverage for all
+     four timeout-mode variants (`native/strict x debt/strict`) rather than
+     relying on profile-only coverage for one branch.
+3. Remaining limitations:
+   - OpenTitan LEC remains unstable (`missing_results=1`) in filtered cadence
+     snapshots, limiting strict default rollout confidence.
+   - recurring AVIP compile failures remain on `axi4Lite_avip`, `spi_avip`,
+     and `uart_avip`.
+4. Next long-term features:
+   - add suite-aware/cadence-aware timeout debt ceilings (`debt-v3`) and bind
+     them to mode families for smoke/nightly/strict defaults.
+   - stabilize OpenTitan LEC result emission so strict formal mode defaults can
+     include OpenTitan without policy noise.
+
 ### Formal Closure Snapshot Update (February 12, 2026, quality-strict modes)
 
 1. Added strict counterpart to quality debt policy modes:
