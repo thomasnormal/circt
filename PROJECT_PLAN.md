@@ -60,6 +60,38 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, init lane-class bootstrap)
+
+1. Extended `circt-mut init` bootstrap policy wiring with lane-class defaults:
+   - new CLI flag: `--report-policy-lane-class <class>`
+2. Bootstrap config emission now supports lane-class policy keys:
+   - emits `[report] policy_lane_class = "<class>"` when lane-class is chosen,
+     instead of hardcoded `policy_mode`.
+3. Validation and guardrails:
+   - `--report-policy-mode` and `--report-policy-lane-class` are now mutually
+     exclusive in init.
+   - lane-class values are validated through the existing lane-class policy
+     mapping surface (`quality-*`, `native-quality-*`, explicit mode literals).
+4. Validation highlights:
+   - focused init policy slice: PASS (4/4).
+   - full mutation suite:
+     `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+     PASS (475/475 selected).
+   - external cadence (`/tmp/formal-all-init-policy-lane-class`):
+     PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+     BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb`
+     FAIL (known): `opentitan` LEC (`missing_results=1`), AVIP compile
+     `axi4Lite_avip`.
+5. Remaining limitations:
+   - generated template defaults now support lane-class policy selection, but
+     existing campaigns still rely on older mode/profile wiring.
+   - OpenTitan and AVIP instability still gate strict-default policy rollout.
+6. Next long-term features:
+   - migrate existing formal campaign templates to lane-class defaults per
+     cadence (smoke/nightly/strict) and reduce explicit profile stacks.
+   - add template-level bounded history defaults aligned with lane-class
+     rollouts for deterministic trend-gate onboarding.
+
 ### Formal Closure Snapshot Update (February 12, 2026, quality-mode regression hardening)
 
 1. Hardened quality-mode regression contracts to reflect the current formal

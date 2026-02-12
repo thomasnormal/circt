@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1166 - February 12, 2026
+
+### Mutation Governance: `circt-mut init` Lane-Class Policy Bootstrap
+
+1. Extended `circt-mut init` in `tools/circt-mut/circt-mut.cpp` with:
+   - `--report-policy-lane-class <class>`
+2. Added init-time lane-class validation:
+   - class values are validated through existing lane-class policy mapping
+     (`quality-*`, `native-quality-*`, explicit mode literals).
+3. Added init guardrail:
+   - `--report-policy-mode` and `--report-policy-lane-class` are now mutually
+     exclusive.
+4. Updated generated config behavior:
+   - init now emits `[report] policy_lane_class = "<class>"` when lane-class
+     is selected, otherwise keeps `policy_mode`.
+5. Added/updated regression coverage:
+   - `test/Tools/circt-mut-init-report-policy-lane-class-override.test`
+   - `test/Tools/circt-mut-init-report-policy-invalid.test`
+   - `test/Tools/circt-mut-init-help.test`
+6. Documentation update:
+   - `README.md` bootstrap examples now include lane-class policy init usage.
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused init policy slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-init-help.test build-test/test/Tools/circt-mut-init-report-policy-invalid.test build-test/test/Tools/circt-mut-init-report-policy-override.test build-test/test/Tools/circt-mut-init-report-policy-lane-class-override.test`
+  - PASS (4/4)
+- Full mutation suite:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (475/475 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-init-policy-lane-class ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+    BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb`
+  - FAIL (known/ongoing): `opentitan` LEC (`missing_results=1`), AVIP compile
+    `axi4Lite_avip`
+
 ## Iteration 1165 - February 12, 2026
 
 ### Simulation: Blocking finish_item / item_done Handshake

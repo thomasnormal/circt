@@ -209,6 +209,15 @@ Bootstrap a project template (MCY/Certitude-style campaign scaffold):
 circt-mut init --project-dir mut-campaign
 ```
 
+Bootstrap directly with lane-class policy defaults (recommended for incremental
+CI rollout without hardcoding profile bundles):
+
+```sh
+circt-mut init \
+  --project-dir mut-campaign \
+  --report-policy-lane-class quality-nightly
+```
+
 This writes:
 - `mut-campaign/circt-mut.toml` (cover/matrix defaults)
 - `mut-campaign/tests.tsv` (test manifest template)

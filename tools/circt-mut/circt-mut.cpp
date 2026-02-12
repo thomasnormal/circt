@@ -155,6 +155,14 @@ static void printInitHelp(raw_ostream &os) {
   os << "                            native-strict-formal-quality-strict|\n";
   os << "                            strict-formal-quality-strict,\n";
   os << "                            default: smoke)\n";
+  os << "  --report-policy-lane-class CLASS\n";
+  os << "                           quality-smoke|quality-nightly|quality-strict|\n";
+  os << "                           quality-debt-nightly|quality-debt-strict|\n";
+  os << "                           native-quality-smoke|native-quality-nightly|\n";
+  os << "                           native-quality-strict|\n";
+  os << "                           native-quality-debt-nightly|\n";
+  os << "                           native-quality-debt-strict\n";
+  os << "                           (maps to report policy mode)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           Enable stop-on-fail report guard profile in\n";
   os << "                           generated config (default: true)\n";
@@ -5872,6 +5880,7 @@ struct InitOptions {
   bool matrixNativeDispatch = false;
   bool matrixNativeGlobalFilterPrequalify = false;
   std::string reportPolicyMode = "smoke";
+  std::string reportPolicyLaneClass;
   bool reportPolicyStopOnFail = true;
   bool force = false;
 };
@@ -5963,9 +5972,12 @@ static constexpr StringLiteral kMatrixPolicyModeList =
     "native-strict-formal-quality-strict|strict-formal-quality-strict";
 
 static bool isMatrixPolicyMode(StringRef mode);
+static std::optional<std::string> mapLanePolicyClassToMode(StringRef laneClass);
 
 static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
   InitParseResult result;
+  bool seenReportPolicyMode = false;
+  bool seenReportPolicyLaneClass = false;
 
   auto consumeValue = [&](size_t &index, StringRef arg,
                           StringRef optName) -> std::optional<StringRef> {
@@ -6106,6 +6118,29 @@ static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
         return result;
       }
       result.opts.reportPolicyMode = std::move(mode);
+      seenReportPolicyMode = true;
+      continue;
+    }
+    if (arg == "--report-policy-lane-class" ||
+        arg.starts_with("--report-policy-lane-class=")) {
+      auto v = consumeValue(i, arg, "--report-policy-lane-class");
+      if (!v)
+        return result;
+      StringRef laneClass = v->trim();
+      if (laneClass.empty()) {
+        result.error = "circt-mut init: --report-policy-lane-class requires "
+                       "non-empty value";
+        return result;
+      }
+      if (!mapLanePolicyClassToMode(laneClass)) {
+        result.error =
+            (Twine("circt-mut init: invalid --report-policy-lane-class value: ") +
+             *v)
+                .str();
+        return result;
+      }
+      result.opts.reportPolicyLaneClass = laneClass.lower();
+      seenReportPolicyLaneClass = true;
       continue;
     }
     if (arg == "--report-policy-stop-on-fail" ||
@@ -6142,6 +6177,11 @@ static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
 
   if (result.opts.projectDir.empty()) {
     result.error = "circt-mut init: --project-dir must not be empty";
+    return result;
+  }
+  if (seenReportPolicyMode && seenReportPolicyLaneClass) {
+    result.error = "circt-mut init: --report-policy-mode and "
+                   "--report-policy-lane-class are mutually exclusive";
     return result;
   }
 
@@ -6190,8 +6230,13 @@ static int runNativeInit(const InitOptions &opts) {
   cfg << "default_formal_global_propagate_circt_chain = \"auto\"\n";
   cfg << "default_formal_global_propagate_timeout_seconds = 60\n\n";
   cfg << "[report]\n";
-  cfg << "policy_mode = \"" << escapeTomlBasicString(opts.reportPolicyMode)
-      << "\"\n";
+  if (!opts.reportPolicyLaneClass.empty()) {
+    cfg << "policy_lane_class = \""
+        << escapeTomlBasicString(opts.reportPolicyLaneClass) << "\"\n";
+  } else {
+    cfg << "policy_mode = \"" << escapeTomlBasicString(opts.reportPolicyMode)
+        << "\"\n";
+  }
   cfg << "policy_stop_on_fail = "
       << (opts.reportPolicyStopOnFail ? "true" : "false") << "\n";
   cfg << "append_history = \"out/report-history.tsv\"\n";
