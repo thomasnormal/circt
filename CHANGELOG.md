@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1154 - February 12, 2026
+
+### Mutation Governance: Cadence-Aware Timeout Debt v3 + Mode Rollout
+
+1. Added cadence-aware timeout debt profiles in `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly`
+   - `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict`
+2. Added policy-mode rollout variants:
+   - `native-strict-formal-timeout-debt-nightly`
+   - `strict-formal-timeout-debt-nightly`
+   - `native-strict-formal-timeout-debt-strict`
+   - `strict-formal-timeout-debt-strict`
+3. Updated policy-mode surfaces and diagnostics:
+   - help output for `init/run/report`
+   - invalid mode diagnostics:
+     - `test/Tools/circt-mut-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-init-report-policy-invalid.test`
+     - `test/Tools/circt-mut-run-with-report-cli-policy-mode-invalid.test`
+     - `test/Tools/circt-mut-report-policy-config-matrix-mode-invalid.test`
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict-fail.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-native-strict-formal-timeout-debt-nightly-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-timeout-debt-nightly-pass.test`
+   - `test/Tools/circt-mut-report-cli-policy-mode-strict-formal-timeout-debt-strict-fail.test`
+   - plus help/profile-list updates:
+     - `test/Tools/circt-mut-init-help.test`
+     - `test/Tools/circt-mut-run-help.test`
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build-test circt-mut`: PASS
+- Focused cadence-aware timeout debt slice (13 tests): PASS (13/13)
+- Full mutation suite:
+  - `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+  - PASS (456/456 selected)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-timeout-debt-v3 ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+    BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+  - FAIL (known/ongoing): `opentitan` LEC (`missing_results=1`), AVIP compile
+    `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 1153 - February 12, 2026
 
 ### Mutation Governance: Native Timeout-Strict Policy-Mode Coverage Closure
