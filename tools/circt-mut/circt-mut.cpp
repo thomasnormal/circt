@@ -135,7 +135,9 @@ static void printInitHelp(raw_ostream &os) {
   os << "                            native-strict-formal-timeout-debt|\n";
   os << "                            strict-formal-timeout-debt|\n";
   os << "                            native-strict-formal-timeout-strict|\n";
-  os << "                            strict-formal-timeout-strict,\n";
+  os << "                            strict-formal-timeout-strict|\n";
+  os << "                            native-strict-formal-quality-debt|\n";
+  os << "                            strict-formal-quality-debt,\n";
   os << "                            default: smoke)\n";
   os << "  --report-policy-stop-on-fail BOOL\n";
   os << "                           Enable stop-on-fail report guard profile in\n";
@@ -205,7 +207,9 @@ static void printRunHelp(raw_ostream &os) {
   os << "                           native-strict-formal-timeout-debt|\n";
   os << "                           strict-formal-timeout-debt|\n";
   os << "                           native-strict-formal-timeout-strict|\n";
-  os << "                           strict-formal-timeout-strict\n";
+  os << "                           strict-formal-timeout-strict|\n";
+  os << "                           native-strict-formal-quality-debt|\n";
+  os << "                           strict-formal-quality-debt\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --report-external-formal-results FILE\n";
   os << "                           Repeatable override for report\n";
@@ -259,7 +263,9 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           native-strict-formal-timeout-debt|\n";
   os << "                           strict-formal-timeout-debt|\n";
   os << "                           native-strict-formal-timeout-strict|\n";
-  os << "                           strict-formal-timeout-strict\n";
+  os << "                           strict-formal-timeout-strict|\n";
+  os << "                           native-strict-formal-quality-debt|\n";
+  os << "                           strict-formal-quality-debt\n";
   os << "                           (maps to report policy profile)\n";
   os << "  --policy-stop-on-fail BOOL\n";
   os << "                           1|0|true|false|yes|no|on|off\n";
@@ -5873,7 +5879,8 @@ static constexpr StringLiteral kMatrixPolicyModeList =
     "strict-formal-compile-debt|native-strict-formal-compile-strict|"
     "strict-formal-compile-strict|native-strict-formal-timeout-debt|"
     "strict-formal-timeout-debt|native-strict-formal-timeout-strict|"
-    "strict-formal-timeout-strict";
+    "strict-formal-timeout-strict|native-strict-formal-quality-debt|"
+    "strict-formal-quality-debt";
 
 static bool isMatrixPolicyMode(StringRef mode);
 
@@ -8479,7 +8486,9 @@ static bool isMatrixPolicyMode(StringRef mode) {
          mode == "native-strict-formal-timeout-debt" ||
          mode == "strict-formal-timeout-debt" ||
          mode == "native-strict-formal-timeout-strict" ||
-         mode == "strict-formal-timeout-strict";
+         mode == "strict-formal-timeout-strict" ||
+         mode == "native-strict-formal-quality-debt" ||
+         mode == "strict-formal-quality-debt";
 }
 
 static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
@@ -8498,7 +8507,9 @@ static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
          mode == "native-strict-formal-timeout-debt" ||
          mode == "strict-formal-timeout-debt" ||
          mode == "native-strict-formal-timeout-strict" ||
-         mode == "strict-formal-timeout-strict";
+         mode == "strict-formal-timeout-strict" ||
+         mode == "native-strict-formal-quality-debt" ||
+         mode == "strict-formal-quality-debt";
 }
 
 static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
@@ -8510,6 +8521,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
   std::string externalFormalProfile;
   std::string externalFormalCompileProfile;
   std::string externalFormalTimeoutProfile;
+  std::string externalFormalSemanticProfile;
   std::string externalFormalBmcCoreMinProfile;
   std::string externalFormalLecCoreMinProfile;
   std::string externalFormalSummaryProfile;
@@ -8709,6 +8721,34 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
         "formal-regression-matrix-external-formal-lec-core-min-total-v1";
+  } else if (mode == "native-strict-formal-quality-debt") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
+                        : "formal-regression-matrix-composite-native-strict";
+    externalFormalTimeoutProfile =
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2";
+    externalFormalSemanticProfile =
+        "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcCoreMinProfile =
+        "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
+    externalFormalLecCoreMinProfile =
+        "formal-regression-matrix-external-formal-lec-core-min-total-v1";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-strict-contract";
+  } else if (mode == "strict-formal-quality-debt") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-strict"
+                        : "formal-regression-matrix-composite-strict";
+    provenanceProfile = "formal-regression-matrix-provenance-strict";
+    externalFormalProfile = "formal-regression-matrix-external-formal-guard";
+    externalFormalTimeoutProfile =
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2";
+    externalFormalSemanticProfile =
+        "formal-regression-matrix-external-formal-semantic-diag-family-guard";
+    externalFormalBmcCoreMinProfile =
+        "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
+    externalFormalLecCoreMinProfile =
+        "formal-regression-matrix-external-formal-lec-core-min-total-v1";
   } else {
     error = (Twine(errorPrefix) + " invalid report policy mode value '" + mode +
              (Twine("' (expected ") + kMatrixPolicyModeList + ")"))
@@ -8724,6 +8764,8 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     out.push_back(externalFormalCompileProfile);
   if (!externalFormalTimeoutProfile.empty())
     out.push_back(externalFormalTimeoutProfile);
+  if (!externalFormalSemanticProfile.empty())
+    out.push_back(externalFormalSemanticProfile);
   if (!externalFormalBmcCoreMinProfile.empty())
     out.push_back(externalFormalBmcCoreMinProfile);
   if (!externalFormalLecCoreMinProfile.empty())
