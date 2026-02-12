@@ -57,6 +57,10 @@ Options:
                          dropped-syntax remarks for BMC and LEC lanes
                          (`--fail-on-any-bmc-drop-remarks` and
                          `--fail-on-any-lec-drop-remarks`).
+  --strict-gate-report-json FILE
+                         With `--strict-gate`, write machine-readable strict
+                         diagnostics JSON (default:
+                         OUT_DIR/strict-gate-report.json).
   --strict-tool-preflight
                          Fail fast when enabled lanes depend on non-executable
                          default-derived CIRCT tools or lane runner entrypoints
@@ -1982,6 +1986,7 @@ UPDATE_BASELINES=0
 FAIL_ON_DIFF=0
 STRICT_GATE=0
 STRICT_GATE_NO_DROP_REMARKS=0
+STRICT_GATE_REPORT_JSON=""
 STRICT_TOOL_PREFLIGHT=0
 BASELINE_WINDOW=1
 BASELINE_WINDOW_DAYS=0
@@ -2357,6 +2362,8 @@ while [[ $# -gt 0 ]]; do
       STRICT_GATE=1; shift ;;
     --strict-gate-no-drop-remarks)
       STRICT_GATE_NO_DROP_REMARKS=1; shift ;;
+    --strict-gate-report-json)
+      STRICT_GATE_REPORT_JSON="$2"; shift 2 ;;
     --strict-tool-preflight)
       STRICT_TOOL_PREFLIGHT=1; shift ;;
     --baseline-window)
@@ -4466,6 +4473,13 @@ fi
 if [[ "$STRICT_GATE_NO_DROP_REMARKS" == "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--strict-gate-no-drop-remarks requires --strict-gate" >&2
   exit 1
+fi
+if [[ -n "$STRICT_GATE_REPORT_JSON" && "$STRICT_GATE" != "1" ]]; then
+  echo "--strict-gate-report-json requires --strict-gate" >&2
+  exit 1
+fi
+if [[ "$STRICT_GATE" == "1" && -z "$STRICT_GATE_REPORT_JSON" ]]; then
+  STRICT_GATE_REPORT_JSON="$OUT_DIR/strict-gate-report.json"
 fi
 
 if [[ -z "$CIRCT_VERILOG_BIN_AVIP" ]]; then
@@ -13228,18 +13242,69 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS="$OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV" \
   OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES="$OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES_CSV" \
   OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES="$OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV" \
+  STRICT_GATE_REPORT_JSON="$STRICT_GATE_REPORT_JSON" \
   STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
 import csv
 import datetime as dt
+import json
 import os
 import re
 from pathlib import Path
 
 summary_path = Path(os.environ["OUT_DIR"]) / "summary.tsv"
 baseline_path = Path(os.environ["BASELINE_FILE"])
+strict_gate_report_json = os.environ.get("STRICT_GATE_REPORT_JSON", "").strip()
 
 if not baseline_path.exists():
     raise SystemExit(f"baseline file not found: {baseline_path}")
+
+def parse_gate_error_line(message: str):
+    match = re.match(r"^([^:]+):\s+(.*)$", message)
+    if not match:
+        return "", "", message
+    lane = match.group(1).strip()
+    detail = match.group(2).strip()
+    lane_parts = lane.split()
+    if len(lane_parts) >= 2:
+        return lane_parts[0], lane_parts[1], detail
+    return "", "", message
+
+def classify_gate_rule_id(detail: str):
+    if detail.startswith("nonempty_filter_miss increased"):
+        return "strict_gate.filtered_lane.nonempty_filter_miss"
+    return "strict_gate.legacy_text"
+
+def build_strict_gate_report_diagnostics(gate_errors):
+    diagnostics = []
+    for message in gate_errors:
+        suite, mode, detail = parse_gate_error_line(message)
+        diagnostics.append(
+            {
+                "suite": suite,
+                "mode": mode,
+                "rule_id": classify_gate_rule_id(detail),
+                "detail": detail,
+                "message": message,
+            }
+        )
+    return diagnostics
+
+def write_strict_gate_report(status: str, gate_errors, baseline_window: int, baseline_window_days: int):
+    if not strict_gate_report_json:
+        return
+    report_path = Path(strict_gate_report_json)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "status": status,
+        "generated_at_utc": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "baseline_window": baseline_window,
+        "baseline_window_days": baseline_window_days,
+        "diagnostics": build_strict_gate_report_diagnostics(gate_errors),
+    }
+    with report_path.open("w") as report_file:
+        json.dump(payload, report_file, indent=2, sort_keys=True)
+        report_file.write("\n")
 
 def parse_result_summary(summary: str):
     parsed = {}
@@ -15863,10 +15928,12 @@ for key, current_row in summary.items():
             )
 
 if gate_errors:
+    write_strict_gate_report("fail", gate_errors, baseline_window, baseline_window_days)
     print("strict gate failures:")
     for item in gate_errors:
         print(f"  {item}")
     raise SystemExit(1)
+write_strict_gate_report("pass", gate_errors, baseline_window, baseline_window_days)
 PY
 fi
 

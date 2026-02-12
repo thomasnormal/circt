@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1195 - February 12, 2026
+
+### Formal Strict-Gate Artifacts: Machine-Readable JSON Diagnostics
+
+1. Added strict-gate report emission to `utils/run_formal_all.sh`:
+   - new CLI option: `--strict-gate-report-json FILE`
+   - validation guard: `--strict-gate-report-json` now requires `--strict-gate`
+   - default under strict-gate: `OUT_DIR/strict-gate-report.json`
+2. Added structured strict diagnostics schema (v1):
+   - fields: `schema_version`, `status`, `generated_at_utc`, baseline-window metadata, and per-diagnostic entries
+   - diagnostic entries include stable lane identity (`suite`, `mode`) and `rule_id`
+   - non-empty filtered-lane drift maps to explicit rule ID:
+     - `strict_gate.filtered_lane.nonempty_filter_miss`
+3. Added focused regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-report-json.test`
+   - `test/Tools/run-formal-all-strict-gate-report-json-requires-strict.test`
+   - updated `test/Tools/run-formal-all-help.test` for new CLI option visibility.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(help|strict-gate-report-json(-requires-strict)?|strict-gate-(nonempty-filtered-lanes-defaults|failure-cases|test)|strict-tool-preflight-nonempty-filtered-lanes-defaults|require-nonempty-filtered-lanes)\.test'`
+  - PASS (7/7)
+- External strict replay sanity (seeded baseline + strict gate, explicit CIRCT tools):
+  - lanes: `sv-tests/LEC` (`16.11--sequence-subroutine-uvm`), `yosys/tests/sva/LEC` (`basic00`)
+  - strict report emitted: `status=pass`, `diagnostics=0`
+
+
 ## Iteration 1194 - February 12, 2026
 
 ### Formal Strict-Gate Diagnostics: Lane-Keyed Non-Empty Contract Drift
