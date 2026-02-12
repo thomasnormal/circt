@@ -556,6 +556,8 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Initializing for module '"
                           << hwModule.getName() << "'\n");
 
+  ++topModuleCount;
+
   // Store the module name for hierarchical path construction
   moduleName = hwModule.getName().str();
 
@@ -14796,10 +14798,14 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
   // simulation loop continues running. LLHD base processes (clock gen,
   // always blocks) aren't affected because they run < 1000 steps per
   // activation and don't call interpretFuncBody from the process body.
-  if (success && !scheduler.getEventScheduler().isComplete()) {
+  // Only applies in multi-top mode; in single-top mode, sim.terminate success
+  // should immediately stop the simulation (e.g., timeout guard tests).
+  if (success && topModuleCount > 1 &&
+      !scheduler.getEventScheduler().isComplete()) {
     LLVM_DEBUG(llvm::dbgs()
-               << "  sim.terminate(success) - scheduler has pending events, "
-               << "setting terminationRequested but keeping sim alive\n");
+               << "  sim.terminate(success) - dual-top mode, scheduler has "
+               << "pending events, setting terminationRequested but keeping "
+               << "sim alive\n");
     terminationRequested = true;
     // DON'T call terminateCallback — the main loop should keep running
     // so the scheduler can advance time for HDL processes.

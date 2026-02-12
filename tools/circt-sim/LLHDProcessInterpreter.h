@@ -1172,6 +1172,9 @@ private:
 
   /// Flag indicating if termination has been requested.
   bool terminationRequested = false;
+  /// Number of top modules initialized. In multi-top (dual-top) mode,
+  /// sim.terminate success is deferred to let other modules continue.
+  unsigned topModuleCount = 0;
   /// Whether we are currently in global initialization (constructors, etc.).
   /// During this phase, sim.terminate should not halt the process to allow
   /// UVM initialization to complete (re-entrant calls set uvm_top properly).
