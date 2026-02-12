@@ -9,6 +9,27 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026)
+
+1. Added suite-aware core timeout debt profile:
+   - `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2`
+2. Contract impact:
+   - timeout debt policy now treats `sv-tests-uvm/BMC_SEMANTICS` as strict
+     (`<= 0`) while preserving debt ceiling (`<= 1`) for the other core
+     suites (`sv-tests`, `verilator-verification`, `yosys/tests/sva`).
+3. Mode rollout:
+   - remapped `native-strict-formal-timeout-debt` and
+     `strict-formal-timeout-debt` to use `debt-v2`.
+4. Remaining limitations:
+   - timeout debt is still static and per-profile; no cadence-aware scaling
+     (smoke/nightly/weekly) is encoded yet.
+   - LEC/BMC diagnostic-family budgets remain separate from timeout budgets.
+5. Next long-term features:
+   - introduce cadence-aware timeout debt profiles (`debt-v3`) with
+     per-suite thresholds by policy mode.
+   - add a policy-mode family that combines timeout budgets with semantic
+     diagnostic budgets (single governance surface for quality).
+
 ### Formal Closure Snapshot Update (February 11, 2026, 23:59+++++++++++++++++++++++)
 
 1. Added mode-level rollout for timeout budgets:

@@ -305,6 +305,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-core-timeout-stage-budget-v1|\n";
   os << "                           formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1|\n";
   os << "                           formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1|\n";
+  os << "                           formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2|\n";
   os << "                           formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1|\n";
   os << "                           formal-regression-matrix-external-formal-compile-mode-budget-v1|\n";
   os << "                           formal-regression-matrix-external-formal-compile-mode-budget-debt-v1|\n";
@@ -8665,7 +8666,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
                         ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
                         : "formal-regression-matrix-composite-native-strict";
     externalFormalTimeoutProfile =
-        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1";
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -8679,7 +8680,7 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     provenanceProfile = "formal-regression-matrix-provenance-strict";
     externalFormalProfile = "formal-regression-matrix-external-formal-guard";
     externalFormalTimeoutProfile =
-        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1";
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9453,6 +9454,82 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return appendCoreTimeoutStageBudget(1.0);
   }
   if (profile ==
+      "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2") {
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_timeout_stage_frontend_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_timeout_stage_solver_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_timeout_stage_unknown_cases",
+                     1.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_timeout_stage_frontend_cases",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_timeout_stage_solver_cases",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_timeout_stage_unknown_cases",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_timeout_stage_frontend_cases",
+        1.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_timeout_stage_solver_cases",
+        1.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_timeout_stage_unknown_cases",
+        1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_timeout_stage_frontend_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_timeout_stage_solver_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_timeout_stage_unknown_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_stage_frontend_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_stage_solver_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_stage_unknown_cases",
+                     1.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_timeout_stage_frontend_cases",
+        1.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_timeout_stage_solver_cases",
+        1.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_timeout_stage_unknown_cases",
+        1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_timeout_stage_frontend_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_timeout_stage_solver_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_timeout_stage_unknown_cases",
+                     1.0);
+    return true;
+  }
+  if (profile ==
       "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1") {
     for (StringRef key : {
              "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_class_preprocess_cases",
@@ -9913,6 +9990,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-core-timeout-stage-budget-v1|"
            "formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1|"
            "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1|"
+           "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2|"
            "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1|"
            "formal-regression-matrix-external-formal-compile-mode-budget-v1|"
            "formal-regression-matrix-external-formal-compile-mode-budget-debt-v1|"

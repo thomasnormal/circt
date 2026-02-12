@@ -71,6 +71,7 @@
 // CHECK: formal-regression-matrix-external-formal-core-timeout-stage-budget-v1
 // CHECK: formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1
 // CHECK: formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1
+// CHECK: formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2
 // CHECK: formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1
 // CHECK: formal-regression-matrix-external-formal-compile-mode-budget-v1
 // CHECK: formal-regression-matrix-external-formal-compile-mode-budget-debt-v1
