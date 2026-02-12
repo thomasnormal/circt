@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1189 - February 12, 2026
+
+### Formal LEC Telemetry: First-Class `LEC_NOT_RUN` Reason-Key Governance
+
+1. Added explicit strict-gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-new-lec-not-run-reason-keys`
+2. Wired full strict-gate flow for no-run reason-key drift checks:
+   - option parsing + env forwarding
+   - Python strict-gate evaluator support
+   - default-on behavior under `--strict-gate`
+3. New reason-key drift check now compares `lec_not_run_reason_*_cases` key families directly (instead of requiring generic prefix-gate wiring).
+4. Regression coverage:
+   - updated `test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys.test`
+   - new `test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys-defaults.test`
+   - updated `test/Tools/run-formal-all-help.test`
+5. Outcome:
+   - `LEC_NOT_RUN` now has full dedicated strict-gate parity across reason keys, case IDs, and case-reason identities.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(help|strict-gate-lec-not-run-(case-(ids|reasons)(-defaults)?|reason-keys(-defaults)?))\.test'`
+  - PASS (7/7)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(baselines|strict-gate-lec-(counter-prefix|not-run-reason-keys(-defaults)?|circt-(opt|verilog|lec)-error-reason-keys(-defaults)?|runner-command-reason-keys(-defaults)?))\.test'`
+  - PASS (12/12)
+- External smoke (filtered formal lanes):
+  - `run_formal_all --include-lane-regex '^sv-tests/LEC$' --sv-tests-lec-test-filter '16\.11--sequence-subroutine-uvm' --circt-verilog /home/thomas-ahle/circt/build-test/bin/circt-verilog`
+    - PASS (`sv-tests/LEC`: total=1 pass=1 error=0)
+  - `run_formal_all --include-lane-regex '^verilator-verification/LEC$' --verilator-lec-test-filter 'assert_changed' --circt-verilog /home/thomas-ahle/circt/build-test/bin/circt-verilog`
+    - PASS (`verilator-verification/LEC`: total=1 pass=1 error=0)
+  - `run_formal_all --include-lane-regex '^yosys/tests/sva/LEC$' --yosys /home/thomas-ahle/yosys/tests/sva --yosys-lec-test-filter 'basic00' --circt-verilog /home/thomas-ahle/circt/build-test/bin/circt-verilog`
+    - PASS (`yosys/tests/sva/LEC`: total=1 pass=1 error=0)
+  - `run_formal_all --with-opentitan --include-lane-regex '^opentitan/LEC$' --opentitan-lec-impl-filter '^__no_impl_should_match__$' --circt-verilog-opentitan /home/thomas-ahle/circt/build-test/bin/circt-verilog`
+    - PASS (`opentitan/LEC`: total=1 skip=1 no_matching_impl_filter=1)
+  - `run_formal_all --with-avip --avip-glob '/home/thomas-ahle/mbit/apb_avip' --include-lane-regex '^avip/apb_avip/compile$' --circt-verilog-avip /home/thomas-ahle/circt/build-test/bin/circt-verilog`
+    - PASS (`avip/apb_avip/compile`: total=1 pass=1)
+
 ## Iteration 1188 - February 12, 2026
 
 ### Formal LEC Telemetry: `LEC_NOT_RUN` Case-Identity Governance
