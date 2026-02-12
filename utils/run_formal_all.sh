@@ -68,6 +68,11 @@ Options:
   --strict-gate-fail-on-legacy-rule-ids
                          With `--strict-gate`, fail if any strict diagnostic
                          remains classified as `strict_gate.legacy_text`.
+  --strict-gate-rule-id-allowlist FILE
+                         With `--strict-gate`, enforce strict diagnostic
+                         `rule_id` compatibility against allowlist entries
+                         (`exact:`, `prefix:`, `regex:`; default kind
+                         is `exact:`).
   --strict-tool-preflight
                          Fail fast when enabled lanes depend on non-executable
                          default-derived CIRCT tools or lane runner entrypoints
@@ -1996,6 +2001,7 @@ STRICT_GATE_NO_DROP_REMARKS=0
 STRICT_GATE_REPORT_JSON=""
 STRICT_GATE_REPORT_TSV=""
 STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS=0
+STRICT_GATE_RULE_ID_ALLOWLIST_FILE=""
 STRICT_TOOL_PREFLIGHT=0
 BASELINE_WINDOW=1
 BASELINE_WINDOW_DAYS=0
@@ -2377,6 +2383,8 @@ while [[ $# -gt 0 ]]; do
       STRICT_GATE_REPORT_TSV="$2"; shift 2 ;;
     --strict-gate-fail-on-legacy-rule-ids)
       STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS=1; shift ;;
+    --strict-gate-rule-id-allowlist)
+      STRICT_GATE_RULE_ID_ALLOWLIST_FILE="$2"; shift 2 ;;
     --strict-tool-preflight)
       STRICT_TOOL_PREFLIGHT=1; shift ;;
     --baseline-window)
@@ -4497,6 +4505,14 @@ if [[ -n "$STRICT_GATE_REPORT_TSV" && "$STRICT_GATE" != "1" ]]; then
 fi
 if [[ "$STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS" == "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--strict-gate-fail-on-legacy-rule-ids requires --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$STRICT_GATE_RULE_ID_ALLOWLIST_FILE" && "$STRICT_GATE" != "1" ]]; then
+  echo "--strict-gate-rule-id-allowlist requires --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$STRICT_GATE_RULE_ID_ALLOWLIST_FILE" && ! -r "$STRICT_GATE_RULE_ID_ALLOWLIST_FILE" ]]; then
+  echo "strict-gate rule-id allowlist file not readable: $STRICT_GATE_RULE_ID_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ "$STRICT_GATE" == "1" && -z "$STRICT_GATE_REPORT_JSON" ]]; then
@@ -13269,6 +13285,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   STRICT_GATE_REPORT_JSON="$STRICT_GATE_REPORT_JSON" \
   STRICT_GATE_REPORT_TSV="$STRICT_GATE_REPORT_TSV" \
   STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS="$STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS" \
+  STRICT_GATE_RULE_ID_ALLOWLIST_FILE="$STRICT_GATE_RULE_ID_ALLOWLIST_FILE" \
   STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
 import csv
 import datetime as dt
@@ -13284,6 +13301,9 @@ strict_gate_report_tsv = os.environ.get("STRICT_GATE_REPORT_TSV", "").strip()
 strict_gate_fail_on_legacy_rule_ids = (
     os.environ.get("STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS", "0") == "1"
 )
+strict_gate_rule_id_allowlist_file = os.environ.get(
+    "STRICT_GATE_RULE_ID_ALLOWLIST_FILE", ""
+).strip()
 
 if not baseline_path.exists():
     raise SystemExit(f"baseline file not found: {baseline_path}")
@@ -13302,6 +13322,8 @@ def parse_gate_error_line(message: str):
 def classify_gate_rule_id(suite: str, mode: str, detail: str):
     if detail.startswith("classification gap:"):
         return "strict_gate.report.legacy_rule_id.present"
+    if detail.startswith("rule-id allowlist violation:"):
+        return "strict_gate.report.rule_id_allowlist.violation"
 
     if detail.startswith("missing baseline row"):
         return "strict_gate.baseline.missing_row"
@@ -13477,6 +13499,63 @@ def normalize_rule_id_token(token: str) -> str:
     normalized = re.sub(r"_+", "_", normalized).strip("_")
     return normalized or "token"
 
+strict_gate_rule_id_allow_exact = set()
+strict_gate_rule_id_allow_prefix = []
+strict_gate_rule_id_allow_regex = []
+
+def load_strict_gate_rule_id_allowlist():
+    if not strict_gate_rule_id_allowlist_file:
+        return
+    allowlist_path = Path(strict_gate_rule_id_allowlist_file)
+    if not allowlist_path.exists():
+        raise SystemExit(
+            f"strict-gate rule-id allowlist file not found: {allowlist_path}"
+        )
+    with allowlist_path.open() as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            kind = "exact"
+            payload = line
+            if ":" in line:
+                maybe_kind, maybe_payload = line.split(":", 1)
+                if maybe_kind in {"exact", "prefix", "regex"}:
+                    kind = maybe_kind
+                    payload = maybe_payload.strip()
+            if not payload:
+                raise SystemExit(
+                    f"strict-gate rule-id allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
+                )
+            if kind == "exact":
+                strict_gate_rule_id_allow_exact.add(payload)
+            elif kind == "prefix":
+                strict_gate_rule_id_allow_prefix.append(payload)
+            elif kind == "regex":
+                try:
+                    strict_gate_rule_id_allow_regex.append(re.compile(payload))
+                except re.error as exc:
+                    raise SystemExit(
+                        f"strict-gate rule-id allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
+                    )
+            else:
+                raise SystemExit(
+                    f"strict-gate rule-id allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
+                )
+
+def is_allowed_strict_gate_rule_id(rule_id: str) -> bool:
+    if not strict_gate_rule_id_allowlist_file:
+        return True
+    if rule_id in strict_gate_rule_id_allow_exact:
+        return True
+    for prefix in strict_gate_rule_id_allow_prefix:
+        if rule_id.startswith(prefix):
+            return True
+    for pattern in strict_gate_rule_id_allow_regex:
+        if pattern.search(rule_id):
+            return True
+    return False
+
 class GateErrorCollector:
     def __init__(self):
         self._diagnostics = []
@@ -13551,6 +13630,7 @@ def write_strict_gate_report(status: str, gate_errors, baseline_window: int, bas
             "generated_at_utc": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
             "baseline_window": baseline_window,
             "baseline_window_days": baseline_window_days,
+            "rule_id_allowlist_file": strict_gate_rule_id_allowlist_file,
             "diagnostic_count": len(diagnostics),
             "legacy_rule_id_count": len(legacy_diagnostics),
             "legacy_diagnostic_messages_sample": legacy_sample_messages,
@@ -14749,6 +14829,7 @@ def is_allowed_bmc_abstraction_provenance_token(token: str) -> bool:
             return True
     return False
 
+load_strict_gate_rule_id_allowlist()
 gate_errors = GateErrorCollector()
 for key, current_row in summary.items():
     suite, mode = key
@@ -16262,8 +16343,34 @@ if strict_gate_fail_on_legacy_rule_ids:
         sample = ", ".join(item["message"] for item in legacy_diagnostics[:2])
         if len(legacy_diagnostics) > 2:
             sample += ", ..."
-        gate_errors.append(
-            f"strict-gate/report GLOBAL: classification gap: {len(legacy_diagnostics)} diagnostics remain strict_gate.legacy_text (sample: {sample})"
+        gate_errors.add(
+            "strict-gate/report",
+            "GLOBAL",
+            f"classification gap: {len(legacy_diagnostics)} diagnostics remain strict_gate.legacy_text (sample: {sample})",
+            rule_id="strict_gate.report.legacy_rule_id.present",
+        )
+
+if strict_gate_rule_id_allowlist_file:
+    diagnostics_preview = build_strict_gate_report_diagnostics(gate_errors)
+    disallowed_rule_ids = sorted(
+        {
+            diagnostic["rule_id"]
+            for diagnostic in diagnostics_preview
+            if not is_allowed_strict_gate_rule_id(diagnostic["rule_id"])
+        }
+    )
+    if disallowed_rule_ids:
+        sample = ", ".join(disallowed_rule_ids[:3])
+        if len(disallowed_rule_ids) > 3:
+            sample += ", ..."
+        gate_errors.add(
+            "strict-gate/report",
+            "GLOBAL",
+            (
+                f"rule-id allowlist violation: {len(disallowed_rule_ids)} rule IDs are not allowlisted "
+                f"in {strict_gate_rule_id_allowlist_file} (sample: {sample})"
+            ),
+            rule_id="strict_gate.report.rule_id_allowlist.violation",
         )
 
 if gate_errors:

@@ -1,7 +1,9 @@
 // RUN: not %S/../../utils/run_formal_all.sh --strict-gate-report-json %t/report.json 2>&1 | FileCheck %s --check-prefix=JSON
 // RUN: not %S/../../utils/run_formal_all.sh --strict-gate-report-tsv %t/report.tsv 2>&1 | FileCheck %s --check-prefix=TSV
 // RUN: not %S/../../utils/run_formal_all.sh --strict-gate-fail-on-legacy-rule-ids 2>&1 | FileCheck %s --check-prefix=LEGACY
+// RUN: not %S/../../utils/run_formal_all.sh --strict-gate-rule-id-allowlist %t/rule-ids.txt 2>&1 | FileCheck %s --check-prefix=ALLOWLIST
 //
 // JSON: --strict-gate-report-json requires --strict-gate
 // TSV: --strict-gate-report-tsv requires --strict-gate
 // LEGACY: --strict-gate-fail-on-legacy-rule-ids requires --strict-gate
+// ALLOWLIST: --strict-gate-rule-id-allowlist requires --strict-gate
