@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1197 - February 12, 2026
+
+### Formal Strict-Gate Quality Gate: Legacy Rule-ID Enforcement + Metadata
+
+1. Extended strict-gate policy controls in `utils/run_formal_all.sh`:
+   - new option: `--strict-gate-fail-on-legacy-rule-ids`
+   - strict guardrail: option requires `--strict-gate`
+   - when enabled, strict runs fail if any diagnostic remains classified as `strict_gate.legacy_text`.
+2. Added strict artifact metadata for governance and CI policy checks:
+   - `diagnostic_count`
+   - `legacy_rule_id_count`
+   - `legacy_diagnostic_messages_sample`
+3. Added explicit rule-ID mapping for the enforcement message path:
+   - `strict_gate.report.legacy_rule_id.present`
+4. Added/updated regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-fail-on-legacy-rule-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-report-json.test` (legacy metadata assertions)
+   - `test/Tools/run-formal-all-strict-gate-report-json-requires-strict.test` (new option guardrail)
+   - `test/Tools/run-formal-all-help.test` (new CLI option visibility)
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(help|strict-gate-(fail-on-legacy-rule-ids|report-json(-requires-strict|-pass-rate-rule-id)?|nonempty-filtered-lanes-defaults|failure-cases|test)|strict-tool-preflight-nonempty-filtered-lanes-defaults|require-nonempty-filtered-lanes)\.test'`
+  - PASS (9/9)
+- External strict replay sanity (seeded baseline + strict gate + legacy enforcement):
+  - lanes: `sv-tests/LEC` (`16.11--sequence-subroutine-uvm`), `yosys/tests/sva/LEC` (`basic00`)
+  - strict report status: `pass`
+  - `diagnostic_count=0`, `legacy_rule_id_count=0`
+
+
 ## Iteration 1196 - February 12, 2026
 
 ### Formal Strict-Gate Artifact Expansion: TSV Companion + Rule-ID Coverage

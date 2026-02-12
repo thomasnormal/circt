@@ -65,6 +65,9 @@ Options:
                          With `--strict-gate`, write machine-readable strict
                          diagnostics TSV (default:
                          OUT_DIR/strict-gate-report.tsv).
+  --strict-gate-fail-on-legacy-rule-ids
+                         With `--strict-gate`, fail if any strict diagnostic
+                         remains classified as `strict_gate.legacy_text`.
   --strict-tool-preflight
                          Fail fast when enabled lanes depend on non-executable
                          default-derived CIRCT tools or lane runner entrypoints
@@ -1992,6 +1995,7 @@ STRICT_GATE=0
 STRICT_GATE_NO_DROP_REMARKS=0
 STRICT_GATE_REPORT_JSON=""
 STRICT_GATE_REPORT_TSV=""
+STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS=0
 STRICT_TOOL_PREFLIGHT=0
 BASELINE_WINDOW=1
 BASELINE_WINDOW_DAYS=0
@@ -2371,6 +2375,8 @@ while [[ $# -gt 0 ]]; do
       STRICT_GATE_REPORT_JSON="$2"; shift 2 ;;
     --strict-gate-report-tsv)
       STRICT_GATE_REPORT_TSV="$2"; shift 2 ;;
+    --strict-gate-fail-on-legacy-rule-ids)
+      STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS=1; shift ;;
     --strict-tool-preflight)
       STRICT_TOOL_PREFLIGHT=1; shift ;;
     --baseline-window)
@@ -4487,6 +4493,10 @@ if [[ -n "$STRICT_GATE_REPORT_JSON" && "$STRICT_GATE" != "1" ]]; then
 fi
 if [[ -n "$STRICT_GATE_REPORT_TSV" && "$STRICT_GATE" != "1" ]]; then
   echo "--strict-gate-report-tsv requires --strict-gate" >&2
+  exit 1
+fi
+if [[ "$STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS" == "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--strict-gate-fail-on-legacy-rule-ids requires --strict-gate" >&2
   exit 1
 fi
 if [[ "$STRICT_GATE" == "1" && -z "$STRICT_GATE_REPORT_JSON" ]]; then
@@ -13258,6 +13268,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES="$OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV" \
   STRICT_GATE_REPORT_JSON="$STRICT_GATE_REPORT_JSON" \
   STRICT_GATE_REPORT_TSV="$STRICT_GATE_REPORT_TSV" \
+  STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS="$STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS" \
   STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
 import csv
 import datetime as dt
@@ -13270,6 +13281,9 @@ summary_path = Path(os.environ["OUT_DIR"]) / "summary.tsv"
 baseline_path = Path(os.environ["BASELINE_FILE"])
 strict_gate_report_json = os.environ.get("STRICT_GATE_REPORT_JSON", "").strip()
 strict_gate_report_tsv = os.environ.get("STRICT_GATE_REPORT_TSV", "").strip()
+strict_gate_fail_on_legacy_rule_ids = (
+    os.environ.get("STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS", "0") == "1"
+)
 
 if not baseline_path.exists():
     raise SystemExit(f"baseline file not found: {baseline_path}")
@@ -13308,6 +13322,8 @@ def classify_gate_rule_id(detail: str):
         return "strict_gate.bmc.drop_remarks.regression"
     if detail.startswith("lec_drop_remark_cases increased"):
         return "strict_gate.lec.drop_remarks.regression"
+    if detail.startswith("classification gap:"):
+        return "strict_gate.report.legacy_rule_id.present"
     return "strict_gate.legacy_text"
 
 def build_strict_gate_report_diagnostics(gate_errors):
@@ -13325,8 +13341,19 @@ def build_strict_gate_report_diagnostics(gate_errors):
         )
     return diagnostics
 
+def summarize_legacy_diagnostics(diagnostics):
+    legacy = [
+        diagnostic
+        for diagnostic in diagnostics
+        if diagnostic["rule_id"] == "strict_gate.legacy_text"
+    ]
+    sample_messages = [diagnostic["message"] for diagnostic in legacy[:5]]
+    return legacy, sample_messages
+
+
 def write_strict_gate_report(status: str, gate_errors, baseline_window: int, baseline_window_days: int):
     diagnostics = build_strict_gate_report_diagnostics(gate_errors)
+    legacy_diagnostics, legacy_sample_messages = summarize_legacy_diagnostics(diagnostics)
     if strict_gate_report_json:
         report_path = Path(strict_gate_report_json)
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -13336,6 +13363,9 @@ def write_strict_gate_report(status: str, gate_errors, baseline_window: int, bas
             "generated_at_utc": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
             "baseline_window": baseline_window,
             "baseline_window_days": baseline_window_days,
+            "diagnostic_count": len(diagnostics),
+            "legacy_rule_id_count": len(legacy_diagnostics),
+            "legacy_diagnostic_messages_sample": legacy_sample_messages,
             "diagnostics": diagnostics,
         }
         with report_path.open("w") as report_file:
@@ -15994,6 +16024,17 @@ for key, current_row in summary.items():
             gate_errors.append(
                 f"{suite} {mode}: pass_rate regressed ({baseline_rate:.3f} -> {current_rate:.3f}, window={baseline_window})"
             )
+
+if strict_gate_fail_on_legacy_rule_ids:
+    diagnostics_preview = build_strict_gate_report_diagnostics(gate_errors)
+    legacy_diagnostics, _ = summarize_legacy_diagnostics(diagnostics_preview)
+    if legacy_diagnostics:
+        sample = ", ".join(item["message"] for item in legacy_diagnostics[:2])
+        if len(legacy_diagnostics) > 2:
+            sample += ", ..."
+        gate_errors.append(
+            f"strict-gate/report GLOBAL: classification gap: {len(legacy_diagnostics)} diagnostics remain strict_gate.legacy_text (sample: {sample})"
+        )
 
 if gate_errors:
     write_strict_gate_report("fail", gate_errors, baseline_window, baseline_window_days)

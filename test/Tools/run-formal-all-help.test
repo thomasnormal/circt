@@ -6,6 +6,7 @@
 // CHECK: --strict-gate-no-drop-remarks
 // CHECK: --strict-gate-report-json
 // CHECK: --strict-gate-report-tsv
+// CHECK: --strict-gate-fail-on-legacy-rule-ids
 // CHECK: --strict-tool-preflight
 // CHECK: --fail-on-new-bmc-timeout-cases
 // CHECK: --fail-on-new-bmc-timeout-case-ids

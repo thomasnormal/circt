@@ -62,6 +62,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, strict legacy rule-ID enforcement)
+
+1. Added strict quality enforcement option in `utils/run_formal_all.sh`:
+   - `--strict-gate-fail-on-legacy-rule-ids`
+   - fails strict runs if diagnostics still use fallback rule ID `strict_gate.legacy_text`.
+2. Added machine-readable strict artifact metadata for CI policy contracts:
+   - `diagnostic_count`, `legacy_rule_id_count`, `legacy_diagnostic_messages_sample`.
+3. Added explicit enforcement-path rule ID:
+   - `strict_gate.report.legacy_rule_id.present`.
+4. Added and validated focused unit coverage:
+   - `test/Tools/run-formal-all-strict-gate-fail-on-legacy-rule-ids.test`
+   - updates to strict report/help/guardrail tests
+   - focused lit slice: PASS (9/9).
+5. External strict replay sanity with enforcement enabled (seeded baseline):
+   - `sv-tests/LEC` + `yosys/tests/sva/LEC` filtered lanes: PASS (1/1 + 1/1)
+   - strict report metadata: `diagnostic_count=0`, `legacy_rule_id_count=0`.
+6. Remaining limitations:
+   - explicit rule-ID coverage is still incomplete; some strict diagnostics still require mapping to eliminate legacy fallback in real regression scenarios.
+   - strict diagnostics are still flat lane-level records; no graph linkage to mutation provenance or cross-lane causal relationships.
+   - strict schema evolution policy/tooling (migrations, compatibility checks, deprecation windows) remains unimplemented.
+7. Next long-term features (BMC/LEC/mutation focus):
+   - complete explicit rule-ID mapping and enable `--strict-gate-fail-on-legacy-rule-ids` in CI strict profiles.
+   - add mutation provenance artifacts and strict policies keyed by generator config drift, seed-lineage changes, and equivalence-outcome regressions.
+   - add strict artifact schema compatibility tooling (versioned validators + migration checks) to keep CI consumers stable over time.
+
 ### Formal Closure Snapshot Update (February 12, 2026, strict-gate TSV companion + expanded rule IDs)
 
 1. Extended strict policy artifact surface in `utils/run_formal_all.sh`:
