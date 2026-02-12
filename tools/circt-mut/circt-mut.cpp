@@ -134,6 +134,10 @@ static void printInitHelp(raw_ostream &os) {
   os << "                            strict-formal-compile-strict|\n";
   os << "                            native-strict-formal-timeout-debt|\n";
   os << "                            strict-formal-timeout-debt|\n";
+  os << "                            native-strict-formal-timeout-debt-nightly|\n";
+  os << "                            strict-formal-timeout-debt-nightly|\n";
+  os << "                            native-strict-formal-timeout-debt-strict|\n";
+  os << "                            strict-formal-timeout-debt-strict|\n";
   os << "                            native-strict-formal-timeout-strict|\n";
   os << "                            strict-formal-timeout-strict|\n";
   os << "                            native-strict-formal-quality-debt|\n";
@@ -208,6 +212,10 @@ static void printRunHelp(raw_ostream &os) {
   os << "                           strict-formal-compile-strict|\n";
   os << "                           native-strict-formal-timeout-debt|\n";
   os << "                           strict-formal-timeout-debt|\n";
+  os << "                           native-strict-formal-timeout-debt-nightly|\n";
+  os << "                           strict-formal-timeout-debt-nightly|\n";
+  os << "                           native-strict-formal-timeout-debt-strict|\n";
+  os << "                           strict-formal-timeout-debt-strict|\n";
   os << "                           native-strict-formal-timeout-strict|\n";
   os << "                           strict-formal-timeout-strict|\n";
   os << "                           native-strict-formal-quality-debt|\n";
@@ -266,6 +274,10 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           strict-formal-compile-strict|\n";
   os << "                           native-strict-formal-timeout-debt|\n";
   os << "                           strict-formal-timeout-debt|\n";
+  os << "                           native-strict-formal-timeout-debt-nightly|\n";
+  os << "                           strict-formal-timeout-debt-nightly|\n";
+  os << "                           native-strict-formal-timeout-debt-strict|\n";
+  os << "                           strict-formal-timeout-debt-strict|\n";
   os << "                           native-strict-formal-timeout-strict|\n";
   os << "                           strict-formal-timeout-strict|\n";
   os << "                           native-strict-formal-quality-debt|\n";
@@ -318,6 +330,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1|\n";
   os << "                           formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1|\n";
   os << "                           formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2|\n";
+  os << "                           formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly|\n";
+  os << "                           formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict|\n";
   os << "                           formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1|\n";
   os << "                           formal-regression-matrix-external-formal-compile-mode-budget-v1|\n";
   os << "                           formal-regression-matrix-external-formal-compile-mode-budget-debt-v1|\n";
@@ -5884,7 +5898,12 @@ static constexpr StringLiteral kMatrixPolicyModeList =
     "strict-formal-summary-v1|native-strict-formal-compile-debt|"
     "strict-formal-compile-debt|native-strict-formal-compile-strict|"
     "strict-formal-compile-strict|native-strict-formal-timeout-debt|"
-    "strict-formal-timeout-debt|native-strict-formal-timeout-strict|"
+    "strict-formal-timeout-debt|"
+    "native-strict-formal-timeout-debt-nightly|"
+    "strict-formal-timeout-debt-nightly|"
+    "native-strict-formal-timeout-debt-strict|"
+    "strict-formal-timeout-debt-strict|"
+    "native-strict-formal-timeout-strict|"
     "strict-formal-timeout-strict|native-strict-formal-quality-debt|"
     "strict-formal-quality-debt|native-strict-formal-quality-strict|"
     "strict-formal-quality-strict";
@@ -8492,6 +8511,10 @@ static bool isMatrixPolicyMode(StringRef mode) {
          mode == "strict-formal-compile-strict" ||
          mode == "native-strict-formal-timeout-debt" ||
          mode == "strict-formal-timeout-debt" ||
+         mode == "native-strict-formal-timeout-debt-nightly" ||
+         mode == "strict-formal-timeout-debt-nightly" ||
+         mode == "native-strict-formal-timeout-debt-strict" ||
+         mode == "strict-formal-timeout-debt-strict" ||
          mode == "native-strict-formal-timeout-strict" ||
          mode == "strict-formal-timeout-strict" ||
          mode == "native-strict-formal-quality-debt" ||
@@ -8515,6 +8538,10 @@ static bool matrixPolicyModeUsesStopOnFail(StringRef mode) {
          mode == "strict-formal-compile-strict" ||
          mode == "native-strict-formal-timeout-debt" ||
          mode == "strict-formal-timeout-debt" ||
+         mode == "native-strict-formal-timeout-debt-nightly" ||
+         mode == "strict-formal-timeout-debt-nightly" ||
+         mode == "native-strict-formal-timeout-debt-strict" ||
+         mode == "strict-formal-timeout-debt-strict" ||
          mode == "native-strict-formal-timeout-strict" ||
          mode == "strict-formal-timeout-strict" ||
          mode == "native-strict-formal-quality-debt" ||
@@ -8704,6 +8731,54 @@ static bool appendMatrixPolicyModeProfiles(StringRef mode, bool stopOnFail,
     externalFormalProfile = "formal-regression-matrix-external-formal-guard";
     externalFormalTimeoutProfile =
         "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2";
+    externalFormalBmcCoreMinProfile =
+        "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
+    externalFormalLecCoreMinProfile =
+        "formal-regression-matrix-external-formal-lec-core-min-total-v1";
+  } else if (mode == "native-strict-formal-timeout-debt-nightly") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
+                        : "formal-regression-matrix-composite-native-strict";
+    externalFormalTimeoutProfile =
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly";
+    externalFormalBmcCoreMinProfile =
+        "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
+    externalFormalLecCoreMinProfile =
+        "formal-regression-matrix-external-formal-lec-core-min-total-v1";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-strict-contract";
+  } else if (mode == "strict-formal-timeout-debt-nightly") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-strict"
+                        : "formal-regression-matrix-composite-strict";
+    provenanceProfile = "formal-regression-matrix-provenance-strict";
+    externalFormalProfile = "formal-regression-matrix-external-formal-guard";
+    externalFormalTimeoutProfile =
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly";
+    externalFormalBmcCoreMinProfile =
+        "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
+    externalFormalLecCoreMinProfile =
+        "formal-regression-matrix-external-formal-lec-core-min-total-v1";
+  } else if (mode == "native-strict-formal-timeout-debt-strict") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-native-strict"
+                        : "formal-regression-matrix-composite-native-strict";
+    externalFormalTimeoutProfile =
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict";
+    externalFormalBmcCoreMinProfile =
+        "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
+    externalFormalLecCoreMinProfile =
+        "formal-regression-matrix-external-formal-lec-core-min-total-v1";
+    modeContractProfile =
+        "formal-regression-matrix-policy-mode-native-strict-contract";
+  } else if (mode == "strict-formal-timeout-debt-strict") {
+    policyProfile = stopOnFail
+                        ? "formal-regression-matrix-composite-stop-on-fail-strict"
+                        : "formal-regression-matrix-composite-strict";
+    provenanceProfile = "formal-regression-matrix-provenance-strict";
+    externalFormalProfile = "formal-regression-matrix-external-formal-guard";
+    externalFormalTimeoutProfile =
+        "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict";
     externalFormalBmcCoreMinProfile =
         "formal-regression-matrix-external-formal-bmc-core-min-total-v1";
     externalFormalLecCoreMinProfile =
@@ -9611,6 +9686,146 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     return true;
   }
   if (profile ==
+      "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly") {
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_timeout_stage_frontend_cases",
+                     2.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_timeout_stage_solver_cases",
+                     2.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_timeout_stage_unknown_cases",
+                     2.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_timeout_stage_frontend_cases",
+        1.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_timeout_stage_solver_cases",
+        1.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_timeout_stage_unknown_cases",
+        1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_timeout_stage_frontend_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_timeout_stage_solver_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_timeout_stage_unknown_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_timeout_stage_frontend_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_timeout_stage_solver_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_timeout_stage_unknown_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_stage_frontend_cases",
+                     2.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_stage_solver_cases",
+                     2.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_stage_unknown_cases",
+                     2.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_timeout_stage_frontend_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_timeout_stage_solver_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_timeout_stage_unknown_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_timeout_stage_frontend_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_timeout_stage_solver_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_timeout_stage_unknown_cases",
+                     1.0);
+    return true;
+  }
+  if (profile ==
+      "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict") {
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_timeout_stage_frontend_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_timeout_stage_solver_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.BMC.bmc_timeout_stage_unknown_cases",
+                     1.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_timeout_stage_frontend_cases",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_timeout_stage_solver_cases",
+        0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "external_formal.summary_counter_by_suite_mode.sv_tests_uvm.BMC_SEMANTICS.bmc_timeout_stage_unknown_cases",
+        0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_timeout_stage_frontend_cases",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_timeout_stage_solver_cases",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.BMC.bmc_timeout_stage_unknown_cases",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_timeout_stage_frontend_cases",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_timeout_stage_solver_cases",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.BMC.bmc_timeout_stage_unknown_cases",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_stage_frontend_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_stage_solver_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_stage_unknown_cases",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_timeout_stage_frontend_cases",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_timeout_stage_solver_cases",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.verilator_verification.LEC.lec_timeout_stage_unknown_cases",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_timeout_stage_frontend_cases",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_timeout_stage_solver_cases",
+                     0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "external_formal.summary_counter_by_suite_mode.yosys_tests_sva.LEC.lec_timeout_stage_unknown_cases",
+                     0.0);
+    return true;
+  }
+  if (profile ==
       "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1") {
     for (StringRef key : {
              "external_formal.summary_counter_by_suite_mode.sv_tests.LEC.lec_timeout_class_preprocess_cases",
@@ -10072,6 +10287,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-external-formal-core-timeout-stage-budget-strict-v1|"
            "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v1|"
            "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v2|"
+           "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly|"
+           "formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict|"
            "formal-regression-matrix-external-formal-frontend-timeout-trend-guard-v1|"
            "formal-regression-matrix-external-formal-compile-mode-budget-v1|"
            "formal-regression-matrix-external-formal-compile-mode-budget-debt-v1|"

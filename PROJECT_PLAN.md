@@ -9,6 +9,37 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Current Status - February 11, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, cadence-aware timeout debt v3)
+
+1. Added cadence-aware core timeout debt profiles:
+   - `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-nightly`
+   - `formal-regression-matrix-external-formal-core-timeout-stage-budget-debt-v3-strict`
+2. Added explicit timeout debt mode variants for matrix policy-mode rollout:
+   - `native-strict-formal-timeout-debt-nightly`
+   - `strict-formal-timeout-debt-nightly`
+   - `native-strict-formal-timeout-debt-strict`
+   - `strict-formal-timeout-debt-strict`
+3. Validation highlights:
+   - focused lit slice for `v3` profiles + policy modes + help/invalid surfaces:
+     PASS.
+   - full mutation suite:
+     `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
+     PASS (456/456 selected).
+   - external cadence:
+     PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification`
+     BMC/LEC, `yosys/tests/sva` BMC/LEC, AVIP compile `ahb/apb/axi4/i2s/i3c/jtag`
+     FAIL (known): `opentitan` LEC (`missing_results=1`), AVIP compile
+     `axi4Lite_avip`, `spi_avip`, `uart_avip`.
+4. Remaining limitations:
+   - timeout debt profiles are now cadence-aware, but policy-mode defaults are
+     still explicit names rather than aliased lane-class defaults.
+   - OpenTitan LEC and three AVIP compile lanes remain recurring blockers.
+5. Next long-term features:
+   - introduce lane-class aliases that map cadence to these timeout debt
+     profiles automatically.
+   - couple timeout debt envelopes with semantic-family quality budgets in the
+     same mode families.
+
 ### Formal Closure Snapshot Update (February 12, 2026, timeout-mode coverage closure)
 
 1. Closed a policy-mode regression gap by adding dedicated coverage for:

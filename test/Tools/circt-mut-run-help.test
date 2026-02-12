@@ -39,6 +39,10 @@
 // CHECK: strict-formal-summary
 // CHECK: native-strict-formal-summary-v1
 // CHECK: strict-formal-summary-v1
+// CHECK: native-strict-formal-timeout-debt-nightly
+// CHECK: strict-formal-timeout-debt-nightly
+// CHECK: native-strict-formal-timeout-debt-strict
+// CHECK: strict-formal-timeout-debt-strict
 // CHECK: --report-external-formal-results FILE
 // CHECK: --report-external-formal-out-dir DIR
 // CHECK: --report-policy-stop-on-fail BOOL
