@@ -9,12 +9,19 @@
 The case manifest is a tab-separated file with one case per line:
 
   case_id <TAB> top_module <TAB> source_files <TAB> include_dirs <TAB> case_path
+          <TAB> timeout_secs <TAB> backend_mode
 
 Only the first three columns are required.
 
 - source_files: ';'-separated list of source files.
 - include_dirs: ';'-separated list of include directories (optional).
 - case_path: logical case path written to output rows (optional).
+- timeout_secs: per-case timeout override in seconds (optional).
+- backend_mode: per-case backend override (optional):
+  - default: inherit global env (BMC_RUN_SMTLIB/BMC_SMOKE_ONLY)
+  - jit: force native/JIT backend (no --run-smtlib)
+  - smtlib: force external SMT-LIB backend (--run-smtlib)
+  - smoke: force smoke-only emit-mlir mode
 
 Relative file paths are resolved against the manifest file directory.
 """
@@ -40,6 +47,8 @@ class CaseSpec:
     source_files: list[str]
     include_dirs: list[str]
     case_path: str
+    timeout_secs: int | None
+    backend_mode: str
 
 
 def parse_nonnegative_int(raw: str, name: str) -> int:
@@ -160,6 +169,51 @@ def parse_semicolon_list(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(";") if item.strip()]
 
 
+def parse_optional_nonnegative_int(
+    raw: str, name: str, line_no: int
+) -> int | None:
+    token = raw.strip()
+    if not token:
+        return None
+    try:
+        value = int(token)
+    except ValueError:
+        print(
+            (
+                f"invalid cases file row {line_no}: {name} must be "
+                f"non-negative integer, got '{raw}'"
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if value < 0:
+        print(
+            (
+                f"invalid cases file row {line_no}: {name} must be "
+                f"non-negative integer, got '{raw}'"
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return value
+
+
+def parse_case_backend(raw: str, line_no: int) -> str:
+    token = raw.strip().lower()
+    if not token:
+        return "default"
+    if token in {"default", "jit", "smtlib", "smoke"}:
+        return token
+    print(
+        (
+            f"invalid cases file row {line_no}: backend_mode must be one of "
+            f"default|jit|smtlib|smoke, got '{raw}'"
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
 def load_cases(cases_file: Path) -> list[CaseSpec]:
     base_dir = cases_file.parent
     cases: list[CaseSpec] = []
@@ -180,6 +234,8 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
             source_files_raw = parts[2].strip()
             include_dirs_raw = parts[3].strip() if len(parts) > 3 else ""
             case_path_raw = parts[4].strip() if len(parts) > 4 else ""
+            timeout_secs_raw = parts[5].strip() if len(parts) > 5 else ""
+            backend_mode_raw = parts[6].strip() if len(parts) > 6 else ""
             if not case_id or not top_module:
                 print(
                     f"invalid cases file row {line_no}: empty case_id/top_module",
@@ -194,6 +250,10 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
                 )
                 raise SystemExit(1)
             include_dirs = parse_semicolon_list(include_dirs_raw)
+            timeout_secs = parse_optional_nonnegative_int(
+                timeout_secs_raw, "timeout_secs", line_no
+            )
+            backend_mode = parse_case_backend(backend_mode_raw, line_no)
 
             def resolve_path(path_raw: str) -> str:
                 path = Path(path_raw)
@@ -208,6 +268,8 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
                     source_files=[resolve_path(path) for path in source_files],
                     include_dirs=[resolve_path(path) for path in include_dirs],
                     case_path=case_path_raw,
+                    timeout_secs=timeout_secs,
+                    backend_mode=backend_mode,
                 )
             )
     return cases
@@ -323,8 +385,29 @@ def main() -> int:
         args.ignore_asserts_until, "--ignore-asserts-until"
     )
 
+    global_include_dirs = [str(Path(path).resolve()) for path in args.include_dir]
+    mode_label = args.mode_label.strip() or "BMC"
+    suite_name = args.suite_name.strip() or "pairwise"
+
+    def resolve_case_execution_profile(case: CaseSpec) -> tuple[bool, bool]:
+        # Returns (smoke_only, run_smtlib) for the case.
+        if case.backend_mode == "smoke":
+            return True, False
+        if case.backend_mode == "smtlib":
+            return False, True
+        if case.backend_mode == "jit":
+            return False, False
+        return bmc_smoke_only, bmc_run_smtlib
+
+    requires_smtlib = any(
+        (not smoke_only) and run_smtlib
+        for smoke_only, run_smtlib in (
+            resolve_case_execution_profile(case) for case in cases
+        )
+    )
+
     z3_bin = os.environ.get("Z3_BIN", "")
-    if bmc_run_smtlib and not bmc_smoke_only:
+    if requires_smtlib:
         if not z3_bin:
             z3_bin = shutil.which("z3") or ""
         if not z3_bin and Path.home().joinpath("z3-install/bin/z3").is_file():
@@ -334,10 +417,6 @@ def main() -> int:
         if not z3_bin:
             print("z3 not found; set Z3_BIN or disable BMC_RUN_SMTLIB", file=sys.stderr)
             return 1
-
-    global_include_dirs = [str(Path(path).resolve()) for path in args.include_dir]
-    mode_label = args.mode_label.strip() or "BMC"
-    suite_name = args.suite_name.strip() or "pairwise"
 
     if args.workdir:
         workdir = Path(args.workdir).resolve()
@@ -367,6 +446,10 @@ def main() -> int:
             case_dir = workdir / sanitize_identifier(case.case_id)
             case_dir.mkdir(parents=True, exist_ok=True)
             case_path = case.case_path or str(case_dir)
+            case_smoke_only, case_run_smtlib = resolve_case_execution_profile(case)
+            case_timeout_secs = (
+                timeout_secs if case.timeout_secs is None else case.timeout_secs
+            )
 
             verilog_log_path = case_dir / "circt-verilog.log"
             opt_log_path = case_dir / "circt-opt.log"
@@ -403,10 +486,10 @@ def main() -> int:
                 str(bound),
                 f"--ignore-asserts-until={ignore_asserts_until}",
             ]
-            if bmc_smoke_only:
+            if case_smoke_only:
                 bmc_cmd.append("--emit-mlir")
             else:
-                if bmc_run_smtlib:
+                if case_run_smtlib:
                     bmc_cmd.append("--run-smtlib")
                     bmc_cmd.append(f"--z3-path={z3_bin}")
                 elif z3_lib:
@@ -420,7 +503,7 @@ def main() -> int:
             stage = "verilog"
             try:
                 verilog_result = run_and_log(
-                    verilog_cmd, verilog_log_path, None, timeout_secs
+                    verilog_cmd, verilog_log_path, None, case_timeout_secs
                 )
                 if verilog_result.returncode != 0:
                     reason = normalize_error_reason(verilog_log_path.read_text())
@@ -453,7 +536,9 @@ def main() -> int:
 
                 if bmc_prepare_core_with_circt_opt:
                     stage = "opt"
-                    opt_result = run_and_log(opt_cmd, opt_log_path, None, timeout_secs)
+                    opt_result = run_and_log(
+                        opt_cmd, opt_log_path, None, case_timeout_secs
+                    )
                     if opt_result.returncode != 0:
                         reason = normalize_error_reason(opt_log_path.read_text())
                         rows.append(
@@ -473,12 +558,12 @@ def main() -> int:
 
                 stage = "bmc"
                 bmc_result = run_and_log(
-                    bmc_cmd, bmc_log_path, bmc_out_path, timeout_secs
+                    bmc_cmd, bmc_log_path, bmc_out_path, case_timeout_secs
                 )
                 combined = bmc_log_path.read_text() + "\n" + bmc_out_path.read_text()
                 bmc_tag = parse_bmc_result(combined)
 
-                if bmc_smoke_only:
+                if case_smoke_only:
                     if bmc_result.returncode == 0:
                         rows.append(
                             (
