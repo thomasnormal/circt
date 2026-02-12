@@ -7,7 +7,51 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 11, 2026
+## Simulation Workstream (circt-sim) — February 12, 2026
+
+### Current Status
+- **sv-tests simulation**: 856 pass, 0 xfail, 1 compile-only, 9 skip, 7 xpass (Feb 10)
+- **circt-sim unit tests**: 223/223 (100%)
+- **ImportVerilog tests**: 268/268 (100%)
+- **AVIP dual-top**: APB reaches all 9 UVM function phases (build→connect→eoe→sos→run→extract→check→report→final), 0 UVM_FATAL, 4 UVM_ERROR (expected scoreboard errors)
+- **Performance**: ~171 ns/s simulated time
+
+### Recently Completed (Iteration 1156, Feb 11-12, 2026)
+1. **die() absorption during phase execution**: Fixed check/report/final phase stall caused by UVM's `die()` → `$finish` → `sim.terminate` + `llvm.unreachable` pattern. Both ops are now absorbed when executing inside a phase function context (`currentExecutingPhaseAddr` + `callDepth > 0`).
+2. **Diagnostic cleanup**: Removed all bracket-tagged debug logging (PROC-EXIT, PROC-FINALIZE, RESUME-FAIL, etc.) and unused variables.
+3. **Unit test**: Added `die-absorption-during-phase.mlir` test covering the die() pattern.
+
+### Feature Gap Table (Simulation)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| UVM phase sequencing | DONE | All 9 function phase IMPs complete in order |
+| VIF shadow signals | DONE | Interface field propagation + store interception |
+| Sequencer interface | DONE | start_item/finish_item/get native interceptors |
+| Analysis port write | DONE | Chain-following BFS dispatch via vtable |
+| Associative array deep copy | DONE | Prevents UVM phase livelock |
+| Runtime vtable override | DONE | All 3 call_indirect paths check runtime vtable |
+| Per-process RNG | DONE | IEEE 1800-2017 §18.13 random stability |
+| Coverage collection | DONE | Covergroups + coverpoints + iff guards |
+| Constraint solver | DONE | Soft/hard, inheritance, inline, dynamic bounds |
+| SVA concurrent assertions | NOT STARTED | 26 compile-only tests (deferred) |
+| BFM/driver transactions | IN PROGRESS | seq_item_port not connected → no item_done |
+| Multi-AVIP coverage | BLOCKED | Needs BFM/driver transaction completion |
+
+### Next Steps (Simulation)
+1. **BFM/driver transaction completion**: Fix DRVCONNECT warning — driver's `seq_item_port` not connected to sequencer. This is the last gap for actual bus transactions and coverage on AVIPs.
+2. **Recompile AVIPs**: Other AVIPs (AHB, SPI, I2S, I3C, JTAG, AXI4, AXI4Lite, UART) need recompilation with latest circt-verilog to include recent fixes.
+3. **Performance optimization**: Target >500 ns/s for practical AVIP runs.
+4. **SVA concurrent assertions**: Needed for 26 compile-only SVA tests.
+
+### Known Limitations (Simulation)
+- AVIP BFM/driver gap: sequences block on `finish_item` waiting for driver `item_done`
+- SVA concurrent assertions not simulated (26 tests compile-only)
+- Xcelium APB reference: 21-30% coverage, 130ns sim time — our target baseline
+
+---
+
+## Formal Workstream (circt-mut) — February 12, 2026
 
 ### Formal Closure Snapshot Update (February 12, 2026, cadence-aware quality debt modes)
 

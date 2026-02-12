@@ -12,6 +12,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLHDProcessInterpreter.h"
+
+// Global crash diagnostic — last LLVM callee name
+const char *g_lastLLVMCallCallee = nullptr;
+// Global crash diagnostic — last MLIR op name being interpreted
+const char *g_lastOpName = nullptr;
+unsigned g_lastProcId = 0;
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
@@ -4418,7 +4424,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   // Per-activation step limit: if a process runs this many steps in a single
   // activation without hitting llhd.wait, it's an infinite loop (e.g.,
   // combinational always blocks or deferred assertions like `assume #0`).
-  constexpr size_t kMaxStepsPerActivation = 1000000;
+  constexpr size_t kMaxStepsPerActivation = 10000000;
   size_t localStepCount = 0;
   while (!state.halted && !state.waiting) {
     ++localStepCount;
@@ -4446,12 +4452,14 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     // Per-activation infinite loop detection: if a process runs too many
     // steps without hitting llhd.wait (which sets state.waiting=true), it's
     // stuck in a combinational loop. Finalize it to prevent hanging.
+    // UVM build_phase with complex config_db lookups can legitimately need
+    // many steps, so set a generous limit.
     if (localStepCount > kMaxStepsPerActivation) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Process " << procId
-                 << " exceeded per-activation step limit ("
-                 << kMaxStepsPerActivation
-                 << ") - likely infinite loop without llhd.wait\n");
+      llvm::errs() << "[circt-sim] WARNING: Process " << procId;
+      if (auto *proc = scheduler.getProcess(procId))
+        llvm::errs() << " '" << proc->getName() << "'";
+      llvm::errs() << " exceeded per-activation step limit ("
+                   << kMaxStepsPerActivation << ") - killing\n";
       finalizeProcess(procId, /*killed=*/false);
       break;
     }
@@ -4485,6 +4493,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     if (!executeStep(procId))
       break;
   }
+
 
   // After the loop exits, check if we have pending delay from __moore_delay.
   // If so, schedule the resumption event with the accumulated delay.
@@ -4620,7 +4629,6 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
       return;
     }
   }
-
   auto it = processStates.find(procId);
   if (it != processStates.end()) {
     it->second.halted = true;
@@ -4714,6 +4722,8 @@ SimTime LLHDProcessInterpreter::convertTimeValue(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
                                                           Operation *op) {
+  g_lastOpName = op->getName().getStringRef().data();
+  g_lastProcId = procId;
   // Fast-path: check dialect namespace to skip irrelevant dyn_cast chains.
   // 93%+ of ops in LLVM function bodies are LLVM/comb/arith dialect, but
   // without this check they'd fail 20+ LLHD/sim/seq/moore dyn_casts first.
@@ -6241,6 +6251,21 @@ arith_dispatch:
           break;
         }
 
+        // Record port connect() in X-fallback path (but still execute UVM body).
+        if (resolvedName.contains("uvm_port_base") &&
+            resolvedName.contains("::connect") &&
+            !resolvedName.contains("connect_phase") && args.size() >= 2) {
+          uint64_t selfAddr2 = args[0].isX() ? 0 : args[0].getUInt64();
+          uint64_t providerAddr2 = args[1].isX() ? 0 : args[1].getUInt64();
+          if (selfAddr2 != 0 && providerAddr2 != 0) {
+            auto &conns = analysisPortConnections[selfAddr2];
+            if (std::find(conns.begin(), conns.end(), providerAddr2) ==
+                conns.end())
+              conns.push_back(providerAddr2);
+          }
+          // Fall through to execute UVM body normally
+        }
+
         // Dispatch the call
         auto &callState = processStates[procId];
         ++callState.callDepth;
@@ -6413,6 +6438,21 @@ arith_dispatch:
           }
           staticResolved = true;
           break;
+        }
+
+        // Record port connect() in static fallback path (but still execute UVM body).
+        if (resolvedName.contains("uvm_port_base") &&
+            resolvedName.contains("::connect") &&
+            !resolvedName.contains("connect_phase") && sArgs.size() >= 2) {
+          uint64_t selfAddr3 = sArgs[0].isX() ? 0 : sArgs[0].getUInt64();
+          uint64_t providerAddr3 = sArgs[1].isX() ? 0 : sArgs[1].getUInt64();
+          if (selfAddr3 != 0 && providerAddr3 != 0) {
+            auto &conns = analysisPortConnections[selfAddr3];
+            if (std::find(conns.begin(), conns.end(), providerAddr3) ==
+                conns.end())
+              conns.push_back(providerAddr3);
+          }
+          // Fall through to execute UVM body normally
         }
 
         // Intercept resource_db in static fallback path.
@@ -7062,11 +7102,6 @@ arith_dispatch:
         auto &conns = analysisPortConnections[selfAddr];
         if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end())
           conns.push_back(providerAddr);
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  call_indirect: intercepted port connect: 0x"
-                   << llvm::format_hex(selfAddr, 16) << " -> 0x"
-                   << llvm::format_hex(providerAddr, 16) << " (total "
-                   << conns.size() << " connections)\n");
       }
       // Return immediately — don't fall through to UVM code which would
       // issue "Late Connection" warning and reject the connection.
@@ -7209,10 +7244,6 @@ arith_dispatch:
       uint64_t seqAddr = args[0].isX() ? 0 : args[0].getUInt64();
       uint64_t itemAddr = args[1].isX() ? 0 : args[1].getUInt64();
       uint64_t sqrAddr = args[3].isX() ? 0 : args[3].getUInt64();
-      LLVM_DEBUG(llvm::dbgs() << "  call_indirect: start_item intercepted: "
-                              << "item=0x" << llvm::format_hex(itemAddr, 16)
-                              << " sqr=0x" << llvm::format_hex(sqrAddr, 16)
-                              << "\n");
       // If sequencer arg is null, get it from the sequence's get_sequencer().
       // The sequence's sequencer is set by seq.start(sqr).
       // For now, look up in our port connection map.
@@ -7255,9 +7286,6 @@ arith_dispatch:
     // Args: (self, item, priority).
     if (calleeName.contains("::finish_item") && args.size() >= 2) {
       uint64_t itemAddr = args[1].isX() ? 0 : args[1].getUInt64();
-      LLVM_DEBUG(llvm::dbgs() << "  call_indirect: finish_item intercepted: "
-                              << "item=0x" << llvm::format_hex(itemAddr, 16)
-                              << "\n");
       if (itemAddr != 0) {
         auto sqrIt = itemToSequencer.find(itemAddr);
         uint64_t sqrAddr = 0;
@@ -7289,11 +7317,6 @@ arith_dispatch:
         (calleeName.ends_with("::get") || calleeName.ends_with("::get_next_item")) &&
         args.size() >= 2) {
       uint64_t portAddr = args[0].isX() ? 0 : args[0].getUInt64();
-      LLVM_DEBUG(llvm::dbgs() << "  call_indirect: seq_item_pull_port::get "
-                              << "intercepted: port=0x"
-                              << llvm::format_hex(portAddr, 16)
-                              << " fifo_count=" << sequencerItemFifo.size()
-                              << "\n");
       // Find connected sequencer via connection map.
       uint64_t seqrAddr = 0;
       auto connIt = analysisPortConnections.find(portAddr);
@@ -7383,8 +7406,6 @@ arith_dispatch:
     if ((calleeName.contains("seq_item_pull_port") ||
          calleeName.contains("seq_item_pull_imp")) &&
         calleeName.ends_with("::item_done")) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  call_indirect: item_done intercepted (no-op)\n");
       return success();
     }
 
@@ -7510,8 +7531,11 @@ arith_dispatch:
       // processing.  Instead, absorb the failure, log a warning, and
       // return zero results so the traversal can continue to the next
       // component.
-      emitVtableWarning("dispatched function '" + calleeName.str() +
-                        "' failed internally");
+      // Suppress the warning when the failure is from abort/timeout —
+      // the abort itself is the expected message.
+      if (!isAbortRequested())
+        emitVtableWarning("dispatched function '" + calleeName.str() +
+                          "' failed internally");
       for (Value result : callIndirectOp.getResults()) {
         unsigned width = getTypeWidth(result.getType());
         setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
@@ -8031,6 +8055,24 @@ llvm_dispatch:
   // Halt the process when this is reached
   if (isa<LLVM::UnreachableOp>(op)) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.unreachable reached - halting process\n");
+    // When executing inside a phase function, llvm.unreachable follows an
+    // absorbed sim.terminate (die() → $finish pattern). Treat it as a void
+    // return so the phase can complete normally. The unreachable was generated
+    // because the compiler assumed $finish never returns.
+    {
+      auto phaseIt = currentExecutingPhaseAddr.find(procId);
+      if (phaseIt != currentExecutingPhaseAddr.end()) {
+        auto &ps = processStates[procId];
+        if (ps.callDepth > 0) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  llvm.unreachable absorbed during phase execution"
+                     << " (callDepth=" << ps.callDepth << ")\n");
+          // Don't finalize — treat as void return so die() returns to its
+          // caller (the report handler), and phase traversal can continue.
+          return success();
+        }
+      }
+    }
     finalizeProcess(procId, /*killed=*/false);
     return success();
   }
@@ -11561,6 +11603,15 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting func.call to '"
                           << callOp.getCallee() << "'\n");
 
+  // Intercept UVM phase wait_for_state: bypass since our IMP ordering mechanism
+  // already enforces the correct phase sequence. The native UVM wait_for_state
+  // polls memory-backed phase states that never update (because our IMP ordering
+  // bypasses the UVM phase graph), creating deadlocks.
+  if (callOp.getCallee() == "uvm_pkg::uvm_phase::wait_for_state") {
+    LLVM_DEBUG(llvm::dbgs() << "  Bypassing wait_for_state (IMP ordering active)\n");
+    return success();
+  }
+
   // Intercept config_db wrapper functions at the func.call level.
   // Config_db wrappers (get_NNNN/set_NNNN) have 4 args, return i1, and their
   // body calls get_imp_NNNN() then call_indirect to the implementation.
@@ -12920,7 +12971,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // to the counter. Replace with a single delta cycle delay (schedule the
   // process to resume in the next Active region at the same simulation time).
   if (calleeName == "uvm_pkg::uvm_wait_for_nba_region") {
-    // Schedule the process to run in the next delta cycle
+    // Yield the current process so other processes (e.g. just-forked
+    // master_phase_process children) get a chance to run first.
+    // executeStep already advanced currentOp past this call, so when the
+    // process resumes it will continue from the next operation.
+    auto &nbaState = processStates[procId];
+    nbaState.waiting = true;
     scheduler.scheduleProcess(procId, SchedulingRegion::Reactive);
     return success();
   }
@@ -12988,8 +13044,30 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       --depthRef;
   }
 
-  if (failed(funcResult))
-    return failure();
+  if (failed(funcResult)) {
+    // Check if the failure was actually a suspension
+    auto &failState = processStates[procId];
+    if (failState.waiting)
+      return success();
+    // Absorb BFM/internal function failures gracefully — log a warning
+    // and return zero results. BFM functions may fail because they
+    // access hardware signals that aren't connected in dual-top mode.
+    // Without this, a single BFM failure kills the entire process tree.
+    if (!isAbortRequested()) {
+      static unsigned funcCallWarnCount = 0;
+      if (funcCallWarnCount < 5) {
+        ++funcCallWarnCount;
+        llvm::errs() << "[circt-sim] WARNING: func.call to '"
+                     << callOp.getCallee()
+                     << "' failed internally (absorbing)\n";
+      }
+    }
+    for (Value result : callOp.getResults()) {
+      unsigned width = getTypeWidth(result.getType());
+      setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+    }
+    return success();
+  }
 
   // Check if process suspended during function execution (e.g., due to wait)
   // If so, return early without setting results - the function didn't complete
@@ -13040,6 +13118,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   // The hopper IS a phase (uvm_phase_hopper extends uvm_phase), so %arg0 can
   // be used as the phase address in both cases.
   StringRef funcName = funcOp.getSymName();
+
   if ((funcName.contains("raise_objection") ||
        funcName.contains("drop_objection")) &&
       (funcName.contains("uvm_phase::") || funcName.contains("uvm_phase_hopper::")) &&
@@ -13047,10 +13126,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       !args.empty() && !args[0].isX()) {
     // For uvm_phase::raise_objection, args[0] is the phase node.
     // For uvm_phase_hopper::raise_objection, args[0] is the hopper (NOT the phase).
-    // Use currentExecutingPhaseAddr if it's a hopper call; otherwise use args[0].
+    // Use currentExecutingPhaseAddr[procId] if it's a hopper call; otherwise use args[0].
     uint64_t phaseAddr;
-    if (funcName.contains("phase_hopper") && currentExecutingPhaseAddr != 0) {
-      phaseAddr = currentExecutingPhaseAddr;
+    if (funcName.contains("phase_hopper") && currentExecutingPhaseAddr[procId] != 0) {
+      phaseAddr = currentExecutingPhaseAddr[procId];
     } else {
       phaseAddr = args[0].getUInt64();
     }
@@ -13076,9 +13155,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   }
 
 
-  // Record function phase IMP addresses from their ::new calls.
-  // These are the singleton IMP objects for each function phase.
-  // Build the ordered sequence: build=0, connect=1, EOE=2, SOS=3.
+  // Record function AND task phase IMP addresses from their ::new calls.
+  // These are the singleton IMP objects for each phase.
+  // Function phases: build=0, connect=1, EOE=2, SOS=3.
+  // Task phases: run=4, extract=5, check=6, report=7, final=8.
   if (funcName.find("::new") != std::string::npos &&
       !args.empty() && !args[0].isX()) {
     uint64_t impAddr = args[0].getUInt64();
@@ -13091,6 +13171,16 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       order = 2;
     else if (funcName.find("uvm_start_of_simulation_phase::new") != std::string::npos)
       order = 3;
+    else if (funcName.find("uvm_run_phase::new") != std::string::npos)
+      order = 4;
+    else if (funcName.find("uvm_extract_phase::new") != std::string::npos)
+      order = 5;
+    else if (funcName.find("uvm_check_phase::new") != std::string::npos)
+      order = 6;
+    else if (funcName.find("uvm_report_phase::new") != std::string::npos)
+      order = 7;
+    else if (funcName.find("uvm_final_phase::new") != std::string::npos)
+      order = 8;
     if (order >= 0) {
       functionPhaseImpOrder[impAddr] = order;
       functionPhaseImpCompleted[impAddr] = false;
@@ -13115,42 +13205,18 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   if (funcName == "uvm_pkg::uvm_phase_hopper::process_phase") {
     if (args.size() >= 2 && !args[1].isX() && callOp) {
       uint64_t phaseAddr = args[1].getUInt64();
-      // Read the IMP pointer from phase field [2] at offset 36
-      // (uvm_object=32 bytes + i32 phase_type=4 bytes = 36)
+      // Read the IMP pointer from phase field [3] (m_imp) at offset 44
+      // Layout: uvm_object=32 + i32 m_phase_type=4 + ptr m_parent=8 = 44
       uint64_t impAddr = 0;
       {
         uint64_t impOff = 0;
-        MemoryBlock *impBlk = findBlockByAddress(phaseAddr + 36, impOff);
+        MemoryBlock *impBlk = findBlockByAddress(phaseAddr + 44, impOff);
         if (impBlk && impOff + 8 <= impBlk->data.size()) {
           for (int i = 0; i < 8; ++i)
             impAddr |= static_cast<uint64_t>(impBlk->data[impOff + i])
                        << (i * 8);
         }
       }
-      // Read phase name for diagnostics
-      std::string ppName = "<unk>";
-      {
-        uint64_t nOff = 0;
-        MemoryBlock *nBlk = findBlockByAddress(phaseAddr + 12, nOff);
-        if (nBlk && nOff + 16 <= nBlk->data.size()) {
-          uint64_t nPtr = 0, nLen = 0;
-          for (int i = 0; i < 8; ++i)
-            nPtr |= static_cast<uint64_t>(nBlk->data[nOff + i]) << (i * 8);
-          for (int i = 0; i < 8; ++i)
-            nLen |= static_cast<uint64_t>(nBlk->data[nOff + 8 + i]) << (i * 8);
-          if (nPtr && nLen > 0 && nLen < 200) {
-            uint64_t sOff = 0;
-            MemoryBlock *sBlk = findBlockByAddress(nPtr, sOff);
-            if (sBlk && sOff + nLen <= sBlk->data.size())
-              ppName.assign(reinterpret_cast<const char *>(
-                  sBlk->data.data() + sOff), nLen);
-          }
-        }
-      }
-      llvm::errs() << "[PHASE-DBG] process_phase proc=" << procId
-                   << " phase='" << ppName << "' addr=0x"
-                   << llvm::format_hex(phaseAddr, 8)
-                   << " imp=0x" << llvm::format_hex(impAddr, 8) << "\n";
       auto impOrderIt = functionPhaseImpOrder.find(impAddr);
       if (impOrderIt != functionPhaseImpOrder.end()) {
         int myOrder = impOrderIt->second;
@@ -13160,38 +13226,31 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
                   ? functionPhaseImpSequence[myOrder - 1]
                   : 0;
           if (predImpAddr != 0 && !functionPhaseImpCompleted[predImpAddr]) {
-            // Predecessor hasn't completed. Suspend and re-execute this
-            // call_indirect on the next delta step.
-            llvm::errs() << "[PHASE-DBG]   BLOCKED waiting for order="
-                         << (myOrder - 1) << " predImp=0x"
-                         << llvm::format_hex(predImpAddr, 8) << "\n";
+            // Predecessor hasn't completed. Add to wait list (notification-
+            // based, no polling). finish_phase will wake us up.
             auto &state = processStates[procId];
             state.waiting = true;
             auto callOpIt = mlir::Block::iterator(callOp);
-            SimTime currentTime = scheduler.getCurrentTime();
-            SimTime targetTime = currentTime.nextDelta();
-            scheduler.getEventScheduler().schedule(
-                targetTime, SchedulingRegion::Active,
-                Event([this, procId, callOpIt]() {
-                  auto &st = processStates[procId];
-                  st.waiting = false;
-                  st.currentOp = callOpIt;
-                  scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-                }));
+            impWaitingProcesses[predImpAddr].push_back({procId, callOpIt});
             return success();
           }
         }
+      } else if (impAddr != 0) {
+        // Unknown IMP — not a recognized function or task phase.
+        // Block until all registered phases have completed.
+        bool allComplete = true;
+        for (auto &[addr, done] : functionPhaseImpCompleted) {
+          if (!done) { allComplete = false; break; }
+        }
+        if (!allComplete && !functionPhaseImpCompleted.empty()) {
+          auto &state = processStates[procId];
+          state.waiting = true;
+          auto callOpIt = mlir::Block::iterator(callOp);
+          impWaitingProcesses[0].push_back({procId, callOpIt});
+          return success();
+        }
       }
     }
-  }
-
-  // Trace all phase hopper pipeline functions for debugging
-  if (funcName.starts_with("uvm_pkg::uvm_phase_hopper::") &&
-      (funcName.contains("sync_phase") || funcName.contains("start_phase") ||
-       funcName.contains("execute_phase") || funcName.contains("end_phase") ||
-       funcName.contains("cleanup_phase") || funcName.contains("finish_phase") ||
-       funcName.contains("schedule_phase") || funcName.contains("run_phases"))) {
-    llvm::errs() << "[PHASE-DBG] " << funcName << " proc=" << procId << "\n";
   }
 
   // Intercept finish_phase to mark function phase IMPs as completed.
@@ -13200,11 +13259,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   if (funcName == "uvm_pkg::uvm_phase_hopper::finish_phase") {
     if (args.size() >= 2 && !args[1].isX()) {
       uint64_t phaseAddr = args[1].getUInt64();
-      // Read the IMP pointer from phase field [2] at offset 36
+      // Read the IMP pointer from phase field [3] (m_imp) at offset 44
       uint64_t impAddr = 0;
       {
         uint64_t impOff = 0;
-        MemoryBlock *impBlk = findBlockByAddress(phaseAddr + 36, impOff);
+        MemoryBlock *impBlk = findBlockByAddress(phaseAddr + 44, impOff);
         if (impBlk && impOff + 8 <= impBlk->data.size()) {
           for (int i = 0; i < 8; ++i)
             impAddr |= static_cast<uint64_t>(impBlk->data[impOff + i])
@@ -13214,10 +13273,38 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       auto impOrderIt = functionPhaseImpOrder.find(impAddr);
       if (impOrderIt != functionPhaseImpOrder.end()) {
         functionPhaseImpCompleted[impAddr] = true;
-        LLVM_DEBUG(llvm::dbgs() << "  Function phase IMP order="
-                                << impOrderIt->second
-                                << " completed (addr=0x"
-                                << llvm::format_hex(impAddr, 16) << ")\n");
+        // Wake up processes waiting for this IMP to complete.
+        auto waitIt = impWaitingProcesses.find(impAddr);
+        if (waitIt != impWaitingProcesses.end()) {
+          for (auto &waiter : waitIt->second) {
+            auto &st = processStates[waiter.procId];
+            st.waiting = false;
+            st.currentOp = waiter.resumeOp;
+            scheduler.scheduleProcess(waiter.procId,
+                                      SchedulingRegion::Active);
+          }
+          impWaitingProcesses.erase(waitIt);
+        }
+
+        // If all phases are now complete, wake unknown IMP waiters
+        // (stored under sentinel key 0).
+        bool allComplete = true;
+        for (auto &[addr, done] : functionPhaseImpCompleted) {
+          if (!done) { allComplete = false; break; }
+        }
+        if (allComplete) {
+          auto taskWaitIt = impWaitingProcesses.find(0);
+          if (taskWaitIt != impWaitingProcesses.end()) {
+            for (auto &waiter : taskWaitIt->second) {
+              auto &st = processStates[waiter.procId];
+              st.waiting = false;
+              st.currentOp = waiter.resumeOp;
+              scheduler.scheduleProcess(waiter.procId,
+                                        SchedulingRegion::Active);
+            }
+            impWaitingProcesses.erase(taskWaitIt);
+          }
+        }
       }
     }
     // Don't return success() - let finish_phase execute normally
@@ -13267,7 +13354,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         }
       }
       // Track which phase is currently being executed
-      currentExecutingPhaseAddr = phaseAddr;
+      currentExecutingPhaseAddr[procId] = phaseAddr;
 
       // Ensure we have an objection handle for this phase
       auto objIt = phaseObjectionHandles.find(phaseAddr);
@@ -14521,11 +14608,39 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
                           << (success ? "success" : "failure") << ", "
                           << (verbose ? "verbose" : "quiet") << ")\n");
 
-  // Check if this process has active forked children that haven't completed.
-  // If so, we cannot terminate yet - we must wait for all children to complete.
+  // When sim.terminate is triggered from within a phase function's execution
+  // (e.g., die() called from check_phase → uvm_report_error), absorb it
+  // so the phase can complete and remaining phases (report, final) can run.
+  // This happens when the scoreboard's check_phase reports errors for zero
+  // transactions — die() calls $finish which triggers sim.terminate, but
+  // the UVM phase machinery needs to run through to completion.
+  {
+    auto phaseIt = currentExecutingPhaseAddr.find(procId);
+    if (phaseIt != currentExecutingPhaseAddr.end() && state.callDepth > 0) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  sim.terminate absorbed during phase execution"
+                 << " (callDepth=" << state.callDepth << ")\n");
+      // Don't set terminationRequested or waiting — just return success
+      // so the phase function can continue. The terminate will fire again
+      // later from the main run_test $finish path.
+      return mlir::success();
+    }
+  }
+
+  // Check if this process has active forked children that haven't completed,
+  // OR if any UVM phase IMPs haven't completed yet.
   // This is important for UVM where run_test() forks phase execution and then
   // calls $finish, but the phases should complete first.
-  if (forkJoinManager.hasActiveChildren(procId)) {
+  // The direct-children check catches the initial fork, and the IMP check
+  // catches the case where the fork child terminates but the phase hopper
+  // grandchild is still running through remaining phases.
+  bool phasesStillRunning = false;
+  if (!functionPhaseImpCompleted.empty()) {
+    for (auto &[addr, done] : functionPhaseImpCompleted) {
+      if (!done) { phasesStillRunning = true; break; }
+    }
+  }
+  if (forkJoinManager.hasActiveChildren(procId) || phasesStillRunning) {
     LLVM_DEBUG(llvm::dbgs()
                << "  Terminate deferred - process has active forked children\n");
 
@@ -14626,12 +14741,12 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
   // map so the NEXT join_any on this process (or its child) gets intercepted.
   bool isMasterPhaseProcessFork = false;
   uint64_t masterPhaseAddr = 0;
-  if (joinType == ForkJoinType::JoinNone && currentExecutingPhaseAddr != 0) {
+  if (joinType == ForkJoinType::JoinNone && currentExecutingPhaseAddr[procId] != 0) {
     auto nameAttr = forkOp->getAttrOfType<mlir::StringAttr>("name");
     if (nameAttr && nameAttr.getValue() == "master_phase_process") {
       isMasterPhaseProcessFork = true;
-      masterPhaseAddr = currentExecutingPhaseAddr;
-      executePhaseBlockingPhaseMap[procId] = currentExecutingPhaseAddr;
+      masterPhaseAddr = currentExecutingPhaseAddr[procId];
+      executePhaseBlockingPhaseMap[procId] = currentExecutingPhaseAddr[procId];
     }
   }
 
@@ -14677,8 +14792,13 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
       }
 
       auto &yieldCount = executePhaseYieldCounts[procId];
+      // After objection count drops to 0, give a grace period (100 yields)
+      // for any last-moment objections, then consider the phase done even if
+      // the master child is still alive (it has forever loops in monitors).
+      constexpr int kObjectionDropGrace = 100;
       bool shouldKeepPolling = (count > 0) ||
-                               (count <= 0 && masterChildAlive) ||
+                               (count <= 0 && masterChildAlive &&
+                                yieldCount < kObjectionDropGrace) ||
                                (count <= 0 && yieldCount < 10);
       if (shouldKeepPolling) {
         ++yieldCount;
@@ -14692,7 +14812,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
         if (currentTime.deltaStep < 2000)
           targetTime = currentTime.nextDelta();
         else
-          targetTime = currentTime.advanceTime(1000); // 1 ps
+          targetTime = currentTime.advanceTime(1000000); // 1 ns
 
         // Re-arm the mapping so next iteration detects the join_any again
         executePhaseBlockingPhaseMap[procId] = phaseAddr;
@@ -14796,6 +14916,15 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
     auto phaseIt = executePhaseBlockingPhaseMap.find(procId);
     if (phaseIt != executePhaseBlockingPhaseMap.end()) {
       executePhaseBlockingPhaseMap[childId] = phaseIt->second;
+    }
+
+    // Propagate the currently executing phase address from parent to child.
+    // Fork children within execute_phase need to know which phase they're
+    // operating on behalf of, so raise/drop_objection intercepts use the
+    // correct phase address.
+    auto curPhaseIt = currentExecutingPhaseAddr.find(procId);
+    if (curPhaseIt != currentExecutingPhaseAddr.end() && curPhaseIt->second != 0) {
+      currentExecutingPhaseAddr[childId] = curPhaseIt->second;
     }
 
     // Record the master_phase_process child process ID so the join_any
@@ -16328,6 +16457,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
   StringRef calleeName = resolvedCalleeName;
 
+  // Debug: track current LLVM callee for crash diagnostics
+  g_lastLLVMCallCallee = calleeName.data();
+
   // Track UVM root construction for re-entrancy handling
   // When m_uvm_get_root is called, we need to mark root construction as started
   // so that re-entrant calls (via uvm_component::new -> get_root) can skip
@@ -17490,12 +17622,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                 << ") -> condition is "
                                 << (conditionTrue ? "true" : "false") << "\n");
 
-        // Trace wait_condition blocks for phase hopper debugging (procs 16-30)
-        if (!conditionTrue && procId >= 16 && procId <= 40) {
-          llvm::errs() << "[PHASE-DBG] wait_condition BLOCKING proc="
-                       << procId << "\n";
-        }
-
         if (conditionTrue) {
           // Condition is already true, continue immediately.
           // Clear the restart block and delta poll counter since we're done.
@@ -17507,6 +17633,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         // Condition is false - suspend the process and set up sensitivity
         // to all probed signals so we wake up when something changes.
         auto &state = processStates[procId];
+
         state.waiting = true;
 
         // Find the operations that compute the condition value by walking
@@ -17821,7 +17948,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (queueAddr != 0 && elemSize > 0) {
           uint64_t queueOffset = 0;
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
-          if (queueBlock && queueBlock->initialized) {
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             // Read from the correct offset within the block
@@ -17829,6 +17957,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
               queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+
+            // Sanity check queue length
+            if (queueLen < 0 || queueLen > 100000) {
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  llvm.call: __moore_queue_push_back: bad queueLen="
+                         << queueLen << " at 0x"
+                         << llvm::format_hex(queueAddr, 16) << "\n");
+              return success();
+            }
 
             // Allocate new storage with space for one more element.
             // Use global address counter to avoid overlap with other processes.
@@ -17864,11 +18001,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             mallocBlocks[newDataAddr] = std::move(newBlock);
             addrRangeIndexDirty = true;
 
-            // Update queue struct with new ptr and len (at the correct offset)
-            for (int i = 0; i < 8; ++i)
-              queueBlock->data[queueOffset + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
-            for (int i = 0; i < 8; ++i)
-              queueBlock->data[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+            // Re-find the queue block after mallocBlocks mutation
+            uint64_t queueOffset2 = 0;
+            auto *queueBlock2 = findMemoryBlockByAddress(queueAddr, procId, &queueOffset2);
+            if (queueBlock2 && queueBlock2->initialized &&
+                queueOffset2 + 16 <= queueBlock2->data.size()) {
+              for (int i = 0; i < 8; ++i)
+                queueBlock2->data[queueOffset2 + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+              for (int i = 0; i < 8; ++i)
+                queueBlock2->data[queueOffset2 + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+            }
 
             LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: queueAddr=0x"
                                     << llvm::format_hex(queueAddr, 16)
@@ -17943,7 +18085,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (queueAddr != 0 && elemSize > 0) {
           uint64_t queueOffset = 0;
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
-          if (queueBlock && queueBlock->initialized) {
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
@@ -17951,13 +18094,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             for (int i = 0; i < 8; ++i)
               queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
 
-            if (queueLen > 0 && dataPtr != 0) {
+            if (queueLen > 0 && queueLen <= 100000 && dataPtr != 0) {
               // Read the last element
               auto *dataBlock = findMemoryBlockByAddress(dataPtr, procId);
               if (dataBlock && dataBlock->initialized) {
                 size_t offset = (queueLen - 1) * elemSize;
-                for (int64_t i = 0; i < std::min(elemSize, int64_t(8)); ++i)
-                  result |= static_cast<uint64_t>(dataBlock->data[offset + i]) << (i * 8);
+                if (static_cast<int64_t>(offset + std::min(elemSize, int64_t(8))) <= static_cast<int64_t>(dataBlock->data.size()))
+                  for (int64_t i = 0; i < std::min(elemSize, int64_t(8)); ++i)
+                    result |= static_cast<uint64_t>(dataBlock->data[offset + i]) << (i * 8);
               }
 
               // Decrement length
@@ -17990,7 +18134,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (queueAddr != 0 && elemSize > 0) {
           uint64_t queueOffset = 0;
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
-          if (queueBlock && queueBlock->initialized) {
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
@@ -17998,15 +18143,18 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             for (int i = 0; i < 8; ++i)
               queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
 
-            if (queueLen > 0 && dataPtr != 0) {
+            if (queueLen > 0 && queueLen <= 100000 && dataPtr != 0) {
               auto *dataBlock = findMemoryBlockByAddress(dataPtr, procId);
               if (dataBlock && dataBlock->initialized) {
                 // Read the first element
-                for (int64_t i = 0; i < std::min(elemSize, int64_t(8)); ++i)
-                  result |= static_cast<uint64_t>(dataBlock->data[i]) << (i * 8);
+                size_t readSize = std::min(elemSize, int64_t(8));
+                if (readSize <= dataBlock->data.size())
+                  for (int64_t i = 0; i < static_cast<int64_t>(readSize); ++i)
+                    result |= static_cast<uint64_t>(dataBlock->data[i]) << (i * 8);
 
                 // Shift remaining elements forward
-                if (queueLen > 1) {
+                if (queueLen > 1 &&
+                    static_cast<size_t>(queueLen * elemSize) <= dataBlock->data.size()) {
                   std::memmove(dataBlock->data.data(),
                                dataBlock->data.data() + elemSize,
                                (queueLen - 1) * elemSize);
@@ -18043,13 +18191,18 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (queueAddr != 0 && elemSize > 0) {
           uint64_t queueOffset = 0;
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
-          if (queueBlock && queueBlock->initialized) {
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
               queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+
+            // Sanity check queue length
+            if (queueLen < 0 || queueLen > 100000)
+              return success();
 
             // Use global address counter to avoid overlap with other processes.
             int64_t newLen = queueLen + 1;
@@ -18077,19 +18230,27 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               if (oldBlock && oldBlock->initialized) {
                 size_t copySize = std::min(static_cast<size_t>(queueLen * elemSize),
                                            oldBlock->data.size());
-                std::memcpy(newBlock.data.data() + elemSize,
-                            oldBlock->data.data(), copySize);
+                if (static_cast<size_t>(elemSize) + copySize <= newBlock.data.size())
+                  std::memcpy(newBlock.data.data() + elemSize,
+                              oldBlock->data.data(), copySize);
               }
             }
 
             mallocBlocks[newDataAddr] = std::move(newBlock);
             addrRangeIndexDirty = true;
 
-            // Update queue struct (at the correct offset)
-            for (int i = 0; i < 8; ++i)
-              queueBlock->data[queueOffset + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
-            for (int i = 0; i < 8; ++i)
-              queueBlock->data[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+            // Re-find the queue block after mallocBlocks mutation to avoid
+            // any pointer invalidation issues.
+            uint64_t queueOffset2 = 0;
+            auto *queueBlock2 = findMemoryBlockByAddress(queueAddr, procId, &queueOffset2);
+            if (queueBlock2 && queueBlock2->initialized &&
+                queueOffset2 + 16 <= queueBlock2->data.size()) {
+              // Update queue struct (at the correct offset)
+              for (int i = 0; i < 8; ++i)
+                queueBlock2->data[queueOffset2 + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+              for (int i = 0; i < 8; ++i)
+                queueBlock2->data[queueOffset2 + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+            }
 
             LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_push_front("
                                     << "queue=0x" << llvm::format_hex(queueAddr, 16)

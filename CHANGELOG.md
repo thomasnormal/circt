@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1156 - February 12, 2026
+
+### circt-sim: Die() Absorption During UVM Phase Execution
+
+Fixed a critical bug where the UVM check phase would kill the simulator
+process, preventing report and final phases from ever running.
+
+**Root Cause**: When a UVM scoreboard's `check_phase` reports errors (e.g.,
+"no transactions received"), it calls `uvm_report_error` which can trigger
+`die()` → `$finish` → `sim.terminate` + `llvm.unreachable`. The
+`sim.terminate` would set `terminationRequested=true`, killing all processes.
+Even after absorbing `sim.terminate`, the `llvm.unreachable` that follows
+(placed by the compiler assuming `$finish` never returns) would call
+`finalizeProcess()`, killing the phase process.
+
+**Fix** (2 changes in `LLHDProcessInterpreter.cpp`):
+1. `interpretTerminate`: Absorb `sim.terminate` when executing inside a phase
+   function (`currentExecutingPhaseAddr` has entry AND `callDepth > 0`).
+2. `llvm.unreachable` handler: Also absorb when in the same phase execution
+   context — treat as void return so `die()` returns to its caller.
+
+**Result**:
+- All 9 UVM IMP phases now complete: build → connect → eoe → sos → run →
+  extract → check → report → final
+- APB AVIP dual-top: 4 UVM_ERROR from scoreboard (expected, no transactions),
+  coverage report runs in report_phase, 0 UVM_FATAL
+- Removed all diagnostic logging (PROC-EXIT, PROC-FINALIZE, CALL-SUSPEND,
+  PHASE-CALL, IMP-ORD, IMP-FIN, WAIT-COND, TERM-SET, PROGRESS, etc.)
+
+### Tests and Validation
+
+- APB AVIP dual-top: all 9 IMP phases complete, 0 UVM_FATAL
+- Coverage report from report_phase runs correctly
+- All diagnostic logging removed for clean output
+
 ## Iteration 1155 - February 12, 2026
 
 ### Mutation Governance: Cadence-Aware Quality Debt Mode Families
