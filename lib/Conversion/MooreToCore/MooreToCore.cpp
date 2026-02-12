@@ -21709,7 +21709,11 @@ static LogicalResult convert(StopBIOp op, StopBIOp::Adaptor adaptor,
 // moore.builtin.finish -> sim.terminate
 static LogicalResult convert(FinishBIOp op, FinishBIOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  rewriter.replaceOpWithNewOp<sim::TerminateOp>(op, op.getExitCode() == 0,
+  // $finish(N) uses N as a diagnostic level (0=minimal, 1=time+location,
+  // 2=stats), NOT as an error code. Always set success=true since $finish
+  // is a normal simulation termination. $fatal is handled separately via
+  // SeverityBIOp which records the error before the subsequent $finish.
+  rewriter.replaceOpWithNewOp<sim::TerminateOp>(op, /*success=*/true,
                                                 /*verbose=*/false);
   return success();
 }

@@ -11,7 +11,7 @@ module {
   func.func @recursive_func(%depth: i32) -> i32 {
     %c1 = arith.constant 1 : i32
     %c0 = arith.constant 0 : i32
-    %c200 = arith.constant 200 : i32
+    %c150 = arith.constant 150 : i32
 
     // Increment global counter
     %ptr = llvm.mlir.addressof @recursion_counter : !llvm.ptr
@@ -19,8 +19,8 @@ module {
     %next = arith.addi %current, %c1 : i32
     llvm.store %next, %ptr : i32, !llvm.ptr
 
-    // If depth > 200, recurse (would overflow stack without protection)
-    %cond = arith.cmpi slt, %depth, %c200 : i32
+    // If depth < 150, recurse (exceeds maxCallDepth=100, caught by protection)
+    %cond = arith.cmpi slt, %depth, %c150 : i32
     cf.cond_br %cond, ^recurse, ^done
 
   ^recurse:

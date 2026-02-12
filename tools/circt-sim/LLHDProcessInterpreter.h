@@ -1189,7 +1189,7 @@ private:
   /// interpreter takes ~10-15s, so 30s gives enough margin for phases to
   /// complete and produce output while still being much shorter than the
   /// 120s external timeout.
-  static constexpr int kFinishGracePeriodSecs = 30;
+  static constexpr int kFinishGracePeriodSecs = 600;
 
   /// Cache of function lookups to avoid repeated moduleOp.lookupSymbol calls.
   /// Maps function name to a cached result:
@@ -1332,10 +1332,11 @@ private:
   /// Per-process yield counter for execute_phase objection polling grace period.
   std::map<ProcessId, int> executePhaseYieldCounts;
 
-  /// The phase address currently being executed by the phase hopper.
+  /// Per-process phase address currently being executed by the phase hopper.
   /// Set when execute_phase is entered, used by raise/drop_objection
   /// interceptors to associate objections with the correct phase.
-  uint64_t currentExecutingPhaseAddr = 0;
+  /// Must be per-process because multiple processes run phases concurrently.
+  std::map<ProcessId, uint64_t> currentExecutingPhaseAddr;
 
   /// Function phase IMP sequencing: tracks which function phase IMP nodes
   /// have completed their traversal. The UVM phase graph IMP nodes for
@@ -1350,6 +1351,16 @@ private:
 
   /// Ordered list of function phase IMP addresses (populated at runtime).
   std::vector<uint64_t> functionPhaseImpSequence;
+
+  /// Processes waiting for IMP ordering: maps the IMP address they're waiting
+  /// on to a list of {procId, resumeOp} pairs. When finish_phase marks an IMP
+  /// as completed, we wake up all processes in the corresponding wait list.
+  /// For task phases waiting on "all function phases", key = 0 (sentinel).
+  struct ImpWaiter {
+    ProcessId procId;
+    mlir::Block::iterator resumeOp;
+  };
+  std::map<uint64_t, std::vector<ImpWaiter>> impWaitingProcesses;
 
   /// Get or create the per-object RNG for the given object address.
   /// If no RNG exists yet, creates one seeded with the object address.

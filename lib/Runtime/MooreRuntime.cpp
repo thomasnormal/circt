@@ -1108,8 +1108,10 @@ extern "C" int8_t __moore_string_getc(MooreString *str, int32_t index) {
 }
 
 extern "C" MooreString __moore_string_substr(MooreString *str, int32_t start,
-                                              int32_t len) {
-  if (!str || !str->data || start < 0 || len <= 0) {
+                                              int32_t endIdx) {
+  // IEEE 1800-2017 §6.16.8: substr(i, j) returns characters from index i
+  // to j inclusive. The third parameter is an end index, NOT a length.
+  if (!str || !str->data || start < 0 || endIdx < start) {
     MooreString empty = {nullptr, 0};
     return empty;
   }
@@ -1120,7 +1122,8 @@ extern "C" MooreString __moore_string_substr(MooreString *str, int32_t start,
     return empty;
   }
 
-  int64_t actualLen = std::min(static_cast<int64_t>(len), str->len - start);
+  int64_t count = static_cast<int64_t>(endIdx - start + 1);
+  int64_t actualLen = std::min(count, str->len - start);
   MooreString result = allocateString(actualLen);
   std::memcpy(result.data, str->data + start, actualLen);
   return result;
@@ -2160,11 +2163,18 @@ extern "C" int32_t __moore_randomize_basic(void *classPtr, int64_t classSize) {
   if (!classPtr || classSize <= 0)
     return 0;
 
-  // Fill the class memory with random values using __moore_urandom.
-  // Process in 4-byte chunks for efficiency, then handle remaining bytes.
-  auto *data = static_cast<uint8_t *>(classPtr);
-  int64_t fullWords = classSize / 4;
-  int64_t remainingBytes = classSize % 4;
+  // Skip the class metadata header: i32 class_id (4 bytes) + ptr vtable (8
+  // bytes) = 12 bytes. These must be preserved across randomization.
+  constexpr int64_t kHeaderSize = 12;
+  if (classSize <= kHeaderSize)
+    return 1; // Nothing to randomize beyond the header.
+
+  // Fill the class memory (after the header) with random values using
+  // __moore_urandom. Process in 4-byte chunks for efficiency.
+  auto *data = static_cast<uint8_t *>(classPtr) + kHeaderSize;
+  int64_t randomizeSize = classSize - kHeaderSize;
+  int64_t fullWords = randomizeSize / 4;
+  int64_t remainingBytes = randomizeSize % 4;
 
   // Fill 4-byte words
   auto *wordPtr = reinterpret_cast<uint32_t *>(data);

@@ -1611,6 +1611,20 @@ int main(int argc, char **argv) {
   // Set up signal handling for clean shutdown
   std::signal(SIGINT, signalHandler);
   std::signal(SIGTERM, signalHandler);
+  // Crash diagnostic: print last LLVM callee and current op before abort
+  std::signal(SIGABRT, [](int) {
+    extern const char *g_lastLLVMCallCallee;
+    extern const char *g_lastOpName;
+    extern unsigned g_lastProcId;
+    if (g_lastLLVMCallCallee)
+      fprintf(stderr, "[CRASH-DIAG] Last LLVM callee: %s\n",
+              g_lastLLVMCallCallee);
+    if (g_lastOpName)
+      fprintf(stderr, "[CRASH-DIAG] Last op: %s proc=%u\n",
+              g_lastOpName, g_lastProcId);
+    std::signal(SIGABRT, SIG_DFL);
+    std::raise(SIGABRT);
+  });
 
   // Hide default LLVM options
   llvm::cl::HideUnrelatedOptions(
