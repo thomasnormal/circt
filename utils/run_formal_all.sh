@@ -13472,7 +13472,49 @@ def classify_gate_rule_id(suite: str, mode: str, detail: str):
 
     return "strict_gate.legacy_text"
 
+def normalize_rule_id_token(token: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", token.strip().lower())
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    return normalized or "token"
+
+class GateErrorCollector:
+    def __init__(self):
+        self._diagnostics = []
+
+    def append(self, message: str):
+        suite, mode, detail = parse_gate_error_line(message)
+        self.add(suite, mode, detail, message=message)
+
+    def add(self, suite: str, mode: str, detail: str, rule_id: str = "", message: str = ""):
+        if not message:
+            if suite and mode:
+                message = f"{suite} {mode}: {detail}"
+            else:
+                message = detail
+        resolved_rule_id = rule_id or classify_gate_rule_id(suite, mode, detail)
+        self._diagnostics.append(
+            {
+                "suite": suite,
+                "mode": mode,
+                "rule_id": resolved_rule_id,
+                "detail": detail,
+                "message": message,
+            }
+        )
+
+    def __iter__(self):
+        for diagnostic in self._diagnostics:
+            yield diagnostic["message"]
+
+    def __len__(self):
+        return len(self._diagnostics)
+
+    def diagnostics(self):
+        return list(self._diagnostics)
+
 def build_strict_gate_report_diagnostics(gate_errors):
+    if isinstance(gate_errors, GateErrorCollector):
+        return gate_errors.diagnostics()
     diagnostics = []
     for message in gate_errors:
         suite, mode, detail = parse_gate_error_line(message)
@@ -14707,7 +14749,7 @@ def is_allowed_bmc_abstraction_provenance_token(token: str) -> bool:
             return True
     return False
 
-gate_errors = []
+gate_errors = GateErrorCollector()
 for key, current_row in summary.items():
     suite, mode = key
     history_rows = history.get(key, [])
@@ -15396,8 +15438,12 @@ for key, current_row in summary.items():
                 baseline_semantic = min(baseline_semantic_values)
                 current_semantic = int(current_counts.get(semantic_key, 0))
                 if current_semantic > baseline_semantic:
-                    gate_errors.append(
-                        f"{suite} {mode}: {semantic_key} increased ({baseline_semantic} -> {current_semantic}, window={baseline_window})"
+                    semantic_rule_key = normalize_rule_id_token(semantic_key)
+                    gate_errors.add(
+                        suite,
+                        mode,
+                        f"{semantic_key} increased ({baseline_semantic} -> {current_semantic}, window={baseline_window})",
+                        rule_id=f"strict_gate.bmc.semantic.counter.key.{semantic_rule_key}.regression",
                     )
         if fail_on_new_bmc_semantic_bucket_case_ids:
             baseline_semantic_case_ids_raw = [
@@ -15685,8 +15731,12 @@ for key, current_row in summary.items():
                     baseline_timeout_class = min(baseline_class_values)
                 current_timeout_class = int(current_counts.get(timeout_class_key, 0))
                 if current_timeout_class > baseline_timeout_class:
-                    gate_errors.append(
-                        f"{suite} {mode}: {timeout_class_key} increased ({baseline_timeout_class} -> {current_timeout_class}, window={baseline_window})"
+                    timeout_class_rule_key = normalize_rule_id_token(timeout_class_key)
+                    gate_errors.add(
+                        suite,
+                        mode,
+                        f"{timeout_class_key} increased ({baseline_timeout_class} -> {current_timeout_class}, window={baseline_window})",
+                        rule_id=f"strict_gate.lec.timeout_class.counter.key.{timeout_class_rule_key}.regression",
                     )
         if fail_on_new_lec_diag_path_fallback_cases:
             baseline_diag_path_fallback_values = []
@@ -15925,8 +15975,12 @@ for key, current_row in summary.items():
                 baseline_counter = min(baseline_values)
                 current_counter = int(current_counts.get(counter_key, 0))
                 if current_counter > baseline_counter:
-                    gate_errors.append(
-                        f"{suite} {mode}: {counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window})"
+                    counter_rule_key = normalize_rule_id_token(counter_key)
+                    gate_errors.add(
+                        suite,
+                        mode,
+                        f"{counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window})",
+                        rule_id=f"strict_gate.lec.counter.key.{counter_rule_key}.regression",
                     )
         if lec_counter_prefixes:
             for counter_prefix in lec_counter_prefixes:
@@ -15945,8 +15999,16 @@ for key, current_row in summary.items():
                     )
                     current_counter = int(current_counts.get(counter_key, 0))
                     if current_counter > baseline_counter:
-                        gate_errors.append(
-                            f"{suite} {mode}: {counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window}, prefix={counter_prefix})"
+                        counter_rule_key = normalize_rule_id_token(counter_key)
+                        counter_prefix_rule_key = normalize_rule_id_token(counter_prefix)
+                        gate_errors.add(
+                            suite,
+                            mode,
+                            f"{counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window}, prefix={counter_prefix})",
+                            rule_id=(
+                                f"strict_gate.lec.counter.prefix.{counter_prefix_rule_key}."
+                                f"key.{counter_rule_key}.regression"
+                            ),
                         )
     if suite == "opentitan" and mode == "E2E_MODE_DIFF":
         current_counts = parse_result_summary(current_row.get("summary", ""))
@@ -16116,8 +16178,14 @@ for key, current_row in summary.items():
             baseline_counter = min(baseline_values)
             current_counter = int(current_counts.get(counter_key, 0))
             if current_counter > baseline_counter:
-                gate_errors.append(
-                    f"{suite} {mode}: {counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window})"
+                counter_rule_key = normalize_rule_id_token(counter_key)
+                gate_errors.add(
+                    suite,
+                    mode,
+                    f"{counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window})",
+                    rule_id=(
+                        f"strict_gate.opentitan.lec_strict.xprop.counter.key.{counter_rule_key}.regression"
+                    ),
                 )
     if suite == "opentitan" and mode == "LEC_STRICT" and opentitan_lec_strict_xprop_counter_prefixes:
         current_counts = parse_result_summary(current_row.get("summary", ""))
@@ -16133,8 +16201,16 @@ for key, current_row in summary.items():
                 baseline_counter = min(int(counts.get(counter_key, 0)) for counts in parsed_counts)
                 current_counter = int(current_counts.get(counter_key, 0))
                 if current_counter > baseline_counter:
-                    gate_errors.append(
-                        f"{suite} {mode}: {counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window}, prefix={counter_prefix})"
+                    counter_rule_key = normalize_rule_id_token(counter_key)
+                    counter_prefix_rule_key = normalize_rule_id_token(counter_prefix)
+                    gate_errors.add(
+                        suite,
+                        mode,
+                        f"{counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window}, prefix={counter_prefix})",
+                        rule_id=(
+                            f"strict_gate.opentitan.lec_strict.xprop.counter.prefix.{counter_prefix_rule_key}."
+                            f"key.{counter_rule_key}.regression"
+                        ),
                     )
     if suite == "opentitan" and mode == "LEC_STRICT" and opentitan_lec_strict_xprop_key_prefixes:
         current_counts = parse_result_summary(current_row.get("summary", ""))
@@ -16150,8 +16226,16 @@ for key, current_row in summary.items():
                 baseline_counter = min(int(counts.get(counter_key, 0)) for counts in parsed_counts)
                 current_counter = int(current_counts.get(counter_key, 0))
                 if current_counter > baseline_counter:
-                    gate_errors.append(
-                        f"{suite} {mode}: {counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window}, prefix={key_prefix})"
+                    counter_rule_key = normalize_rule_id_token(counter_key)
+                    key_prefix_rule_key = normalize_rule_id_token(key_prefix)
+                    gate_errors.add(
+                        suite,
+                        mode,
+                        f"{counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window}, prefix={key_prefix})",
+                        rule_id=(
+                            f"strict_gate.opentitan.lec_strict.xprop.counter.prefix.{key_prefix_rule_key}."
+                            f"key.{counter_rule_key}.regression"
+                        ),
                     )
     if fail_on_passrate_regression:
         baseline_rate = max(

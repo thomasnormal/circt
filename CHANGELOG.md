@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1200 - February 12, 2026
+
+### Formal Strict-Gate Diagnostics: Structured Collector + Counter-Key Rule IDs
+
+1. Refactored strict-gate diagnostic collection in `utils/run_formal_all.sh` with a structured collector:
+   - added `GateErrorCollector` with first-class diagnostic entries (`suite`, `mode`, `rule_id`, `detail`, `message`)
+   - preserved existing append-style call sites while enabling explicit emit-site rule-ID assignment.
+2. Added explicit emit-site rule-ID assignment for counter-family drift checks to reduce generic bucket collapse:
+   - BMC semantic bucket counters now emit key-specific IDs
+   - LEC timeout-class counters now emit key-specific IDs
+   - LEC `--fail-on-new-lec-counter` / `--fail-on-new-lec-counter-prefix` paths now emit key/prefix-specific IDs
+   - OpenTitan `LEC_STRICT` X-prop counter drift paths now emit key/prefix-specific IDs.
+3. Added token normalization helper (`normalize_rule_id_token`) for deterministic, schema-safe rule-ID suffixes.
+4. Added focused regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-report-json-lec-counter-rule-id.test`
+   - verifies `lec_diag_xprop_only_cases` drift is reported as
+     `strict_gate.lec.counter.key.lec_diag_xprop_only_cases.regression`
+   - verifies no legacy fallback (`legacy_rule_id_count=0`) in this path.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(help|strict-gate-fail-on-legacy-rule-ids|strict-gate-report-json(-lec-counter-rule-id|-missing-baseline-rule-id|-pass-rate-rule-id|-requires-strict)?|strict-gate-lec-counter|strict-gate-nonempty-filtered-lanes-defaults|strict-gate-failure-cases)\.test'`
+  - PASS (10/10)
+- External cadence checks (filtered):
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+    - summary: `total=1 pass=0 fail=0 error=1`, `drop_remark_cases=0`
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+    - summary: `total=1 pass=0 fail=0 error=1`, `drop_remark_cases=0`
+  - `TEST_FILTER='basic02' BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - summary: `total=2 pass=0 fail=2`, `drop_remark_cases=0`
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build-test/bin/circt-verilog CIRCT_OPT=/home/thomas-ahle/circt/build-test/bin/circt-opt CIRCT_LEC=/home/thomas-ahle/circt/build-test/bin/circt-lec LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+    - `aes_sbox_canright OK`, `drop_remark_cases=0`
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build-test/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`
+    - exit `0`
+
 ## Iteration 1199 - February 12, 2026
 
 ### Formal Strict-Gate Rule-ID Closure: Baseline/Quality/Drift Coverage Expansion
