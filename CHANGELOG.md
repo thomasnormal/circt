@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1192 - February 12, 2026
+
+### Formal Quality Tightening: Non-Empty Filtered Lanes Are Now Strict-Gate Defaults
+
+1. Updated `utils/run_formal_all.sh` strict policy defaults so `--strict-gate` now implicitly enables:
+   - `--require-nonempty-filtered-lanes`
+2. Updated CLI help text for `--strict-gate` to reflect the new default non-empty filtered-lane contract.
+3. Added focused regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-nonempty-filtered-lanes-defaults.test`
+   - test seeds a baseline row, then verifies a strict run with `total=0` lane output fails and records `nonempty_filter_miss=1`.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-formal-all-(require-nonempty-filtered-lanes|strict-gate-nonempty-filtered-lanes-defaults|strict-gate-(failure-cases|test)|help|strict-gate-no-drop-remarks-requires-strict|strict-gate-no-drop-remarks|strict-gate-bmc-timeout-case-ids-defaults|strict-gate-lec-timeout-case-ids|strict-gate-lec-not-run-reason-keys-defaults)\.test'`
+  - PASS (9/9)
+- External strict-gate replay sanity (yosys LEC lane):
+  - baseline seed run + strict run with explicit yosys root (`/home/thomas-ahle/yosys`) and strict preflight
+  - PASS (`yosys/tests/sva/LEC`: total=1 pass=1 fail=0 error=0)
+
+
 ## Iteration 1191 - February 12, 2026
 
 ### Formal Orchestration Hardening: Strict Yosys Layout Preflight for Explicit `--yosys`

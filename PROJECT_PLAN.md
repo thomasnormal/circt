@@ -62,6 +62,25 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 12, 2026, strict-gate default non-empty filtered lanes)
+
+1. Tightened strict formal quality policy in `utils/run_formal_all.sh`:
+   - `--strict-gate` now always enables non-empty filtered-lane enforcement (`--require-nonempty-filtered-lanes`).
+2. Added dedicated unit coverage for strict-default behavior:
+   - `test/Tools/run-formal-all-strict-gate-nonempty-filtered-lanes-defaults.test`.
+3. Verified strict behavior with baseline-seeded replay flow:
+   - strict run now correctly fails on `total=0` filtered lane outputs and marks `nonempty_filter_miss=1`.
+4. External strict replay sanity:
+   - `yosys/tests/sva/LEC` with baseline seed + `--strict-gate` + explicit yosys root: PASS (1/1).
+5. Remaining limitations:
+   - non-empty filtered-lane enforcement is strict-default only under `--strict-gate`; non-strict runs still require explicit `--require-nonempty-filtered-lanes`.
+   - strict failures from non-empty misses currently appear through aggregate strict-gate failure reporting, without a dedicated top-level strict policy code path for lane-contract violations.
+   - strict/mutation governance still relies mostly on summary counters rather than versioned case-level provenance artifacts.
+6. Next long-term features (BMC/LEC/mutation focus):
+   - extend default non-empty lane-contract enforcement to `--strict-tool-preflight` profiles.
+   - add explicit strict-gate lane-contract diagnostics keyed by lane ID for faster triage.
+   - integrate mutation matrix/cover orchestration into formal policy artifacts so mutation governance and strict gates share one case-level provenance contract.
+
 ### Formal Closure Snapshot Update (February 12, 2026, strict explicit-yosys layout preflight)
 
 1. Closed a key formal orchestration contract gap in `utils/run_formal_all.sh`:

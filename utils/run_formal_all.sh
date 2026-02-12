@@ -45,6 +45,8 @@ Options:
   --update-baselines     Update baseline file and PROJECT_PLAN.md table
   --fail-on-diff         Fail if results differ from baseline file
   --strict-gate          Fail on new fail/error/xpass and pass-rate regression vs baseline
+                         Also enables non-empty filtered-lane enforcement
+                         (`--require-nonempty-filtered-lanes`) for selected lanes.
                          Also enables OpenTitan strict LEC X-prop key-prefix
                          drift checks (`xprop_diag_`, `xprop_status_`,
                          `xprop_result_`, `xprop_counter_`,
@@ -4528,6 +4530,7 @@ if [[ "$WITH_AVIP" == "1" ]]; then
   fi
 fi
 if [[ "$STRICT_GATE" == "1" ]]; then
+  REQUIRE_NONEMPTY_FILTERED_LANES=1
   FAIL_ON_NEW_XPASS=1
   FAIL_ON_PASSRATE_REGRESSION=1
   FAIL_ON_NEW_FAILURE_CASES=1
