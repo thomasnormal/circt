@@ -1,4 +1,27 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1217 - February 13, 2026
+
+### Formal BMC Policy Wiring: OpenTitan `bmc_extra_args` Forwarding
+
+1. Extended `utils/run_opentitan_circt_bmc.py` policy schema to accept an 8th optional column: `bmc_extra_args`.
+2. Added policy parser support for shell-style `bmc_extra_args` tokenization with early diagnostics for malformed quoting.
+3. Wired `bmc_extra_args` into generated OpenTitan pairwise case manifests so per-implementation policy rows can drive case-local `circt-bmc` argument bundles.
+4. Added focused regression coverage:
+   - `test/Tools/run-opentitan-bmc-case-policy-extra-args.test`
+   - `test/Tools/run-opentitan-bmc-case-policy-extra-args-invalid.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_opentitan_circt_bmc.py utils/run_pairwise_circt_bmc.py`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-opentitan-bmc-case-policy-.*\.test|run-pairwise-circt-bmc-case-.*\.test'`
+  - PASS (13/13)
+
+### Remaining Limitations
+
+- `bmc_extra_args` validation is currently centralized in the pairwise runner; OpenTitan policy parsing does not yet apply the restricted-option contract itself.
+- Strict-gate artifacts still do not export resolved per-case policy provenance (selector + effective contract fingerprint).
+
 ## Iteration 1216 - February 13, 2026
 
 ### Formal BMC Contracts: Per-Case `circt-bmc` Extra Args in Pairwise Runner

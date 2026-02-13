@@ -17,6 +17,7 @@ import argparse
 import fnmatch
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -128,6 +129,21 @@ def compile_case_policy_pattern(
         raise SystemExit(1)
 
 
+def parse_case_bmc_extra_args(raw: str, line_no: int) -> str:
+    token = raw.strip()
+    if not token:
+        return ""
+    try:
+        args = shlex.split(token)
+    except ValueError as exc:
+        print(
+            f"invalid case-policy row {line_no}: bmc_extra_args parse error: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return shlex.join(args)
+
+
 def load_case_policy(
     policy_file: Path,
 ) -> tuple[
@@ -145,17 +161,17 @@ def load_case_policy(
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             parts = line.split("\t")
-            if len(parts) > 7:
+            if len(parts) > 8:
                 print(
                     (
-                        f"invalid case-policy row {line_no}: expected at most 7 tab "
+                        f"invalid case-policy row {line_no}: expected at most 8 tab "
                         "columns (impl_selector, timeout_secs, backend_mode, bmc_bound, "
-                        "ignore_asserts_until, assume_known_inputs, allow_multi_clock)"
+                        "ignore_asserts_until, assume_known_inputs, allow_multi_clock, bmc_extra_args)"
                     ),
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
-            while len(parts) < 7:
+            while len(parts) < 8:
                 parts.append("")
 
             impl_key = parts[0].strip()
@@ -183,6 +199,7 @@ def load_case_policy(
                 "allow_multi_clock": parse_case_toggle_mode(
                     parts[6], line_no, "allow_multi_clock"
                 ),
+                "bmc_extra_args": parse_case_bmc_extra_args(parts[7], line_no),
             }
 
             if impl_key == "*":
@@ -539,6 +556,7 @@ def main() -> int:
                 ignore_cell = ""
                 assume_cell = ""
                 allow_mc_cell = ""
+                bmc_extra_args_cell = ""
                 if policy is not None:
                     timeout_value = policy.get("timeout_secs")
                     bound_value = policy.get("bmc_bound")
@@ -546,6 +564,7 @@ def main() -> int:
                     backend_value = str(policy.get("backend_mode", "default"))
                     assume_value = str(policy.get("assume_known_inputs", "default"))
                     allow_value = str(policy.get("allow_multi_clock", "default"))
+                    bmc_extra_args_value = str(policy.get("bmc_extra_args", ""))
 
                     timeout_cell = "" if timeout_value is None else str(timeout_value)
                     backend_cell = "" if backend_value == "default" else backend_value
@@ -553,6 +572,7 @@ def main() -> int:
                     ignore_cell = "" if ignore_value is None else str(ignore_value)
                     assume_cell = "" if assume_value == "default" else assume_value
                     allow_mc_cell = "" if allow_value == "default" else allow_value
+                    bmc_extra_args_cell = bmc_extra_args_value
 
                 handle.write(
                     "\t".join(
@@ -568,6 +588,7 @@ def main() -> int:
                             ignore_cell,
                             assume_cell,
                             allow_mc_cell,
+                            bmc_extra_args_cell,
                         ]
                     )
                     + "\n"

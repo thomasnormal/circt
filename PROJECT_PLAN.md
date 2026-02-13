@@ -63,6 +63,25 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 13, 2026, OpenTitan bmc_extra_args policy forwarding)
+
+1. Extended OpenTitan policy schema in `run_opentitan_circt_bmc.py` with optional `bmc_extra_args` column.
+2. Added shell-style `bmc_extra_args` parsing at policy ingestion time with explicit parse-error diagnostics.
+3. Forwarded policy `bmc_extra_args` into generated pairwise case manifests so per-implementation OpenTitan rows can tune case-local `circt-bmc` arguments.
+4. Added focused regressions:
+   - `run-opentitan-bmc-case-policy-extra-args.test`
+   - `run-opentitan-bmc-case-policy-extra-args-invalid.test`
+5. Validation snapshot:
+   - `python3 -m py_compile` (pairwise+opentitan runners): PASS
+   - focused pairwise+OpenTitan policy lit slice: PASS (13/13).
+6. Remaining limitations:
+   - restricted-option enforcement for `bmc_extra_args` remains pairwise-owned (not duplicated in OpenTitan parser).
+   - strict-gate artifacts still do not carry resolved policy provenance and effective-contract fingerprints.
+7. Next long-term features (BMC/LEC/mutation focus):
+   - emit policy selector + resolved contract fingerprints into per-case result artifacts and strict summaries.
+   - add mutation-bucket policy templates that populate `bmc_extra_args`/backend profiles automatically.
+   - generalize this policy-forwarding pattern to additional formal frontends beyond OpenTitan.
+
 ### Formal Closure Snapshot Update (February 13, 2026, pairwise per-case bmc_extra_args contracts)
 
 1. Extended `run_pairwise_circt_bmc.py` case schema with optional `bmc_extra_args` to support first-class per-case `circt-bmc` option bundles.
