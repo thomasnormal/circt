@@ -34,6 +34,14 @@ Optional:
                             appear vs --baseline-results-file
   --strict-provenance-gate
                             Enable all provenance tuple/identity drift checks
+  --provenance-gate-report-json FILE
+                            Structured provenance gate report JSON.
+                            Defaults to <out-dir>/provenance_gate_report.json
+                            when provenance gating/reporting is enabled.
+  --provenance-gate-report-tsv FILE
+                            Structured provenance gate report TSV.
+                            Defaults to <out-dir>/provenance_gate_report.tsv
+                            when provenance gating/reporting is enabled.
   --create-mutated-script FILE
                             Passed through to run_mutation_cover.sh
   --jobs-per-lane N         Passed through to run_mutation_cover.sh --jobs (default: 1)
@@ -186,6 +194,8 @@ OUT_DIR="${PWD}/mutation-matrix-results"
 RESULTS_FILE=""
 GATE_SUMMARY_FILE=""
 PROVENANCE_SUMMARY_FILE=""
+PROVENANCE_GATE_REPORT_JSON=""
+PROVENANCE_GATE_REPORT_TSV=""
 BASELINE_RESULTS_FILE=""
 CREATE_MUTATED_SCRIPT=""
 JOBS_PER_LANE=1
@@ -378,6 +388,8 @@ while [[ $# -gt 0 ]]; do
     --fail-on-new-contract-fingerprint-identities) FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES=1; shift ;;
     --fail-on-new-mutation-source-fingerprint-identities) FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES=1; shift ;;
     --strict-provenance-gate) STRICT_PROVENANCE_GATE=1; shift ;;
+    --provenance-gate-report-json) PROVENANCE_GATE_REPORT_JSON="$2"; shift 2 ;;
+    --provenance-gate-report-tsv) PROVENANCE_GATE_REPORT_TSV="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --jobs-per-lane) JOBS_PER_LANE="$2"; shift 2 ;;
     --skip-baseline) SKIP_BASELINE=1; shift ;;
@@ -592,6 +604,12 @@ mkdir -p "$OUT_DIR"
 RESULTS_FILE="${RESULTS_FILE:-${OUT_DIR}/results.tsv}"
 GATE_SUMMARY_FILE="${GATE_SUMMARY_FILE:-${OUT_DIR}/gate_summary.tsv}"
 PROVENANCE_SUMMARY_FILE="${PROVENANCE_SUMMARY_FILE:-${OUT_DIR}/provenance_summary.tsv}"
+PROVENANCE_GATE_REPORT_ENABLED=0
+if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 || -n "$PROVENANCE_GATE_REPORT_JSON" || -n "$PROVENANCE_GATE_REPORT_TSV" ]]; then
+  PROVENANCE_GATE_REPORT_ENABLED=1
+  PROVENANCE_GATE_REPORT_JSON="${PROVENANCE_GATE_REPORT_JSON:-${OUT_DIR}/provenance_gate_report.json}"
+  PROVENANCE_GATE_REPORT_TSV="${PROVENANCE_GATE_REPORT_TSV:-${OUT_DIR}/provenance_gate_report.tsv}"
+fi
 
 declare -a LANE_ID
 declare -a DESIGN
@@ -793,6 +811,136 @@ case_ids_sample() {
   printf "%s" "$sample"
 }
 
+sanitize_provenance_gate_field() {
+  local value="$1"
+  value="${value//$'\t'/ }"
+  value="${value//$'\r'/ }"
+  value="${value//$'\n'/ }"
+  printf "%s" "$value"
+}
+
+append_provenance_gate_diagnostic() {
+  local diagnostics_file="$1"
+  local rule_id="$2"
+  local detail="$3"
+  local message="$4"
+
+  if [[ -z "$diagnostics_file" ]]; then
+    return
+  fi
+
+  rule_id="$(sanitize_provenance_gate_field "$rule_id")"
+  detail="$(sanitize_provenance_gate_field "$detail")"
+  message="$(sanitize_provenance_gate_field "$message")"
+  printf "%s\t%s\t%s\n" "$rule_id" "$detail" "$message" >> "$diagnostics_file"
+}
+
+write_provenance_gate_report() {
+  local status="$1"
+  local diagnostics_file="$2"
+  local report_json="$3"
+  local report_tsv="$4"
+
+  PROVENANCE_GATE_STATUS="$status" \
+  PROVENANCE_GATE_DIAGNOSTICS_FILE="$diagnostics_file" \
+  PROVENANCE_GATE_REPORT_JSON="$report_json" \
+  PROVENANCE_GATE_REPORT_TSV="$report_tsv" \
+  PROVENANCE_GATE_FAILURES="$provenance_gate_failures" \
+  STRICT_PROVENANCE_GATE="$STRICT_PROVENANCE_GATE" \
+  FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" \
+  FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" \
+  FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES="$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" \
+  FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES="$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" \
+  BASELINE_RESULTS_FILE="$BASELINE_RESULTS_FILE" \
+  python3 - <<'PY'
+import csv
+import datetime as dt
+import json
+import os
+from pathlib import Path
+
+status = os.environ.get("PROVENANCE_GATE_STATUS", "pass").strip().lower()
+if status not in {"pass", "fail"}:
+  status = "pass"
+
+diagnostics_path = Path(os.environ.get("PROVENANCE_GATE_DIAGNOSTICS_FILE", ""))
+report_json = os.environ.get("PROVENANCE_GATE_REPORT_JSON", "").strip()
+report_tsv = os.environ.get("PROVENANCE_GATE_REPORT_TSV", "").strip()
+
+diagnostics = []
+if diagnostics_path.exists():
+  with diagnostics_path.open() as f:
+    for raw_line in f:
+      line = raw_line.rstrip("\n")
+      if not line:
+        continue
+      parts = line.split("\t", 2)
+      while len(parts) < 3:
+        parts.append("")
+      diagnostics.append(
+          {
+              "rule_id": parts[0],
+              "detail": parts[1],
+              "message": parts[2],
+          }
+      )
+
+payload = {
+    "schema_version": 1,
+    "status": status,
+    "generated_at_utc": dt.datetime.utcnow().replace(microsecond=0).isoformat()
+    + "Z",
+    "baseline_results_file": os.environ.get("BASELINE_RESULTS_FILE", "").strip(),
+    "strict_provenance_gate": os.environ.get("STRICT_PROVENANCE_GATE", "0") == "1",
+    "fail_on_new_contract_fingerprint_case_ids": os.environ.get(
+        "FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS", "0"
+    )
+    == "1",
+    "fail_on_new_mutation_source_fingerprint_case_ids": os.environ.get(
+        "FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS", "0"
+    )
+    == "1",
+    "fail_on_new_contract_fingerprint_identities": os.environ.get(
+        "FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES", "0"
+    )
+    == "1",
+    "fail_on_new_mutation_source_fingerprint_identities": os.environ.get(
+        "FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES", "0"
+    )
+    == "1",
+    "provenance_gate_failures": int(os.environ.get("PROVENANCE_GATE_FAILURES", "0")),
+    "diagnostic_count": len(diagnostics),
+    "diagnostics": diagnostics,
+}
+
+if report_json:
+  json_path = Path(report_json)
+  json_path.parent.mkdir(parents=True, exist_ok=True)
+  with json_path.open("w") as f:
+    json.dump(payload, f, indent=2, sort_keys=True)
+    f.write("\n")
+
+if report_tsv:
+  tsv_path = Path(report_tsv)
+  tsv_path.parent.mkdir(parents=True, exist_ok=True)
+  with tsv_path.open("w", newline="") as f:
+    writer = csv.DictWriter(
+        f,
+        delimiter="\t",
+        fieldnames=["status", "rule_id", "detail", "message"],
+    )
+    writer.writeheader()
+    for diagnostic in diagnostics:
+      writer.writerow(
+          {
+              "status": status,
+              "rule_id": diagnostic["rule_id"],
+              "detail": diagnostic["detail"],
+              "message": diagnostic["message"],
+          }
+      )
+PY
+}
 parse_failures=0
 while IFS= read -r line || [[ -n "$line" ]]; do
   line="${line%$'\r'}"
@@ -1855,6 +2003,11 @@ fi
 
 
 provenance_gate_failures=0
+PROVENANCE_GATE_DIAGNOSTICS_FILE=""
+if [[ "$PROVENANCE_GATE_REPORT_ENABLED" -eq 1 ]]; then
+  PROVENANCE_GATE_DIAGNOSTICS_FILE="${OUT_DIR}/provenance_gate_diagnostics.tsv.tmp"
+  : > "$PROVENANCE_GATE_DIAGNOSTICS_FILE"
+fi
 if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 ]]; then
   baseline_contract_case_ids="$(collect_fingerprint_case_ids_from_results "$BASELINE_RESULTS_FILE" "lane_contract_fingerprint")"
   current_contract_case_ids="$(collect_fingerprint_case_ids_from_results "$RESULTS_FILE" "lane_contract_fingerprint")"
@@ -1865,7 +2018,10 @@ if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 ]]; then
   new_contract_case_ids="${contract_case_diff[3]:-}"
   if [[ "$new_contract_count" -gt 0 ]]; then
     contract_sample="$(case_ids_sample "$new_contract_case_ids" 3)"
-    echo "Provenance gate: new lane contract fingerprint case ids observed (baseline=${baseline_contract_count} current=${current_contract_count}): ${contract_sample}" >&2
+    contract_detail="new lane contract fingerprint case ids observed (baseline=${baseline_contract_count} current=${current_contract_count}): ${contract_sample}"
+    contract_message="Provenance gate: ${contract_detail}"
+    echo "$contract_message" >&2
+    append_provenance_gate_diagnostic "$PROVENANCE_GATE_DIAGNOSTICS_FILE" "mutation_matrix.provenance.contract_fingerprint_case_ids.new" "$contract_detail" "$contract_message"
     provenance_gate_failures=$((provenance_gate_failures + 1))
   fi
 fi
@@ -1879,7 +2035,10 @@ if [[ "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 ]]; then
   new_source_case_ids="${source_case_diff[3]:-}"
   if [[ "$new_source_count" -gt 0 ]]; then
     source_sample="$(case_ids_sample "$new_source_case_ids" 3)"
-    echo "Provenance gate: new lane mutation-source fingerprint case ids observed (baseline=${baseline_source_count} current=${current_source_count}): ${source_sample}" >&2
+    source_detail="new lane mutation-source fingerprint case ids observed (baseline=${baseline_source_count} current=${current_source_count}): ${source_sample}"
+    source_message="Provenance gate: ${source_detail}"
+    echo "$source_message" >&2
+    append_provenance_gate_diagnostic "$PROVENANCE_GATE_DIAGNOSTICS_FILE" "mutation_matrix.provenance.mutation_source_fingerprint_case_ids.new" "$source_detail" "$source_message"
     provenance_gate_failures=$((provenance_gate_failures + 1))
   fi
 fi
@@ -1893,7 +2052,10 @@ if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" -eq 1 ]]; then
   new_contract_identities="${contract_identity_diff[3]:-}"
   if [[ "$new_contract_identity_count" -gt 0 ]]; then
     contract_identity_sample="$(case_ids_sample "$new_contract_identities" 3)"
-    echo "Provenance gate: new contract fingerprint identities observed (baseline=${baseline_contract_identity_count} current=${current_contract_identity_count}): ${contract_identity_sample}" >&2
+    contract_identity_detail="new contract fingerprint identities observed (baseline=${baseline_contract_identity_count} current=${current_contract_identity_count}): ${contract_identity_sample}"
+    contract_identity_message="Provenance gate: ${contract_identity_detail}"
+    echo "$contract_identity_message" >&2
+    append_provenance_gate_diagnostic "$PROVENANCE_GATE_DIAGNOSTICS_FILE" "mutation_matrix.provenance.contract_fingerprint_identities.new" "$contract_identity_detail" "$contract_identity_message"
     provenance_gate_failures=$((provenance_gate_failures + 1))
   fi
 fi
@@ -1907,7 +2069,10 @@ if [[ "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 ]]; then
   new_source_identities="${source_identity_diff[3]:-}"
   if [[ "$new_source_identity_count" -gt 0 ]]; then
     source_identity_sample="$(case_ids_sample "$new_source_identities" 3)"
-    echo "Provenance gate: new mutation-source fingerprint identities observed (baseline=${baseline_source_identity_count} current=${current_source_identity_count}): ${source_identity_sample}" >&2
+    source_identity_detail="new mutation-source fingerprint identities observed (baseline=${baseline_source_identity_count} current=${current_source_identity_count}): ${source_identity_sample}"
+    source_identity_message="Provenance gate: ${source_identity_detail}"
+    echo "$source_identity_message" >&2
+    append_provenance_gate_diagnostic "$PROVENANCE_GATE_DIAGNOSTICS_FILE" "mutation_matrix.provenance.mutation_source_fingerprint_identities.new" "$source_identity_detail" "$source_identity_message"
     provenance_gate_failures=$((provenance_gate_failures + 1))
   fi
 fi
@@ -1915,6 +2080,14 @@ fi
 summary_failures="$failures"
 if [[ "$provenance_gate_failures" -gt 0 ]]; then
   summary_failures=$((summary_failures + provenance_gate_failures))
+fi
+if [[ "$PROVENANCE_GATE_REPORT_ENABLED" -eq 1 ]]; then
+  provenance_gate_status="pass"
+  if [[ "$provenance_gate_failures" -gt 0 ]]; then
+    provenance_gate_status="fail"
+  fi
+  write_provenance_gate_report "$provenance_gate_status" "$PROVENANCE_GATE_DIAGNOSTICS_FILE" "$PROVENANCE_GATE_REPORT_JSON" "$PROVENANCE_GATE_REPORT_TSV"
+  rm -f "$PROVENANCE_GATE_DIAGNOSTICS_FILE"
 fi
 
 echo "Mutation matrix summary: pass=${passes} fail=${summary_failures}"
