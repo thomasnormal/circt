@@ -7,56 +7,9 @@ TOP="${TOP:-top}"
 TEST_FILTER="${TEST_FILTER:-}"
 CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-300}"
 CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS="${CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS:-1}"
-
-resolve_default_circt_tool() {
-  local tool_name="$1"
-  local preferred_dir="${2:-}"
-  local candidate
-
-  if [[ -n "$preferred_dir" ]]; then
-    candidate="${preferred_dir}/${tool_name}"
-    if [[ -x "$candidate" ]]; then
-      printf "%s\n" "$candidate"
-      return 0
-    fi
-  fi
-
-  for candidate in "build/bin/${tool_name}" "build-test/bin/${tool_name}"; do
-    if [[ -x "$candidate" ]]; then
-      printf "%s\n" "$candidate"
-      return 0
-    fi
-  done
-
-  if command -v "$tool_name" >/dev/null 2>&1; then
-    command -v "$tool_name"
-    return 0
-  fi
-
-  if [[ -n "$preferred_dir" ]]; then
-    printf "%s\n" "${preferred_dir}/${tool_name}"
-  else
-    printf "build/bin/%s\n" "$tool_name"
-  fi
-}
-
-derive_tool_dir_from_verilog() {
-  local verilog_tool="$1"
-  local resolved=""
-
-  if [[ "$verilog_tool" == */* ]]; then
-    printf "%s\n" "$(dirname "$verilog_tool")"
-    return 0
-  fi
-
-  resolved="$(command -v "$verilog_tool" 2>/dev/null || true)"
-  if [[ -n "$resolved" ]]; then
-    printf "%s\n" "$(dirname "$resolved")"
-    return 0
-  fi
-
-  printf "%s\n" "build/bin"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=utils/formal_toolchain_resolve.sh
+source "$SCRIPT_DIR/formal_toolchain_resolve.sh"
 
 CIRCT_VERILOG="${CIRCT_VERILOG:-$(resolve_default_circt_tool "circt-verilog")}"
 CIRCT_TOOL_DIR_DEFAULT="$(derive_tool_dir_from_verilog "$CIRCT_VERILOG")"
