@@ -1,4 +1,33 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1273 - February 13, 2026
+
+### Pairwise BMC Launch-Retry Telemetry: Exhaustion Reason Contracts
+
+1. Extended `utils/run_pairwise_circt_bmc.py` ETXTBSY handling to emit a stable retry-exhaustion contract:
+   - new exception path: `TextFileBusyRetryExhausted`
+   - stable reason key: `runner_command_exception_<stage>_runner_command_etxtbsy_retry_exhausted`
+2. Added configurable launch-retry knobs:
+   - `BMC_LAUNCH_ETXTBSY_RETRIES` (default `4`)
+   - `BMC_LAUNCH_ETXTBSY_BACKOFF_SECS` (default `0.2`)
+3. Preserved stage-specific diagnostics (`CIRCT_VERILOG_ERROR` / `CIRCT_OPT_ERROR` / `CIRCT_BMC_ERROR`) and traceback logging semantics.
+4. Added deterministic exhaustion regression:
+   - `test/Tools/run-pairwise-circt-bmc-etxtbsy-retry-exhausted.test`
+5. Stabilized success-path retry regression timing:
+   - updated `test/Tools/run-pairwise-circt-bmc-etxtbsy-retry.test` to explicit retry knobs.
+
+### Validation
+
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv` focused slice:
+  - `run-pairwise-circt-bmc-basic.test`
+  - `run-pairwise-circt-bmc-opt-prep.test`
+  - `run-pairwise-circt-bmc-missing-circt-opt.test`
+  - `run-pairwise-circt-bmc-etxtbsy-retry.test`
+  - `run-pairwise-circt-bmc-etxtbsy-retry-exhausted.test`
+  - `run-formal-all-opentitan-bmc-opentitan-toolchain-fallback.test`
+  - PASS (6/6)
+
 ## Iteration 1272 - February 13, 2026
 
 ### Pairwise BMC ETXTBSY Resilience for Concurrent Tool Relinking

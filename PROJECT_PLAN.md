@@ -81,6 +81,17 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 5. Real filtered OpenTitan BMC mode-diff benchmark now emits semantic signal (not runner missing-results noise):
    - `BMC=FAIL`, `BMC_STRICT=PASS`, `BMC_MODE_DIFF strict_only_pass=1` on `aes_sbox_canright` (bound=2).
 
+### Formal Closure Snapshot Update (February 13, 2026, pairwise launch-retry exhaustion contracts)
+
+1. Added stable ETXTBSY retry-exhaustion reason contract in pairwise BMC:
+   - `runner_command_exception_<stage>_runner_command_etxtbsy_retry_exhausted`.
+2. Added operator knobs for deterministic launch-retry behavior:
+   - `BMC_LAUNCH_ETXTBSY_RETRIES`
+   - `BMC_LAUNCH_ETXTBSY_BACKOFF_SECS`
+3. Added deterministic exhaustion regression:
+   - `test/Tools/run-pairwise-circt-bmc-etxtbsy-retry-exhausted.test`
+4. This gives strict-gate/baselines a stable reason key for transient-launch exhaustion instead of generic exception noise.
+
 ### Remaining Formal Limitations (BMC/LEC/mutation focus)
 
 1. **BMC operational robustness**: bounded ETXTBSY retry is now implemented in `run_pairwise_circt_bmc.py`; remaining gap is broader transient launch resilience/telemetry parity for other launch-failure classes.

@@ -5,12 +5,16 @@
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nin=\"\"\nout=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -o) out=\"$2\"; shift 2 ;;\n    *)\n      if [[ -z \"$in\" ]]; then in=\"$1\"; fi\n      shift ;;\n  esac\ndone\n: \"${in:?}\"\n: \"${out:?}\"\ncp \"$in\" \"$out\"\nexit 0\n' > %t/bin/circt-opt
 // RUN: printf '#!/usr/bin/env bash\necho \"BMC_RESULT=UNSAT\"\nexit 0\n' > %t/bin/circt-bmc
 // RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc
-// RUN: printf 'pass_case\ttop\t%t/src/a.sv\t%t/src\t%t/work/pass\n' > %t/cases.tsv
+// RUN: printf 'case_retry_exhausted\ttop\t%t/src/a.sv\t%t/src\t%t/work/case\n' > %t/cases.tsv
 // RUN: printf 'import sys,time\npath=sys.argv[1]\nduration=float(sys.argv[2])\nwith open(path, \"r+\"):\n  time.sleep(duration)\n' > %t/hold-open.py
-// RUN: sh -c 'python3 %t/hold-open.py %t/bin/circt-opt 0.8 & lock_pid=$!; sleep 0.1; env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_BMC=%t/bin/circt-bmc BMC_RUN_SMTLIB=0 BMC_LAUNCH_ETXTBSY_RETRIES=4 BMC_LAUNCH_ETXTBSY_BACKOFF_SECS=0.1 OUT=%t/results.tsv %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --workdir %t/work > %t/run.log; rc=$?; wait "$lock_pid"; exit "$rc"'
+// RUN: not sh -c 'python3 %t/hold-open.py %t/bin/circt-opt 1.5 & lock_pid=$!; sleep 0.1; env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_BMC=%t/bin/circt-bmc BMC_RUN_SMTLIB=0 BMC_LAUNCH_ETXTBSY_RETRIES=1 BMC_LAUNCH_ETXTBSY_BACKOFF_SECS=0.05 OUT=%t/results.tsv %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --workdir %t/work > %t/run.log; rc=$?; wait "$lock_pid"; exit "$rc"' 2>&1
 // RUN: FileCheck %s --check-prefix=LOG < %t/run.log
 // RUN: FileCheck %s --check-prefix=RES < %t/results.tsv
+// RUN: FileCheck %s --check-prefix=OPTLOG < %t/work/case_retry_exhausted/circt-opt.log
 //
 // LOG: Running BMC on 1 pairwise case(s)...
-// LOG: pairwise BMC summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
-// RES: PASS{{[[:space:]]+}}pass_case{{[[:space:]]+}}{{.*}}work/pass{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
+// LOG: ERROR (CIRCT_OPT_ERROR)
+// LOG: pairwise BMC summary: total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 unknown=0 timeout=0
+// RES: ERROR{{[[:space:]]+}}case_retry_exhausted{{[[:space:]]+}}{{.*}}work/case{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}CIRCT_OPT_ERROR{{[[:space:]]+}}runner_command_exception_opt_runner_command_etxtbsy_retry_exhausted
+// OPTLOG: runner_command_exception stage=opt
+// OPTLOG: TextFileBusyRetryExhausted
