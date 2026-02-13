@@ -1,0 +1,5 @@
+// RUN: rm -rf %t/sv-tests
+// RUN: mkdir -p %t/sv-tests/tests
+// RUN: not env CIRCT_VERILOG=/bin/true CIRCT_BMC=/bin/true CIRCT_MEMORY_LIMIT_GB=1 BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB=1 TEST_FILTER='.' %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests 2>&1 | FileCheck %s
+//
+// CHECK: BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB must be greater than CIRCT_MEMORY_LIMIT_GB when enabled
