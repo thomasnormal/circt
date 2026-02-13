@@ -1,4 +1,39 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1238 - February 13, 2026
+
+### Formal-All Mutation/LEC Lane-Map Support for Lane Parity
+
+1. Added a new lane-map option in `utils/run_formal_all.sh`:
+   - `--mutation-lec-contract-fingerprint-lane-map-file FILE`
+2. Implemented deterministic mutation->LEC lane remapping for lane-scoped contract-fingerprint parity:
+   - map applies to mutation lane IDs before comparison against LEC lane IDs
+   - preserves existing behavior when no map is provided.
+3. Added strict validation and option contract:
+   - map file readability check
+   - map option now requires `--fail-on-mutation-lec-contract-fingerprint-lane-parity` or `--strict-gate`.
+4. Added Python-side map parser with hard-fail diagnostics for malformed rows and conflicting duplicate mappings.
+
+### Tests
+
+1. Added lane-map behavior regression:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map.test`
+   - verifies lane parity fails without map and passes with map.
+2. Added option-contract validation coverage:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test`
+3. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test build-test/test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists.test build-test/test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists-patterns.test build-test/test/Tools/run-formal-all-strict-gate-rule-id-allowlist-patterns.test build-test/test/Tools/run-formal-all-strict-gate-bmc-abstraction-provenance-allowlist-patterns.test`
+  - PASS (9/9)
+
+### Remaining Limitations
+
+- Lane parity mapping is exact-string only; there is no wildcard/regex mapping mode for large lane families yet.
+
 ## Iteration 1237 - February 13, 2026
 
 ### Formal-All Lane-Scoped Mutation/LEC Contract-Fingerprint Parity

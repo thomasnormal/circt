@@ -1,0 +1,4 @@
+// RUN: printf 'mut\tlec\n' > %t.map
+// RUN: not %S/../../utils/run_formal_all.sh --mutation-lec-contract-fingerprint-lane-map-file %t.map 2>&1 | FileCheck %s
+
+// CHECK: --mutation-lec-contract-fingerprint-lane-map-file requires --fail-on-mutation-lec-contract-fingerprint-lane-parity or --strict-gate
