@@ -43,6 +43,10 @@ Only the first three columns are required.
   checks.
 
 Relative file paths are resolved against the manifest file directory.
+
+ETXTBSY launch retry tuning:
+- BMC_LAUNCH_ETXTBSY_RETRIES (default: 4)
+- BMC_LAUNCH_ETXTBSY_BACKOFF_SECS (default: 0.2)
 """
 
 from __future__ import annotations
@@ -80,6 +84,15 @@ class CaseSpec:
     contract_source: str
 
 
+class TextFileBusyRetryExhausted(RuntimeError):
+    def __init__(self, tool: str, attempts: int):
+        super().__init__(
+            f"runner_command_etxtbsy_retry_exhausted tool={tool} attempts={attempts}"
+        )
+        self.tool = tool
+        self.attempts = attempts
+
+
 def parse_nonnegative_int(raw: str, name: str) -> int:
     try:
         value = int(raw)
@@ -87,6 +100,18 @@ def parse_nonnegative_int(raw: str, name: str) -> int:
         print(f"invalid {name}: {raw}", file=sys.stderr)
         raise SystemExit(1)
     if value < 0:
+        print(f"invalid {name}: {raw}", file=sys.stderr)
+        raise SystemExit(1)
+    return value
+
+
+def parse_nonnegative_float(raw: str, name: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        print(f"invalid {name}: {raw}", file=sys.stderr)
+        raise SystemExit(1)
+    if value < 0.0:
         print(f"invalid {name}: {raw}", file=sys.stderr)
         raise SystemExit(1)
     return value
@@ -162,11 +187,15 @@ def normalize_error_reason(text: str) -> str:
 
 
 def run_and_log(
-    cmd: list[str], log_path: Path, out_path: Path | None, timeout_secs: int
+    cmd: list[str],
+    log_path: Path,
+    out_path: Path | None,
+    timeout_secs: int,
+    etxtbsy_retries: int,
+    etxtbsy_backoff_secs: float,
 ) -> subprocess.CompletedProcess[str]:
     # Binary relinking races can produce transient ETXTBSY while a tool is open
     # for writing; retry a few times with bounded backoff.
-    etxtbsy_retries = 4
     result: subprocess.CompletedProcess[str] | None = None
     for attempt in range(etxtbsy_retries + 1):
         try:
@@ -187,8 +216,10 @@ def run_and_log(
             raise
         except OSError as exc:
             if exc.errno == errno.ETXTBSY and attempt < etxtbsy_retries:
-                time.sleep(0.2 * (attempt + 1))
+                time.sleep(etxtbsy_backoff_secs * (attempt + 1))
                 continue
+            if exc.errno == errno.ETXTBSY:
+                raise TextFileBusyRetryExhausted(cmd[0], attempt + 1) from exc
             raise
     if result is None:
         raise RuntimeError("internal error: subprocess result missing")
@@ -532,6 +563,14 @@ def main() -> int:
     timeout_secs = parse_nonnegative_int(
         os.environ.get("CIRCT_TIMEOUT_SECS", "300"), "CIRCT_TIMEOUT_SECS"
     )
+    etxtbsy_retries = parse_nonnegative_int(
+        os.environ.get("BMC_LAUNCH_ETXTBSY_RETRIES", "4"),
+        "BMC_LAUNCH_ETXTBSY_RETRIES",
+    )
+    etxtbsy_backoff_secs = parse_nonnegative_float(
+        os.environ.get("BMC_LAUNCH_ETXTBSY_BACKOFF_SECS", "0.2"),
+        "BMC_LAUNCH_ETXTBSY_BACKOFF_SECS",
+    )
     bound = parse_nonnegative_int(args.bound, "--bound")
     if bound == 0:
         bound = 1
@@ -703,7 +742,12 @@ def main() -> int:
             stage = "verilog"
             try:
                 verilog_result = run_and_log(
-                    verilog_cmd, verilog_log_path, None, case_timeout_secs
+                    verilog_cmd,
+                    verilog_log_path,
+                    None,
+                    case_timeout_secs,
+                    etxtbsy_retries,
+                    etxtbsy_backoff_secs,
                 )
                 if verilog_result.returncode != 0:
                     reason = normalize_error_reason(verilog_log_path.read_text())
@@ -737,7 +781,12 @@ def main() -> int:
                 if bmc_prepare_core_with_circt_opt:
                     stage = "opt"
                     opt_result = run_and_log(
-                        opt_cmd, opt_log_path, None, case_timeout_secs
+                        opt_cmd,
+                        opt_log_path,
+                        None,
+                        case_timeout_secs,
+                        etxtbsy_retries,
+                        etxtbsy_backoff_secs,
                     )
                     if opt_result.returncode != 0:
                         reason = normalize_error_reason(opt_log_path.read_text())
@@ -758,7 +807,12 @@ def main() -> int:
 
                 stage = "bmc"
                 bmc_result = run_and_log(
-                    bmc_cmd, bmc_log_path, bmc_out_path, case_timeout_secs
+                    bmc_cmd,
+                    bmc_log_path,
+                    bmc_out_path,
+                    case_timeout_secs,
+                    etxtbsy_retries,
+                    etxtbsy_backoff_secs,
                 )
                 combined = bmc_log_path.read_text() + "\n" + bmc_out_path.read_text()
                 bmc_tag = parse_bmc_result(combined)
@@ -886,14 +940,20 @@ def main() -> int:
                     error_diag = "CIRCT_BMC_ERROR"
                     error_log_path = bmc_log_path
                 append_exception_log(error_log_path, stage, exc)
-                reason_body = normalize_error_reason(
-                    f"{type(exc).__name__}: {exc}"
-                )
-                reason = (
-                    "runner_command_exception"
-                    if reason_body == "no_diag"
-                    else f"runner_command_exception_{stage}_{reason_body}"
-                )
+                if isinstance(exc, TextFileBusyRetryExhausted):
+                    reason = (
+                        f"runner_command_exception_{stage}_"
+                        "runner_command_etxtbsy_retry_exhausted"
+                    )
+                else:
+                    reason_body = normalize_error_reason(
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    reason = (
+                        "runner_command_exception"
+                        if reason_body == "no_diag"
+                        else f"runner_command_exception_{stage}_{reason_body}"
+                    )
                 rows.append(
                     (
                         "ERROR",
