@@ -56,6 +56,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -180,6 +181,16 @@ def run_and_log(
     if out_path is not None:
         out_path.write_text(result.stdout)
     return result
+
+
+def append_exception_log(log_path: Path, stage: str, exc: Exception) -> None:
+    trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as handle:
+        if log_path.exists() and log_path.stat().st_size > 0:
+            handle.write("\n")
+        handle.write(f"runner_command_exception stage={stage}\n")
+        handle.write(trace)
 
 
 def sanitize_identifier(name: str) -> str:
@@ -849,7 +860,25 @@ def main() -> int:
                 )
                 timeout += 1
                 print(f"{case.case_id:32} TIMEOUT ({timeout_diag})", flush=True)
-            except Exception:
+            except Exception as exc:
+                if stage == "verilog":
+                    error_diag = "CIRCT_VERILOG_ERROR"
+                    error_log_path = verilog_log_path
+                elif stage == "opt":
+                    error_diag = "CIRCT_OPT_ERROR"
+                    error_log_path = opt_log_path
+                else:
+                    error_diag = "CIRCT_BMC_ERROR"
+                    error_log_path = bmc_log_path
+                append_exception_log(error_log_path, stage, exc)
+                reason_body = normalize_error_reason(
+                    f"{type(exc).__name__}: {exc}"
+                )
+                reason = (
+                    "runner_command_exception"
+                    if reason_body == "no_diag"
+                    else f"runner_command_exception_{stage}_{reason_body}"
+                )
                 rows.append(
                     (
                         "ERROR",
@@ -857,12 +886,12 @@ def main() -> int:
                         case_path,
                         suite_name,
                         mode_label,
-                        "CIRCT_BMC_ERROR",
-                        "runner_command_exception",
+                        error_diag,
+                        reason,
                     )
                 )
                 errored += 1
-                print(f"{case.case_id:32} ERROR (CIRCT_BMC_ERROR)", flush=True)
+                print(f"{case.case_id:32} ERROR ({error_diag})", flush=True)
     finally:
         if not keep_workdir:
             shutil.rmtree(workdir, ignore_errors=True)

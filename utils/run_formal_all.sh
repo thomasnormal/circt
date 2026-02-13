@@ -4941,9 +4941,35 @@ fi
 # Keep formal runner tools on a coherent CIRCT toolchain by default.
 # Callers may override individual binaries via environment.
 CIRCT_TOOL_DIR="$(dirname "$CIRCT_VERILOG_BIN")"
+CIRCT_TOOL_DIR_OPENTITAN="$(dirname "$CIRCT_VERILOG_BIN_OPENTITAN")"
 FORMAL_CIRCT_OPT_BIN="${CIRCT_OPT:-$CIRCT_TOOL_DIR/circt-opt}"
 FORMAL_CIRCT_BMC_BIN="${CIRCT_BMC:-$CIRCT_TOOL_DIR/circt-bmc}"
 FORMAL_CIRCT_LEC_BIN="${CIRCT_LEC:-$CIRCT_TOOL_DIR/circt-lec}"
+
+# OpenTitan BMC runner uses circt-verilog from CIRCT_VERILOG_BIN_OPENTITAN but
+# should still be able to reuse globally resolved tools when OpenTitan-specific
+# siblings are absent.
+FORMAL_CIRCT_OPT_BIN_OPENTITAN="$FORMAL_CIRCT_OPT_BIN"
+FORMAL_CIRCT_BMC_BIN_OPENTITAN="$FORMAL_CIRCT_BMC_BIN"
+FORMAL_CIRCT_LEC_BIN_OPENTITAN="$FORMAL_CIRCT_LEC_BIN"
+if [[ "$CIRCT_OPT_ENV_EXPLICIT" != "1" ]]; then
+  FORMAL_CIRCT_OPT_BIN_OPENTITAN_CANDIDATE="$CIRCT_TOOL_DIR_OPENTITAN/circt-opt"
+  if [[ -x "$FORMAL_CIRCT_OPT_BIN_OPENTITAN_CANDIDATE" ]]; then
+    FORMAL_CIRCT_OPT_BIN_OPENTITAN="$FORMAL_CIRCT_OPT_BIN_OPENTITAN_CANDIDATE"
+  fi
+fi
+if [[ "$CIRCT_BMC_ENV_EXPLICIT" != "1" ]]; then
+  FORMAL_CIRCT_BMC_BIN_OPENTITAN_CANDIDATE="$CIRCT_TOOL_DIR_OPENTITAN/circt-bmc"
+  if [[ -x "$FORMAL_CIRCT_BMC_BIN_OPENTITAN_CANDIDATE" ]]; then
+    FORMAL_CIRCT_BMC_BIN_OPENTITAN="$FORMAL_CIRCT_BMC_BIN_OPENTITAN_CANDIDATE"
+  fi
+fi
+if [[ "$CIRCT_LEC_ENV_EXPLICIT" != "1" ]]; then
+  FORMAL_CIRCT_LEC_BIN_OPENTITAN_CANDIDATE="$CIRCT_TOOL_DIR_OPENTITAN/circt-lec"
+  if [[ -x "$FORMAL_CIRCT_LEC_BIN_OPENTITAN_CANDIDATE" ]]; then
+    FORMAL_CIRCT_LEC_BIN_OPENTITAN="$FORMAL_CIRCT_LEC_BIN_OPENTITAN_CANDIDATE"
+  fi
+fi
 require_executable_tool() {
   local label="$1"
   local path="$2"
@@ -8133,8 +8159,9 @@ if [[ "$WITH_OPENTITAN_E2E" == "1" && "$WITH_OPENTITAN_E2E_STRICT" == "1" ]] && 
   fi
 fi
 if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
-  need_core_bmc_lanes=0
-  need_core_lec_lanes=0
+  need_default_core_bmc_lanes=0
+  need_default_core_lec_lanes=0
+  need_opentitan_bmc_lanes=0
   need_sv_bmc_runner=0
   need_sv_lec_runner=0
   need_verilator_bmc_runner=0
@@ -8168,41 +8195,41 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   fi
 
   if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
-    need_core_bmc_lanes=1
+    need_default_core_bmc_lanes=1
     need_sv_bmc_runner=1
   fi
   if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
      [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests-uvm/BMC_SEMANTICS"; then
-    need_core_bmc_lanes=1
+    need_default_core_bmc_lanes=1
     need_sv_bmc_runner=1
   fi
   if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
-    need_core_bmc_lanes=1
+    need_default_core_bmc_lanes=1
     need_verilator_bmc_runner=1
   fi
   if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
-    need_core_bmc_lanes=1
+    need_default_core_bmc_lanes=1
     need_yosys_bmc_runner=1
   fi
   if [[ "$WITH_OPENTITAN_BMC" == "1" ]] && lane_enabled "opentitan/BMC"; then
-    need_core_bmc_lanes=1
+    need_opentitan_bmc_lanes=1
     need_opentitan_bmc_runner=1
   fi
   if [[ "$WITH_OPENTITAN_BMC_STRICT" == "1" ]] && lane_enabled "opentitan/BMC_STRICT"; then
-    need_core_bmc_lanes=1
+    need_opentitan_bmc_lanes=1
     need_opentitan_bmc_runner=1
   fi
 
   if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
-    need_core_lec_lanes=1
+    need_default_core_lec_lanes=1
     need_sv_lec_runner=1
   fi
   if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
-    need_core_lec_lanes=1
+    need_default_core_lec_lanes=1
     need_verilator_lec_runner=1
   fi
   if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
-    need_core_lec_lanes=1
+    need_default_core_lec_lanes=1
     need_yosys_lec_runner=1
   fi
   if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
@@ -8231,22 +8258,33 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
     done
   fi
 
-  if [[ "$need_core_bmc_lanes" == "1" || "$need_core_lec_lanes" == "1" ]]; then
+  if [[ "$need_default_core_bmc_lanes" == "1" || "$need_default_core_lec_lanes" == "1" ]]; then
     if [[ "$CIRCT_VERILOG_BIN_EXPLICIT" == "0" ]]; then
       require_executable_tool "circt-verilog (default-derived)" "$CIRCT_VERILOG_BIN"
     fi
   fi
-  if [[ "$need_core_bmc_lanes" == "1" ]]; then
+  if [[ "$need_default_core_bmc_lanes" == "1" ]]; then
     if [[ "$CIRCT_BMC_ENV_EXPLICIT" == "0" ]]; then
       require_executable_tool "circt-bmc (default-derived)" "$FORMAL_CIRCT_BMC_BIN"
     fi
   fi
-  if [[ "$need_core_lec_lanes" == "1" ]]; then
+  if [[ "$need_default_core_lec_lanes" == "1" ]]; then
     if [[ "$CIRCT_OPT_ENV_EXPLICIT" == "0" ]]; then
       require_executable_tool "circt-opt (default-derived)" "$FORMAL_CIRCT_OPT_BIN"
     fi
     if [[ "$CIRCT_LEC_ENV_EXPLICIT" == "0" ]]; then
       require_executable_tool "circt-lec (default-derived)" "$FORMAL_CIRCT_LEC_BIN"
+    fi
+  fi
+  if [[ "$need_opentitan_bmc_lanes" == "1" ]]; then
+    if [[ "$CIRCT_VERILOG_BIN_OPENTITAN_EXPLICIT" == "0" && "$CIRCT_VERILOG_BIN_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-verilog for OpenTitan BMC (default-derived)" "$CIRCT_VERILOG_BIN_OPENTITAN"
+    fi
+    if [[ "$CIRCT_OPT_ENV_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-opt for OpenTitan BMC (derived)" "$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
+    fi
+    if [[ "$CIRCT_BMC_ENV_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-bmc for OpenTitan BMC (derived)" "$FORMAL_CIRCT_BMC_BIN_OPENTITAN"
     fi
   fi
 
@@ -10795,9 +10833,9 @@ run_opentitan_bmc_lane() {
     BMC_TIMEOUT_REASON_CASES_OUT="$timeout_reasons_file"
     BMC_RESOLVED_CONTRACTS_OUT="$resolved_contracts_file"
     CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN"
-    CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN"
-    CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN"
-    CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN"
+    CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
+    CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN_OPENTITAN"
+    CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN_OPENTITAN"
     BMC_MODE_LABEL="$mode_name"
     BOUND="$OPENTITAN_BMC_BOUND"
     BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
