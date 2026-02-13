@@ -1,4 +1,42 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1241 - February 13, 2026
+
+### Formal-All Mutation/LEC Lane-Map Identity-Fallback Gate
+
+1. Added a new strict gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-mutation-lec-contract-fingerprint-lane-map-identity-fallback`
+2. Extended lane-map parity enforcement to detect implicit identity fallback when a lane-map file is provided:
+   - tracks identity-resolved mutation lanes during parity mapping
+   - fails when the new option is enabled and any mutation lanes still use identity fallback.
+3. Added a dedicated strict-gate rule ID for this diagnostic:
+   - `strict_gate.mutation.parity.contract_fingerprint_lane_map_identity_fallback.present`
+4. Strengthened lane-map option contracts:
+   - identity-fallback gate now requires `--mutation-lec-contract-fingerprint-lane-map-file`
+   - lane-map file activation contract now accepts identity-fallback gate in addition to lane-parity/unmapped/strict-gate.
+
+### Tests
+
+1. Added identity-fallback behavior regression:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback.test`
+   - verifies failure when partial map causes identity fallback and pass when map explicitly covers all mutation lanes.
+2. Added identity-fallback option-contract coverage:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-requires-map.test`
+3. Updated lane-map option-contract expectation:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test`
+4. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-prefix.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-regex.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-invalid-regex.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-requires-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-requires-map.test`
+  - PASS (11/11)
+
+### Remaining Limitations
+
+- Identity-fallback gating is lane-presence based; it does not distinguish whether fallback happened only on legacy baseline-only mutation lanes versus newly observed mutation lanes.
+
 ## Iteration 1240 - February 13, 2026
 
 ### Formal-All Mutation/LEC Lane-Map Unmapped Coverage Gate
