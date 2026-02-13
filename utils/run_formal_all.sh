@@ -167,6 +167,14 @@ Options:
                          preprocess,model_size,unknown}_cases`)
   --fail-on-new-bmc-unknown-cases
                          Fail when BMC unknown-case count increases vs baseline
+  --fail-on-new-bmc-reason-keys
+                         Fail when new BMC reason counter keys
+                         (`bmc_*_reason_*_cases`) appear vs baseline
+                         for any `BMC*` lane
+  --fail-on-new-bmc-contract-fingerprint-case-ids
+                         Fail when new resolved-contract fingerprint tuples
+                         (`bmc_contract_fingerprint_case_ids`) appear vs
+                         baseline for any `BMC*` lane
   --fail-on-new-bmc-drop-remark-cases
                          Fail when BMC dropped-syntax remark count
                          (`bmc_drop_remark_cases`) increases vs baseline
@@ -725,6 +733,8 @@ Options:
                          Bound passed to OpenTitan BMC runner (default: 1)
   --opentitan-bmc-include-masked
                          Include masked OpenTitan BMC implementations
+  --opentitan-bmc-case-policy-file FILE
+                         Optional per-implementation OpenTitan BMC policy TSV
   --opentitan-lec-impl-filter REGEX
                          Regex filter for OpenTitan LEC implementations
   --opentitan-lec-include-masked
@@ -2071,6 +2081,8 @@ FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_IDS=0
 FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=0
 FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
+FAIL_ON_NEW_BMC_REASON_KEYS=0
+FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS=0
@@ -2297,6 +2309,7 @@ WITH_AVIP=0
 OPENTITAN_BMC_IMPL_FILTER=""
 OPENTITAN_BMC_BOUND="1"
 OPENTITAN_BMC_INCLUDE_MASKED=0
+OPENTITAN_BMC_CASE_POLICY_FILE=""
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
 OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES=0
@@ -2376,6 +2389,8 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_BMC_BOUND="$2"; shift 2 ;;
     --opentitan-bmc-include-masked)
       OPENTITAN_BMC_INCLUDE_MASKED=1; shift ;;
+    --opentitan-bmc-case-policy-file)
+      OPENTITAN_BMC_CASE_POLICY_FILE="$2"; shift 2 ;;
     --opentitan-lec-impl-filter)
       OPENTITAN_LEC_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-lec-include-masked)
@@ -2508,6 +2523,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1; shift ;;
     --fail-on-new-bmc-unknown-cases)
       FAIL_ON_NEW_BMC_UNKNOWN_CASES=1; shift ;;
+    --fail-on-new-bmc-reason-keys)
+      FAIL_ON_NEW_BMC_REASON_KEYS=1; shift ;;
+    --fail-on-new-bmc-contract-fingerprint-case-ids)
+      FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
     --fail-on-new-bmc-drop-remark-cases)
       FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1; shift ;;
     --fail-on-new-bmc-drop-remark-case-ids)
@@ -3073,6 +3092,10 @@ if [[ -n "$OPENTITAN_BMC_IMPL_FILTER" ]]; then
 fi
 if [[ -n "$OPENTITAN_BMC_BOUND" && ! "$OPENTITAN_BMC_BOUND" =~ ^[0-9]+$ ]]; then
   echo "invalid --opentitan-bmc-bound: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_BMC_CASE_POLICY_FILE" && ! -f "$OPENTITAN_BMC_CASE_POLICY_FILE" ]]; then
+  echo "missing --opentitan-bmc-case-policy-file: $OPENTITAN_BMC_CASE_POLICY_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
@@ -4721,6 +4744,8 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS=1
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=1
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
+  FAIL_ON_NEW_BMC_REASON_KEYS=1
+  FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS=1
@@ -6828,6 +6853,7 @@ compute_lane_state_config_hash() {
     printf "opentitan_bmc_impl_filter=%s\n" "$OPENTITAN_BMC_IMPL_FILTER"
     printf "opentitan_bmc_bound=%s\n" "$OPENTITAN_BMC_BOUND"
     printf "opentitan_bmc_include_masked=%s\n" "$OPENTITAN_BMC_INCLUDE_MASKED"
+    printf "opentitan_bmc_case_policy_file=%s\n" "$OPENTITAN_BMC_CASE_POLICY_FILE"
     printf "avip_glob=%s\n" "$AVIP_GLOB"
     printf "lane_state_hmac_mode=%s\n" "$LANE_STATE_HMAC_MODE"
     printf "lane_state_hmac_key_id=%s\n" "$LANE_STATE_HMAC_KEY_ID"
@@ -8432,6 +8458,8 @@ summarize_bmc_case_file() {
   local base_summary
   base_summary="$(BMC_CASE_FILE="$case_file" python3 - <<'PY'
 import os
+import re
+from collections import defaultdict
 from pathlib import Path
 
 path = Path(os.environ["BMC_CASE_FILE"])
@@ -8439,9 +8467,28 @@ if not path.exists():
     print("")
     raise SystemExit(0)
 
+def normalize(token: str) -> str:
+    value = re.sub(r"[^a-z0-9]+", "_", (token or "").lower()).strip("_")
+    if not value:
+        value = "missing"
+    return value
+
 timeout_cases = 0
 unknown_cases = 0
 timeout_case_ids = set()
+reason_counts = defaultdict(int)
+fail_like_statuses = {
+    "FAIL",
+    "ERROR",
+    "XFAIL",
+    "XPASS",
+    "EFAIL",
+    "TIMEOUT",
+    "UNKNOWN",
+    "BMC_NOT_RUN",
+    "NOT_RUN",
+}
+
 with path.open(encoding="utf-8") as f:
     for line in f:
         line = line.rstrip("\n")
@@ -8468,13 +8515,28 @@ with path.open(encoding="utf-8") as f:
         elif status == "UNKNOWN":
             unknown_cases += 1
 
+        if status in fail_like_statuses:
+            reason_token = parts[6].strip() if len(parts) > 6 else ""
+            reason_key = normalize(reason_token)
+            status_key = normalize(status)
+            reason_counts[f"bmc_reason_{reason_key}_cases"] += 1
+            reason_counts[f"bmc_{status_key}_reason_{reason_key}_cases"] += 1
+            if reason_key.startswith("runner_command_"):
+                reason_counts[f"bmc_runner_command_reason_{reason_key}_cases"] += 1
+            if status == "BMC_NOT_RUN":
+                reason_counts[f"bmc_not_run_reason_{reason_key}_cases"] += 1
+
 timeout_case_ids_value = ";".join(sorted(timeout_case_ids))
-print(
-    f"bmc_timeout_cases={timeout_cases} "
-    f"bmc_timeout_case_ids_cardinality={len(timeout_case_ids)} "
-    f"bmc_timeout_case_ids={timeout_case_ids_value} "
-    f"bmc_unknown_cases={unknown_cases}"
+summary_parts = [
+    f"bmc_timeout_cases={timeout_cases}",
+    f"bmc_timeout_case_ids_cardinality={len(timeout_case_ids)}",
+    f"bmc_timeout_case_ids={timeout_case_ids_value}",
+    f"bmc_unknown_cases={unknown_cases}",
+]
+summary_parts.extend(
+    f"{key}={reason_counts[key]}" for key in sorted(reason_counts.keys())
 )
+print(" ".join(summary_parts))
 PY
 )"
   local timeout_stage_summary=""
@@ -8857,6 +8919,69 @@ print(
             f"bmc_abstraction_provenance_tokens={len(tokens)}",
             f"bmc_abstraction_provenance_records={records}",
             f"bmc_abstraction_provenance_identity_digest_u64={digest_u64}",
+        ]
+    )
+)
+PY
+}
+
+summarize_bmc_resolved_contracts_file() {
+  local contracts_file="$1"
+  if [[ ! -s "$contracts_file" ]]; then
+    echo ""
+    return 0
+  fi
+  BMC_RESOLVED_CONTRACTS_FILE="$contracts_file" python3 - <<'PY'
+import hashlib
+import os
+from pathlib import Path
+
+path = Path(os.environ["BMC_RESOLVED_CONTRACTS_FILE"])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+rows = 0
+sources = set()
+fingerprints = set()
+case_fingerprint_ids = set()
+
+with path.open(encoding="utf-8") as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        case_id = parts[0].strip() if len(parts) > 0 else ""
+        case_path = parts[1].strip() if len(parts) > 1 else ""
+        source = parts[2].strip() if len(parts) > 2 else ""
+        fingerprint = parts[-1].strip() if parts else ""
+        if source:
+            sources.add(source)
+        if fingerprint:
+            fingerprints.add(fingerprint)
+            identity = case_id if case_id else case_path
+            if not identity:
+                identity = "__aggregate__"
+            case_fingerprint_ids.add(f"{identity}::{fingerprint}")
+        rows += 1
+
+digest_u64 = 0
+if case_fingerprint_ids:
+    canonical = "\n".join(sorted(case_fingerprint_ids)).encode("utf-8")
+    digest_u64 = int(hashlib.sha1(canonical).hexdigest()[:16], 16)
+
+print(
+    " ".join(
+        [
+            f"bmc_contract_resolved_rows={rows}",
+            f"bmc_contract_source_tokens={len(sources)}",
+            f"bmc_contract_fingerprint_cases={len(case_fingerprint_ids)}",
+            f"bmc_contract_fingerprint_unique={len(fingerprints)}",
+            f"bmc_contract_fingerprint_case_ids_cardinality={len(case_fingerprint_ids)}",
+            f"bmc_contract_fingerprint_identity_digest_u64={digest_u64}",
         ]
     )
 )
@@ -9691,11 +9816,13 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     sv_bmc_drop_remark_cases_file="$OUT_DIR/sv-tests-bmc-drop-remark-cases.tsv"
     sv_bmc_drop_remark_reasons_file="$OUT_DIR/sv-tests-bmc-drop-remark-reasons.tsv"
     sv_bmc_timeout_reasons_file="$OUT_DIR/sv-tests-bmc-timeout-reasons.tsv"
+    sv_bmc_contracts_file="$OUT_DIR/sv-tests-bmc-resolved-contracts.tsv"
     : > "$sv_bmc_provenance_file"
     : > "$sv_bmc_check_attribution_file"
     : > "$sv_bmc_drop_remark_cases_file"
     : > "$sv_bmc_drop_remark_reasons_file"
     : > "$sv_bmc_timeout_reasons_file"
+    : > "$sv_bmc_contracts_file"
     # sv-tests semantic closure currently relies on SMT-LIB execution to avoid
     # known JIT/Z3-LLVM backend divergence on local-var/disable-iff cases.
     run_suite sv-tests-bmc \
@@ -9710,6 +9837,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       BMC_DROP_REMARK_CASES_OUT="$sv_bmc_drop_remark_cases_file" \
       BMC_DROP_REMARK_REASONS_OUT="$sv_bmc_drop_remark_reasons_file" \
       BMC_TIMEOUT_REASON_CASES_OUT="$sv_bmc_timeout_reasons_file" \
+      BMC_RESOLVED_CONTRACTS_OUT="$sv_bmc_contracts_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
@@ -9743,6 +9871,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$sv_bmc_provenance_file")"
       if [[ -n "$bmc_provenance_summary" ]]; then
         summary="${summary} ${bmc_provenance_summary}"
+      fi
+      bmc_contract_summary="$(summarize_bmc_resolved_contracts_file "$sv_bmc_contracts_file")"
+      if [[ -n "$bmc_contract_summary" ]]; then
+        summary="${summary} ${bmc_contract_summary}"
       fi
       bmc_check_summary="$(summarize_bmc_check_attribution_file "$sv_bmc_check_attribution_file")"
       if [[ -n "$bmc_check_summary" ]]; then
@@ -9797,11 +9929,13 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
     sv_bmc_uvm_semantics_drop_remark_cases_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-drop-remark-cases.tsv"
     sv_bmc_uvm_semantics_drop_remark_reasons_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-drop-remark-reasons.tsv"
     sv_bmc_uvm_semantics_timeout_reasons_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-timeout-reasons.tsv"
+    sv_bmc_uvm_semantics_contracts_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-resolved-contracts.tsv"
     : > "$sv_bmc_uvm_semantics_provenance_file"
     : > "$sv_bmc_uvm_semantics_check_attribution_file"
     : > "$sv_bmc_uvm_semantics_drop_remark_cases_file"
     : > "$sv_bmc_uvm_semantics_drop_remark_reasons_file"
     : > "$sv_bmc_uvm_semantics_timeout_reasons_file"
+    : > "$sv_bmc_uvm_semantics_contracts_file"
     # Keep the semantic-closure lane aligned with sv-tests/BMC backend policy.
     run_suite sv-tests-bmc-uvm-semantics \
       env "${FORMAL_BMC_TIMEOUT_ENV[@]}" \
@@ -9815,6 +9949,7 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       BMC_DROP_REMARK_CASES_OUT="$sv_bmc_uvm_semantics_drop_remark_cases_file" \
       BMC_DROP_REMARK_REASONS_OUT="$sv_bmc_uvm_semantics_drop_remark_reasons_file" \
       BMC_TIMEOUT_REASON_CASES_OUT="$sv_bmc_uvm_semantics_timeout_reasons_file" \
+      BMC_RESOLVED_CONTRACTS_OUT="$sv_bmc_uvm_semantics_contracts_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK=1 \
@@ -9849,6 +9984,10 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$sv_bmc_uvm_semantics_provenance_file")"
       if [[ -n "$bmc_provenance_summary" ]]; then
         summary="${summary} ${bmc_provenance_summary}"
+      fi
+      bmc_contract_summary="$(summarize_bmc_resolved_contracts_file "$sv_bmc_uvm_semantics_contracts_file")"
+      if [[ -n "$bmc_contract_summary" ]]; then
+        summary="${summary} ${bmc_contract_summary}"
       fi
       bmc_check_summary="$(summarize_bmc_check_attribution_file "$sv_bmc_uvm_semantics_check_attribution_file")"
       if [[ -n "$bmc_check_summary" ]]; then
@@ -9927,11 +10066,13 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
     verilator_bmc_drop_remark_cases_file="$OUT_DIR/verilator-bmc-drop-remark-cases.tsv"
     verilator_bmc_drop_remark_reasons_file="$OUT_DIR/verilator-bmc-drop-remark-reasons.tsv"
     verilator_bmc_timeout_reasons_file="$OUT_DIR/verilator-bmc-timeout-reasons.tsv"
+    verilator_bmc_contracts_file="$OUT_DIR/verilator-bmc-resolved-contracts.tsv"
     : > "$verilator_bmc_provenance_file"
     : > "$verilator_bmc_check_attribution_file"
     : > "$verilator_bmc_drop_remark_cases_file"
     : > "$verilator_bmc_drop_remark_reasons_file"
     : > "$verilator_bmc_timeout_reasons_file"
+    : > "$verilator_bmc_contracts_file"
     run_suite verilator-bmc \
       env "${FORMAL_BMC_TIMEOUT_ENV[@]}" \
       OUT="$OUT_DIR/verilator-bmc-results.txt" \
@@ -9944,6 +10085,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       BMC_DROP_REMARK_CASES_OUT="$verilator_bmc_drop_remark_cases_file" \
       BMC_DROP_REMARK_REASONS_OUT="$verilator_bmc_drop_remark_reasons_file" \
       BMC_TIMEOUT_REASON_CASES_OUT="$verilator_bmc_timeout_reasons_file" \
+      BMC_RESOLVED_CONTRACTS_OUT="$verilator_bmc_contracts_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$VERILATOR_BMC_SEMANTIC_TAG_MAP_FILE" \
       XFAILS="$VERILATOR_BMC_XFAILS" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
@@ -9977,6 +10119,10 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$verilator_bmc_provenance_file")"
       if [[ -n "$bmc_provenance_summary" ]]; then
         summary="${summary} ${bmc_provenance_summary}"
+      fi
+      bmc_contract_summary="$(summarize_bmc_resolved_contracts_file "$verilator_bmc_contracts_file")"
+      if [[ -n "$bmc_contract_summary" ]]; then
+        summary="${summary} ${bmc_contract_summary}"
       fi
       bmc_check_summary="$(summarize_bmc_check_attribution_file "$verilator_bmc_check_attribution_file")"
       if [[ -n "$bmc_check_summary" ]]; then
@@ -10045,11 +10191,13 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     yosys_bmc_drop_remark_cases_file="$OUT_DIR/yosys-bmc-drop-remark-cases.tsv"
     yosys_bmc_drop_remark_reasons_file="$OUT_DIR/yosys-bmc-drop-remark-reasons.tsv"
     yosys_bmc_timeout_reasons_file="$OUT_DIR/yosys-bmc-timeout-reasons.tsv"
+    yosys_bmc_contracts_file="$OUT_DIR/yosys-bmc-resolved-contracts.tsv"
     : > "$yosys_bmc_provenance_file"
     : > "$yosys_bmc_check_attribution_file"
     : > "$yosys_bmc_drop_remark_cases_file"
     : > "$yosys_bmc_drop_remark_reasons_file"
     : > "$yosys_bmc_timeout_reasons_file"
+    : > "$yosys_bmc_contracts_file"
     # NOTE: Do not pass BMC_ASSUME_KNOWN_INPUTS here; the yosys script defaults
     # it to 1 because yosys SVA tests are 2-state and need --assume-known-inputs
     # to avoid spurious X-driven counterexamples.  Only forward an explicit
@@ -10066,6 +10214,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       BMC_DROP_REMARK_CASES_OUT="$yosys_bmc_drop_remark_cases_file"
       BMC_DROP_REMARK_REASONS_OUT="$yosys_bmc_drop_remark_reasons_file"
       BMC_TIMEOUT_REASON_CASES_OUT="$yosys_bmc_timeout_reasons_file"
+      BMC_RESOLVED_CONTRACTS_OUT="$yosys_bmc_contracts_file"
       BMC_SEMANTIC_TAG_MAP_FILE="$YOSYS_BMC_SEMANTIC_TAG_MAP_FILE"
       TEST_FILTER="$YOSYS_BMC_TEST_FILTER"
       Z3_BIN="$Z3_BIN")
@@ -10115,6 +10264,10 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$yosys_bmc_provenance_file")"
       if [[ -n "$bmc_provenance_summary" ]]; then
         summary="${summary} ${bmc_provenance_summary}"
+      fi
+      bmc_contract_summary="$(summarize_bmc_resolved_contracts_file "$yosys_bmc_contracts_file")"
+      if [[ -n "$bmc_contract_summary" ]]; then
+        summary="${summary} ${bmc_contract_summary}"
       fi
       bmc_check_summary="$(summarize_bmc_check_attribution_file "$yosys_bmc_check_attribution_file")"
       if [[ -n "$bmc_check_summary" ]]; then
@@ -10219,7 +10372,8 @@ run_opentitan_bmc_lane() {
   local drop_remark_cases_file="$6"
   local drop_remark_reasons_file="$7"
   local timeout_reasons_file="$8"
-  local lane_assume_known_inputs="$9"
+  local resolved_contracts_file="$9"
+  local lane_assume_known_inputs="${10}"
 
   if ! lane_enabled "$lane_id"; then
     return
@@ -10232,6 +10386,7 @@ run_opentitan_bmc_lane() {
   : > "$drop_remark_cases_file"
   : > "$drop_remark_reasons_file"
   : > "$timeout_reasons_file"
+  : > "$resolved_contracts_file"
   rm -rf "$workdir"
 
   local opentitan_bmc_args=(--opentitan-root "$OPENTITAN_DIR")
@@ -10241,11 +10396,15 @@ run_opentitan_bmc_lane() {
   if [[ "$OPENTITAN_BMC_INCLUDE_MASKED" == "1" ]]; then
     opentitan_bmc_args+=(--include-masked)
   fi
+  if [[ -n "$OPENTITAN_BMC_CASE_POLICY_FILE" ]]; then
+    opentitan_bmc_args+=(--case-policy-file "$OPENTITAN_BMC_CASE_POLICY_FILE")
+  fi
 
   local opentitan_bmc_env=(OUT="$case_results"
     BMC_DROP_REMARK_CASES_OUT="$drop_remark_cases_file"
     BMC_DROP_REMARK_REASONS_OUT="$drop_remark_reasons_file"
     BMC_TIMEOUT_REASON_CASES_OUT="$timeout_reasons_file"
+    BMC_RESOLVED_CONTRACTS_OUT="$resolved_contracts_file"
     CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN"
     CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN"
     CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN"
@@ -10346,6 +10505,11 @@ PY
   if [[ -n "$bmc_case_summary" ]]; then
     summary="${summary} ${bmc_case_summary}"
   fi
+  local bmc_contract_summary
+  bmc_contract_summary="$(summarize_bmc_resolved_contracts_file "$resolved_contracts_file")"
+  if [[ -n "$bmc_contract_summary" ]]; then
+    summary="${summary} ${bmc_contract_summary}"
+  fi
   append_filtered_min_total_violation total summary
   maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
@@ -10362,6 +10526,7 @@ if [[ "$WITH_OPENTITAN_BMC" == "1" ]]; then
     "$OUT_DIR/opentitan-bmc-drop-remark-cases.tsv" \
     "$OUT_DIR/opentitan-bmc-drop-remark-reasons.tsv" \
     "$OUT_DIR/opentitan-bmc-timeout-reasons.tsv" \
+    "$OUT_DIR/opentitan-bmc-resolved-contracts.tsv" \
     "$BMC_ASSUME_KNOWN_INPUTS"
 fi
 
@@ -10376,6 +10541,7 @@ if [[ "$WITH_OPENTITAN_BMC_STRICT" == "1" ]]; then
     "$OUT_DIR/opentitan-bmc-strict-drop-remark-cases.tsv" \
     "$OUT_DIR/opentitan-bmc-strict-drop-remark-reasons.tsv" \
     "$OUT_DIR/opentitan-bmc-strict-timeout-reasons.tsv" \
+    "$OUT_DIR/opentitan-bmc-strict-resolved-contracts.tsv" \
     "1"
 fi
 
@@ -12865,6 +13031,50 @@ def collect_bmc_timeout_case_ids(out_dir: Path):
                     timeout_case_ids.setdefault(key, set()).add(case_id)
     return {key: ";".join(sorted(values)) for key, values in timeout_case_ids.items()}
 
+def collect_bmc_contract_fingerprint_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-resolved-contracts.tsv"),
+        (
+            "sv-tests-uvm",
+            "BMC_SEMANTICS",
+            out_dir / "sv-tests-bmc-uvm-semantics-resolved-contracts.tsv",
+        ),
+        (
+            "verilator-verification",
+            "BMC",
+            out_dir / "verilator-bmc-resolved-contracts.tsv",
+        ),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-resolved-contracts.tsv"),
+        ("opentitan", "BMC", out_dir / "opentitan-bmc-resolved-contracts.tsv"),
+        (
+            "opentitan",
+            "BMC_STRICT",
+            out_dir / "opentitan-bmc-strict-resolved-contracts.tsv",
+        ),
+    ]
+    case_ids = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 3:
+                    continue
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                fingerprint = parts[-1].strip() if parts else ""
+                if not fingerprint:
+                    continue
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    case_ids.setdefault(key, set()).add(f"{case_id}::{fingerprint}")
+    return {key: ";".join(sorted(values)) for key, values in case_ids.items()}
+
 def collect_bmc_semantic_bucket_case_ids(out_dir: Path):
     sources = [
         ("sv-tests", "BMC", out_dir / "sv-tests-bmc-semantic-buckets.tsv"),
@@ -13493,6 +13703,7 @@ bmc_abstraction_provenance = collect_bmc_abstraction_provenance(out_dir)
 bmc_drop_remark_case_ids = collect_bmc_drop_remark_cases(out_dir)
 bmc_drop_remark_case_reason_ids = collect_bmc_drop_remark_case_reasons(out_dir)
 bmc_timeout_case_ids = collect_bmc_timeout_case_ids(out_dir)
+bmc_contract_fingerprint_case_ids = collect_bmc_contract_fingerprint_case_ids(out_dir)
 bmc_semantic_bucket_case_ids = collect_bmc_semantic_bucket_case_ids(out_dir)
 lec_drop_remark_case_ids = collect_lec_drop_remark_cases(out_dir)
 lec_drop_remark_case_reason_ids = collect_lec_drop_remark_case_reasons(out_dir)
@@ -13556,6 +13767,7 @@ if baseline_path.exists():
                 'bmc_drop_remark_case_ids': row.get('bmc_drop_remark_case_ids', ''),
                 'bmc_drop_remark_case_reason_ids': row.get('bmc_drop_remark_case_reason_ids', ''),
                 'bmc_timeout_case_ids': row.get('bmc_timeout_case_ids', ''),
+                'bmc_contract_fingerprint_case_ids': row.get('bmc_contract_fingerprint_case_ids', ''),
                 'bmc_semantic_bucket_case_ids': row.get('bmc_semantic_bucket_case_ids', ''),
                 'lec_drop_remark_case_ids': row.get('lec_drop_remark_case_ids', ''),
                 'lec_drop_remark_case_reason_ids': row.get('lec_drop_remark_case_reason_ids', ''),
@@ -13603,6 +13815,7 @@ for row in rows:
         'bmc_drop_remark_case_ids': bmc_drop_remark_case_ids.get((row['suite'], row['mode']), ''),
         'bmc_drop_remark_case_reason_ids': bmc_drop_remark_case_reason_ids.get((row['suite'], row['mode']), ''),
         'bmc_timeout_case_ids': bmc_timeout_case_ids.get((row['suite'], row['mode']), ''),
+        'bmc_contract_fingerprint_case_ids': bmc_contract_fingerprint_case_ids.get((row['suite'], row['mode']), ''),
         'bmc_semantic_bucket_case_ids': bmc_semantic_bucket_case_ids.get((row['suite'], row['mode']), ''),
         'lec_drop_remark_case_ids': lec_drop_remark_case_ids.get((row['suite'], row['mode']), ''),
         'lec_drop_remark_case_reason_ids': lec_drop_remark_case_reason_ids.get((row['suite'], row['mode']), ''),
@@ -13644,6 +13857,7 @@ with baseline_path.open('w', newline='') as f:
             'bmc_drop_remark_case_ids',
             'bmc_drop_remark_case_reason_ids',
             'bmc_timeout_case_ids',
+            'bmc_contract_fingerprint_case_ids',
             'bmc_semantic_bucket_case_ids',
             'lec_drop_remark_case_ids',
             'lec_drop_remark_case_reason_ids',
@@ -13741,6 +13955,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_REASON_KEYS" == "1" || \
+      "$FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS" == "1" || \
@@ -13818,6 +14034,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS="$FAIL_ON_NEW_LEC_CIRCT_VERILOG_ERROR_CASE_REASONS" \
   FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES="$FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES" \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
+  FAIL_ON_NEW_BMC_REASON_KEYS="$FAIL_ON_NEW_BMC_REASON_KEYS" \
+  FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES="$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS" \
@@ -13937,6 +14155,8 @@ def classify_gate_rule_id(suite: str, mode: str, detail: str):
         return "strict_gate.bmc.timeout_cases.regression"
     if detail.startswith("new BMC timeout case IDs observed"):
         return "strict_gate.bmc.timeout_case_ids.new"
+    if detail.startswith("new BMC contract fingerprint case IDs observed"):
+        return "strict_gate.bmc.contract_fingerprint_case_ids.new"
     if detail.startswith("bmc_unknown_cases increased"):
         return "strict_gate.bmc.unknown_cases.regression"
     if detail.startswith("lec_timeout_cases increased"):
@@ -14583,6 +14803,50 @@ def collect_lec_circt_verilog_error_case_reasons(out_dir: Path):
                     )
     return case_reason_ids
 
+def collect_bmc_contract_fingerprint_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-resolved-contracts.tsv"),
+        (
+            "sv-tests-uvm",
+            "BMC_SEMANTICS",
+            out_dir / "sv-tests-bmc-uvm-semantics-resolved-contracts.tsv",
+        ),
+        (
+            "verilator-verification",
+            "BMC",
+            out_dir / "verilator-bmc-resolved-contracts.tsv",
+        ),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-resolved-contracts.tsv"),
+        ("opentitan", "BMC", out_dir / "opentitan-bmc-resolved-contracts.tsv"),
+        (
+            "opentitan",
+            "BMC_STRICT",
+            out_dir / "opentitan-bmc-strict-resolved-contracts.tsv",
+        ),
+    ]
+    case_ids = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 3:
+                    continue
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                fingerprint = parts[-1].strip() if parts else ""
+                if not fingerprint:
+                    continue
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    case_ids.setdefault(key, set()).add(f"{case_id}::{fingerprint}")
+    return case_ids
+
 def collect_bmc_semantic_bucket_case_ids(out_dir: Path):
     sources = [
         ("sv-tests", "BMC", out_dir / "sv-tests-bmc-semantic-buckets.tsv"),
@@ -14819,6 +15083,9 @@ current_bmc_drop_remark_case_reasons = collect_bmc_drop_remark_case_reasons(
     Path(os.environ["OUT_DIR"])
 )
 current_bmc_timeout_case_ids = collect_bmc_timeout_case_ids(
+    Path(os.environ["OUT_DIR"])
+)
+current_bmc_contract_fingerprint_case_ids = collect_bmc_contract_fingerprint_case_ids(
     Path(os.environ["OUT_DIR"])
 )
 current_bmc_semantic_bucket_case_ids = collect_bmc_semantic_bucket_case_ids(
@@ -15227,6 +15494,12 @@ fail_on_new_lec_timeout_class_cases = (
 fail_on_new_bmc_unknown_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_UNKNOWN_CASES", "0") == "1"
 )
+fail_on_new_bmc_reason_keys = (
+    os.environ.get("FAIL_ON_NEW_BMC_REASON_KEYS", "0") == "1"
+)
+fail_on_new_bmc_contract_fingerprint_case_ids = (
+    os.environ.get("FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS", "0") == "1"
+)
 fail_on_new_bmc_drop_remark_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_DROP_REMARK_CASES", "0") == "1"
 )
@@ -15613,6 +15886,40 @@ for key, current_row in summary.items():
                     sample += ", ..."
                 gate_errors.append(
                     f"{suite} {mode}: new BMC timeout case IDs observed (baseline={len(baseline_timeout_case_set)} current={len(current_timeout_case_set)}, window={baseline_window}): {sample}"
+                )
+    if fail_on_new_bmc_contract_fingerprint_case_ids and mode.startswith("BMC"):
+        baseline_contract_case_ids_raw = [
+            row.get("bmc_contract_fingerprint_case_ids") for row in compare_rows
+        ]
+        if any(raw is not None for raw in baseline_contract_case_ids_raw):
+            baseline_contract_case_set = set()
+            for raw in baseline_contract_case_ids_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_contract_case_set.add(token)
+            current_contract_case_set = current_bmc_contract_fingerprint_case_ids.get(
+                key, set()
+            )
+            new_contract_cases = sorted(
+                current_contract_case_set - baseline_contract_case_set
+            )
+            if new_contract_cases:
+                sample = ", ".join(new_contract_cases[:3])
+                if len(new_contract_cases) > 3:
+                    sample += ", ..."
+                gate_errors.add(
+                    suite,
+                    mode,
+                    (
+                        "new BMC contract fingerprint case IDs observed "
+                        f"(baseline={len(baseline_contract_case_set)} "
+                        f"current={len(current_contract_case_set)}, "
+                        f"window={baseline_window}): {sample}"
+                    ),
+                    rule_id="strict_gate.bmc.contract_fingerprint_case_ids.new",
                 )
     if fail_on_new_lec_drop_remark_case_ids and mode.startswith("LEC"):
         baseline_drop_case_ids_raw = [
@@ -16719,6 +17026,38 @@ for key, current_row in summary.items():
                         )
     if mode.startswith("BMC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
+        if fail_on_new_bmc_reason_keys:
+            baseline_reason_keys = set()
+            for counts in parsed_counts:
+                for counter_key in counts.keys():
+                    if (
+                        counter_key.startswith("bmc_")
+                        and "_reason_" in counter_key
+                        and counter_key.endswith("_cases")
+                    ):
+                        baseline_reason_keys.add(counter_key)
+            should_enforce_bmc_reason_key_drift = (
+                bool(baseline_reason_keys) or not strict_gate
+            )
+            if should_enforce_bmc_reason_key_drift:
+                current_reason_keys = {
+                    counter_key
+                    for counter_key in current_counts.keys()
+                    if counter_key.startswith("bmc_")
+                    and "_reason_" in counter_key
+                    and counter_key.endswith("_cases")
+                }
+                new_reason_keys = sorted(current_reason_keys - baseline_reason_keys)
+                if new_reason_keys:
+                    sample = ", ".join(new_reason_keys[:3])
+                    if len(new_reason_keys) > 3:
+                        sample += ", ..."
+                    gate_errors.add(
+                        suite,
+                        mode,
+                        f"new BMC reason keys observed (baseline={len(baseline_reason_keys)} current={len(current_reason_keys)}, window={baseline_window}): {sample}",
+                        rule_id="strict_gate.bmc.reason_keys.new",
+                    )
         if bmc_counter_keys:
             for counter_key in bmc_counter_keys:
                 baseline_values = []

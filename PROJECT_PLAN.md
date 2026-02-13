@@ -63,6 +63,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 13, 2026, strict-gate contract fingerprint drift)
+
+1. Added resolved-contract fingerprint summary ingestion in `run_formal_all.sh` (`summarize_bmc_resolved_contracts_file`).
+2. Wired `BMC_RESOLVED_CONTRACTS_OUT` through all `BMC*` lanes, including OpenTitan default/strict.
+3. Added baseline persistence of `case_id::contract_fingerprint` tuples via new baseline column:
+   - `bmc_contract_fingerprint_case_ids`.
+4. Added strict-gate drift control for tuple deltas:
+   - `--fail-on-new-bmc-contract-fingerprint-case-ids`.
+5. Enabled the new fingerprint tuple check under `--strict-gate` defaults.
+6. Added focused tests:
+   - `run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids.test`
+   - `run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids-defaults.test`
+7. Validation snapshot:
+   - `bash -n utils/run_formal_all.sh`: PASS
+   - focused `llvm-lit` slices: PASS (8/8, 6/6)
+8. Remaining limitations:
+   - no equivalent resolved-contract fingerprint plane in LEC/mutation strict gates yet.
+   - no cross-lane (BMC/LEC/mutation) provenance schema enforcement yet.
+9. Next long-term features (BMC/LEC/mutation focus):
+   - add LEC and mutation contract artifacts with the same fingerprint semantics.
+   - add lane-crossing provenance parity checks in strict-gate policy profiles.
+   - add schema-versioned contract payloads to protect drift checks through feature evolution.
+
 ### Formal Closure Snapshot Update (February 13, 2026, deterministic contract fingerprints)
 
 1. Added deterministic `contract_fingerprint` emission to resolved contract artifacts in `run_pairwise_circt_bmc.py`.
