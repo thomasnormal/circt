@@ -1,4 +1,28 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1219 - February 13, 2026
+
+### Formal Contracts: Deterministic Resolved-Contract Fingerprints
+
+1. Added `contract_fingerprint` as a final column in `--resolved-contracts-file` rows emitted by `utils/run_pairwise_circt_bmc.py`.
+2. Fingerprint contract is deterministic by construction:
+   - payload = effective contract fields joined by ASCII unit separator (`0x1f`)
+   - digest = `sha256(payload)` truncated to 16 hex chars.
+3. Updated focused provenance regressions to assert exact expected fingerprints:
+   - `test/Tools/run-pairwise-circt-bmc-resolved-contracts-file.test`
+   - `test/Tools/run-opentitan-bmc-case-policy-provenance.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py utils/run_opentitan_circt_bmc.py`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-pairwise-circt-bmc-case-.*\.test|run-pairwise-circt-bmc-resolved-contracts-file\.test|run-opentitan-bmc-case-policy-.*\.test'`
+  - PASS (15/15)
+
+### Remaining Limitations
+
+- Strict-gate summaries still do not ingest/export `contract_fingerprint` rows for drift gating.
+- LEC and mutation runners still need the same resolved-contract fingerprint plane.
+
 ## Iteration 1218 - February 13, 2026
 
 ### Formal Contracts: Resolved Policy Provenance Export (Pairwise + OpenTitan)
