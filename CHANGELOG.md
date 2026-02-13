@@ -1,4 +1,27 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1260 - February 13, 2026
+
+### Formal-All Resolved-Contract Schema Marker Ratchet
+
+1. Added `--require-resolved-contract-schema-marker` to `utils/run_formal_all.sh`.
+2. When enabled, BMC/LEC resolved-contract summarizers now fail if a non-empty contracts artifact does not include `#resolved_contract_schema_version=1`.
+3. This provides a staged migration path from permissive parsing to strict schema contracts without forcing immediate breakage for legacy fixtures.
+
+### Tests
+
+1. Added:
+   - `test/Tools/run-formal-all-resolved-contract-schema-required-bmc.test`
+   - `test/Tools/run-formal-all-resolved-contract-schema-required-lec.test`
+2. Updated:
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-formal-all-help.test build-ot/tools/circt/test/Tools/run-formal-all-resolved-contract-schema-invalid.test build-ot/tools/circt/test/Tools/run-formal-all-resolved-contract-schema-required-bmc.test build-ot/tools/circt/test/Tools/run-formal-all-resolved-contract-schema-required-lec.test build-ot/tools/circt/test/Tools/run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids.test build-ot/tools/circt/test/Tools/run-formal-all-strict-gate-lec-contract-fingerprint-case-ids.test`
+  - PASS (6/6)
+
 ## Iteration 1259 - February 13, 2026
 
 ### Formal-All Resolved-Contract Schema Versioning (BMC/LEC)

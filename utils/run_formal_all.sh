@@ -179,6 +179,10 @@ Options:
                          Fail when new resolved-contract fingerprint tuples
                          (`lec_contract_fingerprint_case_ids`) appear vs
                          baseline for any `LEC*` lane
+  --require-resolved-contract-schema-marker
+                         Require `#resolved_contract_schema_version=1` in
+                         every non-empty BMC/LEC resolved-contract artifact
+                         consumed by this run
   --fail-on-bmc-lec-contract-fingerprint-parity
                          Fail when BMC contract fingerprint values are
                          not present in current LEC contract fingerprints
@@ -2199,6 +2203,7 @@ FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_REASON_KEYS=0
 FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS=0
+REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER=0
 FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY=0
@@ -2676,6 +2681,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
     --fail-on-new-lec-contract-fingerprint-case-ids)
       FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
+    --require-resolved-contract-schema-marker)
+      REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER=1; shift ;;
     --fail-on-bmc-lec-contract-fingerprint-parity)
       FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=1; shift ;;
     --fail-on-new-bmc-lec-contract-fingerprint-parity)
@@ -9220,7 +9227,7 @@ summarize_bmc_resolved_contracts_file() {
     echo ""
     return 0
   fi
-  BMC_RESOLVED_CONTRACTS_FILE="$contracts_file" python3 - <<'PY'
+  REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER="$REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER" BMC_RESOLVED_CONTRACTS_FILE="$contracts_file" python3 - <<'PY'
 import hashlib
 import os
 import sys
@@ -9237,14 +9244,18 @@ fingerprints = set()
 case_fingerprint_ids = set()
 
 EXPECTED_SCHEMA_VERSION = 1
+REQUIRE_SCHEMA_MARKER = os.environ.get("REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER", "0") == "1"
+schema_marker_seen = False
 
 def iter_contract_parts(file_path: Path):
+    global schema_marker_seen
     with file_path.open(encoding="utf-8") as f:
         for line_no, line in enumerate(f, start=1):
             line = line.rstrip("\n")
             if not line:
                 continue
             if line.startswith("#resolved_contract_schema_version="):
+                schema_marker_seen = True
                 raw_version = line.split("=", 1)[1].strip()
                 try:
                     schema_version = int(raw_version)
@@ -9288,6 +9299,16 @@ for parts in iter_contract_parts(path):
             identity = "__aggregate__"
         case_fingerprint_ids.add(f"{identity}::{fingerprint}")
     rows += 1
+
+if REQUIRE_SCHEMA_MARKER and not schema_marker_seen:
+    print(
+        (
+            f"missing resolved-contract schema marker in {path}: "
+            f"expected #resolved_contract_schema_version={EXPECTED_SCHEMA_VERSION}"
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 
 digest_u64 = 0
 if case_fingerprint_ids:
@@ -9315,7 +9336,7 @@ summarize_lec_resolved_contracts_file() {
     echo ""
     return 0
   fi
-  LEC_RESOLVED_CONTRACTS_FILE="$contracts_file" python3 - <<'PY'
+  REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER="$REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER" LEC_RESOLVED_CONTRACTS_FILE="$contracts_file" python3 - <<'PY'
 import hashlib
 import os
 import sys
@@ -9332,14 +9353,18 @@ fingerprints = set()
 case_fingerprint_ids = set()
 
 EXPECTED_SCHEMA_VERSION = 1
+REQUIRE_SCHEMA_MARKER = os.environ.get("REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER", "0") == "1"
+schema_marker_seen = False
 
 def iter_contract_parts(file_path: Path):
+    global schema_marker_seen
     with file_path.open(encoding="utf-8") as f:
         for line_no, line in enumerate(f, start=1):
             line = line.rstrip("\n")
             if not line:
                 continue
             if line.startswith("#resolved_contract_schema_version="):
+                schema_marker_seen = True
                 raw_version = line.split("=", 1)[1].strip()
                 try:
                     schema_version = int(raw_version)
@@ -9383,6 +9408,16 @@ for parts in iter_contract_parts(path):
             identity = "__aggregate__"
         case_fingerprint_ids.add(f"{identity}::{fingerprint}")
     rows += 1
+
+if REQUIRE_SCHEMA_MARKER and not schema_marker_seen:
+    print(
+        (
+            f"missing resolved-contract schema marker in {path}: "
+            f"expected #resolved_contract_schema_version={EXPECTED_SCHEMA_VERSION}"
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 
 digest_u64 = 0
 if case_fingerprint_ids:
