@@ -196,6 +196,9 @@ Options:
   --fail-on-mutation-lec-contract-fingerprint-lane-parity
                          Fail when mutation lane contract fingerprints are
                          not present in matching LEC lanes
+  --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped
+                         Fail when mutation lanes missing explicit lane-map
+                         matches are also missing in current LEC lanes
   --mutation-lec-contract-fingerprint-lane-map-file FILE
                          Optional lane-map file for mutation/LEC lane
                          parity. Each non-comment line:
@@ -2148,6 +2151,7 @@ FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=0
 FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS=0
 FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=0
+FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED=0
 MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE=""
 MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
 MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
@@ -2609,6 +2613,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY=1; shift ;;
     --fail-on-mutation-lec-contract-fingerprint-lane-parity)
       FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=1; shift ;;
+    --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped)
+      FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED=1; FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=1; shift ;;
     --mutation-lec-contract-fingerprint-lane-map-file)
       MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE="$2"; shift 2 ;;
     --mutation-contract-fingerprint-case-id-allowlist-file)
@@ -4710,8 +4716,12 @@ if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATIO
   echo "--mutation-gate-status-case-id-allowlist-file requires --fail-on-new-mutation-gate-status-case-ids or --strict-gate" >&2
   exit 1
 fi
-if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
-  echo "--mutation-lec-contract-fingerprint-lane-map-file requires --fail-on-mutation-lec-contract-fingerprint-lane-parity or --strict-gate" >&2
+if [[ "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" == "1" && -z "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" ]]; then
+  echo "--fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped requires --mutation-lec-contract-fingerprint-lane-map-file" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" != "1" && "$STRICT_GATE" != "1" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" != "1" ]]; then
+  echo "--mutation-lec-contract-fingerprint-lane-map-file requires --fail-on-mutation-lec-contract-fingerprint-lane-parity, --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped, or --strict-gate" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_UNEXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_CASES_FILE" ]]; then
@@ -14403,6 +14413,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" == "1" || \
       "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" == "1" || \
       "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" == "1" || \
+      "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS" == "1" || \
@@ -14489,6 +14500,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS="$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" \
+  FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" \
   MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE="$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" \
   MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
   MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
@@ -14967,18 +14979,23 @@ def load_mutation_lec_contract_fingerprint_lane_map():
     return exact_map, prefix_rules, regex_rules
 
 
-def map_mutation_to_lec_lane_id(mutation_lane: str) -> str:
+def map_mutation_to_lec_lane_id_with_source(mutation_lane: str):
     mapped = mutation_lec_contract_fingerprint_lane_exact.get(mutation_lane)
     if mapped is not None:
-        return mapped
+        return mapped, "exact"
     for mutation_prefix, lec_prefix, _ in mutation_lec_contract_fingerprint_lane_prefix_rules:
         if mutation_lane.startswith(mutation_prefix):
-            return f"{lec_prefix}{mutation_lane[len(mutation_prefix):]}"
+            return f"{lec_prefix}{mutation_lane[len(mutation_prefix):]}", "prefix"
     for pattern, replacement, _ in mutation_lec_contract_fingerprint_lane_regex_rules:
         mapped, count = pattern.subn(replacement, mutation_lane, count=1)
         if count > 0:
-            return mapped
-    return mutation_lane
+            return mapped, "regex"
+    return mutation_lane, "identity"
+
+
+def map_mutation_to_lec_lane_id(mutation_lane: str) -> str:
+    mapped_lane, _ = map_mutation_to_lec_lane_id_with_source(mutation_lane)
+    return mapped_lane
 
 
 def load_mutation_contract_fingerprint_case_id_allowlist():
@@ -16380,6 +16397,10 @@ fail_on_mutation_lec_contract_fingerprint_parity = (
 )
 fail_on_mutation_lec_contract_fingerprint_lane_parity = (
     os.environ.get("FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY", "0") == "1"
+)
+fail_on_mutation_lec_contract_fingerprint_lane_map_unmapped = (
+    os.environ.get("FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED", "0")
+    == "1"
 )
 fail_on_new_bmc_drop_remark_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_DROP_REMARK_CASES", "0") == "1"
@@ -18545,13 +18566,20 @@ if fail_on_mutation_lec_contract_fingerprint_lane_parity:
     )
     if mutation_contract_case_ids and current_lec_contract_fingerprint_case_ids:
         mutation_lane_fingerprints = {}
+        identity_mapped_missing_candidates = set()
         for token in mutation_contract_case_ids:
             lane = extract_case_id_token(token)
             fingerprint = extract_fingerprint_token(token)
             if not lane or not fingerprint:
                 continue
-            mapped_lane = map_mutation_to_lec_lane_id(lane)
+            mapped_lane, map_source = map_mutation_to_lec_lane_id_with_source(lane)
             mutation_lane_fingerprints.setdefault(mapped_lane, set()).add(fingerprint)
+            if (
+                fail_on_mutation_lec_contract_fingerprint_lane_map_unmapped
+                and mutation_lec_contract_fingerprint_lane_map_file
+                and map_source == "identity"
+            ):
+                identity_mapped_missing_candidates.add((lane, mapped_lane))
 
         lec_lane_fingerprints = {}
         for case_id_set in current_lec_contract_fingerprint_case_ids.values():
@@ -18583,6 +18611,30 @@ if fail_on_mutation_lec_contract_fingerprint_lane_parity:
                     ),
                     rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_ids.missing_in_lec",
                 )
+
+            if (
+                fail_on_mutation_lec_contract_fingerprint_lane_map_unmapped
+                and mutation_lec_contract_fingerprint_lane_map_file
+                and identity_mapped_missing_candidates
+            ):
+                unmapped_missing_mutation_lanes = sorted(
+                    mutation_lane
+                    for mutation_lane, mapped_lane in identity_mapped_missing_candidates
+                    if mapped_lane not in lec_lane_fingerprints
+                )
+                if unmapped_missing_mutation_lanes:
+                    sample = ", ".join(unmapped_missing_mutation_lanes[:3])
+                    if len(unmapped_missing_mutation_lanes) > 3:
+                        sample += ", ..."
+                    gate_errors.add(
+                        mutation_key[0],
+                        mutation_key[1],
+                        (
+                            "mutation lane-map unmapped lanes missing in LEC "
+                            f"(unmapped={len(unmapped_missing_mutation_lanes)}): {sample}"
+                        ),
+                        rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_map_unmapped.missing_in_lec",
+                    )
 
             missing_lane_pairs = []
             for lane, mutation_fingerprints in mutation_lane_fingerprints.items():
