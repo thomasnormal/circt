@@ -32,6 +32,12 @@ Optional:
   --fail-on-new-mutation-source-fingerprint-identities
                             Fail when new mutation-source fingerprint identities
                             appear vs --baseline-results-file
+  --fail-on-contract-fingerprint-divergence
+                            Fail when current-run lane contract fingerprint
+                            identities diverge (cardinality > 1)
+  --fail-on-mutation-source-fingerprint-divergence
+                            Fail when current-run lane mutation-source
+                            fingerprint identities diverge (cardinality > 1)
   --strict-provenance-gate
                             Enable all provenance tuple/identity drift checks
   --provenance-gate-report-json FILE
@@ -242,6 +248,8 @@ FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES=0
 FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES=0
+FAIL_ON_CONTRACT_FINGERPRINT_DIVERGENCE=0
+FAIL_ON_MUTATION_SOURCE_FINGERPRINT_DIVERGENCE=0
 STRICT_PROVENANCE_GATE=0
 INCLUDE_LANE_REGEX=()
 EXCLUDE_LANE_REGEX=()
@@ -387,6 +395,8 @@ while [[ $# -gt 0 ]]; do
     --fail-on-new-mutation-source-fingerprint-case-ids) FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=1; shift ;;
     --fail-on-new-contract-fingerprint-identities) FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES=1; shift ;;
     --fail-on-new-mutation-source-fingerprint-identities) FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES=1; shift ;;
+    --fail-on-contract-fingerprint-divergence) FAIL_ON_CONTRACT_FINGERPRINT_DIVERGENCE=1; shift ;;
+    --fail-on-mutation-source-fingerprint-divergence) FAIL_ON_MUTATION_SOURCE_FINGERPRINT_DIVERGENCE=1; shift ;;
     --strict-provenance-gate) STRICT_PROVENANCE_GATE=1; shift ;;
     --provenance-gate-report-json) PROVENANCE_GATE_REPORT_JSON="$2"; shift 2 ;;
     --provenance-gate-report-tsv) PROVENANCE_GATE_REPORT_TSV="$2"; shift 2 ;;
@@ -605,7 +615,7 @@ RESULTS_FILE="${RESULTS_FILE:-${OUT_DIR}/results.tsv}"
 GATE_SUMMARY_FILE="${GATE_SUMMARY_FILE:-${OUT_DIR}/gate_summary.tsv}"
 PROVENANCE_SUMMARY_FILE="${PROVENANCE_SUMMARY_FILE:-${OUT_DIR}/provenance_summary.tsv}"
 PROVENANCE_GATE_REPORT_ENABLED=0
-if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 || -n "$PROVENANCE_GATE_REPORT_JSON" || -n "$PROVENANCE_GATE_REPORT_TSV" ]]; then
+if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_CONTRACT_FINGERPRINT_DIVERGENCE" -eq 1 || "$FAIL_ON_MUTATION_SOURCE_FINGERPRINT_DIVERGENCE" -eq 1 || -n "$PROVENANCE_GATE_REPORT_JSON" || -n "$PROVENANCE_GATE_REPORT_TSV" ]]; then
   PROVENANCE_GATE_REPORT_ENABLED=1
   PROVENANCE_GATE_REPORT_JSON="${PROVENANCE_GATE_REPORT_JSON:-${OUT_DIR}/provenance_gate_report.json}"
   PROVENANCE_GATE_REPORT_TSV="${PROVENANCE_GATE_REPORT_TSV:-${OUT_DIR}/provenance_gate_report.tsv}"
@@ -811,6 +821,35 @@ case_ids_sample() {
   printf "%s" "$sample"
 }
 
+sample_fingerprint_count_pairs() {
+  local map_name="$1"
+  local limit="${2:-3}"
+  local sample=""
+  local count=0
+  local fingerprint=""
+  declare -n fingerprint_counts="$map_name"
+
+  while IFS= read -r fingerprint; do
+    [[ -z "$fingerprint" ]] && continue
+    if [[ -n "$sample" ]]; then
+      sample+=", "
+    fi
+    sample+="${fingerprint}:${fingerprint_counts[$fingerprint]}"
+    count=$((count + 1))
+    if [[ "$count" -ge "$limit" ]]; then
+      break
+    fi
+  done < <(printf "%s\n" "${!fingerprint_counts[@]}" | sort)
+
+  if [[ "${#fingerprint_counts[@]}" -gt "$limit" ]]; then
+    sample+=", ..."
+  fi
+  if [[ -z "$sample" ]]; then
+    sample="none"
+  fi
+  printf "%s" "$sample"
+}
+
 sanitize_provenance_gate_field() {
   local value="$1"
   value="${value//$'\t'/ }"
@@ -851,6 +890,8 @@ write_provenance_gate_report() {
   FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES="$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" \
   FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES="$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" \
+  FAIL_ON_CONTRACT_FINGERPRINT_DIVERGENCE="$FAIL_ON_CONTRACT_FINGERPRINT_DIVERGENCE" \
+  FAIL_ON_MUTATION_SOURCE_FINGERPRINT_DIVERGENCE="$FAIL_ON_MUTATION_SOURCE_FINGERPRINT_DIVERGENCE" \
   BASELINE_RESULTS_FILE="$BASELINE_RESULTS_FILE" \
   python3 - <<'PY'
 import csv
@@ -906,6 +947,14 @@ payload = {
     == "1",
     "fail_on_new_mutation_source_fingerprint_identities": os.environ.get(
         "FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES", "0"
+    )
+    == "1",
+    "fail_on_contract_fingerprint_divergence": os.environ.get(
+        "FAIL_ON_CONTRACT_FINGERPRINT_DIVERGENCE", "0"
+    )
+    == "1",
+    "fail_on_mutation_source_fingerprint_divergence": os.environ.get(
+        "FAIL_ON_MUTATION_SOURCE_FINGERPRINT_DIVERGENCE", "0"
     )
     == "1",
     "provenance_gate_failures": int(os.environ.get("PROVENANCE_GATE_FAILURES", "0")),
@@ -2076,6 +2125,28 @@ if [[ "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 ]]; then
     provenance_gate_failures=$((provenance_gate_failures + 1))
   fi
 fi
+if [[ "$FAIL_ON_CONTRACT_FINGERPRINT_DIVERGENCE" -eq 1 ]]; then
+  contract_identity_cardinality="${#CONTRACT_FINGERPRINT_COUNTS[@]}"
+  if [[ "$contract_identity_cardinality" -gt 1 ]]; then
+    contract_identity_divergence_sample="$(sample_fingerprint_count_pairs CONTRACT_FINGERPRINT_COUNTS 3)"
+    contract_identity_divergence_detail="contract fingerprint divergence observed (unique=${contract_identity_cardinality}): ${contract_identity_divergence_sample}"
+    contract_identity_divergence_message="Provenance gate: ${contract_identity_divergence_detail}"
+    echo "$contract_identity_divergence_message" >&2
+    append_provenance_gate_diagnostic "$PROVENANCE_GATE_DIAGNOSTICS_FILE" "mutation_matrix.provenance.contract_fingerprint_identities.divergent" "$contract_identity_divergence_detail" "$contract_identity_divergence_message"
+    provenance_gate_failures=$((provenance_gate_failures + 1))
+  fi
+fi
+if [[ "$FAIL_ON_MUTATION_SOURCE_FINGERPRINT_DIVERGENCE" -eq 1 ]]; then
+  source_identity_cardinality="${#MUTATION_SOURCE_FINGERPRINT_COUNTS[@]}"
+  if [[ "$source_identity_cardinality" -gt 1 ]]; then
+    source_identity_divergence_sample="$(sample_fingerprint_count_pairs MUTATION_SOURCE_FINGERPRINT_COUNTS 3)"
+    source_identity_divergence_detail="mutation-source fingerprint divergence observed (unique=${source_identity_cardinality}): ${source_identity_divergence_sample}"
+    source_identity_divergence_message="Provenance gate: ${source_identity_divergence_detail}"
+    echo "$source_identity_divergence_message" >&2
+    append_provenance_gate_diagnostic "$PROVENANCE_GATE_DIAGNOSTICS_FILE" "mutation_matrix.provenance.mutation_source_fingerprint_identities.divergent" "$source_identity_divergence_detail" "$source_identity_divergence_message"
+    provenance_gate_failures=$((provenance_gate_failures + 1))
+  fi
+fi
 
 summary_failures="$failures"
 if [[ "$provenance_gate_failures" -gt 0 ]]; then
@@ -2093,7 +2164,7 @@ fi
 echo "Mutation matrix summary: pass=${passes} fail=${summary_failures}"
 echo "Gate summary: $GATE_SUMMARY_FILE"
 echo "Provenance summary: $PROVENANCE_SUMMARY_FILE"
-if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 ]]; then
+if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_CONTRACT_FINGERPRINT_DIVERGENCE" -eq 1 || "$FAIL_ON_MUTATION_SOURCE_FINGERPRINT_DIVERGENCE" -eq 1 ]]; then
   echo "Provenance gate failures: ${provenance_gate_failures}"
 fi
 echo "Mutation matrix generated-mutation cache: hit_lanes=${generated_cache_hit_lanes} miss_lanes=${generated_cache_miss_lanes} saved_runtime_ns=${generated_cache_saved_runtime_ns} lock_wait_ns=${generated_cache_lock_wait_ns} lock_contended_lanes=${generated_cache_lock_contended_lanes}"

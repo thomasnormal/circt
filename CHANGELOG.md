@@ -1,4 +1,35 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1226 - February 13, 2026
+
+### Mutation Matrix Provenance Strict-Gate: Intra-Run Divergence Controls
+
+1. Extended `utils/run_mutation_matrix.sh` with two new provenance strict-gate controls that do not require a baseline:
+   - `--fail-on-contract-fingerprint-divergence`
+   - `--fail-on-mutation-source-fingerprint-divergence`
+2. Added divergence diagnostics keyed by stable rule IDs:
+   - `mutation_matrix.provenance.contract_fingerprint_identities.divergent`
+   - `mutation_matrix.provenance.mutation_source_fingerprint_identities.divergent`
+3. Extended structured provenance gate report payloads with explicit divergence policy flags:
+   - `fail_on_contract_fingerprint_divergence`
+   - `fail_on_mutation_source_fingerprint_divergence`
+4. Added focused regression coverage:
+   - `test/Tools/run-mutation-matrix-provenance-divergence-gate.test`
+   - updated `test/Tools/run-mutation-matrix-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-mutation-matrix-(help|provenance-summary|provenance-gate|provenance-identity-gate|provenance-gate-report|provenance-divergence-gate)\\.test'`
+  - PASS (6/6)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-mutation-matrix-.*\\.test'`
+  - PASS (54/54)
+
+### Remaining Limitations
+
+- Divergence gates currently operate at run-level identity cardinality; they do not yet emit per-lane canonical provenance tuples in dedicated artifact files.
+- `run_formal_all.sh` strict-gate still does not ingest mutation provenance rule-id diagnostics into a unified BMC/LEC/mutation strict report plane.
+
 ## Iteration 1225 - February 13, 2026
 
 ### Mutation Matrix Provenance Strict-Gate: Structured Report Artifacts

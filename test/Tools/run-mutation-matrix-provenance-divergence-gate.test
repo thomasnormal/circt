@@ -1,0 +1,52 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_DETECT\n2 M_MISS\n' > %t/mutations-base.txt
+// RUN: printf '1 M_DETECT\n' > %t/mutations-alt.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    -d) design="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp "$design" "$out"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "$MUTATION_SPEC" == "M_DETECT" ]]; then\n  echo DETECTED > result.txt\nelse\n  echo SURVIVED > result.txt\nfi\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't\tbash %t/fake-test.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 'lane_a\t%t/design.il\t%t/mutations-base.txt\t%t/tests.tsv\t-\t-\t40\n' > %t/lanes-pass.tsv
+// RUN: printf 'lane_a\t%t/design.il\t%t/mutations-base.txt\t%t/tests.tsv\t-\t-\t40\n' > %t/lanes-diverge.tsv
+// RUN: printf 'lane_b\t%t/design.il\t%t/mutations-alt.txt\t%t/tests.tsv\t-\t-\t40\n' >> %t/lanes-diverge.tsv
+
+// RUN: %S/../../utils/run_mutation_matrix.sh \
+// RUN:   --lanes-tsv %t/lanes-pass.tsv \
+// RUN:   --out-dir %t/pass \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --fail-on-contract-fingerprint-divergence \
+// RUN:   --fail-on-mutation-source-fingerprint-divergence \
+// RUN:   2>&1 | FileCheck %s --check-prefix=PASS
+
+// RUN: not %S/../../utils/run_mutation_matrix.sh \
+// RUN:   --lanes-tsv %t/lanes-diverge.tsv \
+// RUN:   --out-dir %t/diverge \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --fail-on-contract-fingerprint-divergence \
+// RUN:   --fail-on-mutation-source-fingerprint-divergence \
+// RUN:   --provenance-gate-report-json %t/diverge/provenance-gate.json \
+// RUN:   --provenance-gate-report-tsv %t/diverge/provenance-gate.tsv \
+// RUN:   2>&1 | FileCheck %s --check-prefix=FAIL
+
+// RUN: FileCheck %s --check-prefix=JSON < %t/diverge/provenance-gate.json
+// RUN: FileCheck %s --check-prefix=TSV < %t/diverge/provenance-gate.tsv
+
+// PASS: Mutation matrix summary: pass=1 fail=0
+// PASS: Provenance gate failures: 0
+
+// FAIL: Provenance gate: contract fingerprint divergence observed
+// FAIL: Provenance gate: mutation-source fingerprint divergence observed
+// FAIL: Mutation matrix summary: pass=2 fail=2
+// FAIL: Provenance gate failures: 2
+
+// JSON-DAG: "status": "fail"
+// JSON-DAG: "fail_on_contract_fingerprint_divergence": true
+// JSON-DAG: "fail_on_mutation_source_fingerprint_divergence": true
+// JSON-DAG: "diagnostic_count": 2
+// JSON-DAG: "rule_id": "mutation_matrix.provenance.contract_fingerprint_identities.divergent"
+// JSON-DAG: "rule_id": "mutation_matrix.provenance.mutation_source_fingerprint_identities.divergent"
+
+// TSV: status{{[[:space:]]+}}rule_id{{[[:space:]]+}}detail{{[[:space:]]+}}message
+// TSV: fail{{[[:space:]]+}}mutation_matrix.provenance.contract_fingerprint_identities.divergent{{[[:space:]]+}}contract fingerprint divergence observed{{.*}}
+// TSV: fail{{[[:space:]]+}}mutation_matrix.provenance.mutation_source_fingerprint_identities.divergent{{[[:space:]]+}}mutation-source fingerprint divergence observed{{.*}}
