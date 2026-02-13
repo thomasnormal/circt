@@ -17,6 +17,9 @@ Optional:
   --provenance-summary-file FILE
                             Provenance aggregate TSV
                             (default: <out-dir>/provenance_summary.tsv)
+  --provenance-tuples-file FILE
+                            Per-lane canonical provenance tuple TSV
+                            (default: <out-dir>/provenance_tuples.tsv)
   --baseline-results-file FILE
                             Baseline results TSV for provenance strict-gate
                             tuple checks
@@ -200,6 +203,7 @@ OUT_DIR="${PWD}/mutation-matrix-results"
 RESULTS_FILE=""
 GATE_SUMMARY_FILE=""
 PROVENANCE_SUMMARY_FILE=""
+PROVENANCE_TUPLES_FILE=""
 PROVENANCE_GATE_REPORT_JSON=""
 PROVENANCE_GATE_REPORT_TSV=""
 BASELINE_RESULTS_FILE=""
@@ -390,6 +394,7 @@ while [[ $# -gt 0 ]]; do
     --results-file) RESULTS_FILE="$2"; shift 2 ;;
     --gate-summary-file) GATE_SUMMARY_FILE="$2"; shift 2 ;;
     --provenance-summary-file) PROVENANCE_SUMMARY_FILE="$2"; shift 2 ;;
+    --provenance-tuples-file) PROVENANCE_TUPLES_FILE="$2"; shift 2 ;;
     --baseline-results-file) BASELINE_RESULTS_FILE="$2"; shift 2 ;;
     --fail-on-new-contract-fingerprint-case-ids) FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
     --fail-on-new-mutation-source-fingerprint-case-ids) FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=1; shift ;;
@@ -614,6 +619,7 @@ mkdir -p "$OUT_DIR"
 RESULTS_FILE="${RESULTS_FILE:-${OUT_DIR}/results.tsv}"
 GATE_SUMMARY_FILE="${GATE_SUMMARY_FILE:-${OUT_DIR}/gate_summary.tsv}"
 PROVENANCE_SUMMARY_FILE="${PROVENANCE_SUMMARY_FILE:-${OUT_DIR}/provenance_summary.tsv}"
+PROVENANCE_TUPLES_FILE="${PROVENANCE_TUPLES_FILE:-${OUT_DIR}/provenance_tuples.tsv}"
 PROVENANCE_GATE_REPORT_ENABLED=0
 if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_CONTRACT_FINGERPRINT_DIVERGENCE" -eq 1 || "$FAIL_ON_MUTATION_SOURCE_FINGERPRINT_DIVERGENCE" -eq 1 || -n "$PROVENANCE_GATE_REPORT_JSON" || -n "$PROVENANCE_GATE_REPORT_TSV" ]]; then
   PROVENANCE_GATE_REPORT_ENABLED=1
@@ -1936,6 +1942,7 @@ else
 fi
 
 printf "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\tconfig_error_code\tconfig_error_reason\tprequalify_summary_present\tprequalify_total_mutants\tprequalify_not_propagated_mutants\tprequalify_propagated_mutants\tprequalify_create_mutated_error_mutants\tprequalify_probe_error_mutants\tprequalify_cmd_token_not_propagated_mutants\tprequalify_cmd_token_propagated_mutants\tprequalify_cmd_rc_not_propagated_mutants\tprequalify_cmd_rc_propagated_mutants\tprequalify_cmd_timeout_propagated_mutants\tprequalify_cmd_error_mutants\tlane_contract_fingerprint\tlane_mutation_source_fingerprint\n" > "$RESULTS_FILE"
+printf "lane_id\tcontract_fingerprint\tmutation_source_fingerprint\tcontract_case_id\tmutation_source_case_id\tprovenance_tuple_id\n" > "$PROVENANCE_TUPLES_FILE"
 failures="$parse_failures"
 passes=0
 generated_cache_hit_lanes=0
@@ -1946,6 +1953,9 @@ generated_cache_lock_contended_lanes=0
 declare -A GATE_COUNTS=()
 declare -A CONTRACT_FINGERPRINT_COUNTS=()
 declare -A MUTATION_SOURCE_FINGERPRINT_COUNTS=()
+declare -A CONTRACT_CASE_IDS=()
+declare -A MUTATION_SOURCE_CASE_IDS=()
+declare -A PROVENANCE_TUPLE_IDS=()
 if [[ "$parse_failures" -gt 0 ]]; then
   GATE_COUNTS["PARSE_ERROR"]="$parse_failures"
 fi
@@ -1957,6 +1967,7 @@ for i in "${EXECUTED_INDICES[@]}"; do
     printf "%s\tFAIL\t1\t0.00\tMISSING_STATUS\t%s\t%s\t%s\tdisabled\t0\t0\t0\t0\t0\t-\t-\t0\t-\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t-\t-\n" \
       "${LANE_ID[$i]}" "${OUT_DIR}/${LANE_ID[$i]}" \
       "${OUT_DIR}/${LANE_ID[$i]}/metrics.tsv" "${OUT_DIR}/${LANE_ID[$i]}/summary.json" >> "$RESULTS_FILE"
+    printf "%s\t-\t-\t-\t-\t-\n" "${LANE_ID[$i]}" >> "$PROVENANCE_TUPLES_FILE"
     GATE_COUNTS["MISSING_STATUS"]=$(( ${GATE_COUNTS["MISSING_STATUS"]:-0} + 1 ))
     continue
   fi
@@ -2003,6 +2014,24 @@ for i in "${EXECUTED_INDICES[@]}"; do
   if [[ -n "$lane_mutation_source_fingerprint" && "$lane_mutation_source_fingerprint" != "-" ]]; then
     MUTATION_SOURCE_FINGERPRINT_COUNTS["$lane_mutation_source_fingerprint"]=$(( ${MUTATION_SOURCE_FINGERPRINT_COUNTS["$lane_mutation_source_fingerprint"]:-0} + 1 ))
   fi
+  contract_case_id="-"
+  mutation_source_case_id="-"
+  provenance_tuple_id="-"
+  if [[ -n "$lane_contract_fingerprint" && "$lane_contract_fingerprint" != "-" ]]; then
+    contract_case_id="${LANE_ID[$i]}::${lane_contract_fingerprint}"
+    CONTRACT_CASE_IDS["$contract_case_id"]=1
+  fi
+  if [[ -n "$lane_mutation_source_fingerprint" && "$lane_mutation_source_fingerprint" != "-" ]]; then
+    mutation_source_case_id="${LANE_ID[$i]}::${lane_mutation_source_fingerprint}"
+    MUTATION_SOURCE_CASE_IDS["$mutation_source_case_id"]=1
+  fi
+  if [[ "$contract_case_id" != "-" && "$mutation_source_case_id" != "-" ]]; then
+    provenance_tuple_id="${LANE_ID[$i]}::${lane_contract_fingerprint}::${lane_mutation_source_fingerprint}"
+    PROVENANCE_TUPLE_IDS["$provenance_tuple_id"]=1
+  fi
+  printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
+    "${LANE_ID[$i]}" "$lane_contract_fingerprint" "$lane_mutation_source_fingerprint" \
+    "$contract_case_id" "$mutation_source_case_id" "$provenance_tuple_id" >> "$PROVENANCE_TUPLES_FILE"
 done
 
 {
@@ -2016,6 +2045,9 @@ done
 
 contract_fingerprints_digest="-"
 mutation_source_fingerprints_digest="-"
+contract_case_ids_digest="-"
+mutation_source_case_ids_digest="-"
+provenance_tuple_ids_digest="-"
 if [[ "${#CONTRACT_FINGERPRINT_COUNTS[@]}" -gt 0 ]]; then
   contract_fingerprints_digest="$(
     for fingerprint in $(printf "%s\n" "${!CONTRACT_FINGERPRINT_COUNTS[@]}" | sort); do
@@ -2030,14 +2062,29 @@ if [[ "${#MUTATION_SOURCE_FINGERPRINT_COUNTS[@]}" -gt 0 ]]; then
     done | hash_stdin
   )"
 fi
+if [[ "${#CONTRACT_CASE_IDS[@]}" -gt 0 ]]; then
+  contract_case_ids_digest="$(printf "%s\n" "${!CONTRACT_CASE_IDS[@]}" | sort | hash_stdin)"
+fi
+if [[ "${#MUTATION_SOURCE_CASE_IDS[@]}" -gt 0 ]]; then
+  mutation_source_case_ids_digest="$(printf "%s\n" "${!MUTATION_SOURCE_CASE_IDS[@]}" | sort | hash_stdin)"
+fi
+if [[ "${#PROVENANCE_TUPLE_IDS[@]}" -gt 0 ]]; then
+  provenance_tuple_ids_digest="$(printf "%s\n" "${!PROVENANCE_TUPLE_IDS[@]}" | sort | hash_stdin)"
+fi
 
 {
   printf "scope\tname\tvalue\n"
   printf "metric\texecuted_lanes\t%s\n" "${#EXECUTED_INDICES[@]}"
   printf "metric\tcontract_fingerprints_unique\t%s\n" "${#CONTRACT_FINGERPRINT_COUNTS[@]}"
   printf "metric\tmutation_source_fingerprints_unique\t%s\n" "${#MUTATION_SOURCE_FINGERPRINT_COUNTS[@]}"
+  printf "metric\tcontract_case_ids_cardinality\t%s\n" "${#CONTRACT_CASE_IDS[@]}"
+  printf "metric\tmutation_source_case_ids_cardinality\t%s\n" "${#MUTATION_SOURCE_CASE_IDS[@]}"
+  printf "metric\tprovenance_tuple_ids_cardinality\t%s\n" "${#PROVENANCE_TUPLE_IDS[@]}"
   printf "metric\tcontract_fingerprints_digest\t%s\n" "$contract_fingerprints_digest"
   printf "metric\tmutation_source_fingerprints_digest\t%s\n" "$mutation_source_fingerprints_digest"
+  printf "metric\tcontract_case_ids_digest\t%s\n" "$contract_case_ids_digest"
+  printf "metric\tmutation_source_case_ids_digest\t%s\n" "$mutation_source_case_ids_digest"
+  printf "metric\tprovenance_tuple_ids_digest\t%s\n" "$provenance_tuple_ids_digest"
   if [[ "${#CONTRACT_FINGERPRINT_COUNTS[@]}" -gt 0 ]]; then
     for fingerprint in $(printf "%s\n" "${!CONTRACT_FINGERPRINT_COUNTS[@]}" | sort); do
       printf "contract_fingerprint_count\t%s\t%s\n" "$fingerprint" "${CONTRACT_FINGERPRINT_COUNTS[$fingerprint]}"
@@ -2164,6 +2211,7 @@ fi
 echo "Mutation matrix summary: pass=${passes} fail=${summary_failures}"
 echo "Gate summary: $GATE_SUMMARY_FILE"
 echo "Provenance summary: $PROVENANCE_SUMMARY_FILE"
+echo "Provenance tuples: $PROVENANCE_TUPLES_FILE"
 if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_CONTRACT_FINGERPRINT_DIVERGENCE" -eq 1 || "$FAIL_ON_MUTATION_SOURCE_FINGERPRINT_DIVERGENCE" -eq 1 ]]; then
   echo "Provenance gate failures: ${provenance_gate_failures}"
 fi

@@ -4,6 +4,7 @@
 // CHECK: --lanes-tsv
 // CHECK: --gate-summary-file
 // CHECK: --provenance-summary-file
+// CHECK: --provenance-tuples-file
 // CHECK: --baseline-results-file
 // CHECK: --fail-on-new-contract-fingerprint-case-ids
 // CHECK: --fail-on-new-mutation-source-fingerprint-case-ids
