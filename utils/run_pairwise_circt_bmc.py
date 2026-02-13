@@ -48,6 +48,7 @@ Relative file paths are resolved against the manifest file directory.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import os
 import re
@@ -56,6 +57,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
@@ -162,21 +164,34 @@ def normalize_error_reason(text: str) -> str:
 def run_and_log(
     cmd: list[str], log_path: Path, out_path: Path | None, timeout_secs: int
 ) -> subprocess.CompletedProcess[str]:
-    try:
-        result = subprocess.run(
-            cmd,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_secs if timeout_secs > 0 else None,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
-        write_log(log_path, stdout, stderr)
-        if out_path is not None:
-            out_path.write_text(stdout)
-        raise
+    # Binary relinking races can produce transient ETXTBSY while a tool is open
+    # for writing; retry a few times with bounded backoff.
+    etxtbsy_retries = 4
+    result: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(etxtbsy_retries + 1):
+        try:
+            result = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_secs if timeout_secs > 0 else None,
+            )
+            break
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            write_log(log_path, stdout, stderr)
+            if out_path is not None:
+                out_path.write_text(stdout)
+            raise
+        except OSError as exc:
+            if exc.errno == errno.ETXTBSY and attempt < etxtbsy_retries:
+                time.sleep(0.2 * (attempt + 1))
+                continue
+            raise
+    if result is None:
+        raise RuntimeError("internal error: subprocess result missing")
     write_log(log_path, result.stdout, result.stderr)
     if out_path is not None:
         out_path.write_text(result.stdout)

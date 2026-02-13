@@ -83,14 +83,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ### Remaining Formal Limitations (BMC/LEC/mutation focus)
 
-1. **BMC operational robustness**: ETXTBSY (`Text file busy`) contention can still occur when tool binaries are concurrently relinked; we currently diagnose it precisely but do not yet retry resiliently.
+1. **BMC operational robustness**: bounded ETXTBSY retry is now implemented in `run_pairwise_circt_bmc.py`; remaining gap is broader transient launch resilience/telemetry parity for other launch-failure classes.
 2. **BMC semantic closure depth**: OpenTitan and sv-tests still need broader case-policy/mode-diff closure beyond canright and current local-var/disable-iff focused slices (notably multiclock and sequence-subroutine buckets).
 3. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
 4. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
 
 ### Next Long-Term Features (best long-term path)
 
-1. Add robust subprocess retry in pairwise BMC for ETXTBSY-class transient launch failures with bounded backoff and explicit audit counters.
+1. Extend launch-resilience policy beyond ETXTBSY (e.g., selected transient I/O launch races) with explicit strict-gate counters and per-reason retry telemetry.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
 
