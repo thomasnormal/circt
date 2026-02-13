@@ -5,6 +5,56 @@ VERIF_DIR="${1:-/home/thomas-ahle/verilator-verification}"
 shift || true
 BOUND="${BOUND:-10}"
 
+resolve_default_circt_tool() {
+  local tool_name="$1"
+  local preferred_dir="${2:-}"
+  local candidate
+
+  if [[ -n "$preferred_dir" ]]; then
+    candidate="${preferred_dir}/${tool_name}"
+    if [[ -x "$candidate" ]]; then
+      printf "%s\n" "$candidate"
+      return 0
+    fi
+  fi
+
+  for candidate in "build/bin/${tool_name}" "build-test/bin/${tool_name}"; do
+    if [[ -x "$candidate" ]]; then
+      printf "%s\n" "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v "$tool_name" >/dev/null 2>&1; then
+    command -v "$tool_name"
+    return 0
+  fi
+
+  if [[ -n "$preferred_dir" ]]; then
+    printf "%s\n" "${preferred_dir}/${tool_name}"
+  else
+    printf "build/bin/%s\n" "$tool_name"
+  fi
+}
+
+derive_tool_dir_from_verilog() {
+  local verilog_tool="$1"
+  local resolved=""
+
+  if [[ "$verilog_tool" == */* ]]; then
+    printf "%s\n" "$(dirname "$verilog_tool")"
+    return 0
+  fi
+
+  resolved="$(command -v "$verilog_tool" 2>/dev/null || true)"
+  if [[ -n "$resolved" ]]; then
+    printf "%s\n" "$(dirname "$resolved")"
+    return 0
+  fi
+
+  printf "%s\n" "build/bin"
+}
+
 # Memory limit settings to prevent system hangs
 CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
 CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-300}"
@@ -21,13 +71,9 @@ IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
 ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-0}"
 Z3_LIB="${Z3_LIB:-/home/thomas-ahle/z3-install/lib64/libz3.so}"
-CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
-if [[ "$CIRCT_VERILOG" == */* ]]; then
-  CIRCT_TOOL_DIR_DEFAULT="$(dirname "$CIRCT_VERILOG")"
-else
-  CIRCT_TOOL_DIR_DEFAULT="build/bin"
-fi
-CIRCT_BMC="${CIRCT_BMC:-$CIRCT_TOOL_DIR_DEFAULT/circt-bmc}"
+CIRCT_VERILOG="${CIRCT_VERILOG:-$(resolve_default_circt_tool "circt-verilog")}"
+CIRCT_TOOL_DIR_DEFAULT="$(derive_tool_dir_from_verilog "$CIRCT_VERILOG")"
+CIRCT_BMC="${CIRCT_BMC:-$(resolve_default_circt_tool "circt-bmc" "$CIRCT_TOOL_DIR_DEFAULT")}"
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
 BMC_FAIL_ON_VIOLATION="${BMC_FAIL_ON_VIOLATION:-1}"
