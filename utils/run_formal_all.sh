@@ -18852,7 +18852,11 @@ if fail_on_mutation_lec_contract_fingerprint_lane_parity:
                         ]
                         if any(raw is not None for raw in baseline_raw):
                             baseline_lec_lane_fingerprints = {}
+                            relevant_lec_keys = set(current_lec_contract_fingerprint_case_ids.keys())
                             for (baseline_suite, baseline_mode), baseline_rows in history.items():
+                                baseline_key = (baseline_suite, baseline_mode)
+                                if baseline_key not in relevant_lec_keys:
+                                    continue
                                 if not baseline_mode.startswith("LEC"):
                                     continue
                                 baseline_rows = list(baseline_rows)
