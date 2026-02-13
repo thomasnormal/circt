@@ -1,4 +1,35 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1276 - February 13, 2026
+
+### sv-tests BMC Frontend Error-Reason Contracts (OOM/Launch/Guard Attribution)
+
+1. Extended `utils/run_sv_tests_circt_bmc.sh` with explicit frontend error-reason export:
+   - new optional artifact: `BMC_FRONTEND_ERROR_REASON_CASES_OUT`.
+   - deduplicated `(case_id, case_path, reason)` rows for frontend-stage `ERROR` outcomes.
+2. Added deterministic reason classifier for frontend failures:
+   - `frontend_out_of_memory`
+   - `frontend_resource_guard_rss`
+   - `frontend_command_launch_text_file_busy`
+   - `frontend_command_launch_permission_denied`
+   - fallback: `frontend_command_exit_<status>`
+3. Added regression:
+   - `test/Tools/run-sv-tests-bmc-frontend-error-reasons.test`
+   - verifies OOM text in frontend log maps to `frontend_out_of_memory`.
+
+### Validation
+
+- `bash -n utils/run_sv_tests_circt_bmc.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv` focused slice:
+  - `run-sv-tests-bmc-frontend-error-reasons.test`
+  - `run-sv-tests-bmc-frontend-timeout.test`
+  - `run-sv-tests-bmc-timeout-stage-reasons.test`
+  - `run-sv-tests-bmc-keep-logs-frontend-error.test`
+  - `run-sv-tests-bmc-launch-retry-etxtbsy.test`
+  - PASS (5/5)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter='run-sv-tests-bmc-'`
+  - PASS (12 passed, 1 unsupported)
+
 ## Iteration 1275 - February 13, 2026
 
 ### sv-tests BMC Frontend Launch-Retry Correctness + Deterministic Coverage

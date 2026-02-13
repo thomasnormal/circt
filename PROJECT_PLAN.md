@@ -63,6 +63,21 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 13, 2026, frontend error-reason attribution)
+
+1. Added frontend error-reason contract export in `run_sv_tests_circt_bmc.sh`:
+   - `BMC_FRONTEND_ERROR_REASON_CASES_OUT` now emits deduplicated per-case frontend `ERROR` reasons.
+2. Reason taxonomy currently includes:
+   - `frontend_out_of_memory`
+   - `frontend_resource_guard_rss`
+   - `frontend_command_launch_text_file_busy`
+   - `frontend_command_launch_permission_denied`
+   - `frontend_command_exit_<status>`
+3. Added deterministic regression:
+   - `test/Tools/run-sv-tests-bmc-frontend-error-reasons.test`
+4. Impact on semantic closure:
+   - remaining UVM blockers (`16.11` sequence-subroutine, `16.13` multiclock) now have explicit frontend-stage reason attribution instead of generic `ERROR` buckets, improving strict-gate triage and long-term closure planning.
+
 ### Formal Closure Snapshot Update (February 13, 2026, sv-tests BMC launch-retry correctness)
 
 1. Fixed frontend launch-retry correctness in `utils/run_sv_tests_circt_bmc.sh`:

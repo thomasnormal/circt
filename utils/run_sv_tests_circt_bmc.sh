@@ -54,6 +54,7 @@ BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
 BMC_DROP_REMARK_CASES_OUT="${BMC_DROP_REMARK_CASES_OUT:-}"
 BMC_DROP_REMARK_REASONS_OUT="${BMC_DROP_REMARK_REASONS_OUT:-}"
 BMC_TIMEOUT_REASON_CASES_OUT="${BMC_TIMEOUT_REASON_CASES_OUT:-}"
+BMC_FRONTEND_ERROR_REASON_CASES_OUT="${BMC_FRONTEND_ERROR_REASON_CASES_OUT:-}"
 BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS - it's emitted before LTLToCore and LowerClockedAssertLike passes
@@ -199,6 +200,10 @@ if [[ -n "$BMC_TIMEOUT_REASON_CASES_OUT" ]]; then
   mkdir -p "$(dirname "$BMC_TIMEOUT_REASON_CASES_OUT")"
   : > "$BMC_TIMEOUT_REASON_CASES_OUT"
 fi
+if [[ -n "$BMC_FRONTEND_ERROR_REASON_CASES_OUT" ]]; then
+  mkdir -p "$(dirname "$BMC_FRONTEND_ERROR_REASON_CASES_OUT")"
+  : > "$BMC_FRONTEND_ERROR_REASON_CASES_OUT"
+fi
 
 pass=0
 fail=0
@@ -219,6 +224,7 @@ declare -A semantic_tags_by_case
 declare -A drop_remark_seen_cases
 declare -A drop_remark_seen_case_reasons
 declare -A timeout_reason_seen_case_reasons
+declare -A frontend_error_reason_seen_case_reasons
 
 load_semantic_tag_map() {
   if [[ -z "$BMC_SEMANTIC_TAG_MAP_FILE" || ! -f "$BMC_SEMANTIC_TAG_MAP_FILE" ]]; then
@@ -316,6 +322,52 @@ record_timeout_reason_case() {
   timeout_reason_seen_case_reasons["$reason_key"]=1
   mkdir -p "$(dirname "$BMC_TIMEOUT_REASON_CASES_OUT")"
   printf "%s\t%s\t%s\n" "$case_id" "$case_path" "$reason" >> "$BMC_TIMEOUT_REASON_CASES_OUT"
+}
+
+classify_frontend_error_reason() {
+  local status="$1"
+  local verilog_log="$2"
+  if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
+    printf '%s\n' "frontend_command_timeout"
+    return
+  fi
+  if [[ -s "$verilog_log" ]]; then
+    if grep -Fq "resource guard triggered: RSS" "$verilog_log"; then
+      printf '%s\n' "frontend_resource_guard_rss"
+      return
+    fi
+    if grep -Eq "LLVM ERROR: out of memory|Allocation failed|out of memory" "$verilog_log"; then
+      printf '%s\n' "frontend_out_of_memory"
+      return
+    fi
+    if [[ "$status" -eq 126 ]] && grep -Fq "Text file busy" "$verilog_log"; then
+      printf '%s\n' "frontend_command_launch_text_file_busy"
+      return
+    fi
+    if [[ "$status" -eq 126 ]] && \
+        grep -Eq "failed to run command .*: Permission denied" "$verilog_log"; then
+      printf '%s\n' "frontend_command_launch_permission_denied"
+      return
+    fi
+  fi
+  printf 'frontend_command_exit_%s\n' "$status"
+}
+
+record_frontend_error_reason_case() {
+  local case_id="$1"
+  local case_path="$2"
+  local reason="$3"
+  if [[ -z "$BMC_FRONTEND_ERROR_REASON_CASES_OUT" || -z "$reason" ]]; then
+    return
+  fi
+  local reason_key="${case_id}|${reason}"
+  if [[ -n "${frontend_error_reason_seen_case_reasons["$reason_key"]+x}" ]]; then
+    return
+  fi
+  frontend_error_reason_seen_case_reasons["$reason_key"]=1
+  mkdir -p "$(dirname "$BMC_FRONTEND_ERROR_REASON_CASES_OUT")"
+  printf "%s\t%s\t%s\n" "$case_id" "$case_path" "$reason" \
+    >> "$BMC_FRONTEND_ERROR_REASON_CASES_OUT"
 }
 
 load_semantic_tag_map
@@ -555,6 +607,7 @@ top_module=${top_module}
   if [[ "$cache_hit" != "1" ]]; then
     : > "$verilog_log"
     launch_attempt=0
+    frontend_error_reason=""
     while true; do
       if run_limited "${cmd[@]}" > "$mlir" 2>> "$verilog_log"; then
         verilog_status=0
@@ -598,11 +651,14 @@ top_module=${top_module}
         pass=$((pass + 1))
       else
         result="ERROR"
+        frontend_error_reason="$(classify_frontend_error_reason "$verilog_status" "$verilog_log")"
         error=$((error + 1))
       fi
       emit_result_row "$result" "$base" "$sv"
       if [[ "$result" == "TIMEOUT" ]]; then
         record_timeout_reason_case "$base" "$sv" "$frontend_timeout_reason"
+      elif [[ "$result" == "ERROR" ]]; then
+        record_frontend_error_reason_case "$base" "$sv" "$frontend_error_reason"
       fi
       if [[ -n "$KEEP_LOGS_DIR" ]]; then
         mkdir -p "$KEEP_LOGS_DIR"
@@ -847,6 +903,9 @@ if [[ -n "$BMC_DROP_REMARK_CASES_OUT" && -f "$BMC_DROP_REMARK_CASES_OUT" ]]; the
 fi
 if [[ -n "$BMC_DROP_REMARK_REASONS_OUT" && -f "$BMC_DROP_REMARK_REASONS_OUT" ]]; then
   sort -u -o "$BMC_DROP_REMARK_REASONS_OUT" "$BMC_DROP_REMARK_REASONS_OUT"
+fi
+if [[ -n "$BMC_FRONTEND_ERROR_REASON_CASES_OUT" && -f "$BMC_FRONTEND_ERROR_REASON_CASES_OUT" ]]; then
+  sort -u -o "$BMC_FRONTEND_ERROR_REASON_CASES_OUT" "$BMC_FRONTEND_ERROR_REASON_CASES_OUT"
 fi
 
 echo "sv-tests SVA summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"
