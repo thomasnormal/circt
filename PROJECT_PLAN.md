@@ -63,6 +63,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 13, 2026, pairwise BMC per-case execution contracts)
+
+1. Extended `utils/run_pairwise_circt_bmc.py` manifest schema with optional per-case execution contracts:
+   - `bmc_bound`
+   - `ignore_asserts_until`
+   - `assume_known_inputs` (`default|on|off`)
+   - `allow_multi_clock` (`default|on|off`)
+2. Added strict parser diagnostics for invalid contract values and preserved backward compatibility for existing manifests.
+3. Added focused regression coverage:
+   - `run-pairwise-circt-bmc-case-bmc-contract-override.test`
+   - `run-pairwise-circt-bmc-case-contract-invalid.test`
+4. Validation snapshot:
+   - `python3 -m py_compile utils/run_pairwise_circt_bmc.py`: PASS
+   - `llvm-lit` filtered pairwise slice: PASS (7/7)
+   - OpenTitan BMC/formal-all focused compatibility slice: PASS (5/5)
+5. Remaining limitations:
+   - per-case arbitrary `circt-bmc` argument bundles are not yet first-class; contracts are structured fields only.
+   - OpenTitan case generation still uses uniform generated contracts and does not yet consume an external per-case policy manifest.
+6. Next long-term features (BMC/LEC/mutation focus):
+   - add explicit per-case solver/time-budget policy fields (for large suites with heterogeneous complexity).
+   - wire OpenTitan (and other suites) to optional external policy manifests so generated cases can inherit contract overrides without script forks.
+   - feed per-case contract metadata into strict-gate artifacts for reproducibility and regression-causality diagnostics.
+
 ### Formal Closure Snapshot Update (February 12, 2026, OpenTitan BMC lane generalized backend)
 
 1. Added a reusable pairwise BMC execution backend:

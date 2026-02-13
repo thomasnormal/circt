@@ -1,4 +1,61 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1213 - February 13, 2026
+
+### Formal BMC Contracts: Per-Case Bounds and Solver Toggles in Pairwise Runner
+
+1. Extended `utils/run_pairwise_circt_bmc.py` case-manifest schema with optional per-case BMC execution contracts:
+   - `bmc_bound`
+   - `ignore_asserts_until`
+   - `assume_known_inputs` (`default|on|off` + boolean aliases)
+   - `allow_multi_clock` (`default|on|off` + boolean aliases)
+2. Added strict parser validation and clear diagnostics for malformed contract fields.
+3. Preserved backward compatibility with existing 3-7 column manifests.
+4. Added focused regression coverage:
+   - `test/Tools/run-pairwise-circt-bmc-case-bmc-contract-override.test`
+   - `test/Tools/run-pairwise-circt-bmc-case-contract-invalid.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-pairwise-circt-bmc-.*\.test'`
+  - PASS (7/7)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-opentitan-bmc-mode-label\.test|run-formal-all-opentitan-bmc.*\.test'`
+  - PASS (5/5)
+
+### Remaining Limitations
+
+- Pairwise manifests still cannot set per-case arbitrary `circt-bmc` option bundles (only structured contract fields).
+- OpenTitan case generation still emits uniform contracts per implementation cohort (no external per-case policy manifest wiring yet).
+
+## Iteration 1212 - February 13, 2026
+
+### UVM Sequencer Pull-Port Routing: Native-Aware Resolution + Direct Connect Capture
+
+1. Improved seq-item pull-port queue resolution in `LLHDProcessInterpreter`:
+   - added native-memory-aware owner promotion for connected provider addresses;
+   - added native-memory-aware vtable probing for `get_comp` fallback;
+   - added deterministic nearest-key sequencer selection when pointer-shape recovery cannot directly hit a FIFO key.
+2. Captured `uvm_port_base::connect` on direct call paths (not only `call_indirect`):
+   - `interpretFuncCall` (`func.call`)
+   - `interpretLLVMCall` (`llvm.call`)
+   This prevents native connection-map loss when UVM bypasses virtual dispatch.
+
+### Validation
+
+- rebuilt simulator:
+  - `ninja -C build-test circt-sim`
+  - PASS
+- APB dual-top trace repro (`CIRCT_UVM_ARGS='+UVM_TESTNAME=apb_8b_write_test'`, `CIRCT_SIM_TRACE_SEQ=1`):
+  - before: `seq_item_pull_port::get_next_item` popped with `fallback=1`
+  - after: same path resolves queue key with `fallback=0`
+- focused handshake sanity:
+  - `test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir`
+  - PASS (expected start/finish/get/item_done ordering)
+
+### Remaining Limitations
+
+- APB run still exits with 0% covergroup coverage after setup-stage progress; transaction-flow completion beyond `get_next_item` is still incomplete.
 ## Iteration 1211 - February 13, 2026
 
 ### sv-tests Simulation: 100% Score (907/907)

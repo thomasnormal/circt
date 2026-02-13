@@ -1,0 +1,15 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin %t/src
+// RUN: touch %t/src/a.sv %t/src/b.sv %t/src/c.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nout=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n: "${out:?}"\n: > "$out"\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nmod=""\nbound=""\nignore=""\nassume=0\nallow_mc=0\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --module=*) mod="${1#--module=}"; shift ;;\n    -b) bound="$2"; shift 2 ;;\n    --ignore-asserts-until=*) ignore="${1#--ignore-asserts-until=}"; shift ;;\n    --assume-known-inputs) assume=1; shift ;;\n    --allow-multi-clock) allow_mc=1; shift ;;\n    *) shift ;;\n  esac\ndone\nif [[ "$mod" == "top_default" ]]; then\n  [[ "$bound" == "5" && "$ignore" == "2" && "$assume" == "1" && "$allow_mc" == "1" ]] || exit 10\nelif [[ "$mod" == "top_case_on" ]]; then\n  [[ "$bound" == "7" && "$ignore" == "3" && "$assume" == "1" && "$allow_mc" == "1" ]] || exit 11\nelif [[ "$mod" == "top_case_off" ]]; then\n  [[ "$bound" == "5" && "$ignore" == "2" && "$assume" == "0" && "$allow_mc" == "0" ]] || exit 12\nfi\necho "BMC_RESULT=UNSAT"\nexit 0\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-bmc
+// RUN: printf 'default_case\ttop_default\t%t/src/a.sv\t%t/src\t%t/work/default\ncase_on\ttop_case_on\t%t/src/b.sv\t%t/src\t%t/work/on\t\tdefault\t7\t3\ton\ton\ncase_off\ttop_case_off\t%t/src/c.sv\t%t/src\t%t/work/off\t\tdefault\t\t\toff\toff\n' > %t/cases.tsv
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc BMC_RUN_SMTLIB=0 BMC_PREPARE_CORE_WITH_CIRCT_OPT=0 BMC_ASSUME_KNOWN_INPUTS=1 BMC_ALLOW_MULTI_CLOCK=1 OUT=%t/results.tsv %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --workdir %t/work --bound 5 --ignore-asserts-until 2 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RES < %t/results.tsv
+//
+// LOG: Running BMC on 3 pairwise case(s)...
+// LOG: pairwise BMC summary: total=3 pass=3 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// RES: PASS{{[[:space:]]+}}case_off{{[[:space:]]+}}{{.*}}work/off{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
+// RES: PASS{{[[:space:]]+}}case_on{{[[:space:]]+}}{{.*}}work/on{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
+// RES: PASS{{[[:space:]]+}}default_case{{[[:space:]]+}}{{.*}}work/default{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
