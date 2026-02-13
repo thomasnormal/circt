@@ -1,30 +1,32 @@
 # CIRCT UVM Parity Changelog
 ## Iteration 1224 - February 13, 2026
 
-### circt-sim config_db Native-Memory Writeback (Frontend-Independent Regression)
+### circt-sim config_db Native-Memory Writeback (Frontend-Independent Regressions)
 
-1. Added direct simulator regression `test/Tools/circt-sim/config-db-native-wrapper-writeback.mlir`.
-2. The test bypasses `circt-verilog`/UVM lowering and directly exercises:
-   - `config_db_default_implementation_t::set`
-   - `config_db_default_implementation_t::exists`
-   - `get_NNNN` wrapper interception with `!llhd.ref<!llvm.ptr>` output.
-3. Verifies that pointer payloads are written back into malloc-backed native memory slots:
-   - `exists_ok=1`
-   - `get_ok=1`
-   - `ptr_eq=1`
-   - `ptr_is_null=0`
+1. Added direct simulator regressions:
+   - `test/Tools/circt-sim/config-db-native-wrapper-writeback.mlir`
+   - `test/Tools/circt-sim/config-db-native-call-indirect-writeback.mlir`
+2. These tests bypass `circt-verilog`/UVM lowering and directly exercise both `config_db::get` interception routes:
+   - wrapper path (`get_NNNN` via `func.call`)
+   - virtual dispatch path (`config_db ... ::get` via `func.call_indirect`)
+3. Both regressions verify pointer payload writeback into malloc-backed native memory slots:
+   - success return (`*_ok=1`)
+   - pointer equality with source (`ptr_eq=1`)
+   - non-null destination (`ptr_is_null=0`)
 
 ### Validation
 
 - `build-test/bin/circt-sim test/Tools/circt-sim/config-db-native-wrapper-writeback.mlir --top test`
   - PASS
-- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim --filter 'config-db-native-wrapper-writeback\.mlir|native-store-oob-fallback\.mlir|vtable-dispatch-uvm-nesting\.mlir|uvm-static-singleton\.mlir'`
-  - PASS (4/4)
+- `build-test/bin/circt-sim test/Tools/circt-sim/config-db-native-call-indirect-writeback.mlir --top test`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim --filter 'config-db-native-wrapper-writeback\.mlir|config-db-native-call-indirect-writeback\.mlir|native-store-oob-fallback\.mlir|vtable-dispatch-uvm-nesting\.mlir|uvm-static-singleton\.mlir'`
+  - PASS (5/5)
 
 ### Remaining Limitations
 
-- This regression targets the direct `func.call` wrapper/implementation interceptor paths.
-- `call_indirect`-specific `config_db` dispatch remains primarily covered by higher-level SV/UVM tests that still depend on frontend compile throughput.
+- Direct regressions validate interpreter behavior only; end-to-end SV/UVM frontend throughput remains a separate concern.
+- The existing SV-based config/resource DB regressions still depend on `circt-verilog` compile performance in this workspace.
 
 ## Iteration 1223 - February 13, 2026
 
