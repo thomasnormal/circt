@@ -199,6 +199,9 @@ Options:
   --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped
                          Fail when mutation lanes missing explicit lane-map
                          matches are also missing in current LEC lanes
+  --fail-on-mutation-lec-contract-fingerprint-lane-map-identity-fallback
+                         Fail when mutation lanes fall back to identity map
+                         despite a lane-map file being provided
   --mutation-lec-contract-fingerprint-lane-map-file FILE
                          Optional lane-map file for mutation/LEC lane
                          parity. Each non-comment line:
@@ -2152,6 +2155,7 @@ FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS=0
 FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=0
 FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED=0
+FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK=0
 MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE=""
 MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
 MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
@@ -2615,6 +2619,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=1; shift ;;
     --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped)
       FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED=1; FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=1; shift ;;
+    --fail-on-mutation-lec-contract-fingerprint-lane-map-identity-fallback)
+      FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK=1; FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=1; shift ;;
     --mutation-lec-contract-fingerprint-lane-map-file)
       MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE="$2"; shift 2 ;;
     --mutation-contract-fingerprint-case-id-allowlist-file)
@@ -4720,8 +4726,12 @@ if [[ "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" == "1" && -
   echo "--fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped requires --mutation-lec-contract-fingerprint-lane-map-file" >&2
   exit 1
 fi
-if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" != "1" && "$STRICT_GATE" != "1" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" != "1" ]]; then
-  echo "--mutation-lec-contract-fingerprint-lane-map-file requires --fail-on-mutation-lec-contract-fingerprint-lane-parity, --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped, or --strict-gate" >&2
+if [[ "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" == "1" && -z "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" ]]; then
+  echo "--fail-on-mutation-lec-contract-fingerprint-lane-map-identity-fallback requires --mutation-lec-contract-fingerprint-lane-map-file" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" != "1" && "$STRICT_GATE" != "1" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" != "1" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" != "1" ]]; then
+  echo "--mutation-lec-contract-fingerprint-lane-map-file requires --fail-on-mutation-lec-contract-fingerprint-lane-parity, --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped, --fail-on-mutation-lec-contract-fingerprint-lane-map-identity-fallback, or --strict-gate" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_UNEXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_CASES_FILE" ]]; then
@@ -14414,6 +14424,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" == "1" || \
       "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" == "1" || \
       "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" == "1" || \
+      "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS" == "1" || \
@@ -14501,6 +14512,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" \
+  FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" \
   MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE="$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" \
   MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
   MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
@@ -16400,6 +16412,12 @@ fail_on_mutation_lec_contract_fingerprint_lane_parity = (
 )
 fail_on_mutation_lec_contract_fingerprint_lane_map_unmapped = (
     os.environ.get("FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED", "0")
+    == "1"
+)
+fail_on_mutation_lec_contract_fingerprint_lane_map_identity_fallback = (
+    os.environ.get(
+        "FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK", "0"
+    )
     == "1"
 )
 fail_on_new_bmc_drop_remark_cases = (
@@ -18566,6 +18584,7 @@ if fail_on_mutation_lec_contract_fingerprint_lane_parity:
     )
     if mutation_contract_case_ids and current_lec_contract_fingerprint_case_ids:
         mutation_lane_fingerprints = {}
+        identity_mapped_lanes = set()
         identity_mapped_missing_candidates = set()
         for token in mutation_contract_case_ids:
             lane = extract_case_id_token(token)
@@ -18574,12 +18593,13 @@ if fail_on_mutation_lec_contract_fingerprint_lane_parity:
                 continue
             mapped_lane, map_source = map_mutation_to_lec_lane_id_with_source(lane)
             mutation_lane_fingerprints.setdefault(mapped_lane, set()).add(fingerprint)
-            if (
-                fail_on_mutation_lec_contract_fingerprint_lane_map_unmapped
-                and mutation_lec_contract_fingerprint_lane_map_file
-                and map_source == "identity"
-            ):
-                identity_mapped_missing_candidates.add((lane, mapped_lane))
+            if map_source == "identity":
+                identity_mapped_lanes.add(lane)
+                if (
+                    fail_on_mutation_lec_contract_fingerprint_lane_map_unmapped
+                    and mutation_lec_contract_fingerprint_lane_map_file
+                ):
+                    identity_mapped_missing_candidates.add((lane, mapped_lane))
 
         lec_lane_fingerprints = {}
         for case_id_set in current_lec_contract_fingerprint_case_ids.values():
@@ -18610,6 +18630,25 @@ if fail_on_mutation_lec_contract_fingerprint_lane_parity:
                         f"missing lanes: {sample}"
                     ),
                     rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_ids.missing_in_lec",
+                )
+
+            if (
+                fail_on_mutation_lec_contract_fingerprint_lane_map_identity_fallback
+                and mutation_lec_contract_fingerprint_lane_map_file
+                and identity_mapped_lanes
+            ):
+                identity_fallback_lanes = sorted(identity_mapped_lanes)
+                sample = ", ".join(identity_fallback_lanes[:3])
+                if len(identity_fallback_lanes) > 3:
+                    sample += ", ..."
+                gate_errors.add(
+                    mutation_key[0],
+                    mutation_key[1],
+                    (
+                        "mutation lane-map identity fallback observed "
+                        f"(identity={len(identity_fallback_lanes)}): {sample}"
+                    ),
+                    rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_map_identity_fallback.present",
                 )
 
             if (
