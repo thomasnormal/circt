@@ -1,4 +1,43 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1271 - February 13, 2026
+
+### OpenTitan BMC Toolchain Resolution Hardening + Pairwise Exception Diagnostics
+
+1. Fixed OpenTitan BMC lane toolchain propagation in `utils/run_formal_all.sh`:
+   - OpenTitan BMC now resolves `CIRCT_OPT`/`CIRCT_BMC`/`CIRCT_LEC` from the OpenTitan verilog tool dir when available.
+   - Falls back to globally resolved formal toolchain when OpenTitan-local sibling tools are absent.
+2. Split strict preflight tool checks into:
+   - default core formal lanes (`sv-tests`, `verilator`, `yosys`)
+   - OpenTitan BMC lanes (`opentitan/BMC`, `opentitan/BMC_STRICT`)
+   This removes false strict-preflight dependency on default `build/bin/*` when only OpenTitan BMC lanes are selected.
+3. Improved `utils/run_pairwise_circt_bmc.py` exception handling:
+   - stage-specific diagnostics (`CIRCT_VERILOG_ERROR` / `CIRCT_OPT_ERROR` / `CIRCT_BMC_ERROR`)
+   - stage-annotated reason keys (`runner_command_exception_<stage>_*`)
+   - traceback emission into per-stage logs for root-cause visibility.
+4. Added focused regressions:
+   - `test/Tools/run-formal-all-opentitan-bmc-opentitan-toolchain-fallback.test`
+   - `test/Tools/run-pairwise-circt-bmc-missing-circt-opt.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py utils/run_opentitan_circt_bmc.py`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv` focused slice:
+  - `run-pairwise-circt-bmc-basic.test`
+  - `run-pairwise-circt-bmc-opt-prep.test`
+  - `run-pairwise-circt-bmc-missing-circt-opt.test`
+  - `run-formal-all-opentitan-bmc.test`
+  - `run-formal-all-opentitan-bmc-opentitan-toolchain-fallback.test`
+  - `run-formal-all-opentitan-bmc-mode-diff.test`
+  - `run-formal-all-strict-tool-preflight-missing-opentitan-bmc-runner.test`
+  - `run-formal-all-strict-gate-bmc-mode-diff-counters.test`
+  - PASS (8/8)
+- OpenTitan filtered real benchmark (BMC + BMC_STRICT + BMC_MODE_DIFF, canright only, bound=2):
+  - no missing-result/runner wiring noise
+  - semantic mode-diff signal observed (`BMC=FAIL`, `BMC_STRICT=PASS`, `BMC_MODE_DIFF strict_only_pass=1`)
+
 ## Iteration 1270 - February 13, 2026
 
 ### Formal Strict-Gate Mutation Scope + BMC Semantic Bucket Contract Sync

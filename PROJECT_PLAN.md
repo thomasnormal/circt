@@ -63,6 +63,37 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 13, 2026, OpenTitan BMC runner/toolchain reliability)
+
+1. Hardened `run_formal_all.sh` OpenTitan BMC tool propagation:
+   - OpenTitan BMC lanes now prefer OpenTitan-verilog sibling tools (`circt-opt`, `circt-bmc`, `circt-lec`) when executable.
+   - Automatic fallback to global formal toolchain remains for compatibility.
+2. Split strict preflight checks for formal tools:
+   - default core lanes vs OpenTitan BMC lanes are now validated independently.
+   - this avoids false failures when `--circt-verilog-opentitan` is provided without default `--circt-verilog`.
+3. Hardened `run_pairwise_circt_bmc.py` exception reporting:
+   - stage-specific error diag IDs
+   - stage-specific reason keys
+   - traceback persistence in per-stage logs for postmortem analysis.
+4. Added regression coverage:
+   - `test/Tools/run-formal-all-opentitan-bmc-opentitan-toolchain-fallback.test`
+   - `test/Tools/run-pairwise-circt-bmc-missing-circt-opt.test`
+5. Real filtered OpenTitan BMC mode-diff benchmark now emits semantic signal (not runner missing-results noise):
+   - `BMC=FAIL`, `BMC_STRICT=PASS`, `BMC_MODE_DIFF strict_only_pass=1` on `aes_sbox_canright` (bound=2).
+
+### Remaining Formal Limitations (BMC/LEC/mutation focus)
+
+1. **BMC operational robustness**: ETXTBSY (`Text file busy`) contention can still occur when tool binaries are concurrently relinked; we currently diagnose it precisely but do not yet retry resiliently.
+2. **BMC semantic closure depth**: OpenTitan and sv-tests still need broader case-policy/mode-diff closure beyond canright and current local-var/disable-iff focused slices (notably multiclock and sequence-subroutine buckets).
+3. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
+4. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
+
+### Next Long-Term Features (best long-term path)
+
+1. Add robust subprocess retry in pairwise BMC for ETXTBSY-class transient launch failures with bounded backoff and explicit audit counters.
+2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
+3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
+
 ### Formal Closure Snapshot Update (February 13, 2026, strict-gate contract fingerprint drift)
 
 1. Added resolved-contract fingerprint summary ingestion in `run_formal_all.sh` (`summarize_bmc_resolved_contracts_file`).
