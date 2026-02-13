@@ -1,4 +1,41 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1243 - February 13, 2026
+
+### Formal-All Baseline-Aware Lane-Map Identity-Fallback Gate
+
+1. Added a new strict gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-new-mutation-lec-contract-fingerprint-lane-map-identity-fallback`
+2. Implemented baseline-window-aware identity-fallback enforcement for mutation↔LEC lane parity:
+   - tracks current identity-fallback mutation lanes after lane-map application
+   - derives baseline identity-fallback mutation lanes from baseline mutation provenance contract IDs
+   - fails only when identity-fallback lanes are newly introduced vs baseline.
+3. Extended option contracts:
+   - new option requires `--mutation-lec-contract-fingerprint-lane-map-file`
+   - lane-map activation contract now also accepts the new baseline-aware flag.
+4. Added strict-gate rule ID for this check:
+   - `strict_gate.mutation.parity.contract_fingerprint_lane_map_identity_fallback_lanes.new`
+
+### Tests
+
+1. Added baseline-aware behavior regression:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-new.test`
+2. Added option-contract coverage:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-new-requires-map.test`
+3. Updated option/help coverage:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test`
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-requires-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-new-requires-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-new.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test`
+  - PASS (9/9)
+
+### Remaining Limitations
+
+- Baseline-aware identity-fallback detection applies the current lane-map policy to baseline provenance rows; if lane-map rules themselves change, drift is interpreted under the new mapping policy.
+
 ## Iteration 1242 - February 13, 2026
 
 ### circt-sim config_db native writeback offset regression

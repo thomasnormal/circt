@@ -1,0 +1,3 @@
+// RUN: not %S/../../utils/run_formal_all.sh --fail-on-new-mutation-lec-contract-fingerprint-lane-map-identity-fallback 2>&1 | FileCheck %s
+
+// CHECK: --fail-on-new-mutation-lec-contract-fingerprint-lane-map-identity-fallback requires --mutation-lec-contract-fingerprint-lane-map-file
