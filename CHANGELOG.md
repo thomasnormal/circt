@@ -1,4 +1,22 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1264 - February 13, 2026
+
+### Config_db Native Offset Regression Hardening
+
+1. Added non-zero-offset native-memory writeback regressions for `config_db::get`:
+   - `test/Tools/circt-sim/config-db-native-impl-direct-writeback-offset.mlir`
+   - `test/Tools/circt-sim/config-db-native-call-indirect-writeback-offset.mlir`
+2. These specifically verify writes into interior pointer slots (e.g. dynamic-array element addresses) for both direct implementation calls and `call_indirect` vtable dispatch.
+
+### Validation
+
+- `build-test/bin/circt-sim test/Tools/circt-sim/config-db-native-impl-direct-writeback-offset.mlir --top test`
+  - PASS
+- `build-test/bin/circt-sim test/Tools/circt-sim/config-db-native-call-indirect-writeback-offset.mlir --top test`
+  - PASS
+- `PATH=/home/thomas-ahle/circt/build-test/bin:$PATH build-ot/bin/llvm-lit -sv test/Tools/circt-sim/config-db-native-impl-direct-writeback-offset.mlir test/Tools/circt-sim/config-db-native-call-indirect-writeback-offset.mlir`
+  - PASS (2/2)
+
 ## Iteration 1263 - February 13, 2026
 
 ### Formal-All Mutation Provenance Canonical Row Validation
