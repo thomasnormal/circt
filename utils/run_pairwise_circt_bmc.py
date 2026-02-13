@@ -38,6 +38,8 @@ Only the first three columns are required.
 - contract_source: optional provenance label for the case contract (for example
   `exact:aes_sbox_canright` or `pattern:re:^foo`) that is emitted in
   `--resolved-contracts-file` artifacts.
+  The artifact appends `contract_fingerprint` (stable sha256-derived digest)
+  for drift checks.
 
 Relative file paths are resolved against the manifest file directory.
 """
@@ -45,6 +47,7 @@ Relative file paths are resolved against the manifest file directory.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shlex
@@ -299,6 +302,11 @@ def parse_case_bmc_extra_args(raw: str, line_no: int) -> list[str]:
                 )
                 raise SystemExit(1)
     return args
+
+
+def compute_contract_fingerprint(fields: list[str]) -> str:
+    payload = "\x1f".join(fields).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
 
 
 def load_cases(cases_file: Path) -> list[CaseSpec]:
@@ -593,20 +601,25 @@ def main() -> int:
             )
             case_bmc_extra_args_text = shlex.join(case.bmc_extra_args)
             contract_source = case.contract_source.strip() or "manifest"
+            contract_fields = [
+                contract_source,
+                case.backend_mode,
+                "1" if case_smoke_only else "0",
+                "1" if case_run_smtlib else "0",
+                str(case_timeout_secs),
+                str(case_bound),
+                str(case_ignore_asserts_until),
+                "1" if case_assume_known_inputs else "0",
+                "1" if case_allow_multi_clock else "0",
+                case_bmc_extra_args_text,
+            ]
+            contract_fingerprint = compute_contract_fingerprint(contract_fields)
             resolved_contract_rows.append(
                 (
                     case.case_id,
                     case_path,
-                    contract_source,
-                    case.backend_mode,
-                    "1" if case_smoke_only else "0",
-                    "1" if case_run_smtlib else "0",
-                    str(case_timeout_secs),
-                    str(case_bound),
-                    str(case_ignore_asserts_until),
-                    "1" if case_assume_known_inputs else "0",
-                    "1" if case_allow_multi_clock else "0",
-                    case_bmc_extra_args_text,
+                    *contract_fields,
+                    contract_fingerprint,
                 )
             )
 

@@ -63,6 +63,26 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 13, 2026, deterministic contract fingerprints)
+
+1. Added deterministic `contract_fingerprint` emission to resolved contract artifacts in `run_pairwise_circt_bmc.py`.
+2. Fingerprint contract:
+   - hash input: resolved contract fields joined with ASCII unit separator (`0x1f`)
+   - output: first 16 hex chars of SHA-256 digest.
+3. Strengthened provenance regressions to assert exact fingerprint values:
+   - `run-pairwise-circt-bmc-resolved-contracts-file.test`
+   - `run-opentitan-bmc-case-policy-provenance.test`
+4. Validation snapshot:
+   - `python3 -m py_compile` (pairwise+opentitan): PASS
+   - focused pairwise/OpenTitan policy lit slice: PASS (15/15).
+5. Remaining limitations:
+   - strict-gate summaries do not yet consume fingerprint rows for policy-drift gating.
+   - LEC/mutation lanes still need unified resolved-contract fingerprint artifacts.
+6. Next long-term features (BMC/LEC/mutation focus):
+   - extend fingerprint artifact emission/consumption to LEC and mutation runners.
+   - add strict-gate drift policies keyed by `(case_id, contract_fingerprint)`.
+   - add schema-versioned provenance contracts so future policy expansion stays CI-safe.
+
 ### Formal Closure Snapshot Update (February 13, 2026, resolved-contract provenance export)
 
 1. Added first-class resolved-contract artifact emission in `run_pairwise_circt_bmc.py` via `--resolved-contracts-file` / `BMC_RESOLVED_CONTRACTS_OUT`.
