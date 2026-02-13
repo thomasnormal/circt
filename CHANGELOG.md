@@ -1,4 +1,44 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1257 - February 13, 2026
+
+### Formal-All BMC↔LEC Case-ID Map Completeness Gates
+
+1. Added new BMC/LEC case-ID map completeness gate options in `utils/run_formal_all.sh`:
+   - `--fail-on-bmc-lec-contract-fingerprint-case-id-map-unmapped`
+   - `--fail-on-new-bmc-lec-contract-fingerprint-case-id-map-unmapped`
+2. Implemented strict-gate diagnostics for identity-fallback map misses (BMC case IDs that are not explicitly mapped and remain missing in LEC):
+   - current mismatch rule:
+     - `strict_gate.bmc.parity.contract_fingerprint_case_id_map_unmapped.missing_in_lec`
+   - baseline-aware new-drift rule:
+     - `strict_gate.bmc.parity.contract_fingerprint_case_id_map_unmapped.new_missing_in_lec`
+3. Added CLI validation contracts:
+   - both new options require `--bmc-lec-contract-fingerprint-case-id-map-file`
+   - map file now accepts parity gates, map-unmapped gates, or `--strict-gate` as valid enablement context.
+4. Enabled strict-default ratchet behavior when a BMC/LEC case-ID map file is provided:
+   - `--strict-gate` now enables the new map-unmapped drift gate under map-file context.
+
+### Tests
+
+1. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+2. Updated map-file gate requirement coverage:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-map-file-requires-gate.test`
+3. Added explicit map-unmapped option requirement coverage:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-map-unmapped-requires-map.test`
+4. Added current map-unmapped parity coverage:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-map-unmapped.test`
+5. Added baseline-aware map-unmapped drift coverage:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-map-unmapped-new.test`
+6. Added strict-default map-unmapped drift coverage:
+   - `test/Tools/run-formal-all-strict-gate-bmc-lec-contract-fingerprint-case-id-map-unmapped-defaults.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-map-file-requires-gate.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-map-unmapped-requires-map.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-map-unmapped.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-map-unmapped-new.test test/Tools/run-formal-all-strict-gate-bmc-lec-contract-fingerprint-case-id-map-unmapped-defaults.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity-map-file.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity-map-file-new.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity-new.test`
+  - PASS (10/10)
+
 ## Iteration 1256 - February 13, 2026
 
 ### Formal-All BMC↔LEC Case-ID Namespace Mapping for Parity Gates

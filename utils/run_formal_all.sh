@@ -200,6 +200,14 @@ Options:
                          Optional case-ID map file used to normalize BMC
                          `case_id::fingerprint` tuples into the LEC case-ID
                          namespace before BMC/LEC case-ID parity checks
+  --fail-on-bmc-lec-contract-fingerprint-case-id-map-unmapped
+                         Fail when BMC case IDs using identity fallback
+                         in the case-ID map are also missing in current
+                         LEC case IDs for the same suite
+  --fail-on-new-bmc-lec-contract-fingerprint-case-id-map-unmapped
+                         Fail when new BMC case IDs using identity fallback
+                         in the case-ID map are missing in current LEC
+                         case IDs vs baseline for the same suite
   --fail-on-new-mutation-contract-fingerprint-case-ids
                          Fail when new mutation contract-fingerprint case IDs
                          (`mutation_contract_fingerprint_case_ids`) appear vs
@@ -2195,6 +2203,8 @@ FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY=0
 FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY=0
+FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED=0
+FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED=0
 BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE=""
 FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=0
@@ -2676,6 +2686,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY=1; shift ;;
     --bmc-lec-contract-fingerprint-case-id-map-file)
       BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE="$2"; shift 2 ;;
+    --fail-on-bmc-lec-contract-fingerprint-case-id-map-unmapped)
+      FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED=1; shift ;;
+    --fail-on-new-bmc-lec-contract-fingerprint-case-id-map-unmapped)
+      FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED=1; shift ;;
     --fail-on-new-mutation-contract-fingerprint-case-ids)
       FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
     --fail-on-new-mutation-source-fingerprint-case-ids)
@@ -4801,8 +4815,16 @@ if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATIO
   echo "--mutation-gate-status-case-id-allowlist-file requires --fail-on-new-mutation-gate-status-case-ids or --strict-gate" >&2
   exit 1
 fi
-if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" && "$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" != "1" && "$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
-  echo "--bmc-lec-contract-fingerprint-case-id-map-file requires --fail-on-bmc-lec-contract-fingerprint-case-id-parity, --fail-on-new-bmc-lec-contract-fingerprint-case-id-parity, or --strict-gate" >&2
+if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" && "$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" != "1" && "$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" != "1" && "$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" != "1" && "$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--bmc-lec-contract-fingerprint-case-id-map-file requires --fail-on-bmc-lec-contract-fingerprint-case-id-parity, --fail-on-new-bmc-lec-contract-fingerprint-case-id-parity, --fail-on-bmc-lec-contract-fingerprint-case-id-map-unmapped, --fail-on-new-bmc-lec-contract-fingerprint-case-id-map-unmapped, or --strict-gate" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" == "1" && -z "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" ]]; then
+  echo "--fail-on-bmc-lec-contract-fingerprint-case-id-map-unmapped requires --bmc-lec-contract-fingerprint-case-id-map-file" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" == "1" && -z "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" ]]; then
+  echo "--fail-on-new-bmc-lec-contract-fingerprint-case-id-map-unmapped requires --bmc-lec-contract-fingerprint-case-id-map-file" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" == "1" && -z "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" ]]; then
@@ -5015,6 +5037,9 @@ if [[ "$STRICT_GATE" == "1" ]]; then
     FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=1
     FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED=1
     FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK=1
+  fi
+  if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" ]]; then
+    FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED=1
   fi
   FAIL_ON_NEW_LEC_DIAG_KEYS=1
   FAIL_ON_NEW_LEC_TIMEOUT_DIAG_KEYS=1
@@ -14526,6 +14551,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY" == "1" || \
       "$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" == "1" || \
       "$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" == "1" || \
+      "$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" == "1" || \
+      "$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" == "1" || \
       "$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" == "1" || \
@@ -14621,6 +14648,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY" \
   FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY="$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" \
   FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY="$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" \
+  FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED="$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" \
+  FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED="$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" \
   BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE="$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" \
   FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" \
@@ -14791,6 +14820,10 @@ def classify_gate_rule_id(suite: str, mode: str, detail: str):
         return "strict_gate.bmc.parity.contract_fingerprint_case_ids.missing_in_lec"
     if detail.startswith("new BMC/LEC contract fingerprint case-ID parity mismatch observed"):
         return "strict_gate.bmc.parity.contract_fingerprint_case_ids.new_missing_in_lec"
+    if detail.startswith("BMC/LEC case-ID map identity fallback missing in LEC"):
+        return "strict_gate.bmc.parity.contract_fingerprint_case_id_map_unmapped.missing_in_lec"
+    if detail.startswith("new BMC/LEC case-ID map identity fallback missing in LEC observed"):
+        return "strict_gate.bmc.parity.contract_fingerprint_case_id_map_unmapped.new_missing_in_lec"
     if detail.startswith("new mutation contract fingerprint case IDs observed"):
         return "strict_gate.mutation.contract_fingerprint_case_ids.new"
     if detail.startswith("new mutation source fingerprint case IDs observed"):
@@ -16651,6 +16684,16 @@ fail_on_bmc_lec_contract_fingerprint_case_id_parity = (
 )
 fail_on_new_bmc_lec_contract_fingerprint_case_id_parity = (
     os.environ.get("FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY", "0")
+    == "1"
+)
+fail_on_bmc_lec_contract_fingerprint_case_id_map_unmapped = (
+    os.environ.get("FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED", "0")
+    == "1"
+)
+fail_on_new_bmc_lec_contract_fingerprint_case_id_map_unmapped = (
+    os.environ.get(
+        "FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED", "0"
+    )
     == "1"
 )
 fail_on_new_mutation_contract_fingerprint_case_ids = (
@@ -19002,6 +19045,8 @@ if (
 if (
     fail_on_bmc_lec_contract_fingerprint_case_id_parity
     or fail_on_new_bmc_lec_contract_fingerprint_case_id_parity
+    or fail_on_bmc_lec_contract_fingerprint_case_id_map_unmapped
+    or fail_on_new_bmc_lec_contract_fingerprint_case_id_map_unmapped
 ):
     for bmc_key, bmc_contract_case_ids in sorted(
         current_bmc_contract_fingerprint_case_ids.items()
@@ -19009,12 +19054,24 @@ if (
         bmc_suite, bmc_mode = bmc_key
         if not bmc_mode.startswith("BMC"):
             continue
-        normalized_bmc_contract_case_ids = {
-            normalize_bmc_contract_case_id_token(token)
-            for token in bmc_contract_case_ids
-            if token and token.strip()
-        }
+        normalized_bmc_contract_case_ids = set()
+        current_identity_fallback_case_ids = set()
+        for token in bmc_contract_case_ids:
+            token = (token or "").strip()
+            if not token:
+                continue
+            case_id = extract_case_id_token(token)
+            fingerprint = extract_fingerprint_token(token)
+            if not case_id or not fingerprint:
+                normalized_bmc_contract_case_ids.add(token)
+                continue
+            mapped_case_id, map_source = map_bmc_to_lec_case_id_with_source(case_id)
+            normalized_token = f"{mapped_case_id}::{fingerprint}"
+            normalized_bmc_contract_case_ids.add(normalized_token)
+            if map_source == "identity":
+                current_identity_fallback_case_ids.add(normalized_token)
         normalized_bmc_contract_case_ids.discard("")
+        current_identity_fallback_case_ids.discard("")
         if not normalized_bmc_contract_case_ids:
             continue
 
@@ -19030,6 +19087,9 @@ if (
 
         current_missing_case_ids = sorted(
             normalized_bmc_contract_case_ids - current_suite_lec_case_ids
+        )
+        current_identity_missing_case_ids = sorted(
+            current_identity_fallback_case_ids - current_suite_lec_case_ids
         )
 
         if (
@@ -19051,8 +19111,30 @@ if (
             )
 
         if (
-            fail_on_new_bmc_lec_contract_fingerprint_case_id_parity
-            and current_missing_case_ids
+            fail_on_bmc_lec_contract_fingerprint_case_id_map_unmapped
+            and current_identity_missing_case_ids
+        ):
+            sample = ", ".join(current_identity_missing_case_ids[:3])
+            if len(current_identity_missing_case_ids) > 3:
+                sample += ", ..."
+            gate_errors.add(
+                bmc_suite,
+                bmc_mode,
+                (
+                    "BMC/LEC case-ID map identity fallback missing in LEC "
+                    f"(identity_missing={len(current_identity_missing_case_ids)} "
+                    f"bmc={len(normalized_bmc_contract_case_ids)} "
+                    f"lec={len(current_suite_lec_case_ids)}): {sample}"
+                ),
+                rule_id="strict_gate.bmc.parity.contract_fingerprint_case_id_map_unmapped.missing_in_lec",
+            )
+
+        if (
+            (fail_on_new_bmc_lec_contract_fingerprint_case_id_parity and current_missing_case_ids)
+            or (
+                fail_on_new_bmc_lec_contract_fingerprint_case_id_map_unmapped
+                and current_identity_missing_case_ids
+            )
         ):
             bmc_history_rows = list(history.get(bmc_key, []))
             if not bmc_history_rows:
@@ -19159,6 +19241,51 @@ if (
                     ),
                     rule_id="strict_gate.bmc.parity.contract_fingerprint_case_ids.new_missing_in_lec",
                 )
+
+            if fail_on_new_bmc_lec_contract_fingerprint_case_id_map_unmapped:
+                baseline_identity_fallback_case_ids = set()
+                for raw in baseline_bmc_raw:
+                    if raw is None or raw == "":
+                        continue
+                    for token in raw.split(";"):
+                        token = token.strip()
+                        if not token:
+                            continue
+                        case_id = extract_case_id_token(token)
+                        fingerprint = extract_fingerprint_token(token)
+                        if not case_id or not fingerprint:
+                            continue
+                        mapped_case_id, map_source = map_bmc_to_lec_case_id_with_source(
+                            case_id
+                        )
+                        if map_source != "identity":
+                            continue
+                        baseline_identity_fallback_case_ids.add(
+                            f"{mapped_case_id}::{fingerprint}"
+                        )
+
+                baseline_identity_missing_case_ids = (
+                    baseline_identity_fallback_case_ids - baseline_suite_lec_case_ids
+                )
+                new_identity_missing_case_ids = sorted(
+                    set(current_identity_missing_case_ids)
+                    - baseline_identity_missing_case_ids
+                )
+                if new_identity_missing_case_ids:
+                    sample = ", ".join(new_identity_missing_case_ids[:3])
+                    if len(new_identity_missing_case_ids) > 3:
+                        sample += ", ..."
+                    gate_errors.add(
+                        bmc_suite,
+                        bmc_mode,
+                        (
+                            "new BMC/LEC case-ID map identity fallback missing in LEC observed "
+                            f"(baseline={len(baseline_identity_missing_case_ids)} "
+                            f"current={len(current_identity_missing_case_ids)}, "
+                            f"window={baseline_window}): {sample}"
+                        ),
+                        rule_id="strict_gate.bmc.parity.contract_fingerprint_case_id_map_unmapped.new_missing_in_lec",
+                    )
 
 
 if fail_on_mutation_lec_contract_fingerprint_parity:
