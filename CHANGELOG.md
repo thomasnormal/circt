@@ -1,4 +1,38 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1235 - February 13, 2026
+
+### Formal-All Shared Allowlist Parser Expansion (Rule-ID + BMC Provenance)
+
+1. Extended strict-gate allowlist parser dedup in `utils/run_formal_all.sh` to cover additional families:
+   - strict diagnostic rule-ID allowlist (`--strict-gate-rule-id-allowlist`)
+   - BMC abstraction provenance allowlist (`--bmc-abstraction-provenance-allowlist-file`)
+2. Reused shared helper path:
+   - `load_pattern_allowlist(...)`
+   - `token_matches_allowlist(...)`
+3. Preserved current behavior and error contract while removing duplicated parser logic:
+   - file-not-found / empty payload / invalid regex / unsupported-kind diagnostics remain label-specific.
+
+### Tests
+
+1. Added strict rule-ID allowlist pattern semantics coverage:
+   - `test/Tools/run-formal-all-strict-gate-rule-id-allowlist-patterns.test`
+   - exercises both `prefix:` and `regex:` forms.
+2. Added BMC abstraction provenance allowlist pattern coverage:
+   - `test/Tools/run-formal-all-strict-gate-bmc-abstraction-provenance-allowlist-patterns.test`
+   - verifies filtered token reporting with `allowlisted=<n>` and residual token surfacing.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-debug/bin/llvm-lit -sv build-test/test/Tools --filter 'run-formal-all-help\.test|run-formal-all-strict-gate-rule-id-allowlist\.test|run-formal-all-strict-gate-rule-id-allowlist-patterns\.test|run-formal-all-strict-gate-report-json-requires-strict\.test|run-formal-all-strict-gate-bmc-abstraction-provenance-records\.test|run-formal-all-strict-gate-bmc-abstraction-provenance-allowlist-patterns\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists-patterns\.test|run-formal-all-mutation-provenance-allowlists-require-gate\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids-allowlist\.test|run-formal-all-mutation-gate-status-case-id-allowlist-requires-gate\.test'`
+  - PASS (11/11)
+
+### Remaining Limitations
+
+- Strict-gate still has repeated tuple-diff gate blocks across mutation/BMC/LEC drift checks; next step is a shared drift-diff helper to reduce future rule skew.
+- Mutation/BMC/LEC provenance checks remain lane-local; cross-lane parity contracts (e.g., mutation vs LEC provenance coherence) are not yet enforced.
+
 ## Iteration 1234 - February 13, 2026
 
 ### Formal-All Mutation Allowlist Parser Dedup + Pattern Coverage

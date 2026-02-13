@@ -1,0 +1,17 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "PASS\tcase_a\t/tests/case_a.sv\n" > "$OUT"\necho "sv-tests SVA summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0"\n' > %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-base --baseline-file %t/formal-baselines.tsv --update-baselines --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^sv-tests/BMC$' --sv-tests-bmc-tag-regex 'tag_bmc' --sv-tests-bmc-test-filter 'filter_bmc'
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "FAIL\tcase_a\t/tests/case_a.sv\n" > "$OUT"\necho "sv-tests SVA summary: total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0"\n' > %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: chmod +x %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: printf 'prefix:strict_gate.\n' > %t/rule-ids-prefix.txt
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-prefix --strict-gate --strict-gate-rule-id-allowlist %t/rule-ids-prefix.txt --baseline-file %t/formal-baselines.tsv --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/BMC$" --sv-tests-bmc-tag-regex "tag_bmc" --sv-tests-bmc-test-filter "filter_bmc"' 2>&1 | FileCheck %s --check-prefix=PREFIX
+// RUN: printf 'regex:^strict_gate\\..*$\n' > %t/rule-ids-regex.txt
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-regex --strict-gate --strict-gate-rule-id-allowlist %t/rule-ids-regex.txt --baseline-file %t/formal-baselines.tsv --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/BMC$" --sv-tests-bmc-tag-regex "tag_bmc" --sv-tests-bmc-test-filter "filter_bmc"' 2>&1 | FileCheck %s --check-prefix=REGEX
+//
+// PREFIX: strict gate failures:
+// PREFIX-NOT: rule-id allowlist violation:
+// REGEX: strict gate failures:
+// REGEX-NOT: rule-id allowlist violation:
