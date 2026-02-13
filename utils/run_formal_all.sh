@@ -19015,7 +19015,14 @@ mutation_gate_enabled = (
     or fail_on_new_mutation_provenance_tuple_ids
     or fail_on_new_mutation_gate_status_case_ids
 )
-if mutation_gate_enabled:
+mutation_lane_in_scope = (
+    mutation_quality_present
+    or any(key[0] == "mutation-matrix" for key in summary.keys())
+    or bool(current_mutation_contract_fingerprint_case_ids.get(("mutation-matrix", "PROVENANCE"), set()))
+    or bool(current_mutation_source_fingerprint_case_ids.get(("mutation-matrix", "PROVENANCE"), set()))
+    or bool(current_mutation_provenance_tuple_ids.get(("mutation-matrix", "PROVENANCE"), set()))
+)
+if mutation_gate_enabled and mutation_lane_in_scope:
     mutation_key = ("mutation-matrix", "PROVENANCE")
     mutation_history_rows = history.get(mutation_key, [])
     if not mutation_history_rows:
@@ -20199,7 +20206,7 @@ if strict_gate_mutation_lane_parity_priority:
             }
         )
 
-if fail_on_new_mutation_gate_status_case_ids:
+if fail_on_new_mutation_gate_status_case_ids and mutation_lane_in_scope:
     quality_key = ("mutation-matrix", "QUALITY")
     quality_history_rows = history.get(quality_key, [])
     if not quality_history_rows:
