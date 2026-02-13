@@ -1,4 +1,42 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1240 - February 13, 2026
+
+### Formal-All Mutation/LEC Lane-Map Unmapped Coverage Gate
+
+1. Added a new strict gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped`
+2. Implemented lane-map coverage enforcement for mutation↔LEC lane parity:
+   - tracks map source for each mutation lane (`exact`, `prefix`, `regex`, `identity`)
+   - when the new option is enabled, fails if identity-mapped mutation lanes are also missing in current LEC lanes.
+3. Added a dedicated strict-gate rule ID for this diagnostic:
+   - `strict_gate.mutation.parity.contract_fingerprint_lane_map_unmapped.missing_in_lec`
+4. Strengthened option contract behavior:
+   - `--fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped` now requires `--mutation-lec-contract-fingerprint-lane-map-file`
+   - `--mutation-lec-contract-fingerprint-lane-map-file` now accepts `--fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped` as a valid activating gate in addition to lane-parity/strict-gate.
+
+### Tests
+
+1. Added unmapped-lane behavior coverage:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped.test`
+   - verifies failure on partial map coverage and pass on complete map coverage.
+2. Added option-contract coverage:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-requires-map.test`
+3. Updated existing option-contract message expectation:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test`
+4. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-prefix.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-regex.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-invalid-regex.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-requires-map.test`
+  - PASS (9/9)
+
+### Remaining Limitations
+
+- Unmapped-lane enforcement currently only flags identity-mapped mutation lanes that are also missing in LEC; it does not require explicit map coverage for lanes that already match LEC by name.
+
 ## Iteration 1239 - February 13, 2026
 
 ### Formal-All Mutation/LEC Lane-Map Pattern Rules
