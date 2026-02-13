@@ -160,6 +160,32 @@ static unsigned writeConfigDbBytesToNativeMemory(
   return maxWritable;
 }
 
+static unsigned writeConfigDbBytesToMemoryBlock(
+    MemoryBlock *block, uint64_t offset, const std::vector<uint8_t> &valueData,
+    unsigned requestedBytes, bool zeroFillMissing) {
+  if (!block || requestedBytes == 0)
+    return 0;
+
+  size_t start = static_cast<size_t>(offset);
+  if (start >= block->data.size())
+    return 0;
+
+  size_t availableBytes = block->data.size() - start;
+  unsigned maxWritable =
+      static_cast<unsigned>(std::min<size_t>(requestedBytes, availableBytes));
+  unsigned copyBytes =
+      std::min(maxWritable, static_cast<unsigned>(valueData.size()));
+
+  if (copyBytes > 0)
+    std::memcpy(block->data.data() + start, valueData.data(), copyBytes);
+  if (zeroFillMissing && maxWritable > copyBytes)
+    std::memset(block->data.data() + start + copyBytes, 0,
+                maxWritable - copyBytes);
+  if (maxWritable > 0)
+    block->initialized = true;
+  return maxWritable;
+}
+
 //===----------------------------------------------------------------------===//
 // LLHDProcessInterpreter Implementation
 //===----------------------------------------------------------------------===//
@@ -6620,13 +6646,10 @@ arith_dispatch:
                       findMemoryBlockByAddress(addr3, procId, &off4);
                   if (!blk3)
                     blk3 = findBlockByAddress(addr3, off4);
-                  if (blk3 && blk3->initialized) {
-                    unsigned wb3 = std::min(
-                        innerBytes,
-                        (unsigned)(blk3->data.size() - off4));
-                    for (unsigned i = 0; i < wb3; ++i)
-                      blk3->data[off4 + i] =
-                          valueData.size() > i ? valueData[i] : 0;
+                  if (blk3) {
+                    writeConfigDbBytesToMemoryBlock(
+                        blk3, off4, valueData, innerBytes,
+                        /*zeroFillMissing=*/true);
                   } else {
                     uint64_t nativeOff = 0;
                     size_t nativeSize = 0;
@@ -6646,12 +6669,11 @@ arith_dispatch:
                       findMemoryBlockByAddress(outputAddr, procId, &outOff2);
                   if (!outBlock)
                     outBlock = findBlockByAddress(outputAddr, outOff2);
-                  if (outBlock && outBlock->initialized) {
-                    unsigned writeBytes =
-                        std::min((unsigned)valueData.size(),
-                                 (unsigned)(outBlock->data.size() - outOff2));
-                    for (unsigned i = 0; i < writeBytes; ++i)
-                      outBlock->data[outOff2 + i] = valueData[i];
+                  if (outBlock) {
+                    writeConfigDbBytesToMemoryBlock(
+                        outBlock, outOff2, valueData,
+                        static_cast<unsigned>(valueData.size()),
+                        /*zeroFillMissing=*/false);
                   } else {
                     uint64_t nativeOff = 0;
                     size_t nativeSize = 0;
@@ -6931,13 +6953,10 @@ arith_dispatch:
                     findMemoryBlockByAddress(addr, procId, &off3);
                 if (!blk)
                   blk = findBlockByAddress(addr, off3);
-                if (blk && blk->initialized) {
-                  unsigned wb = std::min(
-                      innerBytes,
-                      (unsigned)(blk->data.size() - off3));
-                  for (unsigned i = 0; i < wb; ++i)
-                    blk->data[off3 + i] =
-                        valueData.size() > i ? valueData[i] : 0;
+                if (blk) {
+                  writeConfigDbBytesToMemoryBlock(
+                      blk, off3, valueData, innerBytes,
+                      /*zeroFillMissing=*/true);
                 } else {
                   uint64_t nativeOff = 0;
                   size_t nativeSize = 0;
@@ -6958,12 +6977,11 @@ arith_dispatch:
                     findMemoryBlockByAddress(outputAddr, procId, &outOff);
                 if (!outBlock)
                   outBlock = findBlockByAddress(outputAddr, outOff);
-                if (outBlock && outBlock->initialized) {
-                  unsigned writeBytes =
-                      std::min((unsigned)valueData.size(),
-                               (unsigned)(outBlock->data.size() - outOff));
-                  for (unsigned i = 0; i < writeBytes; ++i)
-                    outBlock->data[outOff + i] = valueData[i];
+                if (outBlock) {
+                  writeConfigDbBytesToMemoryBlock(
+                      outBlock, outOff, valueData,
+                      static_cast<unsigned>(valueData.size()),
+                      /*zeroFillMissing=*/false);
                 } else {
                   uint64_t nativeOff = 0;
                   size_t nativeSize = 0;
@@ -7151,12 +7169,10 @@ arith_dispatch:
                 uint64_t off3 = 0;
                 MemoryBlock *blk =
                     findMemoryBlockByAddress(addr, procId, &off3);
-                if (blk && blk->initialized) {
-                  unsigned wb = std::min(
-                      innerBytes, (unsigned)(blk->data.size() - off3));
-                  for (unsigned i = 0; i < wb; ++i)
-                    blk->data[off3 + i] =
-                        valueData.size() > i ? valueData[i] : 0;
+                if (blk) {
+                  writeConfigDbBytesToMemoryBlock(
+                      blk, off3, valueData, innerBytes,
+                      /*zeroFillMissing=*/true);
                 } else {
                   // Fallback: write to native memory (heap-allocated blocks)
                   uint64_t nativeOff = 0;
@@ -7175,12 +7191,11 @@ arith_dispatch:
                 uint64_t outOff = 0;
                 MemoryBlock *outBlock =
                     findMemoryBlockByAddress(outputAddr, procId, &outOff);
-                if (outBlock && outBlock->initialized) {
-                  unsigned writeBytes =
-                      std::min((unsigned)valueData.size(),
-                               (unsigned)(outBlock->data.size() - outOff));
-                  for (unsigned i = 0; i < writeBytes; ++i)
-                    outBlock->data[outOff + i] = valueData[i];
+                if (outBlock) {
+                  writeConfigDbBytesToMemoryBlock(
+                      outBlock, outOff, valueData,
+                      static_cast<unsigned>(valueData.size()),
+                      /*zeroFillMissing=*/false);
                 } else {
                   // Fallback: write to native memory
                   uint64_t nativeOff = 0;
@@ -12333,12 +12348,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             uint64_t off3 = 0;
             MemoryBlock *blk =
                 findMemoryBlockByAddress(addr, procId, &off3);
-            if (blk && blk->initialized) {
-              unsigned wb = std::min(
-                  innerBytes, (unsigned)(blk->data.size() - off3));
-              for (unsigned i = 0; i < wb; ++i)
-                blk->data[off3 + i] =
-                    valueData.size() > i ? valueData[i] : 0;
+            if (blk) {
+              writeConfigDbBytesToMemoryBlock(
+                  blk, off3, valueData, innerBytes,
+                  /*zeroFillMissing=*/true);
             } else {
               // Fallback: write directly to native memory (heap-allocated
               // blocks from __moore_dyn_array_new, malloc, etc.)
@@ -13378,13 +13391,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             if (addr > 0) {
               uint64_t offset = 0;
               auto *block = findMemoryBlockByAddress(addr, procId, &offset);
-              if (block && block->initialized) {
-                for (unsigned i = 0;
-                     i < std::min(innerBytes,
-                                  (unsigned)(block->data.size() - offset));
-                     ++i)
-                  block->data[offset + i] =
-                      valueData.size() > i ? valueData[i] : 0;
+              if (block) {
+                writeConfigDbBytesToMemoryBlock(
+                    block, offset, valueData, innerBytes,
+                    /*zeroFillMissing=*/true);
               } else {
                 uint64_t nativeOffset = 0;
                 size_t nativeSize = 0;
@@ -13401,12 +13411,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             if (addr > 0) {
               uint64_t offset = 0;
               auto *block = findMemoryBlockByAddress(addr, procId, &offset);
-              if (block && block->initialized) {
-                for (unsigned i = 0;
-                     i < std::min((unsigned)valueData.size(),
-                                  (unsigned)(block->data.size() - offset));
-                     ++i)
-                  block->data[offset + i] = valueData[i];
+              if (block) {
+                writeConfigDbBytesToMemoryBlock(
+                    block, offset, valueData,
+                    static_cast<unsigned>(valueData.size()),
+                    /*zeroFillMissing=*/false);
               } else {
                 uint64_t nativeOffset = 0;
                 size_t nativeSize = 0;
@@ -13586,13 +13595,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                 auto *block = findMemoryBlockByAddress(addr, procId, &offset);
                 if (!block)
                   block = findBlockByAddress(addr, offset);
-                if (block && block->initialized) {
-                  for (unsigned i = 0;
-                       i < std::min(innerBytes,
-                                    (unsigned)(block->data.size() - offset));
-                       ++i)
-                    block->data[offset + i] =
-                        valueData.size() > i ? valueData[i] : 0;
+                if (block) {
+                  writeConfigDbBytesToMemoryBlock(
+                      block, offset, valueData, innerBytes,
+                      /*zeroFillMissing=*/true);
                 } else {
                   uint64_t nativeOffset = 0;
                   size_t nativeSize = 0;
@@ -13614,12 +13620,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                   findMemoryBlockByAddress(outputAddr, procId, &outOff);
               if (!outBlock)
                 outBlock = findBlockByAddress(outputAddr, outOff);
-              if (outBlock && outBlock->initialized) {
-                unsigned writeBytes =
-                    std::min((unsigned)valueData.size(),
-                             (unsigned)(outBlock->data.size() - outOff));
-                for (unsigned i = 0; i < writeBytes; ++i)
-                  outBlock->data[outOff + i] = valueData[i];
+              if (outBlock) {
+                writeConfigDbBytesToMemoryBlock(
+                    outBlock, outOff, valueData,
+                    static_cast<unsigned>(valueData.size()),
+                    /*zeroFillMissing=*/false);
               } else {
                 uint64_t nativeOffset = 0;
                 size_t nativeSize = 0;

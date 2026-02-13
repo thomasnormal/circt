@@ -1,4 +1,28 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1228 - February 13, 2026
+
+### circt-sim config_db/resource_db Writeback: Initialize-on-Write
+
+1. Added shared helper `writeConfigDbBytesToMemoryBlock(...)` in `tools/circt-sim/LLHDProcessInterpreter.cpp` to centralize writeback into interpreter-managed `MemoryBlock` storage.
+2. Switched config/resource DB writeback paths to use the helper and mark destination blocks initialized when bytes are written:
+   - static fallback `resource_db::read_by_name` interception via `func.call_indirect`
+   - `config_db` interception via `func.call_indirect`
+   - numeric wrapper interception (`get_NNNN`) via `func.call`
+   - direct `config_db_implementation_t::get` / `resource_db_implementation_t::read_by_name` via `func.call`
+3. Added focused direct-implementation regression:
+   - `test/Tools/circt-sim/config-db-native-impl-direct-writeback.mlir`
+
+### Validation
+
+- `ninja -C build-test circt-sim`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter 'config-db-(dynamic-array-native|native-wrapper-writeback|native-call-indirect-writeback|native-impl-direct-writeback)\.(sv|mlir)'`
+  - PASS (4/4)
+
+### Remaining Limitations
+
+- `llhd.ref` casts built from certain global-address forms can still appear as unknown (`x`) in minimal synthetic MLIR tests; direct pointer-output coverage is now in place, but this cast-lowering edge still warrants dedicated interpreter normalization work.
+
 ## Iteration 1227 - February 13, 2026
 
 ### Mutation Matrix Provenance: Canonical Per-Lane Tuple Artifact
