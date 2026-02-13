@@ -9,7 +9,9 @@
 The case manifest is a tab-separated file with one case per line:
 
   case_id <TAB> top_module <TAB> source_files <TAB> include_dirs <TAB> case_path
-          <TAB> timeout_secs <TAB> backend_mode
+          <TAB> timeout_secs <TAB> backend_mode <TAB> bmc_bound
+          <TAB> ignore_asserts_until <TAB> assume_known_inputs
+          <TAB> allow_multi_clock
 
 Only the first three columns are required.
 
@@ -22,6 +24,13 @@ Only the first three columns are required.
   - jit: force native/JIT backend (no --run-smtlib)
   - smtlib: force external SMT-LIB backend (--run-smtlib)
   - smoke: force smoke-only emit-mlir mode
+- bmc_bound: per-case `-b` override (optional, non-negative integer; 0 maps to 1).
+- ignore_asserts_until: per-case `--ignore-asserts-until` override (optional,
+  non-negative integer).
+- assume_known_inputs: per-case override for `--assume-known-inputs`:
+  `default|on|off` (also accepts `1|0|true|false|yes|no`).
+- allow_multi_clock: per-case override for `--allow-multi-clock`:
+  `default|on|off` (also accepts `1|0|true|false|yes|no`).
 
 Relative file paths are resolved against the manifest file directory.
 """
@@ -49,6 +58,10 @@ class CaseSpec:
     case_path: str
     timeout_secs: int | None
     backend_mode: str
+    bmc_bound: int | None
+    ignore_asserts_until: int | None
+    assume_known_inputs_mode: str
+    allow_multi_clock_mode: str
 
 
 def parse_nonnegative_int(raw: str, name: str) -> int:
@@ -214,6 +227,33 @@ def parse_case_backend(raw: str, line_no: int) -> str:
     raise SystemExit(1)
 
 
+def parse_case_toggle_mode(raw: str, line_no: int, name: str) -> str:
+    token = raw.strip().lower()
+    if not token:
+        return "default"
+    mapping = {
+        "default": "default",
+        "on": "on",
+        "off": "off",
+        "1": "on",
+        "0": "off",
+        "true": "on",
+        "false": "off",
+        "yes": "on",
+        "no": "off",
+    }
+    if token in mapping:
+        return mapping[token]
+    print(
+        (
+            f"invalid cases file row {line_no}: {name} must be one of "
+            f"default|on|off (or 1|0|true|false|yes|no), got '{raw}'"
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
 def load_cases(cases_file: Path) -> list[CaseSpec]:
     base_dir = cases_file.parent
     cases: list[CaseSpec] = []
@@ -236,6 +276,10 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
             case_path_raw = parts[4].strip() if len(parts) > 4 else ""
             timeout_secs_raw = parts[5].strip() if len(parts) > 5 else ""
             backend_mode_raw = parts[6].strip() if len(parts) > 6 else ""
+            bmc_bound_raw = parts[7].strip() if len(parts) > 7 else ""
+            ignore_asserts_until_raw = parts[8].strip() if len(parts) > 8 else ""
+            assume_known_inputs_raw = parts[9].strip() if len(parts) > 9 else ""
+            allow_multi_clock_raw = parts[10].strip() if len(parts) > 10 else ""
             if not case_id or not top_module:
                 print(
                     f"invalid cases file row {line_no}: empty case_id/top_module",
@@ -254,6 +298,18 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
                 timeout_secs_raw, "timeout_secs", line_no
             )
             backend_mode = parse_case_backend(backend_mode_raw, line_no)
+            bmc_bound = parse_optional_nonnegative_int(
+                bmc_bound_raw, "bmc_bound", line_no
+            )
+            ignore_asserts_until = parse_optional_nonnegative_int(
+                ignore_asserts_until_raw, "ignore_asserts_until", line_no
+            )
+            assume_known_inputs_mode = parse_case_toggle_mode(
+                assume_known_inputs_raw, line_no, "assume_known_inputs"
+            )
+            allow_multi_clock_mode = parse_case_toggle_mode(
+                allow_multi_clock_raw, line_no, "allow_multi_clock"
+            )
 
             def resolve_path(path_raw: str) -> str:
                 path = Path(path_raw)
@@ -270,6 +326,10 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
                     case_path=case_path_raw,
                     timeout_secs=timeout_secs,
                     backend_mode=backend_mode,
+                    bmc_bound=bmc_bound,
+                    ignore_asserts_until=ignore_asserts_until,
+                    assume_known_inputs_mode=assume_known_inputs_mode,
+                    allow_multi_clock_mode=allow_multi_clock_mode,
                 )
             )
     return cases
@@ -399,6 +459,13 @@ def main() -> int:
             return False, False
         return bmc_smoke_only, bmc_run_smtlib
 
+    def resolve_case_toggle(mode: str, inherited: bool) -> bool:
+        if mode == "on":
+            return True
+        if mode == "off":
+            return False
+        return inherited
+
     requires_smtlib = any(
         (not smoke_only) and run_smtlib
         for smoke_only, run_smtlib in (
@@ -450,6 +517,20 @@ def main() -> int:
             case_timeout_secs = (
                 timeout_secs if case.timeout_secs is None else case.timeout_secs
             )
+            case_bound = bound if case.bmc_bound is None else case.bmc_bound
+            if case_bound == 0:
+                case_bound = 1
+            case_ignore_asserts_until = (
+                ignore_asserts_until
+                if case.ignore_asserts_until is None
+                else case.ignore_asserts_until
+            )
+            case_assume_known_inputs = resolve_case_toggle(
+                case.assume_known_inputs_mode, bmc_assume_known_inputs
+            )
+            case_allow_multi_clock = resolve_case_toggle(
+                case.allow_multi_clock_mode, bmc_allow_multi_clock
+            )
 
             verilog_log_path = case_dir / "circt-verilog.log"
             opt_log_path = case_dir / "circt-opt.log"
@@ -483,8 +564,8 @@ def main() -> int:
                 str(prepped_mlir if bmc_prepare_core_with_circt_opt else out_mlir),
                 f"--module={case.top_module}",
                 "-b",
-                str(bound),
-                f"--ignore-asserts-until={ignore_asserts_until}",
+                str(case_bound),
+                f"--ignore-asserts-until={case_ignore_asserts_until}",
             ]
             if case_smoke_only:
                 bmc_cmd.append("--emit-mlir")
@@ -494,9 +575,9 @@ def main() -> int:
                     bmc_cmd.append(f"--z3-path={z3_bin}")
                 elif z3_lib:
                     bmc_cmd.append(f"--shared-libs={z3_lib}")
-            if bmc_assume_known_inputs:
+            if case_assume_known_inputs:
                 bmc_cmd.append("--assume-known-inputs")
-            if bmc_allow_multi_clock:
+            if case_allow_multi_clock:
                 bmc_cmd.append("--allow-multi-clock")
             bmc_cmd += circt_bmc_args
 
