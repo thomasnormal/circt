@@ -63,6 +63,25 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 13, 2026, resolved-contract provenance export)
+
+1. Added first-class resolved-contract artifact emission in `run_pairwise_circt_bmc.py` via `--resolved-contracts-file` / `BMC_RESOLVED_CONTRACTS_OUT`.
+2. Exported per-case effective execution contract rows including backend realization flags, bounds/toggles/timeouts, `bmc_extra_args`, and provenance source labels.
+3. Extended pairwise manifest schema with optional `contract_source` and wired OpenTitan policy resolution to produce deterministic source labels (`exact:`, `pattern:`, `default:*`, `none`).
+4. Added focused tests:
+   - `run-pairwise-circt-bmc-resolved-contracts-file.test`
+   - `run-opentitan-bmc-case-policy-provenance.test`
+5. Validation snapshot:
+   - `python3 -m py_compile` (pairwise+opentitan): PASS
+   - focused pairwise/OpenTitan policy lit slice: PASS (15/15).
+6. Remaining limitations:
+   - strict-gate summary artifacts still do not ingest resolved-contract provenance rows.
+   - LEC/mutation runners are not yet on the same provenance contract plane.
+7. Next long-term features (BMC/LEC/mutation focus):
+   - ingest resolved-contract rows into strict-gate JSON/TSV outputs and add provenance drift gates.
+   - extend resolved-contract artifact emission to LEC and mutation runners for a unified formal provenance layer.
+   - add profile-hash compatibility checks so policy schema evolution remains CI-safe across lanes.
+
 ### Formal Closure Snapshot Update (February 13, 2026, OpenTitan bmc_extra_args policy forwarding)
 
 1. Extended OpenTitan policy schema in `run_opentitan_circt_bmc.py` with optional `bmc_extra_args` column.

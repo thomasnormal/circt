@@ -12,6 +12,7 @@ The case manifest is a tab-separated file with one case per line:
           <TAB> timeout_secs <TAB> backend_mode <TAB> bmc_bound
           <TAB> ignore_asserts_until <TAB> assume_known_inputs
           <TAB> allow_multi_clock <TAB> bmc_extra_args
+          <TAB> contract_source
 
 Only the first three columns are required.
 
@@ -34,6 +35,9 @@ Only the first three columns are required.
 - bmc_extra_args: optional shell-style per-case extra circt-bmc argument bundle.
   Restricted core options (module/bound/backend/known-input/multi-clock) are rejected
   to keep contract resolution deterministic.
+- contract_source: optional provenance label for the case contract (for example
+  `exact:aes_sbox_canright` or `pattern:re:^foo`) that is emitted in
+  `--resolved-contracts-file` artifacts.
 
 Relative file paths are resolved against the manifest file directory.
 """
@@ -66,6 +70,7 @@ class CaseSpec:
     assume_known_inputs_mode: str
     allow_multi_clock_mode: str
     bmc_extra_args: list[str]
+    contract_source: str
 
 
 def parse_nonnegative_int(raw: str, name: str) -> int:
@@ -323,6 +328,7 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
             assume_known_inputs_raw = parts[9].strip() if len(parts) > 9 else ""
             allow_multi_clock_raw = parts[10].strip() if len(parts) > 10 else ""
             bmc_extra_args_raw = parts[11].strip() if len(parts) > 11 else ""
+            contract_source_raw = parts[12].strip() if len(parts) > 12 else ""
             if not case_id or not top_module:
                 print(
                     f"invalid cases file row {line_no}: empty case_id/top_module",
@@ -377,6 +383,7 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
                     assume_known_inputs_mode=assume_known_inputs_mode,
                     allow_multi_clock_mode=allow_multi_clock_mode,
                     bmc_extra_args=bmc_extra_args,
+                    contract_source=contract_source_raw,
                 )
             )
     return cases
@@ -446,6 +453,11 @@ def main() -> int:
         "--timeout-reasons-file",
         default=os.environ.get("BMC_TIMEOUT_REASON_CASES_OUT", ""),
         help="Optional TSV output path for timeout reason rows.",
+    )
+    parser.add_argument(
+        "--resolved-contracts-file",
+        default=os.environ.get("BMC_RESOLVED_CONTRACTS_OUT", ""),
+        help="Optional TSV output path for resolved per-case contract rows.",
     )
     args = parser.parse_args()
 
@@ -544,6 +556,7 @@ def main() -> int:
     drop_remark_case_rows: list[tuple[str, str]] = []
     drop_remark_reason_rows: list[tuple[str, str, str]] = []
     timeout_reason_rows: list[tuple[str, str, str]] = []
+    resolved_contract_rows: list[tuple[str, ...]] = []
     drop_remark_seen_case_reasons: set[tuple[str, str]] = set()
     timeout_reason_seen: set[tuple[str, str]] = set()
 
@@ -577,6 +590,24 @@ def main() -> int:
             )
             case_allow_multi_clock = resolve_case_toggle(
                 case.allow_multi_clock_mode, bmc_allow_multi_clock
+            )
+            case_bmc_extra_args_text = shlex.join(case.bmc_extra_args)
+            contract_source = case.contract_source.strip() or "manifest"
+            resolved_contract_rows.append(
+                (
+                    case.case_id,
+                    case_path,
+                    contract_source,
+                    case.backend_mode,
+                    "1" if case_smoke_only else "0",
+                    "1" if case_run_smtlib else "0",
+                    str(case_timeout_secs),
+                    str(case_bound),
+                    str(case_ignore_asserts_until),
+                    "1" if case_assume_known_inputs else "0",
+                    "1" if case_allow_multi_clock else "0",
+                    case_bmc_extra_args_text,
+                )
             )
 
             verilog_log_path = case_dir / "circt-verilog.log"
@@ -849,6 +880,13 @@ def main() -> int:
         timeout_path.parent.mkdir(parents=True, exist_ok=True)
         with timeout_path.open("w", encoding="utf-8") as handle:
             for row in sorted(timeout_reason_rows, key=lambda item: (item[0], item[2])):
+                handle.write("\t".join(row) + "\n")
+
+    if args.resolved_contracts_file:
+        contracts_path = Path(args.resolved_contracts_file)
+        contracts_path.parent.mkdir(parents=True, exist_ok=True)
+        with contracts_path.open("w", encoding="utf-8") as handle:
+            for row in sorted(resolved_contract_rows, key=lambda item: (item[0], item[1])):
                 handle.write("\t".join(row) + "\n")
 
     print(
