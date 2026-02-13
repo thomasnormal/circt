@@ -11,7 +11,7 @@ The case manifest is a tab-separated file with one case per line:
   case_id <TAB> top_module <TAB> source_files <TAB> include_dirs <TAB> case_path
           <TAB> timeout_secs <TAB> backend_mode <TAB> bmc_bound
           <TAB> ignore_asserts_until <TAB> assume_known_inputs
-          <TAB> allow_multi_clock
+          <TAB> allow_multi_clock <TAB> bmc_extra_args
 
 Only the first three columns are required.
 
@@ -31,6 +31,9 @@ Only the first three columns are required.
   `default|on|off` (also accepts `1|0|true|false|yes|no`).
 - allow_multi_clock: per-case override for `--allow-multi-clock`:
   `default|on|off` (also accepts `1|0|true|false|yes|no`).
+- bmc_extra_args: optional shell-style per-case extra circt-bmc argument bundle.
+  Restricted core options (module/bound/backend/known-input/multi-clock) are rejected
+  to keep contract resolution deterministic.
 
 Relative file paths are resolved against the manifest file directory.
 """
@@ -62,6 +65,7 @@ class CaseSpec:
     ignore_asserts_until: int | None
     assume_known_inputs_mode: str
     allow_multi_clock_mode: str
+    bmc_extra_args: list[str]
 
 
 def parse_nonnegative_int(raw: str, name: str) -> int:
@@ -254,6 +258,44 @@ def parse_case_toggle_mode(raw: str, line_no: int, name: str) -> str:
     raise SystemExit(1)
 
 
+def parse_case_bmc_extra_args(raw: str, line_no: int) -> list[str]:
+    token = raw.strip()
+    if not token:
+        return []
+    try:
+        args = shlex.split(token)
+    except ValueError as exc:
+        print(
+            f"invalid cases file row {line_no}: bmc_extra_args parse error: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    restricted = (
+        "--module",
+        "-b",
+        "--bound",
+        "--ignore-asserts-until",
+        "--emit-mlir",
+        "--run-smtlib",
+        "--z3-path",
+        "--shared-libs",
+        "--assume-known-inputs",
+        "--allow-multi-clock",
+    )
+    for arg in args:
+        for key in restricted:
+            if arg == key or arg.startswith(f"{key}="):
+                print(
+                    (
+                        f"invalid cases file row {line_no}: bmc_extra_args contains "
+                        f"restricted option '{arg}'"
+                    ),
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+    return args
+
+
 def load_cases(cases_file: Path) -> list[CaseSpec]:
     base_dir = cases_file.parent
     cases: list[CaseSpec] = []
@@ -280,6 +322,7 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
             ignore_asserts_until_raw = parts[8].strip() if len(parts) > 8 else ""
             assume_known_inputs_raw = parts[9].strip() if len(parts) > 9 else ""
             allow_multi_clock_raw = parts[10].strip() if len(parts) > 10 else ""
+            bmc_extra_args_raw = parts[11].strip() if len(parts) > 11 else ""
             if not case_id or not top_module:
                 print(
                     f"invalid cases file row {line_no}: empty case_id/top_module",
@@ -310,6 +353,9 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
             allow_multi_clock_mode = parse_case_toggle_mode(
                 allow_multi_clock_raw, line_no, "allow_multi_clock"
             )
+            bmc_extra_args = parse_case_bmc_extra_args(
+                bmc_extra_args_raw, line_no
+            )
 
             def resolve_path(path_raw: str) -> str:
                 path = Path(path_raw)
@@ -330,6 +376,7 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
                     ignore_asserts_until=ignore_asserts_until,
                     assume_known_inputs_mode=assume_known_inputs_mode,
                     allow_multi_clock_mode=allow_multi_clock_mode,
+                    bmc_extra_args=bmc_extra_args,
                 )
             )
     return cases
@@ -579,6 +626,7 @@ def main() -> int:
                 bmc_cmd.append("--assume-known-inputs")
             if case_allow_multi_clock:
                 bmc_cmd.append("--allow-multi-clock")
+            bmc_cmd += case.bmc_extra_args
             bmc_cmd += circt_bmc_args
 
             stage = "verilog"

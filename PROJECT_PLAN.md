@@ -63,6 +63,80 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 13, 2026, pairwise per-case bmc_extra_args contracts)
+
+1. Extended `run_pairwise_circt_bmc.py` case schema with optional `bmc_extra_args` to support first-class per-case `circt-bmc` option bundles.
+2. Added shell-style parsing and validation for `bmc_extra_args` tokens.
+3. Added deterministic contract guardrails by rejecting restricted core options that must remain controlled by structured fields/backend profile resolution.
+4. Added focused tests:
+   - `run-pairwise-circt-bmc-case-extra-args.test`
+   - `run-pairwise-circt-bmc-case-extra-args-invalid.test`
+5. Validation snapshot:
+   - `python3 -m py_compile utils/run_pairwise_circt_bmc.py`: PASS
+   - focused pairwise+OpenTitan policy lit slice: PASS (11/11).
+6. Remaining limitations:
+   - OpenTitan policy manifests do not yet emit `bmc_extra_args` as a first-class policy field.
+   - strict-gate artifacts still do not include resolved policy provenance for per-case contracts.
+7. Next long-term features (BMC/LEC/mutation focus):
+   - add OpenTitan policy column forwarding for `bmc_extra_args` with compatibility checks.
+   - emit resolved contract fingerprints (bound/backend/toggles/extra-args) into case artifacts for strict reproducibility.
+   - integrate mutation-class-aware policy templates that tune `bmc_extra_args`/backend by bucket.
+
+### Formal Closure Snapshot Update (February 13, 2026, OpenTitan policy cohort selectors)
+
+1. Extended OpenTitan BMC case-policy selector model in `utils/run_opentitan_circt_bmc.py` to support cohort matching:
+   - exact impl keys
+   - `re:<regex>` selectors
+   - `glob:<glob>` selectors
+   - `*` default selector
+2. Added strict ambiguity contract for pattern policies:
+   - if multiple pattern selectors match one implementation, run fails fast with explicit diagnostics instead of silently picking by order.
+3. Resolution precedence now explicit and stable:
+   - exact -> single pattern match -> `*` default.
+4. Added focused regressions:
+   - `run-opentitan-bmc-case-policy-regex.test`
+   - `run-opentitan-bmc-case-policy-ambiguous-pattern.test`
+5. Validation snapshot:
+   - `python3 -m py_compile utils/run_opentitan_circt_bmc.py`: PASS
+   - focused OpenTitan/policy/formal-all lit slice: PASS (8/8).
+6. Remaining limitations:
+   - no first-class arbitrary per-case `circt-bmc` arg bundles yet.
+   - strict-gate artifacts still do not export resolved policy provenance (matched selector/effective contract).
+7. Next long-term features (BMC/LEC/mutation focus):
+   - add policy-provenance columns to case/result artifacts and strict-gate summaries.
+   - add manifest profile/versioning for reusable policy cohorts across OpenTitan/sv-tests/verilator/yosys formal lanes.
+   - add mutation-aware policy templates that tune solver/backend/bound profiles per mutation class.
+
+### Formal Closure Snapshot Update (February 13, 2026, OpenTitan per-case policy-manifest wiring)
+
+1. Completed OpenTitan BMC per-case policy-manifest support in `utils/run_opentitan_circt_bmc.py`:
+   - new CLI option: `--case-policy-file`
+   - strict TSV parser with wildcard `*` default-row support
+   - per-implementation policy merge into generated pairwise case manifests.
+2. OpenTitan-generated pairwise manifests now emit the full per-case execution-contract columns consumed by `run_pairwise_circt_bmc.py`:
+   - `timeout_secs`, `backend_mode`, `bmc_bound`, `ignore_asserts_until`, `assume_known_inputs`, `allow_multi_clock`.
+3. Wired policy forwarding through `utils/run_formal_all.sh` OpenTitan BMC lane:
+   - new option: `--opentitan-bmc-case-policy-file FILE`
+   - help text + CLI parse + existence validation
+   - lane-state config hash includes policy file path
+   - lane command forwards `--case-policy-file` to OpenTitan BMC runner.
+4. Added focused tests:
+   - `run-opentitan-bmc-case-policy-file.test`
+   - `run-opentitan-bmc-case-policy-invalid.test`
+   - `run-formal-all-opentitan-bmc-case-policy-forwarding.test`
+   - `run-formal-all-help.test` update.
+5. Validation snapshot:
+   - `python3 -m py_compile utils/run_opentitan_circt_bmc.py`: PASS
+   - `bash -n utils/run_formal_all.sh`: PASS
+   - focused `llvm-lit` OpenTitan/policy slice: PASS (6/6).
+6. Remaining limitations:
+   - manifest policy fields remain structured-only (no arbitrary per-case `circt-bmc` arg bundles yet).
+   - policy matching is exact-key (`impl` / `*`) and still lacks regex/cohort profile inheritance.
+7. Next long-term features (BMC/LEC/mutation focus):
+   - add first-class per-case argument profiles with schema + compatibility versioning.
+   - add policy provenance export into strict-gate artifacts (resolved policy row, effective contract, hash).
+   - extend policy-manifest plumbing to non-OpenTitan pairwise frontends for unified formal governance.
+
 ### Formal Closure Snapshot Update (February 13, 2026, pairwise BMC per-case execution contracts)
 
 1. Extended `utils/run_pairwise_circt_bmc.py` manifest schema with optional per-case execution contracts:
