@@ -14836,13 +14836,16 @@ def is_allowed_strict_gate_rule_id(rule_id: str) -> bool:
             return True
     return False
 
-def load_mutation_contract_fingerprint_case_id_allowlist():
-    if not mutation_contract_fingerprint_case_id_allowlist_file:
-        return
-    allowlist_path = Path(mutation_contract_fingerprint_case_id_allowlist_file)
+def load_pattern_allowlist(allowlist_file: str, label: str):
+    allow_exact = set()
+    allow_prefix = []
+    allow_regex = []
+    if not allowlist_file:
+        return allow_exact, allow_prefix, allow_regex
+    allowlist_path = Path(allowlist_file)
     if not allowlist_path.exists():
         raise SystemExit(
-            f"mutation contract-fingerprint case-ID allowlist file not found: {allowlist_path}"
+            f"{label} file not found: {allowlist_path}"
         )
     with allowlist_path.open() as f:
         for lineno, raw_line in enumerate(f, start=1):
@@ -14858,187 +14861,128 @@ def load_mutation_contract_fingerprint_case_id_allowlist():
                     payload = maybe_payload.strip()
             if not payload:
                 raise SystemExit(
-                    f"mutation contract-fingerprint case-ID allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
+                    f"{label} line {lineno} is empty after '{kind}:' in {allowlist_path}"
                 )
             if kind == "exact":
-                mutation_contract_fingerprint_case_id_allow_exact.add(payload)
+                allow_exact.add(payload)
             elif kind == "prefix":
-                mutation_contract_fingerprint_case_id_allow_prefix.append(payload)
+                allow_prefix.append(payload)
             elif kind == "regex":
                 try:
-                    mutation_contract_fingerprint_case_id_allow_regex.append(re.compile(payload))
+                    allow_regex.append(re.compile(payload))
                 except re.error as exc:
                     raise SystemExit(
-                        f"mutation contract-fingerprint case-ID allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
+                        f"{label} invalid regex at {allowlist_path}:{lineno}: {exc}"
                     )
             else:
                 raise SystemExit(
-                    f"mutation contract-fingerprint case-ID allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
+                    f"{label} unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
                 )
+    return allow_exact, allow_prefix, allow_regex
+
+
+def token_matches_allowlist(token: str, allow_exact, allow_prefix, allow_regex) -> bool:
+    if token in allow_exact:
+        return True
+    for prefix in allow_prefix:
+        if token.startswith(prefix):
+            return True
+    for pattern in allow_regex:
+        if pattern.search(token):
+            return True
+    return False
+
+
+def load_mutation_contract_fingerprint_case_id_allowlist():
+    global mutation_contract_fingerprint_case_id_allow_exact
+    global mutation_contract_fingerprint_case_id_allow_prefix
+    global mutation_contract_fingerprint_case_id_allow_regex
+    (
+        mutation_contract_fingerprint_case_id_allow_exact,
+        mutation_contract_fingerprint_case_id_allow_prefix,
+        mutation_contract_fingerprint_case_id_allow_regex,
+    ) = load_pattern_allowlist(
+        mutation_contract_fingerprint_case_id_allowlist_file,
+        "mutation contract-fingerprint case-ID allowlist",
+    )
+
 
 def is_allowed_mutation_contract_fingerprint_case_id(case_id: str) -> bool:
-    if case_id in mutation_contract_fingerprint_case_id_allow_exact:
-        return True
-    for prefix in mutation_contract_fingerprint_case_id_allow_prefix:
-        if case_id.startswith(prefix):
-            return True
-    for pattern in mutation_contract_fingerprint_case_id_allow_regex:
-        if pattern.search(case_id):
-            return True
-    return False
+    return token_matches_allowlist(
+        case_id,
+        mutation_contract_fingerprint_case_id_allow_exact,
+        mutation_contract_fingerprint_case_id_allow_prefix,
+        mutation_contract_fingerprint_case_id_allow_regex,
+    )
+
 
 def load_mutation_source_fingerprint_case_id_allowlist():
-    if not mutation_source_fingerprint_case_id_allowlist_file:
-        return
-    allowlist_path = Path(mutation_source_fingerprint_case_id_allowlist_file)
-    if not allowlist_path.exists():
-        raise SystemExit(
-            f"mutation source-fingerprint case-ID allowlist file not found: {allowlist_path}"
-        )
-    with allowlist_path.open() as f:
-        for lineno, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            kind = "exact"
-            payload = line
-            if ":" in line:
-                maybe_kind, maybe_payload = line.split(":", 1)
-                if maybe_kind in {"exact", "prefix", "regex"}:
-                    kind = maybe_kind
-                    payload = maybe_payload.strip()
-            if not payload:
-                raise SystemExit(
-                    f"mutation source-fingerprint case-ID allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
-                )
-            if kind == "exact":
-                mutation_source_fingerprint_case_id_allow_exact.add(payload)
-            elif kind == "prefix":
-                mutation_source_fingerprint_case_id_allow_prefix.append(payload)
-            elif kind == "regex":
-                try:
-                    mutation_source_fingerprint_case_id_allow_regex.append(re.compile(payload))
-                except re.error as exc:
-                    raise SystemExit(
-                        f"mutation source-fingerprint case-ID allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
-                    )
-            else:
-                raise SystemExit(
-                    f"mutation source-fingerprint case-ID allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
-                )
+    global mutation_source_fingerprint_case_id_allow_exact
+    global mutation_source_fingerprint_case_id_allow_prefix
+    global mutation_source_fingerprint_case_id_allow_regex
+    (
+        mutation_source_fingerprint_case_id_allow_exact,
+        mutation_source_fingerprint_case_id_allow_prefix,
+        mutation_source_fingerprint_case_id_allow_regex,
+    ) = load_pattern_allowlist(
+        mutation_source_fingerprint_case_id_allowlist_file,
+        "mutation source-fingerprint case-ID allowlist",
+    )
+
 
 def is_allowed_mutation_source_fingerprint_case_id(case_id: str) -> bool:
-    if case_id in mutation_source_fingerprint_case_id_allow_exact:
-        return True
-    for prefix in mutation_source_fingerprint_case_id_allow_prefix:
-        if case_id.startswith(prefix):
-            return True
-    for pattern in mutation_source_fingerprint_case_id_allow_regex:
-        if pattern.search(case_id):
-            return True
-    return False
+    return token_matches_allowlist(
+        case_id,
+        mutation_source_fingerprint_case_id_allow_exact,
+        mutation_source_fingerprint_case_id_allow_prefix,
+        mutation_source_fingerprint_case_id_allow_regex,
+    )
+
 
 def load_mutation_provenance_tuple_id_allowlist():
-    if not mutation_provenance_tuple_id_allowlist_file:
-        return
-    allowlist_path = Path(mutation_provenance_tuple_id_allowlist_file)
-    if not allowlist_path.exists():
-        raise SystemExit(
-            f"mutation provenance tuple-ID allowlist file not found: {allowlist_path}"
-        )
-    with allowlist_path.open() as f:
-        for lineno, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            kind = "exact"
-            payload = line
-            if ":" in line:
-                maybe_kind, maybe_payload = line.split(":", 1)
-                if maybe_kind in {"exact", "prefix", "regex"}:
-                    kind = maybe_kind
-                    payload = maybe_payload.strip()
-            if not payload:
-                raise SystemExit(
-                    f"mutation provenance tuple-ID allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
-                )
-            if kind == "exact":
-                mutation_provenance_tuple_id_allow_exact.add(payload)
-            elif kind == "prefix":
-                mutation_provenance_tuple_id_allow_prefix.append(payload)
-            elif kind == "regex":
-                try:
-                    mutation_provenance_tuple_id_allow_regex.append(re.compile(payload))
-                except re.error as exc:
-                    raise SystemExit(
-                        f"mutation provenance tuple-ID allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
-                    )
-            else:
-                raise SystemExit(
-                    f"mutation provenance tuple-ID allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
-                )
+    global mutation_provenance_tuple_id_allow_exact
+    global mutation_provenance_tuple_id_allow_prefix
+    global mutation_provenance_tuple_id_allow_regex
+    (
+        mutation_provenance_tuple_id_allow_exact,
+        mutation_provenance_tuple_id_allow_prefix,
+        mutation_provenance_tuple_id_allow_regex,
+    ) = load_pattern_allowlist(
+        mutation_provenance_tuple_id_allowlist_file,
+        "mutation provenance tuple-ID allowlist",
+    )
+
 
 def is_allowed_mutation_provenance_tuple_id(tuple_id: str) -> bool:
-    if tuple_id in mutation_provenance_tuple_id_allow_exact:
-        return True
-    for prefix in mutation_provenance_tuple_id_allow_prefix:
-        if tuple_id.startswith(prefix):
-            return True
-    for pattern in mutation_provenance_tuple_id_allow_regex:
-        if pattern.search(tuple_id):
-            return True
-    return False
+    return token_matches_allowlist(
+        tuple_id,
+        mutation_provenance_tuple_id_allow_exact,
+        mutation_provenance_tuple_id_allow_prefix,
+        mutation_provenance_tuple_id_allow_regex,
+    )
+
 
 def load_mutation_gate_status_case_id_allowlist():
-    if not mutation_gate_status_case_id_allowlist_file:
-        return
-    allowlist_path = Path(mutation_gate_status_case_id_allowlist_file)
-    if not allowlist_path.exists():
-        raise SystemExit(
-            f"mutation gate-status case-ID allowlist file not found: {allowlist_path}"
-        )
-    with allowlist_path.open() as f:
-        for lineno, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            kind = "exact"
-            payload = line
-            if ":" in line:
-                maybe_kind, maybe_payload = line.split(":", 1)
-                if maybe_kind in {"exact", "prefix", "regex"}:
-                    kind = maybe_kind
-                    payload = maybe_payload.strip()
-            if not payload:
-                raise SystemExit(
-                    f"mutation gate-status case-ID allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
-                )
-            if kind == "exact":
-                mutation_gate_status_case_id_allow_exact.add(payload)
-            elif kind == "prefix":
-                mutation_gate_status_case_id_allow_prefix.append(payload)
-            elif kind == "regex":
-                try:
-                    mutation_gate_status_case_id_allow_regex.append(re.compile(payload))
-                except re.error as exc:
-                    raise SystemExit(
-                        f"mutation gate-status case-ID allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
-                    )
-            else:
-                raise SystemExit(
-                    f"mutation gate-status case-ID allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
-                )
+    global mutation_gate_status_case_id_allow_exact
+    global mutation_gate_status_case_id_allow_prefix
+    global mutation_gate_status_case_id_allow_regex
+    (
+        mutation_gate_status_case_id_allow_exact,
+        mutation_gate_status_case_id_allow_prefix,
+        mutation_gate_status_case_id_allow_regex,
+    ) = load_pattern_allowlist(
+        mutation_gate_status_case_id_allowlist_file,
+        "mutation gate-status case-ID allowlist",
+    )
+
 
 def is_allowed_mutation_gate_status_case_id(case_id: str) -> bool:
-    if case_id in mutation_gate_status_case_id_allow_exact:
-        return True
-    for prefix in mutation_gate_status_case_id_allow_prefix:
-        if case_id.startswith(prefix):
-            return True
-    for pattern in mutation_gate_status_case_id_allow_regex:
-        if pattern.search(case_id):
-            return True
-    return False
+    return token_matches_allowlist(
+        case_id,
+        mutation_gate_status_case_id_allow_exact,
+        mutation_gate_status_case_id_allow_prefix,
+        mutation_gate_status_case_id_allow_regex,
+    )
 
 class GateErrorCollector:
     def __init__(self):
