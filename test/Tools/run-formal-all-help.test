@@ -27,6 +27,8 @@
 // CHECK: --fail-on-new-lec-circt-verilog-error-case-reasons
 // CHECK: --fail-on-new-lec-timeout-class-cases
 // CHECK: --fail-on-new-bmc-unknown-cases
+// CHECK: --fail-on-new-bmc-reason-keys
+// CHECK: --fail-on-new-bmc-contract-fingerprint-case-ids
 // CHECK: --fail-on-new-lec-drop-remark-cases
 // CHECK: --fail-on-any-bmc-drop-remarks
 // CHECK: --fail-on-any-lec-drop-remarks
@@ -67,4 +69,5 @@
 // CHECK: --opentitan-bmc-impl-filter
 // CHECK: --opentitan-bmc-bound
 // CHECK: --opentitan-bmc-include-masked
+// CHECK: --opentitan-bmc-case-policy-file
 // CHECK: --opentitan-lec-impl-filter

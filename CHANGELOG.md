@@ -1,4 +1,48 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1220 - February 13, 2026
+
+### Formal Strict-Gate: BMC Contract-Fingerprint Drift Detection
+
+1. Added resolved-contract fingerprint ingestion to `utils/run_formal_all.sh`:
+   - new summary function: `summarize_bmc_resolved_contracts_file`
+   - emits BMC counters such as:
+     - `bmc_contract_resolved_rows`
+     - `bmc_contract_source_tokens`
+     - `bmc_contract_fingerprint_cases`
+     - `bmc_contract_fingerprint_unique`
+     - `bmc_contract_fingerprint_identity_digest_u64`
+2. Wired `BMC_RESOLVED_CONTRACTS_OUT` artifact plumbing through all BMC lanes in `run_formal_all.sh`:
+   - `sv-tests/BMC`
+   - `sv-tests-uvm/BMC_SEMANTICS`
+   - `verilator-verification/BMC`
+   - `yosys/tests/sva/BMC`
+   - `opentitan/BMC`
+   - `opentitan/BMC_STRICT`
+3. Added baseline and strict-gate case-tuple persistence/comparison for contract fingerprints:
+   - baseline column: `bmc_contract_fingerprint_case_ids`
+   - strict-gate comparator now collects `case_id::contract_fingerprint` tuples per `BMC*` lane.
+4. Added new strict-gate control:
+   - `--fail-on-new-bmc-contract-fingerprint-case-ids`
+   - also enabled by `--strict-gate` default policy.
+5. Added focused regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids-defaults.test`
+   - updated `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-formal-all-help\.test|run-formal-all-opentitan-bmc.*\.test|run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids.*\.test'`
+  - PASS (8/8)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-formal-all-strict-gate-bmc-drop-remark-case-ids\.test|run-formal-all-strict-gate-bmc-abstraction-provenance-records\.test|run-formal-all-strict-gate-bmc-timeout-case-ids-defaults\.test|run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids.*\.test|run-formal-all-help\.test'`
+  - PASS (6/6)
+
+### Remaining Limitations
+
+- LEC/mutation lanes still do not emit a unified resolved-contract fingerprint artifact plane.
+- Strict-gate currently covers BMC fingerprint tuple drift; cross-lane provenance contract parity is still pending.
+
 ## Iteration 1219 - February 13, 2026
 
 ### Formal Contracts: Deterministic Resolved-Contract Fingerprints
