@@ -1,0 +1,7 @@
+// RUN: rm -rf %t/ot
+// RUN: mkdir -p %t/ot/hw/ip/aes/rtl
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_sbox_lut.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright.sv
+// RUN: printf 're:^aes_sbox_can.*\t\tsmtlib\t7\t4\ton\toff\nglob:*canright\t\tjit\t8\t2\toff\ton\n' > %t/policy.tsv
+// RUN: not %S/../../utils/run_opentitan_circt_bmc.py --opentitan-root %t/ot --case-policy-file %t/policy.tsv 2>&1 | FileCheck %s
+//
+// CHECK: ambiguous case-policy for implementation 'aes_sbox_canright': multiple pattern selectors matched
