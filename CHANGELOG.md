@@ -1,4 +1,44 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1263 - February 13, 2026
+
+### Formal-All Mutation Provenance Canonical Row Validation
+
+1. Tightened mutation provenance tuple validation in both `utils/run_formal_all.sh` parser paths (baseline update + strict gate):
+   - require non-empty `lane_id`
+   - enforce canonical `contract_case_id == lane_id::contract_fingerprint`
+   - enforce canonical `mutation_source_case_id == lane_id::mutation_source_fingerprint`
+   - enforce canonical `provenance_tuple_id == lane_id::contract_fingerprint::mutation_source_fingerprint`
+   - require `provenance_tuple_id` when both contract/source case IDs are present
+   - reject orphan fingerprints without corresponding case IDs
+2. Added malformed-row regression coverage:
+   - `test/Tools/run-formal-all-mutation-provenance-canonical-invalid.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-mutation-provenance-canonical-invalid.test test/Tools/run-formal-all-mutation-provenance-schema-required.test test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids.test test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-defaults.test test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists.test test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists-patterns.test`
+  - PASS (6/6)
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-mutation-*.test test/Tools/run-formal-all-strict-gate-mutation-*.test`
+  - PASS (35/35)
+- External filtered cadence:
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh ~/sv-tests`
+    - PASS (runner rc=0; summary: `total=1 error=1`)
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh ~/sv-tests`
+    - PASS (runner rc=0; summary: `total=1 error=1`)
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh ~/verilator-verification`
+    - PASS (runner rc=0; summary: `total=1 error=1`)
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh ~/verilator-verification`
+    - PASS (runner rc=0; summary: `total=1 error=1`)
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva`
+    - FAIL (rc=2; summary: `total=2 fail=2`)
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh ~/yosys/tests/sva`
+    - PASS (runner rc=0; summary: `total=1 error=1`)
+  - `CIRCT_VERILOG=build-test/bin/circt-verilog utils/run_avip_circt_verilog.sh ~/mbit/jtag_avip`
+    - PASS (`RC=0`)
+  - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_OPT=build-test/bin/circt-opt CIRCT_LEC=build-test/bin/circt-lec LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root ~/opentitan --impl-filter canright`
+    - PASS (`aes_sbox_canright OK`)
+
 ## Iteration 1262 - February 13, 2026
 
 ### Formal Mutation Provenance Schema Hardening

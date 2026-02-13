@@ -13587,16 +13587,107 @@ def collect_mutation_provenance_case_ids(out_dir: Path):
             f"mutation provenance tuples file missing required columns in {tuples_path}: "
             + ", ".join(missing_columns)
         )
-    for row in reader:
+    for row_index, row in enumerate(reader, start=1):
+        lane_id = (row.get("lane_id", "") or "").strip()
+        contract_fingerprint = (row.get("contract_fingerprint", "") or "").strip()
+        mutation_source_fingerprint = (
+            row.get("mutation_source_fingerprint", "") or ""
+        ).strip()
         contract_case_id = (row.get("contract_case_id", "") or "").strip()
         source_case_id = (row.get("mutation_source_case_id", "") or "").strip()
         tuple_id = (row.get("provenance_tuple_id", "") or "").strip()
-        if contract_case_id and contract_case_id != "-":
+        row_label = f"row {row_index}"
+
+        if not lane_id or lane_id == "-":
+            raise RuntimeError(
+                f"mutation provenance tuples row missing lane_id in {tuples_path}: {row_label}"
+            )
+
+        contract_present = bool(contract_case_id and contract_case_id != "-")
+        source_present = bool(source_case_id and source_case_id != "-")
+        tuple_present = bool(tuple_id and tuple_id != "-")
+
+        if contract_present:
+            expected_contract_case_id = f"{lane_id}::{contract_fingerprint}"
+            if not contract_fingerprint or contract_fingerprint == "-":
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has contract_case_id without "
+                        f"contract_fingerprint in {tuples_path}: {row_label}"
+                    )
+                )
+            if contract_case_id != expected_contract_case_id:
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has non-canonical "
+                        f"contract_case_id in {tuples_path}: {row_label} "
+                        f"expected '{expected_contract_case_id}', got '{contract_case_id}'"
+                    )
+                )
             contract_case_ids.add(contract_case_id)
-        if source_case_id and source_case_id != "-":
+        elif contract_fingerprint and contract_fingerprint != "-":
+            raise RuntimeError(
+                (
+                    "mutation provenance tuples row has contract_fingerprint without "
+                    f"contract_case_id in {tuples_path}: {row_label}"
+                )
+            )
+
+        if source_present:
+            expected_source_case_id = f"{lane_id}::{mutation_source_fingerprint}"
+            if not mutation_source_fingerprint or mutation_source_fingerprint == "-":
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has mutation_source_case_id "
+                        f"without mutation_source_fingerprint in {tuples_path}: {row_label}"
+                    )
+                )
+            if source_case_id != expected_source_case_id:
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has non-canonical "
+                        f"mutation_source_case_id in {tuples_path}: {row_label} "
+                        f"expected '{expected_source_case_id}', got '{source_case_id}'"
+                    )
+                )
             source_case_ids.add(source_case_id)
-        if tuple_id and tuple_id != "-":
+        elif mutation_source_fingerprint and mutation_source_fingerprint != "-":
+            raise RuntimeError(
+                (
+                    "mutation provenance tuples row has mutation_source_fingerprint "
+                    f"without mutation_source_case_id in {tuples_path}: {row_label}"
+                )
+            )
+
+        if tuple_present:
+            if not (contract_present and source_present):
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has provenance_tuple_id "
+                        "without both contract/source case IDs in "
+                        f"{tuples_path}: {row_label}"
+                    )
+                )
+            expected_tuple_id = (
+                f"{lane_id}::{contract_fingerprint}::{mutation_source_fingerprint}"
+            )
+            if tuple_id != expected_tuple_id:
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has non-canonical "
+                        f"provenance_tuple_id in {tuples_path}: {row_label} "
+                        f"expected '{expected_tuple_id}', got '{tuple_id}'"
+                    )
+                )
             tuple_ids.add(tuple_id)
+        elif contract_present and source_present:
+            raise RuntimeError(
+                (
+                    "mutation provenance tuples row missing provenance_tuple_id "
+                    "for complete contract/source IDs in "
+                    f"{tuples_path}: {row_label}"
+                )
+            )
     return (
         True,
         {key: ";".join(sorted(contract_case_ids))},
@@ -16060,16 +16151,107 @@ def collect_mutation_provenance_case_ids(out_dir: Path):
             f"mutation provenance tuples file missing required columns in {tuples_path}: "
             + ", ".join(missing_columns)
         )
-    for row in reader:
+    for row_index, row in enumerate(reader, start=1):
+        lane_id = (row.get("lane_id", "") or "").strip()
+        contract_fingerprint = (row.get("contract_fingerprint", "") or "").strip()
+        mutation_source_fingerprint = (
+            row.get("mutation_source_fingerprint", "") or ""
+        ).strip()
         contract_case_id = (row.get("contract_case_id", "") or "").strip()
         source_case_id = (row.get("mutation_source_case_id", "") or "").strip()
         tuple_id = (row.get("provenance_tuple_id", "") or "").strip()
-        if contract_case_id and contract_case_id != "-":
+        row_label = f"row {row_index}"
+
+        if not lane_id or lane_id == "-":
+            raise RuntimeError(
+                f"mutation provenance tuples row missing lane_id in {tuples_path}: {row_label}"
+            )
+
+        contract_present = bool(contract_case_id and contract_case_id != "-")
+        source_present = bool(source_case_id and source_case_id != "-")
+        tuple_present = bool(tuple_id and tuple_id != "-")
+
+        if contract_present:
+            expected_contract_case_id = f"{lane_id}::{contract_fingerprint}"
+            if not contract_fingerprint or contract_fingerprint == "-":
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has contract_case_id without "
+                        f"contract_fingerprint in {tuples_path}: {row_label}"
+                    )
+                )
+            if contract_case_id != expected_contract_case_id:
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has non-canonical "
+                        f"contract_case_id in {tuples_path}: {row_label} "
+                        f"expected '{expected_contract_case_id}', got '{contract_case_id}'"
+                    )
+                )
             contract_case_ids.add(contract_case_id)
-        if source_case_id and source_case_id != "-":
+        elif contract_fingerprint and contract_fingerprint != "-":
+            raise RuntimeError(
+                (
+                    "mutation provenance tuples row has contract_fingerprint without "
+                    f"contract_case_id in {tuples_path}: {row_label}"
+                )
+            )
+
+        if source_present:
+            expected_source_case_id = f"{lane_id}::{mutation_source_fingerprint}"
+            if not mutation_source_fingerprint or mutation_source_fingerprint == "-":
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has mutation_source_case_id "
+                        f"without mutation_source_fingerprint in {tuples_path}: {row_label}"
+                    )
+                )
+            if source_case_id != expected_source_case_id:
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has non-canonical "
+                        f"mutation_source_case_id in {tuples_path}: {row_label} "
+                        f"expected '{expected_source_case_id}', got '{source_case_id}'"
+                    )
+                )
             source_case_ids.add(source_case_id)
-        if tuple_id and tuple_id != "-":
+        elif mutation_source_fingerprint and mutation_source_fingerprint != "-":
+            raise RuntimeError(
+                (
+                    "mutation provenance tuples row has mutation_source_fingerprint "
+                    f"without mutation_source_case_id in {tuples_path}: {row_label}"
+                )
+            )
+
+        if tuple_present:
+            if not (contract_present and source_present):
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has provenance_tuple_id "
+                        "without both contract/source case IDs in "
+                        f"{tuples_path}: {row_label}"
+                    )
+                )
+            expected_tuple_id = (
+                f"{lane_id}::{contract_fingerprint}::{mutation_source_fingerprint}"
+            )
+            if tuple_id != expected_tuple_id:
+                raise RuntimeError(
+                    (
+                        "mutation provenance tuples row has non-canonical "
+                        f"provenance_tuple_id in {tuples_path}: {row_label} "
+                        f"expected '{expected_tuple_id}', got '{tuple_id}'"
+                    )
+                )
             tuple_ids.add(tuple_id)
+        elif contract_present and source_present:
+            raise RuntimeError(
+                (
+                    "mutation provenance tuples row missing provenance_tuple_id "
+                    "for complete contract/source IDs in "
+                    f"{tuples_path}: {row_label}"
+                )
+            )
     return (
         {key: contract_case_ids},
         {key: source_case_ids},
