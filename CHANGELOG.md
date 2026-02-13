@@ -1,4 +1,35 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1246 - February 13, 2026
+
+### Formal-All Strict-Gate Lane-Map Ratchet Defaults
+
+1. Tightened strict-gate defaults in `utils/run_formal_all.sh` when a lane-map file is provided:
+   - `--strict-gate --mutation-lec-contract-fingerprint-lane-map-file ...` now enables
+     - baseline-aware unmapped-lane ratchet (`--fail-on-new-mutation-lec-contract-fingerprint-lane-map-unmapped` behavior)
+     - baseline-aware identity-fallback ratchet (`--fail-on-new-mutation-lec-contract-fingerprint-lane-map-identity-fallback` behavior)
+2. Refactored mutation↔LEC lane-parity comparator activation so lane-map checks can execute without forcing legacy lane-parity diagnostics:
+   - lane-map checks now run when any lane-map gate is enabled
+   - lane-parity mismatch diagnostics remain gated by `--fail-on-mutation-lec-contract-fingerprint-lane-parity`.
+
+### Tests
+
+1. Added strict-default regression for identity fallback:
+   - `test/Tools/run-formal-all-strict-gate-mutation-lane-map-identity-fallback-defaults.test`
+2. Added strict-default regression for unmapped lanes:
+   - `test/Tools/run-formal-all-strict-gate-mutation-lane-map-unmapped-defaults.test`
+3. Both tests assert strict-gate map-ratchet diagnostics are emitted without requiring lane-parity mismatch diagnostics.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-strict-gate-mutation-lane-map-identity-fallback-defaults.test build-test/test/Tools/run-formal-all-strict-gate-mutation-lane-map-unmapped-defaults.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-new.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-new-requires-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new-suite-scope.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-defaults.test build-test/test/Tools/run-formal-all-strict-gate-mutation-gate-status-case-ids-defaults.test`
+  - PASS (13/13)
+
+### Remaining Limitations
+
+- Strict-gate lane-map defaults currently ratchet only baseline-aware map regressions; full lane-parity mismatch diagnostics are still opt-in via `--fail-on-mutation-lec-contract-fingerprint-lane-parity` to avoid legacy-baseline churn.
+
 ## Iteration 1245 - February 13, 2026
 
 ### Formal-All Baseline Lane-Scope Tightening (Unmapped-New Gate)
