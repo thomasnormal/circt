@@ -24,45 +24,51 @@ endclass
 
 module resource_db_dyn_array_tb();
   initial begin
-    my_cfg src0;
-    my_cfg src1;
+    my_cfg src_cfgs[];
     my_cfg slots[];
+    int src_ints[];
     int int_slots[];
-    bit get0;
-    bit get1;
-    bit int_get0;
-    bit int_get1;
+    bit gets[];
+    bit int_gets[];
 
-    src0 = new("src0");
-    src1 = new("src1");
-    src0.id = 77;
-    src1.id = 88;
+    src_cfgs = new[2];
+    src_cfgs[0] = new("src0");
+    src_cfgs[1] = new("src1");
+    src_cfgs[0].id = 77;
+    src_cfgs[1].id = 88;
+    src_ints = new[2];
+    src_ints[0] = 1234;
+    src_ints[1] = 5678;
 
     slots = new[2];
-    slots[0] = null;
-    slots[1] = null;
     int_slots = new[2];
-    int_slots[0] = -1;
-    int_slots[1] = -1;
+    gets = new[2];
+    int_gets = new[2];
 
-    uvm_resource_db#(my_cfg)::set("*", "cfg_0", src0, null);
-    uvm_resource_db#(my_cfg)::set("*", "cfg_1", src1, null);
-    uvm_resource_db#(int)::set("*", "int_cfg_0", 1234, null);
-    uvm_resource_db#(int)::set("*", "int_cfg_1", 5678, null);
+    foreach (slots[i]) begin
+      slots[i] = null;
+      int_slots[i] = -1;
+      uvm_resource_db#(my_cfg)::set("*", $sformatf("cfg_%0d", i), src_cfgs[i],
+                                    null);
+      uvm_resource_db#(int)::set("*", $sformatf("int_cfg_%0d", i),
+                                 src_ints[i], null);
+    end
 
-    get0 = uvm_resource_db#(my_cfg)::read_by_name("*", "cfg_0", slots[0], null);
-    get1 = uvm_resource_db#(my_cfg)::read_by_name("*", "cfg_1", slots[1], null);
-    int_get0 = uvm_resource_db#(int)::read_by_name("*", "int_cfg_0", int_slots[0], null);
-    int_get1 = uvm_resource_db#(int)::read_by_name("*", "int_cfg_1", int_slots[1], null);
+    foreach (slots[i]) begin
+      gets[i] = uvm_resource_db#(my_cfg)::read_by_name(
+          "*", $sformatf("cfg_%0d", i), slots[i], null);
+      int_gets[i] = uvm_resource_db#(int)::read_by_name(
+          "*", $sformatf("int_cfg_%0d", i), int_slots[i], null);
+    end
 
-    $display("get0=%0d get1=%0d", get0, get1);
+    $display("get0=%0d get1=%0d", gets[0], gets[1]);
     $display("slot0_null=%0d slot1_null=%0d", slots[0] == null,
              slots[1] == null);
     if (slots[0] != null)
       $display("slot0_id=%0d", slots[0].id);
     if (slots[1] != null)
       $display("slot1_id=%0d", slots[1].id);
-    $display("int_get0=%0d int_get1=%0d", int_get0, int_get1);
+    $display("int_get0=%0d int_get1=%0d", int_gets[0], int_gets[1]);
     $display("int_slot0=%0d int_slot1=%0d", int_slots[0], int_slots[1]);
   end
 endmodule
