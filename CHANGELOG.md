@@ -1,4 +1,30 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1245 - February 13, 2026
+
+### Formal-All Baseline Lane-Scope Tightening (Unmapped-New Gate)
+
+1. Tightened baseline LEC history selection for `--fail-on-new-mutation-lec-contract-fingerprint-lane-map-unmapped` in `utils/run_formal_all.sh`:
+   - baseline LEC lane fingerprints are now collected only from currently active LEC suite/mode keys
+   - unrelated historical LEC suites no longer affect unmapped-new baseline classification.
+2. This removes cross-suite contamination that could misclassify unchanged unmapped lanes as new.
+
+### Tests
+
+1. Added targeted regression:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new-suite-scope.test`
+   - verifies an injected unrelated-suite baseline row does not trigger the unmapped-new rule.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new-suite-scope.test build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-requires-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new-requires-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-new.test`
+  - PASS (10/10)
+
+### Remaining Limitations
+
+- Baseline unmapped-new logic is scoped to current `(suite, mode)` keys but still compares using lane IDs only; future work can add optional suite-qualified lane namespaces for multi-front-end convergence.
+
 ## Iteration 1244 - February 13, 2026
 
 ### Formal-All Baseline-Aware Lane-Map Unmapped Gate
