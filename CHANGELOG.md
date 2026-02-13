@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 ## Iteration 1220 - February 13, 2026
+### circt-sim UVM Native-Memory Regression Hardening
+
+1. Strengthened dynamic-array native-memory regressions:
+   - `test/Tools/circt-sim/config-db-dynamic-array-native.sv`
+   - `test/Tools/circt-sim/resource-db-dynamic-array-native.sv`
+2. Updated both tests to use `foreach` + `$sformatf(...)` key construction and dynamic-array slot references, matching the APB/AVIP retrieval pattern that originally failed.
+
+### Validation
+
+- `build-test-mut-1770839834/bin/circt-verilog test/Tools/circt-sim/config-db-dynamic-array-native.sv --ir-hw -o <tmp>.mlir`
+  + `build-test-mut-1770839834/bin/circt-sim <tmp>.mlir --top config_db_dyn_array_tb`
+  - PASS
+- `build-test-mut-1770839834/bin/circt-verilog test/Tools/circt-sim/resource-db-dynamic-array-native.sv --ir-hw -o <tmp>.mlir`
+  + `build-test-mut-1770839834/bin/circt-sim <tmp>.mlir --top resource_db_dyn_array_tb`
+  - PASS
+
 
 ### Formal Strict-Gate: BMC Contract-Fingerprint Drift Detection
 
