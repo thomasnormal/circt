@@ -1,4 +1,39 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1256 - February 13, 2026
+
+### Formal-All BMC↔LEC Case-ID Namespace Mapping for Parity Gates
+
+1. Added `--bmc-lec-contract-fingerprint-case-id-map-file FILE` to `utils/run_formal_all.sh`.
+2. Implemented case-ID normalization for BMC→LEC parity comparisons used by:
+   - `--fail-on-bmc-lec-contract-fingerprint-case-id-parity`
+   - `--fail-on-new-bmc-lec-contract-fingerprint-case-id-parity`
+3. Map file supports source selectors consistent with existing lane-map style:
+   - `exact:<source_case_id>\t<target_case_id>`
+   - `prefix:<source_prefix>\t<target_prefix>`
+   - `regex:<source_regex>\t<replacement>`
+4. Added CLI validation:
+   - map file readability checks
+   - requires parity gate flags above or `--strict-gate`.
+5. This addresses a long-term limitation where BMC and LEC used different case-ID namespaces for semantically identical contracts.
+
+### Tests
+
+1. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+2. Added map-file contract checks:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-map-file-requires-gate.test`
+3. Added direct parity mapping regression:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity-map-file.test`
+4. Added baseline-aware new-drift mapping regression:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity-map-file-new.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-map-file-requires-gate.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity-map-file.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity-map-file-new.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity-new.test`
+  - PASS (6/6)
+
 ## Iteration 1255 - February 13, 2026
 
 ### Formal-All Strict-Gate Coverage Ratchet (BMC/Mutation/OpenTitan)

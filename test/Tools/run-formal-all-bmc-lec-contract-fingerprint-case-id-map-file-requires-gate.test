@@ -1,0 +1,4 @@
+// RUN: touch %t.case-id-map.tsv
+// RUN: not %S/../../utils/run_formal_all.sh --bmc-lec-contract-fingerprint-case-id-map-file %t.case-id-map.tsv 2>&1 | FileCheck %s
+
+// CHECK: --bmc-lec-contract-fingerprint-case-id-map-file requires --fail-on-bmc-lec-contract-fingerprint-case-id-parity, --fail-on-new-bmc-lec-contract-fingerprint-case-id-parity, or --strict-gate

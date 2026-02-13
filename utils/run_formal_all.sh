@@ -196,6 +196,10 @@ Options:
                          Fail when new BMC contract fingerprint case IDs
                          (missing in current LEC contract fingerprint
                          case IDs) appear vs baseline for the same suite
+  --bmc-lec-contract-fingerprint-case-id-map-file FILE
+                         Optional case-ID map file used to normalize BMC
+                         `case_id::fingerprint` tuples into the LEC case-ID
+                         namespace before BMC/LEC case-ID parity checks
   --fail-on-new-mutation-contract-fingerprint-case-ids
                          Fail when new mutation contract-fingerprint case IDs
                          (`mutation_contract_fingerprint_case_ids`) appear vs
@@ -2191,6 +2195,7 @@ FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY=0
 FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY=0
+BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE=""
 FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=0
@@ -2669,6 +2674,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY=1; shift ;;
     --fail-on-new-bmc-lec-contract-fingerprint-case-id-parity)
       FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY=1; shift ;;
+    --bmc-lec-contract-fingerprint-case-id-map-file)
+      BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE="$2"; shift 2 ;;
     --fail-on-new-mutation-contract-fingerprint-case-ids)
       FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
     --fail-on-new-mutation-source-fingerprint-case-ids)
@@ -4774,6 +4781,10 @@ if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" && ! -r "$MUTATION_L
   echo "mutation/LEC lane-map file not readable: $MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" >&2
   exit 1
 fi
+if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" && ! -r "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" ]]; then
+  echo "BMC/LEC contract-fingerprint case-ID map file not readable: $BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" >&2
+  exit 1
+fi
 if [[ -n "$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--mutation-contract-fingerprint-case-id-allowlist-file requires --fail-on-new-mutation-contract-fingerprint-case-ids or --strict-gate" >&2
   exit 1
@@ -4788,6 +4799,10 @@ if [[ -n "$MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATIO
 fi
 if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--mutation-gate-status-case-id-allowlist-file requires --fail-on-new-mutation-gate-status-case-ids or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" && "$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" != "1" && "$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--bmc-lec-contract-fingerprint-case-id-map-file requires --fail-on-bmc-lec-contract-fingerprint-case-id-parity, --fail-on-new-bmc-lec-contract-fingerprint-case-id-parity, or --strict-gate" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" == "1" && -z "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" ]]; then
@@ -14606,6 +14621,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY" \
   FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY="$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" \
   FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY="$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" \
+  BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE="$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" \
   FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS="$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" \
@@ -15124,6 +15140,109 @@ def map_mutation_to_lec_lane_id_with_source(mutation_lane: str):
 def map_mutation_to_lec_lane_id(mutation_lane: str) -> str:
     mapped_lane, _ = map_mutation_to_lec_lane_id_with_source(mutation_lane)
     return mapped_lane
+
+
+def load_bmc_lec_contract_fingerprint_case_id_map():
+    exact_map = {}
+    prefix_rules = []
+    regex_rules = []
+    prefix_seen = {}
+    if not bmc_lec_contract_fingerprint_case_id_map_file:
+        return exact_map, prefix_rules, regex_rules
+    map_path = Path(bmc_lec_contract_fingerprint_case_id_map_file)
+    if not map_path.exists():
+        raise SystemExit(
+            f"BMC/LEC contract-fingerprint case-ID map file not found: {map_path}"
+        )
+    with map_path.open() as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [part.strip() for part in line.split("\t")]
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                raise SystemExit(
+                    "BMC/LEC contract-fingerprint case-ID map entry must be two tab-separated fields "
+                    f"at {map_path}:{lineno}"
+                )
+            source_token = parts[0]
+            target_token = parts[1]
+            kind = "exact"
+            payload = source_token
+            if ":" in source_token:
+                maybe_kind, maybe_payload = source_token.split(":", 1)
+                if maybe_kind in {"exact", "prefix", "regex"}:
+                    kind = maybe_kind
+                    payload = maybe_payload.strip()
+            if not payload:
+                raise SystemExit(
+                    "BMC/LEC contract-fingerprint case-ID map source token is empty after kind prefix "
+                    f"at {map_path}:{lineno}"
+                )
+            if kind == "exact":
+                existing = exact_map.get(payload)
+                if existing is not None and existing != target_token:
+                    raise SystemExit(
+                        "BMC/LEC contract-fingerprint case-ID map has conflicting exact mapping for "
+                        f"{payload} at {map_path}:{lineno}: "
+                        f"{existing} vs {target_token}"
+                    )
+                exact_map[payload] = target_token
+            elif kind == "prefix":
+                existing = prefix_seen.get(payload)
+                if existing is not None and existing != target_token:
+                    raise SystemExit(
+                        "BMC/LEC contract-fingerprint case-ID map has conflicting prefix mapping for "
+                        f"{payload} at {map_path}:{lineno}: "
+                        f"{existing} vs {target_token}"
+                    )
+                if existing is None:
+                    prefix_seen[payload] = target_token
+                    prefix_rules.append((payload, target_token, lineno))
+            elif kind == "regex":
+                try:
+                    regex_rules.append((re.compile(payload), target_token, lineno))
+                except re.error as exc:
+                    raise SystemExit(
+                        f"BMC/LEC contract-fingerprint case-ID map invalid regex at {map_path}:{lineno}: {exc}"
+                    )
+            else:
+                raise SystemExit(
+                    f"BMC/LEC contract-fingerprint case-ID map unsupported source kind '{kind}' at {map_path}:{lineno}"
+                )
+    prefix_rules.sort(key=lambda item: (-len(item[0]), item[2]))
+    return exact_map, prefix_rules, regex_rules
+
+
+def map_bmc_to_lec_case_id_with_source(bmc_case_id: str):
+    mapped = bmc_lec_contract_fingerprint_case_id_map_exact.get(bmc_case_id)
+    if mapped is not None:
+        return mapped, "exact"
+    for bmc_prefix, lec_prefix, _ in bmc_lec_contract_fingerprint_case_id_map_prefix_rules:
+        if bmc_case_id.startswith(bmc_prefix):
+            return f"{lec_prefix}{bmc_case_id[len(bmc_prefix):]}", "prefix"
+    for pattern, replacement, _ in bmc_lec_contract_fingerprint_case_id_map_regex_rules:
+        mapped, count = pattern.subn(replacement, bmc_case_id, count=1)
+        if count > 0:
+            return mapped, "regex"
+    return bmc_case_id, "identity"
+
+
+def map_bmc_to_lec_case_id(bmc_case_id: str) -> str:
+    mapped_case_id, _ = map_bmc_to_lec_case_id_with_source(bmc_case_id)
+    return mapped_case_id
+
+
+def normalize_bmc_contract_case_id_token(identity_token: str) -> str:
+    token = (identity_token or "").strip()
+    if not token:
+        return ""
+    case_id = extract_case_id_token(token)
+    fingerprint = extract_fingerprint_token(token)
+    if not case_id or not fingerprint:
+        return token
+    mapped_case_id = map_bmc_to_lec_case_id(case_id)
+    return f"{mapped_case_id}::{fingerprint}"
 
 
 def load_mutation_contract_fingerprint_case_id_allowlist():
@@ -16756,6 +16875,9 @@ baseline_window_days = int(os.environ.get("BASELINE_WINDOW_DAYS", "0"))
 bmc_abstraction_provenance_allowlist_file = os.environ.get(
     "BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE", ""
 ).strip()
+bmc_lec_contract_fingerprint_case_id_map_file = os.environ.get(
+    "BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE", ""
+).strip()
 
 (
     bmc_abstraction_provenance_allow_exact,
@@ -16775,6 +16897,11 @@ def is_allowed_bmc_abstraction_provenance_token(token: str) -> bool:
     )
 
 load_strict_gate_rule_id_allowlist()
+(
+    bmc_lec_contract_fingerprint_case_id_map_exact,
+    bmc_lec_contract_fingerprint_case_id_map_prefix_rules,
+    bmc_lec_contract_fingerprint_case_id_map_regex_rules,
+) = load_bmc_lec_contract_fingerprint_case_id_map()
 load_mutation_contract_fingerprint_case_id_allowlist()
 load_mutation_source_fingerprint_case_id_allowlist()
 load_mutation_provenance_tuple_id_allowlist()
@@ -18882,7 +19009,13 @@ if (
         bmc_suite, bmc_mode = bmc_key
         if not bmc_mode.startswith("BMC"):
             continue
-        if not bmc_contract_case_ids:
+        normalized_bmc_contract_case_ids = {
+            normalize_bmc_contract_case_id_token(token)
+            for token in bmc_contract_case_ids
+            if token and token.strip()
+        }
+        normalized_bmc_contract_case_ids.discard("")
+        if not normalized_bmc_contract_case_ids:
             continue
 
         current_suite_lec_case_ids = set()
@@ -18896,7 +19029,7 @@ if (
             continue
 
         current_missing_case_ids = sorted(
-            set(bmc_contract_case_ids) - current_suite_lec_case_ids
+            normalized_bmc_contract_case_ids - current_suite_lec_case_ids
         )
 
         if (
@@ -18911,7 +19044,7 @@ if (
                 bmc_mode,
                 (
                     "BMC/LEC contract fingerprint case-ID parity mismatch "
-                    f"(bmc={len(bmc_contract_case_ids)} "
+                    f"(bmc={len(normalized_bmc_contract_case_ids)} "
                     f"lec={len(current_suite_lec_case_ids)}): {sample}"
                 ),
                 rule_id="strict_gate.bmc.parity.contract_fingerprint_case_ids.missing_in_lec",
@@ -18959,7 +19092,9 @@ if (
                 for token in raw.split(";"):
                     token = token.strip()
                     if token:
-                        baseline_bmc_case_ids.add(token)
+                        normalized = normalize_bmc_contract_case_id_token(token)
+                        if normalized:
+                            baseline_bmc_case_ids.add(normalized)
 
             baseline_suite_lec_case_ids = set()
             for (baseline_suite, baseline_mode), baseline_rows in history.items():
