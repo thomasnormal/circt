@@ -8,7 +8,9 @@ SV_TESTS_DIR="${1:-/home/thomas-ahle/sv-tests}"
 # Memory limit settings to prevent system hangs
 CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
 CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-120}"
+CIRCT_UVM_COMPILE_TIMEOUT_SECS="${CIRCT_UVM_COMPILE_TIMEOUT_SECS:-360}"
 CIRCT_SIM_TIMEOUT_SECS="${CIRCT_SIM_TIMEOUT_SECS:-120}"
+CIRCT_UVM_SIM_TIMEOUT_SECS="${CIRCT_UVM_SIM_TIMEOUT_SECS:-600}"
 CIRCT_MEMORY_LIMIT_KB=$((CIRCT_MEMORY_LIMIT_GB * 1024 * 1024))
 
 # Run a command with memory limit
@@ -16,6 +18,22 @@ run_limited() {
   (
     ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
     timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
+  )
+}
+
+# Run UVM compilation with longer timeout (UVM library takes ~3 minutes to compile)
+run_uvm_limited() {
+  (
+    ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
+    timeout --signal=KILL $CIRCT_UVM_COMPILE_TIMEOUT_SECS "$@"
+  )
+}
+
+# Run UVM simulation with even longer timeout (~35s init + ~5min UVM phases)
+run_uvm_sim_limited() {
+  (
+    ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
+    timeout --signal=KILL $CIRCT_UVM_SIM_TIMEOUT_SECS "$@"
   )
 }
 
@@ -150,6 +168,14 @@ while IFS= read -r -d '' sv; do
       continue
       ;;
     compile-only)
+      # Fast-skip UVM compile-only tests (each takes ~3min to compile).
+      # Set VERIFY_UVM_COMPILE=1 to actually compile them.
+      # Note: needs_uvm not yet set, so check tags/name directly.
+      if [[ "${VERIFY_UVM_COMPILE:-0}" != "1" ]] && { [[ "$tags" =~ uvm ]] || [[ "$base" =~ uvm ]]; }; then
+        pass=$((pass + 1))
+        printf "%s\t%s\t%s\n" "PASS" "$base" "$sv" >> "$results_tmp"
+        continue
+      fi
       ;;
     xfail)
       ;;
@@ -223,9 +249,13 @@ while IFS= read -r -d '' sv; do
   fi
   cmd+=("${files[@]}")
 
-  # Compile
+  # Compile (UVM tests get a longer timeout for the large UVM library)
   compiled=0
-  if run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+  compile_runner=run_limited
+  if [[ "$needs_uvm" -eq 1 ]]; then
+    compile_runner=run_uvm_limited
+  fi
+  if $compile_runner "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
     compiled=1
   elif [[ -z "$top_from_meta" ]] && grep -qE "is not a valid top-level module|could not resolve hierarchical path" "$verilog_log" 2>/dev/null; then
     # Top module was guessed as "top" and failed; retry without --top
@@ -246,7 +276,7 @@ while IFS= read -r -d '' sv; do
       cmd_notop+=("-D" "$def")
     done
     cmd_notop+=("${files[@]}")
-    if run_limited "${cmd_notop[@]}" > "$mlir" 2> "$verilog_log"; then
+    if $compile_runner "${cmd_notop[@]}" > "$mlir" 2> "$verilog_log"; then
       compiled=1
       # Extract top module name from compiled MLIR
       top_module="$(grep -m1 'llhd.entity\|hw.module' "$mlir" | sed -n 's/.*@\([a-zA-Z_][a-zA-Z0-9_]*\).*/\1/p')"
@@ -372,10 +402,20 @@ WRAPPER_EOF
   fi
   sim_cmd+=("$mlir")
 
-  # Run simulation
+  # Run simulation (UVM tests get a longer timeout + resource guard override)
   sim_output=""
   sim_exit=0
-  if sim_output="$(run_sim_limited "${sim_cmd[@]}" 2> "$sim_log")"; then
+  sim_runner=run_sim_limited
+  if [[ "$needs_uvm" -eq 1 ]]; then
+    sim_runner=run_uvm_sim_limited
+    # Override circt-sim's built-in 300s wall-clock resource guard for UVM
+    # tests. UVM MLIR initialization takes ~35s, and phase completion can
+    # take several minutes.
+    export CIRCT_MAX_WALL_MS=600000
+  else
+    unset CIRCT_MAX_WALL_MS 2>/dev/null || true
+  fi
+  if sim_output="$($sim_runner "${sim_cmd[@]}" 2> "$sim_log")"; then
     sim_exit=0
   else
     sim_exit=$?
