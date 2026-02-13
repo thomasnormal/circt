@@ -1,4 +1,38 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1227 - February 13, 2026
+
+### Mutation Matrix Provenance: Canonical Per-Lane Tuple Artifact
+
+1. Extended `utils/run_mutation_matrix.sh` with a first-class per-lane provenance tuple output:
+   - new CLI option: `--provenance-tuples-file FILE`
+   - default path: `<out-dir>/provenance_tuples.tsv`
+2. Added deterministic tuple rows keyed per lane:
+   - `contract_case_id = lane_id::lane_contract_fingerprint`
+   - `mutation_source_case_id = lane_id::lane_mutation_source_fingerprint`
+   - `provenance_tuple_id = lane_id::lane_contract_fingerprint::lane_mutation_source_fingerprint`
+3. Extended aggregate provenance summary metrics in `provenance_summary.tsv`:
+   - `contract_case_ids_cardinality`
+   - `mutation_source_case_ids_cardinality`
+   - `provenance_tuple_ids_cardinality`
+   - digests for each canonical ID set.
+4. Added focused regression updates:
+   - updated `test/Tools/run-mutation-matrix-provenance-summary.test`
+   - updated `test/Tools/run-mutation-matrix-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-mutation-matrix-(help|provenance-summary|provenance-gate|provenance-identity-gate|provenance-gate-report|provenance-divergence-gate)\\.test'`
+  - PASS (6/6)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-mutation-matrix-.*\\.test'`
+  - PASS (54/54)
+
+### Remaining Limitations
+
+- `run_formal_all.sh` strict-gate still does not ingest mutation provenance rule-id diagnostics and tuple artifacts into a unified BMC/LEC/mutation strict report plane.
+- Cross-lane provenance policy profiles are still local to mutation-matrix execution and not yet shared with formal-all baseline governance.
+
 ## Iteration 1226 - February 13, 2026
 
 ### Mutation Matrix Provenance Strict-Gate: Intra-Run Divergence Controls

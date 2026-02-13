@@ -16,12 +16,14 @@
 // RUN: %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out --create-mutated-script %t/fake-create-mutated.sh 2>&1 | FileCheck %s --check-prefix=LOG
 // RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
 // RUN: FileCheck %s --check-prefix=PROV < %t/out/provenance_summary.tsv
+// RUN: FileCheck %s --check-prefix=TUPLES < %t/out/provenance_tuples.tsv
 // RUN: awk -F'\t' 'NR>1{print $(NF-1)}' %t/out/results.tsv | sort -u | wc -l | tr -d ' ' | FileCheck %s --check-prefix=CONTRACT-UNIQ
 // RUN: awk -F'\t' 'NR>1{print $NF}' %t/out/results.tsv | sort -u | wc -l | tr -d ' ' | FileCheck %s --check-prefix=SOURCE-UNIQ
 // RUN: awk -F'\t' 'NR>1{if ($(NF-1) !~ /^[0-9a-f]{64}$/) bad=1; if ($NF !~ /^[0-9a-f]{64}$/) bad=1} END{print bad?"BAD":"OK"}' %t/out/results.tsv | FileCheck %s --check-prefix=FP-FORMAT
 
 // LOG: Mutation matrix summary: pass=2 fail=0
 // LOG: Provenance summary: {{.*}}/out/provenance_summary.tsv
+// LOG: Provenance tuples: {{.*}}/out/provenance_tuples.tsv
 // RESULTS: lane_id{{.*}}lane_contract_fingerprint{{.*}}lane_mutation_source_fingerprint
 // RESULTS: lane_a{{.*}}PASS{{.*}}
 // RESULTS: lane_b{{.*}}PASS{{.*}}
@@ -29,8 +31,18 @@
 // PROV: metric{{.*}}executed_lanes{{.*}}2
 // PROV: metric{{.*}}contract_fingerprints_unique{{.*}}1
 // PROV: metric{{.*}}mutation_source_fingerprints_unique{{.*}}1
+// PROV: metric{{.*}}contract_case_ids_cardinality{{.*}}2
+// PROV: metric{{.*}}mutation_source_case_ids_cardinality{{.*}}2
+// PROV: metric{{.*}}provenance_tuple_ids_cardinality{{.*}}2
 // PROV: metric{{.*}}contract_fingerprints_digest{{.*}}{{[0-9a-f]+}}
 // PROV: metric{{.*}}mutation_source_fingerprints_digest{{.*}}{{[0-9a-f]+}}
+// PROV: metric{{.*}}contract_case_ids_digest{{.*}}{{[0-9a-f]+}}
+// PROV: metric{{.*}}mutation_source_case_ids_digest{{.*}}{{[0-9a-f]+}}
+// PROV: metric{{.*}}provenance_tuple_ids_digest{{.*}}{{[0-9a-f]+}}
 // CONTRACT-UNIQ: 1
 // SOURCE-UNIQ: 1
 // FP-FORMAT: OK
+
+// TUPLES: lane_id{{[[:space:]]+}}contract_fingerprint{{[[:space:]]+}}mutation_source_fingerprint{{[[:space:]]+}}contract_case_id{{[[:space:]]+}}mutation_source_case_id{{[[:space:]]+}}provenance_tuple_id
+// TUPLES: lane_a{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}lane_a::{{[0-9a-f]+}}{{[[:space:]]+}}lane_a::{{[0-9a-f]+}}{{[[:space:]]+}}lane_a::{{[0-9a-f]+}}::{{[0-9a-f]+}}
+// TUPLES: lane_b{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}lane_b::{{[0-9a-f]+}}{{[[:space:]]+}}lane_b::{{[0-9a-f]+}}{{[[:space:]]+}}lane_b::{{[0-9a-f]+}}::{{[0-9a-f]+}}
