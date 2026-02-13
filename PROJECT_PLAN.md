@@ -63,6 +63,20 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 13, 2026, sv-tests BMC launch-retry correctness)
+
+1. Fixed frontend launch-retry correctness in `utils/run_sv_tests_circt_bmc.sh`:
+   - corrected retry-loop exit-status handling so frontend failures/timeouts are not misclassified as PASS.
+   - preserved first-failure diagnostics across retries by appending stderr per attempt.
+2. Added deterministic launch-retry regression:
+   - `test/Tools/run-sv-tests-bmc-launch-retry-etxtbsy.test`
+   - validates single retry on exit-126 `Text file busy` launcher failure and successful completion.
+3. Revalidated timeout/error semantics:
+   - `run-sv-tests-bmc-frontend-timeout.test`
+   - `run-sv-tests-bmc-timeout-stage-reasons.test`
+   - `run-sv-tests-bmc-keep-logs-frontend-error.test`
+4. Real semantic-closure check for remaining UVM buckets (`16.11` sequence-subroutine, `16.13` multiclock) still fails in frontend due OOM in `circt-verilog`; this is currently a frontend scalability blocker, not a resolved BMC-backend semantics verdict.
+
 ### Formal Closure Snapshot Update (February 13, 2026, OpenTitan BMC runner/toolchain reliability)
 
 1. Hardened `run_formal_all.sh` OpenTitan BMC tool propagation:
@@ -95,8 +109,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 ### Remaining Formal Limitations (BMC/LEC/mutation focus)
 
 1. **BMC operational robustness**: bounded ETXTBSY retry is now implemented in `run_pairwise_circt_bmc.py`; remaining gap is broader transient launch resilience/telemetry parity for other launch-failure classes.
-2. **Frontend triage ergonomics**: sv-tests BMC now preserves frontend error logs via `KEEP_LOGS_DIR`, but host-side tool relink contention can still surface as launcher-level `Permission denied`/ETXTBSY noise until binaries stabilize.
-3. **BMC semantic closure depth**: OpenTitan and sv-tests still need broader case-policy/mode-diff closure beyond canright and current local-var/disable-iff focused slices (notably multiclock and sequence-subroutine buckets).
+2. **Frontend triage ergonomics**: sv-tests BMC now preserves frontend error logs via `KEEP_LOGS_DIR`, and launch retry is in place for transient launcher failures; host-side tool relink contention can still surface as launcher-level `Permission denied`/ETXTBSY noise until binaries stabilize.
+3. **Frontend scalability blocker on semantic closure buckets**: `sv-tests` UVM `16.11` (sequence-subroutine) and `16.13` (multiclock) currently hit frontend OOM in `circt-verilog` during import; this blocks clean semantic closure measurement for those buckets.
 4. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
 5. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
 

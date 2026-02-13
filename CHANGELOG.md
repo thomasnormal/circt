@@ -1,4 +1,32 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1275 - February 13, 2026
+
+### sv-tests BMC Frontend Launch-Retry Correctness + Deterministic Coverage
+
+1. Hardened `utils/run_sv_tests_circt_bmc.sh` frontend launch retries:
+   - fixed status capture in retry loop (non-zero frontend exits were previously being overwritten after `if ...; then ...; fi`),
+   - preserved per-attempt stderr by truncating once and appending across retries (`2>>`) so first-failure diagnostics are not lost.
+2. Added frontend launch-retry configuration and validation:
+   - `BMC_LAUNCH_RETRY_ATTEMPTS`
+   - `BMC_LAUNCH_RETRY_BACKOFF_SECS`
+   - retry path is constrained to retryable launcher failures (`Text file busy`, timeout launcher `Permission denied`).
+3. Added deterministic regression for retry behavior:
+   - `test/Tools/run-sv-tests-bmc-launch-retry-etxtbsy.test`
+   - mock `circt-verilog` fails once with exit `126` + `Text file busy`, then succeeds; verifies PASS result and retry evidence in kept log.
+
+### Validation
+
+- `llvm/build/bin/llvm-lit -sv` focused slice:
+  - `run-sv-tests-bmc-frontend-timeout.test`
+  - `run-sv-tests-bmc-timeout-stage-reasons.test`
+  - `run-sv-tests-bmc-keep-logs-frontend-error.test`
+  - `run-sv-tests-bmc-launch-retry-etxtbsy.test`
+  - PASS (4/4)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter='run-sv-tests-bmc-'`
+  - PASS (11 passed, 1 unsupported)
+- Real targeted semantic-closure slice (`sv-tests` UVM `16.11` + `16.13`, explicit tool paths):
+  - still `ERROR`/`ERROR`; logs now clearly show frontend OOM in `circt-verilog` on these heavy UVM imports (after lifting max-rss guard), not solver-stage ambiguity.
+
 ## Iteration 1274 - February 13, 2026
 
 ### sv-tests BMC Frontend-Error Log Retention

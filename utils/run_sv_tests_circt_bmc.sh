@@ -19,6 +19,20 @@ run_limited() {
     timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
   )
 }
+
+is_retryable_launch_failure_log() {
+  local log_file="$1"
+  if [[ ! -s "$log_file" ]]; then
+    return 1
+  fi
+  grep -Eq "Text file busy|failed to run command .*: Permission denied" "$log_file"
+}
+
+compute_retry_backoff_secs() {
+  local attempt="$1"
+  awk -v attempt="$attempt" -v base="$BMC_LAUNCH_RETRY_BACKOFF_SECS" \
+    'BEGIN { printf "%.3f", attempt * base }'
+}
 IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
 ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-0}"
@@ -53,6 +67,8 @@ OUT="${OUT:-$PWD/sv-tests-bmc-results.txt}"
 mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
+BMC_LAUNCH_RETRY_ATTEMPTS="${BMC_LAUNCH_RETRY_ATTEMPTS:-4}"
+BMC_LAUNCH_RETRY_BACKOFF_SECS="${BMC_LAUNCH_RETRY_BACKOFF_SECS:-0.2}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECT_FILE="${EXPECT_FILE:-$SCRIPT_DIR/sv-tests-bmc-expect.txt}"
 UVM_TAG_REGEX="${UVM_TAG_REGEX:-(^| )uvm( |$)}"
@@ -138,6 +154,15 @@ UVM_PATH="${UVM_PATH:-$(resolve_default_uvm_path)}"
 
 if [[ ! -d "$SV_TESTS_DIR/tests" ]]; then
   echo "sv-tests directory not found: $SV_TESTS_DIR" >&2
+  exit 1
+fi
+
+if ! [[ "$BMC_LAUNCH_RETRY_ATTEMPTS" =~ ^[0-9]+$ ]]; then
+  echo "invalid BMC_LAUNCH_RETRY_ATTEMPTS: $BMC_LAUNCH_RETRY_ATTEMPTS" >&2
+  exit 1
+fi
+if ! [[ "$BMC_LAUNCH_RETRY_BACKOFF_SECS" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "invalid BMC_LAUNCH_RETRY_BACKOFF_SECS: $BMC_LAUNCH_RETRY_BACKOFF_SECS" >&2
   exit 1
 fi
 
@@ -528,10 +553,32 @@ top_module=${top_module}
   frontend_timeout_reason=""
   bmc_timeout_reason=""
   if [[ "$cache_hit" != "1" ]]; then
-    if run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
-      verilog_status=0
-    else
-      verilog_status=$?
+    : > "$verilog_log"
+    launch_attempt=0
+    while true; do
+      if run_limited "${cmd[@]}" > "$mlir" 2>> "$verilog_log"; then
+        verilog_status=0
+      else
+        verilog_status=$?
+      fi
+      if [[ "$verilog_status" -eq 0 ]]; then
+        break
+      fi
+      if [[ "$verilog_status" -eq 126 ]] && \
+          is_retryable_launch_failure_log "$verilog_log" && \
+          [[ "$launch_attempt" -lt "$BMC_LAUNCH_RETRY_ATTEMPTS" ]]; then
+        launch_attempt=$((launch_attempt + 1))
+        retry_delay_secs="$(compute_retry_backoff_secs "$launch_attempt")"
+        {
+          printf '[run_sv_tests_circt_bmc] frontend launch retry attempt=%s delay_secs=%s\n' \
+            "$launch_attempt" "$retry_delay_secs"
+        } >> "$verilog_log"
+        sleep "$retry_delay_secs"
+        continue
+      fi
+      break
+    done
+    if [[ "$verilog_status" -ne 0 ]]; then
       record_drop_remark_case "$base" "$sv" "$verilog_log"
       if [[ "$force_xfail" == "1" ]]; then
         result="XFAIL"
