@@ -1,4 +1,43 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1250 - February 13, 2026
+
+### Formal-All Strict-Gate Lane-Parity Priority Mode
+
+1. Added strict-gate policy toggles in `utils/run_formal_all.sh`:
+   - `--strict-gate-mutation-lane-parity-priority`
+   - `--strict-gate-no-mutation-lane-parity-priority`
+2. Set strict default behavior:
+   - with `--strict-gate`, lane-parity-priority now defaults ON unless explicitly overridden.
+3. Implemented overlap suppression when priority mode is enabled:
+   - if new lane-parity drift is present, suppress overlapping tuple-drift strict diagnostics:
+     - `strict_gate.mutation.contract_fingerprint_case_ids.new`
+     - `strict_gate.mutation.source_fingerprint_case_ids.new`
+     - `strict_gate.mutation.provenance_tuple_ids.new`
+4. Added option contract enforcement:
+   - both priority toggles require `--strict-gate`.
+
+### Tests
+
+1. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+2. Strengthened default-priority regression with co-occurring tuple+lane drift fixture:
+   - `test/Tools/run-formal-all-strict-gate-mutation-lane-parity-new-defaults-no-map.test`
+3. Added explicit opt-out regression (tuple diagnostics preserved):
+   - `test/Tools/run-formal-all-strict-gate-mutation-lane-parity-priority-disabled.test`
+4. Added option-contract regression:
+   - `test/Tools/run-formal-all-strict-gate-mutation-lane-parity-priority-requires-strict.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-mutation-lane-parity-new-defaults-no-map.test test/Tools/run-formal-all-strict-gate-mutation-lane-parity-priority-disabled.test test/Tools/run-formal-all-strict-gate-mutation-lane-parity-priority-requires-strict.test`
+  - PASS (4/4)
+
+### Remaining Limitations
+
+- Priority suppression currently targets the three mutation tuple-drift rules only when lane-parity *new-drift* rules are present; future policy profiles may want configurable suppression groups for other overlapping strict diagnostics.
+
 ## Iteration 1249 - February 13, 2026
 
 ### Formal-All Strict Default Lane-Parity Ratchet Without Lane Maps

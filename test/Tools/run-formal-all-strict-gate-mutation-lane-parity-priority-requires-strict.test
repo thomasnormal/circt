@@ -1,0 +1,9 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --strict-gate-mutation-lane-parity-priority --include-lane-regex "^$"' 2>&1 | FileCheck %s --check-prefix=ENABLE
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --strict-gate-no-mutation-lane-parity-priority --include-lane-regex "^$"' 2>&1 | FileCheck %s --check-prefix=DISABLE
+//
+// ENABLE: --strict-gate-mutation-lane-parity-priority/--strict-gate-no-mutation-lane-parity-priority requires --strict-gate
+// DISABLE: --strict-gate-mutation-lane-parity-priority/--strict-gate-no-mutation-lane-parity-priority requires --strict-gate

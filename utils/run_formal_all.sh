@@ -200,6 +200,14 @@ Options:
                          Fail when new mutation lane parity mismatches
                          (lane IDs or lane::fingerprints) appear vs
                          baseline
+  --strict-gate-mutation-lane-parity-priority
+                         With `--strict-gate`, prefer lane-parity new-drift
+                         diagnostics over overlapping mutation tuple-ID drift
+                         diagnostics
+  --strict-gate-no-mutation-lane-parity-priority
+                         With `--strict-gate`, keep mutation tuple-ID drift
+                         diagnostics even when lane-parity new-drift
+                         diagnostics are present
   --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped
                          Fail when mutation lanes missing explicit lane-map
                          matches are also missing in current LEC lanes
@@ -2122,6 +2130,8 @@ UPDATE_BASELINES=0
 FAIL_ON_DIFF=0
 STRICT_GATE=0
 STRICT_GATE_NO_DROP_REMARKS=0
+STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY=0
+STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY_EXPLICIT=0
 STRICT_GATE_REPORT_JSON=""
 STRICT_GATE_REPORT_TSV=""
 STRICT_GATE_FAIL_ON_LEGACY_RULE_IDS=0
@@ -2546,6 +2556,14 @@ while [[ $# -gt 0 ]]; do
       STRICT_GATE=1; shift ;;
     --strict-gate-no-drop-remarks)
       STRICT_GATE_NO_DROP_REMARKS=1; shift ;;
+    --strict-gate-mutation-lane-parity-priority)
+      STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY=1
+      STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY_EXPLICIT=1
+      shift ;;
+    --strict-gate-no-mutation-lane-parity-priority)
+      STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY=0
+      STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY_EXPLICIT=1
+      shift ;;
     --strict-gate-report-json)
       STRICT_GATE_REPORT_JSON="$2"; shift 2 ;;
     --strict-gate-report-tsv)
@@ -4802,6 +4820,10 @@ if [[ "$STRICT_GATE_NO_DROP_REMARKS" == "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--strict-gate-no-drop-remarks requires --strict-gate" >&2
   exit 1
 fi
+if [[ "$STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY_EXPLICIT" == "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--strict-gate-mutation-lane-parity-priority/--strict-gate-no-mutation-lane-parity-priority requires --strict-gate" >&2
+  exit 1
+fi
 if [[ -n "$STRICT_GATE_REPORT_JSON" && "$STRICT_GATE" != "1" ]]; then
   echo "--strict-gate-report-json requires --strict-gate" >&2
   exit 1
@@ -4899,6 +4921,9 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
 fi
 if [[ "$STRICT_GATE" == "1" ]]; then
   REQUIRE_NONEMPTY_FILTERED_LANES=1
+  if [[ "$STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY_EXPLICIT" != "1" ]]; then
+    STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY=1
+  fi
   FAIL_ON_NEW_XPASS=1
   FAIL_ON_PASSRATE_REGRESSION=1
   FAIL_ON_NEW_FAILURE_CASES=1
@@ -14554,6 +14579,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED="$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" \
   FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK="$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" \
+  STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY="$STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY" \
   MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE="$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" \
   MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
   MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
@@ -14643,6 +14669,9 @@ mutation_gate_status_case_id_allowlist_file = os.environ.get(
 mutation_lec_contract_fingerprint_lane_map_file = os.environ.get(
     "MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE", ""
 ).strip()
+strict_gate_mutation_lane_parity_priority = (
+    os.environ.get("STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY", "0") == "1"
+)
 mutation_lec_contract_fingerprint_lane_exact = {}
 mutation_lec_contract_fingerprint_lane_prefix_rules = []
 mutation_lec_contract_fingerprint_lane_regex_rules = []
@@ -15176,6 +15205,18 @@ class GateErrorCollector:
 
     def diagnostics(self):
         return list(self._diagnostics)
+
+    def drop_rule_ids(self, rule_ids):
+        if not rule_ids:
+            return 0
+        rule_ids = set(rule_ids)
+        before = len(self._diagnostics)
+        self._diagnostics = [
+            diagnostic
+            for diagnostic in self._diagnostics
+            if diagnostic.get("rule_id", "") not in rule_ids
+        ]
+        return before - len(self._diagnostics)
 
 def build_strict_gate_report_diagnostics(gate_errors):
     if isinstance(gate_errors, GateErrorCollector):
@@ -19174,6 +19215,24 @@ if (
                                     rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_pairs.new",
                                 )
 
+
+if strict_gate_mutation_lane_parity_priority:
+    lane_parity_new_rule_ids = {
+        "strict_gate.mutation.parity.contract_fingerprint_lane_ids.new",
+        "strict_gate.mutation.parity.contract_fingerprint_lane_pairs.new",
+    }
+    has_lane_parity_new_drift = any(
+        diagnostic.get("rule_id", "") in lane_parity_new_rule_ids
+        for diagnostic in gate_errors.diagnostics()
+    )
+    if has_lane_parity_new_drift:
+        gate_errors.drop_rule_ids(
+            {
+                "strict_gate.mutation.contract_fingerprint_case_ids.new",
+                "strict_gate.mutation.source_fingerprint_case_ids.new",
+                "strict_gate.mutation.provenance_tuple_ids.new",
+            }
+        )
 
 if fail_on_new_mutation_gate_status_case_ids:
     quality_key = ("mutation-matrix", "QUALITY")
