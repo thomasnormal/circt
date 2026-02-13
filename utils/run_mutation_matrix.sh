@@ -17,6 +17,17 @@ Optional:
   --provenance-summary-file FILE
                             Provenance aggregate TSV
                             (default: <out-dir>/provenance_summary.tsv)
+  --baseline-results-file FILE
+                            Baseline results TSV for provenance strict-gate
+                            tuple checks
+  --fail-on-new-contract-fingerprint-case-ids
+                            Fail when new lane_id::contract_fingerprint tuples
+                            appear vs --baseline-results-file
+  --fail-on-new-mutation-source-fingerprint-case-ids
+                            Fail when new lane_id::mutation_source_fingerprint
+                            tuples appear vs --baseline-results-file
+  --strict-provenance-gate
+                            Enable both provenance tuple drift checks
   --create-mutated-script FILE
                             Passed through to run_mutation_cover.sh
   --jobs-per-lane N         Passed through to run_mutation_cover.sh --jobs (default: 1)
@@ -169,6 +180,7 @@ OUT_DIR="${PWD}/mutation-matrix-results"
 RESULTS_FILE=""
 GATE_SUMMARY_FILE=""
 PROVENANCE_SUMMARY_FILE=""
+BASELINE_RESULTS_FILE=""
 CREATE_MUTATED_SCRIPT=""
 JOBS_PER_LANE=1
 SKIP_BASELINE=0
@@ -210,6 +222,9 @@ DEFAULT_BMC_ORIG_CACHE_MAX_AGE_SECONDS=""
 DEFAULT_BMC_ORIG_CACHE_EVICTION_POLICY=""
 REUSE_CACHE_DIR=""
 REUSE_COMPAT_MODE="warn"
+FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS=0
+FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=0
+STRICT_PROVENANCE_GATE=0
 INCLUDE_LANE_REGEX=()
 EXCLUDE_LANE_REGEX=()
 LANE_JOBS=1
@@ -349,6 +364,10 @@ while [[ $# -gt 0 ]]; do
     --results-file) RESULTS_FILE="$2"; shift 2 ;;
     --gate-summary-file) GATE_SUMMARY_FILE="$2"; shift 2 ;;
     --provenance-summary-file) PROVENANCE_SUMMARY_FILE="$2"; shift 2 ;;
+    --baseline-results-file) BASELINE_RESULTS_FILE="$2"; shift 2 ;;
+    --fail-on-new-contract-fingerprint-case-ids) FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
+    --fail-on-new-mutation-source-fingerprint-case-ids) FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=1; shift ;;
+    --strict-provenance-gate) STRICT_PROVENANCE_GATE=1; shift ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --jobs-per-lane) JOBS_PER_LANE="$2"; shift 2 ;;
     --skip-baseline) SKIP_BASELINE=1; shift ;;
@@ -542,6 +561,20 @@ if [[ "$STOP_ON_FAIL" -eq 1 && "$LANE_JOBS" -gt 1 ]]; then
   echo "--stop-on-fail requires --lane-jobs=1 for deterministic stop semantics." >&2
   exit 1
 fi
+if [[ "$STRICT_PROVENANCE_GATE" -eq 1 ]]; then
+  FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS=1
+  FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=1
+fi
+if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 ]]; then
+  if [[ -z "$BASELINE_RESULTS_FILE" ]]; then
+    echo "Provenance strict-gate requires --baseline-results-file." >&2
+    exit 1
+  fi
+  if [[ ! -f "$BASELINE_RESULTS_FILE" ]]; then
+    echo "Baseline results file not found: $BASELINE_RESULTS_FILE" >&2
+    exit 1
+  fi
+fi
 
 mkdir -p "$OUT_DIR"
 RESULTS_FILE="${RESULTS_FILE:-${OUT_DIR}/results.tsv}"
@@ -622,6 +655,96 @@ hash_string() {
 hash_file() {
   local path="$1"
   hash_stdin < "$path"
+}
+
+collect_fingerprint_case_ids_from_results() {
+  local results_file="$1"
+  local fingerprint_column="$2"
+  python3 - "$results_file" "$fingerprint_column" <<'PY'
+import csv
+import sys
+
+results_path = sys.argv[1]
+fingerprint_column = sys.argv[2]
+
+with open(results_path, newline="") as f:
+  reader = csv.DictReader(f, delimiter="	")
+  if reader.fieldnames is None:
+    print(f"results file has no header: {results_path}", file=sys.stderr)
+    raise SystemExit(2)
+  if "lane_id" not in reader.fieldnames:
+    print(f"results file missing required lane_id column: {results_path}", file=sys.stderr)
+    raise SystemExit(3)
+  if fingerprint_column not in reader.fieldnames:
+    print(
+        f"results file missing required {fingerprint_column} column: {results_path}",
+        file=sys.stderr,
+    )
+    raise SystemExit(4)
+
+  case_ids = set()
+  for row in reader:
+    lane_id = (row.get("lane_id") or "").strip()
+    fingerprint = (row.get(fingerprint_column) or "").strip()
+    if not lane_id or not fingerprint or fingerprint == "-":
+      continue
+    case_ids.add(f"{lane_id}::{fingerprint}")
+
+print(";".join(sorted(case_ids)))
+PY
+}
+
+compute_new_case_ids() {
+  local baseline_case_ids="$1"
+  local current_case_ids="$2"
+  python3 - "$baseline_case_ids" "$current_case_ids" <<'PY'
+import sys
+
+def parse_case_ids(raw: str):
+  values = set()
+  for token in raw.split(";"):
+    token = token.strip()
+    if token:
+      values.add(token)
+  return values
+
+baseline = parse_case_ids(sys.argv[1])
+current = parse_case_ids(sys.argv[2])
+new = sorted(current - baseline)
+
+print(len(baseline))
+print(len(current))
+print(len(new))
+print(";".join(new))
+PY
+}
+
+case_ids_sample() {
+  local case_ids_csv="$1"
+  local limit="${2:-3}"
+  local sample=""
+  local i=0
+  local -a case_ids=()
+
+  if [[ -z "$case_ids_csv" ]]; then
+    printf "none"
+    return
+  fi
+
+  IFS=';' read -r -a case_ids <<< "$case_ids_csv"
+  while [[ "$i" -lt "${#case_ids[@]}" && "$i" -lt "$limit" ]]; do
+    if [[ -n "${case_ids[$i]}" ]]; then
+      if [[ -n "$sample" ]]; then
+        sample+=", "
+      fi
+      sample+="${case_ids[$i]}"
+    fi
+    i=$((i + 1))
+  done
+  if [[ "${#case_ids[@]}" -gt "$limit" ]]; then
+    sample+=", ..."
+  fi
+  printf "%s" "$sample"
 }
 
 parse_failures=0
@@ -1685,11 +1808,49 @@ fi
 } > "$PROVENANCE_SUMMARY_FILE"
 
 
-echo "Mutation matrix summary: pass=${passes} fail=${failures}"
+provenance_gate_failures=0
+if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 ]]; then
+  baseline_contract_case_ids="$(collect_fingerprint_case_ids_from_results "$BASELINE_RESULTS_FILE" "lane_contract_fingerprint")"
+  current_contract_case_ids="$(collect_fingerprint_case_ids_from_results "$RESULTS_FILE" "lane_contract_fingerprint")"
+  mapfile -t contract_case_diff < <(compute_new_case_ids "$baseline_contract_case_ids" "$current_contract_case_ids")
+  baseline_contract_count="${contract_case_diff[0]:-0}"
+  current_contract_count="${contract_case_diff[1]:-0}"
+  new_contract_count="${contract_case_diff[2]:-0}"
+  new_contract_case_ids="${contract_case_diff[3]:-}"
+  if [[ "$new_contract_count" -gt 0 ]]; then
+    contract_sample="$(case_ids_sample "$new_contract_case_ids" 3)"
+    echo "Provenance gate: new lane contract fingerprint case ids observed (baseline=${baseline_contract_count} current=${current_contract_count}): ${contract_sample}" >&2
+    provenance_gate_failures=$((provenance_gate_failures + 1))
+  fi
+fi
+if [[ "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 ]]; then
+  baseline_source_case_ids="$(collect_fingerprint_case_ids_from_results "$BASELINE_RESULTS_FILE" "lane_mutation_source_fingerprint")"
+  current_source_case_ids="$(collect_fingerprint_case_ids_from_results "$RESULTS_FILE" "lane_mutation_source_fingerprint")"
+  mapfile -t source_case_diff < <(compute_new_case_ids "$baseline_source_case_ids" "$current_source_case_ids")
+  baseline_source_count="${source_case_diff[0]:-0}"
+  current_source_count="${source_case_diff[1]:-0}"
+  new_source_count="${source_case_diff[2]:-0}"
+  new_source_case_ids="${source_case_diff[3]:-}"
+  if [[ "$new_source_count" -gt 0 ]]; then
+    source_sample="$(case_ids_sample "$new_source_case_ids" 3)"
+    echo "Provenance gate: new lane mutation-source fingerprint case ids observed (baseline=${baseline_source_count} current=${current_source_count}): ${source_sample}" >&2
+    provenance_gate_failures=$((provenance_gate_failures + 1))
+  fi
+fi
+
+summary_failures="$failures"
+if [[ "$provenance_gate_failures" -gt 0 ]]; then
+  summary_failures=$((summary_failures + provenance_gate_failures))
+fi
+
+echo "Mutation matrix summary: pass=${passes} fail=${summary_failures}"
 echo "Gate summary: $GATE_SUMMARY_FILE"
 echo "Provenance summary: $PROVENANCE_SUMMARY_FILE"
+if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 ]]; then
+  echo "Provenance gate failures: ${provenance_gate_failures}"
+fi
 echo "Mutation matrix generated-mutation cache: hit_lanes=${generated_cache_hit_lanes} miss_lanes=${generated_cache_miss_lanes} saved_runtime_ns=${generated_cache_saved_runtime_ns} lock_wait_ns=${generated_cache_lock_wait_ns} lock_contended_lanes=${generated_cache_lock_contended_lanes}"
 echo "Results: $RESULTS_FILE"
-if [[ "$failures" -ne 0 ]]; then
+if [[ "$summary_failures" -ne 0 ]]; then
   exit 1
 fi

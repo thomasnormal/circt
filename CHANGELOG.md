@@ -1,4 +1,35 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1222 - February 13, 2026
+
+### Mutation Matrix Provenance Strict-Gate Baseline Drift Checks
+
+1. Extended `utils/run_mutation_matrix.sh` with provenance baseline-gating controls:
+   - `--baseline-results-file`
+   - `--fail-on-new-contract-fingerprint-case-ids`
+   - `--fail-on-new-mutation-source-fingerprint-case-ids`
+   - `--strict-provenance-gate` (enables both checks)
+2. Added deterministic tuple comparison against baseline `results.tsv`:
+   - contract drift key: `lane_id::lane_contract_fingerprint`
+   - mutation-source drift key: `lane_id::lane_mutation_source_fingerprint`
+3. Added clear provenance-gate diagnostics and explicit gate-failure accounting in matrix summary output.
+4. Added focused regression coverage:
+   - `test/Tools/run-mutation-matrix-provenance-gate.test`
+   - updated `test/Tools/run-mutation-matrix-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-mutation-matrix-help\.test|run-mutation-matrix-provenance-summary\.test|run-mutation-matrix-provenance-gate\.test'`
+  - PASS (3/3)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-mutation-matrix-.*\.test'`
+  - PASS (51/51)
+
+### Remaining Limitations
+
+- Provenance strict-gate is currently lane-local (`lane_id::fingerprint`) and does not yet enforce cross-lane/cross-suite fingerprint parity policy.
+- `run_formal_all.sh` strict-gate still has no mutation provenance ingestion path; BMC/LEC and mutation provenance are not yet unified in one baseline schema.
+
 ## Iteration 1221 - February 13, 2026
 
 ### Mutation Matrix Provenance Fingerprints + Aggregate Summary
