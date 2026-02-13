@@ -1,4 +1,39 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1251 - February 13, 2026
+
+### Formal-All Cross-Lane BMC↔LEC Contract-Fingerprint Parity Gates
+
+1. Added cross-lane parity gate options in `utils/run_formal_all.sh`:
+   - `--fail-on-bmc-lec-contract-fingerprint-parity`
+   - `--fail-on-new-bmc-lec-contract-fingerprint-parity`
+2. Implemented same-suite BMC↔LEC fingerprint parity enforcement in strict-gate evaluation:
+   - current parity mismatch detection (`strict_gate.bmc.parity.contract_fingerprint_values.missing_in_lec`)
+   - baseline-aware new-drift mismatch detection (`strict_gate.bmc.parity.contract_fingerprint_values.new_missing_in_lec`).
+3. Enabled the baseline-aware BMC↔LEC parity drift gate by default under `--strict-gate`.
+4. Extended strict-gate rule classification mapping so both new diagnostics emit stable non-legacy rule IDs in strict reports.
+
+### Tests
+
+1. Added direct parity mismatch regression:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-parity.test`
+2. Added baseline-aware new-drift regression:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-parity-new.test`
+3. Added strict-default coverage:
+   - `test/Tools/run-formal-all-strict-gate-bmc-lec-contract-fingerprint-parity-defaults.test`
+4. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-parity.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-parity-new.test test/Tools/run-formal-all-strict-gate-bmc-lec-contract-fingerprint-parity-defaults.test test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity.test test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity-new.test test/Tools/run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids-defaults.test`
+  - PASS (7/7)
+
+### Remaining Limitations
+
+- BMC↔LEC parity currently compares fingerprints at suite scope (not lane-mapped scope); future policy profiles can add optional lane-aware BMC↔LEC parity semantics for finer diagnostics.
+
 ## Iteration 1250 - February 13, 2026
 
 ### Formal-All Strict-Gate Lane-Parity Priority Mode
