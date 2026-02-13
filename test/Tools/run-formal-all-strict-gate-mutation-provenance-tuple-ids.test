@@ -1,0 +1,24 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\n: "${LEC_RESOLVED_CONTRACTS_OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "PASS\tcase_a\t/tests/case_a.sv\tsv-tests\tLEC\tEQ\n" > "$OUT"\nprintf "case_a\t/tests/case_a.sv\tmanifest\tsmtlib\t300\tlec\t0\t0\t\taaaa1111aaaa1111\n" > "$LEC_RESOLVED_CONTRACTS_OUT"\nprov="$(dirname "$OUT")/provenance_tuples.tsv"\nprintf "lane_id\tcontract_fingerprint\tmutation_source_fingerprint\tcontract_case_id\tmutation_source_case_id\tprovenance_tuple_id\n" > "$prov"\nprintf "lane_a\tcfp_a\tsfp_a\tlane_a::cfp_a\tlane_a::sfp_a\tlane_a::cfp_a::sfp_a\n" >> "$prov"\necho "sv-tests LEC summary: total=1 pass=1 fail=0 error=0 skip=0"\n' > %t/utils/run_sv_tests_circt_lec.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_sv_tests_circt_lec.sh
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-base --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^sv-tests/LEC$' --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --baseline-file %t/formal-baselines.tsv --update-baselines
+// RUN: FileCheck %s --check-prefix=BASE < %t/formal-baselines.tsv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\n: "${LEC_RESOLVED_CONTRACTS_OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "PASS\tcase_a\t/tests/case_a.sv\tsv-tests\tLEC\tEQ\n" > "$OUT"\nprintf "case_a\t/tests/case_a.sv\tmanifest\tsmtlib\t300\tlec\t0\t0\t\taaaa1111aaaa1111\n" > "$LEC_RESOLVED_CONTRACTS_OUT"\nprov="$(dirname "$OUT")/provenance_tuples.tsv"\nprintf "lane_id\tcontract_fingerprint\tmutation_source_fingerprint\tcontract_case_id\tmutation_source_case_id\tprovenance_tuple_id\n" > "$prov"\nprintf "lane_a\tcfp_a\tsfp_a\tlane_a::cfp_a\tlane_a::sfp_a\tlane_a::cfp_a::sfp_a\n" >> "$prov"\nprintf "lane_b\tcfp_b\tsfp_b\tlane_b::cfp_b\tlane_b::sfp_b\tlane_b::cfp_b::sfp_b\n" >> "$prov"\necho "sv-tests LEC summary: total=1 pass=1 fail=0 error=0 skip=0"\n' > %t/utils/run_sv_tests_circt_lec.sh
+// RUN: chmod +x %t/utils/run_sv_tests_circt_lec.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-new --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/LEC$" --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --baseline-file %t/formal-baselines.tsv --fail-on-new-mutation-contract-fingerprint-case-ids --fail-on-new-mutation-source-fingerprint-case-ids --fail-on-new-mutation-provenance-tuple-ids' 2>&1 | FileCheck %s --check-prefix=GATE
+//
+// BASE: mutation_contract_fingerprint_case_ids
+// BASE: mutation_source_fingerprint_case_ids
+// BASE: mutation_provenance_tuple_ids
+// BASE: lane_a::cfp_a
+// BASE: lane_a::sfp_a
+// BASE: lane_a::cfp_a::sfp_a
+// GATE: strict gate failures:
+// GATE: mutation-matrix PROVENANCE: new mutation contract fingerprint case IDs observed
+// GATE: lane_b::cfp_b
+// GATE: mutation-matrix PROVENANCE: new mutation source fingerprint case IDs observed
+// GATE: lane_b::sfp_b
+// GATE: mutation-matrix PROVENANCE: new mutation provenance tuple IDs observed
+// GATE: lane_b::cfp_b::sfp_b
