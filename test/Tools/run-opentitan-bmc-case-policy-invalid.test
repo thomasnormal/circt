@@ -1,0 +1,6 @@
+// RUN: rm -rf %t/ot
+// RUN: mkdir -p %t/ot/hw/ip/aes/rtl
+// RUN: printf 'aes_sbox_canright\t\tbogus\n' > %t/policy.tsv
+// RUN: not %S/../../utils/run_opentitan_circt_bmc.py --opentitan-root %t/ot --case-policy-file %t/policy.tsv 2>&1 | FileCheck %s
+//
+// CHECK: invalid case-policy row 1: backend_mode must be one of default|jit|smtlib|smoke

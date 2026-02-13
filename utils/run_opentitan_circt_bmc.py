@@ -14,6 +14,7 @@ projects.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import os
 import re
 import shutil
@@ -33,6 +34,246 @@ def parse_nonnegative_int(raw: str, name: str) -> int:
         print(f"invalid {name}: {raw}", file=sys.stderr)
         raise SystemExit(1)
     return value
+
+
+def parse_optional_nonnegative_int(raw: str, name: str, line_no: int) -> int | None:
+    token = raw.strip()
+    if not token:
+        return None
+    try:
+        value = int(token)
+    except ValueError:
+        print(
+            f"invalid case-policy row {line_no}: {name} must be non-negative integer, got '{raw}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if value < 0:
+        print(
+            f"invalid case-policy row {line_no}: {name} must be non-negative integer, got '{raw}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return value
+
+
+def parse_case_backend_mode(raw: str, line_no: int) -> str:
+    token = raw.strip().lower()
+    if not token:
+        return "default"
+    if token in {"default", "jit", "smtlib", "smoke"}:
+        return token
+    print(
+        (
+            f"invalid case-policy row {line_no}: backend_mode must be one of "
+            f"default|jit|smtlib|smoke, got '{raw}'"
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
+def parse_case_toggle_mode(raw: str, line_no: int, name: str) -> str:
+    token = raw.strip().lower()
+    if not token:
+        return "default"
+    mapping = {
+        "default": "default",
+        "on": "on",
+        "off": "off",
+        "1": "on",
+        "0": "off",
+        "true": "on",
+        "false": "off",
+        "yes": "on",
+        "no": "off",
+    }
+    if token in mapping:
+        return mapping[token]
+    print(
+        (
+            f"invalid case-policy row {line_no}: {name} must be one of "
+            f"default|on|off (or 1|0|true|false|yes|no), got '{raw}'"
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
+def compile_case_policy_pattern(
+    selector_raw: str, line_no: int, selector_kind: str
+) -> re.Pattern[str]:
+    pattern_text = selector_raw.strip()
+    if not pattern_text:
+        print(
+            f"invalid case-policy row {line_no}: empty {selector_kind}: selector",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    regex_text = pattern_text
+    if selector_kind == "glob":
+        regex_text = fnmatch.translate(pattern_text)
+
+    try:
+        return re.compile(regex_text)
+    except re.error as exc:
+        print(
+            (
+                f"invalid case-policy row {line_no}: invalid {selector_kind}: selector "
+                f"'{pattern_text}': {exc}"
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+
+def load_case_policy(
+    policy_file: Path,
+) -> tuple[
+    dict[str, dict[str, object]],
+    list[tuple[str, re.Pattern[str], dict[str, object]]],
+    dict[str, object] | None,
+]:
+    policy_by_impl: dict[str, dict[str, object]] = {}
+    pattern_rules: list[tuple[str, re.Pattern[str], dict[str, object]]] = []
+    pattern_rule_keys: set[str] = set()
+    default_policy: dict[str, object] | None = None
+    with policy_file.open(encoding="utf-8") as handle:
+        for line_no, raw in enumerate(handle, start=1):
+            line = raw.rstrip("\n")
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) > 7:
+                print(
+                    (
+                        f"invalid case-policy row {line_no}: expected at most 7 tab "
+                        "columns (impl_selector, timeout_secs, backend_mode, bmc_bound, "
+                        "ignore_asserts_until, assume_known_inputs, allow_multi_clock)"
+                    ),
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            while len(parts) < 7:
+                parts.append("")
+
+            impl_key = parts[0].strip()
+            if not impl_key:
+                print(
+                    f"invalid case-policy row {line_no}: empty impl selector",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+
+            entry: dict[str, object] = {
+                "timeout_secs": parse_optional_nonnegative_int(
+                    parts[1], "timeout_secs", line_no
+                ),
+                "backend_mode": parse_case_backend_mode(parts[2], line_no),
+                "bmc_bound": parse_optional_nonnegative_int(
+                    parts[3], "bmc_bound", line_no
+                ),
+                "ignore_asserts_until": parse_optional_nonnegative_int(
+                    parts[4], "ignore_asserts_until", line_no
+                ),
+                "assume_known_inputs": parse_case_toggle_mode(
+                    parts[5], line_no, "assume_known_inputs"
+                ),
+                "allow_multi_clock": parse_case_toggle_mode(
+                    parts[6], line_no, "allow_multi_clock"
+                ),
+            }
+
+            if impl_key == "*":
+                if default_policy is not None:
+                    print(
+                        "invalid case-policy: multiple '*' default rows",
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(1)
+                default_policy = entry
+                continue
+
+            if impl_key.startswith("re:"):
+                if impl_key in pattern_rule_keys:
+                    print(
+                        f"invalid case-policy: duplicate selector '{impl_key}'",
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(1)
+                pattern_rule_keys.add(impl_key)
+                pattern_rules.append(
+                    (
+                        impl_key,
+                        compile_case_policy_pattern(
+                            impl_key[len("re:") :], line_no, "re"
+                        ),
+                        entry,
+                    )
+                )
+                continue
+
+            if impl_key.startswith("glob:"):
+                if impl_key in pattern_rule_keys:
+                    print(
+                        f"invalid case-policy: duplicate selector '{impl_key}'",
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(1)
+                pattern_rule_keys.add(impl_key)
+                pattern_rules.append(
+                    (
+                        impl_key,
+                        compile_case_policy_pattern(
+                            impl_key[len("glob:") :], line_no, "glob"
+                        ),
+                        entry,
+                    )
+                )
+                continue
+
+            if impl_key in policy_by_impl:
+                print(
+                    f"invalid case-policy: duplicate implementation key '{impl_key}'",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            policy_by_impl[impl_key] = entry
+
+    return policy_by_impl, pattern_rules, default_policy
+
+
+def resolve_case_policy_for_impl(
+    impl: str,
+    policy_by_impl: dict[str, dict[str, object]],
+    pattern_rules: list[tuple[str, re.Pattern[str], dict[str, object]]],
+    default_policy: dict[str, object] | None,
+) -> dict[str, object] | None:
+    exact_policy = policy_by_impl.get(impl)
+    if exact_policy is not None:
+        return exact_policy
+
+    matched_patterns: list[tuple[str, dict[str, object]]] = []
+    for selector_key, selector_re, entry in pattern_rules:
+        if selector_re.search(impl):
+            matched_patterns.append((selector_key, entry))
+
+    if len(matched_patterns) > 1:
+        matched_keys = ", ".join(selector for selector, _ in matched_patterns)
+        print(
+            (
+                f"ambiguous case-policy for implementation '{impl}': multiple "
+                f"pattern selectors matched ({matched_keys})"
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    if len(matched_patterns) == 1:
+        return matched_patterns[0][1]
+
+    return default_policy
 
 
 def replace_text(src: Path, dst: Path, replacements: list[tuple[str, str]]) -> None:
@@ -145,6 +386,14 @@ def main() -> int:
         help="Include masked S-Box implementations.",
     )
     parser.add_argument(
+        "--case-policy-file",
+        default="",
+        help=(
+            "Optional TSV policy manifest with per-implementation selectors "
+            "(impl, re:<regex>, glob:<glob>, or * default)."
+        ),
+    )
+    parser.add_argument(
         "--allow-invalid-op",
         action="store_true",
         help="Do not constrain invalid op_i values to supported enum values.",
@@ -181,6 +430,16 @@ def main() -> int:
     if not rtl_path.is_dir():
         print(f"OpenTitan RTL path not found: {rtl_path}", file=sys.stderr)
         return 1
+
+    policy_by_impl: dict[str, dict[str, object]] = {}
+    policy_pattern_rules: list[tuple[str, re.Pattern[str], dict[str, object]]] = []
+    default_policy: dict[str, object] | None = None
+    if args.case_policy_file:
+        policy_path = Path(args.case_policy_file).resolve()
+        if not policy_path.is_file():
+            print(f"case-policy file not found: {policy_path}", file=sys.stderr)
+            return 1
+        policy_by_impl, policy_pattern_rules, default_policy = load_case_policy(policy_path)
 
     impl_gold = "aes_sbox_lut"
     impl_list = [
@@ -270,6 +529,31 @@ def main() -> int:
 
                 source_files = dep_list() + [str(src_ref)] + extra_files
                 include_dirs = [str(prim_path), str(prim_xilinx_path), str(rtl_path)]
+
+                policy = resolve_case_policy_for_impl(
+                    impl, policy_by_impl, policy_pattern_rules, default_policy
+                )
+                timeout_cell = ""
+                backend_cell = ""
+                bound_cell = ""
+                ignore_cell = ""
+                assume_cell = ""
+                allow_mc_cell = ""
+                if policy is not None:
+                    timeout_value = policy.get("timeout_secs")
+                    bound_value = policy.get("bmc_bound")
+                    ignore_value = policy.get("ignore_asserts_until")
+                    backend_value = str(policy.get("backend_mode", "default"))
+                    assume_value = str(policy.get("assume_known_inputs", "default"))
+                    allow_value = str(policy.get("allow_multi_clock", "default"))
+
+                    timeout_cell = "" if timeout_value is None else str(timeout_value)
+                    backend_cell = "" if backend_value == "default" else backend_value
+                    bound_cell = "" if bound_value is None else str(bound_value)
+                    ignore_cell = "" if ignore_value is None else str(ignore_value)
+                    assume_cell = "" if assume_value == "default" else assume_value
+                    allow_mc_cell = "" if allow_value == "default" else allow_value
+
                 handle.write(
                     "\t".join(
                         [
@@ -278,6 +562,12 @@ def main() -> int:
                             ";".join(source_files),
                             ";".join(include_dirs),
                             str(impl_dir),
+                            timeout_cell,
+                            backend_cell,
+                            bound_cell,
+                            ignore_cell,
+                            assume_cell,
+                            allow_mc_cell,
                         ]
                     )
                     + "\n"
