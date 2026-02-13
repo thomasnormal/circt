@@ -1,4 +1,33 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1248 - February 13, 2026
+
+### Formal-All Strict-Gate Default Ratchet for Lane-Parity Drift
+
+1. Extended strict-gate lane-map defaults in `utils/run_formal_all.sh`:
+   - with `--strict-gate --mutation-lec-contract-fingerprint-lane-map-file ...`, the pipeline now also enables baseline-aware lane-parity drift gating (`--fail-on-new-mutation-lec-contract-fingerprint-lane-parity` behavior).
+2. Fixed strict-default shell wiring bug:
+   - corrected the lane-map-file presence check in strict defaults so map-ratchet gates are actually enabled at runtime.
+3. Preserved legacy behavior:
+   - legacy lane-parity mismatch diagnostics remain opt-in (`--fail-on-mutation-lec-contract-fingerprint-lane-parity`), while strict defaults now ratchet only newly introduced lane-parity drift.
+
+### Tests
+
+1. Added strict-default lane-parity regression:
+   - `test/Tools/run-formal-all-strict-gate-mutation-lane-parity-new-defaults.test`
+2. Updated strict-default unmapped regression to assert combined default behavior:
+   - `test/Tools/run-formal-all-strict-gate-mutation-lane-map-unmapped-defaults.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity-new.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new-suite-scope.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-new.test build-test/test/Tools/run-formal-all-strict-gate-mutation-lane-map-identity-fallback-defaults.test build-test/test/Tools/run-formal-all-strict-gate-mutation-lane-map-unmapped-defaults.test build-test/test/Tools/run-formal-all-strict-gate-mutation-lane-parity-new-defaults.test`
+  - PASS (13/13)
+
+### Remaining Limitations
+
+- Strict defaults currently enable lane-parity drift ratcheting only when a lane-map file is supplied; strict policy profiles without lane maps still require explicit opt-in for lane-parity drift checks.
+
 ## Iteration 1247 - February 13, 2026
 
 ### Formal-All Baseline-Aware Lane-Parity Ratchet
