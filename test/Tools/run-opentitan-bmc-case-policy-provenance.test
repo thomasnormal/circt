@@ -1,0 +1,22 @@
+// RUN: rm -rf %t/ot %t/bin %t/work
+// RUN: mkdir -p %t/ot/hw/ip/aes/rtl %t/ot/hw/ip/prim/rtl %t/ot/hw/ip/prim_xilinx/rtl %t/bin %t/work
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_sbox_lut.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright.sv %t/ot/hw/ip/aes/rtl/aes_sbox_foo.sv %t/ot/hw/ip/aes/rtl/aes_sbox_bar.sv
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_pkg.sv %t/ot/hw/ip/aes/rtl/aes_reg_pkg.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright_pkg.sv
+// RUN: touch %t/ot/hw/ip/prim/rtl/prim_util_pkg.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_buf.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_xor2.sv
+// RUN: printf 'aes_sbox_canright\t\tsmtlib\t7\t4\ton\toff\t--foo=bar\nre:^aes_sbox_f.*\t\tjit\t9\t3\toff\ton\t\n*\t\tdefault\t\t\tdefault\tdefault\t\n' > %t/policy.tsv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nout=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n: "${out:?}"\n: > "$out"\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nmod=""\nrun_smtlib=0\nseen_foo=0\nfor arg in "$@"; do\n  case "$arg" in\n    --module=*) mod="${arg#--module=}" ;;\n    --run-smtlib) run_smtlib=1 ;;\n    --foo=bar) seen_foo=1 ;;\n  esac\ndone\nif [[ "$mod" == "aes_sbox_bmc_miter_aes_sbox_canright" ]]; then\n  [[ "$run_smtlib" == "1" && "$seen_foo" == "1" ]] || exit 10\nelif [[ "$mod" == "aes_sbox_bmc_miter_aes_sbox_foo" ]]; then\n  [[ "$run_smtlib" == "0" && "$seen_foo" == "0" ]] || exit 11\nelif [[ "$mod" == "aes_sbox_bmc_miter_aes_sbox_bar" ]]; then\n  [[ "$run_smtlib" == "0" && "$seen_foo" == "0" ]] || exit 12\nfi\necho "BMC_RESULT=UNSAT"\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/z3
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-bmc %t/bin/z3
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc Z3_BIN=%t/bin/z3 BOUND=5 IGNORE_ASSERTS_UNTIL=2 BMC_RUN_SMTLIB=0 BMC_ASSUME_KNOWN_INPUTS=1 BMC_ALLOW_MULTI_CLOCK=0 CIRCT_TIMEOUT_SECS=17 BMC_PREPARE_CORE_WITH_CIRCT_OPT=0 BMC_RESOLVED_CONTRACTS_OUT=%t/contracts.tsv OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_bmc.py --opentitan-root %t/ot --workdir %t/work --keep-workdir --case-policy-file %t/policy.tsv | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RESULT < %t/results.tsv
+// RUN: FileCheck %s --check-prefix=CONTRACT --strict-whitespace < %t/contracts.tsv
+//
+// LOG: Running BMC on 3 pairwise case(s)...
+// LOG: opentitan BMC summary: total=3 pass=3 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// RESULT: PASS{{[[:space:]]+}}aes_sbox_bar{{[[:space:]]+}}{{.*}}opentitan{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
+// RESULT: PASS{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}opentitan{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
+// RESULT: PASS{{[[:space:]]+}}aes_sbox_foo{{[[:space:]]+}}{{.*}}opentitan{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
+// CONTRACT-DAG: aes_sbox_bar{{[[:space:]]+}}{{.*}}aes_sbox_bar{{[[:space:]]+}}default:*{{[[:space:]]+}}default{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}17{{[[:space:]]+}}5{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}0
+// CONTRACT-DAG: aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright{{[[:space:]]+}}exact:aes_sbox_canright{{[[:space:]]+}}smtlib{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}17{{[[:space:]]+}}7{{[[:space:]]+}}4{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}--foo=bar
+// CONTRACT-DAG: aes_sbox_foo{{[[:space:]]+}}{{.*}}aes_sbox_foo{{[[:space:]]+}}pattern:re:^aes_sbox_f.*{{[[:space:]]+}}jit{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}17{{[[:space:]]+}}9{{[[:space:]]+}}3{{[[:space:]]+}}0{{[[:space:]]+}}1

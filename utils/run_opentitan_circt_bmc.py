@@ -266,10 +266,10 @@ def resolve_case_policy_for_impl(
     policy_by_impl: dict[str, dict[str, object]],
     pattern_rules: list[tuple[str, re.Pattern[str], dict[str, object]]],
     default_policy: dict[str, object] | None,
-) -> dict[str, object] | None:
+) -> tuple[dict[str, object] | None, str]:
     exact_policy = policy_by_impl.get(impl)
     if exact_policy is not None:
-        return exact_policy
+        return exact_policy, f"exact:{impl}"
 
     matched_patterns: list[tuple[str, dict[str, object]]] = []
     for selector_key, selector_re, entry in pattern_rules:
@@ -288,9 +288,12 @@ def resolve_case_policy_for_impl(
         raise SystemExit(1)
 
     if len(matched_patterns) == 1:
-        return matched_patterns[0][1]
+        selector_key, entry = matched_patterns[0]
+        return entry, f"pattern:{selector_key}"
 
-    return default_policy
+    if default_policy is not None:
+        return default_policy, "default:*"
+    return None, "none"
 
 
 def replace_text(src: Path, dst: Path, replacements: list[tuple[str, str]]) -> None:
@@ -547,7 +550,7 @@ def main() -> int:
                 source_files = dep_list() + [str(src_ref)] + extra_files
                 include_dirs = [str(prim_path), str(prim_xilinx_path), str(rtl_path)]
 
-                policy = resolve_case_policy_for_impl(
+                policy, policy_source = resolve_case_policy_for_impl(
                     impl, policy_by_impl, policy_pattern_rules, default_policy
                 )
                 timeout_cell = ""
@@ -557,6 +560,7 @@ def main() -> int:
                 assume_cell = ""
                 allow_mc_cell = ""
                 bmc_extra_args_cell = ""
+                contract_source_cell = policy_source
                 if policy is not None:
                     timeout_value = policy.get("timeout_secs")
                     bound_value = policy.get("bmc_bound")
@@ -589,6 +593,7 @@ def main() -> int:
                             assume_cell,
                             allow_mc_cell,
                             bmc_extra_args_cell,
+                            contract_source_cell,
                         ]
                     )
                     + "\n"

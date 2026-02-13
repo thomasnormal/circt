@@ -1,4 +1,36 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1218 - February 13, 2026
+
+### Formal Contracts: Resolved Policy Provenance Export (Pairwise + OpenTitan)
+
+1. Added resolved per-case contract artifact support to `utils/run_pairwise_circt_bmc.py`:
+   - new CLI/env surface: `--resolved-contracts-file` / `BMC_RESOLVED_CONTRACTS_OUT`
+   - emits per-case effective contract rows (source, backend, backend realization flags, timeout/bound/ignore, toggle resolutions, extra args).
+2. Extended pairwise manifest schema with optional `contract_source` column to carry provenance labels from front-end generators.
+3. Extended OpenTitan front-end policy resolution to annotate source labels deterministically:
+   - `exact:<impl>`
+   - `pattern:<selector>`
+   - `default:*`
+   - `none`
+4. Wired OpenTitan-generated pairwise manifests to forward both:
+   - `bmc_extra_args`
+   - `contract_source` provenance labels.
+5. Added focused regression coverage:
+   - `test/Tools/run-pairwise-circt-bmc-resolved-contracts-file.test`
+   - `test/Tools/run-opentitan-bmc-case-policy-provenance.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py utils/run_opentitan_circt_bmc.py`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-pairwise-circt-bmc-case-.*\.test|run-pairwise-circt-bmc-resolved-contracts-file\.test|run-opentitan-bmc-case-policy-.*\.test'`
+  - PASS (15/15)
+
+### Remaining Limitations
+
+- Strict-gate summary artifacts still do not ingest/export resolved-contract provenance rows.
+- LEC lanes and mutation pipelines are not yet wired to the same resolved-contract data plane.
+
 ## Iteration 1217 - February 13, 2026
 
 ### Formal BMC Policy Wiring: OpenTitan `bmc_extra_args` Forwarding
