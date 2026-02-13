@@ -7,6 +7,8 @@
 // CHECK: --baseline-results-file
 // CHECK: --fail-on-new-contract-fingerprint-case-ids
 // CHECK: --fail-on-new-mutation-source-fingerprint-case-ids
+// CHECK: --fail-on-new-contract-fingerprint-identities
+// CHECK: --fail-on-new-mutation-source-fingerprint-identities
 // CHECK: --strict-provenance-gate
 // CHECK: --create-mutated-script
 // CHECK: --jobs-per-lane
