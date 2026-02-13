@@ -1,4 +1,26 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1255 - February 13, 2026
+
+### Formal-All Strict-Gate Coverage Ratchet (BMC/Mutation/OpenTitan)
+
+1. Added missing strict-gate regression coverage for:
+   - BMC reason-key drift gates (`--fail-on-new-bmc-reason-keys`, strict defaults)
+   - mutation gate-status case-ID drift + allowlist policy
+   - mutation provenance tuple/case-ID drift (explicit and strict-default paths)
+   - mutation quality strict-default drift
+   - OpenTitan BMC case-policy CLI forwarding
+   - allowlist precondition validation for mutation gate-status case IDs.
+2. Updated one stale strict-default provenance expectation to current lane-parity-priority behavior:
+   - strict defaults now report lane parity mismatch in this scenario, not per-tuple drift diagnostics.
+3. This adds CI coverage only; no runtime/formal semantics were changed.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-mutation-gate-status-case-id-allowlist-requires-gate.test test/Tools/run-formal-all-opentitan-bmc-case-policy-forwarding.test test/Tools/run-formal-all-strict-gate-bmc-reason-keys.test test/Tools/run-formal-all-strict-gate-bmc-reason-keys-defaults.test test/Tools/run-formal-all-strict-gate-mutation-gate-status-case-ids.test test/Tools/run-formal-all-strict-gate-mutation-gate-status-case-ids-defaults.test test/Tools/run-formal-all-strict-gate-mutation-gate-status-case-ids-allowlist.test test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids.test test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-defaults.test test/Tools/run-formal-all-strict-gate-mutation-quality-defaults.test`
+  - PASS (10/10)
+
 ## Iteration 1254 - February 13, 2026
 
 ### Formal-All LEC Contract-Fingerprint Drift Coverage Completion
