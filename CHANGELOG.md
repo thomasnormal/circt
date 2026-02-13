@@ -1,4 +1,37 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1234 - February 13, 2026
+
+### Formal-All Mutation Allowlist Parser Dedup + Pattern Coverage
+
+1. Reduced strict-gate mutation allowlist tech debt in `utils/run_formal_all.sh` by introducing shared helpers:
+   - `load_pattern_allowlist(...)`
+   - `token_matches_allowlist(...)`
+2. Reworked mutation allowlist loaders to thin wrappers over shared helper logic (no CLI behavior change):
+   - mutation contract fingerprint case IDs
+   - mutation source fingerprint case IDs
+   - mutation provenance tuple IDs
+   - mutation gate-status case IDs
+3. Preserved existing strict-gate diagnostics and `allowlisted=<n>` reporting while removing parser duplication.
+
+### Tests
+
+1. Added pattern semantics coverage for mutation provenance allowlists:
+   - `test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists-patterns.test`
+   - verifies `prefix:` and `regex:` filtering paths end-to-end.
+2. Re-ran existing mutation allowlist/strict regressions to ensure refactor stability.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-debug/bin/llvm-lit -sv build-test/test/Tools --filter 'run-formal-all-help\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids-defaults\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists-patterns\.test|run-formal-all-mutation-provenance-allowlists-require-gate\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids-defaults\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids-allowlist\.test|run-formal-all-mutation-gate-status-case-id-allowlist-requires-gate\.test'`
+  - PASS (10/10)
+
+### Remaining Limitations
+
+- Strict-gate rule-ID and BMC abstraction allowlist parsers still use independent loader implementations; the shared helper is currently mutation-scope only.
+- Mutation strict diagnostics still key on summary identity tuples; per-mutant artifact IDs and lane-crossing provenance parity checks remain long-term follow-ups.
+
 ## Iteration 1233 - February 13, 2026
 
 ### Formal-All Mutation Provenance Identity Allowlists
