@@ -1,4 +1,187 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1233 - February 13, 2026
+
+### Formal-All Mutation Provenance Identity Allowlists
+
+1. Extended `utils/run_formal_all.sh` with three new mutation provenance strict-gate allowlist options:
+   - `--mutation-contract-fingerprint-case-id-allowlist-file FILE`
+   - `--mutation-source-fingerprint-case-id-allowlist-file FILE`
+   - `--mutation-provenance-tuple-id-allowlist-file FILE`
+2. Added shell-side option validation and wiring:
+   - readability checks for all three allowlist files
+   - explicit gating contract: each option now requires its corresponding `--fail-on-new-mutation-*` gate or `--strict-gate`
+3. Added Python-side allowlist parsing/filtering (`exact:`, `prefix:`, `regex:`; bare token defaults to `exact:`) for:
+   - mutation contract fingerprint case IDs
+   - mutation source fingerprint case IDs
+   - mutation provenance tuple IDs
+4. Integrated filtered strict-gate diagnostics for mutation provenance identity drift:
+   - allowlisted IDs are excluded from failures
+   - diagnostics include `allowlisted=<n>` context when filtering occurs.
+
+### Tests
+
+1. Added partial allowlist filtering regression across all three mutation provenance identity gates:
+   - `test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists.test`
+2. Added option-contract validation coverage:
+   - `test/Tools/run-formal-all-mutation-provenance-allowlists-require-gate.test`
+3. Updated CLI help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-debug/bin/llvm-lit -sv build-test/test/Tools --filter 'run-formal-all-help\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids-defaults\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists\.test|run-formal-all-mutation-provenance-allowlists-require-gate\.test|run-formal-all-strict-gate-mutation-quality-defaults\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids-defaults\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids-allowlist\.test|run-formal-all-mutation-gate-status-case-id-allowlist-requires-gate\.test|run-formal-all-strict-gate-bmc-reason-keys\.test|run-formal-all-strict-gate-bmc-reason-keys-defaults\.test|run-formal-all-strict-gate-lec-contract-fingerprint-case-ids\.test|run-formal-all-strict-gate-lec-contract-fingerprint-case-ids-defaults\.test'`
+  - PASS (14/14)
+
+### Remaining Limitations
+
+- Mutation identity allowlists still duplicate parser/matcher code paths in `run_formal_all.sh`; consolidating this logic into a shared helper would reduce tech debt and maintenance risk.
+- Mutation strict gates still operate at summary-identity granularity; per-mutant artifact-level strict drift (with stable IDs) remains a follow-up.
+
+## Iteration 1232 - February 13, 2026
+
+### Formal-All Mutation Gate-Status Allowlist Filtering
+
+1. Added a new strict-gate mutation option:
+   - `--mutation-gate-status-case-id-allowlist-file FILE`
+2. Extended CLI validation and wiring in `utils/run_formal_all.sh`:
+   - validates allowlist readability
+   - requires either `--fail-on-new-mutation-gate-status-case-ids` or `--strict-gate`
+   - forwards allowlist configuration into strict-gate comparison logic
+3. Added allowlist parsing and filtering for mutation gate-status case IDs in strict-gate:
+   - supports `exact:`, `prefix:`, `regex:` entries (bare lines default to `exact:`)
+   - filters newly observed `mutation_gate_status_case_ids` before emitting drift failures
+4. Improved strict diagnostics with filtered context:
+   - appends `allowlisted=<n>` when some new IDs were filtered by allowlist.
+
+### Tests
+
+1. Added partial-filter regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-mutation-gate-status-case-ids-allowlist.test`
+2. Added option-contract validation coverage:
+   - `test/Tools/run-formal-all-mutation-gate-status-case-id-allowlist-requires-gate.test`
+3. Updated CLI help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-debug/bin/llvm-lit -sv build-test/test/Tools --filter 'run-formal-all-help\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids-defaults\.test|run-formal-all-strict-gate-mutation-quality-defaults\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids-defaults\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids-allowlist\.test|run-formal-all-mutation-gate-status-case-id-allowlist-requires-gate\.test|run-formal-all-strict-gate-bmc-reason-keys\.test|run-formal-all-strict-gate-bmc-reason-keys-defaults\.test|run-formal-all-strict-gate-lec-contract-fingerprint-case-ids\.test|run-formal-all-strict-gate-lec-contract-fingerprint-case-ids-defaults\.test'`
+  - PASS (12/12)
+
+### Remaining Limitations
+
+- Mutation allowlisting currently covers only `mutation_gate_status_case_ids`; mutation provenance and contract/source tuple gates still require their own allowlist channels.
+- Mutation allowlist entries are static text/pattern rules; there is no metadata (owner, expiry, rationale) for debt tracking yet.
+
+## Iteration 1231 - February 13, 2026
+
+### Formal-All Mutation Quality Identity Drift Gating
+
+1. Extended `utils/run_formal_all.sh` mutation quality ingestion to emit canonical lane identity tuples:
+   - `mutation_gate_status_case_ids` (semicolon-separated `lane_id::status::gate_status_key`)
+   - `mutation_gate_status_case_ids_cardinality` in the quality summary payload.
+2. Added a dedicated strict-gate drift option:
+   - `--fail-on-new-mutation-gate-status-case-ids`
+3. Integrated the new mutation identity gate into strict defaults (`--strict-gate`) so mutation lane-identity drift is rejected by default.
+4. Added baseline schema persistence for the new identity tuple set:
+   - `mutation_gate_status_case_ids` in `formal-baselines.tsv` rows.
+5. Added stable strict-gate rule-id classification:
+   - `strict_gate.mutation.gate_status_case_ids.new`
+
+### Tests
+
+1. Added explicit flag regression:
+   - `test/Tools/run-formal-all-strict-gate-mutation-gate-status-case-ids.test`
+2. Added strict-defaults regression:
+   - `test/Tools/run-formal-all-strict-gate-mutation-gate-status-case-ids-defaults.test`
+3. Updated CLI help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-debug/bin/llvm-lit -sv build-test/test/Tools --filter 'run-formal-all-help\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids-defaults\.test|run-formal-all-strict-gate-mutation-quality-defaults\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids\.test|run-formal-all-strict-gate-mutation-gate-status-case-ids-defaults\.test|run-formal-all-strict-gate-bmc-reason-keys\.test|run-formal-all-strict-gate-bmc-reason-keys-defaults\.test|run-formal-all-strict-gate-lec-contract-fingerprint-case-ids\.test|run-formal-all-strict-gate-lec-contract-fingerprint-case-ids-defaults\.test'`
+  - PASS (10/10)
+
+### Remaining Limitations
+
+- Mutation quality identity drift currently gates lane-level tuples only (`lane_id::status::gate_status_key`); it does not yet gate per-mutant artifact IDs from mutation matrix detailed outputs.
+- Formal-all still tracks mutation provenance and mutation quality on separate synthetic lanes (`PROVENANCE` and `QUALITY`) rather than a single unified mutation diagnostics lane with per-check typed records.
+
+## Iteration 1230 - February 13, 2026
+
+### Formal-All Mutation Quality Strict-Gate Baseline Integration
+
+1. Extended `utils/run_formal_all.sh` baseline/update flow to ingest mutation lane quality counters from `<out-dir>/results.tsv` as a synthetic lane:
+   - `suite=mutation-matrix`
+   - `mode=QUALITY`
+2. Added mutation quality summary derivation with deterministic gate-status counters in `result`, including:
+   - `mutation_gate_status_unique=<n>`
+   - `mutation_gate_status_<normalized_gate>_lanes=<count>`
+3. Wired strict-gate comparison to include the synthetic mutation quality lane when mutation results are present under strict mode, enabling regression checks for:
+   - `fail` drift
+   - pass-rate drift
+4. Added focused regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-mutation-quality-defaults.test`
+
+### circt-sim config_db Dynamic-Array Output Regression
+
+1. Extended `test/Tools/circt-sim/config-db.sv` to verify `uvm_config_db#(int)::get` writes through a dynamic-array-backed output lvalue (`dyn_got[1]`).
+2. Added checks that catch silent native-memory writeback failures:
+   - `dyn_get_success=1`
+   - `dyn_got_val=42`
+
+### Validation
+
+- `build-debug/bin/llvm-lit -sv build-test/test/Tools --filter 'run-formal-all-help\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids\.test|run-formal-all-strict-gate-mutation-provenance-tuple-ids-defaults\.test|run-formal-all-strict-gate-mutation-quality-defaults\.test|run-formal-all-strict-gate-bmc-reason-keys\.test|run-formal-all-strict-gate-bmc-reason-keys-defaults\.test|run-formal-all-strict-gate-lec-contract-fingerprint-case-ids\.test|run-formal-all-strict-gate-lec-contract-fingerprint-case-ids-defaults\.test'`
+  - PASS (8/8)
+- `build-debug/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter 'config-db\.sv$'`
+  - PASS (1/1)
+
+### Remaining Limitations
+
+- Mutation quality strict-gate currently keys on lane-level `status`/`gate_status` summary in `results.tsv`; it does not yet ingest per-mutation detailed provenance rows into formal-all strict diagnostics.
+- The dynamic-array config_db regression currently covers scalar `int` output slots; dedicated class-handle dynamic-array regression coverage remains a follow-up item once a stable non-hanging minimal case is isolated.
+
+## Iteration 1229 - February 13, 2026
+
+### Formal-All Mutation Provenance Strict-Gate Integration
+
+1. Extended `utils/run_formal_all.sh` strict-gate and baseline update flow to ingest mutation provenance tuples from `<out-dir>/provenance_tuples.tsv`.
+2. Added new strict-gate controls:
+   - `--fail-on-new-mutation-contract-fingerprint-case-ids`
+   - `--fail-on-new-mutation-source-fingerprint-case-ids`
+   - `--fail-on-new-mutation-provenance-tuple-ids`
+3. Enabled the three mutation provenance controls under `--strict-gate` defaults and added stable rule IDs:
+   - `strict_gate.mutation.contract_fingerprint_case_ids.new`
+   - `strict_gate.mutation.source_fingerprint_case_ids.new`
+   - `strict_gate.mutation.provenance_tuple_ids.new`
+4. Persisted mutation provenance baseline telemetry with a synthetic lane key (`suite=mutation-matrix`, `mode=PROVENANCE`) and columns:
+   - `mutation_contract_fingerprint_case_ids`
+   - `mutation_source_fingerprint_case_ids`
+   - `mutation_provenance_tuple_ids`
+5. Added focused regression tests:
+   - `test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-defaults.test`
+   - updated `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids.test test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-defaults.test`
+  - PASS (3/3)
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-lec-contract-fingerprint-case-ids.test test/Tools/run-formal-all-strict-gate-lec-contract-fingerprint-case-ids-defaults.test test/Tools/run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids.test test/Tools/run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids-defaults.test`
+  - PASS (4/4)
+
+### Remaining Limitations
+
+- `run_formal_all.sh` currently gates mutation provenance IDs but does not yet ingest mutation lane pass/fail quality counters into the unified strict-gate baseline window model.
+
 ## Iteration 1228 - February 13, 2026
 
 ### circt-sim config_db/resource_db Writeback: Initialize-on-Write

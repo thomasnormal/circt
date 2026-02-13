@@ -175,6 +175,52 @@ Options:
                          Fail when new resolved-contract fingerprint tuples
                          (`bmc_contract_fingerprint_case_ids`) appear vs
                          baseline for any `BMC*` lane
+  --fail-on-new-lec-contract-fingerprint-case-ids
+                         Fail when new resolved-contract fingerprint tuples
+                         (`lec_contract_fingerprint_case_ids`) appear vs
+                         baseline for any `LEC*` lane
+  --fail-on-new-mutation-contract-fingerprint-case-ids
+                         Fail when new mutation contract-fingerprint case IDs
+                         (`mutation_contract_fingerprint_case_ids`) appear vs
+                         baseline
+  --fail-on-new-mutation-source-fingerprint-case-ids
+                         Fail when new mutation source-fingerprint case IDs
+                         (`mutation_source_fingerprint_case_ids`) appear vs
+                         baseline
+  --fail-on-new-mutation-provenance-tuple-ids
+                         Fail when new mutation provenance tuple IDs
+                         (`mutation_provenance_tuple_ids`) appear vs baseline
+  --mutation-contract-fingerprint-case-id-allowlist-file FILE
+                         Optional allowlist file for mutation contract-
+                         fingerprint case-ID strict-gate filtering.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
+  --mutation-source-fingerprint-case-id-allowlist-file FILE
+                         Optional allowlist file for mutation source-
+                         fingerprint case-ID strict-gate filtering.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
+  --mutation-provenance-tuple-id-allowlist-file FILE
+                         Optional allowlist file for mutation provenance
+                         tuple-ID strict-gate filtering.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
+  --fail-on-new-mutation-gate-status-case-ids
+                         Fail when new mutation gate-status case IDs
+                         (`mutation_gate_status_case_ids`) appear vs baseline
+  --mutation-gate-status-case-id-allowlist-file FILE
+                         Optional allowlist file for mutation gate-status
+                         case-ID strict-gate filtering.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
   --fail-on-new-bmc-drop-remark-cases
                          Fail when BMC dropped-syntax remark count
                          (`bmc_drop_remark_cases`) increases vs baseline
@@ -2083,6 +2129,15 @@ FAIL_ON_NEW_LEC_TIMEOUT_CLASS_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_REASON_KEYS=0
 FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=0
+FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS=0
+FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=0
+FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=0
+FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=0
+FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS=0
+MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
+MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
+MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE=""
+MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE=""
 FAIL_ON_NEW_BMC_DROP_REMARK_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS=0
@@ -2527,6 +2582,24 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_REASON_KEYS=1; shift ;;
     --fail-on-new-bmc-contract-fingerprint-case-ids)
       FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
+    --fail-on-new-lec-contract-fingerprint-case-ids)
+      FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
+    --fail-on-new-mutation-contract-fingerprint-case-ids)
+      FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
+    --fail-on-new-mutation-source-fingerprint-case-ids)
+      FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=1; shift ;;
+    --fail-on-new-mutation-provenance-tuple-ids)
+      FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=1; shift ;;
+    --mutation-contract-fingerprint-case-id-allowlist-file)
+      MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --mutation-source-fingerprint-case-id-allowlist-file)
+      MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --mutation-provenance-tuple-id-allowlist-file)
+      MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --fail-on-new-mutation-gate-status-case-ids)
+      FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS=1; shift ;;
+    --mutation-gate-status-case-id-allowlist-file)
+      MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE="$2"; shift 2 ;;
     --fail-on-new-bmc-drop-remark-cases)
       FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1; shift ;;
     --fail-on-new-bmc-drop-remark-case-ids)
@@ -4580,6 +4653,46 @@ if [[ -n "$BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" && ! -r "$BMC_ABSTRACTION_
   echo "BMC abstraction provenance allowlist file not readable: $BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" >&2
   exit 1
 fi
+if [[ -n "$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && ! -r "$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" ]]; then
+  echo "mutation contract-fingerprint case-ID allowlist file not readable: $MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && ! -r "$MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" ]]; then
+  echo "mutation source-fingerprint case-ID allowlist file not readable: $MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE" && ! -r "$MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE" ]]; then
+  echo "mutation provenance tuple-ID allowlist file not readable: $MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && ! -r "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" ]]; then
+  echo "mutation gate-status case-ID allowlist file not readable: $MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && \
+      "$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" != "1" && \
+      "$STRICT_GATE" != "1" ]]; then
+  echo "--mutation-contract-fingerprint-case-id-allowlist-file requires --fail-on-new-mutation-contract-fingerprint-case-ids or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && \
+      "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" != "1" && \
+      "$STRICT_GATE" != "1" ]]; then
+  echo "--mutation-source-fingerprint-case-id-allowlist-file requires --fail-on-new-mutation-source-fingerprint-case-ids or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE" && \
+      "$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" != "1" && \
+      "$STRICT_GATE" != "1" ]]; then
+  echo "--mutation-provenance-tuple-id-allowlist-file requires --fail-on-new-mutation-provenance-tuple-ids or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && \
+      "$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" != "1" && \
+      "$STRICT_GATE" != "1" ]]; then
+  echo "--mutation-gate-status-case-id-allowlist-file requires --fail-on-new-mutation-gate-status-case-ids or --strict-gate" >&2
+  exit 1
+fi
 if [[ "$FAIL_ON_UNEXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_CASES_FILE" ]]; then
   echo "--fail-on-unexpected-failure-cases requires --expected-failure-cases-file" >&2
   exit 1
@@ -4746,6 +4859,11 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
   FAIL_ON_NEW_BMC_REASON_KEYS=1
   FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=1
+  FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS=1
+  FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=1
+  FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=1
+  FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=1
+  FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS=1
@@ -8988,6 +9106,69 @@ print(
 PY
 }
 
+summarize_lec_resolved_contracts_file() {
+  local contracts_file="$1"
+  if [[ ! -s "$contracts_file" ]]; then
+    echo ""
+    return 0
+  fi
+  LEC_RESOLVED_CONTRACTS_FILE="$contracts_file" python3 - <<'PY'
+import hashlib
+import os
+from pathlib import Path
+
+path = Path(os.environ["LEC_RESOLVED_CONTRACTS_FILE"])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+rows = 0
+sources = set()
+fingerprints = set()
+case_fingerprint_ids = set()
+
+with path.open(encoding="utf-8") as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        case_id = parts[0].strip() if len(parts) > 0 else ""
+        case_path = parts[1].strip() if len(parts) > 1 else ""
+        source = parts[2].strip() if len(parts) > 2 else ""
+        fingerprint = parts[-1].strip() if parts else ""
+        if source:
+            sources.add(source)
+        if fingerprint:
+            fingerprints.add(fingerprint)
+            identity = case_id if case_id else case_path
+            if not identity:
+                identity = "__aggregate__"
+            case_fingerprint_ids.add(f"{identity}::{fingerprint}")
+        rows += 1
+
+digest_u64 = 0
+if case_fingerprint_ids:
+    canonical = "\n".join(sorted(case_fingerprint_ids)).encode("utf-8")
+    digest_u64 = int(hashlib.sha1(canonical).hexdigest()[:16], 16)
+
+print(
+    " ".join(
+        [
+            f"lec_contract_resolved_rows={rows}",
+            f"lec_contract_source_tokens={len(sources)}",
+            f"lec_contract_fingerprint_cases={len(case_fingerprint_ids)}",
+            f"lec_contract_fingerprint_unique={len(fingerprints)}",
+            f"lec_contract_fingerprint_case_ids_cardinality={len(case_fingerprint_ids)}",
+            f"lec_contract_fingerprint_identity_digest_u64={digest_u64}",
+        ]
+    )
+)
+PY
+}
+
 summarize_bmc_check_attribution_file() {
   local check_file="$1"
   if [[ ! -s "$check_file" ]]; then
@@ -10011,8 +10192,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
   else
     sv_lec_drop_remark_cases_file="$OUT_DIR/sv-tests-lec-drop-remark-cases.tsv"
     sv_lec_drop_remark_reasons_file="$OUT_DIR/sv-tests-lec-drop-remark-reasons.tsv"
+    sv_lec_contracts_file="$OUT_DIR/sv-tests-lec-resolved-contracts.tsv"
     : > "$sv_lec_drop_remark_cases_file"
     : > "$sv_lec_drop_remark_reasons_file"
+    : > "$sv_lec_contracts_file"
     run_suite sv-tests-lec \
       env "${FORMAL_LEC_TIMEOUT_ENV[@]}" \
       OUT="$OUT_DIR/sv-tests-lec-results.txt" \
@@ -10022,6 +10205,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
       CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN" \
       LEC_DROP_REMARK_CASES_OUT="$sv_lec_drop_remark_cases_file" \
       LEC_DROP_REMARK_REASONS_OUT="$sv_lec_drop_remark_reasons_file" \
+      LEC_RESOLVED_CONTRACTS_OUT="$sv_lec_contracts_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
       TAG_REGEX="$SV_TESTS_LEC_TAG_REGEX" \
@@ -10044,6 +10228,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
       lec_case_summary="$(summarize_lec_case_file "$OUT_DIR/sv-tests-lec-results.txt")"
       if [[ -n "$lec_case_summary" ]]; then
         summary="${summary} ${lec_case_summary}"
+      fi
+      lec_contract_summary="$(summarize_lec_resolved_contracts_file "$sv_lec_contracts_file")"
+      if [[ -n "$lec_contract_summary" ]]; then
+        summary="${summary} ${lec_contract_summary}"
       fi
       append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "sv-tests/LEC" total error summary
@@ -10142,8 +10330,10 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
   else
     verilator_lec_drop_remark_cases_file="$OUT_DIR/verilator-lec-drop-remark-cases.tsv"
     verilator_lec_drop_remark_reasons_file="$OUT_DIR/verilator-lec-drop-remark-reasons.tsv"
+    verilator_lec_contracts_file="$OUT_DIR/verilator-lec-resolved-contracts.tsv"
     : > "$verilator_lec_drop_remark_cases_file"
     : > "$verilator_lec_drop_remark_reasons_file"
+    : > "$verilator_lec_contracts_file"
     run_suite verilator-lec \
       env "${FORMAL_LEC_TIMEOUT_ENV[@]}" \
       OUT="$OUT_DIR/verilator-lec-results.txt" \
@@ -10153,6 +10343,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
       CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN" \
       LEC_DROP_REMARK_CASES_OUT="$verilator_lec_drop_remark_cases_file" \
       LEC_DROP_REMARK_REASONS_OUT="$verilator_lec_drop_remark_reasons_file" \
+      LEC_RESOLVED_CONTRACTS_OUT="$verilator_lec_contracts_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
       TEST_FILTER="$VERILATOR_LEC_TEST_FILTER" \
@@ -10173,6 +10364,10 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
       lec_case_summary="$(summarize_lec_case_file "$OUT_DIR/verilator-lec-results.txt")"
       if [[ -n "$lec_case_summary" ]]; then
         summary="${summary} ${lec_case_summary}"
+      fi
+      lec_contract_summary="$(summarize_lec_resolved_contracts_file "$verilator_lec_contracts_file")"
+      if [[ -n "$lec_contract_summary" ]]; then
+        summary="${summary} ${lec_contract_summary}"
       fi
       append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "verilator-verification/LEC" total error summary
@@ -10287,8 +10482,10 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
   else
     yosys_lec_drop_remark_cases_file="$OUT_DIR/yosys-lec-drop-remark-cases.tsv"
     yosys_lec_drop_remark_reasons_file="$OUT_DIR/yosys-lec-drop-remark-reasons.tsv"
+    yosys_lec_contracts_file="$OUT_DIR/yosys-lec-resolved-contracts.tsv"
     : > "$yosys_lec_drop_remark_cases_file"
     : > "$yosys_lec_drop_remark_reasons_file"
+    : > "$yosys_lec_contracts_file"
     run_suite yosys-lec \
       env "${FORMAL_LEC_TIMEOUT_ENV[@]}" \
       OUT="$OUT_DIR/yosys-lec-results.txt" \
@@ -10298,6 +10495,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
       CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN" \
       LEC_DROP_REMARK_CASES_OUT="$yosys_lec_drop_remark_cases_file" \
       LEC_DROP_REMARK_REASONS_OUT="$yosys_lec_drop_remark_reasons_file" \
+      LEC_RESOLVED_CONTRACTS_OUT="$yosys_lec_contracts_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
       TEST_FILTER="$YOSYS_LEC_TEST_FILTER" \
@@ -10318,6 +10516,10 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
       lec_case_summary="$(summarize_lec_case_file "$OUT_DIR/yosys-lec-results.txt")"
       if [[ -n "$lec_case_summary" ]]; then
         summary="${summary} ${lec_case_summary}"
+      fi
+      lec_contract_summary="$(summarize_lec_resolved_contracts_file "$yosys_lec_contracts_file")"
+      if [[ -n "$lec_contract_summary" ]]; then
+        summary="${summary} ${lec_contract_summary}"
       fi
       append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "yosys/tests/sva/LEC" total error summary
@@ -10763,6 +10965,7 @@ run_opentitan_lec_lane() {
   local strict_x="$7"
   local drop_remark_cases_file="$8"
   local drop_remark_reasons_file="$9"
+  local resolved_contracts_file="${10}"
 
   if ! lane_enabled "$lane_id"; then
     return
@@ -10775,6 +10978,7 @@ run_opentitan_lec_lane() {
   : > "$xprop_summary_file"
   : > "$drop_remark_cases_file"
   : > "$drop_remark_reasons_file"
+  : > "$resolved_contracts_file"
   rm -rf "$workdir"
 
   local opentitan_lec_args=(--opentitan-root "$OPENTITAN_DIR")
@@ -10789,6 +10993,7 @@ run_opentitan_lec_lane() {
     OUT_XPROP_SUMMARY="$xprop_summary_file"
     LEC_DROP_REMARK_CASES_OUT="$drop_remark_cases_file"
     LEC_DROP_REMARK_REASONS_OUT="$drop_remark_reasons_file"
+    LEC_RESOLVED_CONTRACTS_OUT="$resolved_contracts_file"
     CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
   if [[ "$strict_x" == "1" ]]; then
     opentitan_lec_env+=(LEC_X_OPTIMISTIC=0 LEC_MODE_LABEL=LEC_STRICT)
@@ -10866,6 +11071,11 @@ PY
   if [[ -n "$xprop_summary" ]]; then
     summary="${summary} ${xprop_summary}"
   fi
+  local lec_contract_summary
+  lec_contract_summary="$(summarize_lec_resolved_contracts_file "$resolved_contracts_file")"
+  if [[ -n "$lec_contract_summary" ]]; then
+    summary="${summary} ${lec_contract_summary}"
+  fi
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" 0 0 0 0 "$summary"
 }
 
@@ -10880,7 +11090,8 @@ if [[ "$WITH_OPENTITAN" == "1" ]]; then
     "$OUT_DIR/opentitan-lec-work" \
     "0" \
     "$OUT_DIR/opentitan-lec-drop-remark-cases.tsv" \
-    "$OUT_DIR/opentitan-lec-drop-remark-reasons.tsv"
+    "$OUT_DIR/opentitan-lec-drop-remark-reasons.tsv" \
+    "$OUT_DIR/opentitan-lec-resolved-contracts.tsv"
 fi
 
 # OpenTitan strict LEC audit lane (optional)
@@ -10894,7 +11105,8 @@ if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]]; then
     "$OUT_DIR/opentitan-lec-strict-work" \
     "1" \
     "$OUT_DIR/opentitan-lec-strict-drop-remark-cases.tsv" \
-    "$OUT_DIR/opentitan-lec-strict-drop-remark-reasons.tsv"
+    "$OUT_DIR/opentitan-lec-strict-drop-remark-reasons.tsv" \
+    "$OUT_DIR/opentitan-lec-strict-resolved-contracts.tsv"
 fi
 
 # OpenTitan LEC mode-diff synthesis (default vs strict)
@@ -13075,6 +13287,139 @@ def collect_bmc_contract_fingerprint_case_ids(out_dir: Path):
                     case_ids.setdefault(key, set()).add(f"{case_id}::{fingerprint}")
     return {key: ";".join(sorted(values)) for key, values in case_ids.items()}
 
+
+def collect_lec_contract_fingerprint_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-resolved-contracts.tsv"),
+        (
+            "verilator-verification",
+            "LEC",
+            out_dir / "verilator-lec-resolved-contracts.tsv",
+        ),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-resolved-contracts.tsv"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-resolved-contracts.tsv"),
+        (
+            "opentitan",
+            "LEC_STRICT",
+            out_dir / "opentitan-lec-strict-resolved-contracts.tsv",
+        ),
+    ]
+    case_ids = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 3:
+                    continue
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                fingerprint = parts[-1].strip() if parts else ""
+                if not fingerprint:
+                    continue
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    case_ids.setdefault(key, set()).add(f"{case_id}::{fingerprint}")
+    return {key: ";".join(sorted(values)) for key, values in case_ids.items()}
+
+def collect_mutation_provenance_case_ids(out_dir: Path):
+    tuples_path = out_dir / "provenance_tuples.tsv"
+    if not tuples_path.exists():
+        return False, {}, {}, {}
+    key = ("mutation-matrix", "PROVENANCE")
+    contract_case_ids = set()
+    source_case_ids = set()
+    tuple_ids = set()
+    with tuples_path.open() as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            contract_case_id = (row.get("contract_case_id", "") or "").strip()
+            source_case_id = (row.get("mutation_source_case_id", "") or "").strip()
+            tuple_id = (row.get("provenance_tuple_id", "") or "").strip()
+            if contract_case_id and contract_case_id != "-":
+                contract_case_ids.add(contract_case_id)
+            if source_case_id and source_case_id != "-":
+                source_case_ids.add(source_case_id)
+            if tuple_id and tuple_id != "-":
+                tuple_ids.add(tuple_id)
+    return (
+        True,
+        {key: ";".join(sorted(contract_case_ids))},
+        {key: ";".join(sorted(source_case_ids))},
+        {key: ";".join(sorted(tuple_ids))},
+    )
+
+def collect_mutation_quality_row(out_dir: Path):
+    results_path = out_dir / "results.tsv"
+    if not results_path.exists():
+        return False, {}
+
+    total = 0
+    passed = 0
+    failed = 0
+    gate_counts = {}
+    gate_status_case_ids = set()
+
+    with results_path.open() as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        if reader.fieldnames is None:
+            return False, {}
+        for row in reader:
+            lane_id = (row.get("lane_id", "") or "").strip()
+            if not lane_id:
+                continue
+            status = (row.get("status", "") or "").strip().upper()
+            if not status:
+                status = "UNKNOWN"
+            gate_status = (row.get("gate_status", "") or "").strip()
+            gate_key = re.sub(r"[^a-z0-9]+", "_", gate_status.lower()).strip("_")
+            if not gate_key:
+                gate_key = "missing"
+            total += 1
+            if status == "PASS":
+                passed += 1
+            else:
+                failed += 1
+            gate_counts[gate_key] = gate_counts.get(gate_key, 0) + 1
+            gate_status_case_ids.add(f"{lane_id}::{status}::{gate_key}")
+
+    if total == 0:
+        return False, {}
+
+    summary_parts = [
+        f"total={total}",
+        f"pass={passed}",
+        f"fail={failed}",
+        "xfail=0",
+        "xpass=0",
+        "error=0",
+        "skip=0",
+        f"mutation_gate_status_unique={len(gate_counts)}",
+        f"mutation_gate_status_case_ids_cardinality={len(gate_status_case_ids)}",
+    ]
+    for gate_key, count in sorted(gate_counts.items()):
+        summary_parts.append(f"mutation_gate_status_{gate_key}_lanes={count}")
+
+    return True, {
+        "suite": "mutation-matrix",
+        "mode": "QUALITY",
+        "total": str(total),
+        "pass": str(passed),
+        "fail": str(failed),
+        "xfail": "0",
+        "xpass": "0",
+        "error": "0",
+        "skip": "0",
+        "summary": " ".join(summary_parts),
+        "mutation_gate_status_case_ids": ";".join(sorted(gate_status_case_ids)),
+    }
+
+
 def collect_bmc_semantic_bucket_case_ids(out_dir: Path):
     sources = [
         ("sv-tests", "BMC", out_dir / "sv-tests-bmc-semantic-buckets.tsv"),
@@ -13704,6 +14049,17 @@ bmc_drop_remark_case_ids = collect_bmc_drop_remark_cases(out_dir)
 bmc_drop_remark_case_reason_ids = collect_bmc_drop_remark_case_reasons(out_dir)
 bmc_timeout_case_ids = collect_bmc_timeout_case_ids(out_dir)
 bmc_contract_fingerprint_case_ids = collect_bmc_contract_fingerprint_case_ids(out_dir)
+lec_contract_fingerprint_case_ids = collect_lec_contract_fingerprint_case_ids(out_dir)
+(
+    mutation_provenance_present,
+    mutation_contract_fingerprint_case_ids,
+    mutation_source_fingerprint_case_ids,
+    mutation_provenance_tuple_ids,
+) = collect_mutation_provenance_case_ids(out_dir)
+(
+    mutation_quality_present,
+    mutation_quality_row,
+) = collect_mutation_quality_row(out_dir)
 bmc_semantic_bucket_case_ids = collect_bmc_semantic_bucket_case_ids(out_dir)
 lec_drop_remark_case_ids = collect_lec_drop_remark_cases(out_dir)
 lec_drop_remark_case_reason_ids = collect_lec_drop_remark_case_reasons(out_dir)
@@ -13768,6 +14124,11 @@ if baseline_path.exists():
                 'bmc_drop_remark_case_reason_ids': row.get('bmc_drop_remark_case_reason_ids', ''),
                 'bmc_timeout_case_ids': row.get('bmc_timeout_case_ids', ''),
                 'bmc_contract_fingerprint_case_ids': row.get('bmc_contract_fingerprint_case_ids', ''),
+                'lec_contract_fingerprint_case_ids': row.get('lec_contract_fingerprint_case_ids', ''),
+                'mutation_contract_fingerprint_case_ids': row.get('mutation_contract_fingerprint_case_ids', ''),
+                'mutation_source_fingerprint_case_ids': row.get('mutation_source_fingerprint_case_ids', ''),
+                'mutation_provenance_tuple_ids': row.get('mutation_provenance_tuple_ids', ''),
+                'mutation_gate_status_case_ids': row.get('mutation_gate_status_case_ids', ''),
                 'bmc_semantic_bucket_case_ids': row.get('bmc_semantic_bucket_case_ids', ''),
                 'lec_drop_remark_case_ids': row.get('lec_drop_remark_case_ids', ''),
                 'lec_drop_remark_case_reason_ids': row.get('lec_drop_remark_case_reason_ids', ''),
@@ -13816,6 +14177,11 @@ for row in rows:
         'bmc_drop_remark_case_reason_ids': bmc_drop_remark_case_reason_ids.get((row['suite'], row['mode']), ''),
         'bmc_timeout_case_ids': bmc_timeout_case_ids.get((row['suite'], row['mode']), ''),
         'bmc_contract_fingerprint_case_ids': bmc_contract_fingerprint_case_ids.get((row['suite'], row['mode']), ''),
+        'lec_contract_fingerprint_case_ids': lec_contract_fingerprint_case_ids.get((row['suite'], row['mode']), ''),
+        'mutation_contract_fingerprint_case_ids': mutation_contract_fingerprint_case_ids.get((row['suite'], row['mode']), ''),
+        'mutation_source_fingerprint_case_ids': mutation_source_fingerprint_case_ids.get((row['suite'], row['mode']), ''),
+        'mutation_provenance_tuple_ids': mutation_provenance_tuple_ids.get((row['suite'], row['mode']), ''),
+        'mutation_gate_status_case_ids': '',
         'bmc_semantic_bucket_case_ids': bmc_semantic_bucket_case_ids.get((row['suite'], row['mode']), ''),
         'lec_drop_remark_case_ids': lec_drop_remark_case_ids.get((row['suite'], row['mode']), ''),
         'lec_drop_remark_case_reason_ids': lec_drop_remark_case_reason_ids.get((row['suite'], row['mode']), ''),
@@ -13833,6 +14199,53 @@ for row in rows:
         'lec_error_bucket_case_ids': lec_error_bucket_case_ids.get((row['suite'], row['mode']), ''),
         'lec_semantic_diag_subfamily_case_ids': lec_semantic_diag_subfamily_case_ids.get((row['suite'], row['mode']), ''),
         'lec_semantic_diag_subfamily_case_reasons': lec_semantic_diag_subfamily_case_reasons.get((row['suite'], row['mode']), ''),
+    }
+
+if mutation_provenance_present:
+    key = (date_str, 'mutation-matrix', 'PROVENANCE')
+    lane_key = ('mutation-matrix', 'PROVENANCE')
+    baseline[key] = {
+        'date': date_str,
+        'suite': lane_key[0],
+        'mode': lane_key[1],
+        'total': '0',
+        'pass': '0',
+        'fail': '0',
+        'xfail': '0',
+        'xpass': '0',
+        'error': '0',
+        'skip': '0',
+        'pass_rate': '0.000',
+        'result': 'total=0 pass=0 fail=0 xfail=0 xpass=0 error=0 skip=0',
+        'mutation_contract_fingerprint_case_ids': mutation_contract_fingerprint_case_ids.get(lane_key, ''),
+        'mutation_source_fingerprint_case_ids': mutation_source_fingerprint_case_ids.get(lane_key, ''),
+        'mutation_provenance_tuple_ids': mutation_provenance_tuple_ids.get(lane_key, ''),
+        'mutation_gate_status_case_ids': '',
+    }
+
+if mutation_quality_present:
+    key = (date_str, mutation_quality_row['suite'], mutation_quality_row['mode'])
+    total = int(mutation_quality_row['total'])
+    passed = int(mutation_quality_row['pass'])
+    fail = int(mutation_quality_row['fail'])
+    xfail = int(mutation_quality_row['xfail'])
+    xpass = int(mutation_quality_row['xpass'])
+    error = int(mutation_quality_row['error'])
+    skip = int(mutation_quality_row['skip'])
+    baseline[key] = {
+        'date': date_str,
+        'suite': mutation_quality_row['suite'],
+        'mode': mutation_quality_row['mode'],
+        'total': str(total),
+        'pass': str(passed),
+        'fail': str(fail),
+        'xfail': str(xfail),
+        'xpass': str(xpass),
+        'error': str(error),
+        'skip': str(skip),
+        'pass_rate': f"{compute_pass_rate(total, passed, xfail, skip):.3f}",
+        'result': mutation_quality_row['summary'],
+        'mutation_gate_status_case_ids': mutation_quality_row.get('mutation_gate_status_case_ids', ''),
     }
 
 baseline_path.parent.mkdir(parents=True, exist_ok=True)
@@ -13858,6 +14271,11 @@ with baseline_path.open('w', newline='') as f:
             'bmc_drop_remark_case_reason_ids',
             'bmc_timeout_case_ids',
             'bmc_contract_fingerprint_case_ids',
+            'lec_contract_fingerprint_case_ids',
+            'mutation_contract_fingerprint_case_ids',
+            'mutation_source_fingerprint_case_ids',
+            'mutation_provenance_tuple_ids',
+            'mutation_gate_status_case_ids',
             'bmc_semantic_bucket_case_ids',
             'lec_drop_remark_case_ids',
             'lec_drop_remark_case_reason_ids',
@@ -13957,6 +14375,11 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_REASON_KEYS" == "1" || \
       "$FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS" == "1" || \
+      "$FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS" == "1" || \
+      "$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" == "1" || \
+      "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" == "1" || \
+      "$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" == "1" || \
+      "$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS" == "1" || \
@@ -14036,6 +14459,15 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
   FAIL_ON_NEW_BMC_REASON_KEYS="$FAIL_ON_NEW_BMC_REASON_KEYS" \
   FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS" \
+  FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS" \
+  FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" \
+  FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" \
+  FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS="$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" \
+  FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS="$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" \
+  MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
+  MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
+  MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE="$MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE" \
+  MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE="$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES="$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS" \
@@ -14105,6 +14537,18 @@ strict_gate_fail_on_legacy_rule_ids = (
 strict_gate_rule_id_allowlist_file = os.environ.get(
     "STRICT_GATE_RULE_ID_ALLOWLIST_FILE", ""
 ).strip()
+mutation_contract_fingerprint_case_id_allowlist_file = os.environ.get(
+    "MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE", ""
+).strip()
+mutation_source_fingerprint_case_id_allowlist_file = os.environ.get(
+    "MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE", ""
+).strip()
+mutation_provenance_tuple_id_allowlist_file = os.environ.get(
+    "MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE", ""
+).strip()
+mutation_gate_status_case_id_allowlist_file = os.environ.get(
+    "MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE", ""
+).strip()
 
 if not baseline_path.exists():
     raise SystemExit(f"baseline file not found: {baseline_path}")
@@ -14157,6 +14601,16 @@ def classify_gate_rule_id(suite: str, mode: str, detail: str):
         return "strict_gate.bmc.timeout_case_ids.new"
     if detail.startswith("new BMC contract fingerprint case IDs observed"):
         return "strict_gate.bmc.contract_fingerprint_case_ids.new"
+    if detail.startswith("new LEC contract fingerprint case IDs observed"):
+        return "strict_gate.lec.contract_fingerprint_case_ids.new"
+    if detail.startswith("new mutation contract fingerprint case IDs observed"):
+        return "strict_gate.mutation.contract_fingerprint_case_ids.new"
+    if detail.startswith("new mutation source fingerprint case IDs observed"):
+        return "strict_gate.mutation.source_fingerprint_case_ids.new"
+    if detail.startswith("new mutation provenance tuple IDs observed"):
+        return "strict_gate.mutation.provenance_tuple_ids.new"
+    if detail.startswith("new mutation gate-status case IDs observed"):
+        return "strict_gate.mutation.gate_status_case_ids.new"
     if detail.startswith("bmc_unknown_cases increased"):
         return "strict_gate.bmc.unknown_cases.regression"
     if detail.startswith("lec_timeout_cases increased"):
@@ -14316,6 +14770,18 @@ def normalize_rule_id_token(token: str) -> str:
 strict_gate_rule_id_allow_exact = set()
 strict_gate_rule_id_allow_prefix = []
 strict_gate_rule_id_allow_regex = []
+mutation_contract_fingerprint_case_id_allow_exact = set()
+mutation_contract_fingerprint_case_id_allow_prefix = []
+mutation_contract_fingerprint_case_id_allow_regex = []
+mutation_source_fingerprint_case_id_allow_exact = set()
+mutation_source_fingerprint_case_id_allow_prefix = []
+mutation_source_fingerprint_case_id_allow_regex = []
+mutation_provenance_tuple_id_allow_exact = set()
+mutation_provenance_tuple_id_allow_prefix = []
+mutation_provenance_tuple_id_allow_regex = []
+mutation_gate_status_case_id_allow_exact = set()
+mutation_gate_status_case_id_allow_prefix = []
+mutation_gate_status_case_id_allow_regex = []
 
 def load_strict_gate_rule_id_allowlist():
     if not strict_gate_rule_id_allowlist_file:
@@ -14367,6 +14833,210 @@ def is_allowed_strict_gate_rule_id(rule_id: str) -> bool:
             return True
     for pattern in strict_gate_rule_id_allow_regex:
         if pattern.search(rule_id):
+            return True
+    return False
+
+def load_mutation_contract_fingerprint_case_id_allowlist():
+    if not mutation_contract_fingerprint_case_id_allowlist_file:
+        return
+    allowlist_path = Path(mutation_contract_fingerprint_case_id_allowlist_file)
+    if not allowlist_path.exists():
+        raise SystemExit(
+            f"mutation contract-fingerprint case-ID allowlist file not found: {allowlist_path}"
+        )
+    with allowlist_path.open() as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            kind = "exact"
+            payload = line
+            if ":" in line:
+                maybe_kind, maybe_payload = line.split(":", 1)
+                if maybe_kind in {"exact", "prefix", "regex"}:
+                    kind = maybe_kind
+                    payload = maybe_payload.strip()
+            if not payload:
+                raise SystemExit(
+                    f"mutation contract-fingerprint case-ID allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
+                )
+            if kind == "exact":
+                mutation_contract_fingerprint_case_id_allow_exact.add(payload)
+            elif kind == "prefix":
+                mutation_contract_fingerprint_case_id_allow_prefix.append(payload)
+            elif kind == "regex":
+                try:
+                    mutation_contract_fingerprint_case_id_allow_regex.append(re.compile(payload))
+                except re.error as exc:
+                    raise SystemExit(
+                        f"mutation contract-fingerprint case-ID allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
+                    )
+            else:
+                raise SystemExit(
+                    f"mutation contract-fingerprint case-ID allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
+                )
+
+def is_allowed_mutation_contract_fingerprint_case_id(case_id: str) -> bool:
+    if case_id in mutation_contract_fingerprint_case_id_allow_exact:
+        return True
+    for prefix in mutation_contract_fingerprint_case_id_allow_prefix:
+        if case_id.startswith(prefix):
+            return True
+    for pattern in mutation_contract_fingerprint_case_id_allow_regex:
+        if pattern.search(case_id):
+            return True
+    return False
+
+def load_mutation_source_fingerprint_case_id_allowlist():
+    if not mutation_source_fingerprint_case_id_allowlist_file:
+        return
+    allowlist_path = Path(mutation_source_fingerprint_case_id_allowlist_file)
+    if not allowlist_path.exists():
+        raise SystemExit(
+            f"mutation source-fingerprint case-ID allowlist file not found: {allowlist_path}"
+        )
+    with allowlist_path.open() as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            kind = "exact"
+            payload = line
+            if ":" in line:
+                maybe_kind, maybe_payload = line.split(":", 1)
+                if maybe_kind in {"exact", "prefix", "regex"}:
+                    kind = maybe_kind
+                    payload = maybe_payload.strip()
+            if not payload:
+                raise SystemExit(
+                    f"mutation source-fingerprint case-ID allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
+                )
+            if kind == "exact":
+                mutation_source_fingerprint_case_id_allow_exact.add(payload)
+            elif kind == "prefix":
+                mutation_source_fingerprint_case_id_allow_prefix.append(payload)
+            elif kind == "regex":
+                try:
+                    mutation_source_fingerprint_case_id_allow_regex.append(re.compile(payload))
+                except re.error as exc:
+                    raise SystemExit(
+                        f"mutation source-fingerprint case-ID allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
+                    )
+            else:
+                raise SystemExit(
+                    f"mutation source-fingerprint case-ID allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
+                )
+
+def is_allowed_mutation_source_fingerprint_case_id(case_id: str) -> bool:
+    if case_id in mutation_source_fingerprint_case_id_allow_exact:
+        return True
+    for prefix in mutation_source_fingerprint_case_id_allow_prefix:
+        if case_id.startswith(prefix):
+            return True
+    for pattern in mutation_source_fingerprint_case_id_allow_regex:
+        if pattern.search(case_id):
+            return True
+    return False
+
+def load_mutation_provenance_tuple_id_allowlist():
+    if not mutation_provenance_tuple_id_allowlist_file:
+        return
+    allowlist_path = Path(mutation_provenance_tuple_id_allowlist_file)
+    if not allowlist_path.exists():
+        raise SystemExit(
+            f"mutation provenance tuple-ID allowlist file not found: {allowlist_path}"
+        )
+    with allowlist_path.open() as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            kind = "exact"
+            payload = line
+            if ":" in line:
+                maybe_kind, maybe_payload = line.split(":", 1)
+                if maybe_kind in {"exact", "prefix", "regex"}:
+                    kind = maybe_kind
+                    payload = maybe_payload.strip()
+            if not payload:
+                raise SystemExit(
+                    f"mutation provenance tuple-ID allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
+                )
+            if kind == "exact":
+                mutation_provenance_tuple_id_allow_exact.add(payload)
+            elif kind == "prefix":
+                mutation_provenance_tuple_id_allow_prefix.append(payload)
+            elif kind == "regex":
+                try:
+                    mutation_provenance_tuple_id_allow_regex.append(re.compile(payload))
+                except re.error as exc:
+                    raise SystemExit(
+                        f"mutation provenance tuple-ID allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
+                    )
+            else:
+                raise SystemExit(
+                    f"mutation provenance tuple-ID allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
+                )
+
+def is_allowed_mutation_provenance_tuple_id(tuple_id: str) -> bool:
+    if tuple_id in mutation_provenance_tuple_id_allow_exact:
+        return True
+    for prefix in mutation_provenance_tuple_id_allow_prefix:
+        if tuple_id.startswith(prefix):
+            return True
+    for pattern in mutation_provenance_tuple_id_allow_regex:
+        if pattern.search(tuple_id):
+            return True
+    return False
+
+def load_mutation_gate_status_case_id_allowlist():
+    if not mutation_gate_status_case_id_allowlist_file:
+        return
+    allowlist_path = Path(mutation_gate_status_case_id_allowlist_file)
+    if not allowlist_path.exists():
+        raise SystemExit(
+            f"mutation gate-status case-ID allowlist file not found: {allowlist_path}"
+        )
+    with allowlist_path.open() as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            kind = "exact"
+            payload = line
+            if ":" in line:
+                maybe_kind, maybe_payload = line.split(":", 1)
+                if maybe_kind in {"exact", "prefix", "regex"}:
+                    kind = maybe_kind
+                    payload = maybe_payload.strip()
+            if not payload:
+                raise SystemExit(
+                    f"mutation gate-status case-ID allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
+                )
+            if kind == "exact":
+                mutation_gate_status_case_id_allow_exact.add(payload)
+            elif kind == "prefix":
+                mutation_gate_status_case_id_allow_prefix.append(payload)
+            elif kind == "regex":
+                try:
+                    mutation_gate_status_case_id_allow_regex.append(re.compile(payload))
+                except re.error as exc:
+                    raise SystemExit(
+                        f"mutation gate-status case-ID allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
+                    )
+            else:
+                raise SystemExit(
+                    f"mutation gate-status case-ID allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
+                )
+
+def is_allowed_mutation_gate_status_case_id(case_id: str) -> bool:
+    if case_id in mutation_gate_status_case_id_allow_exact:
+        return True
+    for prefix in mutation_gate_status_case_id_allow_prefix:
+        if case_id.startswith(prefix):
+            return True
+    for pattern in mutation_gate_status_case_id_allow_regex:
+        if pattern.search(case_id):
             return True
     return False
 
@@ -14459,7 +15129,7 @@ def write_strict_gate_report(status: str, gate_errors, baseline_window: int, bas
         with tsv_path.open("w", newline="") as report_file:
             writer = csv.DictWriter(
                 report_file,
-                delimiter="	",
+                delimiter="\t",
                 fieldnames=[
                     "status",
                     "suite",
@@ -14847,6 +15517,138 @@ def collect_bmc_contract_fingerprint_case_ids(out_dir: Path):
                     case_ids.setdefault(key, set()).add(f"{case_id}::{fingerprint}")
     return case_ids
 
+
+def collect_lec_contract_fingerprint_case_ids(out_dir: Path):
+    sources = [
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-resolved-contracts.tsv"),
+        (
+            "verilator-verification",
+            "LEC",
+            out_dir / "verilator-lec-resolved-contracts.tsv",
+        ),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-resolved-contracts.tsv"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-resolved-contracts.tsv"),
+        (
+            "opentitan",
+            "LEC_STRICT",
+            out_dir / "opentitan-lec-strict-resolved-contracts.tsv",
+        ),
+    ]
+    case_ids = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 3:
+                    continue
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                fingerprint = parts[-1].strip() if parts else ""
+                if not fingerprint:
+                    continue
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    case_ids.setdefault(key, set()).add(f"{case_id}::{fingerprint}")
+    return case_ids
+
+def collect_mutation_provenance_case_ids(out_dir: Path):
+    tuples_path = out_dir / "provenance_tuples.tsv"
+    if not tuples_path.exists():
+        return {}, {}, {}
+    key = ("mutation-matrix", "PROVENANCE")
+    contract_case_ids = set()
+    source_case_ids = set()
+    tuple_ids = set()
+    with tuples_path.open() as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            contract_case_id = (row.get("contract_case_id", "") or "").strip()
+            source_case_id = (row.get("mutation_source_case_id", "") or "").strip()
+            tuple_id = (row.get("provenance_tuple_id", "") or "").strip()
+            if contract_case_id and contract_case_id != "-":
+                contract_case_ids.add(contract_case_id)
+            if source_case_id and source_case_id != "-":
+                source_case_ids.add(source_case_id)
+            if tuple_id and tuple_id != "-":
+                tuple_ids.add(tuple_id)
+    return (
+        {key: contract_case_ids},
+        {key: source_case_ids},
+        {key: tuple_ids},
+    )
+
+def collect_mutation_quality_row(out_dir: Path):
+    results_path = out_dir / "results.tsv"
+    if not results_path.exists():
+        return False, {}
+
+    total = 0
+    passed = 0
+    failed = 0
+    gate_counts = {}
+    gate_status_case_ids = set()
+
+    with results_path.open() as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        if reader.fieldnames is None:
+            return False, {}
+        for row in reader:
+            lane_id = (row.get("lane_id", "") or "").strip()
+            if not lane_id:
+                continue
+            status = (row.get("status", "") or "").strip().upper()
+            if not status:
+                status = "UNKNOWN"
+            gate_status = (row.get("gate_status", "") or "").strip()
+            gate_key = re.sub(r"[^a-z0-9]+", "_", gate_status.lower()).strip("_")
+            if not gate_key:
+                gate_key = "missing"
+            total += 1
+            if status == "PASS":
+                passed += 1
+            else:
+                failed += 1
+            gate_counts[gate_key] = gate_counts.get(gate_key, 0) + 1
+            gate_status_case_ids.add(f"{lane_id}::{status}::{gate_key}")
+
+    if total == 0:
+        return False, {}
+
+    summary_parts = [
+        f"total={total}",
+        f"pass={passed}",
+        f"fail={failed}",
+        "xfail=0",
+        "xpass=0",
+        "error=0",
+        "skip=0",
+        f"mutation_gate_status_unique={len(gate_counts)}",
+        f"mutation_gate_status_case_ids_cardinality={len(gate_status_case_ids)}",
+    ]
+    for gate_key, count in sorted(gate_counts.items()):
+        summary_parts.append(f"mutation_gate_status_{gate_key}_lanes={count}")
+
+    return True, {
+        "suite": "mutation-matrix",
+        "mode": "QUALITY",
+        "total": str(total),
+        "pass": str(passed),
+        "fail": str(failed),
+        "xfail": "0",
+        "xpass": "0",
+        "error": "0",
+        "skip": "0",
+        "summary": " ".join(summary_parts),
+        "mutation_gate_status_case_ids": ";".join(sorted(gate_status_case_ids)),
+    }
+
+
 def collect_bmc_semantic_bucket_case_ids(out_dir: Path):
     sources = [
         ("sv-tests", "BMC", out_dir / "sv-tests-bmc-semantic-buckets.tsv"),
@@ -15088,6 +15890,20 @@ current_bmc_timeout_case_ids = collect_bmc_timeout_case_ids(
 current_bmc_contract_fingerprint_case_ids = collect_bmc_contract_fingerprint_case_ids(
     Path(os.environ["OUT_DIR"])
 )
+current_lec_contract_fingerprint_case_ids = collect_lec_contract_fingerprint_case_ids(
+    Path(os.environ["OUT_DIR"])
+)
+(
+    current_mutation_contract_fingerprint_case_ids,
+    current_mutation_source_fingerprint_case_ids,
+    current_mutation_provenance_tuple_ids,
+) = collect_mutation_provenance_case_ids(Path(os.environ["OUT_DIR"]))
+(
+    mutation_quality_present,
+    mutation_quality_row,
+) = collect_mutation_quality_row(Path(os.environ["OUT_DIR"]))
+if mutation_quality_present and os.environ.get("STRICT_GATE", "0") == "1":
+    summary[(mutation_quality_row["suite"], mutation_quality_row["mode"])] = mutation_quality_row
 current_bmc_semantic_bucket_case_ids = collect_bmc_semantic_bucket_case_ids(
     Path(os.environ["OUT_DIR"])
 )
@@ -15500,6 +16316,21 @@ fail_on_new_bmc_reason_keys = (
 fail_on_new_bmc_contract_fingerprint_case_ids = (
     os.environ.get("FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS", "0") == "1"
 )
+fail_on_new_lec_contract_fingerprint_case_ids = (
+    os.environ.get("FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS", "0") == "1"
+)
+fail_on_new_mutation_contract_fingerprint_case_ids = (
+    os.environ.get("FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS", "0") == "1"
+)
+fail_on_new_mutation_source_fingerprint_case_ids = (
+    os.environ.get("FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS", "0") == "1"
+)
+fail_on_new_mutation_provenance_tuple_ids = (
+    os.environ.get("FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS", "0") == "1"
+)
+fail_on_new_mutation_gate_status_case_ids = (
+    os.environ.get("FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS", "0") == "1"
+)
 fail_on_new_bmc_drop_remark_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_DROP_REMARK_CASES", "0") == "1"
 )
@@ -15729,6 +16560,10 @@ def is_allowed_bmc_abstraction_provenance_token(token: str) -> bool:
     return False
 
 load_strict_gate_rule_id_allowlist()
+load_mutation_contract_fingerprint_case_id_allowlist()
+load_mutation_source_fingerprint_case_id_allowlist()
+load_mutation_provenance_tuple_id_allowlist()
+load_mutation_gate_status_case_id_allowlist()
 gate_errors = GateErrorCollector()
 for key, current_row in summary.items():
     suite, mode = key
@@ -15921,6 +16756,41 @@ for key, current_row in summary.items():
                     ),
                     rule_id="strict_gate.bmc.contract_fingerprint_case_ids.new",
                 )
+    if fail_on_new_lec_contract_fingerprint_case_ids and mode.startswith("LEC"):
+        baseline_contract_case_ids_raw = [
+            row.get("lec_contract_fingerprint_case_ids") for row in compare_rows
+        ]
+        if any(raw is not None for raw in baseline_contract_case_ids_raw):
+            baseline_contract_case_set = set()
+            for raw in baseline_contract_case_ids_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_contract_case_set.add(token)
+            current_contract_case_set = current_lec_contract_fingerprint_case_ids.get(
+                key, set()
+            )
+            new_contract_cases = sorted(
+                current_contract_case_set - baseline_contract_case_set
+            )
+            if new_contract_cases:
+                sample = ", ".join(new_contract_cases[:3])
+                if len(new_contract_cases) > 3:
+                    sample += ", ..."
+                gate_errors.add(
+                    suite,
+                    mode,
+                    (
+                        "new LEC contract fingerprint case IDs observed "
+                        f"(baseline={len(baseline_contract_case_set)} "
+                        f"current={len(current_contract_case_set)}, "
+                        f"window={baseline_window}): {sample}"
+                    ),
+                    rule_id="strict_gate.lec.contract_fingerprint_case_ids.new",
+                )
+
     if fail_on_new_lec_drop_remark_case_ids and mode.startswith("LEC"):
         baseline_drop_case_ids_raw = [
             row.get("lec_drop_remark_case_ids") for row in compare_rows
@@ -17426,6 +18296,288 @@ for key, current_row in summary.items():
             gate_errors.append(
                 f"{suite} {mode}: pass_rate regressed ({baseline_rate:.3f} -> {current_rate:.3f}, window={baseline_window})"
             )
+
+mutation_gate_enabled = (
+    fail_on_new_mutation_contract_fingerprint_case_ids
+    or fail_on_new_mutation_source_fingerprint_case_ids
+    or fail_on_new_mutation_provenance_tuple_ids
+    or fail_on_new_mutation_gate_status_case_ids
+)
+if mutation_gate_enabled:
+    mutation_key = ("mutation-matrix", "PROVENANCE")
+    mutation_history_rows = history.get(mutation_key, [])
+    if not mutation_history_rows:
+        if strict_gate:
+            gate_errors.append("mutation-matrix PROVENANCE: missing baseline row")
+    else:
+        mutation_history_rows.sort(key=lambda r: r.get("date", ""))
+        if baseline_window_days > 0:
+            parsed_dates = []
+            for row in mutation_history_rows:
+                try:
+                    parsed_dates.append(dt.date.fromisoformat(row.get("date", "")))
+                except Exception:
+                    parsed_dates.append(None)
+            valid_dates = [d for d in parsed_dates if d is not None]
+            if valid_dates:
+                latest_date = max(valid_dates)
+                cutoff = latest_date - dt.timedelta(days=baseline_window_days)
+                filtered_rows = []
+                for row, row_date in zip(mutation_history_rows, parsed_dates):
+                    if row_date is None:
+                        continue
+                    if cutoff <= row_date <= latest_date:
+                        filtered_rows.append(row)
+                mutation_history_rows = filtered_rows
+        if strict_gate and len(mutation_history_rows) < baseline_window:
+            gate_errors.append(
+                "mutation-matrix PROVENANCE: "
+                f"insufficient baseline history ({len(mutation_history_rows)} < {baseline_window})"
+            )
+        elif not mutation_history_rows:
+            if strict_gate:
+                gate_errors.append(
+                    "mutation-matrix PROVENANCE: "
+                    "no baseline rows remain after "
+                    f"baseline-window-days={baseline_window_days} filtering"
+                )
+        else:
+            compare_rows = mutation_history_rows[-baseline_window:]
+            if fail_on_new_mutation_contract_fingerprint_case_ids:
+                baseline_raw = [
+                    row.get("mutation_contract_fingerprint_case_ids")
+                    for row in compare_rows
+                ]
+                if any(raw is not None for raw in baseline_raw):
+                    baseline_set = set()
+                    for raw in baseline_raw:
+                        if raw is None or raw == "":
+                            continue
+                        for token in raw.split(";"):
+                            token = token.strip()
+                            if token:
+                                baseline_set.add(token)
+                    current_set = current_mutation_contract_fingerprint_case_ids.get(
+                        mutation_key, set()
+                    )
+                    raw_new_ids = sorted(current_set - baseline_set)
+                    if mutation_contract_fingerprint_case_id_allowlist_file:
+                        new_ids = [
+                            case_id
+                            for case_id in raw_new_ids
+                            if not is_allowed_mutation_contract_fingerprint_case_id(case_id)
+                        ]
+                    else:
+                        new_ids = raw_new_ids
+                    if new_ids:
+                        sample = ", ".join(new_ids[:3])
+                        if len(new_ids) > 3:
+                            sample += ", ..."
+                        allowlisted = len(raw_new_ids) - len(new_ids)
+                        allowlisted_suffix = (
+                            f", allowlisted={allowlisted}"
+                            if allowlisted > 0
+                            else ""
+                        )
+                        gate_errors.add(
+                            mutation_key[0],
+                            mutation_key[1],
+                            (
+                                "new mutation contract fingerprint case IDs observed "
+                                f"(baseline={len(baseline_set)} current={len(current_set)}"
+                                f"{allowlisted_suffix}, "
+                                f"window={baseline_window}): {sample}"
+                            ),
+                            rule_id="strict_gate.mutation.contract_fingerprint_case_ids.new",
+                        )
+            if fail_on_new_mutation_source_fingerprint_case_ids:
+                baseline_raw = [
+                    row.get("mutation_source_fingerprint_case_ids")
+                    for row in compare_rows
+                ]
+                if any(raw is not None for raw in baseline_raw):
+                    baseline_set = set()
+                    for raw in baseline_raw:
+                        if raw is None or raw == "":
+                            continue
+                        for token in raw.split(";"):
+                            token = token.strip()
+                            if token:
+                                baseline_set.add(token)
+                    current_set = current_mutation_source_fingerprint_case_ids.get(
+                        mutation_key, set()
+                    )
+                    raw_new_ids = sorted(current_set - baseline_set)
+                    if mutation_source_fingerprint_case_id_allowlist_file:
+                        new_ids = [
+                            case_id
+                            for case_id in raw_new_ids
+                            if not is_allowed_mutation_source_fingerprint_case_id(case_id)
+                        ]
+                    else:
+                        new_ids = raw_new_ids
+                    if new_ids:
+                        sample = ", ".join(new_ids[:3])
+                        if len(new_ids) > 3:
+                            sample += ", ..."
+                        allowlisted = len(raw_new_ids) - len(new_ids)
+                        allowlisted_suffix = (
+                            f", allowlisted={allowlisted}"
+                            if allowlisted > 0
+                            else ""
+                        )
+                        gate_errors.add(
+                            mutation_key[0],
+                            mutation_key[1],
+                            (
+                                "new mutation source fingerprint case IDs observed "
+                                f"(baseline={len(baseline_set)} current={len(current_set)}"
+                                f"{allowlisted_suffix}, "
+                                f"window={baseline_window}): {sample}"
+                            ),
+                            rule_id="strict_gate.mutation.source_fingerprint_case_ids.new",
+                        )
+            if fail_on_new_mutation_provenance_tuple_ids:
+                baseline_raw = [
+                    row.get("mutation_provenance_tuple_ids") for row in compare_rows
+                ]
+                if any(raw is not None for raw in baseline_raw):
+                    baseline_set = set()
+                    for raw in baseline_raw:
+                        if raw is None or raw == "":
+                            continue
+                        for token in raw.split(";"):
+                            token = token.strip()
+                            if token:
+                                baseline_set.add(token)
+                    current_set = current_mutation_provenance_tuple_ids.get(
+                        mutation_key, set()
+                    )
+                    raw_new_ids = sorted(current_set - baseline_set)
+                    if mutation_provenance_tuple_id_allowlist_file:
+                        new_ids = [
+                            tuple_id
+                            for tuple_id in raw_new_ids
+                            if not is_allowed_mutation_provenance_tuple_id(tuple_id)
+                        ]
+                    else:
+                        new_ids = raw_new_ids
+                    if new_ids:
+                        sample = ", ".join(new_ids[:3])
+                        if len(new_ids) > 3:
+                            sample += ", ..."
+                        allowlisted = len(raw_new_ids) - len(new_ids)
+                        allowlisted_suffix = (
+                            f", allowlisted={allowlisted}"
+                            if allowlisted > 0
+                            else ""
+                        )
+                        gate_errors.add(
+                            mutation_key[0],
+                            mutation_key[1],
+                            (
+                                "new mutation provenance tuple IDs observed "
+                                f"(baseline={len(baseline_set)} current={len(current_set)}"
+                                f"{allowlisted_suffix}, "
+                                f"window={baseline_window}): {sample}"
+                            ),
+                            rule_id="strict_gate.mutation.provenance_tuple_ids.new",
+                        )
+
+
+if fail_on_new_mutation_gate_status_case_ids:
+    quality_key = ("mutation-matrix", "QUALITY")
+    quality_history_rows = history.get(quality_key, [])
+    if not quality_history_rows:
+        if strict_gate:
+            gate_errors.append("mutation-matrix QUALITY: missing baseline row")
+    else:
+        quality_history_rows.sort(key=lambda r: r.get("date", ""))
+        if baseline_window_days > 0:
+            parsed_dates = []
+            for row in quality_history_rows:
+                try:
+                    parsed_dates.append(dt.date.fromisoformat(row.get("date", "")))
+                except Exception:
+                    parsed_dates.append(None)
+            valid_dates = [d for d in parsed_dates if d is not None]
+            if valid_dates:
+                latest_date = max(valid_dates)
+                cutoff = latest_date - dt.timedelta(days=baseline_window_days)
+                filtered_rows = []
+                for row, row_date in zip(quality_history_rows, parsed_dates):
+                    if row_date is None:
+                        continue
+                    if cutoff <= row_date <= latest_date:
+                        filtered_rows.append(row)
+                quality_history_rows = filtered_rows
+        if strict_gate and len(quality_history_rows) < baseline_window:
+            gate_errors.append(
+                "mutation-matrix QUALITY: "
+                f"insufficient baseline history ({len(quality_history_rows)} < {baseline_window})"
+            )
+        elif not quality_history_rows:
+            if strict_gate:
+                gate_errors.append(
+                    "mutation-matrix QUALITY: "
+                    "no baseline rows remain after "
+                    f"baseline-window-days={baseline_window_days} filtering"
+                )
+        else:
+            compare_rows = quality_history_rows[-baseline_window:]
+            baseline_raw = [
+                row.get("mutation_gate_status_case_ids") for row in compare_rows
+            ]
+            if any(raw is not None for raw in baseline_raw):
+                baseline_set = set()
+                for raw in baseline_raw:
+                    if raw is None or raw == "":
+                        continue
+                    for token in raw.split(";"):
+                        token = token.strip()
+                        if token:
+                            baseline_set.add(token)
+                current_raw = (
+                    mutation_quality_row.get("mutation_gate_status_case_ids", "")
+                    if mutation_quality_present
+                    else ""
+                )
+                current_set = set()
+                for token in current_raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        current_set.add(token)
+                raw_new_ids = sorted(current_set - baseline_set)
+                if mutation_gate_status_case_id_allowlist_file:
+                    new_ids = [
+                        case_id
+                        for case_id in raw_new_ids
+                        if not is_allowed_mutation_gate_status_case_id(case_id)
+                    ]
+                else:
+                    new_ids = raw_new_ids
+                if new_ids:
+                    sample = ", ".join(new_ids[:3])
+                    if len(new_ids) > 3:
+                        sample += ", ..."
+                    allowlisted = len(raw_new_ids) - len(new_ids)
+                    allowlisted_suffix = (
+                        f", allowlisted={allowlisted}"
+                        if allowlisted > 0
+                        else ""
+                    )
+                    gate_errors.add(
+                        quality_key[0],
+                        quality_key[1],
+                        (
+                            "new mutation gate-status case IDs observed "
+                            f"(baseline={len(baseline_set)} current={len(current_set)}"
+                            f"{allowlisted_suffix}, "
+                            f"window={baseline_window}): {sample}"
+                        ),
+                        rule_id="strict_gate.mutation.gate_status_case_ids.new",
+                    )
+
 
 if strict_gate_fail_on_legacy_rule_ids:
     diagnostics_preview = build_strict_gate_report_diagnostics(gate_errors)

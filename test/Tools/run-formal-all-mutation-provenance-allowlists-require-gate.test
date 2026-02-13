@@ -1,0 +1,8 @@
+// RUN: touch %t.allowlist
+// RUN: not %S/../../utils/run_formal_all.sh --mutation-contract-fingerprint-case-id-allowlist-file %t.allowlist 2>&1 | FileCheck %s --check-prefix=CONTRACT
+// RUN: not %S/../../utils/run_formal_all.sh --mutation-source-fingerprint-case-id-allowlist-file %t.allowlist 2>&1 | FileCheck %s --check-prefix=SOURCE
+// RUN: not %S/../../utils/run_formal_all.sh --mutation-provenance-tuple-id-allowlist-file %t.allowlist 2>&1 | FileCheck %s --check-prefix=TUPLE
+
+// CONTRACT: --mutation-contract-fingerprint-case-id-allowlist-file requires --fail-on-new-mutation-contract-fingerprint-case-ids or --strict-gate
+// SOURCE: --mutation-source-fingerprint-case-id-allowlist-file requires --fail-on-new-mutation-source-fingerprint-case-ids or --strict-gate
+// TUPLE: --mutation-provenance-tuple-id-allowlist-file requires --fail-on-new-mutation-provenance-tuple-ids or --strict-gate
