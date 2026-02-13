@@ -14784,57 +14784,27 @@ mutation_gate_status_case_id_allow_prefix = []
 mutation_gate_status_case_id_allow_regex = []
 
 def load_strict_gate_rule_id_allowlist():
-    if not strict_gate_rule_id_allowlist_file:
-        return
-    allowlist_path = Path(strict_gate_rule_id_allowlist_file)
-    if not allowlist_path.exists():
-        raise SystemExit(
-            f"strict-gate rule-id allowlist file not found: {allowlist_path}"
-        )
-    with allowlist_path.open() as f:
-        for lineno, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            kind = "exact"
-            payload = line
-            if ":" in line:
-                maybe_kind, maybe_payload = line.split(":", 1)
-                if maybe_kind in {"exact", "prefix", "regex"}:
-                    kind = maybe_kind
-                    payload = maybe_payload.strip()
-            if not payload:
-                raise SystemExit(
-                    f"strict-gate rule-id allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
-                )
-            if kind == "exact":
-                strict_gate_rule_id_allow_exact.add(payload)
-            elif kind == "prefix":
-                strict_gate_rule_id_allow_prefix.append(payload)
-            elif kind == "regex":
-                try:
-                    strict_gate_rule_id_allow_regex.append(re.compile(payload))
-                except re.error as exc:
-                    raise SystemExit(
-                        f"strict-gate rule-id allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
-                    )
-            else:
-                raise SystemExit(
-                    f"strict-gate rule-id allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
-                )
+    global strict_gate_rule_id_allow_exact
+    global strict_gate_rule_id_allow_prefix
+    global strict_gate_rule_id_allow_regex
+    (
+        strict_gate_rule_id_allow_exact,
+        strict_gate_rule_id_allow_prefix,
+        strict_gate_rule_id_allow_regex,
+    ) = load_pattern_allowlist(
+        strict_gate_rule_id_allowlist_file,
+        "strict-gate rule-id allowlist",
+    )
 
 def is_allowed_strict_gate_rule_id(rule_id: str) -> bool:
     if not strict_gate_rule_id_allowlist_file:
         return True
-    if rule_id in strict_gate_rule_id_allow_exact:
-        return True
-    for prefix in strict_gate_rule_id_allow_prefix:
-        if rule_id.startswith(prefix):
-            return True
-    for pattern in strict_gate_rule_id_allow_regex:
-        if pattern.search(rule_id):
-            return True
-    return False
+    return token_matches_allowlist(
+        rule_id,
+        strict_gate_rule_id_allow_exact,
+        strict_gate_rule_id_allow_prefix,
+        strict_gate_rule_id_allow_regex,
+    )
 
 def load_pattern_allowlist(allowlist_file: str, label: str):
     allow_exact = set()
@@ -16451,57 +16421,22 @@ bmc_abstraction_provenance_allowlist_file = os.environ.get(
     "BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE", ""
 ).strip()
 
-bmc_abstraction_provenance_allow_exact = set()
-bmc_abstraction_provenance_allow_prefix = []
-bmc_abstraction_provenance_allow_regex = []
-if bmc_abstraction_provenance_allowlist_file:
-    allowlist_path = Path(bmc_abstraction_provenance_allowlist_file)
-    if not allowlist_path.exists():
-        raise SystemExit(
-            f"BMC abstraction provenance allowlist file not found: {allowlist_path}"
-        )
-    with allowlist_path.open() as f:
-        for lineno, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            kind = "exact"
-            payload = line
-            if ":" in line:
-                maybe_kind, maybe_payload = line.split(":", 1)
-                if maybe_kind in {"exact", "prefix", "regex"}:
-                    kind = maybe_kind
-                    payload = maybe_payload.strip()
-            if not payload:
-                raise SystemExit(
-                    f"BMC abstraction provenance allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
-                )
-            if kind == "exact":
-                bmc_abstraction_provenance_allow_exact.add(payload)
-            elif kind == "prefix":
-                bmc_abstraction_provenance_allow_prefix.append(payload)
-            elif kind == "regex":
-                try:
-                    bmc_abstraction_provenance_allow_regex.append(re.compile(payload))
-                except re.error as exc:
-                    raise SystemExit(
-                        f"BMC abstraction provenance allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
-                    )
-            else:
-                raise SystemExit(
-                    f"BMC abstraction provenance allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
-                )
+(
+    bmc_abstraction_provenance_allow_exact,
+    bmc_abstraction_provenance_allow_prefix,
+    bmc_abstraction_provenance_allow_regex,
+) = load_pattern_allowlist(
+    bmc_abstraction_provenance_allowlist_file,
+    "BMC abstraction provenance allowlist",
+)
 
 def is_allowed_bmc_abstraction_provenance_token(token: str) -> bool:
-    if token in bmc_abstraction_provenance_allow_exact:
-        return True
-    for prefix in bmc_abstraction_provenance_allow_prefix:
-        if token.startswith(prefix):
-            return True
-    for pattern in bmc_abstraction_provenance_allow_regex:
-        if pattern.search(token):
-            return True
-    return False
+    return token_matches_allowlist(
+        token,
+        bmc_abstraction_provenance_allow_exact,
+        bmc_abstraction_provenance_allow_prefix,
+        bmc_abstraction_provenance_allow_regex,
+    )
 
 load_strict_gate_rule_id_allowlist()
 load_mutation_contract_fingerprint_case_id_allowlist()
