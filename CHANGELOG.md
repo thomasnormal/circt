@@ -1,4 +1,104 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1270 - February 13, 2026
+
+### Formal Strict-Gate Mutation Scope + BMC Semantic Bucket Contract Sync
+
+1. Fixed `run_formal_all.sh` strict-gate mutation baseline enforcement to only run when mutation lanes are in scope for the current run.
+2. Added `mutation_lane_in_scope` gating for:
+   - mutation provenance strict checks (`mutation-matrix/PROVENANCE`)
+   - mutation quality strict checks (`mutation-matrix/QUALITY`)
+3. This prevents unrelated strict-gate failures (`missing baseline row`) when running lane-filtered formal jobs that intentionally exclude mutation lanes.
+4. Updated semantic-bucket contract expectation in:
+   - `test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test`
+   to include `bmc_semantic_bucket_sequence_subroutine_cases=0`.
+
+### Validation
+
+- `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test build-test/test/Tools/run-formal-all-strict-gate-failure-cases.test`
+  - PASS (2/2)
+- `python3 llvm/llvm/utils/lit/lit.py -sv --filter "(run-formal-all|quality-nightly)" build-test/test/Tools`
+  - PASS (242/242 filtered)
+- External smoke (formal lanes):
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh ~/sv-tests`
+    - PASS (`total=1 pass=1 fail=0 error=0`)
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh ~/sv-tests`
+    - PASS (`total=1 pass=1 fail=0 error=0`)
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh ~/verilator-verification`
+    - PASS (`total=1 pass=1 fail=0 error=0`)
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh ~/verilator-verification`
+    - PASS (`total=1 pass=1 fail=0 error=0`)
+  - `TEST_FILTER='basic02' BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva`
+    - PASS (`tests=1 failures=0`)
+  - `TEST_FILTER='basic02' utils/run_yosys_sva_circt_lec.sh ~/yosys/tests/sva`
+    - PASS (`total=1 pass=1 fail=0 error=0`)
+  - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_OPT=build-test/bin/circt-opt CIRCT_LEC=build-test/bin/circt-lec LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root ~/opentitan --impl-filter canright`
+    - PASS (`aes_sbox_canright OK`)
+  - `CIRCT_VERILOG=build-test/bin/circt-verilog utils/run_avip_circt_verilog.sh ~/mbit/apb_avip`
+    - PASS (`RC=0`)
+
+## Iteration 1269 - February 13, 2026
+
+### `circt-mut` Quality-Nightly Lane-Class Policy Contract Alignment
+
+1. Updated stale `circt-mut` quality-nightly lane-class policy expectations in:
+   - `test/Tools/circt-mut-report-cli-policy-lane-class-quality-nightly-pass.test`
+   - `test/Tools/circt-mut-report-policy-mode-lane-class-auto-quality-nightly-pass.test`
+   - `test/Tools/circt-mut-run-with-report-policy-mode-lane-class-auto-quality-nightly.test`
+2. Adjusted expected `policy.profile_count` from `8` to `10` to match current strict-formal quality-nightly profile expansion emitted by native `circt-mut` policy resolution.
+3. This restores test/implementation parity after external-formal quality profile growth (`bmc_core_min_total` and `lec_core_min_total` guards now included).
+
+### Validation
+
+- `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-mut-run-with-report-policy-mode-lane-class-auto-quality-nightly.test build-test/test/Tools/circt-mut-report-policy-mode-lane-class-auto-quality-nightly-pass.test build-test/test/Tools/circt-mut-report-cli-policy-lane-class-quality-nightly-pass.test`
+  - PASS (3/3)
+- `python3 llvm/llvm/utils/lit/lit.py -sv --filter "circt-mut" build-test/test/Tools`
+  - PASS (490/490 filtered tests)
+
+## Iteration 1268 - February 13, 2026
+
+### LLHD Struct Field Layout Fix for Memory-Backed Ref Arguments
+
+1. Fixed `llhd.sig.struct_extract` drive/probe fallback paths in `tools/circt-sim/LLHDProcessInterpreter.cpp` for memory-backed `!llhd.ref` function arguments.
+2. Added explicit LLVM/HW layout conversion for struct/array field values when direct LLVM field type metadata is unavailable.
+3. Fixed `getLLVMTypeSize` for LLVM struct/array aggregates to use packed aggregate bit width (round once to bytes), matching interpreter aggregate semantics for `llvm.insertvalue`/`llvm.extractvalue`.
+4. Added regression test `test/Tools/circt-sim/llhd-drv-struct-func-arg-four-state.mlir`.
+
+### Validation
+
+- `ninja -C build-test circt-sim`
+  - PASS
+- `build-test/bin/circt-sim test/Tools/circt-sim/llhd-drv-struct-func-arg-four-state.mlir --top top`
+  - PASS (`PRB_A=1`, `LOAD_A=1 B=0`)
+- `build-test/bin/circt-sim /tmp/two_wait_tasks_struct_llhd.mlir --top top`
+  - PASS (`SETUP a=1`, `ACCESS b=2`, `DONE a=1 b=2`)
+- `build-test/bin/circt-sim test/Tools/circt-sim/llhd-drv-struct-alloca.mlir`
+  - PASS
+- `build-test/bin/circt-sim test/Tools/circt-sim/llhd-sig-struct-extract-func-arg.mlir`
+  - PASS
+- `build-test/bin/circt-sim test/Tools/circt-sim/struct-ref-func-arg-drive.mlir`
+  - PASS
+- `build-test/bin/circt-sim test/Tools/circt-sim/llhd-drv-struct-pending-epsilon.mlir`
+  - PASS
+
+## Iteration 1267 - February 13, 2026
+
+### `uvm_wait_for_nba_region` Delta-Yield Fix
+
+1. Fixed `uvm_pkg::uvm_wait_for_nba_region` interceptor in `tools/circt-sim/LLHDProcessInterpreter.cpp`.
+2. Replaced immediate same-slot requeue with explicit event-scheduler resume at `nextDelta()` in the `Reactive` region.
+3. Added regression coverage in `test/Tools/circt-sim/uvm-wait-for-nba-region.sv`.
+
+### Validation
+
+- `ninja -C build-test circt-sim`
+  - PASS
+- `build-test/bin/circt-verilog test/Tools/circt-sim/uvm-wait-for-nba-region.sv --ir-hw -o /tmp/uvm_wait_nba.mlir`
+  - PASS
+- `build-test/bin/circt-sim /tmp/uvm_wait_nba.mlir --top uvm_wait_for_nba_region_tb | build-ot/bin/FileCheck test/Tools/circt-sim/uvm-wait-for-nba-region.sv`
+  - PASS
+- `build-test/bin/circt-sim build-test/apb_avip_dual_llhd.mlir --skip-passes --top=hdl_top --top=hvl_top --timeout=0 -v 1`
+  - APB reproducer still reaches scoreboard no-transaction failure (known remaining issue under investigation)
+
 ## Iteration 1266 - February 13, 2026
 
 ### Formal Runner Resolver Deduplication
