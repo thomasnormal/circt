@@ -1,4 +1,37 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1237 - February 13, 2026
+
+### Formal-All Lane-Scoped Mutation/LEC Contract-Fingerprint Parity
+
+1. Added a new strict gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-mutation-lec-contract-fingerprint-lane-parity`
+2. Implemented lane-scoped parity checks between mutation provenance contract identities and LEC resolved-contract identities:
+   - derives lane key from identity tokens (`<case-id>::<fingerprint>`)
+   - fails when mutation lanes are missing from current LEC lanes
+   - fails when mutation lane fingerprints are missing in matching LEC lanes.
+3. Added stable rule IDs for lane-scoped parity diagnostics:
+   - `strict_gate.mutation.parity.contract_fingerprint_lane_ids.missing_in_lec`
+   - `strict_gate.mutation.parity.contract_fingerprint_lane_pairs.missing_in_lec`
+4. Wired the new option through CLI/default/parser/comparator env forwarding.
+
+### Tests
+
+1. Added regression coverage for lane-scoped fingerprint mismatch:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test`
+2. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test build-test/test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists.test build-test/test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists-patterns.test build-test/test/Tools/run-formal-all-strict-gate-rule-id-allowlist-patterns.test build-test/test/Tools/run-formal-all-strict-gate-bmc-abstraction-provenance-allowlist-patterns.test`
+  - PASS (7/7)
+
+### Remaining Limitations
+
+- Lane parity currently depends on identity token case-id alignment between mutation provenance and LEC resolved-contract outputs; there is no explicit cross-lane mapping file yet.
+
 ## Iteration 1236 - February 13, 2026
 
 ### Formal-All Mutation/LEC Contract-Fingerprint Parity Gate
