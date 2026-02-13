@@ -1,4 +1,66 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1259 - February 13, 2026
+
+### Formal-All Resolved-Contract Schema Versioning (BMC/LEC)
+
+1. Added explicit resolved-contract schema marker emission (`#resolved_contract_schema_version=1`) for:
+   - `utils/run_pairwise_circt_bmc.py` (`--resolved-contracts-file`)
+   - `utils/run_opentitan_circt_lec.py` (`--resolved-contracts-file`)
+   - LEC runner outputs when `LEC_RESOLVED_CONTRACTS_OUT` is set:
+     - `utils/run_sv_tests_circt_lec.sh`
+     - `utils/run_verilator_verification_circt_lec.sh`
+     - `utils/run_yosys_sva_circt_lec.sh`
+2. Hardened `utils/run_formal_all.sh` contract summarizers to parse comment-prefixed metadata and reject unsupported schema versions with clear diagnostics:
+   - `summarize_bmc_resolved_contracts_file`
+   - `summarize_lec_resolved_contracts_file`
+3. This establishes a forward-compatible contract artifact boundary for strict-gate drift checks and future field evolution.
+
+### Tests
+
+1. Updated:
+   - `test/Tools/run-pairwise-circt-bmc-resolved-contracts-file.test`
+   - `test/Tools/run-opentitan-bmc-case-policy-provenance.test`
+2. Added:
+   - `test/Tools/run-formal-all-resolved-contract-schema-invalid.test`
+   - `test/Tools/run-opentitan-lec-resolved-contracts-file.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py utils/run_opentitan_circt_lec.py`
+  - PASS
+- `bash -n utils/run_formal_all.sh utils/run_sv_tests_circt_lec.sh utils/run_verilator_verification_circt_lec.sh utils/run_yosys_sva_circt_lec.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-pairwise-circt-bmc-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-opentitan-bmc-case-policy-provenance.test build-ot/tools/circt/test/Tools/run-formal-all-resolved-contract-schema-invalid.test build-ot/tools/circt/test/Tools/run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids.test build-ot/tools/circt/test/Tools/run-formal-all-strict-gate-lec-contract-fingerprint-case-ids.test`
+  - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
+  - PASS (5/5)
+
+## Iteration 1258 - February 13, 2026
+
+### circt-sim UVM Port Size Native Intercept (connect parity)
+
+1. Added native `uvm_port_base::size()` interception in `tools/circt-sim/LLHDProcessInterpreter.cpp` for all call paths:
+   - `func.call_indirect`
+   - `func.call`
+   - `llvm.call`
+2. Added shared helper `getNativeUvmPortSize(...)` that traverses `analysisPortConnections` and counts terminal providers.
+3. This fixes false zero-size results when UVM internal `m_imp_list` bookkeeping is bypassed by native connect interception.
+4. Added regression test `test/Tools/circt-sim/port-size-after-connect.sv` to assert `PORT_SIZE=1` after `seq_item_port.connect(seq_item_export)`.
+
+### Validation
+
+- `ninja -C build-test circt-sim`
+  - PASS
+- `build-test/bin/circt-sim /tmp/port-size-after-connect.mlir --top top --max-time=1000000 --max-wall-ms=120000 | FileCheck test/Tools/circt-sim/port-size-after-connect.sv`
+  - PASS (`PORT_SIZE=1`, no `DRVCONNECT`)
+- `env CIRCT_UVM_ARGS='+UVM_TESTNAME=apb_8b_write_test' CIRCT_SIM_TRACE_SEQ=1 build-test/bin/circt-sim build-test/apb_avip_dual_llhd.mlir --top hvl_top --top hdl_top --max-time=10000000`
+  - PARTIAL (manual stop after trace capture): no `DRVCONNECT`; still observed sequencer `push` without `pop`/`item_done`.
+
+### Remaining Limitations
+
+- APB AVIP dual-top still has downstream pull-side handshake gap (`finish_item` pushes observed; dequeue/item_done not yet observed in traced window).
+
+
 ## Iteration 1257 - February 13, 2026
 
 ### Formal-All BMC↔LEC Case-ID Map Completeness Gates
@@ -1075,6 +1137,8 @@
   - PASS
 - `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-mutation-matrix-(help|provenance-gate|provenance-identity-gate|provenance-summary|provenance-gate-report)\\.test'`
   - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
+  - PASS (5/5)
 
 ### Remaining Limitations
 
@@ -1103,6 +1167,8 @@
 - `build-test/bin/circt-sim test/Tools/circt-sim/config-db-native-call-indirect-writeback.mlir --top test`
   - PASS
 - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim --filter 'config-db-native-wrapper-writeback\.mlir|config-db-native-call-indirect-writeback\.mlir|native-store-oob-fallback\.mlir|vtable-dispatch-uvm-nesting\.mlir|uvm-static-singleton\.mlir'`
+  - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
   - PASS (5/5)
 
 ### Remaining Limitations
@@ -1456,6 +1522,8 @@
   - PASS (7/7)
 - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-opentitan-bmc-mode-label\.test|run-formal-all-opentitan-bmc.*\.test'`
   - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
+  - PASS (5/5)
 
 ### Remaining Limitations
 
@@ -1700,6 +1768,8 @@
   - `run-pairwise-circt-bmc-case-timeout-override.test`
   - `run-pairwise-circt-bmc-case-backend-override.test`
   - `run-pairwise-circt-bmc-case-backend-invalid.test`
+  - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
   - PASS (5/5)
 - OpenTitan BMC compatibility slice:
   - `run-opentitan-bmc-mode-label.test`
@@ -2389,6 +2459,8 @@
   - PASS
 - `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test --filter='run-formal-all-(help|opentitan-lec-fallback-diag|opentitan-lec-missing-results-reason|strict-gate-lec-circt-lec-error-reason-keys)'`
   - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
+  - PASS (5/5)
 - `llvm/build/bin/llvm-lit --no-progress-bar -v build-test/test --filter='run-formal-all-strict-gate-lec-circt-(opt|verilog|lec)-error-reason-keys'`
   - PASS (6/6)
 
@@ -3076,6 +3148,8 @@ transitions through IDLE→SETUP APB protocol states, simulation reaches 415ns+.
 - Focused policy-lane-class slice:
   - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-mut-report-cli-policy-lane-class-quality-nightly-pass.test build-test/test/Tools/circt-mut-report-cli-policy-lane-class-mode-mutually-exclusive.test build-test/test/Tools/circt-mut-run-with-report-config-policy-lane-class-provenance-guard.test build-test/test/Tools/circt-mut-report-help.test build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`
   - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
+  - PASS (5/5)
 - Full mutation suite:
   - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
   - PASS (474/474 selected)
@@ -3162,6 +3236,8 @@ transitions through IDLE→SETUP APB protocol states, simulation reaches 415ns+.
 - `ninja -C build-test circt-mut`: PASS
 - Focused lane-class auto policy slice:
   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-mut-report-policy-mode-lane-class-auto-quality-nightly-pass.test build-test/test/Tools/circt-mut-run-with-report-policy-mode-lane-class-auto-quality-nightly.test build-test/test/Tools/circt-mut-report-cli-policy-mode-strict-formal-quality-nightly-pass.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-debt.test build-test/test/Tools/circt-mut-run-with-report-cli-policy-mode-native-strict-formal-quality-strict.test`
+  - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
   - PASS (5/5)
 - Full mutation suite:
   - `llvm/build/bin/llvm-lit -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
@@ -4298,6 +4374,8 @@ Even after absorbing `sim.terminate`, the `llvm.unreachable` that follows
     `build-test/test/Tools/circt-mut-report-help.test`
     `build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`
   - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
+  - PASS (5/5)
 - Full mutation suite:
   - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='circt-mut-.*\\.test' build-test/test/Tools`
   - PASS (344/344 selected)
@@ -4810,6 +4888,8 @@ Even after absorbing `sim.terminate`, the `llvm.unreachable` that follows
   - `build-test/test/Tools/circt-mut-report-help.test`
   - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-semantic-guard-pass.test`
   - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
+  - PASS (5/5)
 
 ## Iteration 1114 - February 11, 2026
 
@@ -4838,6 +4918,8 @@ Even after absorbing `sim.terminate`, the `llvm.unreachable` that follows
   - `build-test/test/Tools/circt-mut-report-policy-matrix-external-formal-summary-guard-pass.test`
   - `build-test/test/Tools/circt-mut-report-policy-invalid-profile.test`
   - `build-test/test/Tools/circt-mut-report-external-formal-summary-counter-keys.test`
+  - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
   - PASS (5/5)
 - Real sampled strict check:
   - `circt-mut report ... --external-formal-out-dir /tmp/formal-verilator-lec-bucket-20260211-210703 --policy-profile formal-regression-matrix-external-formal-semantic-guard`
@@ -5110,6 +5192,8 @@ Even after absorbing `sim.terminate`, the `llvm.unreachable` that follows
   - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-case-ids.test`
   - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-case-reasons.test`
   - `build-test/test/Tools/run-formal-all-strict-gate-lec-runner-command-cases.test`
+  - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
   - PASS (5/5)
 - External filtered cadence smoke (explicit `build-test/bin` toolchain):
   - `sv-tests/LEC` (`16.15--property-iff-uvm|...-fail` filter): `pass=1 error=0`
@@ -5725,6 +5809,8 @@ Even after absorbing `sim.terminate`, the `llvm.unreachable` that follows
   - `build-test/test/Tools/run-formal-all-strict-gate-lec-diag-keys-defaults.test`
   - `build-test/test/Tools/run-formal-all-help.test`
   - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
+  - PASS (5/5)
 
 ## Iteration 1092 - February 11, 2026
 
@@ -6188,6 +6274,8 @@ Even after absorbing `sim.terminate`, the `llvm.unreachable` that follows
   - `build-test/test/Tools/run-formal-all-strict-gate-lec-timeout.test`
   - `build-test/test/Tools/run-formal-all-help.test`
   - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
+  - PASS (5/5)
 - External focused sanity:
   - `run_formal_all.sh` on `/home/thomas-ahle/verilator-verification` LEC
     filtered slice (`assert_past|assert_stable`) with
@@ -6249,6 +6337,8 @@ Even after absorbing `sim.terminate`, the `llvm.unreachable` that follows
   - `build-test/test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test`
   - `build-test/test/Tools/run-formal-all-timeout-forwarding.test`
   - `build-test/test/Tools/run-formal-all-help.test`
+  - PASS (5/5)
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-opentitan-lec-resolved-contracts-file.test build-ot/tools/circt/test/Tools/run-sv-tests-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-verilator-verification-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-yosys-sva-circt-lec-diag-fallback.test build-ot/tools/circt/test/Tools/run-opentitan-lec-diag-fallback.test`
   - PASS (5/5)
 
 ## Iteration 1078 - February 11, 2026

@@ -14,5 +14,6 @@
 // LOG: pairwise BMC summary: total=2 pass=2 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
 // RES: PASS{{[[:space:]]+}}custom_case{{[[:space:]]+}}{{.*}}work/custom{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
 // RES: PASS{{[[:space:]]+}}default_case{{[[:space:]]+}}{{.*}}work/default{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
+// CONTRACT: #resolved_contract_schema_version=1
 // CONTRACT-DAG: custom_case{{[[:space:]]+}}{{.*}}work/custom{{[[:space:]]+}}policy:re:^top_custom${{[[:space:]]+}}smtlib{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}13{{[[:space:]]+}}7{{[[:space:]]+}}3{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}--foo=bar --custom=1{{[[:space:]]+}}f4b32e41390cda4f
 // CONTRACT-DAG: default_case{{[[:space:]]+}}{{.*}}work/default{{[[:space:]]+}}manifest{{[[:space:]]+}}default{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}11{{[[:space:]]+}}5{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}8a29cc93bd23d19d

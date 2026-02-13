@@ -9223,6 +9223,7 @@ summarize_bmc_resolved_contracts_file() {
   BMC_RESOLVED_CONTRACTS_FILE="$contracts_file" python3 - <<'PY'
 import hashlib
 import os
+import sys
 from pathlib import Path
 
 path = Path(os.environ["BMC_RESOLVED_CONTRACTS_FILE"])
@@ -9235,27 +9236,58 @@ sources = set()
 fingerprints = set()
 case_fingerprint_ids = set()
 
-with path.open(encoding="utf-8") as f:
-    for line in f:
-        line = line.rstrip("\n")
-        if not line:
-            continue
-        parts = line.split("\t")
-        if len(parts) < 3:
-            continue
-        case_id = parts[0].strip() if len(parts) > 0 else ""
-        case_path = parts[1].strip() if len(parts) > 1 else ""
-        source = parts[2].strip() if len(parts) > 2 else ""
-        fingerprint = parts[-1].strip() if parts else ""
-        if source:
-            sources.add(source)
-        if fingerprint:
-            fingerprints.add(fingerprint)
-            identity = case_id if case_id else case_path
-            if not identity:
-                identity = "__aggregate__"
-            case_fingerprint_ids.add(f"{identity}::{fingerprint}")
-        rows += 1
+EXPECTED_SCHEMA_VERSION = 1
+
+def iter_contract_parts(file_path: Path):
+    with file_path.open(encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            if line.startswith("#resolved_contract_schema_version="):
+                raw_version = line.split("=", 1)[1].strip()
+                try:
+                    schema_version = int(raw_version)
+                except ValueError:
+                    print(
+                        (
+                            f"invalid resolved-contract schema marker in {file_path} "
+                            f"at line {line_no}: expected integer version, got '{raw_version}'"
+                        ),
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(2)
+                if schema_version != EXPECTED_SCHEMA_VERSION:
+                    print(
+                        (
+                            f"invalid resolved-contract schema version in {file_path}: "
+                            f"expected {EXPECTED_SCHEMA_VERSION}, got {schema_version}"
+                        ),
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(2)
+                continue
+            if line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            yield parts
+
+for parts in iter_contract_parts(path):
+    case_id = parts[0].strip() if len(parts) > 0 else ""
+    case_path = parts[1].strip() if len(parts) > 1 else ""
+    source = parts[2].strip() if len(parts) > 2 else ""
+    fingerprint = parts[-1].strip() if parts else ""
+    if source:
+        sources.add(source)
+    if fingerprint:
+        fingerprints.add(fingerprint)
+        identity = case_id if case_id else case_path
+        if not identity:
+            identity = "__aggregate__"
+        case_fingerprint_ids.add(f"{identity}::{fingerprint}")
+    rows += 1
 
 digest_u64 = 0
 if case_fingerprint_ids:
@@ -9286,6 +9318,7 @@ summarize_lec_resolved_contracts_file() {
   LEC_RESOLVED_CONTRACTS_FILE="$contracts_file" python3 - <<'PY'
 import hashlib
 import os
+import sys
 from pathlib import Path
 
 path = Path(os.environ["LEC_RESOLVED_CONTRACTS_FILE"])
@@ -9298,27 +9331,58 @@ sources = set()
 fingerprints = set()
 case_fingerprint_ids = set()
 
-with path.open(encoding="utf-8") as f:
-    for line in f:
-        line = line.rstrip("\n")
-        if not line:
-            continue
-        parts = line.split("\t")
-        if len(parts) < 3:
-            continue
-        case_id = parts[0].strip() if len(parts) > 0 else ""
-        case_path = parts[1].strip() if len(parts) > 1 else ""
-        source = parts[2].strip() if len(parts) > 2 else ""
-        fingerprint = parts[-1].strip() if parts else ""
-        if source:
-            sources.add(source)
-        if fingerprint:
-            fingerprints.add(fingerprint)
-            identity = case_id if case_id else case_path
-            if not identity:
-                identity = "__aggregate__"
-            case_fingerprint_ids.add(f"{identity}::{fingerprint}")
-        rows += 1
+EXPECTED_SCHEMA_VERSION = 1
+
+def iter_contract_parts(file_path: Path):
+    with file_path.open(encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            if line.startswith("#resolved_contract_schema_version="):
+                raw_version = line.split("=", 1)[1].strip()
+                try:
+                    schema_version = int(raw_version)
+                except ValueError:
+                    print(
+                        (
+                            f"invalid resolved-contract schema marker in {file_path} "
+                            f"at line {line_no}: expected integer version, got '{raw_version}'"
+                        ),
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(2)
+                if schema_version != EXPECTED_SCHEMA_VERSION:
+                    print(
+                        (
+                            f"invalid resolved-contract schema version in {file_path}: "
+                            f"expected {EXPECTED_SCHEMA_VERSION}, got {schema_version}"
+                        ),
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(2)
+                continue
+            if line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            yield parts
+
+for parts in iter_contract_parts(path):
+    case_id = parts[0].strip() if len(parts) > 0 else ""
+    case_path = parts[1].strip() if len(parts) > 1 else ""
+    source = parts[2].strip() if len(parts) > 2 else ""
+    fingerprint = parts[-1].strip() if parts else ""
+    if source:
+        sources.add(source)
+    if fingerprint:
+        fingerprints.add(fingerprint)
+        identity = case_id if case_id else case_path
+        if not identity:
+            identity = "__aggregate__"
+        case_fingerprint_ids.add(f"{identity}::{fingerprint}")
+    rows += 1
 
 digest_u64 = 0
 if case_fingerprint_ids:

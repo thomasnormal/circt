@@ -41,6 +41,7 @@ LEC_ACCEPT_XPROP_ONLY="${LEC_ACCEPT_XPROP_ONLY:-0}"
 DROP_REMARK_PATTERN="${DROP_REMARK_PATTERN:-will be dropped during lowering}"
 LEC_DROP_REMARK_CASES_OUT="${LEC_DROP_REMARK_CASES_OUT:-}"
 LEC_DROP_REMARK_REASONS_OUT="${LEC_DROP_REMARK_REASONS_OUT:-}"
+LEC_RESOLVED_CONTRACTS_OUT="${LEC_RESOLVED_CONTRACTS_OUT:-}"
 
 if [[ ! -d "$YOSYS_SVA_DIR" ]]; then
   echo "yosys SVA directory not found: $YOSYS_SVA_DIR" >&2
@@ -72,6 +73,11 @@ trap cleanup EXIT
 
 results_tmp="$tmpdir/results.txt"
 touch "$results_tmp"
+if [[ -n "$LEC_RESOLVED_CONTRACTS_OUT" ]]; then
+  mkdir -p "$(dirname "$LEC_RESOLVED_CONTRACTS_OUT")"
+  : > "$LEC_RESOLVED_CONTRACTS_OUT"
+  printf "#resolved_contract_schema_version=1\n" > "$LEC_RESOLVED_CONTRACTS_OUT"
+fi
 
 pass=0
 fail=0
@@ -156,6 +162,51 @@ hash_file() {
   else
     cksum "$path" | awk '{print $1}'
   fi
+}
+
+compute_contract_fingerprint() {
+  local payload="$1"
+  local digest
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest="$(printf "%s" "$payload" | sha256sum | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    digest="$(printf "%s" "$payload" | shasum -a 256 | awk '{print $1}')"
+  elif command -v python3 >/dev/null 2>&1; then
+    digest="$(
+      CONTRACT_PAYLOAD="$payload" python3 - <<'PY'
+import hashlib
+import os
+payload = os.environ.get("CONTRACT_PAYLOAD", "").encode("utf-8")
+print(hashlib.sha256(payload).hexdigest())
+PY
+    )"
+  else
+    digest="$(printf "%s" "$payload" | cksum | awk '{printf "%016x", $1}')"
+  fi
+  printf "%s\n" "${digest:0:16}"
+}
+
+append_lec_resolved_contract() {
+  local case_id="$1"
+  local case_path="$2"
+  local run_mode="$3"
+  if [[ -z "$LEC_RESOLVED_CONTRACTS_OUT" ]]; then
+    return
+  fi
+  local contract_source="runner-default"
+  local backend_mode="smtlib"
+  if [[ "$LEC_SMOKE_ONLY" == "1" ]]; then
+    backend_mode="smoke"
+  fi
+  local payload
+  payload="${contract_source}"$'\x1f'"${backend_mode}"$'\x1f'"${CIRCT_TIMEOUT_SECS}"$'\x1f'"${run_mode}"$'\x1f'"${LEC_ASSUME_KNOWN_INPUTS}"$'\x1f'"${LEC_ACCEPT_XPROP_ONLY}"$'\x1f'"${CIRCT_LEC_ARGS}"
+  local fingerprint
+  fingerprint="$(compute_contract_fingerprint "$payload")"
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    "$case_id" "$case_path" "$contract_source" "$backend_mode" \
+    "$CIRCT_TIMEOUT_SECS" "$run_mode" "$LEC_ASSUME_KNOWN_INPUTS" \
+    "$LEC_ACCEPT_XPROP_ONLY" "$CIRCT_LEC_ARGS" "$fingerprint" \
+    >> "$LEC_RESOLVED_CONTRACTS_OUT"
 }
 
 extract_opt_error_reason() {
@@ -332,11 +383,13 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
     echo "SKIP(vhdl): $base"
     total=$((total + 1))
     skip=$((skip + 1))
+    append_lec_resolved_contract "$base" "$sv" "not_run_vhdl"
     printf "SKIP\t%s\t%s\tyosys/tests/sva\tLEC\tLEC_NOT_RUN\tvhdl\n" "$base" "$sv" >> "$results_tmp"
     continue
   fi
 
   total=$((total + 1))
+  append_lec_resolved_contract "$base" "$sv" "lec"
   mlir="$tmpdir/${base}.mlir"
   opt_mlir="$tmpdir/${base}.opt.mlir"
   verilog_log="$tmpdir/${base}.circt-verilog.log"
@@ -556,6 +609,9 @@ if [[ -n "$LEC_DROP_REMARK_CASES_OUT" && -f "$LEC_DROP_REMARK_CASES_OUT" ]]; the
 fi
 if [[ -n "$LEC_DROP_REMARK_REASONS_OUT" && -f "$LEC_DROP_REMARK_REASONS_OUT" ]]; then
   sort -u -o "$LEC_DROP_REMARK_REASONS_OUT" "$LEC_DROP_REMARK_REASONS_OUT"
+fi
+if [[ -n "$LEC_RESOLVED_CONTRACTS_OUT" && -f "$LEC_RESOLVED_CONTRACTS_OUT" ]]; then
+  sort -u -o "$LEC_RESOLVED_CONTRACTS_OUT" "$LEC_RESOLVED_CONTRACTS_OUT"
 fi
 
 echo "yosys LEC summary: total=$total pass=$pass fail=$fail error=$error skip=$skip"

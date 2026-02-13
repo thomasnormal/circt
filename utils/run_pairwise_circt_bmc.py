@@ -38,8 +38,9 @@ Only the first three columns are required.
 - contract_source: optional provenance label for the case contract (for example
   `exact:aes_sbox_canright` or `pattern:re:^foo`) that is emitted in
   `--resolved-contracts-file` artifacts.
-  The artifact appends `contract_fingerprint` (stable sha256-derived digest)
-  for drift checks.
+  The artifact writes `#resolved_contract_schema_version=1` on the first line
+  and appends `contract_fingerprint` (stable sha256-derived digest) for drift
+  checks.
 
 Relative file paths are resolved against the manifest file directory.
 """
@@ -899,6 +900,7 @@ def main() -> int:
         contracts_path = Path(args.resolved_contracts_file)
         contracts_path.parent.mkdir(parents=True, exist_ok=True)
         with contracts_path.open("w", encoding="utf-8") as handle:
+            handle.write("#resolved_contract_schema_version=1\n")
             for row in sorted(resolved_contract_rows, key=lambda item: (item[0], item[1])):
                 handle.write("\t".join(row) + "\n")
 
