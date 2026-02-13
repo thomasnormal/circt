@@ -1,4 +1,27 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1272 - February 13, 2026
+
+### Pairwise BMC ETXTBSY Resilience for Concurrent Tool Relinking
+
+1. Hardened `utils/run_pairwise_circt_bmc.py` subprocess execution path (`run_and_log`) with bounded retry/backoff for transient `ETXTBSY` (`Text file busy`) launch failures.
+2. Retry policy:
+   - retries: 4
+   - linear backoff: `0.2s * attempt`
+   - scope: command launch only (timeout behavior unchanged).
+3. Added deterministic regression:
+   - `test/Tools/run-pairwise-circt-bmc-etxtbsy-retry.test`
+   - test holds `circt-opt` open for write while pairwise runner starts, then verifies run succeeds after retry.
+
+### Validation
+
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv` focused slice:
+  - `run-pairwise-circt-bmc-etxtbsy-retry.test`
+  - `run-pairwise-circt-bmc-missing-circt-opt.test`
+  - `run-formal-all-opentitan-bmc-opentitan-toolchain-fallback.test`
+  - PASS (3/3)
+
 ## Iteration 1271 - February 13, 2026
 
 ### OpenTitan BMC Toolchain Resolution Hardening + Pairwise Exception Diagnostics
