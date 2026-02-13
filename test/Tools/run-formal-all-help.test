@@ -36,6 +36,7 @@
 // CHECK: --fail-on-mutation-lec-contract-fingerprint-parity
 // CHECK: --fail-on-mutation-lec-contract-fingerprint-lane-parity
 // CHECK: --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped
+// CHECK: --fail-on-new-mutation-lec-contract-fingerprint-lane-map-unmapped
 // CHECK: --fail-on-mutation-lec-contract-fingerprint-lane-map-identity-fallback
 // CHECK: --fail-on-new-mutation-lec-contract-fingerprint-lane-map-identity-fallback
 // CHECK: --mutation-lec-contract-fingerprint-lane-map-file

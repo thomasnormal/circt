@@ -1,4 +1,45 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1244 - February 13, 2026
+
+### Formal-All Baseline-Aware Lane-Map Unmapped Gate
+
+1. Added a new strict gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-new-mutation-lec-contract-fingerprint-lane-map-unmapped`
+2. Implemented baseline-window-aware unmapped-lane enforcement for mutation↔LEC lane parity:
+   - computes current identity-mapped mutation lanes that are missing in current LEC lanes
+   - computes baseline identity-mapped mutation lanes missing in baseline LEC lanes
+   - fails only on newly introduced unmapped lanes vs baseline.
+3. Extended option contracts:
+   - new option requires `--mutation-lec-contract-fingerprint-lane-map-file`
+   - lane-map activation contract now also accepts the new baseline-aware unmapped flag.
+4. Added strict-gate rule ID for this check:
+   - `strict_gate.mutation.parity.contract_fingerprint_lane_map_unmapped_lanes.new`
+
+5. Fixed unmapped-candidate collection so `--fail-on-new-mutation-lec-contract-fingerprint-lane-map-unmapped` works even when the legacy unmapped flag is not enabled.
+
+### Tests
+
+1. Added baseline-aware behavior regression:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new.test`
+2. Added option-contract coverage:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new-requires-map.test`
+3. Updated option/help coverage:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test`
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-requires-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new-requires-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test`
+  - PASS (8/8)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-requires-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new-requires-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-unmapped-new.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-identity-fallback-new.test`
+  - PASS (9/9)
+
+### Remaining Limitations
+
+- Baseline-aware unmapped-lane detection uses baseline LEC lane fingerprints aggregated under the current baseline-window policy; large suite mix changes can still require map maintenance even when per-suite drift is stable.
+
 ## Iteration 1243 - February 13, 2026
 
 ### Formal-All Baseline-Aware Lane-Map Identity-Fallback Gate
