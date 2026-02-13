@@ -1,4 +1,40 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1252 - February 13, 2026
+
+### Formal-All Cross-Lane BMC↔LEC Case-ID Fingerprint Parity Gates
+
+1. Added optional case-ID parity gate options in `utils/run_formal_all.sh`:
+   - `--fail-on-bmc-lec-contract-fingerprint-case-id-parity`
+   - `--fail-on-new-bmc-lec-contract-fingerprint-case-id-parity`
+2. Implemented same-suite BMC↔LEC case-ID parity checks in strict-gate evaluation:
+   - current mismatch detection on `case_id::fingerprint` tuples
+   - baseline-aware new-drift mismatch detection on newly missing tuples vs baseline window.
+3. Added strict-gate rule-id classification for these diagnostics:
+   - `strict_gate.bmc.parity.contract_fingerprint_case_ids.missing_in_lec`
+   - `strict_gate.bmc.parity.contract_fingerprint_case_ids.new_missing_in_lec`
+4. Preserved strict default behavior:
+   - this new case-ID parity gate remains opt-in (not strict-default) until lane-aware policy profiles are finalized.
+
+### Tests
+
+1. Added direct case-ID parity mismatch regression:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity.test`
+2. Added baseline-aware case-ID new-drift regression:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity-new.test`
+3. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-parity.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-parity-new.test test/Tools/run-formal-all-strict-gate-bmc-lec-contract-fingerprint-parity-defaults.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity.test test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity-new.test test/Tools/run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids-defaults.test`
+  - PASS (7/7)
+
+### Remaining Limitations
+
+- BMC↔LEC case-ID parity currently assumes shared case-ID namespace per suite; future lane-policy profiles should allow explicit case-ID mapping/normalization for heterogeneous frontends.
+
 ## Iteration 1251 - February 13, 2026
 
 ### Formal-All Cross-Lane BMC↔LEC Contract-Fingerprint Parity Gates
