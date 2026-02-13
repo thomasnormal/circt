@@ -1,4 +1,23 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1254 - February 13, 2026
+
+### Formal-All LEC Contract-Fingerprint Drift Coverage Completion
+
+1. Added missing strict-gate coverage tests for LEC contract-fingerprint case-ID drift:
+   - `test/Tools/run-formal-all-strict-gate-lec-contract-fingerprint-case-ids.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-contract-fingerprint-case-ids-defaults.test`
+2. Coverage now explicitly validates both policy paths:
+   - explicit opt-in gate via `--fail-on-new-lec-contract-fingerprint-case-ids`
+   - strict-default enablement via `--strict-gate`
+3. This closes a test gap in the existing LEC fingerprint baseline/new-drift gate behavior without changing runtime semantics.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-lec-contract-fingerprint-case-ids.test test/Tools/run-formal-all-strict-gate-lec-contract-fingerprint-case-ids-defaults.test`
+  - PASS (2/2)
+
 ## Iteration 1253 - February 13, 2026
 
 ### CIRCT-Sim config_db Native-Memory Regression Coverage
