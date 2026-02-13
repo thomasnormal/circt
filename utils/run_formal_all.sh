@@ -196,6 +196,10 @@ Options:
   --fail-on-mutation-lec-contract-fingerprint-lane-parity
                          Fail when mutation lane contract fingerprints are
                          not present in matching LEC lanes
+  --mutation-lec-contract-fingerprint-lane-map-file FILE
+                         Optional lane-map file for mutation/LEC lane
+                         parity. Each non-comment line:
+                           <mutation_case_id><TAB><lec_case_id>
   --mutation-contract-fingerprint-case-id-allowlist-file FILE
                          Optional allowlist file for mutation contract-
                          fingerprint case-ID strict-gate filtering.
@@ -2142,6 +2146,7 @@ FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=0
 FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS=0
 FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=0
+MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE=""
 MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
 MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
 MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE=""
@@ -2602,6 +2607,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY=1; shift ;;
     --fail-on-mutation-lec-contract-fingerprint-lane-parity)
       FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=1; shift ;;
+    --mutation-lec-contract-fingerprint-lane-map-file)
+      MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE="$2"; shift 2 ;;
     --mutation-contract-fingerprint-case-id-allowlist-file)
       MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$2"; shift 2 ;;
     --mutation-source-fingerprint-case-id-allowlist-file)
@@ -4681,28 +4688,28 @@ if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && ! -r "$MUTATION_GATE_
   echo "mutation gate-status case-ID allowlist file not readable: $MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" >&2
   exit 1
 fi
-if [[ -n "$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && \
-      "$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" != "1" && \
-      "$STRICT_GATE" != "1" ]]; then
+if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" && ! -r "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" ]]; then
+  echo "mutation/LEC lane-map file not readable: $MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--mutation-contract-fingerprint-case-id-allowlist-file requires --fail-on-new-mutation-contract-fingerprint-case-ids or --strict-gate" >&2
   exit 1
 fi
-if [[ -n "$MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && \
-      "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" != "1" && \
-      "$STRICT_GATE" != "1" ]]; then
+if [[ -n "$MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--mutation-source-fingerprint-case-id-allowlist-file requires --fail-on-new-mutation-source-fingerprint-case-ids or --strict-gate" >&2
   exit 1
 fi
-if [[ -n "$MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE" && \
-      "$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" != "1" && \
-      "$STRICT_GATE" != "1" ]]; then
+if [[ -n "$MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--mutation-provenance-tuple-id-allowlist-file requires --fail-on-new-mutation-provenance-tuple-ids or --strict-gate" >&2
   exit 1
 fi
-if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && \
-      "$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" != "1" && \
-      "$STRICT_GATE" != "1" ]]; then
+if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--mutation-gate-status-case-id-allowlist-file requires --fail-on-new-mutation-gate-status-case-ids or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--mutation-lec-contract-fingerprint-lane-map-file requires --fail-on-mutation-lec-contract-fingerprint-lane-parity or --strict-gate" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_UNEXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_CASES_FILE" ]]; then
@@ -14480,6 +14487,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS="$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" \
+  MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE="$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" \
   MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
   MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
   MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE="$MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE" \
@@ -14564,6 +14572,9 @@ mutation_provenance_tuple_id_allowlist_file = os.environ.get(
 ).strip()
 mutation_gate_status_case_id_allowlist_file = os.environ.get(
     "MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE", ""
+).strip()
+mutation_lec_contract_fingerprint_lane_map_file = os.environ.get(
+    "MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE", ""
 ).strip()
 
 if not baseline_path.exists():
@@ -14877,6 +14888,39 @@ def token_matches_allowlist(token: str, allow_exact, allow_prefix, allow_regex) 
         if pattern.search(token):
             return True
     return False
+
+
+def load_mutation_lec_contract_fingerprint_lane_map():
+    lane_map = {}
+    if not mutation_lec_contract_fingerprint_lane_map_file:
+        return lane_map
+    map_path = Path(mutation_lec_contract_fingerprint_lane_map_file)
+    if not map_path.exists():
+        raise SystemExit(
+            f"mutation/LEC lane-map file not found: {map_path}"
+        )
+    with map_path.open() as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [part.strip() for part in line.split("\t")]
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                raise SystemExit(
+                    "mutation/LEC lane-map entry must be two tab-separated fields "
+                    f"at {map_path}:{lineno}"
+                )
+            mutation_lane = parts[0]
+            lec_lane = parts[1]
+            existing = lane_map.get(mutation_lane)
+            if existing is not None and existing != lec_lane:
+                raise SystemExit(
+                    "mutation/LEC lane-map has conflicting mapping for "
+                    f"{mutation_lane} at {map_path}:{lineno}: "
+                    f"{existing} vs {lec_lane}"
+                )
+            lane_map[mutation_lane] = lec_lane
+    return lane_map
 
 
 def load_mutation_contract_fingerprint_case_id_allowlist():
@@ -16477,6 +16521,7 @@ load_mutation_contract_fingerprint_case_id_allowlist()
 load_mutation_source_fingerprint_case_id_allowlist()
 load_mutation_provenance_tuple_id_allowlist()
 load_mutation_gate_status_case_id_allowlist()
+mutation_lec_contract_fingerprint_lane_map = load_mutation_lec_contract_fingerprint_lane_map()
 gate_errors = GateErrorCollector()
 for key, current_row in summary.items():
     suite, mode = key
@@ -18443,7 +18488,8 @@ if fail_on_mutation_lec_contract_fingerprint_lane_parity:
             fingerprint = extract_fingerprint_token(token)
             if not lane or not fingerprint:
                 continue
-            mutation_lane_fingerprints.setdefault(lane, set()).add(fingerprint)
+            mapped_lane = mutation_lec_contract_fingerprint_lane_map.get(lane, lane)
+            mutation_lane_fingerprints.setdefault(mapped_lane, set()).add(fingerprint)
 
         lec_lane_fingerprints = {}
         for case_id_set in current_lec_contract_fingerprint_case_ids.values():

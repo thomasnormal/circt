@@ -35,6 +35,7 @@
 // CHECK: --fail-on-new-mutation-provenance-tuple-ids
 // CHECK: --fail-on-mutation-lec-contract-fingerprint-parity
 // CHECK: --fail-on-mutation-lec-contract-fingerprint-lane-parity
+// CHECK: --mutation-lec-contract-fingerprint-lane-map-file
 // CHECK: --mutation-contract-fingerprint-case-id-allowlist-file
 // CHECK: --mutation-source-fingerprint-case-id-allowlist-file
 // CHECK: --mutation-provenance-tuple-id-allowlist-file
