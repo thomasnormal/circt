@@ -199,7 +199,9 @@ Options:
   --mutation-lec-contract-fingerprint-lane-map-file FILE
                          Optional lane-map file for mutation/LEC lane
                          parity. Each non-comment line:
-                           <mutation_case_id><TAB><lec_case_id>
+                           exact:<mutation_lane><TAB><lec_lane>  (or bare token)
+                           prefix:<mutation_prefix><TAB><lec_prefix>
+                           regex:<pattern><TAB><replacement>
   --mutation-contract-fingerprint-case-id-allowlist-file FILE
                          Optional allowlist file for mutation contract-
                          fingerprint case-ID strict-gate filtering.
@@ -14576,6 +14578,9 @@ mutation_gate_status_case_id_allowlist_file = os.environ.get(
 mutation_lec_contract_fingerprint_lane_map_file = os.environ.get(
     "MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE", ""
 ).strip()
+mutation_lec_contract_fingerprint_lane_exact = {}
+mutation_lec_contract_fingerprint_lane_prefix_rules = []
+mutation_lec_contract_fingerprint_lane_regex_rules = []
 
 if not baseline_path.exists():
     raise SystemExit(f"baseline file not found: {baseline_path}")
@@ -14891,9 +14896,12 @@ def token_matches_allowlist(token: str, allow_exact, allow_prefix, allow_regex) 
 
 
 def load_mutation_lec_contract_fingerprint_lane_map():
-    lane_map = {}
+    exact_map = {}
+    prefix_rules = []
+    regex_rules = []
+    prefix_seen = {}
     if not mutation_lec_contract_fingerprint_lane_map_file:
-        return lane_map
+        return exact_map, prefix_rules, regex_rules
     map_path = Path(mutation_lec_contract_fingerprint_lane_map_file)
     if not map_path.exists():
         raise SystemExit(
@@ -14910,17 +14918,67 @@ def load_mutation_lec_contract_fingerprint_lane_map():
                     "mutation/LEC lane-map entry must be two tab-separated fields "
                     f"at {map_path}:{lineno}"
                 )
-            mutation_lane = parts[0]
-            lec_lane = parts[1]
-            existing = lane_map.get(mutation_lane)
-            if existing is not None and existing != lec_lane:
+            source_token = parts[0]
+            target_token = parts[1]
+            kind = "exact"
+            payload = source_token
+            if ":" in source_token:
+                maybe_kind, maybe_payload = source_token.split(":", 1)
+                if maybe_kind in {"exact", "prefix", "regex"}:
+                    kind = maybe_kind
+                    payload = maybe_payload.strip()
+            if not payload:
                 raise SystemExit(
-                    "mutation/LEC lane-map has conflicting mapping for "
-                    f"{mutation_lane} at {map_path}:{lineno}: "
-                    f"{existing} vs {lec_lane}"
+                    "mutation/LEC lane-map source token is empty after kind prefix "
+                    f"at {map_path}:{lineno}"
                 )
-            lane_map[mutation_lane] = lec_lane
-    return lane_map
+            if kind == "exact":
+                existing = exact_map.get(payload)
+                if existing is not None and existing != target_token:
+                    raise SystemExit(
+                        "mutation/LEC lane-map has conflicting exact mapping for "
+                        f"{payload} at {map_path}:{lineno}: "
+                        f"{existing} vs {target_token}"
+                    )
+                exact_map[payload] = target_token
+            elif kind == "prefix":
+                existing = prefix_seen.get(payload)
+                if existing is not None and existing != target_token:
+                    raise SystemExit(
+                        "mutation/LEC lane-map has conflicting prefix mapping for "
+                        f"{payload} at {map_path}:{lineno}: "
+                        f"{existing} vs {target_token}"
+                    )
+                if existing is None:
+                    prefix_seen[payload] = target_token
+                    prefix_rules.append((payload, target_token, lineno))
+            elif kind == "regex":
+                try:
+                    regex_rules.append((re.compile(payload), target_token, lineno))
+                except re.error as exc:
+                    raise SystemExit(
+                        f"mutation/LEC lane-map invalid regex at {map_path}:{lineno}: {exc}"
+                    )
+            else:
+                raise SystemExit(
+                    f"mutation/LEC lane-map unsupported source kind '{kind}' at {map_path}:{lineno}"
+                )
+    prefix_rules.sort(key=lambda item: (-len(item[0]), item[2]))
+    return exact_map, prefix_rules, regex_rules
+
+
+def map_mutation_to_lec_lane_id(mutation_lane: str) -> str:
+    mapped = mutation_lec_contract_fingerprint_lane_exact.get(mutation_lane)
+    if mapped is not None:
+        return mapped
+    for mutation_prefix, lec_prefix, _ in mutation_lec_contract_fingerprint_lane_prefix_rules:
+        if mutation_lane.startswith(mutation_prefix):
+            return f"{lec_prefix}{mutation_lane[len(mutation_prefix):]}"
+    for pattern, replacement, _ in mutation_lec_contract_fingerprint_lane_regex_rules:
+        mapped, count = pattern.subn(replacement, mutation_lane, count=1)
+        if count > 0:
+            return mapped
+    return mutation_lane
 
 
 def load_mutation_contract_fingerprint_case_id_allowlist():
@@ -16521,7 +16579,11 @@ load_mutation_contract_fingerprint_case_id_allowlist()
 load_mutation_source_fingerprint_case_id_allowlist()
 load_mutation_provenance_tuple_id_allowlist()
 load_mutation_gate_status_case_id_allowlist()
-mutation_lec_contract_fingerprint_lane_map = load_mutation_lec_contract_fingerprint_lane_map()
+(
+    mutation_lec_contract_fingerprint_lane_exact,
+    mutation_lec_contract_fingerprint_lane_prefix_rules,
+    mutation_lec_contract_fingerprint_lane_regex_rules,
+) = load_mutation_lec_contract_fingerprint_lane_map()
 gate_errors = GateErrorCollector()
 for key, current_row in summary.items():
     suite, mode = key
@@ -18488,7 +18550,7 @@ if fail_on_mutation_lec_contract_fingerprint_lane_parity:
             fingerprint = extract_fingerprint_token(token)
             if not lane or not fingerprint:
                 continue
-            mapped_lane = mutation_lec_contract_fingerprint_lane_map.get(lane, lane)
+            mapped_lane = map_mutation_to_lec_lane_id(lane)
             mutation_lane_fingerprints.setdefault(mapped_lane, set()).add(fingerprint)
 
         lec_lane_fingerprints = {}

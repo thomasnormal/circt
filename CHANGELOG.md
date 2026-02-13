@@ -1,4 +1,40 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1239 - February 13, 2026
+
+### Formal-All Mutation/LEC Lane-Map Pattern Rules
+
+1. Extended `--mutation-lec-contract-fingerprint-lane-map-file` parsing in `utils/run_formal_all.sh` to support source token kinds:
+   - exact mapping (`exact:<token>` or bare token)
+   - prefix mapping (`prefix:<source_prefix>`)
+   - regex mapping (`regex:<pattern>`)
+2. Implemented deterministic lane remap precedence for mutation-to-LEC parity:
+   - exact match first
+   - longest-prefix match second
+   - first regex substitution match third
+   - identity fallback last.
+3. Wired lane-parity evaluation to use the shared mapper helper (`map_mutation_to_lec_lane_id`) and tuple-loaded lane-map structures.
+4. Added early parser diagnostics for malformed/invalid regex lane-map entries under strict-gate/lane-parity execution.
+
+### Tests
+
+1. Added prefix mapping regression:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-prefix.test`
+2. Added regex mapping regression:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-regex.test`
+3. Added invalid regex diagnostic regression:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-invalid-regex.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-parity.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-requires-gate.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-prefix.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-regex.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-lane-map-invalid-regex.test`
+  - PASS (8/8)
+
+### Remaining Limitations
+
+- Regex rules run in file order and stop at first match; there is no chained rewrite mode.
+
 ## Iteration 1238 - February 13, 2026
 
 ### Formal-All Mutation/LEC Lane-Map Support for Lane Parity
