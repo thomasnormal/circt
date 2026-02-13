@@ -179,6 +179,14 @@ Options:
                          Fail when new resolved-contract fingerprint tuples
                          (`lec_contract_fingerprint_case_ids`) appear vs
                          baseline for any `LEC*` lane
+  --fail-on-bmc-lec-contract-fingerprint-parity
+                         Fail when BMC contract fingerprint values are
+                         not present in current LEC contract fingerprints
+                         for the same suite
+  --fail-on-new-bmc-lec-contract-fingerprint-parity
+                         Fail when new BMC contract fingerprint values
+                         (missing in current LEC contract fingerprints)
+                         appear vs baseline for the same suite
   --fail-on-new-mutation-contract-fingerprint-case-ids
                          Fail when new mutation contract-fingerprint case IDs
                          (`mutation_contract_fingerprint_case_ids`) appear vs
@@ -2170,6 +2178,8 @@ FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_REASON_KEYS=0
 FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS=0
+FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=0
+FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=0
@@ -2640,6 +2650,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
     --fail-on-new-lec-contract-fingerprint-case-ids)
       FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
+    --fail-on-bmc-lec-contract-fingerprint-parity)
+      FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=1; shift ;;
+    --fail-on-new-bmc-lec-contract-fingerprint-parity)
+      FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=1; shift ;;
     --fail-on-new-mutation-contract-fingerprint-case-ids)
       FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
     --fail-on-new-mutation-source-fingerprint-case-ids)
@@ -4955,6 +4969,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_BMC_REASON_KEYS=1
   FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=1
   FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS=1
+  FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=1
   FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=1
   FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=1
   FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=1
@@ -14477,6 +14492,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_REASON_KEYS" == "1" || \
       "$FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS" == "1" || \
+      "$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY" == "1" || \
+      "$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY" == "1" || \
       "$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" == "1" || \
@@ -14568,6 +14585,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_REASON_KEYS="$FAIL_ON_NEW_BMC_REASON_KEYS" \
   FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS" \
+  FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY" \
+  FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY" \
   FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS="$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" \
@@ -14729,6 +14748,10 @@ def classify_gate_rule_id(suite: str, mode: str, detail: str):
         return "strict_gate.bmc.contract_fingerprint_case_ids.new"
     if detail.startswith("new LEC contract fingerprint case IDs observed"):
         return "strict_gate.lec.contract_fingerprint_case_ids.new"
+    if detail.startswith("BMC/LEC contract fingerprint parity mismatch"):
+        return "strict_gate.bmc.parity.contract_fingerprint_values.missing_in_lec"
+    if detail.startswith("new BMC/LEC contract fingerprint parity mismatch observed"):
+        return "strict_gate.bmc.parity.contract_fingerprint_values.new_missing_in_lec"
     if detail.startswith("new mutation contract fingerprint case IDs observed"):
         return "strict_gate.mutation.contract_fingerprint_case_ids.new"
     if detail.startswith("new mutation source fingerprint case IDs observed"):
@@ -16473,6 +16496,12 @@ fail_on_new_bmc_contract_fingerprint_case_ids = (
 )
 fail_on_new_lec_contract_fingerprint_case_ids = (
     os.environ.get("FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS", "0") == "1"
+)
+fail_on_bmc_lec_contract_fingerprint_parity = (
+    os.environ.get("FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY", "0") == "1"
+)
+fail_on_new_bmc_lec_contract_fingerprint_parity = (
+    os.environ.get("FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY", "0") == "1"
 )
 fail_on_new_mutation_contract_fingerprint_case_ids = (
     os.environ.get("FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS", "0") == "1"
@@ -18643,6 +18672,172 @@ if mutation_gate_enabled:
                             ),
                             rule_id="strict_gate.mutation.provenance_tuple_ids.new",
                         )
+
+
+
+if (
+    fail_on_bmc_lec_contract_fingerprint_parity
+    or fail_on_new_bmc_lec_contract_fingerprint_parity
+):
+    for bmc_key, bmc_contract_case_ids in sorted(
+        current_bmc_contract_fingerprint_case_ids.items()
+    ):
+        bmc_suite, bmc_mode = bmc_key
+        if not bmc_mode.startswith("BMC"):
+            continue
+        if not bmc_contract_case_ids:
+            continue
+        bmc_fingerprints = {
+            extract_fingerprint_token(token) for token in bmc_contract_case_ids
+        }
+        bmc_fingerprints.discard("")
+        if not bmc_fingerprints:
+            continue
+
+        current_suite_lec_fingerprints = set()
+        for (lec_suite, lec_mode), lec_case_ids in (
+            current_lec_contract_fingerprint_case_ids.items()
+        ):
+            if lec_suite != bmc_suite or not lec_mode.startswith("LEC"):
+                continue
+            current_suite_lec_fingerprints.update(
+                extract_fingerprint_token(token) for token in lec_case_ids
+            )
+        current_suite_lec_fingerprints.discard("")
+        if not current_suite_lec_fingerprints:
+            continue
+
+        current_missing_fingerprints = sorted(
+            bmc_fingerprints - current_suite_lec_fingerprints
+        )
+
+        if fail_on_bmc_lec_contract_fingerprint_parity and current_missing_fingerprints:
+            sample = ", ".join(current_missing_fingerprints[:3])
+            if len(current_missing_fingerprints) > 3:
+                sample += ", ..."
+            gate_errors.add(
+                bmc_suite,
+                bmc_mode,
+                (
+                    "BMC/LEC contract fingerprint parity mismatch "
+                    f"(bmc={len(bmc_fingerprints)} lec={len(current_suite_lec_fingerprints)}): {sample}"
+                ),
+                rule_id="strict_gate.bmc.parity.contract_fingerprint_values.missing_in_lec",
+            )
+
+        if (
+            fail_on_new_bmc_lec_contract_fingerprint_parity
+            and current_missing_fingerprints
+        ):
+            bmc_history_rows = list(history.get(bmc_key, []))
+            if not bmc_history_rows:
+                continue
+            bmc_history_rows.sort(key=lambda r: r.get("date", ""))
+            if baseline_window_days > 0:
+                parsed_dates = []
+                for row in bmc_history_rows:
+                    try:
+                        parsed_dates.append(dt.date.fromisoformat(row.get("date", "")))
+                    except Exception:
+                        parsed_dates.append(None)
+                valid_dates = [d for d in parsed_dates if d is not None]
+                if valid_dates:
+                    latest_date = max(valid_dates)
+                    cutoff = latest_date - dt.timedelta(days=baseline_window_days)
+                    filtered_rows = []
+                    for row, row_date in zip(bmc_history_rows, parsed_dates):
+                        if row_date is None:
+                            continue
+                        if cutoff <= row_date <= latest_date:
+                            filtered_rows.append(row)
+                    bmc_history_rows = filtered_rows
+            if len(bmc_history_rows) < baseline_window:
+                continue
+            compare_rows = bmc_history_rows[-baseline_window:]
+            baseline_bmc_raw = [
+                row.get("bmc_contract_fingerprint_case_ids") for row in compare_rows
+            ]
+            if not any(raw is not None for raw in baseline_bmc_raw):
+                continue
+
+            baseline_bmc_fingerprints = set()
+            for raw in baseline_bmc_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if not token:
+                        continue
+                    fingerprint = extract_fingerprint_token(token)
+                    if fingerprint:
+                        baseline_bmc_fingerprints.add(fingerprint)
+
+            baseline_suite_lec_fingerprints = set()
+            for (baseline_suite, baseline_mode), baseline_rows in history.items():
+                if baseline_suite != bmc_suite or not baseline_mode.startswith("LEC"):
+                    continue
+                baseline_rows = list(baseline_rows)
+                baseline_rows.sort(key=lambda r: r.get("date", ""))
+                if baseline_window_days > 0:
+                    baseline_parsed_dates = []
+                    for row in baseline_rows:
+                        try:
+                            baseline_parsed_dates.append(
+                                dt.date.fromisoformat(row.get("date", ""))
+                            )
+                        except Exception:
+                            baseline_parsed_dates.append(None)
+                    baseline_valid_dates = [
+                        d for d in baseline_parsed_dates if d is not None
+                    ]
+                    if baseline_valid_dates:
+                        baseline_latest_date = max(baseline_valid_dates)
+                        baseline_cutoff = baseline_latest_date - dt.timedelta(
+                            days=baseline_window_days
+                        )
+                        baseline_filtered_rows = []
+                        for row, row_date in zip(baseline_rows, baseline_parsed_dates):
+                            if row_date is None:
+                                continue
+                            if baseline_cutoff <= row_date <= baseline_latest_date:
+                                baseline_filtered_rows.append(row)
+                        baseline_rows = baseline_filtered_rows
+                if len(baseline_rows) < baseline_window:
+                    continue
+                baseline_compare_rows = baseline_rows[-baseline_window:]
+                for row in baseline_compare_rows:
+                    raw = row.get("lec_contract_fingerprint_case_ids")
+                    if raw is None or raw == "":
+                        continue
+                    for token in raw.split(";"):
+                        token = token.strip()
+                        if not token:
+                            continue
+                        fingerprint = extract_fingerprint_token(token)
+                        if fingerprint:
+                            baseline_suite_lec_fingerprints.add(fingerprint)
+
+            baseline_missing_fingerprints = (
+                baseline_bmc_fingerprints - baseline_suite_lec_fingerprints
+            )
+            new_missing_fingerprints = sorted(
+                set(current_missing_fingerprints) - baseline_missing_fingerprints
+            )
+            if new_missing_fingerprints:
+                sample = ", ".join(new_missing_fingerprints[:3])
+                if len(new_missing_fingerprints) > 3:
+                    sample += ", ..."
+                gate_errors.add(
+                    bmc_suite,
+                    bmc_mode,
+                    (
+                        "new BMC/LEC contract fingerprint parity mismatch observed "
+                        f"(baseline={len(baseline_missing_fingerprints)} "
+                        f"current={len(current_missing_fingerprints)}, "
+                        f"window={baseline_window}): {sample}"
+                    ),
+                    rule_id="strict_gate.bmc.parity.contract_fingerprint_values.new_missing_in_lec",
+                )
 
 
 if fail_on_mutation_lec_contract_fingerprint_parity:
