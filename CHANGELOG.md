@@ -1,4 +1,40 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1236 - February 13, 2026
+
+### Formal-All Mutation/LEC Contract-Fingerprint Parity Gate
+
+1. Added a new gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-mutation-lec-contract-fingerprint-parity`
+2. Implemented cross-lane parity enforcement for mutation provenance vs LEC contract fingerprints:
+   - compares mutation contract fingerprint values against the union of current LEC contract fingerprint values
+   - emits strict diagnostics when mutation fingerprints are missing from LEC.
+3. Wired the option through all required control points:
+   - CLI help and argument parsing
+   - strict comparator activation condition
+   - environment forwarding into the strict-gate Python evaluator.
+4. Added a stable strict-gate rule-id for this check:
+   - `strict_gate.mutation.parity.contract_fingerprint_values.missing_in_lec`
+5. Fixed a runtime regression uncovered by the new test:
+   - added the local `extract_fingerprint_token` helper in the strict-gate embedded Python block to avoid `NameError`.
+
+### Tests
+
+1. Added new regression:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity.test`
+2. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity.test build-test/test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists.test build-test/test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-allowlists-patterns.test build-test/test/Tools/run-formal-all-strict-gate-rule-id-allowlist-patterns.test build-test/test/Tools/run-formal-all-strict-gate-bmc-abstraction-provenance-allowlist-patterns.test`
+  - PASS (6/6)
+
+### Remaining Limitations
+
+- Parity currently compares mutation provenance fingerprints to the aggregate LEC fingerprint set; it does not yet enforce per-lane provenance alignment.
+
 ## Iteration 1235 - February 13, 2026
 
 ### Formal-All Shared Allowlist Parser Expansion (Rule-ID + BMC Provenance)
