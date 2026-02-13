@@ -1,8 +1,8 @@
 // RUN: circt-verilog %s --ir-hw -o %t.mlir 2>/dev/null
-// RUN: circt-sim %t.mlir --top config_db_dyn_array_tb 2>&1 | FileCheck %s
+// RUN: circt-sim %t.mlir --top resource_db_dyn_array_tb 2>&1 | FileCheck %s
 
-// Regression: config_db::get must write through references that point into
-// native heap memory (dynamic-array elements allocated via new[]).
+// Regression: resource_db::read_by_name must write through references that
+// point into native heap memory (dynamic-array elements allocated via new[]).
 
 // CHECK: get0=1 get1=1
 // CHECK: slot0_null=0 slot1_null=0
@@ -22,7 +22,7 @@ class my_cfg extends uvm_object;
   endfunction
 endclass
 
-module config_db_dyn_array_tb();
+module resource_db_dyn_array_tb();
   initial begin
     my_cfg src0;
     my_cfg src1;
@@ -45,15 +45,15 @@ module config_db_dyn_array_tb();
     int_slots[0] = -1;
     int_slots[1] = -1;
 
-    uvm_config_db#(my_cfg)::set(null, "*", "cfg_0", src0);
-    uvm_config_db#(my_cfg)::set(null, "*", "cfg_1", src1);
-    uvm_config_db#(int)::set(null, "*", "int_cfg_0", 1234);
-    uvm_config_db#(int)::set(null, "*", "int_cfg_1", 5678);
+    uvm_resource_db#(my_cfg)::set("*", "cfg_0", src0, null);
+    uvm_resource_db#(my_cfg)::set("*", "cfg_1", src1, null);
+    uvm_resource_db#(int)::set("*", "int_cfg_0", 1234, null);
+    uvm_resource_db#(int)::set("*", "int_cfg_1", 5678, null);
 
-    get0 = uvm_config_db#(my_cfg)::get(null, "", "cfg_0", slots[0]);
-    get1 = uvm_config_db#(my_cfg)::get(null, "", "cfg_1", slots[1]);
-    int_get0 = uvm_config_db#(int)::get(null, "", "int_cfg_0", int_slots[0]);
-    int_get1 = uvm_config_db#(int)::get(null, "", "int_cfg_1", int_slots[1]);
+    get0 = uvm_resource_db#(my_cfg)::read_by_name("*", "cfg_0", slots[0], null);
+    get1 = uvm_resource_db#(my_cfg)::read_by_name("*", "cfg_1", slots[1], null);
+    int_get0 = uvm_resource_db#(int)::read_by_name("*", "int_cfg_0", int_slots[0], null);
+    int_get1 = uvm_resource_db#(int)::read_by_name("*", "int_cfg_1", int_slots[1], null);
 
     $display("get0=%0d get1=%0d", get0, get1);
     $display("slot0_null=%0d slot1_null=%0d", slots[0] == null,
