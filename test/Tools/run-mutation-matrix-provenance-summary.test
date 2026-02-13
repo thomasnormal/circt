@@ -1,0 +1,36 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_DETECT\n2 M_MISS\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    -d) design="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp "$design" "$out"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho ACTIVATED\nexit 1\n' > %t/fake-activate.sh
+// RUN: chmod +x %t/fake-activate.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho PROPAGATED\nexit 1\n' > %t/fake-propagate.sh
+// RUN: chmod +x %t/fake-propagate.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "$MUTATION_SPEC" == "M_DETECT" ]]; then\n  echo DETECTED > result.txt\nelse\n  echo SURVIVED > result.txt\nfi\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't\tbash %t/fake-test.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 'lane_a\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\tbash %t/fake-activate.sh\tbash %t/fake-propagate.sh\t40\n' > %t/lanes.tsv
+// RUN: printf 'lane_b\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\tbash %t/fake-activate.sh\tbash %t/fake-propagate.sh\t40\n' >> %t/lanes.tsv
+
+// RUN: %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out --create-mutated-script %t/fake-create-mutated.sh 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+// RUN: FileCheck %s --check-prefix=PROV < %t/out/provenance_summary.tsv
+// RUN: awk -F'\t' 'NR>1{print $(NF-1)}' %t/out/results.tsv | sort -u | wc -l | tr -d ' ' | FileCheck %s --check-prefix=CONTRACT-UNIQ
+// RUN: awk -F'\t' 'NR>1{print $NF}' %t/out/results.tsv | sort -u | wc -l | tr -d ' ' | FileCheck %s --check-prefix=SOURCE-UNIQ
+// RUN: awk -F'\t' 'NR>1{if ($(NF-1) !~ /^[0-9a-f]{64}$/) bad=1; if ($NF !~ /^[0-9a-f]{64}$/) bad=1} END{print bad?"BAD":"OK"}' %t/out/results.tsv | FileCheck %s --check-prefix=FP-FORMAT
+
+// LOG: Mutation matrix summary: pass=2 fail=0
+// LOG: Provenance summary: {{.*}}/out/provenance_summary.tsv
+// RESULTS: lane_id{{.*}}lane_contract_fingerprint{{.*}}lane_mutation_source_fingerprint
+// RESULTS: lane_a{{.*}}PASS{{.*}}
+// RESULTS: lane_b{{.*}}PASS{{.*}}
+// PROV: scope{{.*}}name{{.*}}value
+// PROV: metric{{.*}}executed_lanes{{.*}}2
+// PROV: metric{{.*}}contract_fingerprints_unique{{.*}}1
+// PROV: metric{{.*}}mutation_source_fingerprints_unique{{.*}}1
+// PROV: metric{{.*}}contract_fingerprints_digest{{.*}}{{[0-9a-f]+}}
+// PROV: metric{{.*}}mutation_source_fingerprints_digest{{.*}}{{[0-9a-f]+}}
+// CONTRACT-UNIQ: 1
+// SOURCE-UNIQ: 1
+// FP-FORMAT: OK
