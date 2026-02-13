@@ -4,6 +4,10 @@
 // CHECK: --lanes-tsv
 // CHECK: --gate-summary-file
 // CHECK: --provenance-summary-file
+// CHECK: --baseline-results-file
+// CHECK: --fail-on-new-contract-fingerprint-case-ids
+// CHECK: --fail-on-new-mutation-source-fingerprint-case-ids
+// CHECK: --strict-provenance-gate
 // CHECK: --create-mutated-script
 // CHECK: --jobs-per-lane
 // CHECK: --skip-baseline
