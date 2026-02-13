@@ -1,4 +1,21 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1253 - February 13, 2026
+
+### CIRCT-Sim config_db Native-Memory Regression Coverage
+
+1. Extended `test/Tools/circt-sim/config-db.sv` to validate `uvm_config_db#(int)::get()` writes through dynamic-array-backed output references (`dyn_got[1]`).
+2. Added explicit checks for:
+   - `dyn_get_success=1`
+   - `dyn_got_val=42`
+3. This guards the native-memory writeback path used when output refs point into heap blocks allocated outside interpreter-owned `MemoryBlock` storage.
+
+### Validation
+
+- `timeout 300 build-test/bin/circt-verilog test/Tools/circt-sim/config-db.sv --ir-hw -o /tmp/config-db.<tmp>.mlir`
+  - PASS
+- `timeout 120 build-test/bin/circt-sim /tmp/config-db.<tmp>.mlir --top config_db_tb | FileCheck test/Tools/circt-sim/config-db.sv`
+  - PASS
+
 ## Iteration 1252 - February 13, 2026
 
 ### Formal-All Cross-Lane BMC↔LEC Case-ID Fingerprint Parity Gates
