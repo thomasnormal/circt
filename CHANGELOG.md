@@ -1,4 +1,25 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1242 - February 13, 2026
+
+### circt-sim config_db native writeback offset regression
+
+1. Added `test/Tools/circt-sim/config-db-native-wrapper-writeback-offset.mlir`.
+2. The new regression validates `get_NNNN` wrapper writeback into native heap memory at a non-zero pointer slot offset (dynamic-array-like layout), not just base-address writes.
+3. This protects the config_db dynamic-array output-reference path where `findMemoryBlockByAddress()` misses and native-memory fallback must perform the write.
+
+### Validation
+
+- `build-test/bin/circt-sim test/Tools/circt-sim/config-db-native-wrapper-writeback-offset.mlir --top test | llvm/build/bin/FileCheck test/Tools/circt-sim/config-db-native-wrapper-writeback-offset.mlir`
+  - PASS
+- `build-test/bin/circt-sim test/Tools/circt-sim/config-db-native-wrapper-writeback.mlir --top test | llvm/build/bin/FileCheck test/Tools/circt-sim/config-db-native-wrapper-writeback.mlir`
+  - PASS
+- `build-test/bin/circt-sim test/Tools/circt-sim/config-db-native-impl-direct-writeback.mlir --top test | llvm/build/bin/FileCheck test/Tools/circt-sim/config-db-native-impl-direct-writeback.mlir`
+  - PASS
+- `build-test/bin/circt-sim test/Tools/circt-sim/config-db-native-call-indirect-writeback.mlir --top test | llvm/build/bin/FileCheck test/Tools/circt-sim/config-db-native-call-indirect-writeback.mlir`
+  - PASS
+- `timeout 240 build-test/bin/circt-verilog test/Tools/circt-sim/config-db-dynamic-array-native.sv --ir-hw -o /tmp/config-db-dyn-native.<tmp>.mlir && timeout 240 build-test/bin/circt-sim /tmp/config-db-dyn-native.<tmp>.mlir --top config_db_dyn_array_tb | llvm/build/bin/FileCheck test/Tools/circt-sim/config-db-dynamic-array-native.sv`
+  - PASS
+
 ## Iteration 1241 - February 13, 2026
 
 ### Formal-All Mutation/LEC Lane-Map Identity-Fallback Gate
