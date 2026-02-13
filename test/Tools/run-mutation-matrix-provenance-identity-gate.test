@@ -1,0 +1,47 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_DETECT\n2 M_MISS\n' > %t/mutations-base.txt
+// RUN: printf '1 M_DETECT\n' > %t/mutations-alt.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    -d) design="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp "$design" "$out"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "$MUTATION_SPEC" == "M_DETECT" ]]; then\n  echo DETECTED > result.txt\nelse\n  echo SURVIVED > result.txt\nfi\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't\tbash %t/fake-test.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 'lane_a\t%t/design.il\t%t/mutations-base.txt\t%t/tests.tsv\t-\t-\t40\n' > %t/lanes-base.tsv
+// RUN: printf 'lane_a\t%t/design.il\t%t/mutations-base.txt\t%t/tests.tsv\t-\t-\t40\n' > %t/lanes-same-identities.tsv
+// RUN: printf 'lane_b\t%t/design.il\t%t/mutations-base.txt\t%t/tests.tsv\t-\t-\t40\n' >> %t/lanes-same-identities.tsv
+// RUN: printf 'lane_a\t%t/design.il\t%t/mutations-alt.txt\t%t/tests.tsv\t-\t-\t40\n' > %t/lanes-new-identities.tsv
+
+// RUN: %S/../../utils/run_mutation_matrix.sh \
+// RUN:   --lanes-tsv %t/lanes-base.tsv \
+// RUN:   --out-dir %t/base \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   2>&1 | FileCheck %s --check-prefix=BASE
+
+// RUN: %S/../../utils/run_mutation_matrix.sh \
+// RUN:   --lanes-tsv %t/lanes-same-identities.tsv \
+// RUN:   --out-dir %t/same-identities \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --baseline-results-file %t/base/results.tsv \
+// RUN:   --fail-on-new-contract-fingerprint-identities \
+// RUN:   --fail-on-new-mutation-source-fingerprint-identities \
+// RUN:   2>&1 | FileCheck %s --check-prefix=SAME
+
+// RUN: not %S/../../utils/run_mutation_matrix.sh \
+// RUN:   --lanes-tsv %t/lanes-new-identities.tsv \
+// RUN:   --out-dir %t/new-identities \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --baseline-results-file %t/base/results.tsv \
+// RUN:   --fail-on-new-contract-fingerprint-identities \
+// RUN:   --fail-on-new-mutation-source-fingerprint-identities \
+// RUN:   2>&1 | FileCheck %s --check-prefix=NEW
+
+// BASE: Mutation matrix summary: pass=1 fail=0
+
+// SAME: Mutation matrix summary: pass=2 fail=0
+// SAME: Provenance gate failures: 0
+
+// NEW: Provenance gate: new contract fingerprint identities observed
+// NEW: Provenance gate: new mutation-source fingerprint identities observed
+// NEW: Mutation matrix summary: pass=1 fail=2
+// NEW: Provenance gate failures: 2

@@ -1,4 +1,33 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1223 - February 13, 2026
+
+### Mutation Matrix Provenance Strict-Gate: Identity Drift Controls
+
+1. Extended `utils/run_mutation_matrix.sh` provenance gating with identity-level drift checks:
+   - `--fail-on-new-contract-fingerprint-identities`
+   - `--fail-on-new-mutation-source-fingerprint-identities`
+2. Updated `--strict-provenance-gate` to enable both existing tuple checks and the new identity checks.
+3. Added baseline-validation wiring so all provenance strict-gate modes share one contract:
+   - requires `--baseline-results-file`
+   - validates baseline file existence before execution
+4. Added focused regression coverage:
+   - `test/Tools/run-mutation-matrix-provenance-identity-gate.test`
+   - updated `test/Tools/run-mutation-matrix-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-mutation-matrix-help\.test|run-mutation-matrix-provenance-gate\.test|run-mutation-matrix-provenance-identity-gate\.test|run-mutation-matrix-provenance-summary\.test'`
+  - PASS (4/4)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-mutation-matrix-.*\.test'`
+  - PASS (52/52)
+
+### Remaining Limitations
+
+- Mutation provenance strict-gate still lives only in `run_mutation_matrix.sh`; `run_formal_all.sh` baseline/strict-gate does not yet ingest mutation provenance artifacts.
+- Provenance gate diagnostics are text-only and do not yet emit rule-id structured JSON/TSV like `run_formal_all.sh` strict-gate reporting.
+
 ## Iteration 1222 - February 13, 2026
 
 ### Mutation Matrix Provenance Strict-Gate Baseline Drift Checks

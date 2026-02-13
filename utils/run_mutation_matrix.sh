@@ -26,8 +26,14 @@ Optional:
   --fail-on-new-mutation-source-fingerprint-case-ids
                             Fail when new lane_id::mutation_source_fingerprint
                             tuples appear vs --baseline-results-file
+  --fail-on-new-contract-fingerprint-identities
+                            Fail when new contract fingerprint identities
+                            appear vs --baseline-results-file
+  --fail-on-new-mutation-source-fingerprint-identities
+                            Fail when new mutation-source fingerprint identities
+                            appear vs --baseline-results-file
   --strict-provenance-gate
-                            Enable both provenance tuple drift checks
+                            Enable all provenance tuple/identity drift checks
   --create-mutated-script FILE
                             Passed through to run_mutation_cover.sh
   --jobs-per-lane N         Passed through to run_mutation_cover.sh --jobs (default: 1)
@@ -224,6 +230,8 @@ REUSE_CACHE_DIR=""
 REUSE_COMPAT_MODE="warn"
 FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=0
+FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES=0
+FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES=0
 STRICT_PROVENANCE_GATE=0
 INCLUDE_LANE_REGEX=()
 EXCLUDE_LANE_REGEX=()
@@ -367,6 +375,8 @@ while [[ $# -gt 0 ]]; do
     --baseline-results-file) BASELINE_RESULTS_FILE="$2"; shift 2 ;;
     --fail-on-new-contract-fingerprint-case-ids) FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
     --fail-on-new-mutation-source-fingerprint-case-ids) FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=1; shift ;;
+    --fail-on-new-contract-fingerprint-identities) FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES=1; shift ;;
+    --fail-on-new-mutation-source-fingerprint-identities) FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES=1; shift ;;
     --strict-provenance-gate) STRICT_PROVENANCE_GATE=1; shift ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --jobs-per-lane) JOBS_PER_LANE="$2"; shift 2 ;;
@@ -564,8 +574,10 @@ fi
 if [[ "$STRICT_PROVENANCE_GATE" -eq 1 ]]; then
   FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS=1
   FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=1
+  FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES=1
+  FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES=1
 fi
-if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 ]]; then
+if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 ]]; then
   if [[ -z "$BASELINE_RESULTS_FILE" ]]; then
     echo "Provenance strict-gate requires --baseline-results-file." >&2
     exit 1
@@ -691,6 +703,40 @@ with open(results_path, newline="") as f:
     case_ids.add(f"{lane_id}::{fingerprint}")
 
 print(";".join(sorted(case_ids)))
+PY
+}
+
+
+collect_fingerprint_identities_from_results() {
+  local results_file="$1"
+  local fingerprint_column="$2"
+  python3 - "$results_file" "$fingerprint_column" <<'PY'
+import csv
+import sys
+
+results_path = sys.argv[1]
+fingerprint_column = sys.argv[2]
+
+with open(results_path, newline="") as f:
+  reader = csv.DictReader(f, delimiter="	")
+  if reader.fieldnames is None:
+    print(f"results file has no header: {results_path}", file=sys.stderr)
+    raise SystemExit(2)
+  if fingerprint_column not in reader.fieldnames:
+    print(
+        f"results file missing required {fingerprint_column} column: {results_path}",
+        file=sys.stderr,
+    )
+    raise SystemExit(4)
+
+  identities = set()
+  for row in reader:
+    fingerprint = (row.get(fingerprint_column) or "").strip()
+    if not fingerprint or fingerprint == "-":
+      continue
+    identities.add(fingerprint)
+
+print(";".join(sorted(identities)))
 PY
 }
 
@@ -1837,6 +1883,34 @@ if [[ "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 ]]; then
     provenance_gate_failures=$((provenance_gate_failures + 1))
   fi
 fi
+if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" -eq 1 ]]; then
+  baseline_contract_identities="$(collect_fingerprint_identities_from_results "$BASELINE_RESULTS_FILE" "lane_contract_fingerprint")"
+  current_contract_identities="$(collect_fingerprint_identities_from_results "$RESULTS_FILE" "lane_contract_fingerprint")"
+  mapfile -t contract_identity_diff < <(compute_new_case_ids "$baseline_contract_identities" "$current_contract_identities")
+  baseline_contract_identity_count="${contract_identity_diff[0]:-0}"
+  current_contract_identity_count="${contract_identity_diff[1]:-0}"
+  new_contract_identity_count="${contract_identity_diff[2]:-0}"
+  new_contract_identities="${contract_identity_diff[3]:-}"
+  if [[ "$new_contract_identity_count" -gt 0 ]]; then
+    contract_identity_sample="$(case_ids_sample "$new_contract_identities" 3)"
+    echo "Provenance gate: new contract fingerprint identities observed (baseline=${baseline_contract_identity_count} current=${current_contract_identity_count}): ${contract_identity_sample}" >&2
+    provenance_gate_failures=$((provenance_gate_failures + 1))
+  fi
+fi
+if [[ "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 ]]; then
+  baseline_source_identities="$(collect_fingerprint_identities_from_results "$BASELINE_RESULTS_FILE" "lane_mutation_source_fingerprint")"
+  current_source_identities="$(collect_fingerprint_identities_from_results "$RESULTS_FILE" "lane_mutation_source_fingerprint")"
+  mapfile -t source_identity_diff < <(compute_new_case_ids "$baseline_source_identities" "$current_source_identities")
+  baseline_source_identity_count="${source_identity_diff[0]:-0}"
+  current_source_identity_count="${source_identity_diff[1]:-0}"
+  new_source_identity_count="${source_identity_diff[2]:-0}"
+  new_source_identities="${source_identity_diff[3]:-}"
+  if [[ "$new_source_identity_count" -gt 0 ]]; then
+    source_identity_sample="$(case_ids_sample "$new_source_identities" 3)"
+    echo "Provenance gate: new mutation-source fingerprint identities observed (baseline=${baseline_source_identity_count} current=${current_source_identity_count}): ${source_identity_sample}" >&2
+    provenance_gate_failures=$((provenance_gate_failures + 1))
+  fi
+fi
 
 summary_failures="$failures"
 if [[ "$provenance_gate_failures" -gt 0 ]]; then
@@ -1846,7 +1920,7 @@ fi
 echo "Mutation matrix summary: pass=${passes} fail=${summary_failures}"
 echo "Gate summary: $GATE_SUMMARY_FILE"
 echo "Provenance summary: $PROVENANCE_SUMMARY_FILE"
-if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 ]]; then
+if [[ "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" -eq 1 || "$FAIL_ON_NEW_CONTRACT_FINGERPRINT_IDENTITIES" -eq 1 || "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_IDENTITIES" -eq 1 ]]; then
   echo "Provenance gate failures: ${provenance_gate_failures}"
 fi
 echo "Mutation matrix generated-mutation cache: hit_lanes=${generated_cache_hit_lanes} miss_lanes=${generated_cache_miss_lanes} saved_runtime_ns=${generated_cache_saved_runtime_ns} lock_wait_ns=${generated_cache_lock_wait_ns} lock_contended_lanes=${generated_cache_lock_contended_lanes}"
