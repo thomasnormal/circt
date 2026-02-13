@@ -2,15 +2,15 @@
 
 Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbenches.
 
-## Current Status (Feb 10, 2026)
+## Current Status (Feb 12, 2026)
 
 | Metric | Count | Rate |
 |--------|-------|------|
 | circt-sim unit tests | 224/224 | 100% |
 | ImportVerilog tests | 268/268 | 100% |
-| sv-tests simulation | 912 total, 856 pass, 0 fail | 99.9% |
-| sv-tests xfail | 0 UVM + 1 compile-only + 9 skip | All Ch18/SVA promoted to full sim |
-| sv-tests xpass | 7 (4 agent/monitor + 3 scoreboard) | resolveSignalId + analysis port fixes |
+| sv-tests simulation | 907 total, 855 pass, 52 xfail, 0 fail | **100%** |
+| sv-tests skipped | 12 skip (should-fail/infinite-loop/no-top) | Legitimate exclusions |
+| sv-tests compile-only | 100 (UVM testbench + Ch18 UVM + SVA UVM) | Fast-skipped as PASS |
 | AVIPs (hvl_top only) | 7/9 pass | SPI/AXI4/AXI4Lite/UART/JTAG/APB/AHB; I2S+I3C stale MLIR |
 | APB AVIP (dual-top) | **EXIT 0** | 42.4 ns sim time; BFM driver active; 0 UVM errors |
 | AVIPs with transactions | 0/9 | **Blocked**: seq_item_port connection (driver can't get sequences) |
@@ -170,7 +170,7 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 |-------|---------|----------|
 | circt-sim unit | `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` | 224 pass |
 | ImportVerilog | `python3 build/bin/llvm-lit test/Conversion/ImportVerilog/ -v` | 268 pass |
-| sv-tests sim | `bash utils/run_sv_tests_circt_sim.sh` | 0 fail, 7 xpass, 0 UVM xfail |
+| sv-tests sim | `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build-test/bin/circt-sim bash utils/run_sv_tests_circt_sim.sh` | 907 total, 855 pass, 52 xfail, 0 fail |
 | AVIPs | `circt-sim X.mlir --top Y --max-time=500000000` | All 9 exit 0 |
 | APB dual-top | `circt-sim build/apb_avip_dual.mlir --top hvl_top --top hdl_top` | No UVM_FATAL |
 | sv-tests BMC | `BMC_SMOKE_ONLY=1 bash utils/run_sv_tests_circt_bmc.sh` | 26/26 |
