@@ -1,4 +1,34 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1265 - February 13, 2026
+
+### Yosys Runner Toolchain Fallback Hardening (BMC/LEC)
+
+1. Hardened default CIRCT tool resolution in:
+   - `utils/run_yosys_sva_circt_bmc.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. When explicit tool env vars are not set, runners now resolve tools in this order:
+   - preferred companion dir derived from resolved `circt-verilog`
+   - repo-local `build/bin`
+   - repo-local `build-test/bin`
+   - `PATH`
+3. This fixes false `FAIL(pass)/FAIL(fail)` (BMC) and `ERROR` (LEC) outcomes when only `build-test/bin` exists.
+4. Added fallback regressions:
+   - `test/Tools/run-yosys-sva-bmc-toolchain-default-build-test-fallback.test`
+   - `test/Tools/run-yosys-sva-circt-lec-toolchain-default-build-test-fallback.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`
+  - PASS
+- `bash -n utils/run_yosys_sva_circt_lec.sh`
+  - PASS
+- `PATH=/home/thomas-ahle/circt/build-test/bin:$PATH build-ot/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-toolchain-derived-from-circt-verilog.test test/Tools/run-yosys-sva-bmc-toolchain-default-build-test-fallback.test test/Tools/run-yosys-sva-circt-lec-toolchain-derived-from-circt-verilog.test test/Tools/run-yosys-sva-circt-lec-toolchain-default-build-test-fallback.test`
+  - PASS (4/4)
+- `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva`
+  - PASS (`PASS(pass): basic02`, `PASS(fail): basic02`)
+- `TEST_FILTER=basic02 utils/run_yosys_sva_circt_lec.sh ~/yosys/tests/sva`
+  - PASS (`PASS: basic02`, summary `pass=1 error=0`)
+
 ## Iteration 1264 - February 13, 2026
 
 ### Config_db Native Offset Regression Hardening
