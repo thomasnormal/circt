@@ -1,4 +1,43 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1278 - February 13, 2026
+
+### Formal Strict-Gate: BMC Frontend Error-Reason Tuple Governance
+
+1. Extended `utils/run_formal_all.sh` BMC lane wiring to persist frontend
+   reason artifacts for all formal BMC suites:
+   - `sv-tests` BMC
+   - `sv-tests` UVM BMC semantics
+   - `verilator-verification` BMC
+   - `yosys/tests/sva` BMC
+   - `opentitan` BMC / `opentitan` BMC_STRICT
+2. Extended BMC summary ingestion to include frontend reason counters:
+   - `bmc_frontend_error_cases`
+   - `bmc_frontend_error_case_reasons_cardinality`
+   - per-reason case counters (`bmc_frontend_error_reason_<reason>_cases`)
+3. Added baseline persistence for frontend reason tuples:
+   - new baseline column `bmc_frontend_error_case_reason_ids`
+4. Added strict-gate drift rule for new frontend reason tuples:
+   - CLI control: `--fail-on-new-bmc-frontend-error-case-reasons`
+   - strict-gate default: enabled by `--strict-gate`
+   - rule id: `strict_gate.bmc.frontend_error.case_reasons.new`
+5. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-bmc-frontend-error-case-reasons.test`
+   - `test/Tools/run-formal-all-help.test` (help text update)
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- Focused `run-formal-all` lit slice:
+  - `run-formal-all-help.test`
+  - `run-formal-all-strict-gate-bmc-frontend-error-case-reasons.test`
+  - `run-formal-all-strict-gate-bmc-drop-remark-case-reasons.test`
+  - `run-formal-all-strict-gate-bmc-drop-remark-cases.test`
+  - `run-formal-all-opentitan-bmc.test`
+  - `run-formal-all-opentitan-bmc-mode-diff.test`
+  - `run-formal-all-opentitan-bmc-opentitan-toolchain-fallback.test`
+  - PASS (7/7)
+
 ## Iteration 1277 - February 13, 2026
 
 ### Formal Strict-Gate: BMC/LEC Contract-Fingerprint Case-ID Allowlists
