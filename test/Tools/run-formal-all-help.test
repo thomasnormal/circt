@@ -29,6 +29,15 @@
 // CHECK: --fail-on-new-bmc-unknown-cases
 // CHECK: --fail-on-new-bmc-reason-keys
 // CHECK: --fail-on-new-bmc-contract-fingerprint-case-ids
+// CHECK: --fail-on-new-lec-contract-fingerprint-case-ids
+// CHECK: --fail-on-new-mutation-contract-fingerprint-case-ids
+// CHECK: --fail-on-new-mutation-source-fingerprint-case-ids
+// CHECK: --fail-on-new-mutation-provenance-tuple-ids
+// CHECK: --mutation-contract-fingerprint-case-id-allowlist-file
+// CHECK: --mutation-source-fingerprint-case-id-allowlist-file
+// CHECK: --mutation-provenance-tuple-id-allowlist-file
+// CHECK: --fail-on-new-mutation-gate-status-case-ids
+// CHECK: --mutation-gate-status-case-id-allowlist-file
 // CHECK: --fail-on-new-lec-drop-remark-cases
 // CHECK: --fail-on-any-bmc-drop-remarks
 // CHECK: --fail-on-any-lec-drop-remarks
