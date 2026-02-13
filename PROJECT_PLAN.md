@@ -63,6 +63,27 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 13, 2026, BMC frontend reason strict-gate governance)
+
+1. Extended `run_formal_all.sh` to carry frontend error-reason artifacts across
+   all BMC suites (`sv-tests`, `sv-tests` UVM semantics, `verilator`,
+   `yosys`, `opentitan` default/strict).
+2. Added BMC summary counters for frontend reason signal:
+   - `bmc_frontend_error_cases`
+   - `bmc_frontend_error_case_reasons_cardinality`
+   - per-reason counters (`bmc_frontend_error_reason_<reason>_cases`)
+3. Added baseline persistence for tuple-level reason evidence:
+   - new baseline column: `bmc_frontend_error_case_reason_ids`
+4. Added strict-gate control for tuple drift:
+   - `--fail-on-new-bmc-frontend-error-case-reasons`
+   - enabled by `--strict-gate`
+5. Added regression:
+   - `test/Tools/run-formal-all-strict-gate-bmc-frontend-error-case-reasons.test`
+6. Practical impact:
+   - remaining semantic-closure blockers such as UVM `16.11`/`16.13`
+     frontend failures can now be tracked as stable, lane-attributed reason
+     tuples instead of generic `ERROR` volume.
+
 ### Formal Closure Snapshot Update (February 13, 2026, frontend error-reason attribution)
 
 1. Added frontend error-reason contract export in `run_sv_tests_circt_bmc.sh`:

@@ -11,6 +11,7 @@
 // CHECK: --strict-tool-preflight
 // CHECK: --fail-on-new-bmc-timeout-cases
 // CHECK: --fail-on-new-bmc-timeout-case-ids
+// CHECK: --fail-on-new-bmc-frontend-error-case-reasons
 // CHECK: --fail-on-new-lec-timeout-cases
 // CHECK: --fail-on-new-lec-timeout-case-ids
 // CHECK: --fail-on-new-lec-circt-opt-error-case-ids
