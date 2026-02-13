@@ -1,0 +1,5 @@
+// RUN: not %S/../../utils/run_formal_all.sh --fail-on-bmc-lec-contract-fingerprint-case-id-map-unmapped 2>&1 | FileCheck %s --check-prefix=CUR
+// RUN: not %S/../../utils/run_formal_all.sh --fail-on-new-bmc-lec-contract-fingerprint-case-id-map-unmapped 2>&1 | FileCheck %s --check-prefix=NEW
+
+// CUR: --fail-on-bmc-lec-contract-fingerprint-case-id-map-unmapped requires --bmc-lec-contract-fingerprint-case-id-map-file
+// NEW: --fail-on-new-bmc-lec-contract-fingerprint-case-id-map-unmapped requires --bmc-lec-contract-fingerprint-case-id-map-file
