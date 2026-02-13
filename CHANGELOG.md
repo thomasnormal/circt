@@ -1,4 +1,43 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1279 - February 13, 2026
+
+### sv-tests BMC Frontend Resilience: OOM Memory Retry + Launch Fallback Copy
+
+1. Extended `utils/run_sv_tests_circt_bmc.sh` frontend robustness with two
+   general (non-OpenTitan-specific) hardening features:
+   - optional one-shot frontend memory retry on OOM/resource-guard failures:
+     - `BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB` (`0` disables)
+   - launch fallback copy after retry exhaustion on retryable launcher errors:
+     - `BMC_LAUNCH_COPY_FALLBACK` (`1` enabled by default)
+2. Added strict input validation for new knobs:
+   - `BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB` must be integer and greater than
+     `CIRCT_MEMORY_LIMIT_GB` when enabled.
+   - `BMC_LAUNCH_COPY_FALLBACK` must be `0` or `1`.
+3. Added deterministic regressions:
+   - `test/Tools/run-sv-tests-bmc-frontend-oom-memory-retry.test`
+   - `test/Tools/run-sv-tests-bmc-frontend-oom-memory-retry-invalid-limit.test`
+   - `test/Tools/run-sv-tests-bmc-launch-fallback-copy.test`
+4. Real semantic-closure impact on the previously blocked UVM bucket slice:
+   - `16.11--sequence-subroutine-uvm`: PASS
+   - `16.13--sequence-multiclock-uvm`: PASS
+   after launcher-retry exhaustion + fallback-copy path recovered from transient
+   `Permission denied` frontend launch failures.
+
+### Validation
+
+- `bash -n utils/run_sv_tests_circt_bmc.sh`
+  - PASS
+- Focused `run-sv-tests-bmc` lit slice:
+  - `run-sv-tests-bmc-launch-fallback-copy.test`
+  - `run-sv-tests-bmc-frontend-oom-memory-retry.test`
+  - `run-sv-tests-bmc-frontend-oom-memory-retry-invalid-limit.test`
+  - `run-sv-tests-bmc-launch-retry-etxtbsy.test`
+  - `run-sv-tests-bmc-frontend-error-reasons.test`
+  - `run-sv-tests-bmc-frontend-timeout.test`
+  - `run-sv-tests-bmc-timeout-stage-reasons.test`
+  - `run-sv-tests-bmc-keep-logs-frontend-error.test`
+  - PASS (8/8)
+
 ## Iteration 1278 - February 13, 2026
 
 ### Formal Strict-Gate: BMC Frontend Error-Reason Tuple Governance

@@ -7,17 +7,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=utils/formal_toolchain_resolve.sh
 source "$SCRIPT_DIR/formal_toolchain_resolve.sh"
 
-# Memory limit settings to prevent system hangs
+# Memory limit settings to prevent system hangs.
 CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
 CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-300}"
+# Optional single-shot retry memory ceiling for frontend OOM/resource-guard
+# failures. Zero disables the retry.
+BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB="${BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB:-0}"
 CIRCT_MEMORY_LIMIT_KB=$((CIRCT_MEMORY_LIMIT_GB * 1024 * 1024))
+BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_KB=$((BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB * 1024 * 1024))
 
-# Run a command with memory limit
-run_limited() {
+# Run a command with explicit memory and timeout limits.
+run_limited_with_memory_kb() {
+  local memory_limit_kb="$1"
+  shift
   (
-    ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
-    timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
+    ulimit -v "$memory_limit_kb" 2>/dev/null || true
+    timeout --signal=KILL "$CIRCT_TIMEOUT_SECS" "$@"
   )
+}
+
+# Run with the default suite memory limit.
+run_limited() {
+  run_limited_with_memory_kb "$CIRCT_MEMORY_LIMIT_KB" "$@"
 }
 
 is_retryable_launch_failure_log() {
@@ -70,6 +81,7 @@ DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 BMC_LAUNCH_RETRY_ATTEMPTS="${BMC_LAUNCH_RETRY_ATTEMPTS:-4}"
 BMC_LAUNCH_RETRY_BACKOFF_SECS="${BMC_LAUNCH_RETRY_BACKOFF_SECS:-0.2}"
+BMC_LAUNCH_COPY_FALLBACK="${BMC_LAUNCH_COPY_FALLBACK:-1}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECT_FILE="${EXPECT_FILE:-$SCRIPT_DIR/sv-tests-bmc-expect.txt}"
 UVM_TAG_REGEX="${UVM_TAG_REGEX:-(^| )uvm( |$)}"
@@ -164,6 +176,23 @@ if ! [[ "$BMC_LAUNCH_RETRY_ATTEMPTS" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "$BMC_LAUNCH_RETRY_BACKOFF_SECS" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "invalid BMC_LAUNCH_RETRY_BACKOFF_SECS: $BMC_LAUNCH_RETRY_BACKOFF_SECS" >&2
+  exit 1
+fi
+if [[ "$BMC_LAUNCH_COPY_FALLBACK" != "0" && "$BMC_LAUNCH_COPY_FALLBACK" != "1" ]]; then
+  echo "invalid BMC_LAUNCH_COPY_FALLBACK: $BMC_LAUNCH_COPY_FALLBACK" >&2
+  exit 1
+fi
+if ! [[ "$CIRCT_MEMORY_LIMIT_GB" =~ ^[0-9]+$ ]] || [[ "$CIRCT_MEMORY_LIMIT_GB" -le 0 ]]; then
+  echo "invalid CIRCT_MEMORY_LIMIT_GB: $CIRCT_MEMORY_LIMIT_GB" >&2
+  exit 1
+fi
+if ! [[ "$BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB" =~ ^[0-9]+$ ]]; then
+  echo "invalid BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB: $BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB" >&2
+  exit 1
+fi
+if [[ "$BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB" -ne 0 ]] && \
+   [[ "$BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB" -le "$CIRCT_MEMORY_LIMIT_GB" ]]; then
+  echo "BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB must be greater than CIRCT_MEMORY_LIMIT_GB when enabled" >&2
   exit 1
 fi
 
@@ -607,9 +636,12 @@ top_module=${top_module}
   if [[ "$cache_hit" != "1" ]]; then
     : > "$verilog_log"
     launch_attempt=0
+    launch_copy_fallback_used=0
+    frontend_memory_retry_used=0
+    frontend_memory_limit_kb="$CIRCT_MEMORY_LIMIT_KB"
     frontend_error_reason=""
     while true; do
-      if run_limited "${cmd[@]}" > "$mlir" 2>> "$verilog_log"; then
+      if run_limited_with_memory_kb "$frontend_memory_limit_kb" "${cmd[@]}" > "$mlir" 2>> "$verilog_log"; then
         verilog_status=0
       else
         verilog_status=$?
@@ -628,6 +660,41 @@ top_module=${top_module}
         } >> "$verilog_log"
         sleep "$retry_delay_secs"
         continue
+      fi
+      if [[ "$verilog_status" -eq 126 && "$BMC_LAUNCH_COPY_FALLBACK" == "1" && \
+            "$launch_copy_fallback_used" -eq 0 ]] && \
+          is_retryable_launch_failure_log "$verilog_log"; then
+        fallback_verilog="$tmpdir/${base}.circt-verilog-launch-fallback"
+        if cp -f "$CIRCT_VERILOG" "$fallback_verilog" 2>> "$verilog_log"; then
+          chmod +x "$fallback_verilog" 2>> "$verilog_log" || true
+          cmd[0]="$fallback_verilog"
+          launch_copy_fallback_used=1
+          launch_attempt=0
+          {
+            printf '[run_sv_tests_circt_bmc] frontend launch fallback copy=%s\n' \
+              "$fallback_verilog"
+          } >> "$verilog_log"
+          continue
+        else
+          {
+            printf '[run_sv_tests_circt_bmc] frontend launch fallback copy failed\n'
+          } >> "$verilog_log"
+        fi
+      fi
+      if [[ "$verilog_status" -ne 0 && \
+            "$frontend_memory_retry_used" -eq 0 && \
+            "$BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_KB" -gt "$frontend_memory_limit_kb" ]]; then
+        frontend_error_reason="$(classify_frontend_error_reason "$verilog_status" "$verilog_log")"
+        if [[ "$frontend_error_reason" == "frontend_out_of_memory" || \
+              "$frontend_error_reason" == "frontend_resource_guard_rss" ]]; then
+          {
+            printf '[run_sv_tests_circt_bmc] frontend memory retry reason=%s from_kb=%s to_kb=%s\n' \
+              "$frontend_error_reason" "$frontend_memory_limit_kb" "$BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_KB"
+          } >> "$verilog_log"
+          frontend_memory_retry_used=1
+          frontend_memory_limit_kb="$BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_KB"
+          continue
+        fi
       fi
       break
     done

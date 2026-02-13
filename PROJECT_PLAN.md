@@ -63,6 +63,30 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### Formal Closure Snapshot Update (February 13, 2026, sv-tests BMC frontend resilience)
+
+1. Hardened `run_sv_tests_circt_bmc.sh` with two general frontend recovery
+   controls:
+   - one-shot OOM/resource-guard memory retry:
+     - `BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_GB`
+   - retry-exhaustion launch fallback:
+     - `BMC_LAUNCH_COPY_FALLBACK=1` stages a private `circt-verilog` copy and
+       retries launch.
+2. Added deterministic regressions for both new behaviors and config
+   validation:
+   - `run-sv-tests-bmc-frontend-oom-memory-retry.test`
+   - `run-sv-tests-bmc-frontend-oom-memory-retry-invalid-limit.test`
+   - `run-sv-tests-bmc-launch-fallback-copy.test`
+3. Closure impact on the long-standing UVM blockers:
+   - targeted slice
+     (`16.11--sequence-subroutine-uvm`, `16.13--sequence-multiclock-uvm`)
+     now reaches PASS by recovering from transient launcher `Permission denied`
+     failures via fallback-copy path.
+4. Remaining limitation after this step:
+   - host toolchain instability (simultaneous relink/truncate windows) can
+     still break `run_formal_all.sh` strict tool preflight before lane-level
+     fallback logic executes.
+
 ### Formal Closure Snapshot Update (February 13, 2026, BMC frontend reason strict-gate governance)
 
 1. Extended `run_formal_all.sh` to carry frontend error-reason artifacts across
