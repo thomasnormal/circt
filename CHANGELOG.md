@@ -1,4 +1,25 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1261 - February 13, 2026
+
+### Formal-All Resolved-Contract Summarizer Deduplication
+
+1. Refactored `utils/run_formal_all.sh` to replace duplicated BMC/LEC resolved-contract parsing blocks with a single shared helper:
+   - `summarize_resolved_contracts_file FILE PREFIX`
+   - thin wrappers:
+     - `summarize_bmc_resolved_contracts_file`
+     - `summarize_lec_resolved_contracts_file`
+2. Preserved output metric keys (`bmc_*`/`lec_*`) and existing schema-marker validation behavior, including optional `--require-resolved-contract-schema-marker` enforcement.
+3. This reduces parser drift risk and lowers maintenance cost for future schema evolution.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools/run-formal-all-help.test build-ot/tools/circt/test/Tools/run-formal-all-resolved-contract-schema-invalid.test build-ot/tools/circt/test/Tools/run-formal-all-resolved-contract-schema-required-bmc.test build-ot/tools/circt/test/Tools/run-formal-all-resolved-contract-schema-required-lec.test build-ot/tools/circt/test/Tools/run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids.test build-ot/tools/circt/test/Tools/run-formal-all-strict-gate-lec-contract-fingerprint-case-ids.test`
+  - PASS (6/6)
+- `timeout 900 utils/run_formal_all.sh --out-dir /tmp/formal-smoke-refactor-<ts> --sv-tests ~/sv-tests --verilator ~/verilator-verification --yosys ~/yosys/tests/sva --include-lane-regex '^sv-tests/BMC$' --sv-tests-bmc-test-filter '^(16\\.11--sequence-subroutine-uvm)$' --sv-tests-lec-test-filter '.*' --verilator-bmc-test-filter '.*' --verilator-lec-test-filter '.*' --yosys-bmc-test-filter '.*' --yosys-lec-test-filter '.*' --sv-tests-uvm-bmc-semantics-test-filter '.*' --baseline-file /tmp/formal-smoke-refactor-baselines.tsv`
+  - PASS (runner completed; lane filtered to zero selected cases with `filtered_min_total_violation=1`)
+
 ## Iteration 1260 - February 13, 2026
 
 ### Formal-All Resolved-Contract Schema Marker Ratchet

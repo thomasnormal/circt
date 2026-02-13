@@ -9221,22 +9221,34 @@ print(
 PY
 }
 
-summarize_bmc_resolved_contracts_file() {
+summarize_resolved_contracts_file() {
   local contracts_file="$1"
+  local metrics_prefix="$2"
   if [[ ! -s "$contracts_file" ]]; then
     echo ""
     return 0
   fi
-  REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER="$REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER" BMC_RESOLVED_CONTRACTS_FILE="$contracts_file" python3 - <<'PY'
+  REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER="$REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER" \
+  RESOLVED_CONTRACTS_FILE="$contracts_file" \
+  RESOLVED_CONTRACTS_METRICS_PREFIX="$metrics_prefix" \
+  python3 - <<'PY'
 import hashlib
 import os
 import sys
 from pathlib import Path
 
-path = Path(os.environ["BMC_RESOLVED_CONTRACTS_FILE"])
+path = Path(os.environ["RESOLVED_CONTRACTS_FILE"])
 if not path.exists():
     print("")
     raise SystemExit(0)
+
+metrics_prefix = os.environ["RESOLVED_CONTRACTS_METRICS_PREFIX"]
+if metrics_prefix not in {"bmc", "lec"}:
+    print(
+        f"invalid resolved-contract metrics prefix: '{metrics_prefix}'",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 
 rows = 0
 sources = set()
@@ -9244,61 +9256,60 @@ fingerprints = set()
 case_fingerprint_ids = set()
 
 EXPECTED_SCHEMA_VERSION = 1
-REQUIRE_SCHEMA_MARKER = os.environ.get("REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER", "0") == "1"
+REQUIRE_SCHEMA_MARKER = (
+    os.environ.get("REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER", "0") == "1"
+)
 schema_marker_seen = False
 
-def iter_contract_parts(file_path: Path):
-    global schema_marker_seen
-    with file_path.open(encoding="utf-8") as f:
-        for line_no, line in enumerate(f, start=1):
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            if line.startswith("#resolved_contract_schema_version="):
-                schema_marker_seen = True
-                raw_version = line.split("=", 1)[1].strip()
-                try:
-                    schema_version = int(raw_version)
-                except ValueError:
-                    print(
-                        (
-                            f"invalid resolved-contract schema marker in {file_path} "
-                            f"at line {line_no}: expected integer version, got '{raw_version}'"
-                        ),
-                        file=sys.stderr,
-                    )
-                    raise SystemExit(2)
-                if schema_version != EXPECTED_SCHEMA_VERSION:
-                    print(
-                        (
-                            f"invalid resolved-contract schema version in {file_path}: "
-                            f"expected {EXPECTED_SCHEMA_VERSION}, got {schema_version}"
-                        ),
-                        file=sys.stderr,
-                    )
-                    raise SystemExit(2)
-                continue
-            if line.startswith("#"):
-                continue
-            parts = line.split("\t")
-            if len(parts) < 3:
-                continue
-            yield parts
 
-for parts in iter_contract_parts(path):
-    case_id = parts[0].strip() if len(parts) > 0 else ""
-    case_path = parts[1].strip() if len(parts) > 1 else ""
-    source = parts[2].strip() if len(parts) > 2 else ""
-    fingerprint = parts[-1].strip() if parts else ""
-    if source:
-        sources.add(source)
-    if fingerprint:
-        fingerprints.add(fingerprint)
-        identity = case_id if case_id else case_path
-        if not identity:
-            identity = "__aggregate__"
-        case_fingerprint_ids.add(f"{identity}::{fingerprint}")
-    rows += 1
+# Detect schema markers via a single scan while collecting rows.
+with path.open(encoding="utf-8") as f:
+    for line_no, line in enumerate(f, start=1):
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        if line.startswith("#resolved_contract_schema_version="):
+            schema_marker_seen = True
+            raw_version = line.split("=", 1)[1].strip()
+            try:
+                schema_version = int(raw_version)
+            except ValueError:
+                print(
+                    (
+                        f"invalid resolved-contract schema marker in {path} "
+                        f"at line {line_no}: expected integer version, got '{raw_version}'"
+                    ),
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
+            if schema_version != EXPECTED_SCHEMA_VERSION:
+                print(
+                    (
+                        f"invalid resolved-contract schema version in {path}: "
+                        f"expected {EXPECTED_SCHEMA_VERSION}, got {schema_version}"
+                    ),
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
+            continue
+        if line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        case_id = parts[0].strip() if len(parts) > 0 else ""
+        case_path = parts[1].strip() if len(parts) > 1 else ""
+        source = parts[2].strip() if len(parts) > 2 else ""
+        fingerprint = parts[-1].strip() if parts else ""
+        if source:
+            sources.add(source)
+        if fingerprint:
+            fingerprints.add(fingerprint)
+            identity = case_id if case_id else case_path
+            if not identity:
+                identity = "__aggregate__"
+            case_fingerprint_ids.add(f"{identity}::{fingerprint}")
+        rows += 1
 
 if REQUIRE_SCHEMA_MARKER and not schema_marker_seen:
     print(
@@ -9318,125 +9329,24 @@ if case_fingerprint_ids:
 print(
     " ".join(
         [
-            f"bmc_contract_resolved_rows={rows}",
-            f"bmc_contract_source_tokens={len(sources)}",
-            f"bmc_contract_fingerprint_cases={len(case_fingerprint_ids)}",
-            f"bmc_contract_fingerprint_unique={len(fingerprints)}",
-            f"bmc_contract_fingerprint_case_ids_cardinality={len(case_fingerprint_ids)}",
-            f"bmc_contract_fingerprint_identity_digest_u64={digest_u64}",
+            f"{metrics_prefix}_contract_resolved_rows={rows}",
+            f"{metrics_prefix}_contract_source_tokens={len(sources)}",
+            f"{metrics_prefix}_contract_fingerprint_cases={len(case_fingerprint_ids)}",
+            f"{metrics_prefix}_contract_fingerprint_unique={len(fingerprints)}",
+            f"{metrics_prefix}_contract_fingerprint_case_ids_cardinality={len(case_fingerprint_ids)}",
+            f"{metrics_prefix}_contract_fingerprint_identity_digest_u64={digest_u64}",
         ]
     )
 )
 PY
 }
 
+summarize_bmc_resolved_contracts_file() {
+  summarize_resolved_contracts_file "$1" "bmc"
+}
+
 summarize_lec_resolved_contracts_file() {
-  local contracts_file="$1"
-  if [[ ! -s "$contracts_file" ]]; then
-    echo ""
-    return 0
-  fi
-  REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER="$REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER" LEC_RESOLVED_CONTRACTS_FILE="$contracts_file" python3 - <<'PY'
-import hashlib
-import os
-import sys
-from pathlib import Path
-
-path = Path(os.environ["LEC_RESOLVED_CONTRACTS_FILE"])
-if not path.exists():
-    print("")
-    raise SystemExit(0)
-
-rows = 0
-sources = set()
-fingerprints = set()
-case_fingerprint_ids = set()
-
-EXPECTED_SCHEMA_VERSION = 1
-REQUIRE_SCHEMA_MARKER = os.environ.get("REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER", "0") == "1"
-schema_marker_seen = False
-
-def iter_contract_parts(file_path: Path):
-    global schema_marker_seen
-    with file_path.open(encoding="utf-8") as f:
-        for line_no, line in enumerate(f, start=1):
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            if line.startswith("#resolved_contract_schema_version="):
-                schema_marker_seen = True
-                raw_version = line.split("=", 1)[1].strip()
-                try:
-                    schema_version = int(raw_version)
-                except ValueError:
-                    print(
-                        (
-                            f"invalid resolved-contract schema marker in {file_path} "
-                            f"at line {line_no}: expected integer version, got '{raw_version}'"
-                        ),
-                        file=sys.stderr,
-                    )
-                    raise SystemExit(2)
-                if schema_version != EXPECTED_SCHEMA_VERSION:
-                    print(
-                        (
-                            f"invalid resolved-contract schema version in {file_path}: "
-                            f"expected {EXPECTED_SCHEMA_VERSION}, got {schema_version}"
-                        ),
-                        file=sys.stderr,
-                    )
-                    raise SystemExit(2)
-                continue
-            if line.startswith("#"):
-                continue
-            parts = line.split("\t")
-            if len(parts) < 3:
-                continue
-            yield parts
-
-for parts in iter_contract_parts(path):
-    case_id = parts[0].strip() if len(parts) > 0 else ""
-    case_path = parts[1].strip() if len(parts) > 1 else ""
-    source = parts[2].strip() if len(parts) > 2 else ""
-    fingerprint = parts[-1].strip() if parts else ""
-    if source:
-        sources.add(source)
-    if fingerprint:
-        fingerprints.add(fingerprint)
-        identity = case_id if case_id else case_path
-        if not identity:
-            identity = "__aggregate__"
-        case_fingerprint_ids.add(f"{identity}::{fingerprint}")
-    rows += 1
-
-if REQUIRE_SCHEMA_MARKER and not schema_marker_seen:
-    print(
-        (
-            f"missing resolved-contract schema marker in {path}: "
-            f"expected #resolved_contract_schema_version={EXPECTED_SCHEMA_VERSION}"
-        ),
-        file=sys.stderr,
-    )
-    raise SystemExit(2)
-
-digest_u64 = 0
-if case_fingerprint_ids:
-    canonical = "\n".join(sorted(case_fingerprint_ids)).encode("utf-8")
-    digest_u64 = int(hashlib.sha1(canonical).hexdigest()[:16], 16)
-
-print(
-    " ".join(
-        [
-            f"lec_contract_resolved_rows={rows}",
-            f"lec_contract_source_tokens={len(sources)}",
-            f"lec_contract_fingerprint_cases={len(case_fingerprint_ids)}",
-            f"lec_contract_fingerprint_unique={len(fingerprints)}",
-            f"lec_contract_fingerprint_case_ids_cardinality={len(case_fingerprint_ids)}",
-            f"lec_contract_fingerprint_identity_digest_u64={digest_u64}",
-        ]
-    )
-)
-PY
+  summarize_resolved_contracts_file "$1" "lec"
 }
 
 summarize_bmc_check_attribution_file() {
