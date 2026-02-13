@@ -43,6 +43,7 @@
 // SOURCE-UNIQ: 1
 // FP-FORMAT: OK
 
+// TUPLES: #mutation_provenance_schema_version=1
 // TUPLES: lane_id{{[[:space:]]+}}contract_fingerprint{{[[:space:]]+}}mutation_source_fingerprint{{[[:space:]]+}}contract_case_id{{[[:space:]]+}}mutation_source_case_id{{[[:space:]]+}}provenance_tuple_id
 // TUPLES: lane_a{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}lane_a::{{[0-9a-f]+}}{{[[:space:]]+}}lane_a::{{[0-9a-f]+}}{{[[:space:]]+}}lane_a::{{[0-9a-f]+}}::{{[0-9a-f]+}}
 // TUPLES: lane_b{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}lane_b::{{[0-9a-f]+}}{{[[:space:]]+}}lane_b::{{[0-9a-f]+}}{{[[:space:]]+}}lane_b::{{[0-9a-f]+}}::{{[0-9a-f]+}}

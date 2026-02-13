@@ -1,4 +1,34 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1262 - February 13, 2026
+
+### Formal Mutation Provenance Schema Hardening
+
+1. Added `--require-mutation-provenance-schema-marker` to `utils/run_formal_all.sh`.
+2. Hardened mutation provenance tuple parsing in both baseline-update and strict-gate paths:
+   - accepts comment-prefixed metadata lines
+   - validates `#mutation_provenance_schema_version=1` when present
+   - enforces marker presence when `--require-mutation-provenance-schema-marker` is set
+   - validates required TSV columns (`lane_id`, `contract_fingerprint`, `mutation_source_fingerprint`, `contract_case_id`, `mutation_source_case_id`, `provenance_tuple_id`)
+3. Updated `utils/run_mutation_matrix.sh` to emit provenance schema metadata by default:
+   - `#mutation_provenance_schema_version=1` before tuple header.
+
+### Tests
+
+1. Added:
+   - `test/Tools/run-formal-all-mutation-provenance-schema-required.test`
+2. Updated:
+   - `test/Tools/run-formal-all-help.test`
+   - `test/Tools/run-mutation-matrix-provenance-summary.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- `bash -n utils/run_mutation_matrix.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-mutation-provenance-schema-required.test test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids.test test/Tools/run-formal-all-strict-gate-mutation-provenance-tuple-ids-defaults.test test/Tools/run-mutation-matrix-provenance-summary.test test/Tools/run-mutation-matrix-provenance-gate.test`
+  - PASS (6/6)
+
 ## Iteration 1261 - February 13, 2026
 
 ### Formal-All Resolved-Contract Summarizer Deduplication

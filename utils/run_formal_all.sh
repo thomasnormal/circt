@@ -183,6 +183,10 @@ Options:
                          Require `#resolved_contract_schema_version=1` in
                          every non-empty BMC/LEC resolved-contract artifact
                          consumed by this run
+  --require-mutation-provenance-schema-marker
+                         Require `#mutation_provenance_schema_version=1` in
+                         every non-empty mutation provenance tuples artifact
+                         consumed by this run
   --fail-on-bmc-lec-contract-fingerprint-parity
                          Fail when BMC contract fingerprint values are
                          not present in current LEC contract fingerprints
@@ -2204,6 +2208,7 @@ FAIL_ON_NEW_BMC_REASON_KEYS=0
 FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS=0
 REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER=0
+REQUIRE_MUTATION_PROVENANCE_SCHEMA_MARKER=0
 FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY=0
@@ -2683,6 +2688,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
     --require-resolved-contract-schema-marker)
       REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER=1; shift ;;
+    --require-mutation-provenance-schema-marker)
+      REQUIRE_MUTATION_PROVENANCE_SCHEMA_MARKER=1; shift ;;
     --fail-on-bmc-lec-contract-fingerprint-parity)
       FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_PARITY=1; shift ;;
     --fail-on-new-bmc-lec-contract-fingerprint-parity)
@@ -13193,7 +13200,9 @@ PY
 fi
 
 if [[ "$UPDATE_BASELINES" == "1" ]]; then
-  OUT_DIR="$OUT_DIR" DATE_STR="$DATE_STR" BASELINE_FILE="$BASELINE_FILE" PLAN_FILE="$PLAN_FILE" python3 - <<'PY'
+  OUT_DIR="$OUT_DIR" DATE_STR="$DATE_STR" BASELINE_FILE="$BASELINE_FILE" PLAN_FILE="$PLAN_FILE" \
+  REQUIRE_MUTATION_PROVENANCE_SCHEMA_MARKER="$REQUIRE_MUTATION_PROVENANCE_SCHEMA_MARKER" \
+  python3 - <<'PY'
 import csv
 import os
 import re
@@ -13511,22 +13520,83 @@ def collect_mutation_provenance_case_ids(out_dir: Path):
     tuples_path = out_dir / "provenance_tuples.tsv"
     if not tuples_path.exists():
         return False, {}, {}, {}
+
+    expected_schema_version = 1
+    require_schema_marker = (
+        os.environ.get("REQUIRE_MUTATION_PROVENANCE_SCHEMA_MARKER", "0") == "1"
+    )
+    required_columns = {
+        "lane_id",
+        "contract_fingerprint",
+        "mutation_source_fingerprint",
+        "contract_case_id",
+        "mutation_source_case_id",
+        "provenance_tuple_id",
+    }
+
+    schema_marker_seen = False
+    data_lines = []
+    with tuples_path.open(encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            if line.startswith("#mutation_provenance_schema_version="):
+                schema_marker_seen = True
+                raw_version = line.split("=", 1)[1].strip()
+                try:
+                    schema_version = int(raw_version)
+                except ValueError:
+                    raise RuntimeError(
+                        f"invalid mutation provenance schema marker in {tuples_path} at line {line_no}: "
+                        f"expected integer version, got '{raw_version}'"
+                    )
+                if schema_version != expected_schema_version:
+                    raise RuntimeError(
+                        f"invalid mutation provenance schema version in {tuples_path}: "
+                        f"expected {expected_schema_version}, got {schema_version}"
+                    )
+                continue
+            if line.startswith("#"):
+                continue
+            data_lines.append(line)
+
+    if require_schema_marker and data_lines and not schema_marker_seen:
+        raise RuntimeError(
+            f"missing mutation provenance schema marker in {tuples_path}: "
+            f"expected #mutation_provenance_schema_version={expected_schema_version}"
+        )
+
     key = ("mutation-matrix", "PROVENANCE")
     contract_case_ids = set()
     source_case_ids = set()
     tuple_ids = set()
-    with tuples_path.open() as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        for row in reader:
-            contract_case_id = (row.get("contract_case_id", "") or "").strip()
-            source_case_id = (row.get("mutation_source_case_id", "") or "").strip()
-            tuple_id = (row.get("provenance_tuple_id", "") or "").strip()
-            if contract_case_id and contract_case_id != "-":
-                contract_case_ids.add(contract_case_id)
-            if source_case_id and source_case_id != "-":
-                source_case_ids.add(source_case_id)
-            if tuple_id and tuple_id != "-":
-                tuple_ids.add(tuple_id)
+    if not data_lines:
+        return (
+            True,
+            {key: ""},
+            {key: ""},
+            {key: ""},
+        )
+
+    reader = csv.DictReader(data_lines, delimiter="\t")
+    fieldnames = {(name or "").strip() for name in (reader.fieldnames or [])}
+    missing_columns = sorted(required_columns - fieldnames)
+    if missing_columns:
+        raise RuntimeError(
+            f"mutation provenance tuples file missing required columns in {tuples_path}: "
+            + ", ".join(missing_columns)
+        )
+    for row in reader:
+        contract_case_id = (row.get("contract_case_id", "") or "").strip()
+        source_case_id = (row.get("mutation_source_case_id", "") or "").strip()
+        tuple_id = (row.get("provenance_tuple_id", "") or "").strip()
+        if contract_case_id and contract_case_id != "-":
+            contract_case_ids.add(contract_case_id)
+        if source_case_id and source_case_id != "-":
+            source_case_ids.add(source_case_id)
+        if tuple_id and tuple_id != "-":
+            tuple_ids.add(tuple_id)
     return (
         True,
         {key: ";".join(sorted(contract_case_ids))},
@@ -14663,6 +14733,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS="$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" \
+  REQUIRE_MUTATION_PROVENANCE_SCHEMA_MARKER="$REQUIRE_MUTATION_PROVENANCE_SCHEMA_MARKER" \
   FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS="$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" \
@@ -15923,22 +15994,82 @@ def collect_mutation_provenance_case_ids(out_dir: Path):
     tuples_path = out_dir / "provenance_tuples.tsv"
     if not tuples_path.exists():
         return {}, {}, {}
+
+    expected_schema_version = 1
+    require_schema_marker = (
+        os.environ.get("REQUIRE_MUTATION_PROVENANCE_SCHEMA_MARKER", "0") == "1"
+    )
+    required_columns = {
+        "lane_id",
+        "contract_fingerprint",
+        "mutation_source_fingerprint",
+        "contract_case_id",
+        "mutation_source_case_id",
+        "provenance_tuple_id",
+    }
+
+    schema_marker_seen = False
+    data_lines = []
+    with tuples_path.open(encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            if line.startswith("#mutation_provenance_schema_version="):
+                schema_marker_seen = True
+                raw_version = line.split("=", 1)[1].strip()
+                try:
+                    schema_version = int(raw_version)
+                except ValueError:
+                    raise RuntimeError(
+                        f"invalid mutation provenance schema marker in {tuples_path} at line {line_no}: "
+                        f"expected integer version, got '{raw_version}'"
+                    )
+                if schema_version != expected_schema_version:
+                    raise RuntimeError(
+                        f"invalid mutation provenance schema version in {tuples_path}: "
+                        f"expected {expected_schema_version}, got {schema_version}"
+                    )
+                continue
+            if line.startswith("#"):
+                continue
+            data_lines.append(line)
+
+    if require_schema_marker and data_lines and not schema_marker_seen:
+        raise RuntimeError(
+            f"missing mutation provenance schema marker in {tuples_path}: "
+            f"expected #mutation_provenance_schema_version={expected_schema_version}"
+        )
+
     key = ("mutation-matrix", "PROVENANCE")
     contract_case_ids = set()
     source_case_ids = set()
     tuple_ids = set()
-    with tuples_path.open() as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        for row in reader:
-            contract_case_id = (row.get("contract_case_id", "") or "").strip()
-            source_case_id = (row.get("mutation_source_case_id", "") or "").strip()
-            tuple_id = (row.get("provenance_tuple_id", "") or "").strip()
-            if contract_case_id and contract_case_id != "-":
-                contract_case_ids.add(contract_case_id)
-            if source_case_id and source_case_id != "-":
-                source_case_ids.add(source_case_id)
-            if tuple_id and tuple_id != "-":
-                tuple_ids.add(tuple_id)
+    if not data_lines:
+        return (
+            {key: contract_case_ids},
+            {key: source_case_ids},
+            {key: tuple_ids},
+        )
+
+    reader = csv.DictReader(data_lines, delimiter="\t")
+    fieldnames = {(name or "").strip() for name in (reader.fieldnames or [])}
+    missing_columns = sorted(required_columns - fieldnames)
+    if missing_columns:
+        raise RuntimeError(
+            f"mutation provenance tuples file missing required columns in {tuples_path}: "
+            + ", ".join(missing_columns)
+        )
+    for row in reader:
+        contract_case_id = (row.get("contract_case_id", "") or "").strip()
+        source_case_id = (row.get("mutation_source_case_id", "") or "").strip()
+        tuple_id = (row.get("provenance_tuple_id", "") or "").strip()
+        if contract_case_id and contract_case_id != "-":
+            contract_case_ids.add(contract_case_id)
+        if source_case_id and source_case_id != "-":
+            source_case_ids.add(source_case_id)
+        if tuple_id and tuple_id != "-":
+            tuple_ids.add(tuple_id)
     return (
         {key: contract_case_ids},
         {key: source_case_ids},
