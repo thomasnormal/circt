@@ -1,4 +1,27 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1274 - February 13, 2026
+
+### sv-tests BMC Frontend-Error Log Retention
+
+1. Fixed `utils/run_sv_tests_circt_bmc.sh` to preserve frontend artifacts under `KEEP_LOGS_DIR` when `circt-verilog` fails before BMC.
+2. Prior behavior dropped these logs on early frontend `ERROR`, making semantic-closure triage opaque.
+3. Added regression:
+   - `test/Tools/run-sv-tests-bmc-keep-logs-frontend-error.test`
+
+### Validation
+
+- `bash -n utils/run_sv_tests_circt_bmc.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv` focused slice:
+  - `run-sv-tests-bmc-keep-logs-frontend-error.test`
+  - `run-sv-tests-bmc-frontend-timeout.test`
+  - `run-sv-tests-bmc-timeout-stage-reasons.test`
+  - `run-sv-tests-bmc-toolchain-derived-from-circt-verilog.test`
+  - PASS (4/4)
+- Real targeted sv-tests closure rerun (`16.11`/`16.13` UVM):
+  - frontend logs now retained and show concrete root cause:
+    `Permission denied` launching `build-test/bin/circt-verilog` in current relink-contended host state.
+
 ## Iteration 1273 - February 13, 2026
 
 ### Pairwise BMC Launch-Retry Telemetry: Exhaustion Reason Contracts

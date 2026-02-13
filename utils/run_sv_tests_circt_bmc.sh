@@ -557,6 +557,12 @@ top_module=${top_module}
       if [[ "$result" == "TIMEOUT" ]]; then
         record_timeout_reason_case "$base" "$sv" "$frontend_timeout_reason"
       fi
+      if [[ -n "$KEEP_LOGS_DIR" ]]; then
+        mkdir -p "$KEEP_LOGS_DIR"
+        cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
+        cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}.circt-verilog.log" \
+          2>/dev/null || true
+      fi
       continue
     fi
     record_drop_remark_case "$base" "$sv" "$verilog_log"

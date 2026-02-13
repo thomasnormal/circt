@@ -95,9 +95,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 ### Remaining Formal Limitations (BMC/LEC/mutation focus)
 
 1. **BMC operational robustness**: bounded ETXTBSY retry is now implemented in `run_pairwise_circt_bmc.py`; remaining gap is broader transient launch resilience/telemetry parity for other launch-failure classes.
-2. **BMC semantic closure depth**: OpenTitan and sv-tests still need broader case-policy/mode-diff closure beyond canright and current local-var/disable-iff focused slices (notably multiclock and sequence-subroutine buckets).
-3. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
-4. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
+2. **Frontend triage ergonomics**: sv-tests BMC now preserves frontend error logs via `KEEP_LOGS_DIR`, but host-side tool relink contention can still surface as launcher-level `Permission denied`/ETXTBSY noise until binaries stabilize.
+3. **BMC semantic closure depth**: OpenTitan and sv-tests still need broader case-policy/mode-diff closure beyond canright and current local-var/disable-iff focused slices (notably multiclock and sequence-subroutine buckets).
+4. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
+5. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
 
 ### Next Long-Term Features (best long-term path)
 
