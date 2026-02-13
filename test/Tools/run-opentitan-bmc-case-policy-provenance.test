@@ -17,6 +17,7 @@
 // RESULT: PASS{{[[:space:]]+}}aes_sbox_bar{{[[:space:]]+}}{{.*}}opentitan{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
 // RESULT: PASS{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}opentitan{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
 // RESULT: PASS{{[[:space:]]+}}aes_sbox_foo{{[[:space:]]+}}{{.*}}opentitan{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
+// CONTRACT: #resolved_contract_schema_version=1
 // CONTRACT-DAG: aes_sbox_bar{{[[:space:]]+}}{{.*}}aes_sbox_bar{{[[:space:]]+}}default:*{{[[:space:]]+}}default{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}17{{[[:space:]]+}}5{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}d1692051e6a66bb5
 // CONTRACT-DAG: aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright{{[[:space:]]+}}exact:aes_sbox_canright{{[[:space:]]+}}smtlib{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}17{{[[:space:]]+}}7{{[[:space:]]+}}4{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}--foo=bar{{[[:space:]]+}}cc2d9af4d713c17a
 // CONTRACT-DAG: aes_sbox_foo{{[[:space:]]+}}{{.*}}aes_sbox_foo{{[[:space:]]+}}pattern:re:^aes_sbox_f.*{{[[:space:]]+}}jit{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}17{{[[:space:]]+}}9{{[[:space:]]+}}3{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}ea28c2a08de2d84c

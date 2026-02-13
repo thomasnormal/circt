@@ -12,6 +12,7 @@ implementation against the LUT-based reference.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shlex
@@ -81,6 +82,11 @@ def encode_summary_counts(counts: dict[str, int]) -> str:
     if not counts:
         return ""
     return ",".join(f"{key}={counts[key]}" for key in sorted(counts))
+
+
+def compute_contract_fingerprint(fields: list[str]) -> str:
+    payload = "\x1f".join(fields).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
 
 
 def normalize_drop_reason(line: str) -> str:
@@ -178,6 +184,11 @@ def main() -> int:
         default=os.environ.get("LEC_DROP_REMARK_REASONS_OUT", ""),
         help="Optional TSV output path for dropped-syntax case+reason rows.",
     )
+    parser.add_argument(
+        "--resolved-contracts-file",
+        default=os.environ.get("LEC_RESOLVED_CONTRACTS_OUT", ""),
+        help="Optional TSV output path for resolved per-case contract rows.",
+    )
     args = parser.parse_args()
 
     ot_root = Path(args.opentitan_root).resolve()
@@ -271,6 +282,13 @@ def main() -> int:
     ):
         circt_lec_args.append("--dump-unknown-sources")
 
+    contract_source = "manifest"
+    contract_backend_mode = "smoke"
+    if not lec_smoke_only:
+        contract_backend_mode = "smtlib" if lec_run_smtlib else "jit"
+    contract_z3_path = z3_bin if contract_backend_mode == "smtlib" else ""
+    contract_lec_args = shlex.join(circt_lec_args)
+
     def write_valid_op_wrapper(out_path: Path, wrapper_name: str, inner_name: str) -> None:
         out_path.write_text(
             "\n".join(
@@ -322,6 +340,7 @@ def main() -> int:
     xprop_rows: list[tuple[str, str, str, str, str, str, str, str]] = []
     drop_remark_case_rows: list[tuple[str, str]] = []
     drop_remark_reason_rows: list[tuple[str, str, str]] = []
+    resolved_contract_rows: list[tuple[str, ...]] = []
     drop_remark_seen_cases: set[str] = set()
     drop_remark_seen_case_reasons: set[tuple[str, str]] = set()
     try:
@@ -333,6 +352,22 @@ def main() -> int:
             impl_dir = workdir / impl
             impl_dir.mkdir(parents=True, exist_ok=True)
             verilog_log_path = impl_dir / "circt-verilog.log"
+            contract_fields = [
+                contract_source,
+                contract_backend_mode,
+                lec_mode_label,
+                "1" if lec_x_optimistic else "0",
+                "1" if lec_assume_known_inputs else "0",
+                "1" if lec_accept_xprop_only else "0",
+                "1" if lec_diagnose_xprop else "0",
+                "1" if lec_dump_unknown_sources else "0",
+                contract_z3_path,
+                contract_lec_args,
+            ]
+            contract_fingerprint = compute_contract_fingerprint(contract_fields)
+            resolved_contract_rows.append(
+                (impl, str(impl_dir), *contract_fields, contract_fingerprint)
+            )
             src_ref = rtl_path / f"{impl_gold}.sv"
             src_impl = rtl_path / f"{impl}.sv"
             ref_file = src_ref
@@ -585,6 +620,13 @@ def main() -> int:
         drop_reason_path.parent.mkdir(parents=True, exist_ok=True)
         with drop_reason_path.open("w") as handle:
             for row in sorted(drop_remark_reason_rows, key=lambda item: (item[0], item[2])):
+                handle.write("\t".join(row) + "\n")
+    if args.resolved_contracts_file:
+        contracts_path = Path(args.resolved_contracts_file)
+        contracts_path.parent.mkdir(parents=True, exist_ok=True)
+        with contracts_path.open("w") as handle:
+            handle.write("#resolved_contract_schema_version=1\n")
+            for row in sorted(resolved_contract_rows, key=lambda item: (item[0], item[1])):
                 handle.write("\t".join(row) + "\n")
 
     print(
