@@ -1,4 +1,36 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1221 - February 13, 2026
+
+### Mutation Matrix Provenance Fingerprints + Aggregate Summary
+
+1. Extended `utils/run_mutation_matrix.sh` with provenance output wiring:
+   - new CLI option: `--provenance-summary-file`
+   - default artifact: `<out-dir>/provenance_summary.tsv`
+2. Appended deterministic provenance columns to matrix lane results:
+   - `lane_contract_fingerprint`
+   - `lane_mutation_source_fingerprint`
+3. Added per-run provenance aggregation in `provenance_summary.tsv`:
+   - unique counts for contract/mutation-source fingerprints
+   - aggregate digests over sorted fingerprint-count tuples
+   - per-fingerprint count rows for both provenance classes
+4. Added focused regression coverage:
+   - `test/Tools/run-mutation-matrix-provenance-summary.test`
+   - updated `test/Tools/run-mutation-matrix-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`
+  - PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-mutation-matrix-help\.test|run-mutation-matrix-provenance-summary\.test|run-mutation-matrix-gate-summary\.test|run-mutation-matrix-generate-cache-parallel\.test'`
+  - PASS (4/4)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-mutation-matrix-.*\.test'`
+  - PASS (50/50)
+
+### Remaining Limitations
+
+- Contract fingerprints currently hash resolved lane inputs and toggles, but do not yet ingest downstream tool-resolved contracts from emitted metrics/JSON artifacts.
+- File-backed mutation-source fingerprints hash full mutation files per lane; this is deterministic but not memoized for very large mutation manifests.
+
 ## Iteration 1220 - February 13, 2026
 ### circt-sim UVM Native-Memory Regression Hardening
 

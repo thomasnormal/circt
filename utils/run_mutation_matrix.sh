@@ -14,6 +14,9 @@ Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
   --results-file FILE       Lane summary TSV (default: <out-dir>/results.tsv)
   --gate-summary-file FILE  Gate-status count TSV (default: <out-dir>/gate_summary.tsv)
+  --provenance-summary-file FILE
+                            Provenance aggregate TSV
+                            (default: <out-dir>/provenance_summary.tsv)
   --create-mutated-script FILE
                             Passed through to run_mutation_cover.sh
   --jobs-per-lane N         Passed through to run_mutation_cover.sh --jobs (default: 1)
@@ -165,6 +168,7 @@ LANES_TSV=""
 OUT_DIR="${PWD}/mutation-matrix-results"
 RESULTS_FILE=""
 GATE_SUMMARY_FILE=""
+PROVENANCE_SUMMARY_FILE=""
 CREATE_MUTATED_SCRIPT=""
 JOBS_PER_LANE=1
 SKIP_BASELINE=0
@@ -344,6 +348,7 @@ while [[ $# -gt 0 ]]; do
     --out-dir) OUT_DIR="$2"; shift 2 ;;
     --results-file) RESULTS_FILE="$2"; shift 2 ;;
     --gate-summary-file) GATE_SUMMARY_FILE="$2"; shift 2 ;;
+    --provenance-summary-file) PROVENANCE_SUMMARY_FILE="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --jobs-per-lane) JOBS_PER_LANE="$2"; shift 2 ;;
     --skip-baseline) SKIP_BASELINE=1; shift ;;
@@ -541,6 +546,7 @@ fi
 mkdir -p "$OUT_DIR"
 RESULTS_FILE="${RESULTS_FILE:-${OUT_DIR}/results.tsv}"
 GATE_SUMMARY_FILE="${GATE_SUMMARY_FILE:-${OUT_DIR}/gate_summary.tsv}"
+PROVENANCE_SUMMARY_FILE="${PROVENANCE_SUMMARY_FILE:-${OUT_DIR}/provenance_summary.tsv}"
 
 declare -a LANE_ID
 declare -a DESIGN
@@ -611,6 +617,11 @@ hash_stdin() {
 hash_string() {
   local s="$1"
   printf "%s" "$s" | hash_stdin
+}
+
+hash_file() {
+  local path="$1"
+  hash_stdin < "$path"
 }
 
 parse_failures=0
@@ -935,10 +946,15 @@ run_lane() {
   local lane_mode_counts_enabled=0
   local lane_mode_weights_enabled=0
   local lane_mode_counts_total=0
+  local lane_contract_payload=""
+  local lane_mutation_source_payload=""
+  local lane_contract_fingerprint="-"
+  local lane_mutation_source_fingerprint="-"
+  local lane_mutations_file_hash="missing"
   local -a cmd=()
 
   lane_write_status() {
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" \
       "$lane_generated_mutations_cache_status" "$lane_generated_mutations_cache_hit" \
       "$lane_generated_mutations_cache_miss" "$lane_generated_mutations_cache_saved_runtime_ns" \
@@ -953,7 +969,8 @@ run_lane() {
       "$lane_prequalify_cmd_rc_not_propagated_mutants" \
       "$lane_prequalify_cmd_rc_propagated_mutants" \
       "$lane_prequalify_cmd_timeout_propagated_mutants" \
-      "$lane_prequalify_cmd_error_mutants" > "$lane_status_file"
+      "$lane_prequalify_cmd_error_mutants" "$lane_contract_fingerprint" \
+      "$lane_mutation_source_fingerprint" > "$lane_status_file"
   }
 
   lane_config_error() {
@@ -1376,6 +1393,85 @@ run_lane() {
     cmd+=(--coverage-threshold "${THRESHOLD[$i]}")
   fi
 
+  if [[ "${MUTATIONS_FILE[$i]}" != "-" ]]; then
+    if [[ -f "${MUTATIONS_FILE[$i]}" ]]; then
+      lane_mutations_file_hash="$(hash_file "${MUTATIONS_FILE[$i]}")"
+    fi
+    lane_mutation_source_payload="$({
+      cat <<EOF
+v1
+kind=file
+mutations_file=${MUTATIONS_FILE[$i]}
+mutations_file_hash=${lane_mutations_file_hash}
+EOF
+    })"
+  else
+    lane_mutation_source_payload="$({
+      cat <<EOF
+v1
+kind=generated
+design=${DESIGN[$i]}
+generate_count=${GENERATE_COUNT[$i]}
+mutations_top=${MUTATIONS_TOP[$i]}
+mutations_seed=${lane_mutations_seed}
+mutations_yosys=${lane_mutations_yosys}
+mutations_modes=${lane_mutations_modes}
+mutations_mode_counts=${lane_mutations_mode_counts}
+mutations_mode_weights=${lane_mutations_mode_weights}
+mutations_profiles=${lane_mutations_profiles}
+mutations_cfg=${lane_mutations_cfg}
+mutations_select=${lane_mutations_select}
+EOF
+    })"
+  fi
+  lane_mutation_source_fingerprint="$(hash_string "$lane_mutation_source_payload")"
+
+  lane_contract_payload="$({
+    cat <<EOF
+v1
+design=${DESIGN[$i]}
+tests_manifest=${TESTS_MANIFEST[$i]}
+jobs_per_lane=${JOBS_PER_LANE}
+skip_baseline=${lane_skip_baseline}
+fail_on_undetected=${lane_fail_on_undetected}
+fail_on_errors=${lane_fail_on_errors}
+create_mutated_script=${CREATE_MUTATED_SCRIPT}
+activate_cmd=${ACTIVATE_CMD[$i]}
+propagate_cmd=${PROPAGATE_CMD[$i]}
+threshold=${THRESHOLD[$i]}
+reuse_cache_dir=${REUSE_CACHE_DIR}
+reuse_compat_mode=${REUSE_COMPAT_MODE}
+reuse_pair_file=${lane_reuse_pair_file}
+reuse_summary_file=${lane_reuse_summary_file}
+global_propagate_cmd=${lane_global_propagate_cmd}
+global_propagate_timeout_seconds=${lane_global_propagate_timeout_seconds}
+global_propagate_lec_timeout_seconds=${lane_global_propagate_lec_timeout_seconds}
+global_propagate_bmc_timeout_seconds=${lane_global_propagate_bmc_timeout_seconds}
+global_propagate_circt_lec=${lane_global_propagate_circt_lec}
+global_propagate_circt_lec_args=${lane_global_propagate_circt_lec_args}
+global_propagate_c1=${lane_global_propagate_c1}
+global_propagate_c2=${lane_global_propagate_c2}
+global_propagate_z3=${lane_global_propagate_z3}
+global_propagate_assume_known_inputs=${lane_global_propagate_assume_known_inputs}
+global_propagate_accept_xprop_only=${lane_global_propagate_accept_xprop_only}
+global_propagate_circt_bmc=${lane_global_propagate_circt_bmc}
+global_propagate_circt_chain=${lane_global_propagate_circt_chain}
+global_propagate_bmc_args=${lane_global_propagate_bmc_args}
+global_propagate_bmc_bound=${lane_global_propagate_bmc_bound}
+global_propagate_bmc_module=${lane_global_propagate_bmc_module}
+global_propagate_bmc_run_smtlib=${lane_global_propagate_bmc_run_smtlib}
+global_propagate_bmc_z3=${lane_global_propagate_bmc_z3}
+global_propagate_bmc_assume_known_inputs=${lane_global_propagate_bmc_assume_known_inputs}
+global_propagate_bmc_ignore_asserts_until=${lane_global_propagate_bmc_ignore_asserts_until}
+bmc_orig_cache_max_entries=${lane_bmc_orig_cache_max_entries}
+bmc_orig_cache_max_bytes=${lane_bmc_orig_cache_max_bytes}
+bmc_orig_cache_max_age_seconds=${lane_bmc_orig_cache_max_age_seconds}
+bmc_orig_cache_eviction_policy=${lane_bmc_orig_cache_eviction_policy}
+mutation_source_fingerprint=${lane_mutation_source_fingerprint}
+EOF
+  })"
+  lane_contract_fingerprint="$(hash_string "$lane_contract_payload")"
+
   rc=0
   set +e
   "${cmd[@]}" >"$lane_log" 2>&1
@@ -1473,7 +1569,7 @@ else
   done
 fi
 
-printf "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\tconfig_error_code\tconfig_error_reason\tprequalify_summary_present\tprequalify_total_mutants\tprequalify_not_propagated_mutants\tprequalify_propagated_mutants\tprequalify_create_mutated_error_mutants\tprequalify_probe_error_mutants\tprequalify_cmd_token_not_propagated_mutants\tprequalify_cmd_token_propagated_mutants\tprequalify_cmd_rc_not_propagated_mutants\tprequalify_cmd_rc_propagated_mutants\tprequalify_cmd_timeout_propagated_mutants\tprequalify_cmd_error_mutants\n" > "$RESULTS_FILE"
+printf "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\tconfig_error_code\tconfig_error_reason\tprequalify_summary_present\tprequalify_total_mutants\tprequalify_not_propagated_mutants\tprequalify_propagated_mutants\tprequalify_create_mutated_error_mutants\tprequalify_probe_error_mutants\tprequalify_cmd_token_not_propagated_mutants\tprequalify_cmd_token_propagated_mutants\tprequalify_cmd_rc_not_propagated_mutants\tprequalify_cmd_rc_propagated_mutants\tprequalify_cmd_timeout_propagated_mutants\tprequalify_cmd_error_mutants\tlane_contract_fingerprint\tlane_mutation_source_fingerprint\n" > "$RESULTS_FILE"
 failures="$parse_failures"
 passes=0
 generated_cache_hit_lanes=0
@@ -1482,6 +1578,8 @@ generated_cache_saved_runtime_ns=0
 generated_cache_lock_wait_ns=0
 generated_cache_lock_contended_lanes=0
 declare -A GATE_COUNTS=()
+declare -A CONTRACT_FINGERPRINT_COUNTS=()
+declare -A MUTATION_SOURCE_FINGERPRINT_COUNTS=()
 if [[ "$parse_failures" -gt 0 ]]; then
   GATE_COUNTS["PARSE_ERROR"]="$parse_failures"
 fi
@@ -1490,7 +1588,7 @@ for i in "${EXECUTED_INDICES[@]}"; do
   lane_status_file="${OUT_DIR}/${LANE_ID[$i]}/lane_status.tsv"
   if [[ ! -f "$lane_status_file" ]]; then
     failures=$((failures + 1))
-    printf "%s\tFAIL\t1\t0.00\tMISSING_STATUS\t%s\t%s\t%s\tdisabled\t0\t0\t0\t0\t0\t-\t-\t0\t-\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n" \
+    printf "%s\tFAIL\t1\t0.00\tMISSING_STATUS\t%s\t%s\t%s\tdisabled\t0\t0\t0\t0\t0\t-\t-\t0\t-\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t-\t-\n" \
       "${LANE_ID[$i]}" "${OUT_DIR}/${LANE_ID[$i]}" \
       "${OUT_DIR}/${LANE_ID[$i]}/metrics.tsv" "${OUT_DIR}/${LANE_ID[$i]}/summary.json" >> "$RESULTS_FILE"
     GATE_COUNTS["MISSING_STATUS"]=$(( ${GATE_COUNTS["MISSING_STATUS"]:-0} + 1 ))
@@ -1531,6 +1629,14 @@ for i in "${EXECUTED_INDICES[@]}"; do
   if [[ "$lane_cache_lock_contended" =~ ^[0-9]+$ ]]; then
     generated_cache_lock_contended_lanes=$((generated_cache_lock_contended_lanes + lane_cache_lock_contended))
   fi
+  lane_contract_fingerprint="$(awk -F$'\t' 'NR==1{print $(NF-1)}' "$lane_status_file")"
+  lane_mutation_source_fingerprint="$(awk -F$'\t' 'NR==1{print $NF}' "$lane_status_file")"
+  if [[ -n "$lane_contract_fingerprint" && "$lane_contract_fingerprint" != "-" ]]; then
+    CONTRACT_FINGERPRINT_COUNTS["$lane_contract_fingerprint"]=$(( ${CONTRACT_FINGERPRINT_COUNTS["$lane_contract_fingerprint"]:-0} + 1 ))
+  fi
+  if [[ -n "$lane_mutation_source_fingerprint" && "$lane_mutation_source_fingerprint" != "-" ]]; then
+    MUTATION_SOURCE_FINGERPRINT_COUNTS["$lane_mutation_source_fingerprint"]=$(( ${MUTATION_SOURCE_FINGERPRINT_COUNTS["$lane_mutation_source_fingerprint"]:-0} + 1 ))
+  fi
 done
 
 {
@@ -1542,8 +1648,46 @@ done
   fi
 } > "$GATE_SUMMARY_FILE"
 
+contract_fingerprints_digest="-"
+mutation_source_fingerprints_digest="-"
+if [[ "${#CONTRACT_FINGERPRINT_COUNTS[@]}" -gt 0 ]]; then
+  contract_fingerprints_digest="$(
+    for fingerprint in $(printf "%s\n" "${!CONTRACT_FINGERPRINT_COUNTS[@]}" | sort); do
+      printf "%s\t%s\n" "$fingerprint" "${CONTRACT_FINGERPRINT_COUNTS[$fingerprint]}"
+    done | hash_stdin
+  )"
+fi
+if [[ "${#MUTATION_SOURCE_FINGERPRINT_COUNTS[@]}" -gt 0 ]]; then
+  mutation_source_fingerprints_digest="$(
+    for fingerprint in $(printf "%s\n" "${!MUTATION_SOURCE_FINGERPRINT_COUNTS[@]}" | sort); do
+      printf "%s\t%s\n" "$fingerprint" "${MUTATION_SOURCE_FINGERPRINT_COUNTS[$fingerprint]}"
+    done | hash_stdin
+  )"
+fi
+
+{
+  printf "scope\tname\tvalue\n"
+  printf "metric\texecuted_lanes\t%s\n" "${#EXECUTED_INDICES[@]}"
+  printf "metric\tcontract_fingerprints_unique\t%s\n" "${#CONTRACT_FINGERPRINT_COUNTS[@]}"
+  printf "metric\tmutation_source_fingerprints_unique\t%s\n" "${#MUTATION_SOURCE_FINGERPRINT_COUNTS[@]}"
+  printf "metric\tcontract_fingerprints_digest\t%s\n" "$contract_fingerprints_digest"
+  printf "metric\tmutation_source_fingerprints_digest\t%s\n" "$mutation_source_fingerprints_digest"
+  if [[ "${#CONTRACT_FINGERPRINT_COUNTS[@]}" -gt 0 ]]; then
+    for fingerprint in $(printf "%s\n" "${!CONTRACT_FINGERPRINT_COUNTS[@]}" | sort); do
+      printf "contract_fingerprint_count\t%s\t%s\n" "$fingerprint" "${CONTRACT_FINGERPRINT_COUNTS[$fingerprint]}"
+    done
+  fi
+  if [[ "${#MUTATION_SOURCE_FINGERPRINT_COUNTS[@]}" -gt 0 ]]; then
+    for fingerprint in $(printf "%s\n" "${!MUTATION_SOURCE_FINGERPRINT_COUNTS[@]}" | sort); do
+      printf "mutation_source_fingerprint_count\t%s\t%s\n" "$fingerprint" "${MUTATION_SOURCE_FINGERPRINT_COUNTS[$fingerprint]}"
+    done
+  fi
+} > "$PROVENANCE_SUMMARY_FILE"
+
+
 echo "Mutation matrix summary: pass=${passes} fail=${failures}"
 echo "Gate summary: $GATE_SUMMARY_FILE"
+echo "Provenance summary: $PROVENANCE_SUMMARY_FILE"
 echo "Mutation matrix generated-mutation cache: hit_lanes=${generated_cache_hit_lanes} miss_lanes=${generated_cache_miss_lanes} saved_runtime_ns=${generated_cache_saved_runtime_ns} lock_wait_ns=${generated_cache_lock_wait_ns} lock_contended_lanes=${generated_cache_lock_contended_lanes}"
 echo "Results: $RESULTS_FILE"
 if [[ "$failures" -ne 0 ]]; then
