@@ -1,4 +1,35 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1225 - February 13, 2026
+
+### Mutation Matrix Provenance Strict-Gate: Structured Report Artifacts
+
+1. Extended `utils/run_mutation_matrix.sh` with structured provenance gate report outputs:
+   - `--provenance-gate-report-json FILE`
+   - `--provenance-gate-report-tsv FILE`
+2. Added deterministic default report paths when provenance strict-gating/reporting is active:
+   - `<out-dir>/provenance_gate_report.json`
+   - `<out-dir>/provenance_gate_report.tsv`
+3. Added rule-id keyed provenance diagnostics for all strict gate checks:
+   - `mutation_matrix.provenance.contract_fingerprint_case_ids.new`
+   - `mutation_matrix.provenance.mutation_source_fingerprint_case_ids.new`
+   - `mutation_matrix.provenance.contract_fingerprint_identities.new`
+   - `mutation_matrix.provenance.mutation_source_fingerprint_identities.new`
+4. Added focused regression coverage for report emission:
+   - `test/Tools/run-mutation-matrix-provenance-gate-report.test`
+   - updated `test/Tools/run-mutation-matrix-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`
+  - PASS
+- `build-ot/bin/llvm-lit -sv build-ot/tools/circt/test/Tools --filter 'run-mutation-matrix-(help|provenance-gate|provenance-identity-gate|provenance-summary|provenance-gate-report)\\.test'`
+  - PASS (5/5)
+
+### Remaining Limitations
+
+- Report emission is currently `run_mutation_matrix.sh`-local; `run_formal_all.sh` strict-gate reporting still does not ingest mutation provenance diagnostics.
+- Provenance report diagnostics are run-level summaries; per-lane structured failure records are not yet emitted as first-class artifacts.
+
 ## Iteration 1224 - February 13, 2026
 
 ### circt-sim config_db Native-Memory Writeback (Frontend-Independent Regressions)

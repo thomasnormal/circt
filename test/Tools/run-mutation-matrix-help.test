@@ -10,6 +10,8 @@
 // CHECK: --fail-on-new-contract-fingerprint-identities
 // CHECK: --fail-on-new-mutation-source-fingerprint-identities
 // CHECK: --strict-provenance-gate
+// CHECK: --provenance-gate-report-json
+// CHECK: --provenance-gate-report-tsv
 // CHECK: --create-mutated-script
 // CHECK: --jobs-per-lane
 // CHECK: --skip-baseline
