@@ -1,4 +1,40 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1277 - February 13, 2026
+
+### Formal Strict-Gate: BMC/LEC Contract-Fingerprint Case-ID Allowlists
+
+1. Extended `utils/run_formal_all.sh` strict-gate controls with per-lane case-ID allowlists:
+   - `--bmc-contract-fingerprint-case-id-allowlist-file`
+   - `--lec-contract-fingerprint-case-id-allowlist-file`
+2. Added option validation and guardrails:
+   - allowlist files must be readable.
+   - each new allowlist option now requires the corresponding strict check (`--fail-on-new-...`) or `--strict-gate`.
+3. Wired allowlist loading and filtering into strict-gate checks for:
+   - `strict_gate.bmc.contract_fingerprint_case_ids.new`
+   - `strict_gate.lec.contract_fingerprint_case_ids.new`
+   including explicit `allowlisted=<N>` diagnostics when filtered IDs are present.
+4. Added/updated regressions:
+   - `test/Tools/run-formal-all-help.test`
+   - `test/Tools/run-formal-all-contract-fingerprint-allowlists-require-gate.test`
+   - `test/Tools/run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids-allowlist.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-contract-fingerprint-case-ids-allowlist.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`
+  - PASS
+- Focused `run-formal-all` lit slice:
+  - `run-formal-all-help.test`
+  - `run-formal-all-contract-fingerprint-allowlists-require-gate.test`
+  - `run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids-allowlist.test`
+  - `run-formal-all-strict-gate-lec-contract-fingerprint-case-ids-allowlist.test`
+  - `run-formal-all-strict-gate-bmc-contract-fingerprint-case-ids.test`
+  - `run-formal-all-strict-gate-lec-contract-fingerprint-case-ids.test`
+  - PASS (6/6)
+- Broader strict-gate/contract-fingerprint lit filter:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv --filter 'run-formal-all-.*(strict-gate|contract-fingerprint)' build-test/test/Tools`
+  - PASS (160/160 filtered)
+
 ## Iteration 1276 - February 13, 2026
 
 ### sv-tests BMC Frontend Error-Reason Contracts (OOM/Launch/Guard Attribution)

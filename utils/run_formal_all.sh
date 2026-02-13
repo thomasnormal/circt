@@ -92,6 +92,9 @@ Options:
                          Fail when BMC timeout-case count increases vs baseline
   --fail-on-new-bmc-timeout-case-ids
                          Fail when BMC timeout case IDs increase vs baseline
+  --fail-on-new-bmc-frontend-error-case-reasons
+                         Fail when BMC frontend-error case+reason tuples
+                         increase vs baseline
   --fail-on-new-lec-timeout-cases
                          Fail when LEC timeout-case count increases vs baseline
   --fail-on-new-lec-timeout-case-ids
@@ -179,6 +182,20 @@ Options:
                          Fail when new resolved-contract fingerprint tuples
                          (`lec_contract_fingerprint_case_ids`) appear vs
                          baseline for any `LEC*` lane
+  --bmc-contract-fingerprint-case-id-allowlist-file FILE
+                         Optional allowlist file for BMC contract-fingerprint
+                         case-ID strict-gate filtering.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
+  --lec-contract-fingerprint-case-id-allowlist-file FILE
+                         Optional allowlist file for LEC contract-fingerprint
+                         case-ID strict-gate filtering.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
   --require-resolved-contract-schema-marker
                          Require `#resolved_contract_schema_version=1` in
                          every non-empty BMC/LEC resolved-contract artifact
@@ -304,6 +321,9 @@ Options:
                          increase vs baseline
   --fail-on-new-bmc-drop-remark-case-reasons
                          Fail when BMC dropped-syntax affected case+reason
+                         tuples increase vs baseline
+  --fail-on-new-bmc-frontend-error-case-reasons
+                         Fail when BMC frontend-error affected case+reason
                          tuples increase vs baseline
   --fail-on-new-lec-drop-remark-cases
                          Fail when LEC dropped-syntax remark count
@@ -2181,6 +2201,7 @@ FAIL_ON_PASSRATE_REGRESSION=0
 FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS=0
+FAIL_ON_NEW_BMC_FRONTEND_ERROR_CASE_REASONS=0
 FAIL_ON_NEW_LEC_TIMEOUT_CASES=0
 FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS=0
 FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_IDS=0
@@ -2216,6 +2237,8 @@ FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY=0
 FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED=0
 FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED=0
 BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE=""
+BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
+LEC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
 FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=0
@@ -2634,6 +2657,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_TIMEOUT_CASES=1; shift ;;
     --fail-on-new-bmc-timeout-case-ids)
       FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS=1; shift ;;
+    --fail-on-new-bmc-frontend-error-case-reasons)
+      FAIL_ON_NEW_BMC_FRONTEND_ERROR_CASE_REASONS=1; shift ;;
     --fail-on-new-lec-timeout-cases)
       FAIL_ON_NEW_LEC_TIMEOUT_CASES=1; shift ;;
     --fail-on-new-lec-timeout-case-ids)
@@ -2686,6 +2711,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
     --fail-on-new-lec-contract-fingerprint-case-ids)
       FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS=1; shift ;;
+    --bmc-contract-fingerprint-case-id-allowlist-file)
+      BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --lec-contract-fingerprint-case-id-allowlist-file)
+      LEC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$2"; shift 2 ;;
     --require-resolved-contract-schema-marker)
       REQUIRE_RESOLVED_CONTRACT_SCHEMA_MARKER=1; shift ;;
     --require-mutation-provenance-schema-marker)
@@ -4789,6 +4818,14 @@ if [[ -n "$BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" && ! -r "$BMC_ABSTRACTION_
   echo "BMC abstraction provenance allowlist file not readable: $BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" >&2
   exit 1
 fi
+if [[ -n "$BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && ! -r "$BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" ]]; then
+  echo "BMC contract-fingerprint case-ID allowlist file not readable: $BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$LEC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && ! -r "$LEC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" ]]; then
+  echo "LEC contract-fingerprint case-ID allowlist file not readable: $LEC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" >&2
+  exit 1
+fi
 if [[ -n "$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && ! -r "$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" ]]; then
   echo "mutation contract-fingerprint case-ID allowlist file not readable: $MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" >&2
   exit 1
@@ -4811,6 +4848,14 @@ if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" && ! -r "$MUTATION_L
 fi
 if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" && ! -r "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" ]]; then
   echo "BMC/LEC contract-fingerprint case-ID map file not readable: $BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" >&2
+  exit 1
+fi
+if [[ -n "$BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--bmc-contract-fingerprint-case-id-allowlist-file requires --fail-on-new-bmc-contract-fingerprint-case-ids or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$LEC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_LEC_CONTRACT_FINGERPRINT_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--lec-contract-fingerprint-case-id-allowlist-file requires --fail-on-new-lec-contract-fingerprint-case-ids or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -5035,6 +5080,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_FAILURE_CASES=1
   FAIL_ON_NEW_BMC_TIMEOUT_CASES=1
   FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS=1
+  FAIL_ON_NEW_BMC_FRONTEND_ERROR_CASE_REASONS=1
   FAIL_ON_NEW_LEC_TIMEOUT_CASES=1
   FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS=1
   FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_IDS=1
@@ -10222,12 +10268,14 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     sv_bmc_drop_remark_cases_file="$OUT_DIR/sv-tests-bmc-drop-remark-cases.tsv"
     sv_bmc_drop_remark_reasons_file="$OUT_DIR/sv-tests-bmc-drop-remark-reasons.tsv"
     sv_bmc_timeout_reasons_file="$OUT_DIR/sv-tests-bmc-timeout-reasons.tsv"
+    sv_bmc_frontend_error_reasons_file="$OUT_DIR/sv-tests-bmc-frontend-error-reasons.tsv"
     sv_bmc_contracts_file="$OUT_DIR/sv-tests-bmc-resolved-contracts.tsv"
     : > "$sv_bmc_provenance_file"
     : > "$sv_bmc_check_attribution_file"
     : > "$sv_bmc_drop_remark_cases_file"
     : > "$sv_bmc_drop_remark_reasons_file"
     : > "$sv_bmc_timeout_reasons_file"
+    : > "$sv_bmc_frontend_error_reasons_file"
     : > "$sv_bmc_contracts_file"
     # sv-tests semantic closure currently relies on SMT-LIB execution to avoid
     # known JIT/Z3-LLVM backend divergence on local-var/disable-iff cases.
@@ -10243,6 +10291,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       BMC_DROP_REMARK_CASES_OUT="$sv_bmc_drop_remark_cases_file" \
       BMC_DROP_REMARK_REASONS_OUT="$sv_bmc_drop_remark_reasons_file" \
       BMC_TIMEOUT_REASON_CASES_OUT="$sv_bmc_timeout_reasons_file" \
+      BMC_FRONTEND_ERROR_REASON_CASES_OUT="$sv_bmc_frontend_error_reasons_file" \
       BMC_RESOLVED_CONTRACTS_OUT="$sv_bmc_contracts_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
@@ -10335,12 +10384,14 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
     sv_bmc_uvm_semantics_drop_remark_cases_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-drop-remark-cases.tsv"
     sv_bmc_uvm_semantics_drop_remark_reasons_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-drop-remark-reasons.tsv"
     sv_bmc_uvm_semantics_timeout_reasons_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-timeout-reasons.tsv"
+    sv_bmc_uvm_semantics_frontend_error_reasons_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-frontend-error-reasons.tsv"
     sv_bmc_uvm_semantics_contracts_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-resolved-contracts.tsv"
     : > "$sv_bmc_uvm_semantics_provenance_file"
     : > "$sv_bmc_uvm_semantics_check_attribution_file"
     : > "$sv_bmc_uvm_semantics_drop_remark_cases_file"
     : > "$sv_bmc_uvm_semantics_drop_remark_reasons_file"
     : > "$sv_bmc_uvm_semantics_timeout_reasons_file"
+    : > "$sv_bmc_uvm_semantics_frontend_error_reasons_file"
     : > "$sv_bmc_uvm_semantics_contracts_file"
     # Keep the semantic-closure lane aligned with sv-tests/BMC backend policy.
     run_suite sv-tests-bmc-uvm-semantics \
@@ -10355,6 +10406,7 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       BMC_DROP_REMARK_CASES_OUT="$sv_bmc_uvm_semantics_drop_remark_cases_file" \
       BMC_DROP_REMARK_REASONS_OUT="$sv_bmc_uvm_semantics_drop_remark_reasons_file" \
       BMC_TIMEOUT_REASON_CASES_OUT="$sv_bmc_uvm_semantics_timeout_reasons_file" \
+      BMC_FRONTEND_ERROR_REASON_CASES_OUT="$sv_bmc_uvm_semantics_frontend_error_reasons_file" \
       BMC_RESOLVED_CONTRACTS_OUT="$sv_bmc_uvm_semantics_contracts_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
@@ -14729,6 +14781,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_FAILURE_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_TIMEOUT_CASE_IDS" == "1" || \
+      "$FAIL_ON_NEW_BMC_FRONTEND_ERROR_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_LEC_TIMEOUT_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_CIRCT_OPT_ERROR_CASE_IDS" == "1" || \
@@ -14859,6 +14912,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED="$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" \
   FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED="$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" \
   BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE="$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" \
+  BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
+  LEC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$LEC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
   FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS="$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" \
   FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS="$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" \
@@ -14880,6 +14935,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES="$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS" \
+  FAIL_ON_NEW_BMC_FRONTEND_ERROR_CASE_REASONS="$FAIL_ON_NEW_BMC_FRONTEND_ERROR_CASE_REASONS" \
   FAIL_ON_ANY_BMC_DROP_REMARKS="$FAIL_ON_ANY_BMC_DROP_REMARKS" \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASES="$FAIL_ON_NEW_LEC_DROP_REMARK_CASES" \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" \
@@ -14945,6 +15001,12 @@ strict_gate_fail_on_legacy_rule_ids = (
 )
 strict_gate_rule_id_allowlist_file = os.environ.get(
     "STRICT_GATE_RULE_ID_ALLOWLIST_FILE", ""
+).strip()
+bmc_contract_fingerprint_case_id_allowlist_file = os.environ.get(
+    "BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE", ""
+).strip()
+lec_contract_fingerprint_case_id_allowlist_file = os.environ.get(
+    "LEC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE", ""
 ).strip()
 mutation_contract_fingerprint_case_id_allowlist_file = os.environ.get(
     "MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE", ""
@@ -15200,6 +15262,12 @@ def normalize_rule_id_token(token: str) -> str:
 strict_gate_rule_id_allow_exact = set()
 strict_gate_rule_id_allow_prefix = []
 strict_gate_rule_id_allow_regex = []
+bmc_contract_fingerprint_case_id_allow_exact = set()
+bmc_contract_fingerprint_case_id_allow_prefix = []
+bmc_contract_fingerprint_case_id_allow_regex = []
+lec_contract_fingerprint_case_id_allow_exact = set()
+lec_contract_fingerprint_case_id_allow_prefix = []
+lec_contract_fingerprint_case_id_allow_regex = []
 mutation_contract_fingerprint_case_id_allow_exact = set()
 mutation_contract_fingerprint_case_id_allow_prefix = []
 mutation_contract_fingerprint_case_id_allow_regex = []
@@ -15485,6 +15553,52 @@ def normalize_bmc_contract_case_id_token(identity_token: str) -> str:
         return token
     mapped_case_id = map_bmc_to_lec_case_id(case_id)
     return f"{mapped_case_id}::{fingerprint}"
+
+
+def load_bmc_contract_fingerprint_case_id_allowlist():
+    global bmc_contract_fingerprint_case_id_allow_exact
+    global bmc_contract_fingerprint_case_id_allow_prefix
+    global bmc_contract_fingerprint_case_id_allow_regex
+    (
+        bmc_contract_fingerprint_case_id_allow_exact,
+        bmc_contract_fingerprint_case_id_allow_prefix,
+        bmc_contract_fingerprint_case_id_allow_regex,
+    ) = load_pattern_allowlist(
+        bmc_contract_fingerprint_case_id_allowlist_file,
+        "BMC contract-fingerprint case-ID allowlist",
+    )
+
+
+def is_allowed_bmc_contract_fingerprint_case_id(case_id: str) -> bool:
+    return token_matches_allowlist(
+        case_id,
+        bmc_contract_fingerprint_case_id_allow_exact,
+        bmc_contract_fingerprint_case_id_allow_prefix,
+        bmc_contract_fingerprint_case_id_allow_regex,
+    )
+
+
+def load_lec_contract_fingerprint_case_id_allowlist():
+    global lec_contract_fingerprint_case_id_allow_exact
+    global lec_contract_fingerprint_case_id_allow_prefix
+    global lec_contract_fingerprint_case_id_allow_regex
+    (
+        lec_contract_fingerprint_case_id_allow_exact,
+        lec_contract_fingerprint_case_id_allow_prefix,
+        lec_contract_fingerprint_case_id_allow_regex,
+    ) = load_pattern_allowlist(
+        lec_contract_fingerprint_case_id_allowlist_file,
+        "LEC contract-fingerprint case-ID allowlist",
+    )
+
+
+def is_allowed_lec_contract_fingerprint_case_id(case_id: str) -> bool:
+    return token_matches_allowlist(
+        case_id,
+        lec_contract_fingerprint_case_id_allow_exact,
+        lec_contract_fingerprint_case_id_allow_prefix,
+        lec_contract_fingerprint_case_id_allow_regex,
+    )
 
 
 def load_mutation_contract_fingerprint_case_id_allowlist():
@@ -17305,6 +17419,8 @@ load_strict_gate_rule_id_allowlist()
     bmc_lec_contract_fingerprint_case_id_map_prefix_rules,
     bmc_lec_contract_fingerprint_case_id_map_regex_rules,
 ) = load_bmc_lec_contract_fingerprint_case_id_map()
+load_bmc_contract_fingerprint_case_id_allowlist()
+load_lec_contract_fingerprint_case_id_allowlist()
 load_mutation_contract_fingerprint_case_id_allowlist()
 load_mutation_source_fingerprint_case_id_allowlist()
 load_mutation_provenance_tuple_id_allowlist()
@@ -17488,20 +17604,35 @@ for key, current_row in summary.items():
             current_contract_case_set = current_bmc_contract_fingerprint_case_ids.get(
                 key, set()
             )
-            new_contract_cases = sorted(
+            raw_new_contract_cases = sorted(
                 current_contract_case_set - baseline_contract_case_set
             )
+            if bmc_contract_fingerprint_case_id_allowlist_file:
+                new_contract_cases = [
+                    case_id
+                    for case_id in raw_new_contract_cases
+                    if not is_allowed_bmc_contract_fingerprint_case_id(case_id)
+                ]
+            else:
+                new_contract_cases = raw_new_contract_cases
             if new_contract_cases:
                 sample = ", ".join(new_contract_cases[:3])
                 if len(new_contract_cases) > 3:
                     sample += ", ..."
+                allowlisted = len(raw_new_contract_cases) - len(new_contract_cases)
+                allowlisted_suffix = (
+                    f", allowlisted={allowlisted}"
+                    if allowlisted > 0
+                    else ""
+                )
                 gate_errors.add(
                     suite,
                     mode,
                     (
                         "new BMC contract fingerprint case IDs observed "
                         f"(baseline={len(baseline_contract_case_set)} "
-                        f"current={len(current_contract_case_set)}, "
+                        f"current={len(current_contract_case_set)}"
+                        f"{allowlisted_suffix}, "
                         f"window={baseline_window}): {sample}"
                     ),
                     rule_id="strict_gate.bmc.contract_fingerprint_case_ids.new",
@@ -17522,20 +17653,35 @@ for key, current_row in summary.items():
             current_contract_case_set = current_lec_contract_fingerprint_case_ids.get(
                 key, set()
             )
-            new_contract_cases = sorted(
+            raw_new_contract_cases = sorted(
                 current_contract_case_set - baseline_contract_case_set
             )
+            if lec_contract_fingerprint_case_id_allowlist_file:
+                new_contract_cases = [
+                    case_id
+                    for case_id in raw_new_contract_cases
+                    if not is_allowed_lec_contract_fingerprint_case_id(case_id)
+                ]
+            else:
+                new_contract_cases = raw_new_contract_cases
             if new_contract_cases:
                 sample = ", ".join(new_contract_cases[:3])
                 if len(new_contract_cases) > 3:
                     sample += ", ..."
+                allowlisted = len(raw_new_contract_cases) - len(new_contract_cases)
+                allowlisted_suffix = (
+                    f", allowlisted={allowlisted}"
+                    if allowlisted > 0
+                    else ""
+                )
                 gate_errors.add(
                     suite,
                     mode,
                     (
                         "new LEC contract fingerprint case IDs observed "
                         f"(baseline={len(baseline_contract_case_set)} "
-                        f"current={len(current_contract_case_set)}, "
+                        f"current={len(current_contract_case_set)}"
+                        f"{allowlisted_suffix}, "
                         f"window={baseline_window}): {sample}"
                     ),
                     rule_id="strict_gate.lec.contract_fingerprint_case_ids.new",

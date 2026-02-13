@@ -30,6 +30,8 @@
 // CHECK: --fail-on-new-bmc-reason-keys
 // CHECK: --fail-on-new-bmc-contract-fingerprint-case-ids
 // CHECK: --fail-on-new-lec-contract-fingerprint-case-ids
+// CHECK: --bmc-contract-fingerprint-case-id-allowlist-file
+// CHECK: --lec-contract-fingerprint-case-id-allowlist-file
 // CHECK: --require-resolved-contract-schema-marker
 // CHECK: --require-mutation-provenance-schema-marker
 // CHECK: --fail-on-bmc-lec-contract-fingerprint-parity

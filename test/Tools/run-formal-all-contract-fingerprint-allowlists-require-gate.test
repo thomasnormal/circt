@@ -1,0 +1,6 @@
+// RUN: touch %t.allowlist
+// RUN: not %S/../../utils/run_formal_all.sh --bmc-contract-fingerprint-case-id-allowlist-file %t.allowlist 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: not %S/../../utils/run_formal_all.sh --lec-contract-fingerprint-case-id-allowlist-file %t.allowlist 2>&1 | FileCheck %s --check-prefix=LEC
+
+// BMC: --bmc-contract-fingerprint-case-id-allowlist-file requires --fail-on-new-bmc-contract-fingerprint-case-ids or --strict-gate
+// LEC: --lec-contract-fingerprint-case-id-allowlist-file requires --fail-on-new-lec-contract-fingerprint-case-ids or --strict-gate
