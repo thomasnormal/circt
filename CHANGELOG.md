@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1353 - February 14, 2026
+
+### Mutation Workflow: Retry Backoff Delay Controls
+
+1. Extended `utils/run_mutation_mcy_examples.sh` retry policy with
+   deterministic delay controls:
+   - new global option: `--example-retry-delay-ms N` (default `0`).
+   - retry diagnostics now include delay metadata when active:
+     - `delay_ms=<N>`.
+2. Extended example-manifest policy schema with optional
+   `example_retry_delay_ms` override column.
+3. Included effective retry-delay policy in per-example policy-fingerprint
+   derivation to keep drift governance deterministic.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-example-retry-delay-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-example-retry-delay-smoke.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-invalid-retry-delay-override.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-retry-delay-override-smoke.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+5. Hardened scheduler flake guard for mutation jobs lane:
+   - increased slow-lane delay in
+     `test/Tools/run-mutation-mcy-examples-jobs-no-head-of-line-blocking.test`
+     to preserve overlap assertion under loaded hosts.
+6. Updated parity baseline fixtures impacted by policy-fingerprint evolution:
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-example-parity-allowlist.test`
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-example-parity-fail.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (81/81)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --example-retry-delay-ms 5 --out-dir /tmp/mcy_examples_smoke_retries1_delay5` PASS
+
 ## Iteration 1352 - February 14, 2026
 
 ### Pairwise BMC: General Launch-Retry Hardening Beyond ETXTBSY

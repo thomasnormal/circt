@@ -19,12 +19,14 @@ Options:
                            <TAB>[mutations_mode_counts]
                            <TAB>[mutations_mode_weights]
                            <TAB>[mutations_profiles]<TAB>[mutations_cfg]
-                           <TAB>[mutations_select]<TAB>[mutation_limit]<TAB>[example_timeout_sec]<TAB>[example_retries]
+                           <TAB>[mutations_select]<TAB>[mutation_limit]<TAB>[example_timeout_sec]<TAB>[example_retries]<TAB>[example_retry_delay_ms]
                            Optional fields accept '-' to inherit global values.
                            Relative design paths resolve under --examples-root
   --jobs N                Max parallel examples to execute (default: 1)
   --example-timeout-sec N  Per-example timeout in seconds (default: 0, disabled)
   --example-retries N      Retry transient launcher failures up to N times per example (default: 0)
+  --example-retry-delay-ms N
+                           Fixed delay before retry attempts (default: 0)
   --circt-mut PATH         circt-mut binary or command (default: auto-detect)
   --yosys PATH             yosys binary (default: yosys)
   --generate-count N       Mutations to generate in non-smoke mode (default: 32)
@@ -151,6 +153,7 @@ YOSYS_BIN="${YOSYS:-yosys}"
 JOBS=1
 EXAMPLE_TIMEOUT_SEC=0
 EXAMPLE_RETRIES=0
+EXAMPLE_RETRY_DELAY_MS=0
 TIMEOUT_BIN="${TIMEOUT:-timeout}"
 TIMEOUT_RESOLVED=""
 GENERATE_COUNT=32
@@ -209,6 +212,7 @@ declare -A EXAMPLE_TO_MUTATIONS_SELECT=()
 declare -A EXAMPLE_TO_MUTATION_LIMIT=()
 declare -A EXAMPLE_TO_TIMEOUT_SEC=()
 declare -A EXAMPLE_TO_RETRIES=()
+declare -A EXAMPLE_TO_RETRY_DELAY_MS=()
 declare -a AVAILABLE_EXAMPLES=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
@@ -413,6 +417,7 @@ reset_example_mappings() {
   EXAMPLE_TO_MUTATION_LIMIT=()
   EXAMPLE_TO_TIMEOUT_SEC=()
   EXAMPLE_TO_RETRIES=()
+  EXAMPLE_TO_RETRY_DELAY_MS=()
   AVAILABLE_EXAMPLES=()
 }
 
@@ -482,6 +487,7 @@ load_example_manifest() {
   local mutation_limit_override=""
   local example_timeout_override=""
   local example_retries_override=""
+  local example_retry_delay_ms_override=""
   local extra=""
   local resolved_design=""
 
@@ -500,7 +506,8 @@ load_example_manifest() {
       generate_count_override mutations_seed_override mutations_modes_override \
       mutations_mode_counts_override mutations_mode_weights_override \
       mutations_profiles_override mutations_cfg_override mutations_select_override \
-      mutation_limit_override example_timeout_override example_retries_override extra <<< "$line"
+      mutation_limit_override example_timeout_override example_retries_override \
+      example_retry_delay_ms_override extra <<< "$line"
 
     example_id="$(trim_whitespace "$example_id")"
     design="$(trim_whitespace "$design")"
@@ -516,10 +523,11 @@ load_example_manifest() {
     mutation_limit_override="$(normalize_manifest_optional "${mutation_limit_override:-}")"
     example_timeout_override="$(normalize_manifest_optional "${example_timeout_override:-}")"
     example_retries_override="$(normalize_manifest_optional "${example_retries_override:-}")"
+    example_retry_delay_ms_override="$(normalize_manifest_optional "${example_retry_delay_ms_override:-}")"
     extra="$(trim_whitespace "${extra:-}")"
 
     if [[ -z "$example_id" || -z "$design" || -z "$top" || -n "$extra" ]]; then
-      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 11 optional override columns)." >&2
+      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 12 optional override columns)." >&2
       return 1
     fi
 
@@ -541,6 +549,10 @@ load_example_manifest() {
     fi
     if [[ -n "$example_retries_override" && ! "$example_retries_override" =~ ^[0-9]+$ ]]; then
       echo "Invalid example_retries override in manifest row ${line_no}: ${example_retries_override}" >&2
+      return 1
+    fi
+    if [[ -n "$example_retry_delay_ms_override" && ! "$example_retry_delay_ms_override" =~ ^[0-9]+$ ]]; then
+      echo "Invalid example_retry_delay_ms override in manifest row ${line_no}: ${example_retry_delay_ms_override}" >&2
       return 1
     fi
     if [[ -n "$mutations_mode_counts_override" && -n "$mutations_mode_weights_override" ]]; then
@@ -591,6 +603,9 @@ load_example_manifest() {
     fi
     if [[ -n "$example_retries_override" ]]; then
       EXAMPLE_TO_RETRIES["$example_id"]="$example_retries_override"
+    fi
+    if [[ -n "$example_retry_delay_ms_override" ]]; then
+      EXAMPLE_TO_RETRY_DELAY_MS["$example_id"]="$example_retry_delay_ms_override"
     fi
   done < "$file"
 
@@ -1235,6 +1250,7 @@ run_example_worker() {
   local example_mutation_limit="$MUTATION_LIMIT"
   local example_timeout_sec="$EXAMPLE_TIMEOUT_SEC"
   local example_retries="$EXAMPLE_RETRIES"
+  local example_retry_delay_ms="$EXAMPLE_RETRY_DELAY_MS"
   local design_content_hash=""
   local policy_fingerprint_input=""
   local policy_fingerprint=""
@@ -1257,6 +1273,8 @@ run_example_worker() {
   local cmd=()
   local max_attempts=1
   local attempt=1
+  local retry_sleep_sec=""
+  local retry_delay_msg=""
 
   if [[ -n "${EXAMPLE_TO_GENERATE_COUNT[$example_id]+x}" ]]; then
     example_generate_count="${EXAMPLE_TO_GENERATE_COUNT[$example_id]}"
@@ -1291,6 +1309,9 @@ run_example_worker() {
   if [[ -n "${EXAMPLE_TO_RETRIES[$example_id]+x}" ]]; then
     example_retries="${EXAMPLE_TO_RETRIES[$example_id]}"
   fi
+  if [[ -n "${EXAMPLE_TO_RETRY_DELAY_MS[$example_id]+x}" ]]; then
+    example_retry_delay_ms="${EXAMPLE_TO_RETRY_DELAY_MS[$example_id]}"
+  fi
   max_attempts=$((example_retries + 1))
 
   if [[ -n "$example_mutations_mode_counts" && -n "$example_mutations_mode_weights" ]]; then
@@ -1304,7 +1325,7 @@ run_example_worker() {
   fi
 
   design_content_hash="$(hash_file_sha256 "$design")"
-  policy_fingerprint_input="${example_id}"$'\n'"${top}"$'\n'"${design_content_hash}"$'\n'"${example_generate_count}"$'\n'"${example_mutations_seed}"$'\n'"${example_mutations_modes}"$'\n'"${example_mutations_mode_counts}"$'\n'"${example_mutations_mode_weights}"$'\n'"${example_mutations_profiles}"$'\n'"${example_mutations_cfg}"$'\n'"${example_mutations_select}"$'\n'"${example_mutation_limit}"$'\n'"${example_timeout_sec}"$'\n'"${example_retries}"$'\n'"${SMOKE}"
+  policy_fingerprint_input="${example_id}"$'\n'"${top}"$'\n'"${design_content_hash}"$'\n'"${example_generate_count}"$'\n'"${example_mutations_seed}"$'\n'"${example_mutations_modes}"$'\n'"${example_mutations_mode_counts}"$'\n'"${example_mutations_mode_weights}"$'\n'"${example_mutations_profiles}"$'\n'"${example_mutations_cfg}"$'\n'"${example_mutations_select}"$'\n'"${example_mutation_limit}"$'\n'"${example_timeout_sec}"$'\n'"${example_retries}"$'\n'"${example_retry_delay_ms}"$'\n'"${SMOKE}"
   policy_fingerprint="$(hash_string_sha256 "$policy_fingerprint_input")"
 
   example_out_dir="${OUT_DIR}/${example_id}"
@@ -1421,7 +1442,17 @@ EOS
       break
     fi
 
-    echo "Retrying example (${example_id}): attempt $((attempt + 1))/${max_attempts} after transient launcher failure (rc=${rc})" >&2
+    if [[ "$example_retry_delay_ms" -gt 0 ]]; then
+      printf -v retry_sleep_sec '%d.%03d' "$((example_retry_delay_ms / 1000))" "$((example_retry_delay_ms % 1000))"
+      retry_delay_msg=", delay_ms=${example_retry_delay_ms}"
+    else
+      retry_sleep_sec=""
+      retry_delay_msg=""
+    fi
+    echo "Retrying example (${example_id}): attempt $((attempt + 1))/${max_attempts} after transient launcher failure (rc=${rc}${retry_delay_msg})" >&2
+    if [[ -n "$retry_sleep_sec" ]]; then
+      sleep "$retry_sleep_sec"
+    fi
     attempt=$((attempt + 1))
   done
   if [[ "$rc" -eq 0 ]]; then
@@ -1543,6 +1574,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --example-retries)
       EXAMPLE_RETRIES="$2"
+      shift 2
+      ;;
+    --example-retry-delay-ms)
+      EXAMPLE_RETRY_DELAY_MS="$2"
       shift 2
       ;;
     --circt-mut)
@@ -1748,6 +1783,10 @@ if ! is_nonneg_int "$EXAMPLE_TIMEOUT_SEC"; then
 fi
 if ! is_nonneg_int "$EXAMPLE_RETRIES"; then
   echo "--example-retries must be a non-negative integer: $EXAMPLE_RETRIES" >&2
+  exit 1
+fi
+if ! is_nonneg_int "$EXAMPLE_RETRY_DELAY_MS"; then
+  echo "--example-retry-delay-ms must be a non-negative integer: $EXAMPLE_RETRY_DELAY_MS" >&2
   exit 1
 fi
 if ! is_nonneg_int "$MUTATIONS_SEED"; then
