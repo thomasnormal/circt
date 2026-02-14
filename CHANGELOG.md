@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1417 - February 14, 2026
+
+### OpenTitan FPV: Cross-Lane Objective Parity (BMC vs LEC) Governance Bootstrap
+
+1. Added a new generic objective-level parity checker for OpenTitan FPV
+   evidence:
+   - `utils/check_opentitan_fpv_objective_parity.py`
+   - compares normalized objective statuses across BMC/LEC assertion+cover
+     evidence, with allowlist-aware mismatch handling.
+2. Added first-class `run_formal_all.sh` controls for FPV cross-lane objective
+   parity:
+   - `--opentitan-fpv-lec-assertion-results-file`
+   - `--opentitan-fpv-lec-cover-results-file`
+   - `--opentitan-fpv-objective-parity-file`
+   - `--opentitan-fpv-objective-parity-allowlist-file`
+   - `--fail-on-opentitan-fpv-objective-parity`
+   - `--opentitan-fpv-objective-parity-include-missing`
+   - `--opentitan-fpv-objective-parity-missing-policy (ignore|assertion|all)`
+3. Added a new orchestration lane:
+   - `opentitan/FPV_OBJECTIVE_PARITY`
+   - emits structured parity counters in lane summaries:
+     - `fpv_objective_parity_rows`
+     - `fpv_objective_parity_non_allowlisted_rows`
+     - `fpv_objective_parity_allowlisted_rows`
+     - objective-class and mismatch-kind breakdown counters.
+4. Integrated strict-gate defaults for this lane:
+   - strict-gate auto-enables fail-on-objective-parity when FPV BMC and LEC
+     assertion evidence input are present.
+   - strict-gate defaults missing-objective policy to `assertion` unless
+     explicitly overridden.
+5. Added focused regressions:
+   - `test/Tools/check-opentitan-fpv-objective-parity-fail.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-objective-parity-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-objective-parity-requires-lec-assertions.test`
+6. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/check-opentitan-fpv-objective-parity-fail.test build-test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-requires-lec-assertions.test build-test/test/Tools/check-opentitan-fpv-bmc-evidence-parity-fail.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-evidence-parity-forwarding.test` PASS
+
 ## Iteration 1416 - February 14, 2026
 
 ### OpenTitan FPV Policy Packs: Canonical BMC+LEC Launch Budget Parity
