@@ -1,5 +1,154 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1308 - February 14, 2026
+
+### OpenTitan Formal Phase E Bootstrap: Connectivity CFG+CSV Ingestion Lane
+
+1. Added new OpenTitan connectivity adapter utility:
+   - `utils/select_opentitan_connectivity_cfg.py`
+   - composes cfg import graphs and expands placeholders (`{proj_root}`,
+     `{conn_csvs_dir}`, etc.).
+2. Implemented connectivity CSV normalization support:
+   - supports `CONNECTION` rows
+   - supports `CONDITION` rows
+   - emits deterministic normalized manifests:
+     - target: `opentitan-connectivity-target-manifest.tsv`
+     - rules: `opentitan-connectivity-rules-manifest.tsv`
+3. Wired connectivity planning into top-level formal driver:
+   - `utils/run_formal_all.sh`
+   - new lane + CLI:
+     - `--with-opentitan-connectivity-parse` (`opentitan/CONNECTIVITY_PARSE`)
+     - `--opentitan-connectivity-cfg`
+     - `--opentitan-connectivity-target-manifest`
+     - `--opentitan-connectivity-rules-manifest`
+   - added option validation, strict-preflight tool checks, and lane-state hash
+     integration for deterministic resume behavior.
+4. Added focused regressions:
+   - `test/Tools/select-opentitan-connectivity-cfg-basic.test`
+   - `test/Tools/select-opentitan-connectivity-cfg-invalid-row-kind.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-parse.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-parse-requires-cfg.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-manifest-requires-cfg.test`
+
+### Validation
+
+- `python3 -m py_compile utils/select_opentitan_connectivity_cfg.py` PASS
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'select-opentitan-connectivity-cfg-.*\\.test|run-formal-all-opentitan-connectivity-.*\\.test|run-formal-all-opentitan-fpv-.*\\.test|run-opentitan-fpv-circt-bmc-.*\\.test'` PASS (44/44)
+
+## Iteration 1307 - February 14, 2026
+
+### OpenTitan FPV Phase F: End-to-End Sharding Wiring Through Formal Driver
+
+1. Extended generic pairwise runner sharding:
+   - `utils/run_pairwise_circt_bmc.py`
+   - new deterministic controls:
+     - `--case-shard-count`, `--case-shard-index`
+     - `--assertion-shard-count`, `--assertion-shard-index`
+     - `--cover-shard-count`, `--cover-shard-index`
+2. Added shard-aware granular behavior:
+   - assertion-granular runs now skip cases with empty assertion shard as
+     explicit `SKIP ... assertion_shard_empty`.
+   - summary now reports real skip count in pairwise BMC totals.
+3. Extended OpenTitan FPV adapter forwarding:
+   - `utils/run_opentitan_fpv_circt_bmc.py`
+   - new flags:
+     - `--case-shard-count`
+     - `--case-shard-index`
+   - forwarded to `run_pairwise_circt_bmc.py`.
+4. Wired OpenTitan FPV sharding through top-level formal driver:
+   - `utils/run_formal_all.sh`
+   - new lane controls:
+     - `--opentitan-fpv-bmc-target-shard-count`
+     - `--opentitan-fpv-bmc-target-shard-index`
+     - `--opentitan-fpv-bmc-case-shard-count`
+     - `--opentitan-fpv-bmc-case-shard-index`
+   - added validation and lane-state hashing integration.
+5. Fixed mutation allowlist guard wiring in `run_formal_all.sh` where three
+   allowlist gate checks were still evaluating empty placeholders instead of the
+   actual option variables.
+6. Added focused regressions:
+   - `test/Tools/run-pairwise-circt-bmc-case-shard-selection.test`
+   - `test/Tools/run-pairwise-circt-bmc-case-shard-empty.test`
+   - `test/Tools/run-pairwise-circt-bmc-case-shard-invalid-index.test`
+   - `test/Tools/run-pairwise-circt-bmc-assertion-shard-selection.test`
+   - `test/Tools/run-pairwise-circt-bmc-assertion-shard-empty.test`
+   - `test/Tools/run-pairwise-circt-bmc-assertion-shard-invalid-index.test`
+   - `test/Tools/run-pairwise-circt-bmc-cover-shard-selection.test`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-case-shard-forwarding.test`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-case-shard-invalid-index.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-target-shard-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-target-shard-index-validation.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-case-shard-index-validation.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-shard-help.test`
+   - updated `test/Tools/run-formal-all-mutation-provenance-allowlists-require-gate.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-formal-all-opentitan-fpv-bmc.*\\.test|run-opentitan-fpv-circt-bmc-.*\\.test|run-pairwise-circt-bmc-.*\\.test|run-formal-all-mutation-provenance-allowlists-require-gate\\.test'` PASS (51/51)
+
+## Iteration 1306 - February 14, 2026
+
+### Mutation Workflow: Drift Allowlist Hygiene Enforcement
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with:
+   - `--fail-on-unused-drift-allowlist`
+   - `--drift-allowlist-unused-file FILE`
+2. Added per-pattern allowlist usage tracking during drift classification.
+3. Added deterministic unused-entry report output:
+   - default path: `<out-dir>/drift-allowlist-unused.txt`
+   - optional override via `--drift-allowlist-unused-file`.
+4. Added policy validation:
+   - `--fail-on-unused-drift-allowlist` requires `--drift-allowlist-file`
+   - `--drift-allowlist-unused-file` requires `--drift-allowlist-file`.
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-baseline-drift-allowlist-unused-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-fail-on-unused-drift-allowlist-requires-allowlist.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (12/12)
+- `utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-run` PASS
+
+## Iteration 1305 - February 14, 2026
+
+### OpenTitan FPV Phase F: Deterministic Target Sharding for Scalable BMC Runs
+
+1. Extended `utils/run_opentitan_fpv_circt_bmc.py` with deterministic target
+   sharding controls:
+   - `--target-shard-count` / `BMC_TARGET_SHARD_COUNT`
+   - `--target-shard-index` / `BMC_TARGET_SHARD_INDEX`
+2. Added explicit shard-selection telemetry:
+   - selected-target count
+   - total-target count
+   - shard tuple (`index/count`).
+3. Added empty-shard handling as a successful no-op run:
+   - deterministic empty `results.tsv` when requested
+   - deterministic zero-row FPV summary output when requested
+   - zero-count summary line.
+4. Wired OpenTitan FPV shard controls through `utils/run_formal_all.sh`:
+   - `--opentitan-fpv-bmc-target-shard-count`
+   - `--opentitan-fpv-bmc-target-shard-index`
+   with CLI validation and forwarding to `run_opentitan_fpv_circt_bmc.py`.
+5. Added focused regressions:
+   - `test/Tools/run-opentitan-fpv-circt-bmc-target-shard-selection.test`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-target-shard-empty.test`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-target-shard-invalid-index.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-target-shard-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-target-shard-index-validation.test`
+   - updated `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-opentitan-fpv-circt-bmc-basic.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-target-shard-selection.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-target-shard-empty.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-target-shard-invalid-index.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-task-policy.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary.test build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-target-shard-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-target-shard-index-validation.test` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-opentitan-fpv-circt-bmc-.*\\.test|run-formal-all-opentitan-fpv-bmc.*\\.test|run-formal-all-help\\.test'` PASS (24/24)
+
 ## Iteration 1304 - February 14, 2026
 
 ### Mutation Workflow: MCY Drift Allowlist Governance

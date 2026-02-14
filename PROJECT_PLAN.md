@@ -68,17 +68,6 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
-#### Execution Status (February 14, 2026)
-
-5. New: task-policy governance is implemented in the OpenTitan FPV compile-contract resolver (known-task mapping, unknown-task fail option, task-policy drift dimensions).
-6. Next: execute task-profile semantics (effective stopat/blackbox behavior) in CIRCT FPV runners, using the new task-policy artifacts as the contract.
-7. New: `run_formal_all.sh` now supports unknown-task strict gating for OpenTitan FPV (`--fail-on-opentitan-fpv-unknown-task`, auto-enabled under `--strict-gate`).
-
-1. Completed: native cfg ingestion + `--select-cfgs` manifest planning is implemented and tested.
-2. Completed: FuseSoC-backed compile-contract extraction and drift checks are integrated in `run_formal_all.sh` with strict/fatal and allowlist modes.
-3. In progress: FPV task parity now carries `task` + `stopats` through selector/resolver artifacts and drift checks; stopat/blackbox execution semantics remain the next implementation step.
-4. Next implementation target: execute sec_cm task profiles end-to-end (effective stopat/blackbox policy realization in CIRCT formal lowering/runners).
-
 #### Goal
 
 Enable a CIRCT-native command flow that is operationally equivalent to:
@@ -245,26 +234,70 @@ verilator-verification, and yosys corpora).
 
 #### Execution Status (February 14, 2026)
 
-1. Phase A is in progress with first runnable slice landed:
-   - `run_formal_all.sh` now accepts `--opentitan-fpv-cfg`, `--select-cfgs`,
-     and `--opentitan-fpv-target-manifest`.
-   - new utility `utils/select_opentitan_formal_cfgs.py` resolves cfg import
-     graphs and emits deterministic selected-target manifests.
-2. Remaining work for Phase A completion:
-   - wire the generated target manifest into runnable OpenTitan FPV lane
-     planning (currently manifest generation is integrated, execution mapping is
-     still pending).
-3. Phase B bootstrap is now landed:
-   - new resolver `utils/resolve_opentitan_formal_compile_contracts.py`
-     generates deterministic per-target compile contracts from FuseSoC
-     `*.eda.yml` artifacts (with `ok`/`partial`/`error` setup status tracking).
-   - next Phase B step is wiring these contracts into formal-lane execution and
-     strict-gate drift baselines.
-4. Compile-contract drift governance utility landed:
-   - `utils/check_opentitan_compile_contract_drift.py` compares baseline/current
-     contract snapshots and emits deterministic per-target drift diagnostics.
-   - next integration step is invoking this checker from `run_formal_all.sh`
-     under strict-gate policy controls for OpenTitan FPV flows.
+1. Phase A is complete:
+   - `run_formal_all.sh` supports `--opentitan-fpv-cfg` + `--select-cfgs`
+     selection semantics with deterministic target manifests.
+   - `utils/select_opentitan_formal_cfgs.py` resolves cfg import graphs and
+     emits stable selected-target artifacts.
+2. Phase B is complete:
+   - FuseSoC-backed compile-contract resolution is integrated.
+   - OpenTitan FPV execution lane bootstrap is landed:
+     - `--with-opentitan-fpv-bmc` (`opentitan/FPV_BMC`)
+     - contracts are executable via `utils/run_opentitan_fpv_circt_bmc.py`.
+3. Phase C core execution semantics are landed:
+   - new generic HW pass `--hw-externalize-modules` converts selected
+     `hw.module` symbols to `hw.module.extern`.
+   - OpenTitan FPV BMC runner now applies task blackbox policy via
+     `BMC_PREPARE_CORE_PASSES` + `hw-externalize-modules`.
+   - task stopats (including hierarchical selectors) are now lowered through
+     `--hw-stopat-symbolic` and exercised end-to-end in OpenTitan FPV runner
+     and `run_formal_all` lanes.
+4. Phase D is in progress:
+   - OpenTitan FPV runner supports FPV-style assertion summary artifacts.
+   - generic pairwise BMC runner now has optional assertion-granular execution
+     (`BMC_ASSERTION_GRANULAR=1`) with per-assertion result artifacts.
+   - assertion-granular classification now consumes explicit
+     `BMC_ASSERTION_STATUS` tags, including first-class `VACUOUS` rows.
+   - cover-granular execution (`BMC_COVER_GRANULAR=1`) now provides concrete
+     `covered` / `unreachable` evidence for FPV summaries.
+   - `run_formal_all.sh` now forwards OpenTitan FPV summary-drift governance
+     controls (`baseline/drift/allowlist/fail/update`) into `opentitan/FPV_BMC`,
+     with strict-gate auto-enabling drift failure when a baseline is configured.
+5. Phase E bootstrap is landed:
+   - new connectivity adapter utility:
+     - `utils/select_opentitan_connectivity_cfg.py`
+   - supports OpenTitan connectivity cfg import-graph composition and
+     placeholder expansion (`{proj_root}`, `{conn_csvs_dir}`, etc.).
+   - parses connectivity CSV rows into normalized rule contracts:
+     - `CONNECTION`
+     - `CONDITION`
+   - emits deterministic artifacts:
+     - `opentitan-connectivity-target-manifest.tsv`
+     - `opentitan-connectivity-rules-manifest.tsv`
+   - `run_formal_all.sh` now supports connectivity planning lane wiring:
+     - `--with-opentitan-connectivity-parse` (`opentitan/CONNECTIVITY_PARSE`)
+     - `--opentitan-connectivity-cfg`
+     - `--opentitan-connectivity-target-manifest`
+     - `--opentitan-connectivity-rules-manifest`
+6. Phase F scalability bootstrap is landed for deterministic sharded execution:
+   - `run_opentitan_fpv_circt_bmc.py` now supports deterministic target sharding
+     (`--target-shard-count`, `--target-shard-index`).
+   - `run_opentitan_fpv_circt_bmc.py` now forwards deterministic per-target case
+     sharding into pairwise execution:
+     - `--case-shard-count`
+     - `--case-shard-index`
+   - `run_pairwise_circt_bmc.py` now supports deterministic sharding at three
+     levels:
+     - case-level (`--case-shard-count`, `--case-shard-index`)
+     - assertion-level (`--assertion-shard-count`, `--assertion-shard-index`)
+     - cover-level (`--cover-shard-count`, `--cover-shard-index`)
+   - `run_formal_all.sh` now forwards OpenTitan FPV shard controls via:
+     - `--opentitan-fpv-bmc-target-shard-count`
+     - `--opentitan-fpv-bmc-target-shard-index`
+     - `--opentitan-fpv-bmc-case-shard-count`
+     - `--opentitan-fpv-bmc-case-shard-index`
+   - empty shard partitions now return deterministic zero-work success, which
+     enables stable static sharding across heterogeneous target counts.
 
 #### Success Definition (program-level)
 
@@ -276,15 +309,22 @@ verilator-verification, and yosys corpora).
 
 ### Remaining Formal Limitations (BMC/LEC/mutation focus)
 
-1. **BMC operational robustness**: bounded ETXTBSY retry is now implemented in `run_pairwise_circt_bmc.py`; remaining gap is broader transient launch resilience/telemetry parity for other launch-failure classes.
-2. **Frontend triage ergonomics**: sv-tests BMC now preserves frontend error logs via `KEEP_LOGS_DIR`, and launch retry is in place for transient launcher failures; host-side tool relink contention can still surface as launcher-level `Permission denied`/ETXTBSY noise until binaries stabilize.
-3. **Frontend scalability blocker on semantic closure buckets**: `sv-tests` UVM `16.11` (sequence-subroutine) and `16.13` (multiclock) currently hit frontend OOM in `circt-verilog` during import; this blocks clean semantic closure measurement for those buckets.
-4. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
-5. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
+1. **FPV status derivation depth gap**: explicit assertion statuses (`PROVEN/FAILING/VACUOUS/UNKNOWN`) and cover-granular `covered/unreachable` evidence are now wired, but fully automatic vacuity/coverage derivation for targets that do not emit explicit status tags is still pending.
+2. **BMC operational robustness**: bounded ETXTBSY retry is now implemented in `run_pairwise_circt_bmc.py`; remaining gap is broader transient launch resilience/telemetry parity for other launch-failure classes.
+3. **Frontend triage ergonomics**: sv-tests BMC now preserves frontend error logs via `KEEP_LOGS_DIR`, and launch retry is in place for transient launcher failures; host-side tool relink contention can still surface as launcher-level `Permission denied`/ETXTBSY noise until binaries stabilize.
+4. **Frontend scalability blocker on semantic closure buckets**: `sv-tests` UVM `16.11` (sequence-subroutine) and `16.13` (multiclock) currently hit frontend OOM in `circt-verilog` during import; this blocks clean semantic closure measurement for those buckets.
+5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.
+6. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
+7. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
+8. **Connectivity execution gap**: cfg+CSV ingestion is now wired, but generated
+   connectivity checks are not yet synthesized/executed through `circt-bmc`/
+   `circt-lec` with per-connection pass/fail classification and drift gating.
 
 ### Next Long-Term Features (best long-term path)
 
 1. Extend launch-resilience policy beyond ETXTBSY (e.g., selected transient I/O launch races) with explicit strict-gate counters and per-reason retry telemetry.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
-
+4. Complete Phase E by synthesizing executable connectivity check bundles from
+   normalized CSV contracts and integrating connection-level status artifacts
+   (`pass/fail/covered/unreachable`) into strict-gate drift workflows.
