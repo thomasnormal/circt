@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1323 - February 14, 2026
+
+### Mutation Workflow: Allowlist Support for Strict Summary Contract
+
+1. Extended `utils/run_mutation_mcy_examples.sh` allowlist semantics so `--drift-allowlist-file` is now accepted with:
+   - `--fail-on-diff`, or
+   - `--require-unique-summary-rows`.
+2. Made strict summary-contract violations allowlist-aware by switching contract checks to `append_drift_candidate()` handling.
+3. Strict summary-contract rows now emit `allowed` outcome when covered by allowlist patterns, preserving existing `example::metric` / `example::metric::detail` syntax.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-require-unique-summary-rows-allowlist.test`
+   - updated `test/Tools/run-mutation-mcy-examples-drift-allowlist-requires-diff.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (42/42)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-122324` PASS
+
 ## Iteration 1322 - February 14, 2026
 
 ### Mutation Workflow: Strict Summary Contract Schema Validation
