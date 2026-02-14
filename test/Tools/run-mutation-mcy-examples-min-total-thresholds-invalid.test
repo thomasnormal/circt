@@ -13,6 +13,11 @@
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-tolerances permission_denied=bad 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-VALUE
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-tolerances permission_denied=1,permission_denied=2 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-DUP
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-suite-tolerance bad 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-SUITE
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-percent-tolerances bad 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-PCT-FORMAT
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-percent-tolerances no-dashes=1 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-PCT-TOKEN
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-percent-tolerances permission_denied=bad 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-PCT-VALUE
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-percent-tolerances permission_denied=1,permission_denied=2 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-PCT-DUP
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-suite-percent-tolerance bad 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-SUITE-PCT
 
 // DETECTED: --min-total-detected must be a non-negative integer: bad
 // RELEVANT: --min-total-relevant must be a non-negative integer: bad
@@ -28,3 +33,8 @@
 // RETRY-DRIFT-VALUE: --retry-reason-drift-tolerances has non-integer tolerance for permission_denied: bad
 // RETRY-DRIFT-DUP: --retry-reason-drift-tolerances repeats reason token: permission_denied
 // RETRY-DRIFT-SUITE: --retry-reason-drift-suite-tolerance must be a non-negative integer: bad
+// RETRY-DRIFT-PCT-FORMAT: --retry-reason-drift-percent-tolerances requires reason=P entries: bad
+// RETRY-DRIFT-PCT-TOKEN: --retry-reason-drift-percent-tolerances has invalid reason token: no-dashes
+// RETRY-DRIFT-PCT-VALUE: --retry-reason-drift-percent-tolerances has non-decimal tolerance for permission_denied: bad
+// RETRY-DRIFT-PCT-DUP: --retry-reason-drift-percent-tolerances repeats reason token: permission_denied
+// RETRY-DRIFT-SUITE-PCT: --retry-reason-drift-suite-percent-tolerance must be a non-negative decimal: bad
