@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1285 - February 14, 2026
+
+### OpenTitan FPV Phase B: Compile-Contract Drift Checker (Governance Utility)
+
+1. Added `utils/check_opentitan_compile_contract_drift.py` to compare baseline
+   vs current compile-contract snapshots emitted by
+   `resolve_opentitan_formal_compile_contracts.py`.
+2. Drift detection currently covers:
+   - target presence drift (`new_in_current`, `missing_in_current`)
+   - `setup_status` drift
+   - `contract_fingerprint` drift
+   - cardinality drifts (`file_count`, `include_dir_count`, `define_count`)
+3. Added target allowlist support (`exact:`, `prefix:`, `regex:`) to suppress
+   planned/accepted drift per target.
+4. Added optional machine-readable drift artifact emission:
+   - `--out-drift-tsv`
+
+### Validation
+
+- `python3 -m py_compile utils/check_opentitan_compile_contract_drift.py`
+  - PASS
+- Focused lit:
+  - `test/Tools/check-opentitan-compile-contract-drift-none.test`
+  - `test/Tools/check-opentitan-compile-contract-drift-fingerprint.test`
+  - `test/Tools/check-opentitan-compile-contract-drift-allowlist.test`
+  - **3/3 PASS**
+
 ## Iteration 1284 - February 14, 2026
 
 ### OpenTitan FPV Adapter Phase B Bootstrap: FuseSoC-backed Compile Contracts

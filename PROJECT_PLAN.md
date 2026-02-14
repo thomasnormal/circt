@@ -249,6 +249,11 @@ verilator-verification, and yosys corpora).
      `*.eda.yml` artifacts (with `ok`/`partial`/`error` setup status tracking).
    - next Phase B step is wiring these contracts into formal-lane execution and
      strict-gate drift baselines.
+4. Compile-contract drift governance utility landed:
+   - `utils/check_opentitan_compile_contract_drift.py` compares baseline/current
+     contract snapshots and emits deterministic per-target drift diagnostics.
+   - next integration step is invoking this checker from `run_formal_all.sh`
+     under strict-gate policy controls for OpenTitan FPV flows.
 
 #### Success Definition (program-level)
 

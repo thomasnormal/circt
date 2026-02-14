@@ -1,0 +1,11 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\tsetup_status\tcontract_fingerprint\tfile_count\tinclude_dir_count\tdefine_count\nfoo_fpv\tok\tdeadbeefdeadbeef\t10\t2\t1\n' > %t/base.tsv
+// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\tsetup_status\tcontract_fingerprint\tfile_count\tinclude_dir_count\tdefine_count\nfoo_fpv\tok\tcafebabecafebabe\t10\t2\t1\n' > %t/current.tsv
+// RUN: printf 'exact:foo_fpv\n' > %t/allow.tsv
+// RUN: python3 %S/../../utils/check_opentitan_compile_contract_drift.py --baseline %t/base.tsv --current %t/current.tsv --allowlist-file %t/allow.tsv --out-drift-tsv %t/drift.tsv 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=DRIFT < %t/drift.tsv
+//
+// LOG: drift check passed
+// DRIFT: target_name{{[[:space:]]+}}kind{{[[:space:]]+}}baseline{{[[:space:]]+}}current
+// DRIFT-NOT: foo_fpv
