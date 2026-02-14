@@ -1,6 +1,7 @@
 add_circt_dialect_library(CIRCTHWTransforms
   HWAggregateToComb.cpp
   HWExternalizeModules.cpp
+  HWStopatSymbolic.cpp
   HWConvertBitcasts.cpp
   HWBypassInnerSymbols.cpp
   HWParameterizeConstantPorts.cpp
@@ -18,6 +19,7 @@ add_circt_dialect_library(CIRCTHWTransforms
   LINK_LIBS PUBLIC
   CIRCTHW
   CIRCTSV
+  CIRCTVerif
   CIRCTSeq
   CIRCTComb
   CIRCTSupport

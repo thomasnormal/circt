@@ -38,6 +38,7 @@ class ContractRow:
     setup_status: str
     stopat_mode: str
     stopat_count: int
+    stopats: tuple[str, ...]
     blackbox_modules: tuple[str, ...]
     toplevels: tuple[str, ...]
     files: tuple[str, ...]
@@ -98,6 +99,20 @@ def parse_blackbox_modules(raw: str) -> tuple[str, ...]:
     return tuple(modules)
 
 
+def normalize_stopat_selector(raw: str) -> str:
+    token = raw.strip()
+    if not token:
+        raise ValueError("empty stopat selector")
+    if token.startswith("*"):
+        token = token[1:].strip()
+    parts = [part.strip() for part in token.split(".") if part.strip()]
+    if len(parts) != 2:
+        raise ValueError(
+            f"unsupported stopat selector '{raw}': expected 'inst.port' or '*inst.port'"
+        )
+    return f"{parts[0]}.{parts[1]}"
+
+
 def read_compile_contracts(path: Path) -> list[ContractRow]:
     if not path.is_file():
         fail(f"compile-contracts file not found: {path}")
@@ -121,6 +136,7 @@ def read_compile_contracts(path: Path) -> list[ContractRow]:
         "setup_status",
         "stopat_mode",
         "stopat_count",
+        "stopats",
         "blackbox_policy",
         "toplevel",
         "files",
@@ -152,6 +168,7 @@ def read_compile_contracts(path: Path) -> list[ContractRow]:
                 stopat_count=parse_nonnegative_int(
                     (row.get("stopat_count") or "0").strip(), "stopat_count"
                 ),
+                stopats=parse_semicolon_list((row.get("stopats") or "").strip()),
                 blackbox_modules=parse_blackbox_modules(
                     (row.get("blackbox_policy") or "").strip()
                 ),
@@ -284,7 +301,7 @@ def main() -> int:
         keep_workdir = args.keep_workdir
 
     pre_rows: list[tuple[str, ...]] = []
-    grouped_case_lines: dict[tuple[str, ...], list[str]] = {}
+    grouped_case_lines: dict[tuple[tuple[str, ...], tuple[str, ...]], list[str]] = {}
 
     def add_contract_error(row: ContractRow, reason: str) -> None:
         case_id = row.target_name
@@ -311,9 +328,26 @@ def main() -> int:
         if row.stopat_mode not in {"none", "task_defined"}:
             add_contract_error(row, "compile_contract_invalid_stopat_mode")
             continue
-        if row.stopat_mode == "task_defined" and row.stopat_count > 0:
-            add_contract_error(row, "unsupported_stopat_injection")
+        if row.stopat_mode == "none" and row.stopat_count > 0:
+            add_contract_error(row, "compile_contract_stopat_mode_none_with_stopats")
             continue
+        if row.stopat_count != len(row.stopats):
+            add_contract_error(row, "compile_contract_stopat_count_mismatch")
+            continue
+        normalized_stopats: tuple[str, ...] = ()
+        if row.stopat_mode == "task_defined" and row.stopat_count > 0:
+            try:
+                normalized_stopats = tuple(
+                    sorted(
+                        {
+                            normalize_stopat_selector(stopat)
+                            for stopat in row.stopats
+                        }
+                    )
+                )
+            except ValueError:
+                add_contract_error(row, "unsupported_stopat_selector")
+                continue
         if not row.toplevels:
             add_contract_error(row, "compile_contract_missing_toplevel")
             continue
@@ -328,13 +362,17 @@ def main() -> int:
             blackbox_policy = (
                 ",".join(row.blackbox_modules) if row.blackbox_modules else "none"
             )
+            stopat_policy = ",".join(normalized_stopats) if normalized_stopats else "none"
             contract_source = (
                 f"fpv_target:{row.target_name};"
                 f"task_profile:{row.task_profile or 'unknown'};"
                 f"stopat_mode:{row.stopat_mode or 'none'};"
+                f"stopat_selectors:{stopat_policy};"
                 f"blackbox_policy:{blackbox_policy}"
             )
-            grouped_case_lines.setdefault(row.blackbox_modules, []).append(
+            grouped_case_lines.setdefault(
+                (normalized_stopats, row.blackbox_modules), []
+            ).append(
                 "\t".join(
                     [
                         case_id,
@@ -407,8 +445,9 @@ def main() -> int:
                 "BMC_PREPARE_CORE_PASSES",
                 "--lower-lec-llvm --reconcile-unrealized-casts",
             ).strip()
-            for group_index, blackbox_modules in enumerate(sorted(grouped_case_lines)):
-                group_cases = grouped_case_lines[blackbox_modules]
+            for group_index, group_key in enumerate(sorted(grouped_case_lines)):
+                stopat_selectors, blackbox_modules = group_key
+                group_cases = grouped_case_lines[group_key]
                 group_cases_path = workdir / f"pairwise-cases-{group_index}.tsv"
                 group_results_path = workdir / f"pairwise-results-{group_index}.tsv"
                 group_workdir = workdir / f"pairwise-work-{group_index}"
@@ -463,16 +502,23 @@ def main() -> int:
                     cmd += ["--resolved-contracts-file", str(group_resolved_contracts)]
 
                 cmd_env = os.environ.copy()
+                policy_passes: list[str] = []
+                if stopat_selectors:
+                    selector_list = ",".join(stopat_selectors)
+                    policy_passes.append(
+                        f"--hw-stopat-symbolic=targets={selector_list}"
+                    )
                 if blackbox_modules:
                     module_list = ",".join(blackbox_modules)
-                    externalize_pass = (
+                    policy_passes.append(
                         f"--hw-externalize-modules=module-names={module_list}"
                     )
-                    cmd_env["BMC_PREPARE_CORE_PASSES"] = (
-                        f"{externalize_pass} {base_prepare_core_passes}".strip()
-                    )
+                if policy_passes:
+                    cmd_env["BMC_PREPARE_CORE_PASSES"] = " ".join(
+                        [*policy_passes, base_prepare_core_passes]
+                    ).strip()
                     print(
-                        "opentitan FPV BMC: applying blackbox policy via "
+                        "opentitan FPV BMC: applying task policy via "
                         f"BMC_PREPARE_CORE_PASSES={shlex.quote(cmd_env['BMC_PREPARE_CORE_PASSES'])}",
                         flush=True,
                     )

@@ -180,5 +180,27 @@ def HWExternalizeModules : Pass<"hw-externalize-modules", "mlir::ModuleOp"> {
   ];
 }
 
+def HWStopatSymbolic : Pass<"hw-stopat-symbolic", "mlir::ModuleOp"> {
+  let summary = "Replace selected instance output nets with symbolic values";
+  let description = [{
+    This pass applies stopat-style symbolic cutpoints by replacing uses of
+    selected instance output ports with `verif.symbolic_value`.
+
+    Supported selector forms:
+      - `inst.port`
+      - `*inst.port`
+
+    The leading `*` is treated as an optional compatibility prefix and does
+    not currently encode multi-level hierarchy matching.
+  }];
+  let options = [
+    ListOption<"targets", "targets", "std::string",
+               "Stopat selectors in 'inst.port' or '*inst.port' form">,
+    Option<"allowUnmatched", "allow-unmatched", "bool", "false",
+           "Do not fail if requested selectors have no matches">
+  ];
+  let dependentDialects = ["verif::VerifDialect"];
+}
+
 
 #endif // CIRCT_DIALECT_HW_PASSES_TD
