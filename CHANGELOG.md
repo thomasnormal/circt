@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1376 - February 14, 2026
+
+### Mutation Workflow: Manifest Suite Drift-Budget Overrides
+
+1. Extended example-manifest schema in
+   `utils/run_mutation_mcy_examples.sh` with optional suite-level drift budget
+   override columns:
+   - `max_total_detected_drop`
+   - `max_total_detected_drop_percent`
+   - `max_total_relevant_drop`
+   - `max_total_relevant_drop_percent`
+   - `max_total_coverage_drop_percent`
+   - `max_total_errors_increase`
+2. Added deterministic manifest policy resolution for suite overrides:
+   - manifest suite overrides can appear on any row
+   - conflicting values across rows are rejected with explicit diagnostics
+3. Added manifest validation for new suite override fields (integer/decimal and
+   `[0,100]` checks for percent fields).
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-suite-drift-budget-override-pass.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-conflicting-suite-drift-budget-override.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-invalid-max-total-detected-drop-percent-override.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (111 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_iter1376` PASS
+
+
 ## Iteration 1375 - February 14, 2026
 
 ### Mutation Workflow: Per-Example Percent Drift Budget Overrides

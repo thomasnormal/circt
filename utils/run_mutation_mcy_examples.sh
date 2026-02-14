@@ -25,6 +25,12 @@ Options:
                            <TAB>[max_errors_increase]
                            <TAB>[max_detected_drop_percent]
                            <TAB>[max_relevant_drop_percent]
+                           <TAB>[max_total_detected_drop]
+                           <TAB>[max_total_detected_drop_percent]
+                           <TAB>[max_total_relevant_drop]
+                           <TAB>[max_total_relevant_drop_percent]
+                           <TAB>[max_total_coverage_drop_percent]
+                           <TAB>[max_total_errors_increase]
                            Optional fields accept '-' to inherit global values.
                            Relative design paths resolve under --examples-root
   --jobs N                Max parallel examples to execute (default: 1)
@@ -857,8 +863,20 @@ load_example_manifest() {
   local max_errors_increase_override=""
   local max_detected_drop_percent_override=""
   local max_relevant_drop_percent_override=""
+  local max_total_detected_drop_override=""
+  local max_total_detected_drop_percent_override=""
+  local max_total_relevant_drop_override=""
+  local max_total_relevant_drop_percent_override=""
+  local max_total_coverage_drop_percent_override=""
+  local max_total_errors_increase_override=""
   local extra=""
   local resolved_design=""
+  local manifest_max_total_detected_drop_override=""
+  local manifest_max_total_detected_drop_percent_override=""
+  local manifest_max_total_relevant_drop_override=""
+  local manifest_max_total_relevant_drop_percent_override=""
+  local manifest_max_total_coverage_drop_percent_override=""
+  local manifest_max_total_errors_increase_override=""
 
   reset_example_mappings
 
@@ -879,7 +897,11 @@ load_example_manifest() {
       example_retry_delay_ms_override max_detected_drop_override \
       max_relevant_drop_override max_coverage_drop_percent_override \
       max_errors_increase_override max_detected_drop_percent_override \
-      max_relevant_drop_percent_override extra <<< "$line"
+      max_relevant_drop_percent_override max_total_detected_drop_override \
+      max_total_detected_drop_percent_override max_total_relevant_drop_override \
+      max_total_relevant_drop_percent_override \
+      max_total_coverage_drop_percent_override max_total_errors_increase_override \
+      extra <<< "$line"
 
     example_id="$(trim_whitespace "$example_id")"
     design="$(trim_whitespace "$design")"
@@ -902,10 +924,16 @@ load_example_manifest() {
     max_errors_increase_override="$(normalize_manifest_optional "${max_errors_increase_override:-}")"
     max_detected_drop_percent_override="$(normalize_manifest_optional "${max_detected_drop_percent_override:-}")"
     max_relevant_drop_percent_override="$(normalize_manifest_optional "${max_relevant_drop_percent_override:-}")"
+    max_total_detected_drop_override="$(normalize_manifest_optional "${max_total_detected_drop_override:-}")"
+    max_total_detected_drop_percent_override="$(normalize_manifest_optional "${max_total_detected_drop_percent_override:-}")"
+    max_total_relevant_drop_override="$(normalize_manifest_optional "${max_total_relevant_drop_override:-}")"
+    max_total_relevant_drop_percent_override="$(normalize_manifest_optional "${max_total_relevant_drop_percent_override:-}")"
+    max_total_coverage_drop_percent_override="$(normalize_manifest_optional "${max_total_coverage_drop_percent_override:-}")"
+    max_total_errors_increase_override="$(normalize_manifest_optional "${max_total_errors_increase_override:-}")"
     extra="$(trim_whitespace "${extra:-}")"
 
     if [[ -z "$example_id" || -z "$design" || -z "$top" || -n "$extra" ]]; then
-      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 18 optional override columns)." >&2
+      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 24 optional override columns)." >&2
       return 1
     fi
 
@@ -967,6 +995,42 @@ load_example_manifest() {
     fi
     if [[ -n "$max_relevant_drop_percent_override" ]] && ! awk -v v="$max_relevant_drop_percent_override" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
       echo "Invalid max_relevant_drop_percent override in manifest row ${line_no}: ${max_relevant_drop_percent_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_total_detected_drop_override" && ! "$max_total_detected_drop_override" =~ ^[0-9]+$ ]]; then
+      echo "Invalid max_total_detected_drop override in manifest row ${line_no}: ${max_total_detected_drop_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_total_detected_drop_percent_override" && ! "$max_total_detected_drop_percent_override" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      echo "Invalid max_total_detected_drop_percent override in manifest row ${line_no}: ${max_total_detected_drop_percent_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_total_detected_drop_percent_override" ]] && ! awk -v v="$max_total_detected_drop_percent_override" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+      echo "Invalid max_total_detected_drop_percent override in manifest row ${line_no}: ${max_total_detected_drop_percent_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_total_relevant_drop_override" && ! "$max_total_relevant_drop_override" =~ ^[0-9]+$ ]]; then
+      echo "Invalid max_total_relevant_drop override in manifest row ${line_no}: ${max_total_relevant_drop_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_total_relevant_drop_percent_override" && ! "$max_total_relevant_drop_percent_override" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      echo "Invalid max_total_relevant_drop_percent override in manifest row ${line_no}: ${max_total_relevant_drop_percent_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_total_relevant_drop_percent_override" ]] && ! awk -v v="$max_total_relevant_drop_percent_override" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+      echo "Invalid max_total_relevant_drop_percent override in manifest row ${line_no}: ${max_total_relevant_drop_percent_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_total_coverage_drop_percent_override" && ! "$max_total_coverage_drop_percent_override" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      echo "Invalid max_total_coverage_drop_percent override in manifest row ${line_no}: ${max_total_coverage_drop_percent_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_total_coverage_drop_percent_override" ]] && ! awk -v v="$max_total_coverage_drop_percent_override" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+      echo "Invalid max_total_coverage_drop_percent override in manifest row ${line_no}: ${max_total_coverage_drop_percent_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_total_errors_increase_override" && ! "$max_total_errors_increase_override" =~ ^[0-9]+$ ]]; then
+      echo "Invalid max_total_errors_increase override in manifest row ${line_no}: ${max_total_errors_increase_override}" >&2
       return 1
     fi
     if [[ -n "$mutations_mode_counts_override" && -n "$mutations_mode_weights_override" ]]; then
@@ -1039,7 +1103,75 @@ load_example_manifest() {
     if [[ -n "$max_relevant_drop_percent_override" ]]; then
       EXAMPLE_TO_MAX_RELEVANT_DROP_PERCENT["$example_id"]="$max_relevant_drop_percent_override"
     fi
+
+    if [[ -n "$max_total_detected_drop_override" ]]; then
+      if [[ -z "$manifest_max_total_detected_drop_override" ]]; then
+        manifest_max_total_detected_drop_override="$max_total_detected_drop_override"
+      elif [[ "$manifest_max_total_detected_drop_override" != "$max_total_detected_drop_override" ]]; then
+        echo "Conflicting max_total_detected_drop override in manifest row ${line_no}: ${max_total_detected_drop_override} (already set to ${manifest_max_total_detected_drop_override})" >&2
+        return 1
+      fi
+    fi
+    if [[ -n "$max_total_detected_drop_percent_override" ]]; then
+      if [[ -z "$manifest_max_total_detected_drop_percent_override" ]]; then
+        manifest_max_total_detected_drop_percent_override="$max_total_detected_drop_percent_override"
+      elif [[ "$manifest_max_total_detected_drop_percent_override" != "$max_total_detected_drop_percent_override" ]]; then
+        echo "Conflicting max_total_detected_drop_percent override in manifest row ${line_no}: ${max_total_detected_drop_percent_override} (already set to ${manifest_max_total_detected_drop_percent_override})" >&2
+        return 1
+      fi
+    fi
+    if [[ -n "$max_total_relevant_drop_override" ]]; then
+      if [[ -z "$manifest_max_total_relevant_drop_override" ]]; then
+        manifest_max_total_relevant_drop_override="$max_total_relevant_drop_override"
+      elif [[ "$manifest_max_total_relevant_drop_override" != "$max_total_relevant_drop_override" ]]; then
+        echo "Conflicting max_total_relevant_drop override in manifest row ${line_no}: ${max_total_relevant_drop_override} (already set to ${manifest_max_total_relevant_drop_override})" >&2
+        return 1
+      fi
+    fi
+    if [[ -n "$max_total_relevant_drop_percent_override" ]]; then
+      if [[ -z "$manifest_max_total_relevant_drop_percent_override" ]]; then
+        manifest_max_total_relevant_drop_percent_override="$max_total_relevant_drop_percent_override"
+      elif [[ "$manifest_max_total_relevant_drop_percent_override" != "$max_total_relevant_drop_percent_override" ]]; then
+        echo "Conflicting max_total_relevant_drop_percent override in manifest row ${line_no}: ${max_total_relevant_drop_percent_override} (already set to ${manifest_max_total_relevant_drop_percent_override})" >&2
+        return 1
+      fi
+    fi
+    if [[ -n "$max_total_coverage_drop_percent_override" ]]; then
+      if [[ -z "$manifest_max_total_coverage_drop_percent_override" ]]; then
+        manifest_max_total_coverage_drop_percent_override="$max_total_coverage_drop_percent_override"
+      elif [[ "$manifest_max_total_coverage_drop_percent_override" != "$max_total_coverage_drop_percent_override" ]]; then
+        echo "Conflicting max_total_coverage_drop_percent override in manifest row ${line_no}: ${max_total_coverage_drop_percent_override} (already set to ${manifest_max_total_coverage_drop_percent_override})" >&2
+        return 1
+      fi
+    fi
+    if [[ -n "$max_total_errors_increase_override" ]]; then
+      if [[ -z "$manifest_max_total_errors_increase_override" ]]; then
+        manifest_max_total_errors_increase_override="$max_total_errors_increase_override"
+      elif [[ "$manifest_max_total_errors_increase_override" != "$max_total_errors_increase_override" ]]; then
+        echo "Conflicting max_total_errors_increase override in manifest row ${line_no}: ${max_total_errors_increase_override} (already set to ${manifest_max_total_errors_increase_override})" >&2
+        return 1
+      fi
+    fi
   done < "$file"
+
+  if [[ -n "$manifest_max_total_detected_drop_override" ]]; then
+    MAX_TOTAL_DETECTED_DROP="$manifest_max_total_detected_drop_override"
+  fi
+  if [[ -n "$manifest_max_total_detected_drop_percent_override" ]]; then
+    MAX_TOTAL_DETECTED_DROP_PERCENT="$manifest_max_total_detected_drop_percent_override"
+  fi
+  if [[ -n "$manifest_max_total_relevant_drop_override" ]]; then
+    MAX_TOTAL_RELEVANT_DROP="$manifest_max_total_relevant_drop_override"
+  fi
+  if [[ -n "$manifest_max_total_relevant_drop_percent_override" ]]; then
+    MAX_TOTAL_RELEVANT_DROP_PERCENT="$manifest_max_total_relevant_drop_percent_override"
+  fi
+  if [[ -n "$manifest_max_total_coverage_drop_percent_override" ]]; then
+    MAX_TOTAL_COVERAGE_DROP_PERCENT="$manifest_max_total_coverage_drop_percent_override"
+  fi
+  if [[ -n "$manifest_max_total_errors_increase_override" ]]; then
+    MAX_TOTAL_ERRORS_INCREASE="$manifest_max_total_errors_increase_override"
+  fi
 
   if [[ ${#AVAILABLE_EXAMPLES[@]} -eq 0 ]]; then
     echo "Example manifest has no usable rows: ${file}" >&2
