@@ -1,0 +1,8 @@
+# OpenTitan FPV BMC launch reason-event per-key budgets.
+# Format:
+#   <selector><TAB><max_rows>
+# selector supports:
+#   exact:<token> (or bare token), prefix:<prefix>, regex:<pattern>, *
+#
+# Default canary posture keeps non-allowlisted launch reason-event rows at zero.
+*	0

@@ -47,6 +47,12 @@ Options:
   --workflow-check-max-lec-launch-reason-event-rows N
                           Forwarded to workflow as
                           --check-max-lec-launch-reason-event-rows
+  --workflow-check-bmc-launch-reason-event-budget-file FILE
+                          Forwarded to workflow as
+                          --check-bmc-launch-reason-event-budget-file
+  --workflow-check-lec-launch-reason-event-budget-file FILE
+                          Forwarded to workflow as
+                          --check-lec-launch-reason-event-budget-file
   --workflow-check-fail-on-any-bmc-launch-reason-events
                           Forwarded to workflow as
                           --check-fail-on-any-bmc-launch-reason-events
@@ -66,6 +72,8 @@ Profile TSV schema:
     check_lec_launch_reason_key_allowlist_file
     check_max_bmc_launch_reason_event_rows
     check_max_lec_launch_reason_event_rows
+    check_bmc_launch_reason_event_budget_file
+    check_lec_launch_reason_event_budget_file
     check_fail_on_any_bmc_launch_reason_events
     check_fail_on_any_lec_launch_reason_events
 
@@ -175,6 +183,8 @@ WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
 WORKFLOW_CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
 WORKFLOW_CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS=""
 WORKFLOW_CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS=""
+WORKFLOW_CHECK_BMC_LAUNCH_REASON_EVENT_BUDGET_FILE=""
+WORKFLOW_CHECK_LEC_LAUNCH_REASON_EVENT_BUDGET_FILE=""
 WORKFLOW_CHECK_FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS=0
 WORKFLOW_CHECK_FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS=0
 declare -a PROFILE_FILTERS=()
@@ -207,6 +217,10 @@ while [[ $# -gt 0 ]]; do
       WORKFLOW_CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS="$(parse_optional_nonnegative_int_like "$2")"; shift 2 ;;
     --workflow-check-max-lec-launch-reason-event-rows)
       WORKFLOW_CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS="$(parse_optional_nonnegative_int_like "$2")"; shift 2 ;;
+    --workflow-check-bmc-launch-reason-event-budget-file)
+      WORKFLOW_CHECK_BMC_LAUNCH_REASON_EVENT_BUDGET_FILE="$2"; shift 2 ;;
+    --workflow-check-lec-launch-reason-event-budget-file)
+      WORKFLOW_CHECK_LEC_LAUNCH_REASON_EVENT_BUDGET_FILE="$2"; shift 2 ;;
     --workflow-check-fail-on-any-bmc-launch-reason-events)
       WORKFLOW_CHECK_FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS=1; shift ;;
     --workflow-check-fail-on-any-lec-launch-reason-events)
@@ -251,6 +265,14 @@ if [[ -n "$WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$WORKFL
 fi
 if [[ -n "$WORKFLOW_CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$WORKFLOW_CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
   echo "LEC launch reason allowlist file not readable: $WORKFLOW_CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$WORKFLOW_CHECK_BMC_LAUNCH_REASON_EVENT_BUDGET_FILE" && ! -r "$WORKFLOW_CHECK_BMC_LAUNCH_REASON_EVENT_BUDGET_FILE" ]]; then
+  echo "BMC launch reason-event budget file not readable: $WORKFLOW_CHECK_BMC_LAUNCH_REASON_EVENT_BUDGET_FILE" >&2
+  exit 1
+fi
+if [[ -n "$WORKFLOW_CHECK_LEC_LAUNCH_REASON_EVENT_BUDGET_FILE" && ! -r "$WORKFLOW_CHECK_LEC_LAUNCH_REASON_EVENT_BUDGET_FILE" ]]; then
+  echo "LEC launch reason-event budget file not readable: $WORKFLOW_CHECK_LEC_LAUNCH_REASON_EVENT_BUDGET_FILE" >&2
   exit 1
 fi
 if [[ -z "$OUT_DIR" ]]; then
@@ -335,6 +357,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   profile_check_lec_launch_reason_key_allowlist_file="$(trim "$(get_col check_lec_launch_reason_key_allowlist_file)")"
   profile_check_max_bmc_launch_reason_event_rows="$(parse_optional_nonnegative_int_like "$(get_col check_max_bmc_launch_reason_event_rows)")"
   profile_check_max_lec_launch_reason_event_rows="$(parse_optional_nonnegative_int_like "$(get_col check_max_lec_launch_reason_event_rows)")"
+  profile_check_bmc_launch_reason_event_budget_file="$(trim "$(get_col check_bmc_launch_reason_event_budget_file)")"
+  profile_check_lec_launch_reason_event_budget_file="$(trim "$(get_col check_lec_launch_reason_event_budget_file)")"
   profile_check_fail_on_any_bmc_launch_reason_events="$(parse_optional_bool_like "$(get_col check_fail_on_any_bmc_launch_reason_events)")"
   profile_check_fail_on_any_lec_launch_reason_events="$(parse_optional_bool_like "$(get_col check_fail_on_any_lec_launch_reason_events)")"
 
@@ -379,6 +403,28 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   effective_check_max_lec_launch_reason_event_rows="$WORKFLOW_CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS"
   if [[ -n "$profile_check_max_lec_launch_reason_event_rows" ]]; then
     effective_check_max_lec_launch_reason_event_rows="$profile_check_max_lec_launch_reason_event_rows"
+  fi
+  effective_check_bmc_launch_reason_event_budget_file="$WORKFLOW_CHECK_BMC_LAUNCH_REASON_EVENT_BUDGET_FILE"
+  if [[ -n "$profile_check_bmc_launch_reason_event_budget_file" ]]; then
+    effective_check_bmc_launch_reason_event_budget_file="$profile_check_bmc_launch_reason_event_budget_file"
+  fi
+  effective_check_lec_launch_reason_event_budget_file="$WORKFLOW_CHECK_LEC_LAUNCH_REASON_EVENT_BUDGET_FILE"
+  if [[ -n "$profile_check_lec_launch_reason_event_budget_file" ]]; then
+    effective_check_lec_launch_reason_event_budget_file="$profile_check_lec_launch_reason_event_budget_file"
+  fi
+  if [[ -n "$effective_check_bmc_launch_reason_event_budget_file" && "${effective_check_bmc_launch_reason_event_budget_file:0:1}" != "/" ]]; then
+    effective_check_bmc_launch_reason_event_budget_file="${PROFILES_DIR}/${effective_check_bmc_launch_reason_event_budget_file}"
+  fi
+  if [[ -n "$effective_check_lec_launch_reason_event_budget_file" && "${effective_check_lec_launch_reason_event_budget_file:0:1}" != "/" ]]; then
+    effective_check_lec_launch_reason_event_budget_file="${PROFILES_DIR}/${effective_check_lec_launch_reason_event_budget_file}"
+  fi
+  if [[ -n "$effective_check_bmc_launch_reason_event_budget_file" && ! -r "$effective_check_bmc_launch_reason_event_budget_file" ]]; then
+    echo "BMC launch reason-event budget file not readable for profile '$profile_name': $effective_check_bmc_launch_reason_event_budget_file" >&2
+    exit 1
+  fi
+  if [[ -n "$effective_check_lec_launch_reason_event_budget_file" && ! -r "$effective_check_lec_launch_reason_event_budget_file" ]]; then
+    echo "LEC launch reason-event budget file not readable for profile '$profile_name': $effective_check_lec_launch_reason_event_budget_file" >&2
+    exit 1
   fi
   effective_check_fail_on_any_bmc_launch_reason_events="$WORKFLOW_CHECK_FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS"
   if [[ -n "$profile_check_fail_on_any_bmc_launch_reason_events" ]]; then
@@ -431,6 +477,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   fi
   if [[ -n "$effective_check_max_lec_launch_reason_event_rows" ]]; then
     cmd+=(--check-max-lec-launch-reason-event-rows "$effective_check_max_lec_launch_reason_event_rows")
+  fi
+  if [[ -n "$effective_check_bmc_launch_reason_event_budget_file" ]]; then
+    cmd+=(--check-bmc-launch-reason-event-budget-file "$effective_check_bmc_launch_reason_event_budget_file")
+  fi
+  if [[ -n "$effective_check_lec_launch_reason_event_budget_file" ]]; then
+    cmd+=(--check-lec-launch-reason-event-budget-file "$effective_check_lec_launch_reason_event_budget_file")
   fi
   if [[ "$effective_check_fail_on_any_bmc_launch_reason_events" == "1" ]]; then
     cmd+=(--check-fail-on-any-bmc-launch-reason-events)
