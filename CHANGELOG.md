@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1366 - February 14, 2026
+
+### Mutation Workflow: Strict Retry-Reason Schema Artifact Validity Governance
+
+1. Extended retry-reason drift governance in
+   `utils/run_mutation_mcy_examples.sh` with stricter schema-metadata
+   validation controls:
+   - `--require-retry-reason-schema-artifact-validity`
+   - `--strict-retry-reason-baseline-governance`
+2. Added strict retry-reason governance bundle semantics:
+   - `--strict-retry-reason-baseline-governance` enables:
+     - `--require-retry-reason-baseline-schema-artifacts`
+     - `--require-retry-reason-schema-artifact-validity`
+   - strict mode requires `--fail-on-retry-reason-diff`.
+3. Extended retry-reason drift checks to flag unknown schema metadata when
+   validity gating is enabled:
+   - `retry_reason_schema_version_unknown_baseline`
+   - `retry_reason_schema_version_unknown_current`
+   - `retry_reason_schema_contract_unknown_baseline`
+   - `retry_reason_schema_contract_unknown_current`
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-require-retry-reason-schema-artifact-validity-requires-retry-reason-diff.test`
+   - `test/Tools/run-mutation-mcy-examples-strict-retry-reason-baseline-governance-requires-retry-reason-diff.test`
+   - `test/Tools/run-mutation-mcy-examples-require-retry-reason-schema-artifact-validity-unknown-baseline-version-fail.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-mutation-mcy-examples-help.test build-test/test/Tools/run-mutation-mcy-examples-require-retry-reason-schema-artifact-validity-requires-retry-reason-diff.test build-test/test/Tools/run-mutation-mcy-examples-strict-retry-reason-baseline-governance-requires-retry-reason-diff.test build-test/test/Tools/run-mutation-mcy-examples-require-retry-reason-schema-artifact-validity-unknown-baseline-version-fail.test` PASS (4/4)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (98 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --baseline-file /tmp/mcy_retry_validity_baseline.tsv --update-baseline --out-dir /tmp/mcy_retry_validity_update` PASS
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --baseline-file /tmp/mcy_retry_validity_baseline.tsv --fail-on-retry-reason-diff --require-retry-reason-schema-artifact-validity --out-dir /tmp/mcy_retry_validity_check` FAIL (expected) with `retry_reason_schema_version_unknown_baseline`
+
+
 ## Iteration 1365 - February 14, 2026
 
 ### Strict Gate: Launch-Telemetry Counter Coupling (BMC/LEC)

@@ -1,0 +1,4 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --require-retry-reason-schema-artifact-validity 2>&1 | FileCheck %s
+
+// CHECK: --require-retry-reason-schema-artifact-validity requires --fail-on-retry-reason-diff
