@@ -3371,12 +3371,20 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --native-mutation-ops)
+      if [[ $# -lt 2 ]]; then
+        echo "--native-mutation-ops requires a value" >&2
+        exit 1
+      fi
       NATIVE_MUTATION_OPS="$2"
       NATIVE_MUTATION_OPS_EXPLICIT=1
       MUTATION_GENERATION_FLAGS_SEEN=1
       shift 2
       ;;
     --native-real-harness-args)
+      if [[ $# -lt 2 ]]; then
+        echo "--native-real-harness-args requires a value" >&2
+        exit 1
+      fi
       NATIVE_REAL_HARNESS_ARGS="$2"
       NATIVE_REAL_HARNESS_ARGS_EXPLICIT=1
       MUTATION_GENERATION_FLAGS_SEEN=1
