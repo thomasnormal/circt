@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1344 - February 14, 2026
+
+### OpenTitan Connectivity Objective Parity: Semantic-Kind and Rollup Hardening
+
+1. Extended `utils/check_opentitan_connectivity_objective_parity.py` with
+   objective-class-aware status semantics:
+   - case objective mapping now preserves semantic classes such as:
+     - `vacuous`
+     - `unreachable`
+     - `timeout`
+     - `unknown`
+   - cover objective mapping now preserves:
+     - `covered`
+     - `unreachable`
+     - `timeout`
+     - `unknown`
+2. Added richer drift-kind classification for shared-objective mismatches:
+   - `case_status`
+   - `cover_status`
+   replacing generic `status` mismatches.
+3. Extended objective-parity lane summaries in `utils/run_formal_all.sh` with
+   deterministic objective-class/kind rollups:
+   - `objective_parity_case_rows`
+   - `objective_parity_cover_rows`
+   - `objective_parity_missing_rows`
+   - `objective_parity_case_status_rows`
+   - `objective_parity_cover_status_rows`
+   - `objective_parity_case_non_allowlisted_rows`
+   - `objective_parity_cover_non_allowlisted_rows`
+4. Added focused semantic regressions:
+   - `test/Tools/check-opentitan-connectivity-objective-parity-case-vacuous.test`
+   - `test/Tools/check-opentitan-connectivity-objective-parity-cover-status.test`
+   - updated existing objective-parity tests for `case_status` kind and rollup
+     summary expectations.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/check_opentitan_connectivity_objective_parity.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(check-opentitan-connectivity-objective-parity|run-formal-all-opentitan-connectivity-objective-parity|run-formal-all-help)'` PASS (14 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(run-formal-all-opentitan|check-opentitan-connectivity)'` PASS (96 selected)
+
 ## Iteration 1343 - February 14, 2026
 
 ### Mutation Workflow: Parallel Example Execution (`--jobs`)

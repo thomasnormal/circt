@@ -13254,6 +13254,13 @@ run_opentitan_connectivity_objective_parity_lane() {
 
   local parity_total_rows=0
   local parity_allowlisted_rows=0
+  local parity_case_rows=0
+  local parity_cover_rows=0
+  local parity_missing_rows=0
+  local parity_case_status_rows=0
+  local parity_cover_status_rows=0
+  local parity_case_non_allowlisted_rows=0
+  local parity_cover_non_allowlisted_rows=0
   if [[ -n "$parity_file" && -f "$parity_file" ]]; then
     local parity_counts
     parity_counts="$(
@@ -13265,18 +13272,50 @@ from pathlib import Path
 path = Path(os.environ["OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_FILE"])
 total = 0
 allowlisted = 0
+case_rows = 0
+cover_rows = 0
+missing_rows = 0
+case_status_rows = 0
+cover_status_rows = 0
+case_non_allowlisted_rows = 0
+cover_non_allowlisted_rows = 0
 if path.is_file():
   with path.open(encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
     if reader.fieldnames:
       for row in reader:
         total += 1
-        if (row.get("allowlisted") or "").strip() == "1":
+        objective_class = (row.get("objective_class") or "").strip()
+        kind = (row.get("kind") or "").strip()
+        is_allowlisted = (row.get("allowlisted") or "").strip() == "1"
+        if objective_class == "case":
+          case_rows += 1
+          if not is_allowlisted:
+            case_non_allowlisted_rows += 1
+        elif objective_class == "cover":
+          cover_rows += 1
+          if not is_allowlisted:
+            cover_non_allowlisted_rows += 1
+        if kind.startswith("missing_in_"):
+          missing_rows += 1
+        elif kind == "case_status":
+          case_status_rows += 1
+        elif kind == "cover_status":
+          cover_status_rows += 1
+        if is_allowlisted:
           allowlisted += 1
-print(f"{total}\t{allowlisted}")
+print(
+    f"{total}\t{allowlisted}\t{case_rows}\t{cover_rows}\t{missing_rows}\t"
+    f"{case_status_rows}\t{cover_status_rows}\t"
+    f"{case_non_allowlisted_rows}\t{cover_non_allowlisted_rows}"
+)
 PY
     )"
-    IFS=$'\t' read -r parity_total_rows parity_allowlisted_rows <<< "$parity_counts"
+    IFS=$'\t' read -r \
+      parity_total_rows parity_allowlisted_rows \
+      parity_case_rows parity_cover_rows parity_missing_rows \
+      parity_case_status_rows parity_cover_status_rows \
+      parity_case_non_allowlisted_rows parity_cover_non_allowlisted_rows <<< "$parity_counts"
   fi
   local parity_non_allowlisted_rows=$((parity_total_rows - parity_allowlisted_rows))
   if (( parity_non_allowlisted_rows < 0 )); then
@@ -13295,7 +13334,7 @@ PY
   else
     error=1
   fi
-  local summary="total=1 pass=${pass} fail=0 xfail=0 xpass=0 error=${error} skip=0 objective_parity_rows=${parity_total_rows} objective_parity_non_allowlisted_rows=${parity_non_allowlisted_rows} objective_parity_allowlisted_rows=${parity_allowlisted_rows}"
+  local summary="total=1 pass=${pass} fail=0 xfail=0 xpass=0 error=${error} skip=0 objective_parity_rows=${parity_total_rows} objective_parity_non_allowlisted_rows=${parity_non_allowlisted_rows} objective_parity_allowlisted_rows=${parity_allowlisted_rows} objective_parity_case_rows=${parity_case_rows} objective_parity_cover_rows=${parity_cover_rows} objective_parity_missing_rows=${parity_missing_rows} objective_parity_case_status_rows=${parity_case_status_rows} objective_parity_cover_status_rows=${parity_cover_status_rows} objective_parity_case_non_allowlisted_rows=${parity_case_non_allowlisted_rows} objective_parity_cover_non_allowlisted_rows=${parity_cover_non_allowlisted_rows}"
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
 }
 
