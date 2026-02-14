@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1321 - February 14, 2026
+
+### Mutation Workflow: Optional Strict Summary Row Uniqueness Gate
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with:
+   - `--require-unique-summary-rows`
+2. Added a new summary-contract evaluator:
+   - `evaluate_summary_contract(summary.tsv, summary-contract.tsv)`
+   - detects duplicate example IDs in current summary rows
+   - emits contract rows using drift-compatible schema fields:
+     - metric: `row`
+     - detail: `duplicate_current_row`
+3. Added runtime contract enforcement path:
+   - when enabled, writes `out-dir/summary-contract.tsv`
+   - fails run with explicit diagnostic if duplicates are found.
+4. Preserved default behavior when option is omitted:
+   - duplicate summary rows remain allowed.
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-require-unique-summary-rows-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-require-unique-summary-rows-off-by-default.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (40/40)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-121721` PASS
+
 ## Iteration 1320 - February 14, 2026
 
 ### OpenTitan Connectivity BMC: Status-Depth Expansion (`covered`/`unreachable`)
