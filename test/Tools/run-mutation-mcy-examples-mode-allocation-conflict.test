@@ -1,0 +1,3 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --mutations-mode-counts arith=4 --mutations-mode-weights arith=1 2>&1 | FileCheck %s
+
+// CHECK: Use either --mutations-mode-counts or --mutations-mode-weights, not both.

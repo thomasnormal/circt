@@ -16,6 +16,15 @@ Options:
   --circt-mut PATH         circt-mut binary or command (default: auto-detect)
   --yosys PATH             yosys binary (default: yosys)
   --generate-count N       Mutations to generate in non-smoke mode (default: 32)
+  --mutations-seed N       Seed used with --generate-mutations (default: 1)
+  --mutations-modes CSV    Comma-separated mutate modes for auto-generation
+  --mutations-mode-counts CSV
+                           Comma-separated mode=count allocation for auto-generation
+  --mutations-mode-weights CSV
+                           Comma-separated mode=weight allocation for auto-generation
+  --mutations-profiles CSV Comma-separated named mutate profiles for auto-generation
+  --mutations-cfg CSV      Comma-separated KEY=VALUE mutate cfg entries
+  --mutations-select CSV   Comma-separated mutate select expressions
   --mutation-limit N       Per-example mutation limit (default: 8)
   --min-detected N         Fail if detected mutants per example is below N
                            (default: 0)
@@ -61,6 +70,13 @@ OUT_DIR="${PWD}/mutation-mcy-examples-results"
 CIRCT_MUT=""
 YOSYS_BIN="${YOSYS:-yosys}"
 GENERATE_COUNT=32
+MUTATIONS_SEED=1
+MUTATIONS_MODES=""
+MUTATIONS_MODE_COUNTS=""
+MUTATIONS_MODE_WEIGHTS=""
+MUTATIONS_PROFILES=""
+MUTATIONS_CFG=""
+MUTATIONS_SELECT=""
 MUTATION_LIMIT=8
 MIN_DETECTED=0
 MIN_COVERAGE_PERCENT=""
@@ -73,6 +89,7 @@ FAIL_ON_UNUSED_DRIFT_ALLOWLIST=0
 DRIFT_ALLOWLIST_UNUSED_FILE=""
 SMOKE=0
 KEEP_WORK=0
+MUTATION_GENERATION_FLAGS_SEEN=0
 EXAMPLE_IDS=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
@@ -365,6 +382,41 @@ while [[ $# -gt 0 ]]; do
       GENERATE_COUNT="$2"
       shift 2
       ;;
+    --mutations-seed)
+      MUTATIONS_SEED="$2"
+      MUTATION_GENERATION_FLAGS_SEEN=1
+      shift 2
+      ;;
+    --mutations-modes)
+      MUTATIONS_MODES="$2"
+      MUTATION_GENERATION_FLAGS_SEEN=1
+      shift 2
+      ;;
+    --mutations-mode-counts)
+      MUTATIONS_MODE_COUNTS="$2"
+      MUTATION_GENERATION_FLAGS_SEEN=1
+      shift 2
+      ;;
+    --mutations-mode-weights)
+      MUTATIONS_MODE_WEIGHTS="$2"
+      MUTATION_GENERATION_FLAGS_SEEN=1
+      shift 2
+      ;;
+    --mutations-profiles)
+      MUTATIONS_PROFILES="$2"
+      MUTATION_GENERATION_FLAGS_SEEN=1
+      shift 2
+      ;;
+    --mutations-cfg)
+      MUTATIONS_CFG="$2"
+      MUTATION_GENERATION_FLAGS_SEEN=1
+      shift 2
+      ;;
+    --mutations-select)
+      MUTATIONS_SELECT="$2"
+      MUTATION_GENERATION_FLAGS_SEEN=1
+      shift 2
+      ;;
     --mutation-limit)
       MUTATION_LIMIT="$2"
       shift 2
@@ -427,6 +479,14 @@ done
 
 if ! is_pos_int "$GENERATE_COUNT"; then
   echo "--generate-count must be a positive integer: $GENERATE_COUNT" >&2
+  exit 1
+fi
+if ! is_nonneg_int "$MUTATIONS_SEED"; then
+  echo "--mutations-seed must be a non-negative integer: $MUTATIONS_SEED" >&2
+  exit 1
+fi
+if [[ -n "$MUTATIONS_MODE_COUNTS" && -n "$MUTATIONS_MODE_WEIGHTS" ]]; then
+  echo "Use either --mutations-mode-counts or --mutations-mode-weights, not both." >&2
   exit 1
 fi
 if ! is_pos_int "$MUTATION_LIMIT"; then
@@ -493,6 +553,11 @@ if [[ -n "$DRIFT_ALLOWLIST_FILE" ]]; then
     exit 1
   fi
   load_drift_allowlist "$DRIFT_ALLOWLIST_FILE"
+fi
+
+if [[ "$SMOKE" -eq 1 && "$MUTATION_GENERATION_FLAGS_SEEN" -eq 1 ]]; then
+  echo "Mutation generation options (--mutations-*) require non-smoke mode." >&2
+  exit 1
 fi
 
 if [[ ${#EXAMPLE_IDS[@]} -eq 0 ]]; then
@@ -622,7 +687,26 @@ EOS
       --generate-mutations "$GENERATE_COUNT"
       --mutations-top "$top"
       --mutations-yosys "$YOSYS_RESOLVED"
+      --mutations-seed "$MUTATIONS_SEED"
     )
+    if [[ -n "$MUTATIONS_MODES" ]]; then
+      cmd+=(--mutations-modes "$MUTATIONS_MODES")
+    fi
+    if [[ -n "$MUTATIONS_MODE_COUNTS" ]]; then
+      cmd+=(--mutations-mode-counts "$MUTATIONS_MODE_COUNTS")
+    fi
+    if [[ -n "$MUTATIONS_MODE_WEIGHTS" ]]; then
+      cmd+=(--mutations-mode-weights "$MUTATIONS_MODE_WEIGHTS")
+    fi
+    if [[ -n "$MUTATIONS_PROFILES" ]]; then
+      cmd+=(--mutations-profiles "$MUTATIONS_PROFILES")
+    fi
+    if [[ -n "$MUTATIONS_CFG" ]]; then
+      cmd+=(--mutations-cfg "$MUTATIONS_CFG")
+    fi
+    if [[ -n "$MUTATIONS_SELECT" ]]; then
+      cmd+=(--mutations-select "$MUTATIONS_SELECT")
+    fi
   fi
 
   run_log="${example_out_dir}/run.log"
