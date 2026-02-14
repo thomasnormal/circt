@@ -107,13 +107,18 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      `--opentitan-fpv-bmc-assertion-status-policy-file`
    - strict-gate auto-enables status-policy fail mode when a policy file is
      configured.
-9. Remaining limitation vs Jasper/VCF-style mature flows:
-   - policy enforcement exists, but higher-level policy authoring and
-     diagnostics are still manual; no task-profile-to-policy presets yet.
-10. Next formal milestone (OpenTitan-aligned, backend-generic):
+9. Task-profile-aware status-policy presets and grouped diagnostics completed:
+   - added task-profile preset policy controls:
+     `--opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file`
+   - added grouped violation diagnostics by task_profile/status class:
+     `--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-file`
+10. Remaining limitation vs Jasper/VCF-style mature flows:
+   - policy execution is now structured, but default OpenTitan preset bundles
+     and drift-governed policy rollout workflows are still manual.
+11. Next formal milestone (OpenTitan-aligned, backend-generic):
    - advance per-assertion reporting parity:
-     - add OpenTitan task-profile-aware status-policy presets plus richer
-       violation diagnostics (grouped by status class and target cohort).
+     - ship canonical OpenTitan task-profile preset bundles and add baseline/
+       fail governance for grouped status-policy diagnostics.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
