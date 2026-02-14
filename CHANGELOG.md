@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1301 - February 14, 2026
+
+### OpenTitan FPV Phase D: Cover-Granular Evidence for `covered/unreachable`
+
+1. Extended generic pairwise BMC runner (`utils/run_pairwise_circt_bmc.py`) with cover-granular execution:
+   - `--cover-granular` / `BMC_COVER_GRANULAR`
+   - `--cover-results-file` / `BMC_COVER_RESULTS_OUT`
+2. Added per-cover isolated checks by rewriting:
+   - non-final `verif.assert` -> `verif.assume`
+   - non-target `verif.cover` -> disabled comment
+   to isolate each cover objective.
+3. Added per-cover status rows:
+   - `COVERED` (SAT)
+   - `UNREACHABLE` (UNSAT)
+   - plus `UNKNOWN` / `TIMEOUT` / `ERROR` passthroughs.
+4. Extended OpenTitan FPV BMC runner (`utils/run_opentitan_fpv_circt_bmc.py`):
+   - `--cover-granular` / `BMC_COVER_GRANULAR`
+   - `--cover-results-file` / `BMC_COVER_RESULTS_OUT`
+   - FPV summary now merges assertion + cover rows, allowing non-placeholder
+     `covered` and `unreachable` counters from real cover checks.
+5. Added focused regressions:
+   - `test/Tools/run-pairwise-circt-bmc-cover-granular.test`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-cover-granular.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-pairwise-circt-bmc-assertion-granular.test build-test/test/Tools/run-pairwise-circt-bmc-cover-granular.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-basic.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-task-policy.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-none.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-fail.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-stopat-selector-validation.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-assertion-granular-forwarding.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-assertion-granular.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-cover-granular.test` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-opentitan-fpv-circt-bmc-.*\\.test|run-formal-all-opentitan-fpv-bmc.*\\.test|run-pairwise-circt-bmc-.*\\.test'` PASS (33/33)
+
 ## Iteration 1300 - February 14, 2026
 
 ### Mutation Workflow: Stronger MCY Example Validation Gates
