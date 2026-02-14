@@ -1,0 +1,21 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal %t/src
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: cp %S/../../utils/select_opentitan_formal_cfgs.py %t/utils/select_opentitan_formal_cfgs.py
+// RUN: cp %S/../../utils/resolve_opentitan_formal_compile_contracts.py %t/utils/resolve_opentitan_formal_compile_contracts.py
+// RUN: cp %S/../../utils/run_opentitan_fpv_circt_bmc.py %t/utils/run_opentitan_fpv_circt_bmc.py
+// RUN: printf '#!/usr/bin/env python3\nimport os,pathlib,sys\ncases=\"\"\nout=\"\"\nargs=sys.argv[1:]\ni=0\nwhile i < len(args):\n  if args[i]==\"--cases-file\":\n    cases=args[i+1]; i+=2; continue\n  if args[i]==\"--results-file\":\n    out=args[i+1]; i+=2; continue\n  i+=1\nif not cases or not out:\n  raise SystemExit(10)\nrows=[line for line in pathlib.Path(cases).read_text(encoding=\"utf-8\").splitlines() if line.strip()]\nif len(rows)!=1:\n  raise SystemExit(11)\nparts=rows[0].split(\"\\t\")\ncase_id=parts[0]\ncase_path=parts[4]\nif case_id!=\"foo_sec_cm::foo_tb\":\n  raise SystemExit(12)\npasses=os.environ.get(\"BMC_PREPARE_CORE_PASSES\",\"\")\nif \"--hw-stopat-symbolic=targets=u_a.u_state_regs.state_o\" not in passes:\n  raise SystemExit(13)\nif \"--hw-externalize-modules=module-names=prim_count,prim_double_lfsr\" not in passes:\n  raise SystemExit(14)\npathlib.Path(out).write_text(f\"PASS\\t{case_id}\\t{case_path}\\topentitan\\tFPV_BMC\\tUNSAT\\n\", encoding=\"utf-8\")\n' > %t/utils/run_pairwise_circt_bmc.py
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib,sys\ncore = sys.argv[-1]\ntool = sys.argv[sys.argv.index(\"--tool\") + 1]\ntarget = sys.argv[sys.argv.index(\"--target\") + 1]\ncore_token = core.replace(\":\", \"_\").replace(\".\", \"_\")\nout_dir = pathlib.Path.cwd() / \"build\" / core_token / f\"{target}-{tool}\"\nout_dir.mkdir(parents=True, exist_ok=True)\neda = out_dir / f\"{core_token}.eda.yml\"\neda.write_text(\"\"\"toplevel: foo_tb\\nfiles:\\n- core: lowrisc:foo:pkg:0\\n  file_type: systemVerilogSource\\n  name: ../src/foo.sv\\n\"\"\")\n' > %t/bin/fusesoc
+// RUN: printf 'module foo_tb; endmodule\n' > %t/src/foo.sv
+// RUN: printf '{\n  "name": "top_earlgrey_fpv_sec_cm_cfgs",\n  "flow": "formal",\n  "sub_flow": "fpv",\n  "use_cfgs": [\n    {\n      "name": "foo_sec_cm",\n      "dut": "foo_tb",\n      "fusesoc_core": "lowrisc:fpv:foo_sec_cm",\n      "task": "FpvSecCm",\n      "stopats": ["*u_a.u_state_regs.state_o"],\n      "rel_path": "hw/top_earlgrey/formal/sec_cm/foo"\n    }\n  ]\n}\n' > %t/ot/hw/top_earlgrey/formal/top_earlgrey_sec_cm_fpv_cfgs.hjson
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/select_opentitan_formal_cfgs.py %t/utils/resolve_opentitan_formal_compile_contracts.py %t/utils/run_opentitan_fpv_circt_bmc.py %t/utils/run_pairwise_circt_bmc.py %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec %t/bin/fusesoc
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-fpv-bmc --opentitan %t/ot --circt-verilog %t/bin/circt-verilog --include-lane-regex '^opentitan/FPV_BMC$' --opentitan-fpv-cfg %t/ot/hw/top_earlgrey/formal/top_earlgrey_sec_cm_fpv_cfgs.hjson --select-cfgs 'foo_sec_cm' --opentitan-fpv-target-filter '^foo' --opentitan-fpv-fusesoc-bin %t/bin/fusesoc
+// RUN: FileCheck %s --check-prefix=SUM < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=CASE < %t/out/opentitan-fpv-bmc-results.txt
+//
+// SUM: opentitan{{[[:space:]]+}}FPV_BMC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
+// CASE: PASS{{[[:space:]]+}}foo_sec_cm::foo_tb{{[[:space:]]+}}hw/top_earlgrey/formal/sec_cm/foo/foo_tb{{[[:space:]]+}}opentitan{{[[:space:]]+}}FPV_BMC{{[[:space:]]+}}UNSAT
