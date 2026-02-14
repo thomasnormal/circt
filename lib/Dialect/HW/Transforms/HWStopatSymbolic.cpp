@@ -15,6 +15,7 @@
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -36,7 +37,7 @@ using namespace hw;
 namespace {
 struct StopatSelector {
   std::string key;
-  std::string instanceName;
+  SmallVector<std::string, 4> instancePath;
   std::string portName;
 };
 
@@ -63,22 +64,28 @@ static std::optional<StopatSelector> parseStopatSelector(StringRef raw,
 
   SmallVector<StringRef> parts;
   token.split(parts, '.', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
-  if (parts.size() != 2) {
+  if (parts.size() < 2) {
     error = "unsupported selector form (expected 'inst.port' or '*inst.port')";
     return std::nullopt;
   }
 
-  StringRef instanceName = parts[0].trim();
-  StringRef portName = parts[1].trim();
-  if (instanceName.empty() || portName.empty()) {
+  StringRef portName = parts.back().trim();
+  if (portName.empty()) {
     error = "selector requires non-empty instance and port names";
     return std::nullopt;
   }
 
   StopatSelector out;
-  out.instanceName = instanceName.str();
   out.portName = portName.str();
-  out.key = (instanceName + "." + portName).str();
+  for (size_t i = 0, e = parts.size() - 1; i < e; ++i) {
+    StringRef instanceName = parts[i].trim();
+    if (instanceName.empty()) {
+      error = "selector requires non-empty instance and port names";
+      return std::nullopt;
+    }
+    out.instancePath.push_back(instanceName.str());
+  }
+  out.key = token.str();
   return out;
 }
 
@@ -109,11 +116,48 @@ void HWStopatSymbolicPass::runOnOperation() {
     matchCounts.try_emplace(it.getKey(), 0);
 
   mlir::ModuleOp module = getOperation();
+  llvm::DenseMap<mlir::StringAttr, SmallVector<hw::InstanceOp>>
+      incomingInstancesByModule;
   module.walk([&](hw::InstanceOp instance) {
-    StringRef instanceName = instance.getInstanceName();
+    incomingInstancesByModule[instance.getModuleNameAttr().getAttr()].push_back(
+        instance);
+  });
+
+  auto hasUniqueIncomingPath =
+      [&](hw::HWModuleOp startModule, ArrayRef<std::string> pathPrefix) -> bool {
+    hw::HWModuleOp currentModule = startModule;
+    for (auto it = pathPrefix.rbegin(), e = pathPrefix.rend(); it != e; ++it) {
+      auto incomingIt =
+          incomingInstancesByModule.find(currentModule.getNameAttr());
+      if (incomingIt == incomingInstancesByModule.end())
+        return false;
+      auto &incoming = incomingIt->second;
+      if (incoming.size() != 1)
+        return false;
+      hw::InstanceOp incomingInst = incoming.front();
+      if (incomingInst.getInstanceName() != *it)
+        return false;
+      currentModule = incomingInst->getParentOfType<hw::HWModuleOp>();
+      if (!currentModule && std::next(it) != e)
+        return false;
+    }
+    return true;
+  };
+
+  module.walk([&](hw::InstanceOp instance) {
+    auto *parentOp = instance->getParentOp();
+    auto parentModule = mlir::dyn_cast_or_null<hw::HWModuleOp>(parentOp);
+    if (!parentModule)
+      return;
     for (auto &it : selectorsByKey) {
       const StopatSelector &selector = it.second;
-      if (instanceName != selector.instanceName)
+      if (selector.instancePath.empty())
+        continue;
+      if (instance.getInstanceName() != selector.instancePath.back())
+        continue;
+      if (!hasUniqueIncomingPath(
+              parentModule,
+              ArrayRef<std::string>(selector.instancePath).drop_back()))
         continue;
       for (auto [idx, portAttr] : llvm::enumerate(instance.getResultNames())) {
         auto portName = mlir::cast<mlir::StringAttr>(portAttr).getValue();
