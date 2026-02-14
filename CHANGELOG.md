@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1314 - February 14, 2026
+
+### Mutation Workflow: Strict Baseline Example-Parity Requirement
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with:
+   - `--require-baseline-example-parity`
+2. Added strict-option validation:
+   - `--require-baseline-example-parity` now requires `--fail-on-diff`.
+3. Extended drift evaluation with opt-in baseline/current parity checks:
+   - when strict option is enabled, baseline examples missing from current
+     summary are emitted as drift candidates:
+     - metric: `row`
+     - detail: `missing_current_row`
+4. Preserved existing default behavior without strict option:
+   - no baseline-only row regressions are emitted unless explicitly requested.
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-example-parity-requires-fail-on-diff.test`
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-example-parity-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-example-parity-allowlist.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (31/31)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-115632` PASS
+
 ## Iteration 1313 - February 14, 2026
 
 ### Mutation Workflow: Strict Baseline Policy-Fingerprint Requirement
