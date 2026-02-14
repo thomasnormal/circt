@@ -67375,3 +67375,11 @@ See CHANGELOG.md on recent progress.
     - Added regression coverage:
       - `run-mutation-mcy-examples-native-mutation-ops-missing-value.test`
       - `run-mutation-mcy-examples-native-real-harness-args-missing-value.test`.
+43. Shell-safe native real harness script path forwarding
+    (February 14, 2026):
+    - Native real harness script paths are now shell-escaped before being
+      emitted into generated tests-manifest commands (`bash <script> ...`).
+    - This hardens execution for paths containing spaces/metacharacters and
+      prevents command-splitting path bugs in real harness mode.
+    - Added regression coverage:
+      `run-mutation-mcy-examples-native-real-harness-manifest-override-space-path-pass.test`.

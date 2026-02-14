@@ -1,0 +1,20 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/unknown %t/examples/hooks\ dir %t/bin
+// RUN: printf 'module unknown(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/unknown/unknown.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SURVIVED > result.txt\n' > %t/examples/hooks\ dir/real\ unknown.sh
+// RUN: chmod +x %t/examples/hooks\ dir/real\ unknown.sh
+// RUN: { printf 'unknown\tunknown/unknown.v\tunknown'; for _ in $(seq 1 24); do printf '\t-'; done; printf '\thooks dir/real unknown.sh\n'; } > %t/manifest.tsv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nmanifest=""\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --tests-manifest) manifest="$2"; shift 2 ;;\n    --tests-manifest=*) manifest="${1#*=}"; shift ;;\n    --work-dir) work_dir="$2"; shift 2 ;;\n    --work-dir=*) work_dir="${1#*=}"; shift ;;\n    *) shift ;;\n  esac\ndone\nif [[ -z "$manifest" ]]; then\n  echo "missing tests manifest" >&2\n  exit 8\nfi\nif ! grep -Fq "hooks\\ dir/real\\ unknown.sh" "$manifest"; then\n  echo "expected escaped space path in harness command" >&2\n  cat "$manifest" >&2\n  exit 7\nfi\nif grep -Fq "hooks dir/real unknown.sh ../mutant.v" "$manifest"; then\n  echo "found unescaped space path in harness command" >&2\n  cat "$manifest" >&2\n  exit 6\nfi\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t1\\nrelevant_mutants\\t2\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+
+// RUN: %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example-manifest %t/manifest.tsv \
+// RUN:   --example unknown \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --mutations-backend native \
+// RUN:   --native-tests-mode real \
+// RUN:   --out-dir %t/out
+
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+
+// SUMMARY: unknown{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}50.00{{[[:space:]]}}0
