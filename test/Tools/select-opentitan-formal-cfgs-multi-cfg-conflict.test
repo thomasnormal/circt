@@ -1,0 +1,7 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '{\n  "name": "top_earlgrey_fpv_ip_cfgs",\n  "use_cfgs": [\n    {\n      "name": "foo_fpv",\n      "dut": "foo_tb",\n      "fusesoc_core": "lowrisc:dv:foo_fpv_ip"\n    }\n  ]\n}\n' > %t/top_earlgrey_fpv_ip_cfgs.hjson
+// RUN: printf '{\n  "name": "top_earlgrey_fpv_prim_cfgs",\n  "use_cfgs": [\n    {\n      "name": "foo_fpv",\n      "dut": "foo_tb",\n      "fusesoc_core": "lowrisc:dv:foo_fpv_prim"\n    }\n  ]\n}\n' > %t/top_earlgrey_fpv_prim_cfgs.hjson
+// RUN: not python3 %S/../../utils/select_opentitan_formal_cfgs.py --cfg-file %t/top_earlgrey_fpv_ip_cfgs.hjson --cfg-file %t/top_earlgrey_fpv_prim_cfgs.hjson --out-manifest %t/manifest.tsv 2>&1 | FileCheck %s
+//
+// CHECK: duplicate target name with conflicting payload across cfg files: name='foo_fpv'

@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1349 - February 14, 2026
+
+### OpenTitan FPV Planning: Multi-CFG HJSON Ingestion Hardening
+
+1. Extended `utils/select_opentitan_formal_cfgs.py` to accept repeatable
+   `--cfg-file` inputs and merge selected targets across multiple root cfgs in
+   deterministic order.
+2. Added fail-closed duplicate handling in selector merge logic:
+   - identical target payloads are deduplicated.
+   - conflicting payloads for the same target name now error out with an
+     explicit diagnostic.
+3. Extended `utils/run_formal_all.sh` FPV planning plumbing:
+   - `--opentitan-fpv-cfg` is now repeatable end-to-end.
+   - FPV manifest/contract planning now forwards all cfg files to
+     `select_opentitan_formal_cfgs.py`.
+   - FPV cfg presence/validation gates now evaluate the cfg-file list.
+4. Added focused regressions:
+   - `test/Tools/select-opentitan-formal-cfgs-multi-cfg.test`
+   - `test/Tools/select-opentitan-formal-cfgs-multi-cfg-conflict.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-target-manifest-multi-cfg.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/select_opentitan_formal_cfgs.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(select-opentitan-formal-cfgs-(basic|unknown-select|multi-cfg|multi-cfg-conflict)|run-formal-all-opentitan-fpv-target-manifest(-multi-cfg)?|run-formal-all-opentitan-select-cfgs-requires-fpv-cfg|run-formal-all-help)'` PASS (8 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(run-formal-all-opentitan|select-opentitan-formal-cfgs)'` PASS (89 selected)
+
 ## Iteration 1348 - February 14, 2026
 
 ### Mutation Workflow: Manifest-Level Timeout Overrides
