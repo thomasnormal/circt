@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1389 - February 14, 2026
+
+### Mutation Workflow: Native Real Harness Reliability + Safer Native Mutations
+
+1. Hardened native real-test execution for `bitcnt` in
+   `utils/run_mutation_mcy_examples.sh`:
+   - real harness now compiles with an `iverilog` compatibility sequence
+     (`-g2005` first, then `-g2012`).
+   - compile/runtime failures now emit `result.txt` as `DETECTED` instead of
+     surfacing as missing-result-file `errors`.
+2. Improved native non-smoke mutation operator safety in
+   `utils/run_mutation_mcy_examples.sh`:
+   - removed risky arithmetic token flips:
+     - `PLUS_TO_MINUS`
+     - `MINUS_TO_PLUS`
+   - added safer operators:
+     - `LE_TO_LT`
+     - `GE_TO_GT`
+     - `UNARY_NOT_DROP`
+   - tightened literal rewrites to explicit 1-bit forms (`1'b*`, `1'd*`).
+3. Added focused regression tests:
+   - `test/Tools/run-mutation-mcy-examples-native-mutation-plan-safe-ops-pass.test`
+   - `test/Tools/run-mutation-mcy-examples-native-real-bitcnt-script-fallback-pass.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (136 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --mutations-backend native --native-tests-mode real --out-dir /tmp/mcy_examples_real_native_mode_real_1771084209` PASS
+  - `bitcnt`: `detected=6 relevant=8 coverage=75.00 errors=0`
+
 ## Iteration 1388 - February 14, 2026
 
 ### Mutation Workflow: Native Real-Test Harness Mode
