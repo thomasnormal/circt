@@ -172,6 +172,8 @@ RETRYABLE_LAUNCH_PATTERNS = (
     "too many open files",
     "emfile",
     "enfile",
+    "cannot allocate memory",
+    "enomem",
 )
 
 RETRYABLE_LAUNCH_REASON_PATTERNS = (
@@ -181,6 +183,7 @@ RETRYABLE_LAUNCH_REASON_PATTERNS = (
     ("resource_temporarily_unavailable", ("resource temporarily unavailable",)),
     ("stale_file_handle", ("stale file handle", "estale")),
     ("too_many_open_files", ("too many open files", "emfile", "enfile")),
+    ("cannot_allocate_memory", ("cannot allocate memory", "enomem")),
 )
 
 UNKNOWN_MODULE_PATTERNS = (
@@ -921,6 +924,8 @@ def run_and_log(
                 and exc.errno == getattr(errno, "ENFILE", None)
             ):
                 os_retry_reason = "too_many_open_files"
+            elif exc.errno == errno.ENOMEM:
+                os_retry_reason = "cannot_allocate_memory"
             if os_retry_reason:
                 if launch_retry_count < launch_retry_attempts:
                     launch_retry_count += 1

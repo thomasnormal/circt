@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1415 - February 14, 2026
+
+### Formal BMC/LEC: `cannot_allocate_memory` Launch Retry Classification
+
+1. Extended formal launch retry taxonomy with explicit
+   `cannot_allocate_memory` classification across BMC/LEC runners:
+   - `utils/run_pairwise_circt_bmc.py`
+   - `utils/run_sv_tests_circt_bmc.sh`
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - `utils/run_yosys_sva_circt_bmc.sh`
+2. Hardened pairwise retryable launcher exception mapping:
+   - transient `OSError` `errno.ENOMEM` is now classified as retryable
+     `cannot_allocate_memory`.
+3. Extended launch-event summary counters in `run_formal_all.sh`:
+   - `*_launch_cannot_allocate_memory_events`
+   - updated classification coverage in
+     `test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test`
+     to include both dedicated and dynamic reason counters for
+     `cannot_allocate_memory`.
+4. Updated canonical per-reason budget policy defaults:
+   - `utils/opentitan_fpv_policy/bmc_launch_reason_event_budget.tsv` now carries
+     explicit `exact:cannot_allocate_memory` budget row.
+5. Added focused regressions:
+   - `test/Tools/run-pairwise-circt-bmc-launch-retry-cannot-allocate-memory.test`
+   - `test/Tools/run-sv-tests-bmc-launch-retry-cannot-allocate-memory.test`
+   - `test/Tools/run-sv-tests-lec-verilog-cannot-allocate-memory-retry.test`
+   - `test/Tools/run-verilator-verification-circt-bmc-launch-retry-cannot-allocate-memory.test`
+   - `test/Tools/run-yosys-sva-bmc-launch-retry-cannot-allocate-memory.test`
+6. Validation:
+   - focused new-class slice:
+     - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-pairwise-circt-bmc-launch-retry-cannot-allocate-memory.test build-test/test/Tools/run-sv-tests-bmc-launch-retry-cannot-allocate-memory.test build-test/test/Tools/run-sv-tests-lec-verilog-cannot-allocate-memory-retry.test build-test/test/Tools/run-verilator-verification-circt-bmc-launch-retry-cannot-allocate-memory.test build-test/test/Tools/run-yosys-sva-bmc-launch-retry-cannot-allocate-memory.test build-test/test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test` PASS
+   - compatibility slice:
+     - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-pairwise-circt-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-sv-tests-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-sv-tests-lec-verilog-stale-file-handle-retry.test build-test/test/Tools/run-verilator-verification-circt-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-yosys-sva-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-pairwise-circt-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-sv-tests-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-sv-tests-lec-verilog-too-many-open-files-retry.test build-test/test/Tools/run-verilator-verification-circt-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-yosys-sva-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-pairwise-circt-bmc-launch-retry-cannot-allocate-memory.test build-test/test/Tools/run-sv-tests-bmc-launch-retry-cannot-allocate-memory.test build-test/test/Tools/run-sv-tests-lec-verilog-cannot-allocate-memory-retry.test build-test/test/Tools/run-verilator-verification-circt-bmc-launch-retry-cannot-allocate-memory.test build-test/test/Tools/run-yosys-sva-bmc-launch-retry-cannot-allocate-memory.test build-test/test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test build-test/test/Tools/run-sv-tests-lec-verilog-text-file-busy-retry.test build-test/test/Tools/run-sv-tests-lec-opt-text-file-busy-retry.test build-test/test/Tools/run-formal-all-strict-gate-bmc-launch-counters-defaults.test build-test/test/Tools/run-formal-all-strict-gate-lec-launch-counters-defaults.test build-test/test/Tools/run-formal-all-sv-tests-launch-events-summary.test build-test/test/Tools/run-formal-all-non-sv-bmc-launch-events-summary.test` PASS
+
 ## Iteration 1414 - February 14, 2026
 
 ### Formal BMC/LEC: `too_many_open_files` Launch Retry Classification

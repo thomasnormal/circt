@@ -1,0 +1,17 @@
+// RUN: rm -rf %t/verilator %t/keep %t/verilog-launch-count.txt
+// RUN: mkdir -p %t/verilator/tests/asserts %t/bin
+// RUN: printf 'module top;\n  logic clk;\n  assert property (@(posedge clk) 1);\nendmodule\n' > %t/verilator/tests/asserts/retry_case.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nSTATE_FILE="%t/verilog-launch-count.txt"\nlaunch_count=0\nif [[ -f "$STATE_FILE" ]]; then\n  launch_count="$(cat "$STATE_FILE")"\nfi\nlaunch_count=$((launch_count + 1))\necho "$launch_count" > "$STATE_FILE"\nif [[ "$launch_count" -eq 1 ]]; then\n  echo "Cannot allocate memory" >&2\n  exit 126\nfi\nprintf "module {\\n  hw.module @top() {}\\n}\\n"\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\necho "BMC_RESULT=UNSAT"\nexit 0\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-bmc
+// RUN: env KEEP_LOGS_DIR=%t/keep CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc TEST_FILTER=retry_case BMC_LAUNCH_RETRY_ATTEMPTS=2 BMC_LAUNCH_RETRY_BACKOFF_SECS=0 BMC_LAUNCH_EVENTS_OUT=%t/launch.tsv OUT=%t/results.tsv %S/../../utils/run_verilator_verification_circt_bmc.sh %t/verilator > %t/run.log
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/run.log
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+// RUN: FileCheck %s --check-prefix=RETRYLOG < %t/keep/tests__asserts__retry_case.circt-verilog.log
+// RUN: FileCheck %s --check-prefix=LAUNCH < %t/launch.tsv
+//
+// SUMMARY: verilator-verification summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// RESULTS: PASS{{[[:space:]]+}}retry_case{{[[:space:]]+}}{{.*}}retry_case.sv
+// RETRYLOG: frontend launch retry attempt=1
+// LAUNCH: RETRY{{[[:space:]]+}}retry_case{{[[:space:]]+}}{{.*}}retry_case.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}circt-verilog{{[[:space:]]+}}cannot_allocate_memory{{[[:space:]]+}}1{{[[:space:]]+}}0.000{{[[:space:]]+}}126
