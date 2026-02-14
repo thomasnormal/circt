@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1365 - February 14, 2026
+
+### Strict Gate: Launch-Telemetry Counter Coupling (BMC/LEC)
+
+1. Extended `utils/run_formal_all.sh` strict-gate defaults to enforce launch
+   telemetry drift checks by counter-prefix:
+   - `bmc_launch_`
+   - `lec_launch_`
+2. This uses existing strict-gate counter-prefix enforcement and is now
+   auto-enabled by `--strict-gate` (no extra CLI knobs required).
+3. Added focused regressions for strict default behavior:
+   - `test/Tools/run-formal-all-strict-gate-bmc-launch-counters-defaults.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-launch-counters-defaults.test`
+4. Updated formal roadmap notes in `PROJECT_PLAN.md` to mark launch-counter
+   strict coupling as landed and narrow remaining launch-governance gaps.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-strict-gate-bmc-launch-counters-defaults.test build-test/test/Tools/run-formal-all-strict-gate-lec-launch-counters-defaults.test build-test/test/Tools/run-formal-all-strict-gate-lec-counter-prefix.test build-test/test/Tools/run-formal-all-strict-gate-bmc-reason-keys-defaults.test build-test/test/Tools/run-formal-all-strict-gate-lec-not-run-reason-keys-defaults.test` PASS (5/5)
+
 ## Iteration 1364 - February 14, 2026
 
 ### Mutation Workflow: Dedicated Retry-Reason Baseline Schema Migration
