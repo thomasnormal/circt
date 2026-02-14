@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1412 - February 14, 2026
+
+### Formal Strict-Gate: Per-Reason Launch Event Budget Files + Policy Wrapper Forwarding
+
+1. Extended `utils/run_formal_all.sh` with selector-based per-reason launch
+   event budgets for non-allowlisted launch counters:
+   - `--bmc-launch-reason-event-budget-file`
+   - `--lec-launch-reason-event-budget-file`
+2. Implemented strict-gate enforcement of per-reason max budgets with selectors:
+   - `exact:<token>` (or bare token)
+   - `prefix:<prefix>`
+   - `regex:<pattern>`
+   - `*` wildcard fallback
+3. Preserved allowlist semantics: launch reason-key allowlisted entries are
+   excluded from per-reason budget enforcement, and allowlist precondition
+   checks now accept budget-file mode as a valid governed path.
+4. Extended OpenTitan FPV policy wrappers for check-mode budget forwarding:
+   - `utils/run_opentitan_fpv_bmc_policy_workflow.sh`:
+     - `--check-bmc-launch-reason-event-budget-file`
+     - `--check-lec-launch-reason-event-budget-file`
+   - `utils/run_opentitan_fpv_bmc_policy_profiles.sh`:
+     - workflow defaults + profile TSV optional columns:
+       - `check_bmc_launch_reason_event_budget_file`
+       - `check_lec_launch_reason_event_budget_file`
+5. Updated canonical OpenTitan FPV canary policy inputs:
+   - added `utils/opentitan_fpv_policy/bmc_launch_reason_event_budget.tsv`
+   - wired in `utils/opentitan_fpv_policy/profile_packs.tsv`.
+6. Added/updated regressions:
+   - added:
+     - `test/Tools/run-formal-all-strict-gate-bmc-launch-reason-event-budget-file.test`
+     - `test/Tools/run-formal-all-strict-gate-lec-launch-reason-event-budget-file.test`
+   - updated:
+     - `test/Tools/run-formal-all-launch-reason-key-allowlists-require-gate.test`
+     - `test/Tools/run-opentitan-fpv-bmc-policy-workflow.test`
+     - `test/Tools/run-opentitan-fpv-bmc-policy-profiles.test`
+7. Validation:
+   - focused:
+     - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-launch-reason-key-allowlists-require-gate.test build-test/test/Tools/run-formal-all-strict-gate-bmc-launch-reason-events-budget.test build-test/test/Tools/run-formal-all-strict-gate-lec-launch-reason-events-budget.test build-test/test/Tools/run-formal-all-strict-gate-bmc-launch-reason-event-budget-file.test build-test/test/Tools/run-formal-all-strict-gate-lec-launch-reason-event-budget-file.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-workflow.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-profiles.test` PASS
+   - broader launch-policy slice:
+     - `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-(pairwise-circt-bmc|sv-tests-bmc|sv-tests-lec|verilator-verification-circt-bmc|yosys-sva-bmc|formal-all-.*launch|opentitan-fpv-bmc-policy-(workflow|profiles)).*\\.test'` PASS (`145` passed, `2` unsupported)
+
 ## Iteration 1411 - February 14, 2026
 
 ### Formal BMC/LEC: Expanded Launch Retry Reason Taxonomy

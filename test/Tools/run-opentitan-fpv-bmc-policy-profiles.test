@@ -7,9 +7,11 @@
 // RUN: mkdir -p %t/allow
 // RUN: printf 'exact:retryable_exit_code_126\n' > %t/global-bmc-launch-allow.txt
 // RUN: printf 'exact:retryable_exit_code_127\n' > %t/allow/sec-cm-bmc-launch-allow.txt
-// RUN: printf 'profile_name\tfpv_cfg\tbaseline_prefix\tselect_cfgs\ttarget_filter\tallow_unfiltered\tmax_targets\tdescription\tverilog_cache_mode\tverilog_cache_dir\tcheck_bmc_launch_reason_key_allowlist_file\tcheck_max_bmc_launch_reason_event_rows\tcheck_fail_on_any_bmc_launch_reason_events\nprim_all\thw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson\topentitan-fpv-bmc-prim\tfoo_fpv,bar_fpv\t\t0\t24\tprim cohort\t\t\t\t\t\nsec_cm_all\thw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson\topentitan-fpv-bmc-sec-cm\t\t^sec_cm_.*\t1\t0\tsec_cm cohort\treadwrite\t%t/cache-sec-cm\tallow/sec-cm-bmc-launch-allow.txt\t1\t0\n' > %t/profiles.tsv
+// RUN: printf 'exact:retryable_exit_code_126\t2\n' > %t/global-bmc-launch-budget.tsv
+// RUN: printf 'exact:retryable_exit_code_127\t1\n' > %t/allow/sec-cm-bmc-launch-budget.tsv
+// RUN: printf 'profile_name\tfpv_cfg\tbaseline_prefix\tselect_cfgs\ttarget_filter\tallow_unfiltered\tmax_targets\tdescription\tverilog_cache_mode\tverilog_cache_dir\tcheck_bmc_launch_reason_key_allowlist_file\tcheck_max_bmc_launch_reason_event_rows\tcheck_bmc_launch_reason_event_budget_file\tcheck_fail_on_any_bmc_launch_reason_events\nprim_all\thw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson\topentitan-fpv-bmc-prim\tfoo_fpv,bar_fpv\t\t0\t24\tprim cohort\t\t\t\t\t\t\nsec_cm_all\thw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson\topentitan-fpv-bmc-sec-cm\t\t^sec_cm_.*\t1\t0\tsec_cm cohort\treadwrite\t%t/cache-sec-cm\tallow/sec-cm-bmc-launch-allow.txt\t1\tallow/sec-cm-bmc-launch-budget.tsv\t0\n' > %t/profiles.tsv
 // RUN: chmod +x %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh %t/utils/fake-workflow.sh
-// RUN: LOG_DIR=%t/logs %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh --run-workflow %t/utils/fake-workflow.sh --profiles-file %t/profiles.tsv --opentitan-root %t/ot --out-dir %t/out --profile prim_all --profile sec_cm_all --no-strict-gate --workflow-verilog-cache-mode read --workflow-verilog-cache-dir %t/cache-global --workflow-check-bmc-launch-reason-key-allowlist-file %t/global-bmc-launch-allow.txt --workflow-check-max-bmc-launch-reason-event-rows 4 --workflow-check-fail-on-any-bmc-launch-reason-events check --circt-verilog %t/bin/circt-verilog
+// RUN: LOG_DIR=%t/logs %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh --run-workflow %t/utils/fake-workflow.sh --profiles-file %t/profiles.tsv --opentitan-root %t/ot --out-dir %t/out --profile prim_all --profile sec_cm_all --no-strict-gate --workflow-verilog-cache-mode read --workflow-verilog-cache-dir %t/cache-global --workflow-check-bmc-launch-reason-key-allowlist-file %t/global-bmc-launch-allow.txt --workflow-check-max-bmc-launch-reason-event-rows 4 --workflow-check-bmc-launch-reason-event-budget-file %t/global-bmc-launch-budget.tsv --workflow-check-fail-on-any-bmc-launch-reason-events check --circt-verilog %t/bin/circt-verilog
 // RUN: FileCheck %s --check-prefix=CALL1 < %t/logs/call-1.args
 // RUN: FileCheck %s --check-prefix=CALL2 < %t/logs/call-2.args
 // RUN: not rg -q -- '--check-fail-on-any-bmc-launch-reason-events' %t/logs/call-2.args
@@ -26,6 +28,8 @@
 // CALL1-NEXT: {{.*/}}global-bmc-launch-allow.txt
 // CALL1: --check-max-bmc-launch-reason-event-rows
 // CALL1-NEXT: 4
+// CALL1: --check-bmc-launch-reason-event-budget-file
+// CALL1-NEXT: {{.*/}}global-bmc-launch-budget.tsv
 // CALL1: --check-fail-on-any-bmc-launch-reason-events
 // CALL1: --no-strict-gate
 // CALL1: --baseline-prefix
@@ -56,6 +60,8 @@
 // CALL2-NEXT: {{.*/}}allow/sec-cm-bmc-launch-allow.txt
 // CALL2: --check-max-bmc-launch-reason-event-rows
 // CALL2-NEXT: 1
+// CALL2: --check-bmc-launch-reason-event-budget-file
+// CALL2-NEXT: {{.*/}}allow/sec-cm-bmc-launch-budget.tsv
 // CALL2: --no-strict-gate
 // CALL2: --baseline-prefix
 // CALL2-NEXT: opentitan-fpv-bmc-sec-cm

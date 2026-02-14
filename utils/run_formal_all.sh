@@ -426,6 +426,22 @@ Options:
                          Fail when any `LEC*` lane reports non-allowlisted
                          launch-reason event rows sum
                          (`sum(lec_launch_reason_*_events) > N`)
+  --bmc-launch-reason-event-budget-file FILE
+                         Optional per-reason max budget file for non-allowlisted
+                         BMC launch-reason event counters.
+                         Format per non-comment line:
+                           <selector><TAB><max_rows>
+                         selector supports:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
+                         Special selector:
+                           *              (default fallback budget)
+  --lec-launch-reason-event-budget-file FILE
+                         Optional per-reason max budget file for non-allowlisted
+                         LEC launch-reason event counters.
+                         Format is identical to
+                         --bmc-launch-reason-event-budget-file.
   --fail-on-new-bmc-launch-reason-keys
                          Fail when new launch reason keys derived from
                          `BMC_LAUNCH_EVENTS_OUT` appear vs baseline for any
@@ -2730,6 +2746,8 @@ MAX_BMC_LAUNCH_EVENT_ROWS=""
 MAX_LEC_LAUNCH_EVENT_ROWS=""
 MAX_BMC_LAUNCH_REASON_EVENT_ROWS=""
 MAX_LEC_LAUNCH_REASON_EVENT_ROWS=""
+BMC_LAUNCH_REASON_EVENT_BUDGET_FILE=""
+LEC_LAUNCH_REASON_EVENT_BUDGET_FILE=""
 FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS=0
 FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS=0
 BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
@@ -3566,6 +3584,10 @@ while [[ $# -gt 0 ]]; do
       MAX_BMC_LAUNCH_REASON_EVENT_ROWS="$2"; shift 2 ;;
     --max-lec-launch-reason-event-rows)
       MAX_LEC_LAUNCH_REASON_EVENT_ROWS="$2"; shift 2 ;;
+    --bmc-launch-reason-event-budget-file)
+      BMC_LAUNCH_REASON_EVENT_BUDGET_FILE="$2"; shift 2 ;;
+    --lec-launch-reason-event-budget-file)
+      LEC_LAUNCH_REASON_EVENT_BUDGET_FILE="$2"; shift 2 ;;
     --fail-on-new-bmc-launch-reason-keys)
       FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS=1; shift ;;
     --fail-on-new-lec-launch-reason-keys)
@@ -6504,16 +6526,18 @@ if [[ -n "$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && \
       "$FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS" != "1" && \
       "$FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS" != "1" && \
       -z "$MAX_BMC_LAUNCH_REASON_EVENT_ROWS" && \
+      -z "$BMC_LAUNCH_REASON_EVENT_BUDGET_FILE" && \
       "$STRICT_GATE" != "1" ]]; then
-  echo "--bmc-launch-reason-key-allowlist-file requires --fail-on-new-bmc-launch-reason-keys, --fail-on-any-bmc-launch-reason-events, --max-bmc-launch-reason-event-rows, or --strict-gate" >&2
+  echo "--bmc-launch-reason-key-allowlist-file requires --fail-on-new-bmc-launch-reason-keys, --fail-on-any-bmc-launch-reason-events, --max-bmc-launch-reason-event-rows, --bmc-launch-reason-event-budget-file, or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && \
       "$FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS" != "1" && \
       "$FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS" != "1" && \
       -z "$MAX_LEC_LAUNCH_REASON_EVENT_ROWS" && \
+      -z "$LEC_LAUNCH_REASON_EVENT_BUDGET_FILE" && \
       "$STRICT_GATE" != "1" ]]; then
-  echo "--lec-launch-reason-key-allowlist-file requires --fail-on-new-lec-launch-reason-keys, --fail-on-any-lec-launch-reason-events, --max-lec-launch-reason-event-rows, or --strict-gate" >&2
+  echo "--lec-launch-reason-key-allowlist-file requires --fail-on-new-lec-launch-reason-keys, --fail-on-any-lec-launch-reason-events, --max-lec-launch-reason-event-rows, --lec-launch-reason-event-budget-file, or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
@@ -6522,6 +6546,14 @@ if [[ -n "$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$BMC_LAUNCH_REASON_KEY
 fi
 if [[ -n "$LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
   echo "LEC launch reason-key allowlist file not readable: $LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$BMC_LAUNCH_REASON_EVENT_BUDGET_FILE" && ! -r "$BMC_LAUNCH_REASON_EVENT_BUDGET_FILE" ]]; then
+  echo "BMC launch reason-event budget file not readable: $BMC_LAUNCH_REASON_EVENT_BUDGET_FILE" >&2
+  exit 1
+fi
+if [[ -n "$LEC_LAUNCH_REASON_EVENT_BUDGET_FILE" && ! -r "$LEC_LAUNCH_REASON_EVENT_BUDGET_FILE" ]]; then
+  echo "LEC launch reason-event budget file not readable: $LEC_LAUNCH_REASON_EVENT_BUDGET_FILE" >&2
   exit 1
 fi
 if [[ -n "$MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" && "$FAIL_ON_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY" != "1" && "$FAIL_ON_NEW_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -18889,6 +18921,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       -n "$MAX_LEC_LAUNCH_EVENT_ROWS" || \
       -n "$MAX_BMC_LAUNCH_REASON_EVENT_ROWS" || \
       -n "$MAX_LEC_LAUNCH_REASON_EVENT_ROWS" || \
+      -n "$BMC_LAUNCH_REASON_EVENT_BUDGET_FILE" || \
+      -n "$LEC_LAUNCH_REASON_EVENT_BUDGET_FILE" || \
       "$FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS" == "1" || \
       "$FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS" == "1" || \
       -n "$BMC_COUNTER_KEYS_CSV" || \
@@ -19018,6 +19052,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS="$FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS" \
   BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" \
   LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" \
+  BMC_LAUNCH_REASON_EVENT_BUDGET_FILE="$BMC_LAUNCH_REASON_EVENT_BUDGET_FILE" \
+  LEC_LAUNCH_REASON_EVENT_BUDGET_FILE="$LEC_LAUNCH_REASON_EVENT_BUDGET_FILE" \
   BMC_COUNTER_KEYS="$BMC_COUNTER_KEYS_CSV" \
   BMC_COUNTER_PREFIXES="$BMC_COUNTER_PREFIXES_CSV" \
   LEC_COUNTER_KEYS="$LEC_COUNTER_KEYS_CSV" \
@@ -19526,6 +19562,147 @@ def is_allowed_lec_launch_reason_key(reason_key: str) -> bool:
         lec_launch_reason_key_allow_exact,
         lec_launch_reason_key_allow_prefix,
         lec_launch_reason_key_allow_regex,
+    )
+
+def load_launch_reason_event_budget_file(path_value: str, label: str):
+    exact_limits = {}
+    prefix_rules = []
+    regex_rules = []
+    wildcard_limit = None
+    if not path_value:
+        return exact_limits, prefix_rules, regex_rules, wildcard_limit
+    budget_path = Path(path_value)
+    if not budget_path.exists():
+        raise SystemExit(f"{label} file not found: {budget_path}")
+    with budget_path.open() as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [part.strip() for part in line.split("\t")]
+            if len(parts) != 2:
+                raise SystemExit(
+                    f"{label} line {lineno} must be '<selector><TAB><max_rows>' in {budget_path}"
+                )
+            selector_token, max_rows_raw = parts
+            if not selector_token:
+                raise SystemExit(
+                    f"{label} line {lineno} has empty selector in {budget_path}"
+                )
+            if not re.fullmatch(r"[0-9]+", max_rows_raw):
+                raise SystemExit(
+                    f"{label} line {lineno} has invalid max_rows '{max_rows_raw}' in {budget_path}"
+                )
+            max_rows = int(max_rows_raw)
+            kind = "exact"
+            payload = selector_token
+            if selector_token != "*" and ":" in selector_token:
+                maybe_kind, maybe_payload = selector_token.split(":", 1)
+                if maybe_kind in {"exact", "prefix", "regex"}:
+                    kind = maybe_kind
+                    payload = maybe_payload.strip()
+            if selector_token == "*":
+                kind = "wildcard"
+                payload = "*"
+            if kind == "wildcard":
+                if wildcard_limit is not None and wildcard_limit != max_rows:
+                    raise SystemExit(
+                        f"{label} line {lineno} conflicts with prior wildcard budget in {budget_path}"
+                    )
+                wildcard_limit = max_rows
+                continue
+            if not payload:
+                raise SystemExit(
+                    f"{label} line {lineno} has empty selector payload in {budget_path}"
+                )
+            if kind == "exact":
+                existing = exact_limits.get(payload)
+                if existing is not None and existing != max_rows:
+                    raise SystemExit(
+                        f"{label} line {lineno} conflicts with prior exact selector '{payload}' in {budget_path}"
+                    )
+                exact_limits[payload] = max_rows
+            elif kind == "prefix":
+                prefix_rules.append((payload, max_rows, lineno))
+            elif kind == "regex":
+                try:
+                    regex_rules.append((re.compile(payload), max_rows, lineno))
+                except re.error as exc:
+                    raise SystemExit(
+                        f"{label} invalid regex at {budget_path}:{lineno}: {exc}"
+                    )
+            else:
+                raise SystemExit(
+                    f"{label} line {lineno} unsupported selector kind '{kind}' in {budget_path}"
+                )
+    prefix_rules.sort(key=lambda item: (-len(item[0]), item[2]))
+    return exact_limits, prefix_rules, regex_rules, wildcard_limit
+
+def launch_reason_budget_for_key(
+    reason_key: str,
+    exact_limits,
+    prefix_rules,
+    regex_rules,
+    wildcard_limit,
+):
+    if reason_key in exact_limits:
+        return exact_limits[reason_key], f"exact:{reason_key}"
+    for prefix, max_rows, _ in prefix_rules:
+        if reason_key.startswith(prefix):
+            return max_rows, f"prefix:{prefix}"
+    for pattern, max_rows, _ in regex_rules:
+        if pattern.search(reason_key):
+            return max_rows, f"regex:{pattern.pattern}"
+    if wildcard_limit is not None:
+        return wildcard_limit, "*"
+    return None, ""
+
+def load_bmc_launch_reason_event_budget():
+    global bmc_launch_reason_budget_exact
+    global bmc_launch_reason_budget_prefix
+    global bmc_launch_reason_budget_regex
+    global bmc_launch_reason_budget_wildcard
+    (
+        bmc_launch_reason_budget_exact,
+        bmc_launch_reason_budget_prefix,
+        bmc_launch_reason_budget_regex,
+        bmc_launch_reason_budget_wildcard,
+    ) = load_launch_reason_event_budget_file(
+        bmc_launch_reason_event_budget_file,
+        "BMC launch reason-event budget",
+    )
+
+def load_lec_launch_reason_event_budget():
+    global lec_launch_reason_budget_exact
+    global lec_launch_reason_budget_prefix
+    global lec_launch_reason_budget_regex
+    global lec_launch_reason_budget_wildcard
+    (
+        lec_launch_reason_budget_exact,
+        lec_launch_reason_budget_prefix,
+        lec_launch_reason_budget_regex,
+        lec_launch_reason_budget_wildcard,
+    ) = load_launch_reason_event_budget_file(
+        lec_launch_reason_event_budget_file,
+        "LEC launch reason-event budget",
+    )
+
+def bmc_launch_reason_event_budget_for_key(reason_key: str):
+    return launch_reason_budget_for_key(
+        reason_key,
+        bmc_launch_reason_budget_exact,
+        bmc_launch_reason_budget_prefix,
+        bmc_launch_reason_budget_regex,
+        bmc_launch_reason_budget_wildcard,
+    )
+
+def lec_launch_reason_event_budget_for_key(reason_key: str):
+    return launch_reason_budget_for_key(
+        reason_key,
+        lec_launch_reason_budget_exact,
+        lec_launch_reason_budget_prefix,
+        lec_launch_reason_budget_regex,
+        lec_launch_reason_budget_wildcard,
     )
 
 
@@ -21666,6 +21843,12 @@ bmc_launch_reason_key_allowlist_file = os.environ.get(
 lec_launch_reason_key_allowlist_file = os.environ.get(
     "LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE", ""
 ).strip()
+bmc_launch_reason_event_budget_file = os.environ.get(
+    "BMC_LAUNCH_REASON_EVENT_BUDGET_FILE", ""
+).strip()
+lec_launch_reason_event_budget_file = os.environ.get(
+    "LEC_LAUNCH_REASON_EVENT_BUDGET_FILE", ""
+).strip()
 bmc_counter_keys = sorted(
     {
         token.strip()
@@ -21817,6 +22000,8 @@ def is_allowed_bmc_abstraction_provenance_token(token: str) -> bool:
 load_strict_gate_rule_id_allowlist()
 load_bmc_launch_reason_key_allowlist()
 load_lec_launch_reason_key_allowlist()
+load_bmc_launch_reason_event_budget()
+load_lec_launch_reason_event_budget()
 (
     bmc_lec_contract_fingerprint_case_id_map_exact,
     bmc_lec_contract_fingerprint_case_id_map_prefix_rules,
@@ -22649,6 +22834,29 @@ for key, current_row in summary.items():
                 ),
                 rule_id="strict_gate.bmc.launch.reason_event_rows.nonallowlisted.max_exceeded",
             )
+        if bmc_launch_reason_event_budget_file:
+            for reason_key, event_rows in current_bmc_reason_event_counts.items():
+                if (
+                    bmc_launch_reason_key_allowlist_file
+                    and is_allowed_bmc_launch_reason_key(reason_key)
+                ):
+                    continue
+                budget_max, budget_selector = bmc_launch_reason_event_budget_for_key(
+                    reason_key
+                )
+                if budget_max is None:
+                    continue
+                if event_rows > budget_max:
+                    gate_errors.add(
+                        suite,
+                        mode,
+                        (
+                            "non-allowlisted bmc_launch_reason_*_events for reason "
+                            f"'{reason_key}' exceeds per-reason max "
+                            f"(selector={budget_selector}, max={budget_max}, current={event_rows})"
+                        ),
+                        rule_id="strict_gate.bmc.launch.reason_event_rows.per_reason.max_exceeded",
+                    )
         if fail_on_new_bmc_launch_reason_keys:
             baseline_reason_keys = set()
             for counts in parsed_counts:
@@ -23094,6 +23302,29 @@ for key, current_row in summary.items():
                 ),
                 rule_id="strict_gate.lec.launch.reason_event_rows.nonallowlisted.max_exceeded",
             )
+        if lec_launch_reason_event_budget_file:
+            for reason_key, event_rows in current_lec_reason_event_counts.items():
+                if (
+                    lec_launch_reason_key_allowlist_file
+                    and is_allowed_lec_launch_reason_key(reason_key)
+                ):
+                    continue
+                budget_max, budget_selector = lec_launch_reason_event_budget_for_key(
+                    reason_key
+                )
+                if budget_max is None:
+                    continue
+                if event_rows > budget_max:
+                    gate_errors.add(
+                        suite,
+                        mode,
+                        (
+                            "non-allowlisted lec_launch_reason_*_events for reason "
+                            f"'{reason_key}' exceeds per-reason max "
+                            f"(selector={budget_selector}, max={budget_max}, current={event_rows})"
+                        ),
+                        rule_id="strict_gate.lec.launch.reason_event_rows.per_reason.max_exceeded",
+                    )
         if fail_on_new_lec_launch_reason_keys:
             baseline_reason_keys = set()
             for counts in parsed_counts:
