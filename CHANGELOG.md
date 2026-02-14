@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1387 - February 14, 2026
+
+### Mutation Workflow: Native Non-Smoke Backend (No Yosys)
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with non-smoke backend
+   selection:
+   - `--mutations-backend MODE`
+   - supported: `yosys|native` (default: `yosys`)
+2. Added native backend execution path for non-smoke runs that does not depend
+   on Yosys:
+   - generates native mutation lists in helper workspace
+   - uses a native `--create-mutated-script` mutator for `circt-mut cover`
+3. Updated non-smoke preflight behavior:
+   - Yosys resolution is required only for `--mutations-backend yosys`
+   - native backend runs without `yosys` on PATH
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-mutations-backend-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-native-backend-no-yosys-pass.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (132 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --mutations-backend native --out-dir /tmp/mcy_examples_real_native_1771083331` PASS
+
 ## Iteration 1386 - February 14, 2026
 
 ### OpenTitan FPV BMC: Task-Profile Status-Policy Presets + Grouped Diagnostics
