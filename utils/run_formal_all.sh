@@ -936,6 +936,22 @@ Options:
                          Regex filter for OpenTitan FPV target names in
                          `opentitan/FPV_BMC` execution (in addition to
                          `--select-cfgs`)
+  --opentitan-fpv-bmc-target-shard-count N
+                         Deterministic number of OpenTitan FPV target shards
+                         passed to `run_opentitan_fpv_circt_bmc.py`
+                         (default: 1)
+  --opentitan-fpv-bmc-target-shard-index N
+                         Deterministic OpenTitan FPV target shard index in
+                         `[0, shard-count)` passed to
+                         `run_opentitan_fpv_circt_bmc.py` (default: 0)
+  --opentitan-fpv-bmc-case-shard-count N
+                         Deterministic number of OpenTitan FPV per-target case
+                         shards passed to `run_opentitan_fpv_circt_bmc.py`
+                         (default: 1)
+  --opentitan-fpv-bmc-case-shard-index N
+                         Deterministic OpenTitan FPV per-target case shard
+                         index in `[0, shard-count)` passed to
+                         `run_opentitan_fpv_circt_bmc.py` (default: 0)
   --select-cfgs LIST
                          Optional target names selected from
                          `--opentitan-fpv-cfg` (repeatable; comma/space
@@ -2610,6 +2626,10 @@ OPENTITAN_BMC_INCLUDE_MASKED=0
 OPENTITAN_BMC_CASE_POLICY_FILE=""
 OPENTITAN_FPV_CFG_FILE=""
 OPENTITAN_FPV_TARGET_FILTER=""
+OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT="1"
+OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX="0"
+OPENTITAN_FPV_BMC_CASE_SHARD_COUNT="1"
+OPENTITAN_FPV_BMC_CASE_SHARD_INDEX="0"
 declare -a OPENTITAN_SELECT_CFGS=()
 OPENTITAN_FPV_TARGET_MANIFEST_FILE=""
 OPENTITAN_FPV_COMPILE_CONTRACTS_FILE=""
@@ -2714,6 +2734,14 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_CFG_FILE="$2"; shift 2 ;;
     --opentitan-fpv-target-filter)
       OPENTITAN_FPV_TARGET_FILTER="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-target-shard-count)
+      OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-target-shard-index)
+      OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-case-shard-count)
+      OPENTITAN_FPV_BMC_CASE_SHARD_COUNT="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-case-shard-index)
+      OPENTITAN_FPV_BMC_CASE_SHARD_INDEX="$2"; shift 2 ;;
     --select-cfgs)
       OPENTITAN_SELECT_CFGS+=("$2"); shift 2 ;;
     --opentitan-fpv-target-manifest)
@@ -3551,6 +3579,38 @@ if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
 fi
 if [[ -n "$OPENTITAN_BMC_BOUND" && ! "$OPENTITAN_BMC_BOUND" =~ ^[0-9]+$ ]]; then
   echo "invalid --opentitan-bmc-bound: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT" && ! "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-fpv-bmc-target-shard-count: expected integer >= 1" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX" && ! "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-fpv-bmc-target-shard-index: expected non-negative integer" >&2
+  exit 1
+fi
+if (( OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT < 1 )); then
+  echo "invalid --opentitan-fpv-bmc-target-shard-count: expected integer >= 1" >&2
+  exit 1
+fi
+if (( OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX >= OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT )); then
+  echo "invalid --opentitan-fpv-bmc-target-shard-index: expected value < --opentitan-fpv-bmc-target-shard-count" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_CASE_SHARD_COUNT" && ! "$OPENTITAN_FPV_BMC_CASE_SHARD_COUNT" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-fpv-bmc-case-shard-count: expected integer >= 1" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_CASE_SHARD_INDEX" && ! "$OPENTITAN_FPV_BMC_CASE_SHARD_INDEX" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-fpv-bmc-case-shard-index: expected non-negative integer" >&2
+  exit 1
+fi
+if (( OPENTITAN_FPV_BMC_CASE_SHARD_COUNT < 1 )); then
+  echo "invalid --opentitan-fpv-bmc-case-shard-count: expected integer >= 1" >&2
+  exit 1
+fi
+if (( OPENTITAN_FPV_BMC_CASE_SHARD_INDEX >= OPENTITAN_FPV_BMC_CASE_SHARD_COUNT )); then
+  echo "invalid --opentitan-fpv-bmc-case-shard-index: expected value < --opentitan-fpv-bmc-case-shard-count" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_BMC_CASE_POLICY_FILE" && ! -f "$OPENTITAN_BMC_CASE_POLICY_FILE" ]]; then
@@ -5240,15 +5300,15 @@ if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATIO
   echo "--mutation-gate-status-case-id-allowlist-file requires --fail-on-new-mutation-gate-status-case-ids or --strict-gate" >&2
   exit 1
 fi
-if [[ -n "" && "" != "1" && "" != "1" && "" != "1" ]]; then
+if [[ -n "$MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" && "$FAIL_ON_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY" != "1" && "$FAIL_ON_NEW_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--mutation-bmc-contract-fingerprint-parity-allowlist-file requires --fail-on-mutation-bmc-contract-fingerprint-parity, --fail-on-new-mutation-bmc-contract-fingerprint-parity, or --strict-gate" >&2
   exit 1
 fi
-if [[ -n "" && "" != "1" && "" != "1" && "" != "1" ]]; then
+if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" != "1" && "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--mutation-lec-contract-fingerprint-parity-allowlist-file requires --fail-on-mutation-lec-contract-fingerprint-parity, --fail-on-new-mutation-lec-contract-fingerprint-parity, or --strict-gate" >&2
   exit 1
 fi
-if [[ -n "" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" != "1" && "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" != "1" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" != "1" && "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" != "1" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" != "1" && "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" != "1" && "$STRICT_GATE" != "1" ]]; then
+if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY_ALLOWLIST_FILE" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" != "1" && "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" != "1" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" != "1" && "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" != "1" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" != "1" && "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--mutation-lec-contract-fingerprint-lane-parity-allowlist-file requires --fail-on-mutation-lec-contract-fingerprint-lane-parity, --fail-on-new-mutation-lec-contract-fingerprint-lane-parity, --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped, --fail-on-new-mutation-lec-contract-fingerprint-lane-map-unmapped, --fail-on-mutation-lec-contract-fingerprint-lane-map-identity-fallback, --fail-on-new-mutation-lec-contract-fingerprint-lane-map-identity-fallback, or --strict-gate" >&2
   exit 1
 fi
@@ -7679,6 +7739,10 @@ compute_lane_state_config_hash() {
     printf "opentitan_bmc_case_policy_file=%s\n" "$OPENTITAN_BMC_CASE_POLICY_FILE"
     printf "opentitan_fpv_cfg_file=%s\n" "$OPENTITAN_FPV_CFG_FILE"
     printf "opentitan_fpv_target_filter=%s\n" "$OPENTITAN_FPV_TARGET_FILTER"
+    printf "opentitan_fpv_bmc_target_shard_count=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT"
+    printf "opentitan_fpv_bmc_target_shard_index=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
+    printf "opentitan_fpv_bmc_case_shard_count=%s\n" "$OPENTITAN_FPV_BMC_CASE_SHARD_COUNT"
+    printf "opentitan_fpv_bmc_case_shard_index=%s\n" "$OPENTITAN_FPV_BMC_CASE_SHARD_INDEX"
     printf "opentitan_fpv_target_manifest_file=%s\n" "$OPENTITAN_FPV_TARGET_MANIFEST_FILE"
     printf "opentitan_fpv_compile_contracts_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE"
     printf "opentitan_fpv_compile_contracts_baseline_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE"
@@ -11576,6 +11640,10 @@ run_opentitan_fpv_bmc_lane() {
 
   local opentitan_fpv_bmc_args=(
     --compile-contracts "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE"
+    --target-shard-count "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT"
+    --target-shard-index "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
+    --case-shard-count "$OPENTITAN_FPV_BMC_CASE_SHARD_COUNT"
+    --case-shard-index "$OPENTITAN_FPV_BMC_CASE_SHARD_INDEX"
   )
   if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
     opentitan_fpv_bmc_args+=(--target-filter "$OPENTITAN_FPV_TARGET_FILTER")
