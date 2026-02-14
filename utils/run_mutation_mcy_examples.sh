@@ -92,6 +92,9 @@ Options:
                            Percentile [0,100] used when deriving per-example
                            baselines from baseline+history files
                            (default: 50)
+  --example-history-missing-policy MODE
+                           Missing-row policy for per-example history files:
+                           ignore|warn|fail (default: ignore)
   --update-baseline        Write current summary.tsv to --baseline-file
   --allow-update-baseline-on-failure
                            Allow --update-baseline even when run exits failing
@@ -335,6 +338,7 @@ MAX_TOTAL_ERRORS_INCREASE=0
 BASELINE_FILE=""
 SUITE_HISTORY_PERCENTILE="50"
 EXAMPLE_HISTORY_PERCENTILE="50"
+EXAMPLE_HISTORY_MISSING_POLICY="ignore"
 RETRY_REASON_BASELINE_FILE=""
 RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE=""
 RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
@@ -405,6 +409,9 @@ declare -A DRIFT_ALLOW_PATTERN_USED=()
 declare -A RETRY_REASON_BUDGETS=()
 declare -A RETRY_REASON_DRIFT_TOLERANCE_MAP=()
 declare -A RETRY_REASON_DRIFT_PERCENT_TOLERANCE_MAP=()
+declare -A EXAMPLE_HISTORY_ROW_PRESENT=()
+declare -A EXAMPLE_HISTORY_ROW_POLICY_REPORTED=()
+COMPUTED_EXAMPLE_HISTORY_METRIC=""
 
 SUMMARY_HEADER_V1=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors'
 SUMMARY_HEADER_V2=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\tpolicy_fingerprint'
@@ -703,11 +710,38 @@ compute_example_metric_percentile_from_histories() {
   local tmp_values_file=""
   local history_file=""
   local value=""
+  local cache_key=""
+  local row_present=""
 
+  COMPUTED_EXAMPLE_HISTORY_METRIC=""
   tmp_values_file="$(mktemp "${OUT_DIR}/example-history-values.XXXXXX")"
   printf '%s\n' "$baseline_value" > "$tmp_values_file"
 
   for history_file in "${EXAMPLE_BASELINE_HISTORY_FILES[@]}"; do
+    cache_key="${history_file}::${example}"
+    row_present="${EXAMPLE_HISTORY_ROW_PRESENT[$cache_key]-}"
+    if [[ -z "$row_present" ]]; then
+      if awk -F '\t' -v ex="$example" 'NR > 1 && $1 == ex { found = 1; exit } END { exit !found }' "$history_file"; then
+        row_present="1"
+      else
+        row_present="0"
+      fi
+      EXAMPLE_HISTORY_ROW_PRESENT["$cache_key"]="$row_present"
+    fi
+
+    if [[ "$row_present" == "0" ]]; then
+      if [[ "$EXAMPLE_HISTORY_MISSING_POLICY" == "fail" ]]; then
+        echo "Missing example baseline history row for ${example} in ${history_file}" >&2
+        rm -f "$tmp_values_file"
+        return 1
+      fi
+      if [[ "$EXAMPLE_HISTORY_MISSING_POLICY" == "warn" && -z "${EXAMPLE_HISTORY_ROW_POLICY_REPORTED[$cache_key]-}" ]]; then
+        echo "warning: missing example baseline history row for ${example} in ${history_file}; using baseline value" >&2
+        EXAMPLE_HISTORY_ROW_POLICY_REPORTED["$cache_key"]="1"
+      fi
+      continue
+    fi
+
     value="$(awk -F '\t' -v ex="$example" -v idx="$field_index" '
       NR == 1 { next }
       $1 == ex { print $idx; exit }
@@ -730,7 +764,8 @@ compute_example_metric_percentile_from_histories() {
   fi
 
   rm -f "$tmp_values_file"
-  printf '%s\n' "$value"
+  COMPUTED_EXAMPLE_HISTORY_METRIC="$value"
+  return 0
 }
 
 resolve_tool() {
@@ -1869,10 +1904,14 @@ evaluate_summary_drift() {
     base_cov_num="$(normalize_decimal_or_zero "${_bc:-0}")"
 
     if [[ ${#EXAMPLE_BASELINE_HISTORY_FILES[@]} -gt 0 ]]; then
-      _bd="$(compute_example_metric_percentile_from_histories "$example" 4 "$_bd" int)"
-      _br="$(compute_example_metric_percentile_from_histories "$example" 5 "$_br" int)"
-      base_cov_num="$(compute_example_metric_percentile_from_histories "$example" 6 "$base_cov_num" decimal)"
-      _berr="$(compute_example_metric_percentile_from_histories "$example" 7 "$_berr" int)"
+      compute_example_metric_percentile_from_histories "$example" 4 "$_bd" int || return 1
+      _bd="$COMPUTED_EXAMPLE_HISTORY_METRIC"
+      compute_example_metric_percentile_from_histories "$example" 5 "$_br" int || return 1
+      _br="$COMPUTED_EXAMPLE_HISTORY_METRIC"
+      compute_example_metric_percentile_from_histories "$example" 6 "$base_cov_num" decimal || return 1
+      base_cov_num="$COMPUTED_EXAMPLE_HISTORY_METRIC"
+      compute_example_metric_percentile_from_histories "$example" 7 "$_berr" int || return 1
+      _berr="$COMPUTED_EXAMPLE_HISTORY_METRIC"
     fi
 
     if [[ "${_bs:-}" == "PASS" && "$status" != "PASS" ]]; then
@@ -2750,6 +2789,10 @@ while [[ $# -gt 0 ]]; do
       EXAMPLE_HISTORY_PERCENTILE="$2"
       shift 2
       ;;
+    --example-history-missing-policy)
+      EXAMPLE_HISTORY_MISSING_POLICY="$2"
+      shift 2
+      ;;
     --update-baseline)
       UPDATE_BASELINE=1
       shift
@@ -3164,6 +3207,10 @@ if ! is_nonneg_decimal "$EXAMPLE_HISTORY_PERCENTILE"; then
 fi
 if ! awk -v v="$EXAMPLE_HISTORY_PERCENTILE" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
   echo "--example-history-percentile must be numeric in range [0,100]: $EXAMPLE_HISTORY_PERCENTILE" >&2
+  exit 1
+fi
+if [[ "$EXAMPLE_HISTORY_MISSING_POLICY" != "ignore" && "$EXAMPLE_HISTORY_MISSING_POLICY" != "warn" && "$EXAMPLE_HISTORY_MISSING_POLICY" != "fail" ]]; then
+  echo "--example-history-missing-policy must be one of: ignore|warn|fail" >&2
   exit 1
 fi
 for history_file in "${SUITE_BASELINE_HISTORY_FILES[@]}"; do
