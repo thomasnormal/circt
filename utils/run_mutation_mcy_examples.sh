@@ -102,6 +102,15 @@ Options:
                            Require retry-reason baseline schema sidecars
                            to exist and be readable when evaluating
                            --fail-on-retry-reason-diff
+  --require-retry-reason-schema-artifact-validity
+                           Require retry-reason schema version/contract
+                           metadata to be parseable (non-unknown) when
+                           evaluating --fail-on-retry-reason-diff
+  --strict-retry-reason-baseline-governance
+                           Enable strict retry-reason baseline governance:
+                           --require-retry-reason-baseline-schema-artifacts +
+                           --require-retry-reason-schema-artifact-validity
+                           (requires --fail-on-retry-reason-diff)
   --fail-on-retry-reason-diff
                            Fail when retry-reason counts regress vs baseline
   --retry-reason-drift-tolerances SPEC
@@ -255,6 +264,8 @@ BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_VERSION_FILE=""
 RETRY_REASON_SUMMARY_SCHEMA_VERSION_FILE=""
 REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS=0
+REQUIRE_RETRY_REASON_SCHEMA_ARTIFACT_VALIDITY=0
+STRICT_RETRY_REASON_BASELINE_GOVERNANCE=0
 BASELINE_SCHEMA_CONTRACT_FILE=""
 BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_CONTRACT_FILE=""
@@ -1623,11 +1634,22 @@ evaluate_retry_reason_drift() {
   local baseline_schema_contract=""
   local summary_schema_contract=""
 
-  printf 'example	metric	baseline	current	outcome	detail
-' > "$drift_file"
+  printf 'example\tmetric\tbaseline\tcurrent\toutcome\tdetail\n' > "$drift_file"
 
   summary_schema_version="$(retry_reason_schema_version_for_artifacts "$summary_file" "$summary_schema_version_file")"
   baseline_schema_version="$(retry_reason_schema_version_for_artifacts "$baseline_file" "$baseline_schema_version_file")"
+  if [[ "$REQUIRE_RETRY_REASON_SCHEMA_ARTIFACT_VALIDITY" -eq 1 ]]; then
+    if [[ "$baseline_schema_version" == "unknown" ]]; then
+      if ! append_drift_candidate "$drift_file" "__baseline__" "retry_reason_schema_version" "known" "$baseline_schema_version" "retry_reason_schema_version_unknown_baseline"; then
+        regressions=$((regressions + 1))
+      fi
+    fi
+    if [[ "$summary_schema_version" == "unknown" ]]; then
+      if ! append_drift_candidate "$drift_file" "__baseline__" "retry_reason_schema_version" "known" "$summary_schema_version" "retry_reason_schema_version_unknown_current"; then
+        regressions=$((regressions + 1))
+      fi
+    fi
+  fi
   if [[ "$baseline_schema_version" != "$summary_schema_version" ]]; then
     if ! append_drift_candidate "$drift_file" "__baseline__" "retry_reason_schema_version" "$baseline_schema_version" "$summary_schema_version" "retry_reason_schema_version_mismatch"; then
       regressions=$((regressions + 1))
@@ -1638,6 +1660,18 @@ evaluate_retry_reason_drift() {
 
   summary_schema_contract="$(retry_reason_schema_contract_fingerprint_for_artifacts "$summary_file" "$summary_schema_version_file" "$summary_schema_contract_file")"
   baseline_schema_contract="$(retry_reason_schema_contract_fingerprint_for_artifacts "$baseline_file" "$baseline_schema_version_file" "$baseline_schema_contract_file")"
+  if [[ "$REQUIRE_RETRY_REASON_SCHEMA_ARTIFACT_VALIDITY" -eq 1 ]]; then
+    if [[ "$baseline_schema_contract" == "unknown" ]]; then
+      if ! append_drift_candidate "$drift_file" "__baseline__" "retry_reason_schema_contract" "known" "$baseline_schema_contract" "retry_reason_schema_contract_unknown_baseline"; then
+        regressions=$((regressions + 1))
+      fi
+    fi
+    if [[ "$summary_schema_contract" == "unknown" ]]; then
+      if ! append_drift_candidate "$drift_file" "__baseline__" "retry_reason_schema_contract" "known" "$summary_schema_contract" "retry_reason_schema_contract_unknown_current"; then
+        regressions=$((regressions + 1))
+      fi
+    fi
+  fi
   if [[ "$baseline_schema_contract" != "$summary_schema_contract" ]]; then
     if ! append_drift_candidate "$drift_file" "__baseline__" "retry_reason_schema_contract" "$baseline_schema_contract" "$summary_schema_contract" "retry_reason_schema_contract_mismatch"; then
       regressions=$((regressions + 1))
@@ -1646,7 +1680,7 @@ evaluate_retry_reason_drift() {
     append_drift_row "$drift_file" "__baseline__" "retry_reason_schema_contract" "$baseline_schema_contract" "$summary_schema_contract" "ok" ""
   fi
 
-  while IFS=$'	' read -r baseline_reason baseline_retries; do
+  while IFS=$'\t' read -r baseline_reason baseline_retries; do
     [[ "$baseline_reason" == "retry_reason" ]] && continue
     baseline_reason="$(trim_whitespace "${baseline_reason:-}")"
     if [[ -z "$baseline_reason" ]]; then
@@ -1664,7 +1698,7 @@ evaluate_retry_reason_drift() {
     baseline_total_retries=$((baseline_total_retries + baseline_retries))
   done < "$baseline_file"
 
-  while IFS=$'	' read -r current_reason current_retries; do
+  while IFS=$'\t' read -r current_reason current_retries; do
     [[ "$current_reason" == "retry_reason" ]] && continue
     current_reason="$(trim_whitespace "${current_reason:-}")"
     if [[ -z "$current_reason" ]]; then
@@ -1740,7 +1774,6 @@ evaluate_retry_reason_drift() {
   fi
   return 0
 }
-
 ensure_unique_example_selection() {
   local -A seen=()
   local example_id=""
@@ -2252,6 +2285,14 @@ while [[ $# -gt 0 ]]; do
       REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS=1
       shift
       ;;
+    --require-retry-reason-schema-artifact-validity)
+      REQUIRE_RETRY_REASON_SCHEMA_ARTIFACT_VALIDITY=1
+      shift
+      ;;
+    --strict-retry-reason-baseline-governance)
+      STRICT_RETRY_REASON_BASELINE_GOVERNANCE=1
+      shift
+      ;;
     --fail-on-retry-reason-diff)
       FAIL_ON_RETRY_REASON_DIFF=1
       shift
@@ -2356,6 +2397,10 @@ if [[ "$STRICT_BASELINE_GOVERNANCE" -eq 1 ]]; then
   REQUIRE_BASELINE_SCHEMA_VERSION_MATCH=1
   REQUIRE_BASELINE_SCHEMA_CONTRACT_MATCH=1
   REQUIRE_UNIQUE_EXAMPLE_SELECTION=1
+fi
+if [[ "$STRICT_RETRY_REASON_BASELINE_GOVERNANCE" -eq 1 ]]; then
+  REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS=1
+  REQUIRE_RETRY_REASON_SCHEMA_ARTIFACT_VALIDITY=1
 fi
 
 if ! is_pos_int "$GENERATE_COUNT"; then
@@ -2652,8 +2697,16 @@ if [[ "$FAIL_ON_RETRY_REASON_DIFF" -eq 1 ]]; then
     fi
   fi
 fi
+if [[ "$STRICT_RETRY_REASON_BASELINE_GOVERNANCE" -eq 1 && "$FAIL_ON_RETRY_REASON_DIFF" -ne 1 ]]; then
+  echo "--strict-retry-reason-baseline-governance requires --fail-on-retry-reason-diff" >&2
+  exit 1
+fi
 if [[ "$REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS" -eq 1 && "$FAIL_ON_RETRY_REASON_DIFF" -ne 1 ]]; then
   echo "--require-retry-reason-baseline-schema-artifacts requires --fail-on-retry-reason-diff" >&2
+  exit 1
+fi
+if [[ "$REQUIRE_RETRY_REASON_SCHEMA_ARTIFACT_VALIDITY" -eq 1 && "$FAIL_ON_RETRY_REASON_DIFF" -ne 1 ]]; then
+  echo "--require-retry-reason-schema-artifact-validity requires --fail-on-retry-reason-diff" >&2
   exit 1
 fi
 if [[ -n "$DRIFT_ALLOWLIST_FILE" ]]; then

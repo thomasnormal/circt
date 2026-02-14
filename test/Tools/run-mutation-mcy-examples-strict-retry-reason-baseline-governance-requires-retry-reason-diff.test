@@ -1,0 +1,4 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --strict-retry-reason-baseline-governance 2>&1 | FileCheck %s
+
+// CHECK: --strict-retry-reason-baseline-governance requires --fail-on-retry-reason-diff
