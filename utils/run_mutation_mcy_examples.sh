@@ -912,6 +912,14 @@ evaluate_summary_drift() {
   local -a summary_duplicate_examples=()
   local -a baseline_order=()
   local -a baseline_duplicate_examples=()
+  local baseline_total_detected=0
+  local baseline_total_relevant=0
+  local baseline_total_errors=0
+  local summary_total_detected=0
+  local summary_total_relevant=0
+  local summary_total_errors=0
+  local baseline_total_coverage="0.00"
+  local summary_total_coverage="0.00"
 
   printf 'example\tmetric\tbaseline\tcurrent\toutcome\tdetail\n' > "$drift_file"
 
@@ -959,6 +967,10 @@ evaluate_summary_drift() {
     fi
     baseline_rows["$baseline_example"]="$baseline_example"$'\t'"${_status}"$'\t'"${_exit}"$'\t'"${_detected}"$'\t'"${_relevant}"$'\t'"${_coverage}"$'\t'"${_errors}"$'\t'"${_policy}"
     baseline_order+=("$baseline_example")
+
+    baseline_total_detected=$((baseline_total_detected + $(normalize_int_or_zero "${_detected:-0}")))
+    baseline_total_relevant=$((baseline_total_relevant + $(normalize_int_or_zero "${_relevant:-0}")))
+    baseline_total_errors=$((baseline_total_errors + $(normalize_int_or_zero "${_errors:-0}")))
   done < "$baseline_file"
 
   while IFS=$'\t' read -r example status exit_code detected relevant coverage errors policy_fingerprint; do
@@ -980,6 +992,9 @@ evaluate_summary_drift() {
     relevant="$(normalize_int_or_zero "$relevant")"
     errors="$(normalize_int_or_zero "$errors")"
     policy_fingerprint="$(trim_whitespace "${policy_fingerprint:-}")"
+    summary_total_detected=$((summary_total_detected + detected))
+    summary_total_relevant=$((summary_total_relevant + relevant))
+    summary_total_errors=$((summary_total_errors + errors))
     local coverage_num
     coverage_num="$(normalize_decimal_or_zero "$coverage")"
 
@@ -1063,6 +1078,45 @@ evaluate_summary_drift() {
       fi
     fi
   done < "$summary_file"
+
+  if [[ "$baseline_total_relevant" -gt 0 ]]; then
+    baseline_total_coverage="$(awk -v d="$baseline_total_detected" -v r="$baseline_total_relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
+  fi
+  if [[ "$summary_total_relevant" -gt 0 ]]; then
+    summary_total_coverage="$(awk -v d="$summary_total_detected" -v r="$summary_total_relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
+  fi
+
+  if [[ "$summary_total_detected" -lt "$baseline_total_detected" ]]; then
+    if ! append_drift_candidate "$drift_file" "__suite__" "suite_detected_mutants" "$baseline_total_detected" "$summary_total_detected" "detected_decreased"; then
+      regressions=$((regressions + 1))
+    fi
+  else
+    append_drift_row "$drift_file" "__suite__" "suite_detected_mutants" "$baseline_total_detected" "$summary_total_detected" "ok" ""
+  fi
+
+  if [[ "$summary_total_relevant" -lt "$baseline_total_relevant" ]]; then
+    if ! append_drift_candidate "$drift_file" "__suite__" "suite_relevant_mutants" "$baseline_total_relevant" "$summary_total_relevant" "relevant_decreased"; then
+      regressions=$((regressions + 1))
+    fi
+  else
+    append_drift_row "$drift_file" "__suite__" "suite_relevant_mutants" "$baseline_total_relevant" "$summary_total_relevant" "ok" ""
+  fi
+
+  if float_lt "$summary_total_coverage" "$baseline_total_coverage"; then
+    if ! append_drift_candidate "$drift_file" "__suite__" "suite_coverage_percent" "$baseline_total_coverage" "$summary_total_coverage" "coverage_decreased"; then
+      regressions=$((regressions + 1))
+    fi
+  else
+    append_drift_row "$drift_file" "__suite__" "suite_coverage_percent" "$baseline_total_coverage" "$summary_total_coverage" "ok" ""
+  fi
+
+  if [[ "$summary_total_errors" -gt "$baseline_total_errors" ]]; then
+    if ! append_drift_candidate "$drift_file" "__suite__" "suite_errors" "$baseline_total_errors" "$summary_total_errors" "errors_increased"; then
+      regressions=$((regressions + 1))
+    fi
+  else
+    append_drift_row "$drift_file" "__suite__" "suite_errors" "$baseline_total_errors" "$summary_total_errors" "ok" ""
+  fi
 
   if [[ "$require_baseline_example_parity" -eq 1 ]]; then
     for baseline_example in "${baseline_order[@]}"; do

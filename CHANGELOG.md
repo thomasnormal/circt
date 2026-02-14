@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1341 - February 14, 2026
+
+### Mutation Workflow: Baseline Drift Governance for Suite Aggregates
+
+1. Extended baseline drift evaluation in `utils/run_mutation_mcy_examples.sh`
+   to include `__suite__` aggregate metrics:
+   - `suite_detected_mutants`
+   - `suite_relevant_mutants`
+   - `suite_coverage_percent`
+   - `suite_errors`
+2. Suite aggregate rows are now fully drift-governed and allowlist-compatible
+   via standard drift tokens:
+   - `__suite__::suite_detected_mutants`
+   - `__suite__::suite_relevant_mutants`
+   - `__suite__::suite_coverage_percent`
+   - `__suite__::suite_errors`
+3. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-suite-aggregate-drift-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-suite-aggregate-drift-allowlist.test`
+   - updated `test/Tools/run-mutation-mcy-examples-baseline-drift-allowlist.test`
+   - updated `test/Tools/run-mutation-mcy-examples-require-baseline-example-parity-allowlist.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (66/66)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-suite-drift-20260214-baseline --baseline-file /tmp/mcy-suite-drift-20260214.baseline.tsv --update-baseline` PASS
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --example bitcnt --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-suite-drift-20260214-compare --baseline-file /tmp/mcy-suite-drift-20260214.baseline.tsv --fail-on-diff` expected FAIL (`rc=1`) due `__suite__::suite_relevant_mutants` regression
+
 ## Iteration 1340 - February 14, 2026
 
 ### OpenTitan Connectivity: Cross-Lane Objective-Level Parity Governance
