@@ -12,7 +12,7 @@ The case manifest is a tab-separated file with one case per line:
           <TAB> timeout_secs <TAB> backend_mode <TAB> bmc_bound
           <TAB> ignore_asserts_until <TAB> assume_known_inputs
           <TAB> allow_multi_clock <TAB> bmc_extra_args
-          <TAB> contract_source
+          <TAB> contract_source <TAB> verilog_defines
 
 Only the first three columns are required.
 
@@ -38,6 +38,8 @@ Only the first three columns are required.
 - contract_source: optional provenance label for the case contract (for example
   `exact:aes_sbox_canright` or `pattern:re:^foo`) that is emitted in
   `--resolved-contracts-file` artifacts.
+- verilog_defines: optional ';'-separated preprocessor define list forwarded
+  to `circt-verilog` as `-D<token>` arguments.
   The artifact writes `#resolved_contract_schema_version=1` on the first line
   and appends `contract_fingerprint` (stable sha256-derived digest) for drift
   checks.
@@ -82,6 +84,7 @@ class CaseSpec:
     allow_multi_clock_mode: str
     bmc_extra_args: list[str]
     contract_source: str
+    verilog_defines: list[str]
 
 
 class TextFileBusyRetryExhausted(RuntimeError):
@@ -362,6 +365,10 @@ def parse_case_bmc_extra_args(raw: str, line_no: int) -> list[str]:
     return args
 
 
+def parse_case_verilog_defines(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(";") if item.strip()]
+
+
 def compute_contract_fingerprint(fields: list[str]) -> str:
     payload = "\x1f".join(fields).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:16]
@@ -395,6 +402,7 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
             allow_multi_clock_raw = parts[10].strip() if len(parts) > 10 else ""
             bmc_extra_args_raw = parts[11].strip() if len(parts) > 11 else ""
             contract_source_raw = parts[12].strip() if len(parts) > 12 else ""
+            verilog_defines_raw = parts[13].strip() if len(parts) > 13 else ""
             if not case_id or not top_module:
                 print(
                     f"invalid cases file row {line_no}: empty case_id/top_module",
@@ -450,6 +458,9 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
                     allow_multi_clock_mode=allow_multi_clock_mode,
                     bmc_extra_args=bmc_extra_args,
                     contract_source=contract_source_raw,
+                    verilog_defines=parse_case_verilog_defines(
+                        verilog_defines_raw
+                    ),
                 )
             )
     return cases
@@ -679,6 +690,8 @@ def main() -> int:
                 "1" if case_allow_multi_clock else "0",
                 case_bmc_extra_args_text,
             ]
+            if case.verilog_defines:
+                contract_fields.append(";".join(case.verilog_defines))
             contract_fingerprint = compute_contract_fingerprint(contract_fields)
             resolved_contract_rows.append(
                 (
@@ -708,6 +721,8 @@ def main() -> int:
             ]
             for include_dir in include_dirs:
                 verilog_cmd += ["-I", include_dir]
+            for define_token in case.verilog_defines:
+                verilog_cmd.append(f"-D{define_token}")
             verilog_cmd += circt_verilog_args
             verilog_cmd += case.source_files
 

@@ -1,0 +1,11 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --circt-verilog %t/bin/circt-verilog --with-opentitan-fpv-bmc --include-lane-regex "^opentitan/FPV_BMC$"' 2>&1 | FileCheck %s
+//
+// CHECK: --with-opentitan-fpv-bmc requires --opentitan-fpv-cfg
