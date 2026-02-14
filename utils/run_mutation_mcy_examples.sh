@@ -33,11 +33,14 @@ Options:
                            <TAB>[max_total_errors_increase]
                            <TAB>[native_real_harness_script]
                            <TAB>[native_mutation_ops]
+                           <TAB>[native_real_harness_args]
                            Optional fields accept '-' to inherit global values.
                            native_real_harness_script may be absolute or
                            relative to --examples-root.
                            native_mutation_ops is a comma-separated allowlist
                            of native mutation operator tokens.
+                           native_real_harness_args is appended to the harness
+                           command after the mutant path.
                            Relative design paths resolve under --examples-root
   --jobs N                Max parallel examples to execute (default: 1)
   --example-timeout-sec N  Per-example timeout in seconds (default: 0, disabled)
@@ -58,6 +61,9 @@ Options:
                            Comma-separated native mutation operator allowlist
                            for --mutations-backend native
                            (default: all native operators)
+  --native-real-harness-args ARGS
+                           Extra args appended to native real harness commands
+                           after mutant path
   --generate-count N       Mutations to generate in non-smoke mode (default: 32)
   --mutations-seed N       Seed used with --generate-mutations (default: 1)
   --mutations-modes CSV    Comma-separated mutate modes for auto-generation
@@ -342,6 +348,7 @@ MUTATIONS_BACKEND="yosys"
 NATIVE_TESTS_MODE="synthetic"
 NATIVE_REAL_TESTS_STRICT=0
 NATIVE_MUTATION_OPS=""
+NATIVE_REAL_HARNESS_ARGS=""
 JOBS=1
 EXAMPLE_TIMEOUT_SEC=0
 EXAMPLE_RETRIES=0
@@ -455,6 +462,7 @@ declare -A EXAMPLE_TO_MAX_DETECTED_DROP_PERCENT=()
 declare -A EXAMPLE_TO_MAX_RELEVANT_DROP_PERCENT=()
 declare -A EXAMPLE_TO_NATIVE_REAL_HARNESS=()
 declare -A EXAMPLE_TO_NATIVE_MUTATION_OPS=()
+declare -A EXAMPLE_TO_NATIVE_REAL_HARNESS_ARGS=()
 declare -a AVAILABLE_EXAMPLES=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
@@ -527,6 +535,20 @@ validate_native_mutation_ops_spec() {
     fi
     seen+="${token},"
   done
+  return 0
+}
+
+validate_native_real_harness_args_spec() {
+  local spec="$1"
+  local context="$2"
+
+  if [[ -z "$spec" ]]; then
+    return 0
+  fi
+  if [[ "$spec" == *$'\t'* || "$spec" == *$'\n'* || "$spec" == *$'\r'* ]]; then
+    echo "${context}: native real harness args must not contain tabs or newlines" >&2
+    return 1
+  fi
   return 0
 }
 
@@ -1132,6 +1154,8 @@ reset_example_mappings() {
   EXAMPLE_TO_MAX_DETECTED_DROP_PERCENT=()
   EXAMPLE_TO_MAX_RELEVANT_DROP_PERCENT=()
   EXAMPLE_TO_NATIVE_REAL_HARNESS=()
+  EXAMPLE_TO_NATIVE_MUTATION_OPS=()
+  EXAMPLE_TO_NATIVE_REAL_HARNESS_ARGS=()
   AVAILABLE_EXAMPLES=()
 }
 
@@ -1235,6 +1259,7 @@ load_example_manifest() {
   local max_total_errors_increase_override=""
   local native_real_harness_override=""
   local native_mutation_ops_override=""
+  local native_real_harness_args_override=""
   local extra=""
   local resolved_design=""
   local manifest_max_total_detected_drop_override=""
@@ -1267,7 +1292,8 @@ load_example_manifest() {
       max_total_detected_drop_percent_override max_total_relevant_drop_override \
       max_total_relevant_drop_percent_override \
       max_total_coverage_drop_percent_override max_total_errors_increase_override \
-      native_real_harness_override native_mutation_ops_override extra <<< "$line"
+      native_real_harness_override native_mutation_ops_override \
+      native_real_harness_args_override extra <<< "$line"
 
     example_id="$(trim_whitespace "$example_id")"
     design="$(trim_whitespace "$design")"
@@ -1298,10 +1324,11 @@ load_example_manifest() {
     max_total_errors_increase_override="$(normalize_manifest_optional "${max_total_errors_increase_override:-}")"
     native_real_harness_override="$(normalize_manifest_optional "${native_real_harness_override:-}")"
     native_mutation_ops_override="$(normalize_manifest_optional "${native_mutation_ops_override:-}")"
+    native_real_harness_args_override="$(normalize_manifest_optional "${native_real_harness_args_override:-}")"
     extra="$(trim_whitespace "${extra:-}")"
 
     if [[ -z "$example_id" || -z "$design" || -z "$top" || -n "$extra" ]]; then
-      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 26 optional override columns)." >&2
+      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 27 optional override columns)." >&2
       return 1
     fi
 
@@ -1410,6 +1437,11 @@ load_example_manifest() {
         return 1
       fi
     fi
+    if [[ -n "$native_real_harness_args_override" ]]; then
+      if ! validate_native_real_harness_args_spec "$native_real_harness_args_override" "manifest row ${line_no}: invalid native_real_harness_args override"; then
+        return 1
+      fi
+    fi
 
     if [[ "$design" == /* ]]; then
       resolved_design="$design"
@@ -1481,6 +1513,9 @@ load_example_manifest() {
     fi
     if [[ -n "$native_mutation_ops_override" ]]; then
       EXAMPLE_TO_NATIVE_MUTATION_OPS["$example_id"]="$native_mutation_ops_override"
+    fi
+    if [[ -n "$native_real_harness_args_override" ]]; then
+      EXAMPLE_TO_NATIVE_REAL_HARNESS_ARGS["$example_id"]="$native_real_harness_args_override"
     fi
 
     if [[ -n "$max_total_detected_drop_override" ]]; then
@@ -2626,6 +2661,8 @@ run_example_worker() {
   local retry_delay_msg=""
   local native_real_harness_override=""
   local native_real_harness_resolved=""
+  local native_real_harness_args_spec="$NATIVE_REAL_HARNESS_ARGS"
+  local native_real_harness_args_suffix=""
   local native_mutation_ops_spec="$NATIVE_MUTATION_OPS"
 
   if [[ -n "${EXAMPLE_TO_GENERATE_COUNT[$example_id]+x}" ]]; then
@@ -2670,6 +2707,9 @@ run_example_worker() {
   if [[ -n "${EXAMPLE_TO_NATIVE_MUTATION_OPS[$example_id]+x}" ]]; then
     native_mutation_ops_spec="${EXAMPLE_TO_NATIVE_MUTATION_OPS[$example_id]}"
   fi
+  if [[ -n "${EXAMPLE_TO_NATIVE_REAL_HARNESS_ARGS[$example_id]+x}" ]]; then
+    native_real_harness_args_spec="${EXAMPLE_TO_NATIVE_REAL_HARNESS_ARGS[$example_id]}"
+  fi
   max_attempts=$((example_retries + 1))
 
   if [[ -n "$example_mutations_mode_counts" && -n "$example_mutations_mode_weights" ]]; then
@@ -2687,7 +2727,16 @@ run_example_worker() {
   if [[ -n "$native_real_harness_override" ]]; then
     policy_fingerprint_input+=$'\n'"${native_real_harness_override}"
   fi
+  if [[ -n "$native_mutation_ops_spec" ]]; then
+    policy_fingerprint_input+=$'\n'"${native_mutation_ops_spec}"
+  fi
+  if [[ -n "$native_real_harness_args_spec" ]]; then
+    policy_fingerprint_input+=$'\n'"${native_real_harness_args_spec}"
+  fi
   policy_fingerprint="$(hash_string_sha256 "$policy_fingerprint_input")"
+  if [[ -n "$native_real_harness_args_spec" ]]; then
+    native_real_harness_args_suffix=" ${native_real_harness_args_spec}"
+  fi
 
   example_out_dir="${OUT_DIR}/${example_id}"
   helper_dir="${WORK_ROOT}/${example_id}"
@@ -2715,8 +2764,8 @@ EOS
         echo "configured native_real_harness_script is missing or not a file for ${example_id}: ${native_real_harness_resolved}" >&2
         return 2
       fi
-      printf 'sim_real	bash %s ../mutant.v	result.txt	^DETECTED$	^SURVIVED$
-' "$native_real_harness_resolved" > "$tests_manifest"
+      printf 'sim_real	bash %s ../mutant.v%s	result.txt	^DETECTED$	^SURVIVED$
+' "$native_real_harness_resolved" "$native_real_harness_args_suffix" > "$tests_manifest"
     else
       case "$example_id" in
       bitcnt)
@@ -2749,8 +2798,8 @@ else
 fi
 EOS
         chmod +x "$real_test_script"
-        printf 'sim_real	bash %s ../mutant.v	result.txt	^DETECTED$	^SURVIVED$
-' "$real_test_script" > "$tests_manifest"
+        printf 'sim_real	bash %s ../mutant.v%s	result.txt	^DETECTED$	^SURVIVED$
+' "$real_test_script" "$native_real_harness_args_suffix" > "$tests_manifest"
         ;;
       picorv32_primes)
         real_test_script="${helper_dir}/real_picorv32_primes_test.sh"
@@ -2801,8 +2850,8 @@ else
 fi
 EOS
         chmod +x "$real_test_script"
-        printf 'sim_real	bash %s ../mutant.v	result.txt	^DETECTED$	^SURVIVED$
-' "$real_test_script" > "$tests_manifest"
+        printf 'sim_real	bash %s ../mutant.v%s	result.txt	^DETECTED$	^SURVIVED$
+' "$real_test_script" "$native_real_harness_args_suffix" > "$tests_manifest"
         ;;
       *)
         if [[ "$NATIVE_REAL_TESTS_STRICT" -eq 1 ]]; then
@@ -3266,6 +3315,10 @@ while [[ $# -gt 0 ]]; do
       MUTATION_GENERATION_FLAGS_SEEN=1
       shift 2
       ;;
+    --native-real-harness-args)
+      NATIVE_REAL_HARNESS_ARGS="$2"
+      shift 2
+      ;;
     --generate-count)
       GENERATE_COUNT="$2"
       shift 2
@@ -3656,6 +3709,11 @@ if [[ "$NATIVE_TESTS_MODE" != "synthetic" && "$NATIVE_TESTS_MODE" != "real" ]]; 
 fi
 if [[ -n "$NATIVE_MUTATION_OPS" ]]; then
   if ! validate_native_mutation_ops_spec "$NATIVE_MUTATION_OPS" "--native-mutation-ops"; then
+    exit 1
+  fi
+fi
+if [[ -n "$NATIVE_REAL_HARNESS_ARGS" ]]; then
+  if ! validate_native_real_harness_args_spec "$NATIVE_REAL_HARNESS_ARGS" "--native-real-harness-args"; then
     exit 1
   fi
 fi

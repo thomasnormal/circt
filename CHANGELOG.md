@@ -67259,3 +67259,14 @@ See CHANGELOG.md on recent progress.
     - Purpose:
       prevent cross-agent filter collisions and keep lane selection
       deterministic in multi-runner formal workflows.
+34. Native real harness argument forwarding for mutation examples
+    (February 14, 2026):
+    - `utils/run_mutation_mcy_examples.sh` now supports
+      `--native-real-harness-args` and per-manifest
+      `native_real_harness_args` overrides for native+real runs.
+    - Native real harness args are validated to reject tab/newline payloads,
+      appended to generated harness commands after `../mutant.v`, and included
+      in policy fingerprints.
+    - Fixed manifest parsing/reset coverage for new native override maps and
+      added regression coverage:
+      `run-mutation-mcy-examples-native-real-harness-args-manifest-override-pass.test`.
