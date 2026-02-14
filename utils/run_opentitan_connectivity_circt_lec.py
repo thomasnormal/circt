@@ -66,6 +66,17 @@ class ConnectivityLECCase:
     impl_module: str
 
 
+CONNECTIVITY_LEC_STATUS_FIELDS = (
+    "case_total",
+    "case_pass",
+    "case_fail",
+    "case_xfail",
+    "case_xpass",
+    "case_error",
+    "case_skip",
+)
+
+
 def fail(msg: str) -> None:
     print(msg, file=sys.stderr)
     raise SystemExit(1)
@@ -79,6 +90,169 @@ def parse_nonnegative_int(raw: str, name: str) -> int:
     if value < 0:
         fail(f"invalid {name}: {raw}")
     return value
+
+
+def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
+    exact: set[str] = set()
+    prefixes: list[str] = []
+    regex_rules: list[re.Pattern[str]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line_no, raw in enumerate(handle, start=1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            mode = "exact"
+            payload = line
+            if ":" in line:
+                mode, payload = line.split(":", 1)
+                mode = mode.strip()
+                payload = payload.strip()
+            if not payload:
+                fail(f"invalid allowlist row {line_no}: empty pattern")
+            if mode == "exact":
+                exact.add(payload)
+            elif mode == "prefix":
+                prefixes.append(payload)
+            elif mode == "regex":
+                try:
+                    regex_rules.append(re.compile(payload))
+                except re.error as exc:
+                    fail(
+                        f"invalid allowlist row {line_no}: bad regex '{payload}': {exc}"
+                    )
+            else:
+                fail(
+                    f"invalid allowlist row {line_no}: unsupported mode '{mode}' "
+                    "(expected exact|prefix|regex)"
+                )
+    return exact, prefixes, regex_rules
+
+
+def is_allowlisted(
+    token: str, exact: set[str], prefixes: list[str], regex_rules: list[re.Pattern[str]]
+) -> bool:
+    if token in exact:
+        return True
+    for prefix in prefixes:
+        if token.startswith(prefix):
+            return True
+    for pattern in regex_rules:
+        if pattern.search(token):
+            return True
+    return False
+
+
+def normalize_connectivity_rule_id(case_id: str) -> str:
+    token = case_id.strip()
+    prefix = "connectivity::"
+    if token.startswith(prefix):
+        return token[len(prefix) :]
+    return token
+
+
+def init_connectivity_lec_status_counts() -> dict[str, int]:
+    return {field: 0 for field in CONNECTIVITY_LEC_STATUS_FIELDS}
+
+
+def collect_connectivity_lec_status_counts(
+    case_rows: list[tuple[str, ...]],
+) -> dict[str, dict[str, int]]:
+    by_rule: dict[str, dict[str, int]] = {}
+
+    def get_counts(rule_id: str) -> dict[str, int]:
+        return by_rule.setdefault(rule_id, init_connectivity_lec_status_counts())
+
+    for row in case_rows:
+        if len(row) < 2:
+            continue
+        rule_id = normalize_connectivity_rule_id(row[1])
+        if not rule_id:
+            continue
+        status = (row[0] if row else "").strip().upper()
+        counts = get_counts(rule_id)
+        counts["case_total"] += 1
+        if status == "PASS":
+            counts["case_pass"] += 1
+        elif status == "FAIL":
+            counts["case_fail"] += 1
+        elif status == "XFAIL":
+            counts["case_xfail"] += 1
+        elif status == "XPASS":
+            counts["case_xpass"] += 1
+        elif status == "SKIP":
+            counts["case_skip"] += 1
+        else:
+            counts["case_error"] += 1
+
+    return by_rule
+
+
+def write_connectivity_lec_status_summary(
+    path: Path,
+    by_rule: dict[str, dict[str, int]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(["rule_id", *CONNECTIVITY_LEC_STATUS_FIELDS])
+        for rule_id in sorted(by_rule.keys()):
+            counts = by_rule[rule_id]
+            writer.writerow(
+                [rule_id, *[counts[field] for field in CONNECTIVITY_LEC_STATUS_FIELDS]]
+            )
+
+
+def read_connectivity_lec_status_summary(path: Path) -> dict[str, dict[str, str]]:
+    if not path.is_file():
+        fail(f"connectivity LEC status summary file not found: {path}")
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames is None:
+            fail(f"connectivity LEC status summary missing header row: {path}")
+        required = {"rule_id", *CONNECTIVITY_LEC_STATUS_FIELDS}
+        missing = sorted(required.difference(reader.fieldnames))
+        if missing:
+            fail(
+                f"connectivity LEC status summary missing required columns {missing}: "
+                f"{path} (found: {reader.fieldnames})"
+            )
+        out: dict[str, dict[str, str]] = {}
+        for idx, row in enumerate(reader, start=2):
+            rule_id = (row.get("rule_id") or "").strip()
+            if not rule_id:
+                continue
+            if rule_id in out:
+                fail(f"duplicate rule_id '{rule_id}' in {path} row {idx}")
+            out[rule_id] = {
+                field: (row.get(field) or "").strip()
+                for field in CONNECTIVITY_LEC_STATUS_FIELDS
+            }
+    return out
+
+
+def write_connectivity_lec_status_drift(
+    path: Path,
+    rows: list[tuple[str, str, str, str, str]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(["rule_id", "kind", "baseline", "current", "allowlisted"])
+        for row in rows:
+            writer.writerow(row)
+
+
+def append_status_drift_error_row(
+    results_path: Path,
+    mode_label: str,
+    baseline_path: Path,
+) -> None:
+    with results_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "ERROR\tconnectivity_status_drift\t"
+            f"{baseline_path}\topentitan\t{mode_label}\t"
+            "LEC_DRIFT_ERROR\tconnectivity_status_drift\n"
+        )
 
 
 def parse_target_manifest(path: Path) -> ConnectivityTarget:
@@ -559,6 +733,41 @@ def main() -> int:
         help="Output results TSV path (default: env OUT).",
     )
     parser.add_argument(
+        "--status-summary-file",
+        default=os.environ.get("LEC_CONNECTIVITY_STATUS_SUMMARY_OUT", ""),
+        help=(
+            "Optional output TSV path for per-rule connectivity LEC status "
+            "counters."
+        ),
+    )
+    parser.add_argument(
+        "--status-baseline-file",
+        default=os.environ.get("LEC_CONNECTIVITY_STATUS_BASELINE_FILE", ""),
+        help=(
+            "Optional baseline per-rule connectivity LEC status summary TSV used for "
+            "drift checking."
+        ),
+    )
+    parser.add_argument(
+        "--status-drift-file",
+        default=os.environ.get("LEC_CONNECTIVITY_STATUS_DRIFT_OUT", ""),
+        help="Optional output TSV path for connectivity LEC status drift rows.",
+    )
+    parser.add_argument(
+        "--status-drift-allowlist-file",
+        default=os.environ.get("LEC_CONNECTIVITY_STATUS_DRIFT_ALLOWLIST_FILE", ""),
+        help=(
+            "Optional allowlist file for connectivity LEC status drift suppression "
+            "(rule_id exact/prefix/regex)."
+        ),
+    )
+    parser.add_argument(
+        "--fail-on-status-drift",
+        action="store_true",
+        default=os.environ.get("LEC_FAIL_ON_CONNECTIVITY_STATUS_DRIFT", "0") == "1",
+        help="Fail when connectivity LEC status drift is detected vs baseline.",
+    )
+    parser.add_argument(
         "--resolved-contracts-file",
         default=os.environ.get("LEC_RESOLVED_CONTRACTS_OUT", ""),
         help="Optional output TSV path for resolved per-case contract rows.",
@@ -582,8 +791,29 @@ def main() -> int:
     rules_manifest = Path(args.rules_manifest).resolve()
     opentitan_root = Path(args.opentitan_root).resolve()
     results_file = Path(args.results_file).resolve()
+    status_summary_path = (
+        Path(args.status_summary_file).resolve() if args.status_summary_file else None
+    )
+    status_baseline_path = (
+        Path(args.status_baseline_file).resolve() if args.status_baseline_file else None
+    )
+    status_drift_path = (
+        Path(args.status_drift_file).resolve() if args.status_drift_file else None
+    )
+    status_allowlist_path = (
+        Path(args.status_drift_allowlist_file).resolve()
+        if args.status_drift_allowlist_file
+        else None
+    )
     if not opentitan_root.is_dir():
         fail(f"opentitan root not found: {opentitan_root}")
+    if status_baseline_path is not None and not status_baseline_path.is_file():
+        fail(f"connectivity LEC status baseline file not found: {status_baseline_path}")
+    if status_allowlist_path is not None and not status_allowlist_path.is_file():
+        fail(
+            "connectivity LEC status drift allowlist file not found: "
+            f"{status_allowlist_path}"
+        )
 
     rule_shard_count = parse_nonnegative_int(args.rule_shard_count, "rule-shard-count")
     rule_shard_index = parse_nonnegative_int(args.rule_shard_index, "rule-shard-index")
@@ -591,6 +821,16 @@ def main() -> int:
         fail("invalid --rule-shard-count: expected integer >= 1")
     if rule_shard_index >= rule_shard_count:
         fail("invalid --rule-shard-index: expected value < --rule-shard-count")
+    if args.fail_on_status_drift and not args.status_baseline_file:
+        fail("--fail-on-status-drift requires --status-baseline-file")
+    if args.status_drift_allowlist_file and not args.status_baseline_file:
+        fail("--status-drift-allowlist-file requires --status-baseline-file")
+
+    allow_exact: set[str] = set()
+    allow_prefix: list[str] = []
+    allow_regex: list[re.Pattern[str]] = []
+    if status_allowlist_path is not None:
+        allow_exact, allow_prefix, allow_regex = load_allowlist(status_allowlist_path)
 
     rule_filter_re: re.Pattern[str] | None = None
     if args.rule_filter:
@@ -615,7 +855,85 @@ def main() -> int:
 
     results_file.parent.mkdir(parents=True, exist_ok=True)
     results_file.write_text("", encoding="utf-8")
+
+    def evaluate_status_governance(case_rows: list[tuple[str, ...]]) -> int:
+        current_counts = collect_connectivity_lec_status_counts(case_rows)
+        if status_summary_path is not None:
+            write_connectivity_lec_status_summary(status_summary_path, current_counts)
+            print(f"connectivity LEC status summary: {status_summary_path}", flush=True)
+        if status_baseline_path is None:
+            return 0
+
+        baseline = read_connectivity_lec_status_summary(status_baseline_path)
+        current = {
+            rule_id: {
+                field: str(counts[field]) for field in CONNECTIVITY_LEC_STATUS_FIELDS
+            }
+            for rule_id, counts in current_counts.items()
+        }
+        drift_rows: list[tuple[str, str, str, str, str]] = []
+        non_allowlisted_rows: list[tuple[str, str, str, str, str]] = []
+        baseline_rules = set(baseline.keys())
+        current_rules = set(current.keys())
+
+        def add_drift(rule_id: str, kind: str, before: str, after: str) -> None:
+            allowlisted = is_allowlisted(rule_id, allow_exact, allow_prefix, allow_regex)
+            row = (rule_id, kind, before, after, "1" if allowlisted else "0")
+            drift_rows.append(row)
+            if not allowlisted:
+                non_allowlisted_rows.append(row)
+
+        for rule_id in sorted(baseline_rules - current_rules):
+            add_drift(rule_id, "missing_in_current", "present", "absent")
+        for rule_id in sorted(current_rules - baseline_rules):
+            add_drift(rule_id, "new_in_current", "absent", "present")
+        for rule_id in sorted(baseline_rules.intersection(current_rules)):
+            before_row = baseline[rule_id]
+            after_row = current[rule_id]
+            for kind in CONNECTIVITY_LEC_STATUS_FIELDS:
+                before = before_row.get(kind, "")
+                after = after_row.get(kind, "")
+                if before != after:
+                    add_drift(rule_id, kind, before, after)
+
+        if status_drift_path is not None:
+            write_connectivity_lec_status_drift(status_drift_path, drift_rows)
+            print(f"connectivity LEC status drift: {status_drift_path}", flush=True)
+
+        if non_allowlisted_rows:
+            sample = ", ".join(
+                f"{rule_id}:{kind}"
+                for rule_id, kind, _, _, _ in non_allowlisted_rows[:6]
+            )
+            if len(non_allowlisted_rows) > 6:
+                sample += ", ..."
+            message = (
+                "opentitan connectivity LEC status drift detected: "
+                f"rows={len(non_allowlisted_rows)} sample=[{sample}] "
+                f"baseline={status_baseline_path}"
+            )
+            if args.fail_on_status_drift:
+                append_status_drift_error_row(
+                    results_file, args.mode_label, status_baseline_path
+                )
+                print(message, file=sys.stderr)
+                return 1
+            print(f"warning: {message}", file=sys.stderr)
+        else:
+            print(
+                "opentitan connectivity LEC status drift check passed: "
+                f"rules={len(current)} baseline={status_baseline_path}",
+                file=sys.stderr,
+            )
+        return 0
+
     if not selected_groups:
+        if status_summary_path is not None:
+            write_connectivity_lec_status_summary(status_summary_path, {})
+            print(f"connectivity LEC status summary: {status_summary_path}", flush=True)
+        if status_drift_path is not None:
+            write_connectivity_lec_status_drift(status_drift_path, [])
+            print(f"connectivity LEC status drift: {status_drift_path}", flush=True)
         print(
             "No OpenTitan connectivity LEC cases selected.",
             file=sys.stderr,
@@ -766,6 +1084,12 @@ def main() -> int:
             )
 
         if not cases:
+            if status_summary_path is not None:
+                write_connectivity_lec_status_summary(status_summary_path, {})
+                print(f"connectivity LEC status summary: {status_summary_path}", flush=True)
+            if status_drift_path is not None:
+                write_connectivity_lec_status_drift(status_drift_path, [])
+                print(f"connectivity LEC status drift: {status_drift_path}", flush=True)
             print(
                 "No OpenTitan connectivity LEC cases selected.",
                 file=sys.stderr,
@@ -1028,6 +1352,8 @@ def main() -> int:
             for row in sorted(rows, key=lambda item: (item[1], item[0], item[2])):
                 handle.write("\t".join(row) + "\n")
 
+        governance_rc = evaluate_status_governance(rows)
+
         if args.drop_remark_cases_file:
             drop_case_path = Path(args.drop_remark_cases_file).resolve()
             drop_case_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1074,6 +1400,9 @@ def main() -> int:
                 counts["skip"] += 1
             else:
                 counts["error"] += 1
+        if governance_rc != 0:
+            counts["total"] += 1
+            counts["error"] += 1
         print(
             "opentitan connectivity LEC summary: "
             f"total={counts['total']} pass={counts['pass']} fail={counts['fail']} "
@@ -1082,7 +1411,8 @@ def main() -> int:
             file=sys.stderr,
             flush=True,
         )
-        return 0 if counts["fail"] == 0 and counts["error"] == 0 else 1
+        case_rc = 0 if counts["fail"] == 0 and counts["error"] == 0 else 1
+        return max(case_rc, governance_rc)
     finally:
         if temp_dir_obj is not None:
             temp_dir_obj.cleanup()

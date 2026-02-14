@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1329 - February 14, 2026
+
+### OpenTitan Connectivity LEC: Per-Rule Status Drift Governance
+
+1. Extended `utils/run_opentitan_connectivity_circt_lec.py` with status-governance artifacts:
+   - per-rule status summary output:
+     - `LEC_CONNECTIVITY_STATUS_SUMMARY_OUT`
+   - baseline/diff controls:
+     - `LEC_CONNECTIVITY_STATUS_BASELINE_FILE`
+     - `LEC_CONNECTIVITY_STATUS_DRIFT_OUT`
+     - `LEC_CONNECTIVITY_STATUS_DRIFT_ALLOWLIST_FILE`
+     - `LEC_FAIL_ON_CONNECTIVITY_STATUS_DRIFT`
+   - drift model is keyed by stable `rule_id` and tracks case counters:
+     - `case_pass/fail/xfail/xpass/error/skip`
+   - fail-on drift appends an explicit `ERROR` row to case results
+     (`LEC_DRIFT_ERROR`) to preserve lane-level failure visibility.
+2. Extended `utils/run_formal_all.sh` connectivity LEC lane wiring:
+   - new CLI options:
+     - `--opentitan-connectivity-lec-status-baseline-file`
+     - `--opentitan-connectivity-lec-status-drift-file`
+     - `--opentitan-connectivity-lec-status-drift-allowlist-file`
+     - `--update-opentitan-connectivity-lec-status-baseline`
+     - `--fail-on-opentitan-connectivity-lec-status-drift`
+   - lane now forwards status-governance env to connectivity LEC runner.
+   - baseline update workflow added for connectivity LEC status artifacts.
+   - strict-gate behavior:
+     - auto-enables connectivity LEC drift failure when baseline is configured.
+     - enforces allowlist gating requirements.
+3. Added focused regressions:
+   - `test/Tools/run-opentitan-connectivity-circt-lec-status-summary.test`
+   - `test/Tools/run-opentitan-connectivity-circt-lec-status-drift-fail.test`
+   - `test/Tools/run-opentitan-connectivity-circt-lec-status-drift-allowlist.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-lec-status-drift-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-lec-status-drift-requires-baseline.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-lec-status-drift-allowlist-requires-gate.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-lec-status-baseline-update.test`
+   - updated `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py` PASS
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-(opentitan-connectivity-circt-lec-status-|formal-all-opentitan-connectivity-lec-status-|formal-all-help).*\\.test'` PASS (8 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-(opentitan-connectivity-circt-bmc|opentitan-connectivity-circt-lec|formal-all-opentitan-connectivity-).*\\.test'` PASS (31 selected)
+
 ## Iteration 1328 - February 14, 2026
 
 ### Mutation Workflow: Deterministic Example Selection Governance

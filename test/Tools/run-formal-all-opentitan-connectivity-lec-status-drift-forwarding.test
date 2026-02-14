@@ -1,0 +1,21 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal/conn_csvs
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: cp %S/../../utils/select_opentitan_connectivity_cfg.py %t/utils/select_opentitan_connectivity_cfg.py
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\n: "${LEC_CONNECTIVITY_STATUS_SUMMARY_OUT:?}"\n: "${LEC_CONNECTIVITY_STATUS_BASELINE_FILE:?}"\n: "${LEC_CONNECTIVITY_STATUS_DRIFT_OUT:?}"\n: "${LEC_CONNECTIVITY_STATUS_DRIFT_ALLOWLIST_FILE:?}"\nif [[ "${LEC_FAIL_ON_CONNECTIVITY_STATUS_DRIFT:-}" != "1" ]]; then\n  echo "bad_fail=${LEC_FAIL_ON_CONNECTIVITY_STATUS_DRIFT:-}" >&2\n  exit 11\nfi\nif [[ "$LEC_CONNECTIVITY_STATUS_SUMMARY_OUT" != "%t/out/opentitan-connectivity-lec-status-summary.tsv" ]]; then\n  echo "bad_summary_out=$LEC_CONNECTIVITY_STATUS_SUMMARY_OUT" >&2\n  exit 12\nfi\nif [[ "$LEC_CONNECTIVITY_STATUS_BASELINE_FILE" != "%t/status-baseline.tsv" ]]; then\n  echo "bad_baseline=$LEC_CONNECTIVITY_STATUS_BASELINE_FILE" >&2\n  exit 13\nfi\nif [[ "$LEC_CONNECTIVITY_STATUS_DRIFT_OUT" != "%t/out/opentitan-connectivity-lec-status-drift.tsv" ]]; then\n  echo "bad_drift_out=$LEC_CONNECTIVITY_STATUS_DRIFT_OUT" >&2\n  exit 14\nfi\nif [[ "$LEC_CONNECTIVITY_STATUS_DRIFT_ALLOWLIST_FILE" != "%t/status-allowlist.txt" ]]; then\n  echo "bad_allowlist=$LEC_CONNECTIVITY_STATUS_DRIFT_ALLOWLIST_FILE" >&2\n  exit 15\nfi\nprintf "PASS\\tconnectivity::chip.csv:RULE_CLK\\t%t/out/opentitan-connectivity-lec-work\\topentitan\\tCONNECTIVITY_LEC\\tEQ\\n" > "$OUT"\nprintf "rule_id\\tcase_total\\tcase_pass\\tcase_fail\\tcase_xfail\\tcase_xpass\\tcase_error\\tcase_skip\\nchip.csv:RULE_CLK\\t1\\t1\\t0\\t0\\t0\\t0\\t0\\n" > "$LEC_CONNECTIVITY_STATUS_SUMMARY_OUT"\nprintf "rule_id\\tkind\\tbaseline\\tcurrent\\tallowlisted\\nchip.csv:RULE_CLK\\tcase_pass\\t0\\t1\\t1\\n" > "$LEC_CONNECTIVITY_STATUS_DRIFT_OUT"\n' > %t/utils/run_opentitan_connectivity_circt_lec.py
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '{\n  "name": "chip_earlgrey_asic",\n  "fusesoc_core": "lowrisc:systems:chip_earlgrey_asic:0.1",\n  "conn_csvs_dir": "{proj_root}/hw/top_earlgrey/formal/conn_csvs",\n  "conn_csvs": ["{conn_csvs_dir}/chip.csv"]\n}\n' > %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson
+// RUN: printf ',NAME,SRC BLOCK,SRC SIGNAL,DEST BLOCK,DEST SIGNAL\nCONNECTION, RULE_CLK, top_earlgrey.u_src, clk_o, top_earlgrey.u_dst, clk_i\n' > %t/ot/hw/top_earlgrey/formal/conn_csvs/chip.csv
+// RUN: printf 'rule_id\tcase_total\tcase_pass\tcase_fail\tcase_xfail\tcase_xpass\tcase_error\tcase_skip\nchip.csv:RULE_CLK\t1\t0\t0\t0\t0\t0\t0\n' > %t/status-baseline.tsv
+// RUN: printf 'exact:chip.csv:RULE_CLK\n' > %t/status-allowlist.txt
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/select_opentitan_connectivity_cfg.py %t/utils/run_opentitan_connectivity_circt_lec.py %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^opentitan/CONNECTIVITY_LEC$' --with-opentitan-connectivity-lec --opentitan %t/ot --circt-verilog %t/bin/circt-verilog --opentitan-connectivity-cfg %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson --opentitan-connectivity-rule-filter '^RULE_' --opentitan-connectivity-lec-status-baseline-file %t/status-baseline.tsv --opentitan-connectivity-lec-status-drift-file %t/out/opentitan-connectivity-lec-status-drift.tsv --opentitan-connectivity-lec-status-drift-allowlist-file %t/status-allowlist.txt --fail-on-opentitan-connectivity-lec-status-drift
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=DRIFT < %t/out/opentitan-connectivity-lec-status-drift.tsv
+//
+// SUMMARY: opentitan{{[[:space:]]+}}CONNECTIVITY_LEC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
+// DRIFT: rule_id{{[[:space:]]+}}kind{{[[:space:]]+}}baseline{{[[:space:]]+}}current{{[[:space:]]+}}allowlisted
+// DRIFT: chip.csv:RULE_CLK{{[[:space:]]+}}case_pass{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}1
