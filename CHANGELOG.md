@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1331 - February 14, 2026
+
+### OpenTitan Connectivity: Cross-Lane BMC-vs-LEC Status Parity Governance
+
+1. Added a new parity checker utility:
+   - `utils/check_opentitan_connectivity_status_parity.py`
+   - compares rule-keyed BMC vs LEC case counters:
+     - `case_total/pass/fail/xfail/xpass/error/skip`
+   - supports mismatch allowlists via:
+     - `exact:`
+     - `prefix:`
+     - `regex:`
+   - emits deterministic parity artifact rows:
+     - `rule_id`, `kind`, `bmc`, `lec`, `allowlisted`
+2. Extended `utils/run_formal_all.sh` with connectivity parity lane wiring:
+   - lane:
+     - `opentitan/CONNECTIVITY_PARITY`
+   - new CLI controls:
+     - `--opentitan-connectivity-status-parity-file`
+     - `--opentitan-connectivity-status-parity-allowlist-file`
+     - `--fail-on-opentitan-connectivity-status-parity`
+   - strict-gate behavior:
+     - auto-enables parity fail-on when both connectivity lanes are active.
+   - lane-filter dependency enforcement:
+     - parity lane now requires source lanes in filter
+       (`CONNECTIVITY_BMC` + `CONNECTIVITY_LEC`).
+3. Added focused regressions:
+   - checker-level:
+     - `test/Tools/check-opentitan-connectivity-status-parity-none.test`
+     - `test/Tools/check-opentitan-connectivity-status-parity-fail.test`
+     - `test/Tools/check-opentitan-connectivity-status-parity-allowlist.test`
+   - formal-driver-level:
+     - `test/Tools/run-formal-all-opentitan-connectivity-parity-forwarding.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-parity-fail.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-parity-lane-deps.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-parity-allowlist-requires-gate.test`
+   - updated:
+     - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/check_opentitan_connectivity_status_parity.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-formal-all-opentitan-connectivity-.*\\.test|run-formal-all-help\\.test'` PASS (23 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-formal-all-opentitan-connectivity-parity-.*\\.test|check-opentitan-connectivity-status-parity-.*\\.test'` PASS (7 selected)
+
 ## Iteration 1330 - February 14, 2026
 
 ### Mutation Workflow: Explicit Schema-Version Artifacts for Baselines

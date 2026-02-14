@@ -1004,6 +1004,18 @@ Options:
   --fail-on-opentitan-connectivity-lec-status-drift
                          Fail when connectivity LEC status drift checker
                          reports non-allowlisted drift
+  --opentitan-connectivity-status-parity-file FILE
+                         Optional output path for cross-lane connectivity
+                         BMC-vs-LEC status parity rows (default:
+                         OUT_DIR/opentitan-connectivity-status-parity.tsv
+                         when both connectivity lanes are enabled)
+  --opentitan-connectivity-status-parity-allowlist-file FILE
+                         Optional allowlist file for cross-lane connectivity
+                         status parity mismatches (`rule_id` or
+                         `rule_id::kind`, exact/prefix/regex)
+  --fail-on-opentitan-connectivity-status-parity
+                         Fail when cross-lane connectivity BMC-vs-LEC status
+                         parity checker reports non-allowlisted mismatches
   --opentitan-fpv-target-filter REGEX
                          Regex filter for OpenTitan FPV target names in
                          `opentitan/FPV_BMC` execution (in addition to
@@ -2731,6 +2743,8 @@ OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_INDEX="0"
 OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE=""
 OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE=""
 OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE=""
+OPENTITAN_CONNECTIVITY_STATUS_PARITY_FILE=""
+OPENTITAN_CONNECTIVITY_STATUS_PARITY_ALLOWLIST_FILE=""
 OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT="1"
 OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX="0"
 OPENTITAN_FPV_BMC_CASE_SHARD_COUNT="1"
@@ -2759,6 +2773,7 @@ UPDATE_OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE=0
 FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT=0
 UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE=0
 FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT=0
+FAIL_ON_OPENTITAN_CONNECTIVITY_STATUS_PARITY=0
 FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=0
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
@@ -2887,6 +2902,12 @@ while [[ $# -gt 0 ]]; do
       UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE=1; shift ;;
     --fail-on-opentitan-connectivity-lec-status-drift)
       FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT=1; shift ;;
+    --opentitan-connectivity-status-parity-file)
+      OPENTITAN_CONNECTIVITY_STATUS_PARITY_FILE="$2"; shift 2 ;;
+    --opentitan-connectivity-status-parity-allowlist-file)
+      OPENTITAN_CONNECTIVITY_STATUS_PARITY_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --fail-on-opentitan-connectivity-status-parity)
+      FAIL_ON_OPENTITAN_CONNECTIVITY_STATUS_PARITY=1; shift ;;
     --opentitan-fpv-target-filter)
       OPENTITAN_FPV_TARGET_FILTER="$2"; shift 2 ;;
     --opentitan-fpv-bmc-target-shard-count)
@@ -3560,6 +3581,9 @@ fi
 if [[ "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" && -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" && -z "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE" ]]; then
   OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE="$OUT_DIR/opentitan-connectivity-lec-status-drift.tsv"
 fi
+if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" && -z "$OPENTITAN_CONNECTIVITY_STATUS_PARITY_FILE" ]]; then
+  OPENTITAN_CONNECTIVITY_STATUS_PARITY_FILE="$OUT_DIR/opentitan-connectivity-status-parity.tsv"
+fi
 if ! [[ "$BASELINE_WINDOW" =~ ^[0-9]+$ ]] || [[ "$BASELINE_WINDOW" == "0" ]]; then
   echo "invalid --baseline-window: expected positive integer" >&2
   exit 1
@@ -3980,6 +4004,22 @@ if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" && "$UPDATE_OPENTITA
 fi
 if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE" ]]; then
   echo "OpenTitan connectivity LEC status drift allowlist file not readable: $OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_STATUS_PARITY_FILE" && ! ( "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ) ]]; then
+  echo "--opentitan-connectivity-status-parity-file requires both --with-opentitan-connectivity-bmc and --with-opentitan-connectivity-lec" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_STATUS_PARITY_ALLOWLIST_FILE" && ! ( "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ) ]]; then
+  echo "--opentitan-connectivity-status-parity-allowlist-file requires both --with-opentitan-connectivity-bmc and --with-opentitan-connectivity-lec" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_CONNECTIVITY_STATUS_PARITY" == "1" && ! ( "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ) ]]; then
+  echo "--fail-on-opentitan-connectivity-status-parity requires both --with-opentitan-connectivity-bmc and --with-opentitan-connectivity-lec" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_STATUS_PARITY_ALLOWLIST_FILE" && ! -r "$OPENTITAN_CONNECTIVITY_STATUS_PARITY_ALLOWLIST_FILE" ]]; then
+  echo "OpenTitan connectivity status parity allowlist file not readable: $OPENTITAN_CONNECTIVITY_STATUS_PARITY_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
@@ -5628,6 +5668,9 @@ fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" && -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT=1
 fi
+if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ]]; then
+  FAIL_ON_OPENTITAN_CONNECTIVITY_STATUS_PARITY=1
+fi
 if [[ "$STRICT_GATE" == "1" && -n "$OPENTITAN_FPV_CFG_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=1
 fi
@@ -5645,6 +5688,10 @@ if [[ -n "$OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_
 fi
 if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--opentitan-connectivity-lec-status-drift-allowlist-file requires --fail-on-opentitan-connectivity-lec-status-drift or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_STATUS_PARITY_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_CONNECTIVITY_STATUS_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--opentitan-connectivity-status-parity-allowlist-file requires --fail-on-opentitan-connectivity-status-parity or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -8136,6 +8183,8 @@ compute_lane_state_config_hash() {
     printf "opentitan_connectivity_lec_status_baseline_file=%s\n" "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE"
     printf "opentitan_connectivity_lec_status_drift_file=%s\n" "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE"
     printf "opentitan_connectivity_lec_status_drift_allowlist_file=%s\n" "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE"
+    printf "opentitan_connectivity_status_parity_file=%s\n" "$OPENTITAN_CONNECTIVITY_STATUS_PARITY_FILE"
+    printf "opentitan_connectivity_status_parity_allowlist_file=%s\n" "$OPENTITAN_CONNECTIVITY_STATUS_PARITY_ALLOWLIST_FILE"
     printf "opentitan_fpv_target_filter=%s\n" "$OPENTITAN_FPV_TARGET_FILTER"
     printf "opentitan_fpv_bmc_target_shard_count=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT"
     printf "opentitan_fpv_bmc_target_shard_index=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
@@ -8164,6 +8213,7 @@ compute_lane_state_config_hash() {
     printf "fail_on_opentitan_connectivity_bmc_status_drift=%s\n" "$FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT"
     printf "update_opentitan_connectivity_lec_status_baseline=%s\n" "$UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE"
     printf "fail_on_opentitan_connectivity_lec_status_drift=%s\n" "$FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT"
+    printf "fail_on_opentitan_connectivity_status_parity=%s\n" "$FAIL_ON_OPENTITAN_CONNECTIVITY_STATUS_PARITY"
     printf "fail_on_opentitan_fpv_unknown_task=%s\n" "$FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK"
     for opentitan_select_cfg in "${OPENTITAN_SELECT_CFGS[@]}"; do
       printf "opentitan_select_cfgs[]=%s\n" "$opentitan_select_cfg"
@@ -9110,6 +9160,13 @@ if [[ "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ]] && lane_enabled "opentitan/CO
     exit 1
   fi
 fi
+if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ]] && \
+   lane_enabled "opentitan/CONNECTIVITY_PARITY"; then
+  if ! lane_enabled "opentitan/CONNECTIVITY_BMC" || ! lane_enabled "opentitan/CONNECTIVITY_LEC"; then
+    echo "opentitan/CONNECTIVITY_PARITY requires source lanes in filter: include opentitan/CONNECTIVITY_BMC and opentitan/CONNECTIVITY_LEC" >&2
+    exit 1
+  fi
+fi
 if [[ "$WITH_OPENTITAN_BMC" == "1" && "$WITH_OPENTITAN_BMC_STRICT" == "1" ]] && \
    lane_enabled "opentitan/BMC_MODE_DIFF"; then
   if [[ -z "$OPENTITAN_BMC_IMPL_FILTER" ]]; then
@@ -9176,6 +9233,7 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   need_opentitan_connectivity_parser=0
   need_opentitan_connectivity_bmc_runner=0
   need_opentitan_connectivity_lec_runner=0
+  need_opentitan_connectivity_parity_checker=0
   need_opentitan_connectivity_lec_lanes=0
   need_opentitan_lec_runner=0
   need_opentitan_e2e_runner=0
@@ -9243,6 +9301,9 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
     need_opentitan_connectivity_lec_lanes=1
     need_opentitan_connectivity_lec_runner=1
     need_opentitan_connectivity_parser=1
+  fi
+  if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ]] && lane_enabled "opentitan/CONNECTIVITY_PARITY"; then
+    need_opentitan_connectivity_parity_checker=1
   fi
 
   if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
@@ -9356,6 +9417,9 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   fi
   if [[ "$need_opentitan_connectivity_lec_runner" == "1" ]]; then
     require_executable_tool "OpenTitan connectivity LEC runner" "utils/run_opentitan_connectivity_circt_lec.py"
+  fi
+  if [[ "$need_opentitan_connectivity_parity_checker" == "1" ]]; then
+    require_executable_tool "OpenTitan connectivity parity checker" "utils/check_opentitan_connectivity_status_parity.py"
   fi
   if [[ "$need_opentitan_lec_runner" == "1" ]]; then
     require_executable_tool "OpenTitan LEC runner" "utils/run_opentitan_circt_lec.py"
@@ -12610,6 +12674,102 @@ PY
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
 }
 
+run_opentitan_connectivity_parity_lane() {
+  local lane_id="$1"
+  local mode_name="$2"
+  local suite_name="$3"
+  local bmc_status_summary_file="$4"
+  local lec_status_summary_file="$5"
+  local parity_file="$6"
+
+  if ! lane_enabled "$lane_id"; then
+    return
+  fi
+  if lane_resume_from_state "$lane_id"; then
+    return
+  fi
+
+  if [[ -n "$parity_file" ]]; then
+    : > "$parity_file"
+  fi
+
+  if [[ ! -s "$bmc_status_summary_file" || ! -s "$lec_status_summary_file" ]]; then
+    local summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_status_summary=1"
+    if [[ ! -s "$bmc_status_summary_file" ]]; then
+      summary="${summary} missing_bmc_status_summary=1"
+    fi
+    if [[ ! -s "$lec_status_summary_file" ]]; then
+      summary="${summary} missing_lec_status_summary=1"
+    fi
+    record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$summary"
+    return
+  fi
+
+  local parity_args=(
+    --bmc-status-summary "$bmc_status_summary_file"
+    --lec-status-summary "$lec_status_summary_file"
+  )
+  if [[ -n "$parity_file" ]]; then
+    parity_args+=(--out-parity-tsv "$parity_file")
+  fi
+  if [[ -n "$OPENTITAN_CONNECTIVITY_STATUS_PARITY_ALLOWLIST_FILE" ]]; then
+    parity_args+=(--allowlist-file "$OPENTITAN_CONNECTIVITY_STATUS_PARITY_ALLOWLIST_FILE")
+  fi
+  if [[ "$FAIL_ON_OPENTITAN_CONNECTIVITY_STATUS_PARITY" == "1" ]]; then
+    parity_args+=(--fail-on-mismatch)
+  fi
+
+  local parity_ec=0
+  run_suite "$suite_name" \
+    python3 "$SCRIPT_DIR/check_opentitan_connectivity_status_parity.py" "${parity_args[@]}" || parity_ec=$?
+
+  local parity_total_rows=0
+  local parity_allowlisted_rows=0
+  if [[ -n "$parity_file" && -f "$parity_file" ]]; then
+    local parity_counts
+    parity_counts="$(
+      OPENTITAN_CONNECTIVITY_PARITY_FILE="$parity_file" python3 - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+path = Path(os.environ["OPENTITAN_CONNECTIVITY_PARITY_FILE"])
+total = 0
+allowlisted = 0
+if path.is_file():
+  with path.open(encoding="utf-8", newline="") as handle:
+    reader = csv.DictReader(handle, delimiter="\t")
+    if reader.fieldnames:
+      for row in reader:
+        total += 1
+        if (row.get("allowlisted") or "").strip() == "1":
+          allowlisted += 1
+print(f"{total}\t{allowlisted}")
+PY
+    )"
+    IFS=$'\t' read -r parity_total_rows parity_allowlisted_rows <<< "$parity_counts"
+  fi
+  local parity_non_allowlisted_rows=$((parity_total_rows - parity_allowlisted_rows))
+  if (( parity_non_allowlisted_rows < 0 )); then
+    parity_non_allowlisted_rows=0
+  fi
+
+  local total=1
+  local pass=0
+  local fail=0
+  local xfail=0
+  local xpass=0
+  local error=0
+  local skip=0
+  if [[ "$parity_ec" == "0" ]]; then
+    pass=1
+  else
+    error=1
+  fi
+  local summary="total=1 pass=${pass} fail=0 xfail=0 xpass=0 error=${error} skip=0 parity_rows=${parity_total_rows} parity_non_allowlisted_rows=${parity_non_allowlisted_rows} parity_allowlisted_rows=${parity_allowlisted_rows}"
+  record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
+}
+
 run_opentitan_fpv_bmc_lane() {
   local lane_id="$1"
   local mode_name="$2"
@@ -12846,6 +13006,17 @@ if [[ "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ]]; then
     "$OUT_DIR/opentitan-connectivity-lec-resolved-contracts.tsv" \
     "$OUT_DIR/opentitan-connectivity-lec-status-summary.tsv" \
     "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE"
+fi
+
+# OpenTitan connectivity cross-lane parity lane (optional)
+if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ]]; then
+  run_opentitan_connectivity_parity_lane \
+    "opentitan/CONNECTIVITY_PARITY" \
+    "CONNECTIVITY_PARITY" \
+    "opentitan-connectivity-parity" \
+    "$OUT_DIR/opentitan-connectivity-bmc-status-summary.tsv" \
+    "$OUT_DIR/opentitan-connectivity-lec-status-summary.tsv" \
+    "$OPENTITAN_CONNECTIVITY_STATUS_PARITY_FILE"
 fi
 
 # OpenTitan BMC (optional)
