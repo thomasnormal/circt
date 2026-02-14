@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1405 - February 14, 2026
+
+### Pairwise BMC: Frontend Verilog Artifact Cache
+
+1. Added generic frontend cache support in
+   `utils/run_pairwise_circt_bmc.py`:
+   - `BMC_VERILOG_CACHE_MODE=off|read|readwrite` (default: `off`)
+   - `BMC_VERILOG_CACHE_DIR` (default:
+     `~/.cache/circt-bmc-verilog-cache` when cache is enabled)
+2. Cache behavior:
+   - on `read|readwrite`, verilog frontend stage restores `pairwise_bmc.mlir`
+     by deterministic cache key (tool fingerprint + frontend flags + include
+     paths + defines + source file fingerprints).
+   - on `readwrite`, successful frontend outputs are stored atomically.
+   - launch telemetry now records cache hits via:
+     - `CACHE ... verilog_cache_hit`.
+3. Robustness:
+   - cache is best-effort and fail-open (any cache I/O issue falls back to
+     normal frontend execution).
+   - cache-hit path now writes deterministic verilog log content to preserve
+     downstream drop-reason processing behavior.
+4. Added regression coverage:
+   - `test/Tools/run-pairwise-circt-bmc-verilog-cache-basic.test`
+   - validates readwrite population + read-mode hit by forcing second-run
+     `circt-verilog` failure (pass must come from cache).
+5. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-pairwise-circt-bmc-verilog-cache-basic.test build-test/test/Tools/run-pairwise-circt-bmc-prim-assert-retry-precedes-external-preprocess.test build-test/test/Tools/run-pairwise-circt-bmc-prim-assert-include-shim-auto-retry.test build-test/test/Tools/run-pairwise-circt-bmc-external-preprocess-auto-retry.test` PASS
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-opentitan-bmc.test build-test/test/Tools/run-formal-all-opentitan-bmc-mode-diff.test build-test/test/Tools/run-formal-all-opentitan-bmc-opentitan-toolchain-fallback.test build-test/test/Tools/run-formal-all-opentitan-bmc-case-policy-forwarding.test build-test/test/Tools/run-opentitan-bmc-case-policy-provenance.test` PASS
+
 ## Iteration 1404 - February 14, 2026
 
 ### OpenTitan FPV BMC: Prim-Assert Retry Priority over External Preprocess

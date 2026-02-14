@@ -92,6 +92,14 @@ Verilog frontend mode:
 - BMC_VERILOG_EXTERNAL_PREPROCESS_CMD (default: "verilator -E")
   External preprocessor command used by
   BMC_VERILOG_EXTERNAL_PREPROCESS_MODE=auto|on.
+- BMC_VERILOG_CACHE_MODE (default: off)
+  Values:
+  - off: disable frontend compile artifact cache.
+  - read: restore frontend MLIR artifacts from cache when available.
+  - readwrite: restore from cache and store successful frontend MLIR artifacts.
+- BMC_VERILOG_CACHE_DIR (optional)
+  Cache directory used by BMC_VERILOG_CACHE_MODE=read|readwrite
+  (default: ~/.cache/circt-bmc-verilog-cache).
 """
 
 from __future__ import annotations
@@ -1086,6 +1094,36 @@ def compute_contract_fingerprint(fields: list[str]) -> str:
     return hashlib.sha256(payload).hexdigest()[:16]
 
 
+def compute_file_state_fingerprint(path: str) -> str:
+    stat = Path(path).stat()
+    return f"{stat.st_size}:{stat.st_mtime_ns}"
+
+
+def compute_verilog_cache_key(
+    circt_verilog_path: str,
+    circt_verilog_args: list[str],
+    top_module: str,
+    use_single_unit: bool,
+    include_dirs: list[str],
+    define_tokens: list[str],
+    input_sources: list[str],
+) -> str:
+    fields: list[str] = [
+        str(Path(circt_verilog_path).resolve()),
+        compute_file_state_fingerprint(circt_verilog_path),
+        top_module,
+        "1" if use_single_unit else "0",
+        ";".join(include_dirs),
+        ";".join(define_tokens),
+        shlex.join(circt_verilog_args),
+    ]
+    for path in input_sources:
+        resolved = str(Path(path).resolve())
+        fields.append(f"{resolved}|{compute_file_state_fingerprint(resolved)}")
+    payload = "\x1f".join(fields).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def load_cases(cases_file: Path) -> list[CaseSpec]:
     base_dir = cases_file.parent
     cases: list[CaseSpec] = []
@@ -1430,6 +1468,28 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    verilog_cache_mode = os.environ.get(
+        "BMC_VERILOG_CACHE_MODE", "off"
+    ).strip().lower()
+    if verilog_cache_mode not in {"off", "read", "readwrite"}:
+        print(
+            (
+                "invalid BMC_VERILOG_CACHE_MODE: "
+                f"{verilog_cache_mode} (expected off|read|readwrite)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    verilog_cache_dir_raw = os.environ.get("BMC_VERILOG_CACHE_DIR", "").strip()
+    verilog_cache_dir: Path | None = None
+    if verilog_cache_mode != "off":
+        if verilog_cache_dir_raw:
+            verilog_cache_dir = Path(verilog_cache_dir_raw).expanduser().resolve()
+        else:
+            verilog_cache_dir = (
+                Path.home() / ".cache" / "circt-bmc-verilog-cache"
+            )
+        verilog_cache_dir.mkdir(parents=True, exist_ok=True)
     z3_lib = os.environ.get("Z3_LIB", str(Path.home() / "z3-install/lib64/libz3.so"))
     bmc_run_smtlib = os.environ.get("BMC_RUN_SMTLIB", "1") == "1"
     bmc_smoke_only = os.environ.get("BMC_SMOKE_ONLY", "0") == "1"
@@ -1822,6 +1882,93 @@ def main() -> int:
                     + source_dirs
                 )
 
+            def run_verilog_with_cache(
+                stage_label: str,
+            ) -> subprocess.CompletedProcess[str]:
+                if verilog_cache_mode != "off" and verilog_cache_dir is not None:
+                    try:
+                        input_sources = current_verilog_input_sources()
+                        cache_key = compute_verilog_cache_key(
+                            circt_verilog,
+                            circt_verilog_args,
+                            case.top_module,
+                            use_single_unit,
+                            current_verilog_include_dirs(),
+                            case.verilog_defines,
+                            input_sources,
+                        )
+                        cache_mlir_path = verilog_cache_dir / f"{cache_key}.mlir"
+                        if cache_mlir_path.is_file():
+                            shutil.copy2(cache_mlir_path, out_mlir)
+                            verilog_log_path.write_text(
+                                f"verilog cache hit key={cache_key}\n",
+                                encoding="utf-8",
+                            )
+                            if launch_event_rows is not None:
+                                launch_event_rows.append(
+                                    (
+                                        "CACHE",
+                                        case.case_id,
+                                        case_path,
+                                        stage_label,
+                                        circt_verilog,
+                                        "verilog_cache_hit",
+                                        "0",
+                                        "0.000",
+                                        "0",
+                                        cache_key[:16],
+                                    )
+                                )
+                            return subprocess.CompletedProcess(
+                                args=verilog_cmd, returncode=0
+                            )
+                    except OSError:
+                        # Cache must be best-effort and never fail case execution.
+                        pass
+
+                result = run_and_log(
+                    verilog_cmd,
+                    verilog_log_path,
+                    None,
+                    case_timeout_secs,
+                    etxtbsy_retries,
+                    etxtbsy_backoff_secs,
+                    launch_retry_attempts,
+                    launch_retry_backoff_secs,
+                    launch_retryable_exit_codes,
+                    launch_copy_fallback,
+                    launch_event_rows,
+                    case.case_id,
+                    case_path,
+                    stage_label,
+                )
+                if (
+                    result.returncode == 0
+                    and verilog_cache_mode == "readwrite"
+                    and verilog_cache_dir is not None
+                ):
+                    try:
+                        input_sources = current_verilog_input_sources()
+                        cache_key = compute_verilog_cache_key(
+                            circt_verilog,
+                            circt_verilog_args,
+                            case.top_module,
+                            use_single_unit,
+                            current_verilog_include_dirs(),
+                            case.verilog_defines,
+                            input_sources,
+                        )
+                        cache_mlir_path = verilog_cache_dir / f"{cache_key}.mlir"
+                        cache_tmp_path = (
+                            verilog_cache_dir
+                            / f".{cache_key}.tmp.{os.getpid()}.{time.time_ns()}"
+                        )
+                        shutil.copy2(out_mlir, cache_tmp_path)
+                        os.replace(cache_tmp_path, cache_mlir_path)
+                    except OSError:
+                        pass
+                return result
+
             def enable_prim_assert_include_shims() -> None:
                 nonlocal use_prim_assert_include_shims
                 if use_prim_assert_include_shims:
@@ -1897,22 +2044,7 @@ def main() -> int:
 
             stage = "verilog"
             try:
-                verilog_result = run_and_log(
-                    verilog_cmd,
-                    verilog_log_path,
-                    None,
-                    case_timeout_secs,
-                    etxtbsy_retries,
-                    etxtbsy_backoff_secs,
-                    launch_retry_attempts,
-                    launch_retry_backoff_secs,
-                    launch_retryable_exit_codes,
-                    launch_copy_fallback,
-                    launch_event_rows,
-                    case.case_id,
-                    case_path,
-                    stage,
-                )
+                verilog_result = run_verilog_with_cache(stage)
                 if (
                     verilog_result.returncode != 0
                     and verilog_single_unit_mode == "auto"
@@ -1951,22 +2083,7 @@ def main() -> int:
                             verilog_post_sources,
                             verilog_source_override,
                         )
-                        verilog_result = run_and_log(
-                            verilog_cmd,
-                            verilog_log_path,
-                            None,
-                            case_timeout_secs,
-                            etxtbsy_retries,
-                            etxtbsy_backoff_secs,
-                            launch_retry_attempts,
-                            launch_retry_backoff_secs,
-                            launch_retryable_exit_codes,
-                            launch_copy_fallback,
-                            launch_event_rows,
-                            case.case_id,
-                            case_path,
-                            stage,
-                        )
+                        verilog_result = run_verilog_with_cache(stage)
                 if (
                     verilog_result.returncode != 0
                     and verilog_xilinx_primitive_stub_mode == "auto"
@@ -2004,22 +2121,7 @@ def main() -> int:
                             verilog_post_sources,
                             verilog_source_override,
                         )
-                        verilog_result = run_and_log(
-                            verilog_cmd,
-                            verilog_log_path,
-                            None,
-                            case_timeout_secs,
-                            etxtbsy_retries,
-                            etxtbsy_backoff_secs,
-                            launch_retry_attempts,
-                            launch_retry_backoff_secs,
-                            launch_retryable_exit_codes,
-                            launch_copy_fallback,
-                            launch_event_rows,
-                            case.case_id,
-                            case_path,
-                            stage,
-                        )
+                        verilog_result = run_verilog_with_cache(stage)
                 if (
                     verilog_result.returncode != 0
                     and verilog_unified_include_unit_mode == "auto"
@@ -2057,22 +2159,7 @@ def main() -> int:
                             verilog_post_sources,
                             verilog_source_override,
                         )
-                        verilog_result = run_and_log(
-                            verilog_cmd,
-                            verilog_log_path,
-                            None,
-                            case_timeout_secs,
-                            etxtbsy_retries,
-                            etxtbsy_backoff_secs,
-                            launch_retry_attempts,
-                            launch_retry_backoff_secs,
-                            launch_retryable_exit_codes,
-                            launch_copy_fallback,
-                            launch_event_rows,
-                            case.case_id,
-                            case_path,
-                            stage,
-                        )
+                        verilog_result = run_verilog_with_cache(stage)
                 if (
                     verilog_result.returncode != 0
                     and verilog_external_preprocess_mode == "auto"
@@ -2124,22 +2211,7 @@ def main() -> int:
                                 verilog_post_sources,
                                 verilog_source_override,
                             )
-                            verilog_result = run_and_log(
-                                verilog_cmd,
-                                verilog_log_path,
-                                None,
-                                case_timeout_secs,
-                                etxtbsy_retries,
-                                etxtbsy_backoff_secs,
-                                launch_retry_attempts,
-                                launch_retry_backoff_secs,
-                                launch_retryable_exit_codes,
-                                launch_copy_fallback,
-                                launch_event_rows,
-                                case.case_id,
-                                case_path,
-                                stage,
-                            )
+                            verilog_result = run_verilog_with_cache(stage)
                         elif launch_event_rows is not None:
                             launch_event_rows.append(
                                 (
@@ -2198,22 +2270,7 @@ def main() -> int:
                             verilog_post_sources,
                             verilog_source_override,
                         )
-                        verilog_result = run_and_log(
-                            verilog_cmd,
-                            verilog_log_path,
-                            None,
-                            case_timeout_secs,
-                            etxtbsy_retries,
-                            etxtbsy_backoff_secs,
-                            launch_retry_attempts,
-                            launch_retry_backoff_secs,
-                            launch_retryable_exit_codes,
-                            launch_copy_fallback,
-                            launch_event_rows,
-                            case.case_id,
-                            case_path,
-                            stage,
-                        )
+                        verilog_result = run_verilog_with_cache(stage)
                 if (
                     verilog_result.returncode != 0
                     and verilog_assert_macro_shim_mode == "auto"
@@ -2250,22 +2307,7 @@ def main() -> int:
                             verilog_post_sources,
                             verilog_source_override,
                         )
-                        verilog_result = run_and_log(
-                            verilog_cmd,
-                            verilog_log_path,
-                            None,
-                            case_timeout_secs,
-                            etxtbsy_retries,
-                            etxtbsy_backoff_secs,
-                            launch_retry_attempts,
-                            launch_retry_backoff_secs,
-                            launch_retryable_exit_codes,
-                            launch_copy_fallback,
-                            launch_event_rows,
-                            case.case_id,
-                            case_path,
-                            stage,
-                        )
+                        verilog_result = run_verilog_with_cache(stage)
                 if verilog_result.returncode != 0:
                     reason = normalize_error_reason(verilog_log_path.read_text())
                     rows.append(
