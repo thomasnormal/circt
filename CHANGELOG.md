@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1414 - February 14, 2026
+
+### Formal BMC/LEC: `too_many_open_files` Launch Retry Classification
+
+1. Extended formal launch retry taxonomy with explicit
+   `too_many_open_files` classification across BMC/LEC runners:
+   - `utils/run_pairwise_circt_bmc.py`
+   - `utils/run_sv_tests_circt_bmc.sh`
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - `utils/run_yosys_sva_circt_bmc.sh`
+2. Hardened pairwise retryable launcher exception mapping:
+   - transient `OSError` `errno.EMFILE` and host-available `errno.ENFILE`
+     are now classified as retryable `too_many_open_files`.
+3. Extended launch-event summary counters in `run_formal_all.sh`:
+   - `*_launch_too_many_open_files_events`
+   - updated classification coverage in
+     `test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test`
+     to include both dedicated and dynamic reason counters for
+     `too_many_open_files`.
+4. Updated canonical per-reason budget policy defaults:
+   - `utils/opentitan_fpv_policy/bmc_launch_reason_event_budget.tsv` now carries
+     explicit `exact:too_many_open_files` budget row.
+5. Added focused regressions:
+   - `test/Tools/run-pairwise-circt-bmc-launch-retry-too-many-open-files.test`
+   - `test/Tools/run-sv-tests-bmc-launch-retry-too-many-open-files.test`
+   - `test/Tools/run-sv-tests-lec-verilog-too-many-open-files-retry.test`
+   - `test/Tools/run-verilator-verification-circt-bmc-launch-retry-too-many-open-files.test`
+   - `test/Tools/run-yosys-sva-bmc-launch-retry-too-many-open-files.test`
+6. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-pairwise-circt-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-sv-tests-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-sv-tests-lec-verilog-too-many-open-files-retry.test build-test/test/Tools/run-verilator-verification-circt-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-yosys-sva-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test` PASS
+   - compatibility slice:
+     - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-pairwise-circt-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-sv-tests-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-sv-tests-lec-verilog-stale-file-handle-retry.test build-test/test/Tools/run-verilator-verification-circt-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-yosys-sva-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-pairwise-circt-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-sv-tests-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-sv-tests-lec-verilog-too-many-open-files-retry.test build-test/test/Tools/run-verilator-verification-circt-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-yosys-sva-bmc-launch-retry-too-many-open-files.test build-test/test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test build-test/test/Tools/run-sv-tests-lec-verilog-text-file-busy-retry.test build-test/test/Tools/run-sv-tests-lec-opt-text-file-busy-retry.test` PASS
+
 ## Iteration 1413 - February 14, 2026
 
 ### Formal BMC/LEC: `stale_file_handle` Launch Retry Classification

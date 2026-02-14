@@ -7,5 +7,6 @@
 # Keep known transient classes explicit so profile overrides can selectively
 # relax budgets without changing the wildcard default.
 exact:stale_file_handle	0
+exact:too_many_open_files	0
 # Default canary posture keeps non-allowlisted launch reason-event rows at zero.
 *	0

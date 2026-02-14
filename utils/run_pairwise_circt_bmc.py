@@ -169,6 +169,9 @@ RETRYABLE_LAUNCH_PATTERNS = (
     "resource temporarily unavailable",
     "stale file handle",
     "estale",
+    "too many open files",
+    "emfile",
+    "enfile",
 )
 
 RETRYABLE_LAUNCH_REASON_PATTERNS = (
@@ -177,6 +180,7 @@ RETRYABLE_LAUNCH_REASON_PATTERNS = (
     ("permission_denied", ("permission denied",)),
     ("resource_temporarily_unavailable", ("resource temporarily unavailable",)),
     ("stale_file_handle", ("stale file handle", "estale")),
+    ("too_many_open_files", ("too many open files", "emfile", "enfile")),
 )
 
 UNKNOWN_MODULE_PATTERNS = (
@@ -912,6 +916,11 @@ def run_and_log(
                 os_retry_reason = "resource_temporarily_unavailable"
             elif getattr(errno, "ESTALE", None) == exc.errno:
                 os_retry_reason = "stale_file_handle"
+            elif exc.errno == errno.EMFILE or (
+                getattr(errno, "ENFILE", None) is not None
+                and exc.errno == getattr(errno, "ENFILE", None)
+            ):
+                os_retry_reason = "too_many_open_files"
             if os_retry_reason:
                 if launch_retry_count < launch_retry_attempts:
                     launch_retry_count += 1
