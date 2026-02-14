@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1286 - February 14, 2026
+
+### OpenTitan FPV Phase B Integration in `run_formal_all.sh`
+
+1. Wired compile-contract generation and drift checks into `utils/run_formal_all.sh` for cfg-driven OpenTitan FPV selection flows.
+2. Added CLI surface for compile-contract artifact paths, baseline update, drift gating, allowlist, and FuseSoC/workdir controls.
+3. Added focused regressions for baseline requirements, fatal/non-fatal drift, and allowlist gate behavior.
+
+### FPV Task/Stopat Semantic Propagation
+
+1. Extended `utils/select_opentitan_formal_cfgs.py` manifest emission with `stopats` metadata per selected target.
+2. Extended `utils/resolve_opentitan_formal_compile_contracts.py` to carry `stopats` into compile-contract metadata (`stopat_count`, `stopats_fingerprint`) and fold `task`/`stopats` into contract fingerprints.
+3. Extended `utils/check_opentitan_compile_contract_drift.py` to detect drift in `task` and `stopats_fingerprint` in addition to existing contract fields.
+4. Added regressions:
+   - `test/Tools/resolve-opentitan-formal-compile-contracts-stopats.test`
+   - `test/Tools/check-opentitan-compile-contract-drift-task-stopats.test`
+
+### Validation
+
+- `python3 -m py_compile` for selector/resolver/drift utilities: PASS
+- Focused lit slices:
+  - OpenTitan compile-contract/run-formal-all drift slice: 5/5 PASS
+  - selector/resolver/drift task-stopat slice: 10/10 PASS
+
 ## Iteration 1285 - February 14, 2026
 
 ### OpenTitan FPV Phase B: Compile-Contract Drift Checker (Governance Utility)

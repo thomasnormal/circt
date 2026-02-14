@@ -68,6 +68,13 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
+#### Execution Status (February 14, 2026)
+
+1. Completed: native cfg ingestion + `--select-cfgs` manifest planning is implemented and tested.
+2. Completed: FuseSoC-backed compile-contract extraction and drift checks are integrated in `run_formal_all.sh` with strict/fatal and allowlist modes.
+3. In progress: FPV task parity now carries `task` + `stopats` through selector/resolver artifacts and drift checks; stopat/blackbox execution semantics remain the next implementation step.
+4. Next implementation target: execute sec_cm task profiles end-to-end (effective stopat/blackbox policy realization in CIRCT formal lowering/runners).
+
 #### Goal
 
 Enable a CIRCT-native command flow that is operationally equivalent to:
