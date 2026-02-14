@@ -11,6 +11,10 @@
 // RUN: ARG_LOG=%t/check-nostrict.args %t/utils/run_opentitan_fpv_bmc_policy_workflow.sh --run-formal-all %t/utils/fake-run-formal-all.sh --no-strict-gate check --out-dir %t/out-check-nostrict --opentitan-fpv-cfg %t/cfg.hjson --select-cfgs foo_fpv
 // RUN: FileCheck %s --check-prefix=CHECK-NOSTRICT < %t/check-nostrict.args
 // RUN: not rg -q -- '--strict-gate' %t/check-nostrict.args
+// RUN: printf 'exact:retryable_exit_code_126\n' > %t/bmc-launch-allow.txt
+// RUN: printf 'exact:retryable_exit_code_127\n' > %t/lec-launch-allow.txt
+// RUN: ARG_LOG=%t/check-launch.args %t/utils/run_opentitan_fpv_bmc_policy_workflow.sh --run-formal-all %t/utils/fake-run-formal-all.sh --check-bmc-launch-reason-key-allowlist-file %t/bmc-launch-allow.txt --check-lec-launch-reason-key-allowlist-file %t/lec-launch-allow.txt --check-max-bmc-launch-reason-event-rows 2 --check-max-lec-launch-reason-event-rows 3 --check-fail-on-any-bmc-launch-reason-events --check-fail-on-any-lec-launch-reason-events check --out-dir %t/out-check-launch --opentitan-fpv-cfg %t/cfg.hjson --select-cfgs foo_fpv
+// RUN: FileCheck %s --check-prefix=CHECK-LAUNCH < %t/check-launch.args
 // RUN: ARG_LOG=%t/check-cache.args %t/utils/run_opentitan_fpv_bmc_policy_workflow.sh --run-formal-all %t/utils/fake-run-formal-all.sh --opentitan-fpv-bmc-verilog-cache-mode readwrite --opentitan-fpv-bmc-verilog-cache-dir %t/cache check --out-dir %t/out-check-cache --opentitan-fpv-cfg %t/cfg.hjson --select-cfgs foo_fpv
 // RUN: FileCheck %s --check-prefix=CACHE < %t/check-cache.args
 // RUN: not sh -c '%t/utils/run_opentitan_fpv_bmc_policy_workflow.sh --run-formal-all %t/utils/fake-run-formal-all.sh update --out-dir %t/out-invalid --opentitan-fpv-cfg %t/cfg.hjson --select-cfgs foo_fpv --opentitan-fpv-bmc-summary-baseline-file %t/bad.tsv > %t/err.txt 2>&1'
@@ -49,6 +53,17 @@
 // CHECK-NOSTRICT-DAG: --fail-on-opentitan-fpv-bmc-assertion-results-drift
 // CHECK-NOSTRICT-DAG: --fail-on-opentitan-fpv-bmc-assertion-status-policy
 // CHECK-NOSTRICT-DAG: --fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift
+//
+// CHECK-LAUNCH-DAG: --bmc-launch-reason-key-allowlist-file
+// CHECK-LAUNCH-DAG: {{.*/}}bmc-launch-allow.txt
+// CHECK-LAUNCH-DAG: --lec-launch-reason-key-allowlist-file
+// CHECK-LAUNCH-DAG: {{.*/}}lec-launch-allow.txt
+// CHECK-LAUNCH-DAG: --max-bmc-launch-reason-event-rows
+// CHECK-LAUNCH-DAG: 2
+// CHECK-LAUNCH-DAG: --max-lec-launch-reason-event-rows
+// CHECK-LAUNCH-DAG: 3
+// CHECK-LAUNCH-DAG: --fail-on-any-bmc-launch-reason-events
+// CHECK-LAUNCH-DAG: --fail-on-any-lec-launch-reason-events
 //
 // CACHE: --opentitan-fpv-bmc-verilog-cache-mode
 // CACHE-NEXT: readwrite

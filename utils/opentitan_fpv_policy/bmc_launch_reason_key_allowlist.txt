@@ -1,0 +1,5 @@
+# OpenTitan FPV BMC launch reason-key allowlist.
+# Keep this list narrow and review/removal-oriented.
+exact:retryable_exit_code_126
+exact:retryable_exit_code_127
+exact:etxtbsy

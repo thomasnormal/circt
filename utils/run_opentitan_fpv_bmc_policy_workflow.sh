@@ -29,6 +29,24 @@ Options:
                           (`off|read|readwrite|auto`)
   --opentitan-fpv-bmc-verilog-cache-dir DIR
                           OpenTitan FPV BMC verilog frontend cache base dir
+  --check-bmc-launch-reason-key-allowlist-file FILE
+                          check mode: forward as
+                          --bmc-launch-reason-key-allowlist-file
+  --check-lec-launch-reason-key-allowlist-file FILE
+                          check mode: forward as
+                          --lec-launch-reason-key-allowlist-file
+  --check-max-bmc-launch-reason-event-rows N
+                          check mode: forward as
+                          --max-bmc-launch-reason-event-rows
+  --check-max-lec-launch-reason-event-rows N
+                          check mode: forward as
+                          --max-lec-launch-reason-event-rows
+  --check-fail-on-any-bmc-launch-reason-events
+                          check mode: forward as
+                          --fail-on-any-bmc-launch-reason-events
+  --check-fail-on-any-lec-launch-reason-events
+                          check mode: forward as
+                          --fail-on-any-lec-launch-reason-events
   --no-strict-gate        check mode: do not add --strict-gate automatically
   -h, --help              Show this help
 
@@ -46,6 +64,12 @@ PRESETS_FILE="${SCRIPT_DIR}/opentitan_fpv_policy/task_profile_status_presets.tsv
 USE_STRICT_GATE_IN_CHECK=1
 OPENTITAN_FPV_BMC_VERILOG_CACHE_MODE=""
 OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR=""
+CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
+CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
+CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS=""
+CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS=""
+CHECK_FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS=0
+CHECK_FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS=0
 MODE=""
 
 while [[ $# -gt 0 ]]; do
@@ -62,6 +86,18 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_BMC_VERILOG_CACHE_MODE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-verilog-cache-dir)
       OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR="$2"; shift 2 ;;
+    --check-bmc-launch-reason-key-allowlist-file)
+      CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --check-lec-launch-reason-key-allowlist-file)
+      CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --check-max-bmc-launch-reason-event-rows)
+      CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS="$2"; shift 2 ;;
+    --check-max-lec-launch-reason-event-rows)
+      CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS="$2"; shift 2 ;;
+    --check-fail-on-any-bmc-launch-reason-events)
+      CHECK_FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS=1; shift ;;
+    --check-fail-on-any-lec-launch-reason-events)
+      CHECK_FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS=1; shift ;;
     --no-strict-gate)
       USE_STRICT_GATE_IN_CHECK=0; shift ;;
     update|check)
@@ -105,6 +141,22 @@ if [[ -n "$OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR" && -z "$OPENTITAN_FPV_BMC_VERILO
   echo "--opentitan-fpv-bmc-verilog-cache-dir requires --opentitan-fpv-bmc-verilog-cache-mode" >&2
   exit 1
 fi
+if [[ -n "$CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
+  echo "BMC launch reason allowlist file not readable: $CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
+  echo "LEC launch reason allowlist file not readable: $CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS" && ! "$CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --check-max-bmc-launch-reason-event-rows: $CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS" >&2
+  exit 1
+fi
+if [[ -n "$CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS" && ! "$CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --check-max-lec-launch-reason-event-rows: $CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS" >&2
+  exit 1
+fi
 
 readonly MANAGED_FLAGS=(
   --with-opentitan-fpv-bmc
@@ -121,6 +173,12 @@ readonly MANAGED_FLAGS=(
   --fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift
   --opentitan-fpv-bmc-verilog-cache-mode
   --opentitan-fpv-bmc-verilog-cache-dir
+  --bmc-launch-reason-key-allowlist-file
+  --lec-launch-reason-key-allowlist-file
+  --max-bmc-launch-reason-event-rows
+  --max-lec-launch-reason-event-rows
+  --fail-on-any-bmc-launch-reason-events
+  --fail-on-any-lec-launch-reason-events
 )
 for arg in "$@"; do
   for managed in "${MANAGED_FLAGS[@]}"; do
@@ -169,6 +227,24 @@ elif [[ "$MODE" == "check" ]]; then
   )
   if [[ "$USE_STRICT_GATE_IN_CHECK" == "1" ]]; then
     workflow_args+=(--strict-gate)
+  fi
+  if [[ "$CHECK_FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS" == "1" ]]; then
+    workflow_args+=(--fail-on-any-bmc-launch-reason-events)
+  fi
+  if [[ "$CHECK_FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS" == "1" ]]; then
+    workflow_args+=(--fail-on-any-lec-launch-reason-events)
+  fi
+  if [[ -n "$CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS" ]]; then
+    workflow_args+=(--max-bmc-launch-reason-event-rows "$CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS")
+  fi
+  if [[ -n "$CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS" ]]; then
+    workflow_args+=(--max-lec-launch-reason-event-rows "$CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS")
+  fi
+  if [[ -n "$CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
+    workflow_args+=(--bmc-launch-reason-key-allowlist-file "$CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE")
+  fi
+  if [[ -n "$CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
+    workflow_args+=(--lec-launch-reason-key-allowlist-file "$CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE")
   fi
 else
   echo "unsupported mode: $MODE" >&2

@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1410 - February 14, 2026
+
+### OpenTitan FPV Policy Packs: Launch Reason-Event Budget Rollout
+
+1. Extended `utils/run_opentitan_fpv_bmc_policy_workflow.sh` with check-only
+   launch reason-event policy forwarding:
+   - `--check-bmc-launch-reason-key-allowlist-file`
+   - `--check-lec-launch-reason-key-allowlist-file`
+   - `--check-max-bmc-launch-reason-event-rows`
+   - `--check-max-lec-launch-reason-event-rows`
+   - `--check-fail-on-any-bmc-launch-reason-events`
+   - `--check-fail-on-any-lec-launch-reason-events`
+2. Added fail-closed validation in workflow wrapper:
+   - unreadable check allowlist files are rejected.
+   - non-numeric check max values are rejected.
+   - launch-reason gate flags are now wrapper-managed and blocked from direct
+     pass-through in workflow-managed mode.
+3. Extended `utils/run_opentitan_fpv_bmc_policy_profiles.sh` with workflow
+   defaults and per-profile overrides for the same check-only launch reason
+   policy surface.
+   - added profile TSV optional columns:
+     - `check_bmc_launch_reason_key_allowlist_file`
+     - `check_lec_launch_reason_key_allowlist_file`
+     - `check_max_bmc_launch_reason_event_rows`
+     - `check_max_lec_launch_reason_event_rows`
+     - `check_fail_on_any_bmc_launch_reason_events`
+     - `check_fail_on_any_lec_launch_reason_events`
+   - profile-local allowlist paths now resolve relative to the profiles TSV
+     directory for deterministic checked-in pack behavior.
+4. Updated canonical OpenTitan canary profile pack policy inputs:
+   - `utils/opentitan_fpv_policy/profile_packs.tsv`
+   - added `utils/opentitan_fpv_policy/bmc_launch_reason_key_allowlist.txt`
+5. Updated policy docs:
+   - `utils/opentitan_fpv_policy/README.md` now documents check-only launch
+     budget controls and profile-pack `check_*` columns.
+6. Updated focused wrapper regressions:
+   - `test/Tools/run-opentitan-fpv-bmc-policy-workflow.test`
+   - `test/Tools/run-opentitan-fpv-bmc-policy-profiles.test`
+7. Validation:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-opentitan-fpv-bmc-policy-workflow.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-workflow-baseline-prefix.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-profiles.test` PASS
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-formal-all-.*launch-reason.*.test'` PASS (6/6)
+
 ## Iteration 1409 - February 14, 2026
 
 ### Formal Strict-Gate: BMC/LEC Launch Reason-Event Budget Policies

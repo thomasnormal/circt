@@ -35,6 +35,24 @@ Options:
   --workflow-verilog-cache-dir DIR
                           Forwarded to workflow as
                           --opentitan-fpv-bmc-verilog-cache-dir
+  --workflow-check-bmc-launch-reason-key-allowlist-file FILE
+                          Forwarded to workflow as
+                          --check-bmc-launch-reason-key-allowlist-file
+  --workflow-check-lec-launch-reason-key-allowlist-file FILE
+                          Forwarded to workflow as
+                          --check-lec-launch-reason-key-allowlist-file
+  --workflow-check-max-bmc-launch-reason-event-rows N
+                          Forwarded to workflow as
+                          --check-max-bmc-launch-reason-event-rows
+  --workflow-check-max-lec-launch-reason-event-rows N
+                          Forwarded to workflow as
+                          --check-max-lec-launch-reason-event-rows
+  --workflow-check-fail-on-any-bmc-launch-reason-events
+                          Forwarded to workflow as
+                          --check-fail-on-any-bmc-launch-reason-events
+  --workflow-check-fail-on-any-lec-launch-reason-events
+                          Forwarded to workflow as
+                          --check-fail-on-any-lec-launch-reason-events
   --no-strict-gate        check mode: forward --no-strict-gate to workflow
   -h, --help              Show this help
 
@@ -44,6 +62,12 @@ Profile TSV schema:
   Optional columns:
     select_cfgs,target_filter,allow_unfiltered,max_targets,description
     verilog_cache_mode,verilog_cache_dir
+    check_bmc_launch_reason_key_allowlist_file
+    check_lec_launch_reason_key_allowlist_file
+    check_max_bmc_launch_reason_event_rows
+    check_max_lec_launch_reason_event_rows
+    check_fail_on_any_bmc_launch_reason_events
+    check_fail_on_any_lec_launch_reason_events
 
 Notes:
   - Each profile executes one workflow invocation with:
@@ -96,6 +120,30 @@ parse_nonnegative_int_like() {
   printf "%s" "$raw"
 }
 
+parse_optional_nonnegative_int_like() {
+  local raw
+  raw="$(trim "$1")"
+  if [[ -z "$raw" ]]; then
+    printf ""
+    return
+  fi
+  if ! [[ "$raw" =~ ^[0-9]+$ ]]; then
+    echo "invalid non-negative integer: $raw" >&2
+    exit 1
+  fi
+  printf "%s" "$raw"
+}
+
+parse_optional_bool_like() {
+  local raw
+  raw="$(trim "$1")"
+  if [[ -z "$raw" ]]; then
+    printf ""
+    return
+  fi
+  parse_bool_like "$raw"
+}
+
 parse_cache_mode_like() {
   local raw
   raw="$(trim "$1")"
@@ -123,6 +171,12 @@ WORKFLOW_BASELINE_DIR=""
 WORKFLOW_PRESETS_FILE=""
 WORKFLOW_VERILOG_CACHE_MODE=""
 WORKFLOW_VERILOG_CACHE_DIR=""
+WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
+WORKFLOW_CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
+WORKFLOW_CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS=""
+WORKFLOW_CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS=""
+WORKFLOW_CHECK_FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS=0
+WORKFLOW_CHECK_FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS=0
 declare -a PROFILE_FILTERS=()
 
 while [[ $# -gt 0 ]]; do
@@ -145,6 +199,18 @@ while [[ $# -gt 0 ]]; do
       WORKFLOW_VERILOG_CACHE_MODE="$(parse_cache_mode_like "$2")"; shift 2 ;;
     --workflow-verilog-cache-dir)
       WORKFLOW_VERILOG_CACHE_DIR="$2"; shift 2 ;;
+    --workflow-check-bmc-launch-reason-key-allowlist-file)
+      WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --workflow-check-lec-launch-reason-key-allowlist-file)
+      WORKFLOW_CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --workflow-check-max-bmc-launch-reason-event-rows)
+      WORKFLOW_CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS="$(parse_optional_nonnegative_int_like "$2")"; shift 2 ;;
+    --workflow-check-max-lec-launch-reason-event-rows)
+      WORKFLOW_CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS="$(parse_optional_nonnegative_int_like "$2")"; shift 2 ;;
+    --workflow-check-fail-on-any-bmc-launch-reason-events)
+      WORKFLOW_CHECK_FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS=1; shift ;;
+    --workflow-check-fail-on-any-lec-launch-reason-events)
+      WORKFLOW_CHECK_FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS=1; shift ;;
     --no-strict-gate)
       NO_STRICT_GATE=1; shift ;;
     update|check)
@@ -179,10 +245,19 @@ if [[ -n "$WORKFLOW_VERILOG_CACHE_DIR" && -z "$WORKFLOW_VERILOG_CACHE_MODE" ]]; 
   echo "--workflow-verilog-cache-dir requires --workflow-verilog-cache-mode" >&2
   exit 1
 fi
+if [[ -n "$WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
+  echo "BMC launch reason allowlist file not readable: $WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$WORKFLOW_CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$WORKFLOW_CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
+  echo "LEC launch reason allowlist file not readable: $WORKFLOW_CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="${PWD}/opentitan-fpv-bmc-policy-profiles-${MODE}"
 fi
 mkdir -p "$OUT_DIR"
+PROFILES_DIR="$(cd "$(dirname "$PROFILES_FILE")" && pwd)"
 
 declare -A filter_map=()
 for profile in "${PROFILE_FILTERS[@]}"; do
@@ -256,6 +331,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   max_targets="$(parse_nonnegative_int_like "$(get_col max_targets)")"
   profile_verilog_cache_mode="$(parse_cache_mode_like "$(get_col verilog_cache_mode)")"
   profile_verilog_cache_dir="$(trim "$(get_col verilog_cache_dir)")"
+  profile_check_bmc_launch_reason_key_allowlist_file="$(trim "$(get_col check_bmc_launch_reason_key_allowlist_file)")"
+  profile_check_lec_launch_reason_key_allowlist_file="$(trim "$(get_col check_lec_launch_reason_key_allowlist_file)")"
+  profile_check_max_bmc_launch_reason_event_rows="$(parse_optional_nonnegative_int_like "$(get_col check_max_bmc_launch_reason_event_rows)")"
+  profile_check_max_lec_launch_reason_event_rows="$(parse_optional_nonnegative_int_like "$(get_col check_max_lec_launch_reason_event_rows)")"
+  profile_check_fail_on_any_bmc_launch_reason_events="$(parse_optional_bool_like "$(get_col check_fail_on_any_bmc_launch_reason_events)")"
+  profile_check_fail_on_any_lec_launch_reason_events="$(parse_optional_bool_like "$(get_col check_fail_on_any_lec_launch_reason_events)")"
 
   effective_verilog_cache_mode="$WORKFLOW_VERILOG_CACHE_MODE"
   if [[ -n "$profile_verilog_cache_mode" ]]; then
@@ -268,6 +349,44 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   if [[ -n "$effective_verilog_cache_dir" && -z "$effective_verilog_cache_mode" ]]; then
     echo "verilog_cache_dir requires verilog_cache_mode for profile '$profile_name' in $PROFILES_FILE row $line_no" >&2
     exit 1
+  fi
+  effective_check_bmc_launch_reason_key_allowlist_file="$WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE"
+  if [[ -n "$profile_check_bmc_launch_reason_key_allowlist_file" ]]; then
+    effective_check_bmc_launch_reason_key_allowlist_file="$profile_check_bmc_launch_reason_key_allowlist_file"
+  fi
+  effective_check_lec_launch_reason_key_allowlist_file="$WORKFLOW_CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE"
+  if [[ -n "$profile_check_lec_launch_reason_key_allowlist_file" ]]; then
+    effective_check_lec_launch_reason_key_allowlist_file="$profile_check_lec_launch_reason_key_allowlist_file"
+  fi
+  if [[ -n "$effective_check_bmc_launch_reason_key_allowlist_file" && "${effective_check_bmc_launch_reason_key_allowlist_file:0:1}" != "/" ]]; then
+    effective_check_bmc_launch_reason_key_allowlist_file="${PROFILES_DIR}/${effective_check_bmc_launch_reason_key_allowlist_file}"
+  fi
+  if [[ -n "$effective_check_lec_launch_reason_key_allowlist_file" && "${effective_check_lec_launch_reason_key_allowlist_file:0:1}" != "/" ]]; then
+    effective_check_lec_launch_reason_key_allowlist_file="${PROFILES_DIR}/${effective_check_lec_launch_reason_key_allowlist_file}"
+  fi
+  if [[ -n "$effective_check_bmc_launch_reason_key_allowlist_file" && ! -r "$effective_check_bmc_launch_reason_key_allowlist_file" ]]; then
+    echo "BMC launch reason allowlist file not readable for profile '$profile_name': $effective_check_bmc_launch_reason_key_allowlist_file" >&2
+    exit 1
+  fi
+  if [[ -n "$effective_check_lec_launch_reason_key_allowlist_file" && ! -r "$effective_check_lec_launch_reason_key_allowlist_file" ]]; then
+    echo "LEC launch reason allowlist file not readable for profile '$profile_name': $effective_check_lec_launch_reason_key_allowlist_file" >&2
+    exit 1
+  fi
+  effective_check_max_bmc_launch_reason_event_rows="$WORKFLOW_CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS"
+  if [[ -n "$profile_check_max_bmc_launch_reason_event_rows" ]]; then
+    effective_check_max_bmc_launch_reason_event_rows="$profile_check_max_bmc_launch_reason_event_rows"
+  fi
+  effective_check_max_lec_launch_reason_event_rows="$WORKFLOW_CHECK_MAX_LEC_LAUNCH_REASON_EVENT_ROWS"
+  if [[ -n "$profile_check_max_lec_launch_reason_event_rows" ]]; then
+    effective_check_max_lec_launch_reason_event_rows="$profile_check_max_lec_launch_reason_event_rows"
+  fi
+  effective_check_fail_on_any_bmc_launch_reason_events="$WORKFLOW_CHECK_FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS"
+  if [[ -n "$profile_check_fail_on_any_bmc_launch_reason_events" ]]; then
+    effective_check_fail_on_any_bmc_launch_reason_events="$profile_check_fail_on_any_bmc_launch_reason_events"
+  fi
+  effective_check_fail_on_any_lec_launch_reason_events="$WORKFLOW_CHECK_FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS"
+  if [[ -n "$profile_check_fail_on_any_lec_launch_reason_events" ]]; then
+    effective_check_fail_on_any_lec_launch_reason_events="$profile_check_fail_on_any_lec_launch_reason_events"
   fi
 
   if [[ -z "$fpv_cfg" ]]; then
@@ -300,6 +419,24 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   fi
   if [[ -n "$effective_verilog_cache_dir" ]]; then
     cmd+=(--opentitan-fpv-bmc-verilog-cache-dir "$effective_verilog_cache_dir")
+  fi
+  if [[ -n "$effective_check_bmc_launch_reason_key_allowlist_file" ]]; then
+    cmd+=(--check-bmc-launch-reason-key-allowlist-file "$effective_check_bmc_launch_reason_key_allowlist_file")
+  fi
+  if [[ -n "$effective_check_lec_launch_reason_key_allowlist_file" ]]; then
+    cmd+=(--check-lec-launch-reason-key-allowlist-file "$effective_check_lec_launch_reason_key_allowlist_file")
+  fi
+  if [[ -n "$effective_check_max_bmc_launch_reason_event_rows" ]]; then
+    cmd+=(--check-max-bmc-launch-reason-event-rows "$effective_check_max_bmc_launch_reason_event_rows")
+  fi
+  if [[ -n "$effective_check_max_lec_launch_reason_event_rows" ]]; then
+    cmd+=(--check-max-lec-launch-reason-event-rows "$effective_check_max_lec_launch_reason_event_rows")
+  fi
+  if [[ "$effective_check_fail_on_any_bmc_launch_reason_events" == "1" ]]; then
+    cmd+=(--check-fail-on-any-bmc-launch-reason-events)
+  fi
+  if [[ "$effective_check_fail_on_any_lec_launch_reason_events" == "1" ]]; then
+    cmd+=(--check-fail-on-any-lec-launch-reason-events)
   fi
   if [[ "$NO_STRICT_GATE" == "1" ]]; then
     cmd+=(--no-strict-gate)

@@ -23,6 +23,13 @@ policy baselines:
   - `--opentitan-fpv-bmc-verilog-cache-mode off|read|readwrite|auto`
   - `--opentitan-fpv-bmc-verilog-cache-dir <dir>`
   - `--opentitan-fpv-bmc-verilog-cache-dir` requires mode.
+- optional check-only launch reason-event budget controls:
+  - `--check-bmc-launch-reason-key-allowlist-file <file>`
+  - `--check-lec-launch-reason-key-allowlist-file <file>`
+  - `--check-max-bmc-launch-reason-event-rows <N>`
+  - `--check-max-lec-launch-reason-event-rows <N>`
+  - `--check-fail-on-any-bmc-launch-reason-events`
+  - `--check-fail-on-any-lec-launch-reason-events`
 
 By default, baselines are written under:
 
@@ -47,6 +54,13 @@ With `--baseline-prefix <name>`, artifacts become:
     `allow_unfiltered`, `max_targets`)
   - optional OpenTitan FPV BMC verilog cache controls
     (`verilog_cache_mode`, `verilog_cache_dir`)
+  - optional check-only launch reason-event budget controls:
+    - `check_bmc_launch_reason_key_allowlist_file`
+    - `check_lec_launch_reason_key_allowlist_file`
+    - `check_max_bmc_launch_reason_event_rows`
+    - `check_max_lec_launch_reason_event_rows`
+    - `check_fail_on_any_bmc_launch_reason_events`
+    - `check_fail_on_any_lec_launch_reason_events`
   - current defaults are canary seeds (one representative target per cohort)
     for deterministic baseline bootstrap.
 
@@ -64,6 +78,9 @@ Use `utils/run_opentitan_fpv_bmc_policy_profiles.sh` to run packs:
 - set workflow-level verilog cache defaults for all selected packs:
   - `utils/run_opentitan_fpv_bmc_policy_profiles.sh check --opentitan-root ~/opentitan --workflow-verilog-cache-mode read --workflow-verilog-cache-dir /tmp/circt-fpv-cache`
   - per-pack TSV values (`verilog_cache_mode`, `verilog_cache_dir`) override workflow defaults.
+- set workflow-level check-only launch reason-event budget defaults:
+  - `utils/run_opentitan_fpv_bmc_policy_profiles.sh check --opentitan-root ~/opentitan --workflow-check-bmc-launch-reason-key-allowlist-file utils/opentitan_fpv_policy/bmc_launch_reason_key_allowlist.txt --workflow-check-max-bmc-launch-reason-event-rows 0 --workflow-check-fail-on-any-bmc-launch-reason-events`
+  - per-pack TSV values (`check_*`) override workflow defaults.
 
 ## Drift Triage
 
