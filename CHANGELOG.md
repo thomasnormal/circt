@@ -67347,3 +67347,11 @@ See CHANGELOG.md on recent progress.
       `policy_fingerprint` while preserving operator semantics.
     - Added regression coverage:
       `run-mutation-mcy-examples-native-mutation-ops-policy-fingerprint-canonical-pass.test`.
+40. Canonical native real harness path policy fingerprinting
+    (February 14, 2026):
+    - Manifest `native_real_harness_script` overrides are now canonicalized to
+      absolute paths at load time.
+    - This removes relative-vs-absolute false drift in mutation
+      `policy_fingerprint` while preserving harness execution behavior.
+    - Added regression coverage:
+      `run-mutation-mcy-examples-native-real-harness-policy-fingerprint-canonical-pass.test`.

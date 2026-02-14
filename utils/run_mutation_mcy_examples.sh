@@ -1375,6 +1375,9 @@ load_example_manifest() {
     max_total_coverage_drop_percent_override="$(normalize_manifest_optional "${max_total_coverage_drop_percent_override:-}")"
     max_total_errors_increase_override="$(normalize_manifest_optional "${max_total_errors_increase_override:-}")"
     native_real_harness_override="$(normalize_manifest_optional "${native_real_harness_override:-}")"
+    if [[ -n "$native_real_harness_override" && "$native_real_harness_override" != /* ]]; then
+      native_real_harness_override="${EXAMPLES_ROOT}/${native_real_harness_override}"
+    fi
     native_mutation_ops_override="$(normalize_manifest_optional "${native_mutation_ops_override:-}")"
     native_real_harness_args_override="$(normalize_manifest_optional "${native_real_harness_args_override:-}")"
     extra="$(trim_whitespace "${extra:-}")"
