@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1418 - February 14, 2026
+
+### OpenTitan FPV: Native LEC Evidence Auto-Production for Objective Parity
+
+1. Added a native OpenTitan FPV LEC evidence producer:
+   - `utils/run_opentitan_fpv_circt_lec.py`
+   - consumes compile contracts + BMC objective manifests and emits:
+     - case-level FPV LEC rows
+     - assertion objective evidence rows
+     - cover objective evidence rows.
+2. Wired `run_formal_all.sh` objective parity flow to auto-produce FPV LEC
+   evidence when external `--opentitan-fpv-lec-{assertion,cover}-results-file`
+   inputs are not provided:
+   - default outputs:
+     - `OUT_DIR/opentitan-fpv-lec-assertion-results.tsv`
+     - `OUT_DIR/opentitan-fpv-lec-cover-results.tsv`
+   - objective parity now runs on native artifacts by default for selected
+     `opentitan/FPV_OBJECTIVE_PARITY` lanes.
+3. Extended strict preflight to include OpenTitan FPV LEC auto-production path:
+   - requires runner: `utils/run_opentitan_fpv_circt_lec.py`
+   - verifies derived toolchain availability:
+     - `circt-verilog`
+     - `circt-opt`
+     - `circt-lec`.
+4. Added/updated regressions:
+   - added: `test/Tools/run-opentitan-fpv-circt-lec-basic.test`
+   - updated:
+     `test/Tools/run-formal-all-opentitan-fpv-objective-parity-requires-lec-assertions.test`
+     to validate native auto-production wiring.
+5. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-formal-all-opentitan-fpv-objective-parity-.*\\.test|check-opentitan-fpv-objective-parity-.*\\.test|run-opentitan-fpv-circt-lec-basic\\.test'` PASS
+
 ## Iteration 1417 - February 14, 2026
 
 ### OpenTitan FPV: Cross-Lane Objective Parity (BMC vs LEC) Governance Bootstrap
