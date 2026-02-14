@@ -67339,3 +67339,11 @@ See CHANGELOG.md on recent progress.
     - Added regression coverage proving fingerprint parity between
       semantically equivalent spacing variants:
       `run-mutation-mcy-examples-native-real-harness-args-policy-fingerprint-canonical-pass.test`.
+39. Canonical native mutation-ops policy fingerprinting in mutation runner
+    (February 14, 2026):
+    - `native_mutation_ops` specs are now canonicalized (trimmed CSV tokens)
+      before policy application and fingerprinting.
+    - This removes whitespace-only false drift in mutation
+      `policy_fingerprint` while preserving operator semantics.
+    - Added regression coverage:
+      `run-mutation-mcy-examples-native-mutation-ops-policy-fingerprint-canonical-pass.test`.

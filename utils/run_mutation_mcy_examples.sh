@@ -538,6 +538,31 @@ validate_native_mutation_ops_spec() {
   return 0
 }
 
+canonicalize_native_mutation_ops_spec() {
+  local spec="$1"
+  local raw=""
+  local token=""
+  local out=""
+  local -a parts=()
+
+  raw="$(trim_whitespace "$spec")"
+  if [[ -z "$raw" ]]; then
+    printf '\n'
+    return 0
+  fi
+
+  IFS=',' read -r -a parts <<< "$raw"
+  for token in "${parts[@]}"; do
+    token="$(trim_whitespace "$token")"
+    if [[ -z "$out" ]]; then
+      out="$token"
+    else
+      out+=",${token}"
+    fi
+  done
+  printf '%s\n' "$out"
+}
+
 validate_native_real_harness_args_spec() {
   local spec="$1"
   local context="$2"
@@ -1463,6 +1488,7 @@ load_example_manifest() {
       if ! validate_native_mutation_ops_spec "$native_mutation_ops_override" "manifest row ${line_no}: invalid native_mutation_ops override"; then
         return 1
       fi
+      native_mutation_ops_override="$(canonicalize_native_mutation_ops_spec "$native_mutation_ops_override")"
     fi
     if [[ -n "$native_real_harness_args_override" ]]; then
       if ! validate_native_real_harness_args_spec "$native_real_harness_args_override" "manifest row ${line_no}: invalid native_real_harness_args override"; then
@@ -3741,6 +3767,7 @@ if [[ -n "$NATIVE_MUTATION_OPS" ]]; then
   if ! validate_native_mutation_ops_spec "$NATIVE_MUTATION_OPS" "--native-mutation-ops"; then
     exit 1
   fi
+  NATIVE_MUTATION_OPS="$(canonicalize_native_mutation_ops_spec "$NATIVE_MUTATION_OPS")"
 fi
 if [[ -n "$NATIVE_REAL_HARNESS_ARGS" ]]; then
   if ! validate_native_real_harness_args_spec "$NATIVE_REAL_HARNESS_ARGS" "--native-real-harness-args"; then
