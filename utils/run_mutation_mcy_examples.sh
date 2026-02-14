@@ -2761,6 +2761,9 @@ run_example_worker() {
     if ! native_real_harness_args_suffix="$(render_native_real_harness_args_suffix "$native_real_harness_args_spec" "example ${example_id}: invalid native real harness args")"; then
       return 2
     fi
+    if [[ -n "$native_real_harness_args_suffix" ]]; then
+      policy_fingerprint_input+=$'\n'"${native_real_harness_args_suffix# }"
+    fi
   fi
   policy_fingerprint="$(hash_string_sha256 "$policy_fingerprint_input")"
 
