@@ -74,6 +74,12 @@ Options:
                            --baseline-file and exit
                            (writes .schema-version/.schema-contract)
   --fail-on-diff           Fail on metric regression vs --baseline-file
+  --retry-reason-baseline-file FILE
+                           Optional retry-reason baseline summary used for
+                           --fail-on-retry-reason-diff (default:
+                           <baseline-file>.retry-reason-summary.tsv)
+  --fail-on-retry-reason-diff
+                           Fail when retry-reason counts regress vs baseline
   --require-policy-fingerprint-baseline
                            Require baseline rows to include policy_fingerprint
                            when evaluating --fail-on-diff
@@ -140,6 +146,11 @@ Outputs:
                            Aggregated retry attempts/retries-used summary
   <out-dir>/retry-events.tsv
                            Per-retry event trace with classified reason
+  <out-dir>/retry-reason-summary.tsv
+                           Aggregated retry counts by retry_reason
+  <out-dir>/retry-reason-drift.tsv
+                           Retry-reason drift report
+                           (when --fail-on-retry-reason-diff)
   <out-dir>/summary.schema-version
                            Current summary schema-version artifact
   <out-dir>/summary.schema-contract
@@ -186,6 +197,7 @@ MAX_TOTAL_ERRORS=""
 MAX_TOTAL_RETRIES=""
 MAX_TOTAL_RETRIES_BY_REASON=""
 BASELINE_FILE=""
+RETRY_REASON_BASELINE_FILE=""
 BASELINE_SCHEMA_VERSION_FILE=""
 BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_VERSION_FILE=""
@@ -196,6 +208,7 @@ UPDATE_BASELINE=0
 ALLOW_UPDATE_BASELINE_ON_FAILURE=0
 MIGRATE_BASELINE_SCHEMA_ARTIFACTS=0
 FAIL_ON_DIFF=0
+FAIL_ON_RETRY_REASON_DIFF=0
 REQUIRE_POLICY_FINGERPRINT_BASELINE=0
 REQUIRE_BASELINE_EXAMPLE_PARITY=0
 REQUIRE_BASELINE_SCHEMA_VERSION_MATCH=0
@@ -1306,6 +1319,115 @@ evaluate_summary_drift() {
   return 0
 }
 
+evaluate_retry_reason_drift() {
+  local baseline_file="$1"
+  local summary_file="$2"
+  local drift_file="$3"
+  local regressions=0
+  local baseline_reason=""
+  local baseline_retries=""
+  local current_reason=""
+  local current_retries=""
+  local reason=""
+  local baseline_total_retries=0
+  local current_total_retries=0
+  local -A baseline_counts=()
+  local -A current_counts=()
+  local -A baseline_duplicate_seen=()
+  local -A current_duplicate_seen=()
+  local -a baseline_duplicates=()
+  local -a current_duplicates=()
+
+  printf 'example\tmetric\tbaseline\tcurrent\toutcome\tdetail\n' > "$drift_file"
+
+  while IFS=$'	' read -r baseline_reason baseline_retries; do
+    [[ "$baseline_reason" == "retry_reason" ]] && continue
+    baseline_reason="$(trim_whitespace "${baseline_reason:-}")"
+    if [[ -z "$baseline_reason" ]]; then
+      continue
+    fi
+    baseline_retries="$(normalize_int_or_zero "${baseline_retries:-0}")"
+    if [[ -n "${baseline_counts[$baseline_reason]+x}" ]]; then
+      if [[ -z "${baseline_duplicate_seen[$baseline_reason]+x}" ]]; then
+        baseline_duplicate_seen["$baseline_reason"]=1
+        baseline_duplicates+=("$baseline_reason")
+      fi
+      continue
+    fi
+    baseline_counts["$baseline_reason"]="$baseline_retries"
+    baseline_total_retries=$((baseline_total_retries + baseline_retries))
+  done < "$baseline_file"
+
+  while IFS=$'	' read -r current_reason current_retries; do
+    [[ "$current_reason" == "retry_reason" ]] && continue
+    current_reason="$(trim_whitespace "${current_reason:-}")"
+    if [[ -z "$current_reason" ]]; then
+      continue
+    fi
+    current_retries="$(normalize_int_or_zero "${current_retries:-0}")"
+    if [[ -n "${current_counts[$current_reason]+x}" ]]; then
+      if [[ -z "${current_duplicate_seen[$current_reason]+x}" ]]; then
+        current_duplicate_seen["$current_reason"]=1
+        current_duplicates+=("$current_reason")
+      fi
+      continue
+    fi
+    current_counts["$current_reason"]="$current_retries"
+    current_total_retries=$((current_total_retries + current_retries))
+  done < "$summary_file"
+
+  for reason in "${!baseline_counts[@]}"; do
+    baseline_retries="${baseline_counts[$reason]}"
+    current_retries="${current_counts[$reason]:-0}"
+    if [[ "$current_retries" -gt "$baseline_retries" ]]; then
+      if ! append_drift_candidate "$drift_file" "$reason" "retry_count" "$baseline_retries" "$current_retries" "retry_count_increased"; then
+        regressions=$((regressions + 1))
+      fi
+    else
+      append_drift_row "$drift_file" "$reason" "retry_count" "$baseline_retries" "$current_retries" "ok" ""
+    fi
+  done
+
+  for reason in "${!current_counts[@]}"; do
+    if [[ -n "${baseline_counts[$reason]+x}" ]]; then
+      continue
+    fi
+    current_retries="${current_counts[$reason]}"
+    if [[ "$current_retries" -gt 0 ]]; then
+      if ! append_drift_candidate "$drift_file" "$reason" "retry_count" "0" "$current_retries" "new_retry_reason"; then
+        regressions=$((regressions + 1))
+      fi
+    else
+      append_drift_row "$drift_file" "$reason" "retry_count" "0" "$current_retries" "ok" ""
+    fi
+  done
+
+  if [[ "$current_total_retries" -gt "$baseline_total_retries" ]]; then
+    if ! append_drift_candidate "$drift_file" "__suite__" "suite_retries" "$baseline_total_retries" "$current_total_retries" "retries_increased"; then
+      regressions=$((regressions + 1))
+    fi
+  else
+    append_drift_row "$drift_file" "__suite__" "suite_retries" "$baseline_total_retries" "$current_total_retries" "ok" ""
+  fi
+
+  for reason in "${baseline_duplicates[@]}"; do
+    if ! append_drift_candidate "$drift_file" "$reason" "row" "single_row" "duplicate_rows" "duplicate_baseline_row"; then
+      regressions=$((regressions + 1))
+    fi
+  done
+
+  for reason in "${current_duplicates[@]}"; do
+    if ! append_drift_candidate "$drift_file" "$reason" "row" "single_row" "duplicate_rows" "duplicate_current_row"; then
+      regressions=$((regressions + 1))
+    fi
+  done
+
+  if [[ "$regressions" -gt 0 ]]; then
+    return 1
+  fi
+  return 0
+}
+
 
 ensure_unique_example_selection() {
   local -A seen=()
@@ -1788,6 +1910,14 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_DIFF=1
       shift
       ;;
+    --retry-reason-baseline-file)
+      RETRY_REASON_BASELINE_FILE="$2"
+      shift 2
+      ;;
+    --fail-on-retry-reason-diff)
+      FAIL_ON_RETRY_REASON_DIFF=1
+      shift
+      ;;
     --require-policy-fingerprint-baseline)
       REQUIRE_POLICY_FINGERPRINT_BASELINE=1
       shift
@@ -1967,6 +2097,10 @@ if [[ "$UPDATE_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -eq 1 ]]; then
   echo "Use either --update-baseline or --fail-on-diff, not both." >&2
   exit 1
 fi
+if [[ "$UPDATE_BASELINE" -eq 1 && "$FAIL_ON_RETRY_REASON_DIFF" -eq 1 ]]; then
+  echo "Use either --update-baseline or --fail-on-retry-reason-diff, not both." >&2
+  exit 1
+fi
 if [[ "$ALLOW_UPDATE_BASELINE_ON_FAILURE" -eq 1 && "$UPDATE_BASELINE" -ne 1 ]]; then
   echo "--allow-update-baseline-on-failure requires --update-baseline" >&2
   exit 1
@@ -1976,6 +2110,9 @@ if [[ -z "$SUMMARY_SCHEMA_VERSION_FILE" ]]; then
 fi
 if [[ -z "$BASELINE_SCHEMA_VERSION_FILE" && -n "$BASELINE_FILE" ]]; then
   BASELINE_SCHEMA_VERSION_FILE="${BASELINE_FILE}.schema-version"
+fi
+if [[ -z "$RETRY_REASON_BASELINE_FILE" && -n "$BASELINE_FILE" ]]; then
+  RETRY_REASON_BASELINE_FILE="${BASELINE_FILE}.retry-reason-summary.tsv"
 fi
 if [[ "$BASELINE_SCHEMA_VERSION_FILE_EXPLICIT" -eq 1 && "$FAIL_ON_DIFF" -eq 1 && "$REQUIRE_BASELINE_SCHEMA_VERSION_MATCH" -eq 1 ]]; then
   if [[ ! -f "$BASELINE_SCHEMA_VERSION_FILE" ]]; then
@@ -2008,6 +2145,10 @@ fi
 if [[ "$MIGRATE_BASELINE_SCHEMA_ARTIFACTS" -eq 1 ]]; then
   if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
     echo "--migrate-baseline-schema-artifacts cannot be combined with --update-baseline or --fail-on-diff" >&2
+    exit 1
+  fi
+  if [[ "$FAIL_ON_RETRY_REASON_DIFF" -eq 1 ]]; then
+    echo "--migrate-baseline-schema-artifacts cannot be combined with --fail-on-retry-reason-diff" >&2
     exit 1
   fi
   if [[ -z "$BASELINE_FILE" ]]; then
@@ -2067,6 +2208,20 @@ if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
   fi
   if [[ ! -r "$BASELINE_FILE" ]]; then
     echo "Baseline file not readable: $BASELINE_FILE" >&2
+    exit 1
+  fi
+fi
+if [[ "$FAIL_ON_RETRY_REASON_DIFF" -eq 1 ]]; then
+  if [[ -z "$RETRY_REASON_BASELINE_FILE" ]]; then
+    echo "--fail-on-retry-reason-diff requires --retry-reason-baseline-file or --baseline-file" >&2
+    exit 1
+  fi
+  if [[ ! -f "$RETRY_REASON_BASELINE_FILE" ]]; then
+    echo "Retry-reason baseline file not found: $RETRY_REASON_BASELINE_FILE" >&2
+    exit 1
+  fi
+  if [[ ! -r "$RETRY_REASON_BASELINE_FILE" ]]; then
+    echo "Retry-reason baseline file not readable: $RETRY_REASON_BASELINE_FILE" >&2
     exit 1
   fi
 fi
@@ -2165,6 +2320,8 @@ RETRY_SUMMARY_FILE="${OUT_DIR}/retry-summary.tsv"
 printf 'example\tretry_attempts\tretries_used\n' > "$RETRY_SUMMARY_FILE"
 RETRY_EVENTS_FILE="${OUT_DIR}/retry-events.tsv"
 printf 'example\tfailed_attempt\tnext_attempt\texit_code\tretry_reason\tdelay_ms\n' > "$RETRY_EVENTS_FILE"
+RETRY_REASON_SUMMARY_FILE="${OUT_DIR}/retry-reason-summary.tsv"
+printf 'retry_reason\tretries\n' > "$RETRY_REASON_SUMMARY_FILE"
 
 overall_rc=0
 mkdir -p "$(dirname "$SUMMARY_SCHEMA_VERSION_FILE")"
@@ -2269,6 +2426,12 @@ for example_id in "${EXAMPLE_IDS[@]}"; do
   fi
 done
 
+if [[ "${#RETRY_REASON_TOTALS[@]}" -gt 0 ]]; then
+  while IFS= read -r retry_reason; do
+    printf '%s\t%s\n' "$retry_reason" "${RETRY_REASON_TOTALS[$retry_reason]}" >> "$RETRY_REASON_SUMMARY_FILE"
+  done < <(printf '%s\n' "${!RETRY_REASON_TOTALS[@]}" | LC_ALL=C sort)
+fi
+
 if [[ "$worker_failures" -ne 0 ]]; then
   overall_rc=1
 fi
@@ -2339,6 +2502,14 @@ if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
   fi
 fi
 
+if [[ "$FAIL_ON_RETRY_REASON_DIFF" -eq 1 ]]; then
+  RETRY_REASON_DRIFT_FILE="${OUT_DIR}/retry-reason-drift.tsv"
+  if ! evaluate_retry_reason_drift "$RETRY_REASON_BASELINE_FILE" "$RETRY_REASON_SUMMARY_FILE" "$RETRY_REASON_DRIFT_FILE"; then
+    overall_rc=1
+    echo "Retry-reason drift failure: see $RETRY_REASON_DRIFT_FILE" >&2
+  fi
+fi
+
 if [[ -n "$DRIFT_ALLOWLIST_FILE" && -n "$DRIFT_ALLOWLIST_UNUSED_FILE" ]]; then
   unused_allowlist_count="$(write_unused_drift_allowlist_report "$DRIFT_ALLOWLIST_UNUSED_FILE")"
   if [[ "$FAIL_ON_UNUSED_DRIFT_ALLOWLIST" -eq 1 && "$unused_allowlist_count" -gt 0 ]]; then
@@ -2360,6 +2531,10 @@ if [[ "$UPDATE_BASELINE" -eq 1 ]]; then
     if [[ -n "$BASELINE_SCHEMA_CONTRACT_FILE" ]]; then
       mkdir -p "$(dirname "$BASELINE_SCHEMA_CONTRACT_FILE")"
       cp "$SUMMARY_SCHEMA_CONTRACT_FILE" "$BASELINE_SCHEMA_CONTRACT_FILE"
+    fi
+    if [[ -n "$RETRY_REASON_BASELINE_FILE" ]]; then
+      mkdir -p "$(dirname "$RETRY_REASON_BASELINE_FILE")"
+      cp "$RETRY_REASON_SUMMARY_FILE" "$RETRY_REASON_BASELINE_FILE"
     fi
     echo "Updated baseline: $BASELINE_FILE" >&2
   fi
