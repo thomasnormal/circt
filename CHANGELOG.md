@@ -67298,3 +67298,11 @@ See CHANGELOG.md on recent progress.
       shell metacharacters inert in generated real-harness command lines.
     - Added regression coverage:
       `run-mutation-mcy-examples-native-real-harness-args-shell-escape-pass.test`.
+38. Canonical native harness-args policy fingerprinting in mutation runner
+    (February 14, 2026):
+    - Native real harness args now contribute to mutation
+      `policy_fingerprint` via canonical tokenized form, so whitespace-only
+      differences do not create false policy drift.
+    - Added regression coverage proving fingerprint parity between
+      semantically equivalent spacing variants:
+      `run-mutation-mcy-examples-native-real-harness-args-policy-fingerprint-canonical-pass.test`.
