@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1289 - February 14, 2026
+
+### OpenTitan FPV Execution Lane Bootstrap (`opentitan/FPV_BMC`)
+
+1. Added a new OpenTitan FPV BMC runner:
+   - `utils/run_opentitan_fpv_circt_bmc.py`
+   - consumes OpenTitan FPV compile contracts and expands target+toplevel cases
+     into the generic `run_pairwise_circt_bmc.py` backend.
+2. Added a new `run_formal_all.sh` lane path:
+   - `--with-opentitan-fpv-bmc`
+   - lane id: `opentitan/FPV_BMC`
+   - optional regex narrowing: `--opentitan-fpv-target-filter`
+   - explicit-filter contract enforced (`--select-cfgs` or target filter).
+3. Extended OpenTitan compile-contract exports with execution materialization:
+   - added `files`, `include_dirs`, `defines` columns in
+     `utils/resolve_opentitan_formal_compile_contracts.py` output.
+4. Extended generic pairwise BMC case contracts with per-case Verilog defines:
+   - new optional case column `verilog_defines`
+   - forwarded as `-D` args to `circt-verilog` in
+     `utils/run_pairwise_circt_bmc.py`.
+5. Added regressions:
+   - `test/Tools/run-opentitan-fpv-circt-bmc-basic.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-requires-cfg.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-requires-filter.test`
+   - updated `test/Tools/run-formal-all-help.test`.
+
 ## Iteration 1288 - February 14, 2026
 
 ### OpenTitan FPV Unknown-Task Strict Gating in `run_formal_all.sh`

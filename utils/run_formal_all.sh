@@ -868,6 +868,9 @@ Options:
                          (BMC_ASSUME_KNOWN_INPUTS=1) and synthesize
                          `opentitan/BMC_MODE_DIFF` when combined with
                          `--with-opentitan-bmc`
+  --with-opentitan-fpv-bmc
+                         Run OpenTitan FPV BMC lane from selected FPV compile
+                         contracts (`opentitan/FPV_BMC`)
   --with-opentitan-lec-strict
                          Run strict OpenTitan LEC lane (LEC_X_OPTIMISTIC=0)
                          and synthesize `opentitan/LEC_MODE_DIFF` when
@@ -888,6 +891,10 @@ Options:
   --opentitan-fpv-cfg FILE
                          Optional OpenTitan FPV cfg HJSON for target-manifest
                          selection planning
+  --opentitan-fpv-target-filter REGEX
+                         Regex filter for OpenTitan FPV target names in
+                         `opentitan/FPV_BMC` execution (in addition to
+                         `--select-cfgs`)
   --select-cfgs LIST
                          Optional target names selected from
                          `--opentitan-fpv-cfg` (repeatable; comma/space
@@ -2526,6 +2533,7 @@ EXCLUDE_LANE_REGEX=""
 WITH_OPENTITAN=0
 WITH_OPENTITAN_BMC=0
 WITH_OPENTITAN_BMC_STRICT=0
+WITH_OPENTITAN_FPV_BMC=0
 WITH_OPENTITAN_LEC_STRICT=0
 WITH_OPENTITAN_E2E=0
 WITH_OPENTITAN_E2E_STRICT=0
@@ -2537,6 +2545,7 @@ OPENTITAN_BMC_BOUND="1"
 OPENTITAN_BMC_INCLUDE_MASKED=0
 OPENTITAN_BMC_CASE_POLICY_FILE=""
 OPENTITAN_FPV_CFG_FILE=""
+OPENTITAN_FPV_TARGET_FILTER=""
 declare -a OPENTITAN_SELECT_CFGS=()
 OPENTITAN_FPV_TARGET_MANIFEST_FILE=""
 OPENTITAN_FPV_COMPILE_CONTRACTS_FILE=""
@@ -2612,6 +2621,8 @@ while [[ $# -gt 0 ]]; do
       WITH_OPENTITAN_BMC=1; shift ;;
     --with-opentitan-bmc-strict)
       WITH_OPENTITAN_BMC_STRICT=1; shift ;;
+    --with-opentitan-fpv-bmc)
+      WITH_OPENTITAN_FPV_BMC=1; shift ;;
     --with-opentitan-lec-strict)
       WITH_OPENTITAN_LEC_STRICT=1; shift ;;
     --with-opentitan-e2e)
@@ -2632,6 +2643,8 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_BMC_CASE_POLICY_FILE="$2"; shift 2 ;;
     --opentitan-fpv-cfg)
       OPENTITAN_FPV_CFG_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-target-filter)
+      OPENTITAN_FPV_TARGET_FILTER="$2"; shift 2 ;;
     --select-cfgs)
       OPENTITAN_SELECT_CFGS+=("$2"); shift 2 ;;
     --opentitan-fpv-target-manifest)
@@ -3432,6 +3445,16 @@ if [[ -n "$OPENTITAN_BMC_IMPL_FILTER" ]]; then
     exit 1
   fi
 fi
+if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$OPENTITAN_FPV_TARGET_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --opentitan-fpv-target-filter: $OPENTITAN_FPV_TARGET_FILTER" >&2
+    exit 1
+  fi
+fi
 if [[ -n "$OPENTITAN_BMC_BOUND" && ! "$OPENTITAN_BMC_BOUND" =~ ^[0-9]+$ ]]; then
   echo "invalid --opentitan-bmc-bound: expected non-negative integer" >&2
   exit 1
@@ -3446,6 +3469,10 @@ if [[ -n "$OPENTITAN_FPV_CFG_FILE" && ! -f "$OPENTITAN_FPV_CFG_FILE" ]]; then
 fi
 if [[ "${#OPENTITAN_SELECT_CFGS[@]}" -gt 0 && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
   echo "--select-cfgs requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--opentitan-fpv-target-filter requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
@@ -3486,6 +3513,10 @@ if [[ "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" == "1" && -z "$OPENTITAN_F
 fi
 if [[ "$FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
   echo "--fail-on-opentitan-fpv-unknown-task requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--with-opentitan-fpv-bmc requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
 if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" && -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
@@ -5239,6 +5270,7 @@ fi
 if [[ "$WITH_OPENTITAN" == "1" || \
       "$WITH_OPENTITAN_BMC" == "1" || \
       "$WITH_OPENTITAN_BMC_STRICT" == "1" || \
+      "$WITH_OPENTITAN_FPV_BMC" == "1" || \
       "$WITH_OPENTITAN_LEC_STRICT" == "1" || \
       "$WITH_OPENTITAN_E2E" == "1" || \
       "$WITH_OPENTITAN_E2E_STRICT" == "1" ]]; then
@@ -7455,6 +7487,7 @@ compute_lane_state_config_hash() {
     printf "with_opentitan=%s\n" "$WITH_OPENTITAN"
     printf "with_opentitan_bmc=%s\n" "$WITH_OPENTITAN_BMC"
     printf "with_opentitan_lec_strict=%s\n" "$WITH_OPENTITAN_LEC_STRICT"
+    printf "with_opentitan_fpv_bmc=%s\n" "$WITH_OPENTITAN_FPV_BMC"
     printf "with_opentitan_e2e=%s\n" "$WITH_OPENTITAN_E2E"
     printf "with_opentitan_e2e_strict=%s\n" "$WITH_OPENTITAN_E2E_STRICT"
     printf "with_sv_tests_uvm_bmc_semantics=%s\n" "$WITH_SV_TESTS_UVM_BMC_SEMANTICS"
@@ -7478,6 +7511,7 @@ compute_lane_state_config_hash() {
     printf "opentitan_bmc_include_masked=%s\n" "$OPENTITAN_BMC_INCLUDE_MASKED"
     printf "opentitan_bmc_case_policy_file=%s\n" "$OPENTITAN_BMC_CASE_POLICY_FILE"
     printf "opentitan_fpv_cfg_file=%s\n" "$OPENTITAN_FPV_CFG_FILE"
+    printf "opentitan_fpv_target_filter=%s\n" "$OPENTITAN_FPV_TARGET_FILTER"
     printf "opentitan_fpv_target_manifest_file=%s\n" "$OPENTITAN_FPV_TARGET_MANIFEST_FILE"
     printf "opentitan_fpv_compile_contracts_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE"
     printf "opentitan_fpv_compile_contracts_baseline_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE"
@@ -8416,6 +8450,12 @@ if [[ "$WITH_OPENTITAN_BMC_STRICT" == "1" ]] && lane_enabled "opentitan/BMC_STRI
     exit 1
   fi
 fi
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]] && lane_enabled "opentitan/FPV_BMC"; then
+  if [[ "${#OPENTITAN_SELECT_CFGS[@]}" == "0" && -z "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
+    echo "opentitan/FPV_BMC requires explicit filter: set --select-cfgs or --opentitan-fpv-target-filter" >&2
+    exit 1
+  fi
+fi
 if [[ "$WITH_OPENTITAN_BMC" == "1" && "$WITH_OPENTITAN_BMC_STRICT" == "1" ]] && \
    lane_enabled "opentitan/BMC_MODE_DIFF"; then
   if [[ -z "$OPENTITAN_BMC_IMPL_FILTER" ]]; then
@@ -8528,6 +8568,10 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
     need_opentitan_bmc_lanes=1
     need_opentitan_bmc_runner=1
   fi
+  if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]] && lane_enabled "opentitan/FPV_BMC"; then
+    need_opentitan_bmc_lanes=1
+    need_opentitan_fpv_bmc_runner=1
+  fi
 
   if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
     need_default_core_lec_lanes=1
@@ -8617,6 +8661,9 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   fi
   if [[ "$need_opentitan_bmc_runner" == "1" ]]; then
     require_executable_tool "OpenTitan BMC runner" "utils/run_opentitan_circt_bmc.py"
+  fi
+  if [[ "$need_opentitan_fpv_bmc_runner" == "1" ]]; then
+    require_executable_tool "OpenTitan FPV BMC runner" "utils/run_opentitan_fpv_circt_bmc.py"
   fi
   if [[ "$need_opentitan_lec_runner" == "1" ]]; then
     require_executable_tool "OpenTitan LEC runner" "utils/run_opentitan_circt_lec.py"
@@ -11321,6 +11368,154 @@ PY
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
 }
 
+run_opentitan_fpv_bmc_lane() {
+  local lane_id="$1"
+  local mode_name="$2"
+  local suite_name="$3"
+  local case_results="$4"
+  local workdir="$5"
+  local drop_remark_cases_file="$6"
+  local drop_remark_reasons_file="$7"
+  local timeout_reasons_file="$8"
+  local resolved_contracts_file="$9"
+  local lane_assume_known_inputs="${10}"
+
+  if ! lane_enabled "$lane_id"; then
+    return
+  fi
+  if lane_resume_from_state "$lane_id"; then
+    return
+  fi
+
+  : > "$case_results"
+  : > "$drop_remark_cases_file"
+  : > "$drop_remark_reasons_file"
+  : > "$timeout_reasons_file"
+  : > "$resolved_contracts_file"
+  rm -rf "$workdir"
+
+  local opentitan_fpv_bmc_args=(
+    --compile-contracts "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE"
+  )
+  if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
+    opentitan_fpv_bmc_args+=(--target-filter "$OPENTITAN_FPV_TARGET_FILTER")
+  fi
+
+  local opentitan_fpv_bmc_env=(OUT="$case_results"
+    BMC_DROP_REMARK_CASES_OUT="$drop_remark_cases_file"
+    BMC_DROP_REMARK_REASONS_OUT="$drop_remark_reasons_file"
+    BMC_TIMEOUT_REASON_CASES_OUT="$timeout_reasons_file"
+    BMC_RESOLVED_CONTRACTS_OUT="$resolved_contracts_file"
+    CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN"
+    CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
+    CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN_OPENTITAN"
+    CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN_OPENTITAN"
+    BMC_MODE_LABEL="$mode_name"
+    BOUND="$OPENTITAN_BMC_BOUND"
+    BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
+    BMC_ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
+    BMC_ASSUME_KNOWN_INPUTS="$lane_assume_known_inputs"
+    Z3_BIN="$Z3_BIN")
+  if [[ ${#FORMAL_BMC_TIMEOUT_ENV[@]} -gt 0 ]]; then
+    opentitan_fpv_bmc_env+=("${FORMAL_BMC_TIMEOUT_ENV[@]}")
+  fi
+
+  run_suite "$suite_name" \
+    env "${opentitan_fpv_bmc_env[@]}" \
+    utils/run_opentitan_fpv_circt_bmc.py --workdir "$workdir" "${opentitan_fpv_bmc_args[@]}" || true
+
+  if [[ ! -s "$case_results" ]]; then
+    local suite_log="$OUT_DIR/${suite_name}.log"
+    if [[ -f "$suite_log" ]] && \
+       grep -q "No OpenTitan FPV compile-contract targets selected." "$suite_log"; then
+      printf "SKIP\tfpv_target\tno_matching_target_filter\topentitan\t%s\tBMC_NOT_RUN\ttarget_filter\n" "$mode_name" > "$case_results"
+      local no_impl_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=0 skip=1 no_matching_target_filter=1"
+      local bmc_case_summary
+      bmc_case_summary="$(summarize_bmc_case_file "$case_results" "$timeout_reasons_file" "")"
+      if [[ -n "$bmc_case_summary" ]]; then
+        no_impl_summary="${no_impl_summary} ${bmc_case_summary}"
+      fi
+      record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 0 1 "$no_impl_summary"
+      return
+    fi
+    local missing_reason
+    missing_reason="$(classify_opentitan_bmc_missing_results_reason "$suite_log")"
+    printf "ERROR\tfpv_target\tmissing_results\topentitan\t%s\tCIRCT_BMC_ERROR\t%s\n" "$mode_name" "$missing_reason" > "$case_results"
+    local missing_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
+    local bmc_case_summary
+    bmc_case_summary="$(summarize_bmc_case_file "$case_results" "$timeout_reasons_file" "")"
+    if [[ -n "$bmc_case_summary" ]]; then
+      missing_summary="${missing_summary} ${bmc_case_summary}"
+    fi
+    record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$missing_summary"
+    return
+  fi
+
+  local counts total pass fail xfail xpass error skip
+  counts="$(
+    OPENTITAN_CASE_RESULTS_FILE="$case_results" python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["OPENTITAN_CASE_RESULTS_FILE"])
+counts = {
+    "total": 0,
+    "pass": 0,
+    "fail": 0,
+    "xfail": 0,
+    "xpass": 0,
+    "error": 0,
+    "skip": 0,
+}
+for line in path.read_text().splitlines():
+  parts = line.split("\t")
+  if not parts or not parts[0]:
+    continue
+  status = parts[0].strip().upper()
+  counts["total"] += 1
+  if status == "PASS":
+    counts["pass"] += 1
+  elif status == "FAIL":
+    counts["fail"] += 1
+  elif status == "XFAIL":
+    counts["xfail"] += 1
+  elif status == "XPASS":
+    counts["xpass"] += 1
+  elif status == "SKIP":
+    counts["skip"] += 1
+  elif status in ("UNKNOWN", "TIMEOUT", "ERROR"):
+    counts["error"] += 1
+  else:
+    counts["error"] += 1
+print(
+    f"{counts['total']}\t{counts['pass']}\t{counts['fail']}\t"
+    f"{counts['xfail']}\t{counts['xpass']}\t{counts['error']}\t{counts['skip']}"
+)
+PY
+  )"
+  IFS=$'\t' read -r total pass fail xfail xpass error skip <<< "$counts"
+
+  local summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
+  local bmc_drop_summary
+  bmc_drop_summary="$(summarize_bmc_drop_remark_log "$OUT_DIR/${suite_name}.log")"
+  if [[ -n "$bmc_drop_summary" ]]; then
+    summary="${summary} ${bmc_drop_summary}"
+  fi
+  local bmc_case_summary
+  bmc_case_summary="$(summarize_bmc_case_file "$case_results" "$timeout_reasons_file" "")"
+  if [[ -n "$bmc_case_summary" ]]; then
+    summary="${summary} ${bmc_case_summary}"
+  fi
+  local bmc_contract_summary
+  bmc_contract_summary="$(summarize_bmc_resolved_contracts_file "$resolved_contracts_file")"
+  if [[ -n "$bmc_contract_summary" ]]; then
+    summary="${summary} ${bmc_contract_summary}"
+  fi
+  append_filtered_min_total_violation total summary
+  maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
+  record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
+}
+
 # OpenTitan BMC (optional)
 if [[ "$WITH_OPENTITAN_BMC" == "1" ]]; then
   run_opentitan_bmc_lane \
@@ -11334,6 +11529,21 @@ if [[ "$WITH_OPENTITAN_BMC" == "1" ]]; then
     "$OUT_DIR/opentitan-bmc-timeout-reasons.tsv" \
     "$OUT_DIR/opentitan-bmc-frontend-error-reasons.tsv" \
     "$OUT_DIR/opentitan-bmc-resolved-contracts.tsv" \
+    "$BMC_ASSUME_KNOWN_INPUTS"
+fi
+
+# OpenTitan FPV BMC (optional)
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]]; then
+  run_opentitan_fpv_bmc_lane \
+    "opentitan/FPV_BMC" \
+    "FPV_BMC" \
+    "opentitan-fpv-bmc" \
+    "$OUT_DIR/opentitan-fpv-bmc-results.txt" \
+    "$OUT_DIR/opentitan-fpv-bmc-work" \
+    "$OUT_DIR/opentitan-fpv-bmc-drop-remark-cases.tsv" \
+    "$OUT_DIR/opentitan-fpv-bmc-drop-remark-reasons.tsv" \
+    "$OUT_DIR/opentitan-fpv-bmc-timeout-reasons.tsv" \
+    "$OUT_DIR/opentitan-fpv-bmc-resolved-contracts.tsv" \
     "$BMC_ASSUME_KNOWN_INPUTS"
 fi
 

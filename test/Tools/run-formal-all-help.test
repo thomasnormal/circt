@@ -98,12 +98,14 @@
 // CHECK: --bmc-allow-multi-clock
 // CHECK: --with-opentitan-bmc
 // CHECK: --with-opentitan-bmc-strict
+// CHECK: --with-opentitan-fpv-bmc
 // CHECK: --with-opentitan-lec-strict
 // CHECK: --opentitan-bmc-impl-filter
 // CHECK: --opentitan-bmc-bound
 // CHECK: --opentitan-bmc-include-masked
 // CHECK: --opentitan-bmc-case-policy-file
 // CHECK: --opentitan-fpv-cfg
+// CHECK: --opentitan-fpv-target-filter
 // CHECK: --select-cfgs
 // CHECK: --opentitan-fpv-target-manifest
 // CHECK: --opentitan-fpv-compile-contracts
