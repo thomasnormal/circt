@@ -1,0 +1,13 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic clk); assert property (@(posedge clk) 1); endmodule\n' > %t/simple.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nSTATE_FILE="%t/verilog-launch-count.txt"\nlaunch_count=0\nif [[ -f "$STATE_FILE" ]]; then\n  launch_count="$(cat "$STATE_FILE")"\nfi\nlaunch_count=$((launch_count + 1))\necho "$launch_count" > "$STATE_FILE"\nif [[ "$launch_count" -eq 1 ]]; then\n  echo "Too many open files" >&2\n  exit 126\nfi\nprintf "module {\\n  hw.module @top() {}\\n}\\n"\n' > %t/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env bash\necho "Bound reached with no violations!"\necho "Assertion can be violated!"\nexit 0\n' > %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh Z3_LIB=/dev/null EXPECT_FILE=/dev/null XFAIL_FILE=/dev/null SKIP_VHDL=0 SKIP_FAIL_WITHOUT_MACRO=0 TEST_FILTER='.*' BMC_LAUNCH_RETRY_ATTEMPTS=2 BMC_LAUNCH_RETRY_BACKOFF_SECS=0 BMC_LAUNCH_EVENTS_OUT=%t/launch.tsv KEEP_LOGS_DIR=%t/keep %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run.log
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/run.log
+// RUN: FileCheck %s --check-prefix=RETRYLOG < %t/keep/simple_pass.circt-verilog.log
+// RUN: FileCheck %s --check-prefix=LAUNCH < %t/launch.tsv
+//
+// SUMMARY: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+// RETRYLOG: frontend launch retry attempt=1
+// LAUNCH: RETRY{{[[:space:]]+}}simple{{[[:space:]]+}}{{.*}}simple.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}fake-verilog.sh{{[[:space:]]+}}too_many_open_files{{[[:space:]]+}}1{{[[:space:]]+}}0.000{{[[:space:]]+}}126

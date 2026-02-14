@@ -212,13 +212,17 @@ classify_retryable_launch_failure_reason() {
     echo "stale_file_handle"
     return 0
   fi
+  if [[ -s "$log_file" ]] && grep -Eiq "Too many open files|EMFILE|ENFILE" "$log_file"; then
+    echo "too_many_open_files"
+    return 0
+  fi
   echo "retryable_exit_code_${exit_code}"
 }
 
 is_retryable_launch_failure_log() {
   local log_file="$1"
   [[ -s "$log_file" ]] && grep -Eiq \
-    "Text file busy|ETXTBSY|posix_spawn failed|Permission denied|resource temporarily unavailable|stale file handle|ESTALE" \
+    "Text file busy|ETXTBSY|posix_spawn failed|Permission denied|resource temporarily unavailable|stale file handle|ESTALE|too many open files|EMFILE|ENFILE" \
     "$log_file"
 }
 

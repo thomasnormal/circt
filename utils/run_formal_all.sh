@@ -11625,7 +11625,7 @@ summarize_launch_events_file_with_prefix() {
   local launch_events_file="$1"
   local metrics_prefix="$2"
   if [[ ! -s "$launch_events_file" ]]; then
-    echo "${metrics_prefix}_event_rows=0 ${metrics_prefix}_retry_events=0 ${metrics_prefix}_retry_cases=0 ${metrics_prefix}_retryable_exit_events=0 ${metrics_prefix}_etxtbsy_events=0 ${metrics_prefix}_fallback_events=0 ${metrics_prefix}_fallback_cases=0 ${metrics_prefix}_permission_denied_events=0 ${metrics_prefix}_posix_spawn_failed_events=0 ${metrics_prefix}_resource_temporarily_unavailable_events=0"
+    echo "${metrics_prefix}_event_rows=0 ${metrics_prefix}_retry_events=0 ${metrics_prefix}_retry_cases=0 ${metrics_prefix}_retryable_exit_events=0 ${metrics_prefix}_etxtbsy_events=0 ${metrics_prefix}_fallback_events=0 ${metrics_prefix}_fallback_cases=0 ${metrics_prefix}_permission_denied_events=0 ${metrics_prefix}_posix_spawn_failed_events=0 ${metrics_prefix}_resource_temporarily_unavailable_events=0 ${metrics_prefix}_too_many_open_files_events=0"
     return 0
   fi
   BMC_LAUNCH_EVENTS_FILE="$launch_events_file" BMC_LAUNCH_METRICS_PREFIX="$metrics_prefix" python3 - <<'PY'
@@ -11642,7 +11642,8 @@ if not path.exists():
         f"{prefix}_etxtbsy_events=0 {prefix}_fallback_events=0 "
         f"{prefix}_fallback_cases=0 {prefix}_permission_denied_events=0 "
         f"{prefix}_posix_spawn_failed_events=0 "
-        f"{prefix}_resource_temporarily_unavailable_events=0"
+        f"{prefix}_resource_temporarily_unavailable_events=0 "
+        f"{prefix}_too_many_open_files_events=0"
     )
     raise SystemExit(0)
 
@@ -11654,6 +11655,7 @@ etxtbsy_events = 0
 permission_denied_events = 0
 posix_spawn_failed_events = 0
 resource_temporarily_unavailable_events = 0
+too_many_open_files_events = 0
 retry_cases = set()
 fallback_cases = set()
 reason_events = {}
@@ -11699,6 +11701,8 @@ with path.open(encoding="utf-8") as handle:
         posix_spawn_failed_events += 1
       if reason == "resource_temporarily_unavailable":
         resource_temporarily_unavailable_events += 1
+      if reason == "too_many_open_files":
+        too_many_open_files_events += 1
     elif event_kind == "FALLBACK":
       fallback_events += 1
       if case_id:
@@ -11718,6 +11722,7 @@ parts = [
         f"{prefix}_resource_temporarily_unavailable_events="
         f"{resource_temporarily_unavailable_events}"
     ),
+    f"{prefix}_too_many_open_files_events={too_many_open_files_events}",
     f"{prefix}_reason_keys={len(reason_events)}",
 ]
 if reason_events:
