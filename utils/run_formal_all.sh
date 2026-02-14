@@ -1192,6 +1192,10 @@ Options:
   --opentitan-fpv-bmc-summary-drift-allowlist-file FILE
                          Optional allowlist file for OpenTitan FPV assertion-summary
                          drift checks (target-level exact/prefix/regex)
+  --opentitan-fpv-bmc-summary-drift-row-allowlist-file FILE
+                         Optional allowlist file for OpenTitan FPV assertion-summary
+                         drift-row checks (`target_name::kind`,
+                         exact/prefix/regex)
   --update-opentitan-fpv-bmc-summary-baseline
                          Update --opentitan-fpv-bmc-summary-baseline-file with
                          the current OpenTitan FPV summary artifact
@@ -2919,6 +2923,7 @@ OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE=""
 OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE=""
 OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE=""
 OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE=""
+OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE=""
 OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE=""
 OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE=""
 OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE=""
@@ -3150,6 +3155,8 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-summary-drift-allowlist-file)
       OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-summary-drift-row-allowlist-file)
+      OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-assertion-results-baseline-file)
       OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-assertion-results-drift-file)
@@ -4436,6 +4443,10 @@ if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && "$WITH_OPENTITAN_F
   echo "--opentitan-fpv-bmc-summary-drift-allowlist-file requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
+if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-summary-drift-row-allowlist-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
 if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
   echo "--opentitan-fpv-bmc-assertion-results-baseline-file requires --with-opentitan-fpv-bmc" >&2
   exit 1
@@ -4550,6 +4561,10 @@ if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTIT
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" ]]; then
   echo "OpenTitan FPV BMC summary drift allowlist file not readable: $OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE" ]]; then
+  echo "OpenTitan FPV BMC summary drift row allowlist file not readable: $OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE" ]]; then
@@ -6146,6 +6161,10 @@ if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPEN
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--opentitan-fpv-bmc-summary-drift-allowlist-file requires --fail-on-opentitan-fpv-bmc-summary-drift or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-summary-drift-row-allowlist-file requires --fail-on-opentitan-fpv-bmc-summary-drift or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -8778,6 +8797,7 @@ compute_lane_state_config_hash() {
     printf "opentitan_fpv_bmc_summary_baseline_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE"
     printf "opentitan_fpv_bmc_summary_drift_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE"
     printf "opentitan_fpv_bmc_summary_drift_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE"
+    printf "opentitan_fpv_bmc_summary_drift_row_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE"
     printf "opentitan_fpv_bmc_assertion_results_baseline_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE"
     printf "opentitan_fpv_bmc_assertion_results_drift_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE"
     printf "opentitan_fpv_bmc_assertion_results_drift_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE"
@@ -14159,6 +14179,9 @@ run_opentitan_fpv_bmc_lane() {
     fi
     if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" ]]; then
       opentitan_fpv_bmc_env+=("BMC_FPV_SUMMARY_DRIFT_ALLOWLIST_FILE=$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE")
+    fi
+    if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE" ]]; then
+      opentitan_fpv_bmc_env+=("BMC_FPV_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE=$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE")
     fi
     if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" == "1" ]]; then
       opentitan_fpv_bmc_env+=("BMC_FAIL_ON_FPV_SUMMARY_DRIFT=1")

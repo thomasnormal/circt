@@ -153,6 +153,7 @@
 // CHECK: --opentitan-fpv-bmc-summary-baseline-file
 // CHECK: --opentitan-fpv-bmc-summary-drift-file
 // CHECK: --opentitan-fpv-bmc-summary-drift-allowlist-file
+// CHECK: --opentitan-fpv-bmc-summary-drift-row-allowlist-file
 // CHECK: --update-opentitan-fpv-bmc-summary-baseline
 // CHECK: --fail-on-opentitan-fpv-bmc-summary-drift
 // CHECK: --opentitan-fpv-bmc-assertion-results-baseline-file
