@@ -1,0 +1,16 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/unknown %t/bin
+// RUN: printf 'module unknown(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/unknown/unknown.v
+// RUN: { printf 'unknown\tunknown/unknown.v\tunknown'; for _ in $(seq 1 24); do printf '\t-'; done; printf '\thooks/missing.sh\n'; } > %t/manifest.tsv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho should-not-run >&2\nexit 99\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example-manifest %t/manifest.tsv \
+// RUN:   --example unknown \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --mutations-backend native \
+// RUN:   --native-tests-mode real \
+// RUN:   --out-dir %t/out 2>&1 | FileCheck %s
+
+// CHECK: configured native_real_harness_script is missing or not a file for unknown

@@ -2,6 +2,35 @@
 
 ## Iteration 1392 - February 14, 2026
 
+### Mutation Workflow: Manifest-Driven Native Real Harness Overrides
+
+1. Extended `utils/run_mutation_mcy_examples.sh` manifest schema with an
+   optional `native_real_harness_script` column (new final optional field):
+   - allows per-example native real harness selection from manifest data,
+     avoiding hardcoded harness mapping for new examples.
+   - supports absolute paths or paths relative to `--examples-root`.
+2. Integrated manifest real-harness overrides into native real mode execution:
+   - when set, override harness is used to populate `--tests-manifest`
+     (`sim_real`) directly.
+   - missing override script paths now fail fast with a clear diagnostic.
+3. Preserved baseline compatibility for policy fingerprinting:
+   - `native_real_harness_script` contributes to policy fingerprint only when
+     non-empty, so existing baseline fingerprints remain stable unless the
+     override is actively used.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-native-real-harness-manifest-override-pass.test`
+   - `test/Tools/run-mutation-mcy-examples-native-real-harness-manifest-override-missing.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (140 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --mutations-backend native --native-tests-mode real --native-real-tests-strict --out-dir /tmp/mcy_examples_real_native_mode_real_strict_1771084804` PASS
+  - `bitcnt`: `detected=6 relevant=8 coverage=75.00 errors=0`
+  - `picorv32_primes`: `detected=8 relevant=8 coverage=100.00 errors=0`
+
+## Iteration 1392 - February 14, 2026
+
 ### OpenTitan Formal: Unknown-Module Missing-Results Diagnostics (BMC + LEC)
 
 1. Hardened OpenTitan missing-results diagnostics in `utils/run_formal_all.sh`:
