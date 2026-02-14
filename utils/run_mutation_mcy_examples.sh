@@ -491,12 +491,6 @@ metric_value_or_zero() {
   fi
 }
 
-lookup_baseline_row() {
-  local baseline_file="$1"
-  local example_id="$2"
-  awk -F '\t' -v e="$example_id" 'NR > 1 && $1 == e { print; exit }' "$baseline_file"
-}
-
 append_drift_row() {
   local drift_file="$1"
   local example_id="$2"
@@ -541,9 +535,12 @@ evaluate_summary_drift() {
   local _errors=""
   local _policy=""
   local baseline_row=""
+  local summary_example=""
   local -A summary_examples_seen=()
+  local -A summary_duplicate_seen=()
   local -A baseline_rows=()
   local -A baseline_duplicate_seen=()
+  local -a summary_duplicate_examples=()
   local -a baseline_order=()
   local -a baseline_duplicate_examples=()
 
@@ -571,6 +568,13 @@ evaluate_summary_drift() {
       continue
     fi
 
+    if [[ -n "${summary_examples_seen[$example]+x}" ]]; then
+      if [[ -z "${summary_duplicate_seen[$example]+x}" ]]; then
+        summary_duplicate_seen["$example"]=1
+        summary_duplicate_examples+=("$example")
+      fi
+      continue
+    fi
     summary_examples_seen["$example"]=1
 
     detected="$(normalize_int_or_zero "$detected")"
@@ -673,6 +677,12 @@ evaluate_summary_drift() {
 
   for baseline_example in "${baseline_duplicate_examples[@]}"; do
     if ! append_drift_candidate "$drift_file" "$baseline_example" "row" "single_row" "duplicate_rows" "duplicate_baseline_row"; then
+      regressions=$((regressions + 1))
+    fi
+  done
+
+  for summary_example in "${summary_duplicate_examples[@]}"; do
+    if ! append_drift_candidate "$drift_file" "$summary_example" "row" "single_row" "duplicate_rows" "duplicate_current_row"; then
       regressions=$((regressions + 1))
     fi
   done

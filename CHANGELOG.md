@@ -1,5 +1,64 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1318 - February 14, 2026
+
+### OpenTitan Connectivity: Native LEC Lane Execution
+
+1. Added a real OpenTitan connectivity LEC runner:
+   - `utils/run_opentitan_connectivity_circt_lec.py`
+2. Runner capabilities:
+   - consumes connectivity target/rules manifests from
+     `select_opentitan_connectivity_cfg.py`
+   - applies `CONDITION` guard semantics to owning `CONNECTION` checks
+   - executes `circt-verilog` + `circt-opt` + `circt-lec` per rule
+   - supports deterministic rule filtering/sharding
+   - emits strict-gate-compatible artifacts:
+     - case results (`OUT`)
+     - drop-remark case/reason rows
+     - resolved contract rows with schema marker
+3. Extended `run_formal_all.sh` with connectivity LEC lane wiring:
+   - `--with-opentitan-connectivity-lec`
+   - `opentitan/CONNECTIVITY_LEC` lane
+   - `--opentitan-connectivity-lec-rule-shard-count`
+   - `--opentitan-connectivity-lec-rule-shard-index`
+   - explicit filter requirement:
+     - `--opentitan-connectivity-rule-filter`
+   - strict-tool preflight integration for:
+     - parser + connectivity LEC runner executables
+     - OpenTitan `circt-verilog/circt-opt/circt-lec` derived toolchain
+4. Added focused regressions:
+   - `test/Tools/run-opentitan-connectivity-circt-lec-basic.test`
+   - `test/Tools/run-opentitan-connectivity-circt-lec-condition-filter.test`
+   - `test/Tools/run-opentitan-connectivity-circt-lec-invalid-shard-index.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-lec.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-lec-requires-filter.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-lec-rule-shard-index-validation.test`
+
+### Validation
+
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-opentitan-connectivity-circt-lec-basic.test build-test/test/Tools/run-opentitan-connectivity-circt-lec-condition-filter.test build-test/test/Tools/run-opentitan-connectivity-circt-lec-invalid-shard-index.test build-test/test/Tools/run-formal-all-opentitan-connectivity-lec.test build-test/test/Tools/run-formal-all-opentitan-connectivity-lec-requires-filter.test build-test/test/Tools/run-formal-all-opentitan-connectivity-lec-rule-shard-index-validation.test` PASS (6/6)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-(opentitan-connectivity-circt-bmc|opentitan-connectivity-circt-lec|formal-all-opentitan-connectivity-).*\\.test'` PASS (15 selected)
+
+## Iteration 1317 - February 14, 2026
+
+### Mutation Workflow: Current Summary Row Uniqueness Gate
+
+1. Extended `evaluate_summary_drift()` in `utils/run_mutation_mcy_examples.sh` with current-summary duplicate detection.
+2. Duplicate example rows in current `summary.tsv` are now treated as drift candidates:
+   - metric: `row`
+   - detail: `duplicate_current_row`
+3. Duplicate current rows are now normalized to one drift event per example by ignoring repeated duplicate rows after first sighting.
+4. Removed unused helper `lookup_baseline_row()` after baseline preload migration.
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-current-duplicate-row-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-current-duplicate-row-allowlist.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (37/37)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-120817` PASS
+
 ## Iteration 1316 - February 14, 2026
 
 ### Mutation Workflow: Baseline Row Uniqueness Gate + O(1) Drift Lookup
