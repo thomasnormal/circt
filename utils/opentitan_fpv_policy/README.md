@@ -59,6 +59,8 @@ With `--baseline-prefix <name>`, artifacts become:
     - `check_lec_launch_reason_key_allowlist_file`
     - `check_max_bmc_launch_reason_event_rows`
     - `check_max_lec_launch_reason_event_rows`
+    - `check_bmc_launch_reason_event_budget_file`
+    - `check_lec_launch_reason_event_budget_file`
     - `check_fail_on_any_bmc_launch_reason_events`
     - `check_fail_on_any_lec_launch_reason_events`
   - current defaults are canary seeds (one representative target per cohort)
@@ -79,7 +81,7 @@ Use `utils/run_opentitan_fpv_bmc_policy_profiles.sh` to run packs:
   - `utils/run_opentitan_fpv_bmc_policy_profiles.sh check --opentitan-root ~/opentitan --workflow-verilog-cache-mode read --workflow-verilog-cache-dir /tmp/circt-fpv-cache`
   - per-pack TSV values (`verilog_cache_mode`, `verilog_cache_dir`) override workflow defaults.
 - set workflow-level check-only launch reason-event budget defaults:
-  - `utils/run_opentitan_fpv_bmc_policy_profiles.sh check --opentitan-root ~/opentitan --workflow-check-bmc-launch-reason-key-allowlist-file utils/opentitan_fpv_policy/bmc_launch_reason_key_allowlist.txt --workflow-check-max-bmc-launch-reason-event-rows 0 --workflow-check-fail-on-any-bmc-launch-reason-events`
+  - `utils/run_opentitan_fpv_bmc_policy_profiles.sh check --opentitan-root ~/opentitan --workflow-check-bmc-launch-reason-key-allowlist-file utils/opentitan_fpv_policy/bmc_launch_reason_key_allowlist.txt --workflow-check-max-bmc-launch-reason-event-rows 0 --workflow-check-max-lec-launch-reason-event-rows 0 --workflow-check-bmc-launch-reason-event-budget-file utils/opentitan_fpv_policy/bmc_launch_reason_event_budget.tsv --workflow-check-lec-launch-reason-event-budget-file utils/opentitan_fpv_policy/lec_launch_reason_event_budget.tsv --workflow-check-fail-on-any-bmc-launch-reason-events --workflow-check-fail-on-any-lec-launch-reason-events`
   - per-pack TSV values (`check_*`) override workflow defaults.
 
 ## Drift Triage

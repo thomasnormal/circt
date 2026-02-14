@@ -1,0 +1,15 @@
+// RUN: test -r %S/../../utils/opentitan_fpv_policy/bmc_launch_reason_event_budget.tsv
+// RUN: test -r %S/../../utils/opentitan_fpv_policy/lec_launch_reason_event_budget.tsv
+// RUN: FileCheck %s --check-prefix=HEADER < %S/../../utils/opentitan_fpv_policy/profile_packs.tsv
+// RUN: FileCheck %s --check-prefix=ROW-PRIM < %S/../../utils/opentitan_fpv_policy/profile_packs.tsv
+// RUN: FileCheck %s --check-prefix=ROW-IP < %S/../../utils/opentitan_fpv_policy/profile_packs.tsv
+// RUN: FileCheck %s --check-prefix=ROW-SECCM < %S/../../utils/opentitan_fpv_policy/profile_packs.tsv
+//
+// HEADER-DAG: check_bmc_launch_reason_event_budget_file
+// HEADER-DAG: check_lec_launch_reason_event_budget_file
+// HEADER-DAG: check_fail_on_any_bmc_launch_reason_events
+// HEADER-DAG: check_fail_on_any_lec_launch_reason_events
+//
+// ROW-PRIM: prim_all{{.*}}bmc_launch_reason_event_budget.tsv{{.*}}1{{.*}}0{{.*}}lec_launch_reason_event_budget.tsv{{.*}}1
+// ROW-IP: ip_all{{.*}}bmc_launch_reason_event_budget.tsv{{.*}}1{{.*}}0{{.*}}lec_launch_reason_event_budget.tsv{{.*}}1
+// ROW-SECCM: sec_cm_all{{.*}}bmc_launch_reason_event_budget.tsv{{.*}}1{{.*}}0{{.*}}lec_launch_reason_event_budget.tsv{{.*}}1
