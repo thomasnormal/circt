@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1404 - February 14, 2026
+
+### OpenTitan FPV BMC: Prim-Assert Retry Priority over External Preprocess
+
+1. Refined frontend retry ordering in `utils/run_pairwise_circt_bmc.py`:
+   - when `BMC_VERILOG_ASSERT_MACRO_SHIM_MODE=auto` and diagnostics match
+     `prim_assert*` macro-compatibility failures, the runner now prioritizes
+     `prim_assert` include-shim retry over external preprocessing.
+   - external preprocessing auto-retry remains active for non-`prim_assert`
+     macro/preprocessor failures.
+2. Rationale:
+   - avoids expensive preprocessed mega-unit fallback for a known OpenTitan
+     failure family where lightweight include-shim override is the better
+     first recovery path.
+   - improves long-term scale behavior for large FPV compile units by reducing
+     avoidable preprocessing retries.
+3. Added focused regression:
+   - `test/Tools/run-pairwise-circt-bmc-prim-assert-retry-precedes-external-preprocess.test`
+   - validates that:
+     - `prim_assert_include_shim_macro_compat` retry is used,
+     - external preprocess retry is not emitted/called for that failure class.
+4. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-pairwise-circt-bmc-prim-assert-retry-precedes-external-preprocess.test build-test/test/Tools/run-pairwise-circt-bmc-prim-assert-include-shim-auto-retry.test build-test/test/Tools/run-pairwise-circt-bmc-external-preprocess-auto-retry.test build-test/test/Tools/run-pairwise-circt-bmc-unified-include-unit-auto-retry.test build-test/test/Tools/run-pairwise-circt-bmc-assert-macro-shim-auto-retry.test` PASS
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-opentitan-bmc.test build-test/test/Tools/run-formal-all-opentitan-bmc-mode-diff.test build-test/test/Tools/run-opentitan-bmc-case-policy-provenance.test` PASS
+
 ## Iteration 1403 - February 14, 2026
 
 ### OpenTitan FPV BMC: Macro-Compatibility Retry Hardening

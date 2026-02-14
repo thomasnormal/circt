@@ -244,6 +244,18 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      hardening is now in place, but broad OpenTitan FPV closure still needs:
      - additional parser-compat closure beyond current shim scope, and
      - compile-unit scale/performance improvements for large FPV targets.
+24. Frontend retry ordering hardened for OpenTitan-scale compile units:
+   - `run_pairwise_circt_bmc.py` now prioritizes `prim_assert` include-shim
+     retry over external preprocessing when diagnostics indicate
+     `prim_assert*` macro-compatibility failures.
+   - external preprocessing fallback remains available for non-`prim_assert`
+     macro/preprocessor failures.
+   - added regression:
+     - `test/Tools/run-pairwise-circt-bmc-prim-assert-retry-precedes-external-preprocess.test`
+   - impact:
+     - reduces avoidable heavyweight preprocessing retries in the dominant
+       OpenTitan prim-assert failure family, improving scale behavior while
+       preserving generic fallback coverage.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
