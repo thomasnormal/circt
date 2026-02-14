@@ -1,0 +1,15 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'objective_id\tobjective_class\ttarget_name\tcase_id\tobjective_key\tkind\tbmc\tlec\tbmc_case_path\tlec_case_path\tbmc_evidence\tlec_evidence\tbmc_reason\tlec_reason\tallowlisted\nassertion::foo_fpv::foo_tb::a0000\tassertion\tfoo_fpv\tfoo_fpv::foo_tb\tfoo_fpv::foo_tb::a0000\tassertion_reason\tprojected_case_eq\tprojected_case_eq\t/tmp/foo.sv\t/tmp/foo.sv\tUNSAT\tEQ\tprojected_case_eq\tprojected_case_eq\t0\n' > %t/baseline.tsv
+// RUN: printf 'objective_id\tobjective_class\ttarget_name\tcase_id\tobjective_key\tkind\tbmc\tlec\tbmc_case_path\tlec_case_path\tbmc_evidence\tlec_evidence\tbmc_reason\tlec_reason\tallowlisted\nassertion::foo_fpv::foo_tb::a0000\tassertion\tfoo_fpv\tfoo_fpv::foo_tb\tfoo_fpv::foo_tb::a0000\tassertion_reason\tprojected_case_eq\tprojected_case_unknown\t/tmp/foo.sv\t/tmp/foo.sv\tUNSAT\tEQ\tprojected_case_eq\tprojected_case_unknown\t0\n' > %t/current.tsv
+// RUN: printf 'exact:assertion::foo_fpv::foo_tb::a0000::assertion_reason::payload_changed\n' > %t/row-allow.txt
+// RUN: printf '' > %t/allow.txt
+// RUN: python3 %S/../../utils/check_opentitan_fpv_objective_parity_drift.py --baseline-parity-tsv %t/baseline.tsv --current-parity-tsv %t/current.tsv --out-drift-tsv %t/drift.tsv --allowlist-file %t/allow.txt --row-allowlist-file %t/row-allow.txt 2>&1 | FileCheck %s --check-prefix=PASS
+// RUN: FileCheck %s --check-prefix=DRIFT < %t/drift.tsv
+// RUN: not python3 %S/../../utils/check_opentitan_fpv_objective_parity_drift.py --baseline-parity-tsv %t/baseline.tsv --current-parity-tsv %t/current.tsv --out-drift-tsv %t/drift-fail.tsv --fail-on-drift 2>&1 | FileCheck %s --check-prefix=FAIL
+//
+// PASS: opentitan fpv objective parity drift check passed
+// DRIFT: objective_id{{[[:space:]]+}}kind{{[[:space:]]+}}target_name{{[[:space:]]+}}drift_kind{{[[:space:]]+}}baseline{{[[:space:]]+}}current{{[[:space:]]+}}allowlisted
+// DRIFT: assertion::foo_fpv::foo_tb::a0000{{[[:space:]]+}}assertion_reason{{[[:space:]]+}}foo_fpv{{[[:space:]]+}}payload_changed{{[[:space:]]+}}{{.*}}projected_case_eq{{.*}}{{[[:space:]]+}}{{.*}}projected_case_unknown{{.*}}{{[[:space:]]+}}1
+// FAIL: opentitan fpv objective parity drift detected
+// FAIL: assertion::foo_fpv::foo_tb::a0000::assertion_reason::payload_changed

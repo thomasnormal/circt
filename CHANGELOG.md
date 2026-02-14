@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1422 - February 14, 2026
+
+### OpenTitan FPV Objective Parity: Baseline/Drift Governance
+
+1. Added a new objective-parity drift checker:
+   - `utils/check_opentitan_fpv_objective_parity_drift.py`
+   - compares baseline vs current parity TSV rows by objective key.
+   - emits drift classes:
+     - `new_row`
+     - `missing_row`
+     - `payload_changed`
+   - supports row/global allowlists and fail-on-drift mode.
+2. Wired drift governance end-to-end in `utils/run_formal_all.sh` for
+   `opentitan/FPV_OBJECTIVE_PARITY`:
+   - baseline update:
+     - `--update-opentitan-fpv-objective-parity-baseline`
+   - drift gating:
+     - `--fail-on-opentitan-fpv-objective-parity-drift`
+   - drift artifacts and allowlists:
+     - `--opentitan-fpv-objective-parity-drift-file`
+     - `--opentitan-fpv-objective-parity-drift-allowlist-file`
+     - `--opentitan-fpv-objective-parity-drift-row-allowlist-file`
+   - strict preflight now requires
+     `utils/check_opentitan_fpv_objective_parity_drift.py` when applicable.
+3. Extended FPV objective-parity lane summary counters:
+   - `fpv_objective_parity_drift_rows`
+   - `fpv_objective_parity_drift_non_allowlisted_rows`
+   - `fpv_objective_parity_drift_allowlisted_rows`
+   - `fpv_objective_parity_drift_new_rows`
+   - `fpv_objective_parity_drift_missing_rows`
+   - `fpv_objective_parity_drift_payload_changed_rows`
+4. Added/updated focused regressions:
+   - added:
+     - `test/Tools/check-opentitan-fpv-objective-parity-drift-basic.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-objective-parity-drift-forwarding.test`
+   - updated:
+     - `test/Tools/check-opentitan-fpv-objective-parity-drift-basic.test`
+       (fixed allowlist setup ordering).
+5. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/check-opentitan-fpv-objective-parity-drift-basic.test build-test/test/Tools/check-opentitan-fpv-objective-parity-reason-policy.test build-test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-requires-lec-assertions.test build-test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-drift-forwarding.test` PASS
+
 ## Iteration 1421 - February 14, 2026
 
 ### OpenTitan FPV Objective Parity: Reason-Drift Policy Enforcement
