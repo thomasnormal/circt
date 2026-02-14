@@ -1,0 +1,22 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal/conn_csvs
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: cp %S/../../utils/select_opentitan_connectivity_cfg.py %t/utils/select_opentitan_connectivity_cfg.py
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\n: "${BMC_COVER_RESULTS_OUT:?}"\nprintf "PASS\\tconnectivity::chip.csv:RULE_CLK\\t%t/out/opentitan-connectivity-bmc-work\\topentitan\\tCONNECTIVITY_BMC\\tUNSAT\\n" > "$OUT"\nprintf "COVERED\\tconnectivity::chip.csv:RULE_CLK\\t%t/ot/hw/top_earlgrey/formal/conn_csvs/chip.csv:2\\tc0000\\tline_1\\tSAT\\tsat\\n" > "$BMC_COVER_RESULTS_OUT"\nprintf "UNREACHABLE\\tconnectivity::chip.csv:RULE_CLK\\t%t/ot/hw/top_earlgrey/formal/conn_csvs/chip.csv:2\\tc0001\\tline_2\\tUNSAT\\tunsat\\n" >> "$BMC_COVER_RESULTS_OUT"\n' > %t/utils/run_opentitan_connectivity_circt_bmc.py
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '{\n  "name": "chip_earlgrey_asic",\n  "fusesoc_core": "lowrisc:systems:chip_earlgrey_asic:0.1",\n  "conn_csvs_dir": "{proj_root}/hw/top_earlgrey/formal/conn_csvs",\n  "conn_csvs": ["{conn_csvs_dir}/chip.csv"]\n}\n' > %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson
+// RUN: printf ',NAME,SRC BLOCK,SRC SIGNAL,DEST BLOCK,DEST SIGNAL\nCONNECTION, RULE_CLK, top_earlgrey.u_src, clk_o, top_earlgrey.u_dst, clk_i\n' > %t/ot/hw/top_earlgrey/formal/conn_csvs/chip.csv
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/select_opentitan_connectivity_cfg.py %t/utils/run_opentitan_connectivity_circt_bmc.py %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^opentitan/CONNECTIVITY_BMC$' --with-opentitan-connectivity-bmc --opentitan %t/ot --circt-verilog %t/bin/circt-verilog --opentitan-connectivity-cfg %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson --opentitan-connectivity-rule-filter '^RULE_'
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=COVERS < %t/out/opentitan-connectivity-bmc-cover-results.tsv
+//
+// SUMMARY: opentitan{{[[:space:]]+}}CONNECTIVITY_BMC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}total=1
+// SUMMARY-SAME: bmc_cover_total=2
+// SUMMARY-SAME: bmc_cover_covered=1
+// SUMMARY-SAME: bmc_cover_unreachable=1
+// COVERS: COVERED{{[[:space:]]+}}connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}{{.*}}
+// COVERS: UNREACHABLE{{[[:space:]]+}}connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}{{.*}}

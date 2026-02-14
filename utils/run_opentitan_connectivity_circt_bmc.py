@@ -384,10 +384,13 @@ def synthesize_rule_checker(
     assertion_expr = f"(({src_expr}) === ({dst_expr}))"
     if guard_expr:
         assertion_expr = f"((!({guard_expr})) || {assertion_expr})"
+    # Cover guard activation to provide per-rule reachability evidence.
+    cover_expr = guard_expr if guard_expr else "1'b1"
     body = f"""// Auto-generated connectivity check for {rule_id}
 module {module_name};
   always_comb begin
     assert ({assertion_expr});
+    cover ({cover_expr});
   end
 endmodule
 
@@ -460,6 +463,31 @@ def main() -> int:
         help="Deterministic rule shard index in [0, count).",
     )
     parser.add_argument(
+        "--cover-granular",
+        action="store_true",
+        default=os.environ.get("BMC_COVER_GRANULAR", "0") == "1",
+        help=(
+            "Run BMC per cover by delegating --cover-granular to the pairwise "
+            "runner (default: env BMC_COVER_GRANULAR or off)."
+        ),
+    )
+    parser.add_argument(
+        "--cover-shard-count",
+        default=os.environ.get("BMC_COVER_SHARD_COUNT", "1"),
+        help=(
+            "Deterministic cover shard count used with --cover-granular "
+            "(default: env BMC_COVER_SHARD_COUNT or 1)."
+        ),
+    )
+    parser.add_argument(
+        "--cover-shard-index",
+        default=os.environ.get("BMC_COVER_SHARD_INDEX", "0"),
+        help=(
+            "Deterministic cover shard index in [0, count) used with "
+            "--cover-granular (default: env BMC_COVER_SHARD_INDEX or 0)."
+        ),
+    )
+    parser.add_argument(
         "--fusesoc-bin",
         default="fusesoc",
         help="FuseSoC executable (default: fusesoc).",
@@ -522,6 +550,12 @@ def main() -> int:
         fail("invalid --rule-shard-count: expected integer >= 1")
     if rule_shard_index >= rule_shard_count:
         fail("invalid --rule-shard-index: expected value < --rule-shard-count")
+    cover_shard_count = parse_nonnegative_int(args.cover_shard_count, "cover-shard-count")
+    cover_shard_index = parse_nonnegative_int(args.cover_shard_index, "cover-shard-index")
+    if cover_shard_count < 1:
+        fail("invalid --cover-shard-count: expected integer >= 1")
+    if cover_shard_index >= cover_shard_count:
+        fail("invalid --cover-shard-index: expected value < --cover-shard-count")
     bound = parse_nonnegative_int(args.bound, "bound")
     ignore_asserts_until = parse_nonnegative_int(
         args.ignore_asserts_until, "ignore-asserts-until"
@@ -691,6 +725,16 @@ def main() -> int:
         cover_results_out = os.environ.get("BMC_COVER_RESULTS_OUT", "").strip()
         if cover_results_out:
             cmd.extend(["--cover-results-file", cover_results_out])
+        if args.cover_granular:
+            cmd.extend(
+                [
+                    "--cover-granular",
+                    "--cover-shard-count",
+                    str(cover_shard_count),
+                    "--cover-shard-index",
+                    str(cover_shard_index),
+                ]
+            )
         drop_cases_out = os.environ.get("BMC_DROP_REMARK_CASES_OUT", "").strip()
         if drop_cases_out:
             cmd.extend(["--drop-remark-cases-file", drop_cases_out])
@@ -707,7 +751,9 @@ def main() -> int:
             f"selected_conditions={sum(len(group.conditions) for group in selected_groups)} "
             f"generated_cases={len(generated_sv_files)} "
             f"skipped_connections={skipped_connections} "
-            f"top={top_module} shard={rule_shard_index}/{rule_shard_count}",
+            f"top={top_module} shard={rule_shard_index}/{rule_shard_count} "
+            f"cover_granular={int(args.cover_granular)} "
+            f"cover_shard={cover_shard_index}/{cover_shard_count}",
             file=sys.stderr,
             flush=True,
         )

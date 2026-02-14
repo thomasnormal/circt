@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1320 - February 14, 2026
+
+### OpenTitan Connectivity BMC: Status-Depth Expansion (`covered`/`unreachable`)
+
+1. Extended `utils/run_opentitan_connectivity_circt_bmc.py`:
+   - generated connectivity checker modules now include per-rule guard-coverage
+     objectives in addition to assertions.
+   - added cover-granular delegation support to pairwise runner:
+     - `--cover-granular`
+     - `--cover-shard-count`
+     - `--cover-shard-index`
+     - env-compatible defaults (`BMC_COVER_GRANULAR`, `BMC_COVER_SHARD_*`).
+2. Extended `utils/run_formal_all.sh` connectivity BMC lane:
+   - always provisions `opentitan-connectivity-bmc-cover-results.tsv` via
+     `BMC_COVER_RESULTS_OUT`.
+   - added `summarize_bmc_cover_file()` and lane summary counters:
+     - `bmc_cover_total`
+     - `bmc_cover_covered`
+     - `bmc_cover_unreachable`
+     - `bmc_cover_timeout`
+     - `bmc_cover_unknown`
+     - `bmc_cover_skip`
+     - `bmc_cover_error`
+3. Added focused regressions:
+   - `test/Tools/run-opentitan-connectivity-circt-bmc-cover-granular.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-bmc-cover-summary.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_opentitan_connectivity_circt_bmc.py` PASS
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-(opentitan-connectivity-circt-bmc-cover-granular|formal-all-opentitan-connectivity-bmc-cover-summary|opentitan-connectivity-circt-bmc-basic|formal-all-opentitan-connectivity-bmc).*\\.test'` PASS (6 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-(opentitan-connectivity-circt-bmc|opentitan-connectivity-circt-lec|formal-all-opentitan-connectivity-).*\\.test'` PASS (17 selected)
+
 ## Iteration 1319 - February 14, 2026
 
 ### Mutation Workflow: Single-Pass Metrics Parsing

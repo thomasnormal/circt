@@ -284,6 +284,15 @@ verilator-verification, and yosys corpora).
      - `--opentitan-connectivity-rule-filter`
      - `--opentitan-connectivity-bmc-rule-shard-count`
      - `--opentitan-connectivity-bmc-rule-shard-index`
+   - connectivity BMC now emits connectivity-status evidence beyond pass/fail:
+     - per-rule guard-activation cover objectives are synthesized with each
+       generated connectivity checker.
+     - `utils/run_opentitan_connectivity_circt_bmc.py` now supports
+       cover-granular delegation into `run_pairwise_circt_bmc.py`
+       (`BMC_COVER_GRANULAR` + deterministic cover shard controls).
+     - `run_formal_all.sh` now records connectivity BMC cover counters in lane
+       summaries (`bmc_cover_total`, `bmc_cover_covered`,
+       `bmc_cover_unreachable`, ...).
    - connectivity LEC execution lane is now wired:
      - `--with-opentitan-connectivity-lec` (`opentitan/CONNECTIVITY_LEC`)
      - `--opentitan-connectivity-rule-filter`
@@ -339,17 +348,17 @@ verilator-verification, and yosys corpora).
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.
 6. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
 7. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
-8. **Connectivity status depth gap**: `CONNECTION` + attached `CONDITION`
-   guard semantics are executable through both BMC and LEC, but connectivity
-   status expansion (`covered`/`unreachable`) and assertion-style drift
-   governance for those classes are still pending.
+8. **Connectivity status governance gap**: `CONNECTION` + attached `CONDITION`
+   guard semantics are executable through both BMC and LEC, and BMC now emits
+   `covered`/`unreachable` evidence; remaining gap is first-class drift
+   governance and parity policies over those status classes.
 
 ### Next Long-Term Features (best long-term path)
 
 1. Extend launch-resilience policy beyond ETXTBSY (e.g., selected transient I/O launch races) with explicit strict-gate counters and per-reason retry telemetry.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
-4. Extend Phase E connectivity parity from pass/fail execution into full
-   status-model parity:
-   integrate connectivity-specific status artifacts
-   (`pass/fail/covered/unreachable`) into strict-gate drift workflows.
+4. Extend Phase E connectivity parity from status evidence into strict drift
+   governance:
+   add connectivity-specific status baselines and drift gates over
+   (`pass/fail/covered/unreachable`) with stable rule-ID keyed attribution.
