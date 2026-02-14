@@ -611,6 +611,10 @@ render_native_real_harness_args_suffix() {
   printf '%s\n' "$out"
 }
 
+shell_escape_word() {
+  printf "%q\n" "$1"
+}
+
 is_retry_reason_token() {
   [[ "$1" =~ ^[a-z][a-z0-9_]*$ ]]
 }
@@ -2719,6 +2723,7 @@ run_example_worker() {
   local retry_delay_msg=""
   local native_real_harness_override=""
   local native_real_harness_resolved=""
+  local native_real_harness_cmd_script=""
   local native_real_harness_args_spec="$NATIVE_REAL_HARNESS_ARGS"
   local native_real_harness_args_suffix=""
   local native_mutation_ops_spec="$NATIVE_MUTATION_OPS"
@@ -2824,8 +2829,9 @@ EOS
         echo "configured native_real_harness_script is missing or not a file for ${example_id}: ${native_real_harness_resolved}" >&2
         return 2
       fi
+      native_real_harness_cmd_script="$(shell_escape_word "$native_real_harness_resolved")"
       printf 'sim_real	bash %s ../mutant.v%s	result.txt	^DETECTED$	^SURVIVED$
-' "$native_real_harness_resolved" "$native_real_harness_args_suffix" > "$tests_manifest"
+' "$native_real_harness_cmd_script" "$native_real_harness_args_suffix" > "$tests_manifest"
     else
       case "$example_id" in
       bitcnt)
@@ -2858,8 +2864,9 @@ else
 fi
 EOS
         chmod +x "$real_test_script"
+        native_real_harness_cmd_script="$(shell_escape_word "$real_test_script")"
         printf 'sim_real	bash %s ../mutant.v%s	result.txt	^DETECTED$	^SURVIVED$
-' "$real_test_script" "$native_real_harness_args_suffix" > "$tests_manifest"
+' "$native_real_harness_cmd_script" "$native_real_harness_args_suffix" > "$tests_manifest"
         ;;
       picorv32_primes)
         real_test_script="${helper_dir}/real_picorv32_primes_test.sh"
@@ -2910,8 +2917,9 @@ else
 fi
 EOS
         chmod +x "$real_test_script"
+        native_real_harness_cmd_script="$(shell_escape_word "$real_test_script")"
         printf 'sim_real	bash %s ../mutant.v%s	result.txt	^DETECTED$	^SURVIVED$
-' "$real_test_script" "$native_real_harness_args_suffix" > "$tests_manifest"
+' "$native_real_harness_cmd_script" "$native_real_harness_args_suffix" > "$tests_manifest"
         ;;
       *)
         if [[ "$NATIVE_REAL_TESTS_STRICT" -eq 1 ]]; then
