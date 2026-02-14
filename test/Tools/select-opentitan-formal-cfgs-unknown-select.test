@@ -1,0 +1,6 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '{\n  "name": "top_earlgrey_ip_fpv",\n  "use_cfgs": [\n    {\n      "name": "foo_fpv",\n      "dut": "foo_tb"\n    }\n  ]\n}\n' > %t/top.hjson
+// RUN: not python3 %S/../../utils/select_opentitan_formal_cfgs.py --cfg-file %t/top.hjson --out-manifest %t/manifest.tsv --select-cfgs 'bar_fpv' 2>&1 | FileCheck %s
+//
+// CHECK: unknown --select-cfgs target(s): bar_fpv; available targets: foo_fpv

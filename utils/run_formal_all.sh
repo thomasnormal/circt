@@ -885,6 +885,17 @@ Options:
                          Include masked OpenTitan BMC implementations
   --opentitan-bmc-case-policy-file FILE
                          Optional per-implementation OpenTitan BMC policy TSV
+  --opentitan-fpv-cfg FILE
+                         Optional OpenTitan FPV cfg HJSON for target-manifest
+                         selection planning
+  --select-cfgs LIST
+                         Optional target names selected from
+                         `--opentitan-fpv-cfg` (repeatable; comma/space
+                         separated, dvsim-style)
+  --opentitan-fpv-target-manifest FILE
+                         Optional output path for selected OpenTitan FPV target
+                         manifest TSV (default:
+                         OUT_DIR/opentitan-fpv-target-manifest.tsv)
   --opentitan-lec-impl-filter REGEX
                          Regex filter for OpenTitan LEC implementations
   --opentitan-lec-include-masked
@@ -2492,6 +2503,9 @@ OPENTITAN_BMC_IMPL_FILTER=""
 OPENTITAN_BMC_BOUND="1"
 OPENTITAN_BMC_INCLUDE_MASKED=0
 OPENTITAN_BMC_CASE_POLICY_FILE=""
+OPENTITAN_FPV_CFG_FILE=""
+declare -a OPENTITAN_SELECT_CFGS=()
+OPENTITAN_FPV_TARGET_MANIFEST_FILE=""
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
 OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES=0
@@ -2573,6 +2587,12 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_BMC_INCLUDE_MASKED=1; shift ;;
     --opentitan-bmc-case-policy-file)
       OPENTITAN_BMC_CASE_POLICY_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-cfg)
+      OPENTITAN_FPV_CFG_FILE="$2"; shift 2 ;;
+    --select-cfgs)
+      OPENTITAN_SELECT_CFGS+=("$2"); shift 2 ;;
+    --opentitan-fpv-target-manifest)
+      OPENTITAN_FPV_TARGET_MANIFEST_FILE="$2"; shift 2 ;;
     --opentitan-lec-impl-filter)
       OPENTITAN_LEC_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-lec-include-masked)
@@ -3158,6 +3178,9 @@ YOSYS_DIR="$YOSYS_DIR_NORMALIZED"
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="$PWD/formal-results-${DATE_STR//-/}"
 fi
+if [[ -n "$OPENTITAN_FPV_CFG_FILE" && -z "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" ]]; then
+  OPENTITAN_FPV_TARGET_MANIFEST_FILE="$OUT_DIR/opentitan-fpv-target-manifest.tsv"
+fi
 if ! [[ "$BASELINE_WINDOW" =~ ^[0-9]+$ ]] || [[ "$BASELINE_WINDOW" == "0" ]]; then
   echo "invalid --baseline-window: expected positive integer" >&2
   exit 1
@@ -3346,6 +3369,18 @@ if [[ -n "$OPENTITAN_BMC_BOUND" && ! "$OPENTITAN_BMC_BOUND" =~ ^[0-9]+$ ]]; then
 fi
 if [[ -n "$OPENTITAN_BMC_CASE_POLICY_FILE" && ! -f "$OPENTITAN_BMC_CASE_POLICY_FILE" ]]; then
   echo "missing --opentitan-bmc-case-policy-file: $OPENTITAN_BMC_CASE_POLICY_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_CFG_FILE" && ! -f "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "missing --opentitan-fpv-cfg file: $OPENTITAN_FPV_CFG_FILE" >&2
+  exit 1
+fi
+if [[ "${#OPENTITAN_SELECT_CFGS[@]}" -gt 0 && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--select-cfgs requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--opentitan-fpv-target-manifest requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
@@ -7096,6 +7131,18 @@ fi
 
 mkdir -p "$OUT_DIR"
 
+if [[ -n "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  opentitan_select_cfg_args=()
+  for opentitan_select_cfg in "${OPENTITAN_SELECT_CFGS[@]}"; do
+    opentitan_select_cfg_args+=(--select-cfgs "$opentitan_select_cfg")
+  done
+  python3 "$SCRIPT_DIR/select_opentitan_formal_cfgs.py" \
+    --cfg-file "$OPENTITAN_FPV_CFG_FILE" \
+    --proj-root "$OPENTITAN_DIR" \
+    --out-manifest "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" \
+    "${opentitan_select_cfg_args[@]}"
+fi
+
 emit_expectations_dry_run_run_end() {
   local exit_code="$?"
   if [[ "$EXPECTATIONS_DRY_RUN" == "1" && -n "$EXPECTATIONS_DRY_RUN_REPORT_JSONL" ]]; then
@@ -7249,6 +7296,11 @@ compute_lane_state_config_hash() {
     printf "opentitan_bmc_bound=%s\n" "$OPENTITAN_BMC_BOUND"
     printf "opentitan_bmc_include_masked=%s\n" "$OPENTITAN_BMC_INCLUDE_MASKED"
     printf "opentitan_bmc_case_policy_file=%s\n" "$OPENTITAN_BMC_CASE_POLICY_FILE"
+    printf "opentitan_fpv_cfg_file=%s\n" "$OPENTITAN_FPV_CFG_FILE"
+    printf "opentitan_fpv_target_manifest_file=%s\n" "$OPENTITAN_FPV_TARGET_MANIFEST_FILE"
+    for opentitan_select_cfg in "${OPENTITAN_SELECT_CFGS[@]}"; do
+      printf "opentitan_select_cfgs[]=%s\n" "$opentitan_select_cfg"
+    done
     printf "avip_glob=%s\n" "$AVIP_GLOB"
     printf "lane_state_hmac_mode=%s\n" "$LANE_STATE_HMAC_MODE"
     printf "lane_state_hmac_key_id=%s\n" "$LANE_STATE_HMAC_KEY_ID"
