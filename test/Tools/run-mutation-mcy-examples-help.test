@@ -27,6 +27,9 @@
 // CHECK-DAG: --require-baseline-schema-version-match
 // CHECK-DAG: --baseline-schema-version-file
 // CHECK-DAG: --summary-schema-version-file
+// CHECK-DAG: --require-baseline-schema-contract-match
+// CHECK-DAG: --baseline-schema-contract-file
+// CHECK-DAG: --summary-schema-contract-file
 // CHECK-DAG: --require-unique-example-selection
 // CHECK-DAG: --strict-baseline-governance
 // CHECK-DAG: --require-unique-summary-rows

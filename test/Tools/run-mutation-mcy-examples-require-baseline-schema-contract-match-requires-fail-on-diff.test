@@ -1,0 +1,4 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --require-baseline-schema-contract-match 2>&1 | FileCheck %s
+
+// CHECK: --require-baseline-schema-contract-match requires --fail-on-diff

@@ -61,11 +61,23 @@ Options:
   --summary-schema-version-file FILE
                            Output schema-version artifact for current summary
                            (default: <out-dir>/summary.schema-version)
+  --require-baseline-schema-contract-match
+                           Require baseline summary schema contract
+                           fingerprint to match current summary schema
+                           contract when evaluating --fail-on-diff
+  --baseline-schema-contract-file FILE
+                           Optional baseline schema-contract artifact used for
+                           --require-baseline-schema-contract-match (default:
+                           <baseline-file>.schema-contract when present)
+  --summary-schema-contract-file FILE
+                           Output schema-contract artifact for current summary
+                           (default: <out-dir>/summary.schema-contract)
   --strict-baseline-governance
                            Enable strict baseline governance bundle:
                            --require-policy-fingerprint-baseline +
                            --require-baseline-example-parity +
                            --require-baseline-schema-version-match +
+                           --require-baseline-schema-contract-match +
                            --require-unique-example-selection
                            (requires --fail-on-diff)
   --require-unique-example-selection
@@ -96,6 +108,8 @@ Outputs:
   <out-dir>/summary.tsv    Aggregated example status/coverage summary
   <out-dir>/summary.schema-version
                            Current summary schema-version artifact
+  <out-dir>/summary.schema-contract
+                           Current summary schema-contract artifact
   <out-dir>/drift.tsv      Drift report (when --fail-on-diff)
   <out-dir>/drift-allowlist-unused.txt
                            Unused allowlist entries (when allowlist is set)
@@ -128,11 +142,15 @@ BASELINE_FILE=""
 BASELINE_SCHEMA_VERSION_FILE=""
 BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_VERSION_FILE=""
+BASELINE_SCHEMA_CONTRACT_FILE=""
+BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT=0
+SUMMARY_SCHEMA_CONTRACT_FILE=""
 UPDATE_BASELINE=0
 FAIL_ON_DIFF=0
 REQUIRE_POLICY_FINGERPRINT_BASELINE=0
 REQUIRE_BASELINE_EXAMPLE_PARITY=0
 REQUIRE_BASELINE_SCHEMA_VERSION_MATCH=0
+REQUIRE_BASELINE_SCHEMA_CONTRACT_MATCH=0
 REQUIRE_UNIQUE_EXAMPLE_SELECTION=0
 STRICT_BASELINE_GOVERNANCE=0
 REQUIRE_UNIQUE_SUMMARY_ROWS=0
@@ -622,6 +640,56 @@ summary_schema_version_for_artifacts() {
   fi
   summary_schema_version_from_header "$header_line"
 }
+summary_schema_contract_fingerprint_from_components() {
+  local schema_version="$1"
+  local header_line="$2"
+  if [[ "$schema_version" == "unknown" || -z "$schema_version" ]]; then
+    printf 'unknown\n'
+    return 0
+  fi
+  if [[ -z "$header_line" ]]; then
+    printf 'unknown\n'
+    return 0
+  fi
+  hash_string_sha256 "${schema_version}"$'\n'"${header_line}"
+}
+
+summary_schema_contract_fingerprint_from_metadata() {
+  local fingerprint_raw="$1"
+  local fingerprint=""
+  fingerprint="$(trim_whitespace "$fingerprint_raw")"
+  if [[ "$fingerprint" =~ ^[0-9a-f]{64}$ ]]; then
+    printf '%s\n' "$fingerprint"
+    return 0
+  fi
+  printf 'unknown\n'
+}
+
+summary_schema_contract_fingerprint_for_artifacts() {
+  local summary_file="$1"
+  local schema_file="${2:-}"
+  local contract_file="${3:-}"
+  local contract_line=""
+  local header_line=""
+  local schema_version=""
+
+  if [[ -n "$contract_file" && -f "$contract_file" ]]; then
+    if ! IFS= read -r contract_line < "$contract_file"; then
+      printf 'unknown\n'
+      return 0
+    fi
+    summary_schema_contract_fingerprint_from_metadata "$contract_line"
+    return 0
+  fi
+
+  if ! IFS= read -r header_line < "$summary_file"; then
+    printf 'unknown\n'
+    return 0
+  fi
+  schema_version="$(summary_schema_version_for_artifacts "$summary_file" "$schema_file")"
+  summary_schema_contract_fingerprint_from_components "$schema_version" "$header_line"
+}
+
 sanitize_contract_field() {
   local value="$1"
   value="${value//$'\t'/ }"
@@ -763,6 +831,9 @@ evaluate_summary_drift() {
   local require_baseline_schema_version_match="${6:-0}"
   local baseline_schema_version_file="${7:-}"
   local summary_schema_version_file="${8:-}"
+  local require_baseline_schema_contract_match="${9:-0}"
+  local baseline_schema_contract_file="${10:-}"
+  local summary_schema_contract_file="${11:-}"
   local regressions=0
   local baseline_example=""
   local _status=""
@@ -796,6 +867,21 @@ evaluate_summary_drift() {
       fi
     else
       append_drift_row "$drift_file" "__baseline__" "baseline_schema_version" "$baseline_schema_version" "$summary_schema_version" "ok" ""
+    fi
+  fi
+
+  local baseline_schema_contract=""
+  local summary_schema_contract=""
+  summary_schema_contract="$(summary_schema_contract_fingerprint_for_artifacts "$summary_file" "$summary_schema_version_file" "$summary_schema_contract_file")"
+  baseline_schema_contract="$(summary_schema_contract_fingerprint_for_artifacts "$baseline_file" "$baseline_schema_version_file" "$baseline_schema_contract_file")"
+
+  if [[ "$require_baseline_schema_contract_match" -eq 1 ]]; then
+    if [[ "$baseline_schema_contract" != "$summary_schema_contract" ]]; then
+      if ! append_drift_candidate "$drift_file" "__baseline__" "baseline_schema_contract" "$baseline_schema_contract" "$summary_schema_contract" "baseline_schema_contract_mismatch"; then
+        regressions=$((regressions + 1))
+      fi
+    else
+      append_drift_row "$drift_file" "__baseline__" "baseline_schema_contract" "$baseline_schema_contract" "$summary_schema_contract" "ok" ""
     fi
   fi
 
@@ -1074,6 +1160,19 @@ while [[ $# -gt 0 ]]; do
       BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=1
       shift 2
       ;;
+    --require-baseline-schema-contract-match)
+      REQUIRE_BASELINE_SCHEMA_CONTRACT_MATCH=1
+      shift
+      ;;
+    --summary-schema-contract-file)
+      SUMMARY_SCHEMA_CONTRACT_FILE="$2"
+      shift 2
+      ;;
+    --baseline-schema-contract-file)
+      BASELINE_SCHEMA_CONTRACT_FILE="$2"
+      BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT=1
+      shift 2
+      ;;
     --strict-baseline-governance)
       STRICT_BASELINE_GOVERNANCE=1
       shift
@@ -1122,6 +1221,7 @@ if [[ "$STRICT_BASELINE_GOVERNANCE" -eq 1 ]]; then
   REQUIRE_POLICY_FINGERPRINT_BASELINE=1
   REQUIRE_BASELINE_EXAMPLE_PARITY=1
   REQUIRE_BASELINE_SCHEMA_VERSION_MATCH=1
+  REQUIRE_BASELINE_SCHEMA_CONTRACT_MATCH=1
   REQUIRE_UNIQUE_EXAMPLE_SELECTION=1
 fi
 
@@ -1186,6 +1286,23 @@ if [[ "$BASELINE_SCHEMA_VERSION_FILE_EXPLICIT" -eq 1 && "$FAIL_ON_DIFF" -eq 1 &&
   fi
 fi
 
+if [[ -z "$SUMMARY_SCHEMA_CONTRACT_FILE" ]]; then
+  SUMMARY_SCHEMA_CONTRACT_FILE="${OUT_DIR}/summary.schema-contract"
+fi
+if [[ -z "$BASELINE_SCHEMA_CONTRACT_FILE" && -n "$BASELINE_FILE" ]]; then
+  BASELINE_SCHEMA_CONTRACT_FILE="${BASELINE_FILE}.schema-contract"
+fi
+if [[ "$BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT" -eq 1 && "$FAIL_ON_DIFF" -eq 1 && "$REQUIRE_BASELINE_SCHEMA_CONTRACT_MATCH" -eq 1 ]]; then
+  if [[ ! -f "$BASELINE_SCHEMA_CONTRACT_FILE" ]]; then
+    echo "Baseline schema-contract file not found: $BASELINE_SCHEMA_CONTRACT_FILE" >&2
+    exit 1
+  fi
+  if [[ ! -r "$BASELINE_SCHEMA_CONTRACT_FILE" ]]; then
+    echo "Baseline schema-contract file not readable: $BASELINE_SCHEMA_CONTRACT_FILE" >&2
+    exit 1
+  fi
+fi
+
 if [[ "$STRICT_BASELINE_GOVERNANCE" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
   echo "--strict-baseline-governance requires --fail-on-diff" >&2
   exit 1
@@ -1200,6 +1317,10 @@ if [[ "$REQUIRE_BASELINE_EXAMPLE_PARITY" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
 fi
 if [[ "$REQUIRE_BASELINE_SCHEMA_VERSION_MATCH" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
   echo "--require-baseline-schema-version-match requires --fail-on-diff" >&2
+  exit 1
+fi
+if [[ "$REQUIRE_BASELINE_SCHEMA_CONTRACT_MATCH" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
+  echo "--require-baseline-schema-contract-match requires --fail-on-diff" >&2
   exit 1
 fi
 if [[ -n "$DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_DIFF" -ne 1 && "$REQUIRE_UNIQUE_SUMMARY_ROWS" -ne 1 ]]; then
@@ -1310,6 +1431,9 @@ printf '%s\n' "$CURRENT_SUMMARY_HEADER" > "$SUMMARY_FILE"
 overall_rc=0
 mkdir -p "$(dirname "$SUMMARY_SCHEMA_VERSION_FILE")"
 printf '%s\n' "$CURRENT_SUMMARY_SCHEMA_VERSION" > "$SUMMARY_SCHEMA_VERSION_FILE"
+CURRENT_SUMMARY_SCHEMA_CONTRACT_FINGERPRINT="$(summary_schema_contract_fingerprint_from_components "$CURRENT_SUMMARY_SCHEMA_VERSION" "$CURRENT_SUMMARY_HEADER")"
+mkdir -p "$(dirname "$SUMMARY_SCHEMA_CONTRACT_FILE")"
+printf '%s\n' "$CURRENT_SUMMARY_SCHEMA_CONTRACT_FINGERPRINT" > "$SUMMARY_SCHEMA_CONTRACT_FILE"
 
 for example_id in "${EXAMPLE_IDS[@]}"; do
   design="${EXAMPLE_TO_DESIGN[$example_id]}"
@@ -1520,7 +1644,7 @@ fi
 
 if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
   DRIFT_FILE="${OUT_DIR}/drift.tsv"
-  if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE" "$REQUIRE_POLICY_FINGERPRINT_BASELINE" "$REQUIRE_BASELINE_EXAMPLE_PARITY" "$REQUIRE_BASELINE_SCHEMA_VERSION_MATCH" "$BASELINE_SCHEMA_VERSION_FILE" "$SUMMARY_SCHEMA_VERSION_FILE"; then
+  if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE" "$REQUIRE_POLICY_FINGERPRINT_BASELINE" "$REQUIRE_BASELINE_EXAMPLE_PARITY" "$REQUIRE_BASELINE_SCHEMA_VERSION_MATCH" "$BASELINE_SCHEMA_VERSION_FILE" "$SUMMARY_SCHEMA_VERSION_FILE" "$REQUIRE_BASELINE_SCHEMA_CONTRACT_MATCH" "$BASELINE_SCHEMA_CONTRACT_FILE" "$SUMMARY_SCHEMA_CONTRACT_FILE"; then
     overall_rc=1
     echo "Baseline drift failure: see $DRIFT_FILE" >&2
   fi
@@ -1540,6 +1664,10 @@ if [[ "$UPDATE_BASELINE" -eq 1 ]]; then
   if [[ -n "$BASELINE_SCHEMA_VERSION_FILE" ]]; then
     mkdir -p "$(dirname "$BASELINE_SCHEMA_VERSION_FILE")"
     cp "$SUMMARY_SCHEMA_VERSION_FILE" "$BASELINE_SCHEMA_VERSION_FILE"
+  fi
+  if [[ -n "$BASELINE_SCHEMA_CONTRACT_FILE" ]]; then
+    mkdir -p "$(dirname "$BASELINE_SCHEMA_CONTRACT_FILE")"
+    cp "$SUMMARY_SCHEMA_CONTRACT_FILE" "$BASELINE_SCHEMA_CONTRACT_FILE"
   fi
   echo "Updated baseline: $BASELINE_FILE" >&2
 fi

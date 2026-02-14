@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1332 - February 14, 2026
+
+### Mutation Workflow: Schema-Contract Fingerprint Baseline Governance
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with schema-contract governance controls:
+   - `--require-baseline-schema-contract-match`
+   - `--baseline-schema-contract-file`
+   - `--summary-schema-contract-file`
+2. Added schema-contract artifact model:
+   - emits `<out-dir>/summary.schema-contract` (SHA-256 fingerprint over schema version + summary header)
+   - `--update-baseline` now also updates `<baseline>.schema-contract` by default.
+3. Extended drift evaluation to compare baseline/current schema-contract fingerprints:
+   - drift metric: `baseline_schema_contract`
+   - mismatch detail: `baseline_schema_contract_mismatch`
+   - allowlist-compatible (`example::metric::detail`).
+4. Extended strict baseline governance bundle to include schema-contract parity enforcement.
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-schema-contract-match-requires-fail-on-diff.test`
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-schema-contract-match-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-schema-contract-match-allowlist.test`
+   - `test/Tools/run-mutation-mcy-examples-baseline-schema-contract-file-missing.test`
+   - updated `test/Tools/run-mutation-mcy-examples-strict-baseline-governance-fail.test`
+   - updated `test/Tools/run-mutation-mcy-examples-baseline-update.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (54/54)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-124940` PASS
+
 ## Iteration 1331 - February 14, 2026
 
 ### OpenTitan Connectivity: Cross-Lane BMC-vs-LEC Status Parity Governance
