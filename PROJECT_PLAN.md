@@ -263,7 +263,7 @@ verilator-verification, and yosys corpora).
    - `run_formal_all.sh` now forwards OpenTitan FPV summary-drift governance
      controls (`baseline/drift/allowlist/fail/update`) into `opentitan/FPV_BMC`,
      with strict-gate auto-enabling drift failure when a baseline is configured.
-5. Phase E bootstrap is landed:
+5. Phase E execution lane is landed:
    - new connectivity adapter utility:
      - `utils/select_opentitan_connectivity_cfg.py`
    - supports OpenTitan connectivity cfg import-graph composition and
@@ -279,6 +279,15 @@ verilator-verification, and yosys corpora).
      - `--opentitan-connectivity-cfg`
      - `--opentitan-connectivity-target-manifest`
      - `--opentitan-connectivity-rules-manifest`
+   - connectivity BMC execution lane is now wired:
+     - `--with-opentitan-connectivity-bmc` (`opentitan/CONNECTIVITY_BMC`)
+     - `--opentitan-connectivity-rule-filter`
+     - `--opentitan-connectivity-bmc-rule-shard-count`
+     - `--opentitan-connectivity-bmc-rule-shard-index`
+   - new connectivity runner:
+     - `utils/run_opentitan_connectivity_circt_bmc.py`
+   - `CONNECTION` rules are synthesized into bind-check cases and executed via
+     generic `run_pairwise_circt_bmc.py` with deterministic rule sharding.
 6. Phase F scalability bootstrap is landed for deterministic sharded execution:
    - `run_opentitan_fpv_circt_bmc.py` now supports deterministic target sharding
      (`--target-shard-count`, `--target-shard-index`).
@@ -316,15 +325,17 @@ verilator-verification, and yosys corpora).
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.
 6. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
 7. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
-8. **Connectivity execution gap**: cfg+CSV ingestion is now wired, but generated
-   connectivity checks are not yet synthesized/executed through `circt-bmc`/
-   `circt-lec` with per-connection pass/fail classification and drift gating.
+8. **Connectivity semantic depth gap**: `CONNECTION` rows are executable through
+   BMC, but `CONDITION` rule semantics, connectivity-specific LEC parity, and
+   richer connectivity status buckets (`covered`/`unreachable`) are still
+   pending.
 
 ### Next Long-Term Features (best long-term path)
 
 1. Extend launch-resilience policy beyond ETXTBSY (e.g., selected transient I/O launch races) with explicit strict-gate counters and per-reason retry telemetry.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
-4. Complete Phase E by synthesizing executable connectivity check bundles from
-   normalized CSV contracts and integrating connection-level status artifacts
+4. Extend Phase E from `CONNECTION`-only BMC into full connectivity parity:
+   execute `CONDITION` semantics, add connectivity LEC lane support, and
+   integrate connectivity-specific status artifacts
    (`pass/fail/covered/unreachable`) into strict-gate drift workflows.
