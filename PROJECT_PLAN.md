@@ -360,6 +360,26 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
    - focused wrapper regressions updated:
      - `test/Tools/run-opentitan-fpv-bmc-policy-workflow.test`
      - `test/Tools/run-opentitan-fpv-bmc-policy-profiles.test`
+31. Launch retry reason taxonomy expanded across BMC lanes:
+   - runner-level launch retry classification now emits explicit reason keys
+     beyond `etxtbsy`:
+     - `permission_denied`
+     - `posix_spawn_failed`
+     - `resource_temporarily_unavailable`
+   - implemented in:
+     - `utils/run_pairwise_circt_bmc.py`
+     - `utils/run_sv_tests_circt_bmc.sh`
+     - `utils/run_verilator_verification_circt_bmc.sh`
+     - `utils/run_yosys_sva_circt_bmc.sh`
+     - `utils/run_sv_tests_circt_lec.sh`
+   - `run_formal_all.sh` launch-event summaries now expose dedicated counters:
+     - `*_launch_permission_denied_events`
+     - `*_launch_posix_spawn_failed_events`
+     - `*_launch_resource_temporarily_unavailable_events`
+   - focused regressions added/updated:
+     - `test/Tools/run-sv-tests-bmc-launch-retry-posix-spawn-failed.test`
+     - `test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test`
+     - updated launch-reason expectation tests across pairwise/sv-tests/verilator/yosys BMC runners.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
@@ -749,7 +769,7 @@ verilator-verification, and yosys corpora).
 ### Remaining Formal Limitations (BMC/LEC/mutation focus)
 
 1. **FPV status derivation depth gap**: explicit assertion statuses (`PROVEN/FAILING/VACUOUS/UNKNOWN`) and cover-granular `covered/unreachable` evidence are now wired, but fully automatic vacuity/coverage derivation for targets that do not emit explicit status tags is still pending.
-2. **BMC/LEC operational robustness**: launcher retry/copy-fallback controls are telemetry-visible in OpenTitan FPV and non-FPV formal lanes (`bmc_launch_*`, `lec_launch_*`), strict-gate enforces launch-counter drift plus nonzero/max reason-event budgets with per-reason allowlisting, and OpenTitan FPV policy-pack wrappers now carry check-only launch-budget defaults/overrides; remaining gap is broad threshold tuning on larger target cohorts and expanding retry classification coverage for additional transient launcher races.
+2. **BMC/LEC operational robustness**: launcher retry/copy-fallback controls are telemetry-visible in OpenTitan FPV and non-FPV formal lanes (`bmc_launch_*`, `lec_launch_*`), strict-gate enforces launch-counter drift plus nonzero/max reason-event budgets with per-reason allowlisting, OpenTitan FPV policy-pack wrappers carry check-only launch-budget defaults/overrides, and retry reason taxonomy now includes `permission_denied` / `posix_spawn_failed` / `resource_temporarily_unavailable`; remaining gap is threshold tuning on larger cohorts and adding further transient classes (e.g. platform-specific launch failures) with deterministic governance.
 3. **Frontend triage ergonomics**: sv-tests BMC now preserves frontend error logs via `KEEP_LOGS_DIR`, and launch retry is in place for transient launcher failures; host-side tool relink contention can still surface as launcher-level `Permission denied`/ETXTBSY noise until binaries stabilize.
 4. **Frontend scalability blocker on semantic closure buckets**: `sv-tests` UVM `16.11` (sequence-subroutine) and `16.13` (multiclock) currently hit frontend OOM in `circt-verilog` during import; this blocks clean semantic closure measurement for those buckets.
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.
@@ -772,7 +792,7 @@ verilator-verification, and yosys corpora).
 
 ### Next Long-Term Features (best long-term path)
 
-1. Validate and tune launch reason-event budget thresholds/allowlists on larger OpenTitan and non-OpenTitan cohorts, then extend retry classification beyond ETXTBSY (selected transient I/O launch races).
+1. Validate and tune launch reason-event budget thresholds/allowlists on larger OpenTitan and non-OpenTitan cohorts, then extend retry classification with additional platform-specific transient launch classes and policy-pack defaults.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
 4. Implement FPV cross-lane objective parity (BMC vs LEC) on normalized

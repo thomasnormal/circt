@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1411 - February 14, 2026
+
+### Formal BMC/LEC: Expanded Launch Retry Reason Taxonomy
+
+1. Expanded launch retry reason classification across formal BMC runners to
+   emit explicit reason keys beyond `etxtbsy`:
+   - `permission_denied`
+   - `posix_spawn_failed`
+   - `resource_temporarily_unavailable`
+2. Implemented classification updates in:
+   - `utils/run_pairwise_circt_bmc.py`
+   - `utils/run_sv_tests_circt_bmc.sh`
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - `utils/run_yosys_sva_circt_bmc.sh`
+   - `utils/run_sv_tests_circt_lec.sh`
+3. Improved pairwise launch robustness for direct launcher exceptions:
+   - `run_pairwise_circt_bmc.py` now retries/fallbacks on retryable `OSError`
+     classes (`EACCES`, `EAGAIN`/`EBUSY`) with the new reason taxonomy.
+4. Extended launch-event summary metrics in `utils/run_formal_all.sh` with
+   dedicated reason counters:
+   - `*_launch_permission_denied_events`
+   - `*_launch_posix_spawn_failed_events`
+   - `*_launch_resource_temporarily_unavailable_events`
+5. Added/updated focused regressions:
+   - added:
+     - `test/Tools/run-sv-tests-bmc-launch-retry-posix-spawn-failed.test`
+     - `test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test`
+   - updated:
+     - `test/Tools/run-pairwise-circt-bmc-launch-retry-permission-denied.test`
+     - `test/Tools/run-pairwise-circt-bmc-launch-fallback-copy.test`
+     - `test/Tools/run-sv-tests-bmc-launch-fallback-copy.test`
+     - `test/Tools/run-verilator-verification-circt-bmc-launch-events.test`
+     - `test/Tools/run-yosys-sva-bmc-launch-events.test`
+6. Validation:
+   - focused:
+     - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-pairwise-circt-bmc-launch-retry-permission-denied.test build-test/test/Tools/run-pairwise-circt-bmc-launch-fallback-copy.test build-test/test/Tools/run-sv-tests-bmc-launch-fallback-copy.test build-test/test/Tools/run-sv-tests-bmc-launch-retry-etxtbsy.test build-test/test/Tools/run-sv-tests-bmc-launch-retry-posix-spawn-failed.test build-test/test/Tools/run-verilator-verification-circt-bmc-launch-events.test build-test/test/Tools/run-yosys-sva-bmc-launch-events.test build-test/test/Tools/run-formal-all-sv-tests-launch-events-summary.test build-test/test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test build-test/test/Tools/run-formal-all-non-sv-bmc-launch-events-summary.test` PASS
+   - broader launch slice:
+     - `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-(pairwise-circt-bmc|sv-tests-bmc|verilator-verification-circt-bmc|yosys-sva-bmc|formal-all-.*launch).*\\.test'` PASS (`126` passed, `1` unsupported)
+
 ## Iteration 1410 - February 14, 2026
 
 ### OpenTitan FPV Policy Packs: Launch Reason-Event Budget Rollout

@@ -15,5 +15,5 @@
 // RESULTS: PASS{{[[:space:]]+}}launch_fallback_case{{[[:space:]]+}}{{.*}}launch_fallback_case.sv
 // RETRYLOG: frontend launch retry attempt=1
 // RETRYLOG: frontend launch fallback copy=
-// LAUNCH: RETRY{{[[:space:]]+}}launch_fallback_case{{[[:space:]]+}}{{.*}}launch_fallback_case.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}circt-verilog{{[[:space:]]+}}retryable_exit_code_126{{[[:space:]]+}}1{{[[:space:]]+}}0.000{{[[:space:]]+}}126
-// LAUNCH: FALLBACK{{[[:space:]]+}}launch_fallback_case{{[[:space:]]+}}{{.*}}launch_fallback_case.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}circt-verilog{{[[:space:]]+}}retryable_exit_code_126_retry_exhausted{{[[:space:]]+}}126{{[[:space:]]+}}{{.*}}circt-verilog-launch-fallback
+// LAUNCH: RETRY{{[[:space:]]+}}launch_fallback_case{{[[:space:]]+}}{{.*}}launch_fallback_case.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}circt-verilog{{[[:space:]]+}}permission_denied{{[[:space:]]+}}1{{[[:space:]]+}}0.000{{[[:space:]]+}}126
+// LAUNCH: FALLBACK{{[[:space:]]+}}launch_fallback_case{{[[:space:]]+}}{{.*}}launch_fallback_case.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}circt-verilog{{[[:space:]]+}}permission_denied_retry_exhausted{{[[:space:]]+}}126{{[[:space:]]+}}{{.*}}circt-verilog-launch-fallback

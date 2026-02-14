@@ -11,5 +11,5 @@
 // SUMMARY: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
 // RETRYLOG: frontend launch retry attempt=1
 // RETRYLOG: frontend launch fallback copy=
-// LAUNCH: RETRY{{[[:space:]]+}}simple{{[[:space:]]+}}{{.*}}simple.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}fake-verilog.sh{{[[:space:]]+}}retryable_exit_code_126{{[[:space:]]+}}1{{[[:space:]]+}}0.000{{[[:space:]]+}}126
-// LAUNCH: FALLBACK{{[[:space:]]+}}simple{{[[:space:]]+}}{{.*}}simple.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}fake-verilog.sh{{[[:space:]]+}}retryable_exit_code_126_retry_exhausted{{[[:space:]]+}}126{{[[:space:]]+}}{{.*}}circt-verilog-launch-fallback
+// LAUNCH: RETRY{{[[:space:]]+}}simple{{[[:space:]]+}}{{.*}}simple.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}fake-verilog.sh{{[[:space:]]+}}permission_denied{{[[:space:]]+}}1{{[[:space:]]+}}0.000{{[[:space:]]+}}126
+// LAUNCH: FALLBACK{{[[:space:]]+}}simple{{[[:space:]]+}}{{.*}}simple.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}fake-verilog.sh{{[[:space:]]+}}permission_denied_retry_exhausted{{[[:space:]]+}}126{{[[:space:]]+}}{{.*}}circt-verilog-launch-fallback
