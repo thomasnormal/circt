@@ -1,0 +1,34 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt %t/bin
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --work-dir) work_dir="$2"; shift 2 ;;&\n    --work-dir=*) work_dir="${1#*=}"; shift ;;&\n    *) shift ;;&\n  esac\ndone\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t3\\nrelevant_mutants\\t5\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+// RUN: printf 'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\nbitcnt\tPASS\t0\t4\t6\t66.67\t0\n' > %t/baseline.tsv
+// RUN: printf 'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\nbitcnt\tPASS\t0\t2\t4\t50.00\t0\n' > %t/history.tsv
+
+// RUN: %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --smoke \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --baseline-file %t/baseline.tsv \
+// RUN:   --suite-baseline-history-file %t/history.tsv \
+// RUN:   --history-aggregation-mode ewma \
+// RUN:   --history-ewma-alpha 0.5 \
+// RUN:   --fail-on-diff \
+// RUN:   --max-detected-drop 10 \
+// RUN:   --max-detected-drop-percent 100 \
+// RUN:   --max-relevant-drop 10 \
+// RUN:   --max-relevant-drop-percent 100 \
+// RUN:   --max-coverage-drop-percent 100 \
+// RUN:   --max-errors-increase 0 \
+// RUN:   --max-total-detected-drop 0 \
+// RUN:   --max-total-relevant-drop 0 \
+// RUN:   --max-total-coverage-drop-percent 0 \
+// RUN:   --max-total-errors-increase 0 \
+// RUN:   --out-dir %t/out
+
+// RUN: FileCheck %s --check-prefix=DRIFT < %t/out/drift.tsv
+
+// DRIFT: __suite__{{[[:space:]]}}suite_detected_mutants{{[[:space:]]}}3{{[[:space:]]}}3{{[[:space:]]}}ok
+// DRIFT: __suite__{{[[:space:]]}}suite_relevant_mutants{{[[:space:]]}}5{{[[:space:]]}}5{{[[:space:]]}}ok
+// DRIFT: __suite__{{[[:space:]]}}suite_coverage_percent{{[[:space:]]}}58.34{{[[:space:]]}}60.00{{[[:space:]]}}ok

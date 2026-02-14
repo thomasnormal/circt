@@ -1,5 +1,71 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1383 - February 14, 2026
+
+### Mutation Workflow: EWMA History-Window Drift Baselines
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with shared history
+   aggregation controls for suite and per-example drift baselines:
+   - `--history-aggregation-mode MODE` (`percentile|ewma`)
+   - `--history-ewma-alpha A` in range `(0,1]`
+2. Added EWMA aggregation helpers for integer/decimal metrics and wired them
+   into both history-window baseline paths:
+   - suite totals derived from `--suite-baseline-history-file`
+   - per-example metrics derived from `--example-baseline-history-file`
+3. Preserved existing percentile behavior as default for backwards
+   compatibility; EWMA is opt-in via `--history-aggregation-mode ewma`.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-history-aggregation-mode-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-history-ewma-alpha-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-example-history-ewma-pass.test`
+   - `test/Tools/run-mutation-mcy-examples-suite-history-ewma-pass.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (124 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_1771082702` PASS
+
+## Iteration 1382 - February 14, 2026
+
+### OpenTitan FPV BMC: Per-Target Assertion Status Policy Gates
+
+1. Extended `utils/run_opentitan_fpv_circt_bmc.py` with explicit per-target
+   assertion status policy checking:
+   - `--assertion-status-policy-file`
+   - `--assertion-status-policy-violations-file`
+   - `--fail-on-assertion-status-policy`
+2. Added status policy schema and enforcement:
+   - TSV columns:
+     `target_name`, `required_statuses`, `forbidden_statuses`
+   - status tokens are validated against:
+     `PROVEN`, `FAILING`, `VACUOUS`, `COVERED`, `UNREACHABLE`, `UNKNOWN`,
+     `TIMEOUT`, `SKIP`, `ERROR`
+   - violations are emitted as:
+     `target_name`, `kind`, `status`, `evidence`
+3. Extended `utils/run_formal_all.sh` with first-class status policy controls:
+   - `--opentitan-fpv-bmc-assertion-status-policy-file`
+   - `--opentitan-fpv-bmc-assertion-status-policy-violations-file`
+   - `--fail-on-opentitan-fpv-bmc-assertion-status-policy`
+4. Added strict validation + strict-gate behavior:
+   - fail-mode requires policy file
+   - policy file requires `--with-opentitan-fpv-bmc`
+   - strict-gate auto-enables fail mode when policy file is configured
+5. Added focused regressions:
+   - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-fail.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-fail-requires-file.test`
+   - updated:
+     - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-fail-requires-file.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-row-allowlist-requires-gate.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-fail.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-fail.test` PASS (7/7)
+
 ## Iteration 1381 - February 14, 2026
 
 ### Mutation Workflow: Missing-History Example Governance

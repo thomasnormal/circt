@@ -1,0 +1,3 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --history-aggregation-mode bad 2>&1 | FileCheck %s
+
+// CHECK: --history-aggregation-mode must be one of: percentile|ewma
