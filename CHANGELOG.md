@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1374 - February 14, 2026
+
+### Mutation Workflow: Percentage-Based Detected/Relevant Drift Budgets
+
+1. Extended `utils/run_mutation_mcy_examples.sh` drift governance with
+   percentage budgets for detected/relevant regressions under `--fail-on-diff`:
+   - per-example:
+     - `--max-detected-drop-percent`
+     - `--max-relevant-drop-percent`
+   - suite aggregate:
+     - `--max-total-detected-drop-percent`
+     - `--max-total-relevant-drop-percent`
+2. Combined absolute + percentage budget semantics for detected/relevant:
+   - allowed drop = absolute allowance + ceil(baseline * percent / 100)
+3. Added strict numeric range validation `[0,100]` for new percentage options.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-baseline-drift-percent-tolerance-pass.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+     - `test/Tools/run-mutation-mcy-examples-min-total-thresholds-invalid.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (106 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_iter1373` PASS
+
+
 ## Iteration 1373 - February 14, 2026
 
 ### OpenTitan FPV: Task-Policy Drift Governance in Compile-Contract Baselines

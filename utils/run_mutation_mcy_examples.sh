@@ -83,8 +83,16 @@ Options:
   --fail-on-diff           Fail on metric regression vs --baseline-file
   --max-detected-drop N    Allow per-example detected drop up to N when
                            evaluating --fail-on-diff (default: 0)
+  --max-detected-drop-percent P
+                           Allow per-example detected drop up to P percent
+                           of baseline detected count when evaluating
+                           --fail-on-diff (default: 0)
   --max-relevant-drop N    Allow per-example relevant drop up to N when
                            evaluating --fail-on-diff (default: 0)
+  --max-relevant-drop-percent P
+                           Allow per-example relevant drop up to P percent
+                           of baseline relevant count when evaluating
+                           --fail-on-diff (default: 0)
   --max-coverage-drop-percent P
                            Allow per-example coverage drop up to P
                            percentage points when evaluating
@@ -94,9 +102,17 @@ Options:
   --max-total-detected-drop N
                            Allow suite total detected drop up to N when
                            evaluating --fail-on-diff (default: 0)
+  --max-total-detected-drop-percent P
+                           Allow suite total detected drop up to P percent
+                           of baseline suite detected count when evaluating
+                           --fail-on-diff (default: 0)
   --max-total-relevant-drop N
                            Allow suite total relevant drop up to N when
                            evaluating --fail-on-diff (default: 0)
+  --max-total-relevant-drop-percent P
+                           Allow suite total relevant drop up to P percent
+                           of baseline suite relevant count when evaluating
+                           --fail-on-diff (default: 0)
   --max-total-coverage-drop-percent P
                            Allow suite total coverage drop up to P
                            percentage points when evaluating
@@ -281,11 +297,15 @@ MAX_TOTAL_ERRORS=""
 MAX_TOTAL_RETRIES=""
 MAX_TOTAL_RETRIES_BY_REASON=""
 MAX_DETECTED_DROP=0
+MAX_DETECTED_DROP_PERCENT="0"
 MAX_RELEVANT_DROP=0
+MAX_RELEVANT_DROP_PERCENT="0"
 MAX_COVERAGE_DROP_PERCENT="0"
 MAX_ERRORS_INCREASE=0
 MAX_TOTAL_DETECTED_DROP=0
+MAX_TOTAL_DETECTED_DROP_PERCENT="0"
 MAX_TOTAL_RELEVANT_DROP=0
+MAX_TOTAL_RELEVANT_DROP_PERCENT="0"
 MAX_TOTAL_COVERAGE_DROP_PERCENT="0"
 MAX_TOTAL_ERRORS_INCREASE=0
 BASELINE_FILE=""
@@ -1484,11 +1504,15 @@ evaluate_summary_drift() {
   local baseline_schema_contract=""
   local summary_schema_contract=""
   local max_detected_drop="$MAX_DETECTED_DROP"
+  local max_detected_drop_percent="$MAX_DETECTED_DROP_PERCENT"
   local max_relevant_drop="$MAX_RELEVANT_DROP"
+  local max_relevant_drop_percent="$MAX_RELEVANT_DROP_PERCENT"
   local max_coverage_drop_percent="$MAX_COVERAGE_DROP_PERCENT"
   local max_errors_increase="$MAX_ERRORS_INCREASE"
   local max_total_detected_drop="$MAX_TOTAL_DETECTED_DROP"
+  local max_total_detected_drop_percent="$MAX_TOTAL_DETECTED_DROP_PERCENT"
   local max_total_relevant_drop="$MAX_TOTAL_RELEVANT_DROP"
+  local max_total_relevant_drop_percent="$MAX_TOTAL_RELEVANT_DROP_PERCENT"
   local max_total_coverage_drop_percent="$MAX_TOTAL_COVERAGE_DROP_PERCENT"
   local max_total_errors_increase="$MAX_TOTAL_ERRORS_INCREASE"
   summary_schema_contract="$(summary_schema_contract_fingerprint_for_artifacts "$summary_file" "$summary_schema_version_file" "$summary_schema_contract_file")"
@@ -1593,7 +1617,12 @@ evaluate_summary_drift() {
       effective_max_errors_increase="${EXAMPLE_TO_MAX_ERRORS_INCREASE[$example]}"
     fi
 
-    if (( detected + effective_max_detected_drop < _bd )); then
+    local detected_drop_percent_allowance=0
+    local relevant_drop_percent_allowance=0
+    detected_drop_percent_allowance="$(percentage_ceiling_count "$_bd" "$max_detected_drop_percent")"
+    relevant_drop_percent_allowance="$(percentage_ceiling_count "$_br" "$max_relevant_drop_percent")"
+
+    if (( detected + effective_max_detected_drop + detected_drop_percent_allowance < _bd )); then
       if ! append_drift_candidate "$drift_file" "$example" "detected_mutants" "$_bd" "$detected" "detected_decreased"; then
         regressions=$((regressions + 1))
       fi
@@ -1619,7 +1648,7 @@ evaluate_summary_drift() {
       append_drift_row "$drift_file" "$example" "errors" "$_berr" "$errors" "ok" ""
     fi
 
-    if (( relevant + effective_max_relevant_drop < _br )); then
+    if (( relevant + effective_max_relevant_drop + relevant_drop_percent_allowance < _br )); then
       if ! append_drift_candidate "$drift_file" "$example" "relevant_mutants" "$_br" "$relevant" "relevant_decreased"; then
         regressions=$((regressions + 1))
       fi
@@ -1657,7 +1686,12 @@ evaluate_summary_drift() {
     summary_total_coverage="$(awk -v d="$summary_total_detected" -v r="$summary_total_relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
   fi
 
-  if (( summary_total_detected + max_total_detected_drop < baseline_total_detected )); then
+  local suite_detected_drop_percent_allowance=0
+  local suite_relevant_drop_percent_allowance=0
+  suite_detected_drop_percent_allowance="$(percentage_ceiling_count "$baseline_total_detected" "$max_total_detected_drop_percent")"
+  suite_relevant_drop_percent_allowance="$(percentage_ceiling_count "$baseline_total_relevant" "$max_total_relevant_drop_percent")"
+
+  if (( summary_total_detected + max_total_detected_drop + suite_detected_drop_percent_allowance < baseline_total_detected )); then
     if ! append_drift_candidate "$drift_file" "__suite__" "suite_detected_mutants" "$baseline_total_detected" "$summary_total_detected" "detected_decreased"; then
       regressions=$((regressions + 1))
     fi
@@ -1665,7 +1699,7 @@ evaluate_summary_drift() {
     append_drift_row "$drift_file" "__suite__" "suite_detected_mutants" "$baseline_total_detected" "$summary_total_detected" "ok" ""
   fi
 
-  if (( summary_total_relevant + max_total_relevant_drop < baseline_total_relevant )); then
+  if (( summary_total_relevant + max_total_relevant_drop + suite_relevant_drop_percent_allowance < baseline_total_relevant )); then
     if ! append_drift_candidate "$drift_file" "__suite__" "suite_relevant_mutants" "$baseline_total_relevant" "$summary_total_relevant" "relevant_decreased"; then
       regressions=$((regressions + 1))
     fi
@@ -2399,8 +2433,16 @@ while [[ $# -gt 0 ]]; do
       MAX_DETECTED_DROP="$2"
       shift 2
       ;;
+    --max-detected-drop-percent)
+      MAX_DETECTED_DROP_PERCENT="$2"
+      shift 2
+      ;;
     --max-relevant-drop)
       MAX_RELEVANT_DROP="$2"
+      shift 2
+      ;;
+    --max-relevant-drop-percent)
+      MAX_RELEVANT_DROP_PERCENT="$2"
       shift 2
       ;;
     --max-coverage-drop-percent)
@@ -2415,8 +2457,16 @@ while [[ $# -gt 0 ]]; do
       MAX_TOTAL_DETECTED_DROP="$2"
       shift 2
       ;;
+    --max-total-detected-drop-percent)
+      MAX_TOTAL_DETECTED_DROP_PERCENT="$2"
+      shift 2
+      ;;
     --max-total-relevant-drop)
       MAX_TOTAL_RELEVANT_DROP="$2"
+      shift 2
+      ;;
+    --max-total-relevant-drop-percent)
+      MAX_TOTAL_RELEVANT_DROP_PERCENT="$2"
       shift 2
       ;;
     --max-total-coverage-drop-percent)
@@ -2663,8 +2713,24 @@ if ! is_nonneg_int "$MAX_DETECTED_DROP"; then
   echo "--max-detected-drop must be a non-negative integer: $MAX_DETECTED_DROP" >&2
   exit 1
 fi
+if ! is_nonneg_decimal "$MAX_DETECTED_DROP_PERCENT"; then
+  echo "--max-detected-drop-percent must be numeric in range [0,100]: $MAX_DETECTED_DROP_PERCENT" >&2
+  exit 1
+fi
+if ! awk -v v="$MAX_DETECTED_DROP_PERCENT" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+  echo "--max-detected-drop-percent must be numeric in range [0,100]: $MAX_DETECTED_DROP_PERCENT" >&2
+  exit 1
+fi
 if ! is_nonneg_int "$MAX_RELEVANT_DROP"; then
   echo "--max-relevant-drop must be a non-negative integer: $MAX_RELEVANT_DROP" >&2
+  exit 1
+fi
+if ! is_nonneg_decimal "$MAX_RELEVANT_DROP_PERCENT"; then
+  echo "--max-relevant-drop-percent must be numeric in range [0,100]: $MAX_RELEVANT_DROP_PERCENT" >&2
+  exit 1
+fi
+if ! awk -v v="$MAX_RELEVANT_DROP_PERCENT" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+  echo "--max-relevant-drop-percent must be numeric in range [0,100]: $MAX_RELEVANT_DROP_PERCENT" >&2
   exit 1
 fi
 if ! is_nonneg_decimal "$MAX_COVERAGE_DROP_PERCENT"; then
@@ -2683,8 +2749,24 @@ if ! is_nonneg_int "$MAX_TOTAL_DETECTED_DROP"; then
   echo "--max-total-detected-drop must be a non-negative integer: $MAX_TOTAL_DETECTED_DROP" >&2
   exit 1
 fi
+if ! is_nonneg_decimal "$MAX_TOTAL_DETECTED_DROP_PERCENT"; then
+  echo "--max-total-detected-drop-percent must be numeric in range [0,100]: $MAX_TOTAL_DETECTED_DROP_PERCENT" >&2
+  exit 1
+fi
+if ! awk -v v="$MAX_TOTAL_DETECTED_DROP_PERCENT" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+  echo "--max-total-detected-drop-percent must be numeric in range [0,100]: $MAX_TOTAL_DETECTED_DROP_PERCENT" >&2
+  exit 1
+fi
 if ! is_nonneg_int "$MAX_TOTAL_RELEVANT_DROP"; then
   echo "--max-total-relevant-drop must be a non-negative integer: $MAX_TOTAL_RELEVANT_DROP" >&2
+  exit 1
+fi
+if ! is_nonneg_decimal "$MAX_TOTAL_RELEVANT_DROP_PERCENT"; then
+  echo "--max-total-relevant-drop-percent must be numeric in range [0,100]: $MAX_TOTAL_RELEVANT_DROP_PERCENT" >&2
+  exit 1
+fi
+if ! awk -v v="$MAX_TOTAL_RELEVANT_DROP_PERCENT" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+  echo "--max-total-relevant-drop-percent must be numeric in range [0,100]: $MAX_TOTAL_RELEVANT_DROP_PERCENT" >&2
   exit 1
 fi
 if ! is_nonneg_decimal "$MAX_TOTAL_COVERAGE_DROP_PERCENT"; then
