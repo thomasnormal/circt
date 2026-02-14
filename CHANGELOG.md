@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1391 - February 14, 2026
+
+### Mutation Workflow: Strict Native Real Harness Enforcement
+
+1. Added strict native-real harness gating to
+   `utils/run_mutation_mcy_examples.sh`:
+   - new CLI flag: `--native-real-tests-strict`
+   - behavior: when using `--mutations-backend native` and
+     `--native-tests-mode real`, examples without a configured real harness
+     now fail immediately instead of silently falling back to synthetic tests.
+2. Kept default behavior unchanged for compatibility:
+   - without `--native-real-tests-strict`, unresolved examples still warn and
+     fall back to synthetic harness mode.
+3. Help/CLI cleanup:
+   - removed duplicated `--mutations-backend` help entry.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-native-real-tests-strict-missing-harness.test`
+   - `test/Tools/Inputs/run-mutation-mcy-examples-unknown-manifest.tsv`
+   - updated: `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (138 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --mutations-backend native --native-tests-mode real --native-real-tests-strict --out-dir /tmp/mcy_examples_real_native_mode_real_strict_1771084456` PASS
+  - `bitcnt`: `detected=6 relevant=8 coverage=75.00 errors=0`
+  - `picorv32_primes`: `detected=8 relevant=8 coverage=100.00 errors=0`
+
 ## Iteration 1390 - February 14, 2026
 
 ### Mutation Workflow: Native Real Harness for `picorv32_primes`

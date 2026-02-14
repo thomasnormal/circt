@@ -44,8 +44,10 @@ Options:
                            yosys|native (default: yosys)
   --native-tests-mode MODE   Test harness mode when using native backend:
                            synthetic|real (default: synthetic)
-  --mutations-backend MODE  Mutation generation backend in non-smoke mode:
-                           yosys|native (default: yosys)
+  --native-real-tests-strict
+                           In native+real mode, fail examples without a
+                           configured real harness instead of falling back
+                           to synthetic
   --generate-count N       Mutations to generate in non-smoke mode (default: 32)
   --mutations-seed N       Seed used with --generate-mutations (default: 1)
   --mutations-modes CSV    Comma-separated mutate modes for auto-generation
@@ -328,6 +330,7 @@ CIRCT_MUT=""
 YOSYS_BIN="${YOSYS:-yosys}"
 MUTATIONS_BACKEND="yosys"
 NATIVE_TESTS_MODE="synthetic"
+NATIVE_REAL_TESTS_STRICT=0
 JOBS=1
 EXAMPLE_TIMEOUT_SEC=0
 EXAMPLE_RETRIES=0
@@ -2702,6 +2705,10 @@ EOS
 ' "$real_test_script" > "$tests_manifest"
         ;;
       *)
+        if [[ "$NATIVE_REAL_TESTS_STRICT" -eq 1 ]]; then
+          echo "native real tests are required but not configured for ${example_id}" >&2
+          return 2
+        fi
         echo "warning: native real tests not configured for ${example_id}; falling back to synthetic harness" >&2
         ;;
     esac
@@ -3080,6 +3087,10 @@ while [[ $# -gt 0 ]]; do
     --native-tests-mode)
       NATIVE_TESTS_MODE="$2"
       shift 2
+      ;;
+    --native-real-tests-strict)
+      NATIVE_REAL_TESTS_STRICT=1
+      shift
       ;;
     --generate-count)
       GENERATE_COUNT="$2"

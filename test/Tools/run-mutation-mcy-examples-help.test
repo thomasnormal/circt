@@ -13,6 +13,7 @@
 // CHECK-DAG: --yosys
 // CHECK-DAG: --mutations-backend
 // CHECK-DAG: --native-tests-mode
+// CHECK-DAG: --native-real-tests-strict
 // CHECK-DAG: --generate-count
 // CHECK-DAG: --mutations-seed
 // CHECK-DAG: --mutations-modes
