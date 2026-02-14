@@ -1,0 +1,10 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'rule_id\tcase_total\tcase_pass\tcase_fail\tcase_xfail\tcase_xpass\tcase_error\tcase_skip\tcover_total\tcover_covered\tcover_unreachable\tcover_timeout\tcover_unknown\tcover_skip\tcover_error\nchip.csv:RULE_CLK\t1\t1\t0\t0\t0\t0\t0\t1\t1\t0\t0\t0\t0\t0\n' > %t/bmc.tsv
+// RUN: printf 'rule_id\tcase_total\tcase_pass\tcase_fail\tcase_xfail\tcase_xpass\tcase_error\tcase_skip\nchip.csv:RULE_CLK\t1\t1\t0\t0\t0\t0\t0\n' > %t/lec.tsv
+// RUN: python3 %S/../../utils/check_opentitan_connectivity_status_parity.py --bmc-status-summary %t/bmc.tsv --lec-status-summary %t/lec.tsv --out-parity-tsv %t/parity.tsv 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=PARITY < %t/parity.tsv
+//
+// LOG: parity check passed
+// PARITY: rule_id{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}allowlisted
+// PARITY-NOT: chip.csv:RULE_CLK

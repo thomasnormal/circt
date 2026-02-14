@@ -120,6 +120,9 @@
 // CHECK: --opentitan-connectivity-lec-status-drift-allowlist-file
 // CHECK: --update-opentitan-connectivity-lec-status-baseline
 // CHECK: --fail-on-opentitan-connectivity-lec-status-drift
+// CHECK: --opentitan-connectivity-status-parity-file
+// CHECK: --opentitan-connectivity-status-parity-allowlist-file
+// CHECK: --fail-on-opentitan-connectivity-status-parity
 // CHECK: --opentitan-fpv-target-filter
 // CHECK: --opentitan-fpv-bmc-target-shard-count
 // CHECK: --opentitan-fpv-bmc-target-shard-index
