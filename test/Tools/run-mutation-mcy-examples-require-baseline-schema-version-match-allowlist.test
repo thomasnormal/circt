@@ -1,0 +1,23 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt %t/bin
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --work-dir) work_dir="$2"; shift 2 ;;\n    --work-dir=*) work_dir="${1#*=}"; shift ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t2\\nrelevant_mutants\\t4\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+// RUN: printf 'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\nbitcnt\tPASS\t0\t2\t4\t50.00\t0\n' > %t/baseline.tsv
+// RUN: printf '__baseline__::baseline_schema_version::baseline_schema_version_mismatch\n' > %t/allowlist.txt
+
+// RUN: %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --smoke \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --baseline-file %t/baseline.tsv \
+// RUN:   --fail-on-diff \
+// RUN:   --require-baseline-schema-version-match \
+// RUN:   --drift-allowlist-file %t/allowlist.txt \
+// RUN:   --out-dir %t/out
+
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=DRIFT < %t/out/drift.tsv
+
+// SUMMARY: bitcnt{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}2{{[[:space:]]}}4{{[[:space:]]}}50.00{{[[:space:]]}}0{{[[:space:]]}}{{[0-9a-f]+}}
+// DRIFT: __baseline__{{[[:space:]]}}baseline_schema_version{{[[:space:]]}}v1{{[[:space:]]}}v2{{[[:space:]]}}allowed{{[[:space:]]}}baseline_schema_version_mismatch

@@ -50,6 +50,10 @@ Options:
   --require-baseline-example-parity
                            Require baseline/current example-id parity when
                            evaluating --fail-on-diff
+  --require-baseline-schema-version-match
+                           Require baseline summary schema version to match
+                           current summary schema when evaluating
+                           --fail-on-diff
   --strict-baseline-governance
                            Enable strict baseline governance bundle:
                            --require-policy-fingerprint-baseline +
@@ -112,6 +116,7 @@ UPDATE_BASELINE=0
 FAIL_ON_DIFF=0
 REQUIRE_POLICY_FINGERPRINT_BASELINE=0
 REQUIRE_BASELINE_EXAMPLE_PARITY=0
+REQUIRE_BASELINE_SCHEMA_VERSION_MATCH=0
 STRICT_BASELINE_GOVERNANCE=0
 REQUIRE_UNIQUE_SUMMARY_ROWS=0
 DRIFT_ALLOWLIST_FILE=""
@@ -136,6 +141,11 @@ declare -A EXAMPLE_TO_MUTATION_LIMIT=()
 declare -a AVAILABLE_EXAMPLES=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
+
+SUMMARY_HEADER_V1=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors'
+SUMMARY_HEADER_V2=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\tpolicy_fingerprint'
+CURRENT_SUMMARY_SCHEMA_VERSION="v2"
+CURRENT_SUMMARY_HEADER="$SUMMARY_HEADER_V2"
 
 is_pos_int() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
@@ -550,6 +560,28 @@ append_drift_candidate() {
   return 1
 }
 
+summary_schema_version_from_header() {
+  local header_line="$1"
+  if [[ "$header_line" == "$SUMMARY_HEADER_V2" ]]; then
+    printf 'v2\n'
+    return 0
+  fi
+  if [[ "$header_line" == "$SUMMARY_HEADER_V1" ]]; then
+    printf 'v1\n'
+    return 0
+  fi
+  printf 'unknown\n'
+}
+
+summary_schema_version_for_file() {
+  local file="$1"
+  local header_line=""
+  if ! IFS= read -r header_line < "$file"; then
+    printf 'unknown\n'
+    return 0
+  fi
+  summary_schema_version_from_header "$header_line"
+}
 sanitize_contract_field() {
   local value="$1"
   value="${value//$'\t'/ }"
@@ -562,7 +594,7 @@ evaluate_summary_contract() {
   local contract_file="$2"
   local regressions=0
   local summary_example="__summary__"
-  local expected_header=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\tpolicy_fingerprint'
+  local expected_header="$CURRENT_SUMMARY_HEADER"
   local header_line=""
   local example=""
   local status=""
@@ -688,6 +720,7 @@ evaluate_summary_drift() {
   local drift_file="$3"
   local require_policy_fingerprint_baseline="${4:-0}"
   local require_baseline_example_parity="${5:-0}"
+  local require_baseline_schema_version_match="${6:-0}"
   local regressions=0
   local baseline_example=""
   local _status=""
@@ -708,6 +741,21 @@ evaluate_summary_drift() {
   local -a baseline_duplicate_examples=()
 
   printf 'example\tmetric\tbaseline\tcurrent\toutcome\tdetail\n' > "$drift_file"
+
+  local baseline_schema_version=""
+  local summary_schema_version=""
+  summary_schema_version="$(summary_schema_version_for_file "$summary_file")"
+  baseline_schema_version="$(summary_schema_version_for_file "$baseline_file")"
+
+  if [[ "$require_baseline_schema_version_match" -eq 1 ]]; then
+    if [[ "$baseline_schema_version" != "$summary_schema_version" ]]; then
+      if ! append_drift_candidate "$drift_file" "__baseline__" "baseline_schema_version" "$baseline_schema_version" "$summary_schema_version" "baseline_schema_version_mismatch"; then
+        regressions=$((regressions + 1))
+      fi
+    else
+      append_drift_row "$drift_file" "__baseline__" "baseline_schema_version" "$baseline_schema_version" "$summary_schema_version" "ok" ""
+    fi
+  fi
 
   while IFS=$'\t' read -r baseline_example _status _exit _detected _relevant _coverage _errors _policy; do
     [[ "$baseline_example" == "example" ]] && continue
@@ -958,6 +1006,10 @@ while [[ $# -gt 0 ]]; do
       REQUIRE_BASELINE_EXAMPLE_PARITY=1
       shift
       ;;
+    --require-baseline-schema-version-match)
+      REQUIRE_BASELINE_SCHEMA_VERSION_MATCH=1
+      shift
+      ;;
     --strict-baseline-governance)
       STRICT_BASELINE_GOVERNANCE=1
       shift
@@ -1059,6 +1111,10 @@ if [[ "$REQUIRE_BASELINE_EXAMPLE_PARITY" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
   echo "--require-baseline-example-parity requires --fail-on-diff" >&2
   exit 1
 fi
+if [[ "$REQUIRE_BASELINE_SCHEMA_VERSION_MATCH" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
+  echo "--require-baseline-schema-version-match requires --fail-on-diff" >&2
+  exit 1
+fi
 if [[ -n "$DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_DIFF" -ne 1 && "$REQUIRE_UNIQUE_SUMMARY_ROWS" -ne 1 ]]; then
   echo "--drift-allowlist-file requires --fail-on-diff or --require-unique-summary-rows" >&2
   exit 1
@@ -1158,7 +1214,7 @@ if [[ "$KEEP_WORK" -ne 1 ]]; then
 fi
 
 SUMMARY_FILE="${OUT_DIR}/summary.tsv"
-printf 'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\tpolicy_fingerprint\n' > "$SUMMARY_FILE"
+printf '%s\n' "$CURRENT_SUMMARY_HEADER" > "$SUMMARY_FILE"
 
 overall_rc=0
 
@@ -1371,7 +1427,7 @@ fi
 
 if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
   DRIFT_FILE="${OUT_DIR}/drift.tsv"
-  if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE" "$REQUIRE_POLICY_FINGERPRINT_BASELINE" "$REQUIRE_BASELINE_EXAMPLE_PARITY"; then
+  if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE" "$REQUIRE_POLICY_FINGERPRINT_BASELINE" "$REQUIRE_BASELINE_EXAMPLE_PARITY" "$REQUIRE_BASELINE_SCHEMA_VERSION_MATCH"; then
     overall_rc=1
     echo "Baseline drift failure: see $DRIFT_FILE" >&2
   fi
