@@ -129,6 +129,10 @@
 // CHECK: --opentitan-connectivity-cover-parity-file
 // CHECK: --opentitan-connectivity-cover-parity-allowlist-file
 // CHECK: --fail-on-opentitan-connectivity-cover-parity
+// CHECK: --opentitan-connectivity-objective-parity-file
+// CHECK: --opentitan-connectivity-objective-parity-allowlist-file
+// CHECK: --fail-on-opentitan-connectivity-objective-parity
+// CHECK: --opentitan-connectivity-objective-parity-include-missing
 // CHECK: --opentitan-fpv-target-filter
 // CHECK: --opentitan-fpv-bmc-target-shard-count
 // CHECK: --opentitan-fpv-bmc-target-shard-index

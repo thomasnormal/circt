@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1340 - February 14, 2026
+
+### OpenTitan Connectivity: Cross-Lane Objective-Level Parity Governance
+
+1. Added a new objective-parity checker utility:
+   - `utils/check_opentitan_connectivity_objective_parity.py`
+   - compares normalized objective statuses between BMC and LEC:
+     - `pass`, `fail`, `xfail`, `xpass`, `skip`, `error`
+   - consumes connectivity case-results and optional cover-results artifacts.
+   - default behavior compares shared objective IDs only.
+   - optional missing-objective drift mode:
+     - `--include-missing-objectives`
+   - supports mismatch allowlists via:
+     - `exact:`
+     - `prefix:`
+     - `regex:`
+   - emits deterministic parity artifact rows:
+     - `objective_id`, `kind`, `bmc`, `lec`, `allowlisted`
+2. Extended `utils/run_formal_all.sh` with objective-parity lane wiring:
+   - lane:
+     - `opentitan/CONNECTIVITY_OBJECTIVE_PARITY`
+   - new CLI controls:
+     - `--opentitan-connectivity-objective-parity-file`
+     - `--opentitan-connectivity-objective-parity-allowlist-file`
+     - `--fail-on-opentitan-connectivity-objective-parity`
+     - `--opentitan-connectivity-objective-parity-include-missing`
+   - strict-gate behavior:
+     - auto-enables objective-parity fail-on when both connectivity lanes are active.
+   - lane-filter dependency enforcement:
+     - objective-parity lane now requires source lanes in filter
+       (`CONNECTIVITY_BMC` + `CONNECTIVITY_LEC`).
+3. Added focused regressions:
+   - checker-level:
+     - `test/Tools/check-opentitan-connectivity-objective-parity-none.test`
+     - `test/Tools/check-opentitan-connectivity-objective-parity-fail.test`
+     - `test/Tools/check-opentitan-connectivity-objective-parity-allowlist.test`
+   - formal-driver-level:
+     - `test/Tools/run-formal-all-opentitan-connectivity-objective-parity-forwarding.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-objective-parity-fail.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-objective-parity-lane-deps.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-objective-parity-allowlist-requires-gate.test`
+   - updated:
+     - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/check_opentitan_connectivity_objective_parity.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(check-opentitan-connectivity-objective-parity|run-formal-all-opentitan-connectivity-objective-parity|run-formal-all-help)'` PASS (8 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(run-formal-all-opentitan|check-opentitan-connectivity)'` PASS (90 selected)
+
 ## Iteration 1339 - February 14, 2026
 
 ### Mutation Workflow: Aggregate Error-Budget Gate
