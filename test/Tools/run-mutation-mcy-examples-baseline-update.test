@@ -11,12 +11,15 @@
 // RUN:   --baseline-file %t/baseline.tsv \
 // RUN:   --update-baseline \
 // RUN:   --summary-schema-version-file %t/out/custom.schema-version \
+// RUN:   --summary-schema-contract-file %t/out/custom.schema-contract \
 // RUN:   --out-dir %t/out
 
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
 // RUN: FileCheck %s --check-prefix=BASELINE < %t/baseline.tsv
 // RUN: FileCheck %s --check-prefix=SCHEMA < %t/out/custom.schema-version
 // RUN: FileCheck %s --check-prefix=BASELINE-SCHEMA < %t/baseline.tsv.schema-version
+// RUN: FileCheck %s --check-prefix=SCHEMA-CONTRACT < %t/out/custom.schema-contract
+// RUN: FileCheck %s --check-prefix=BASELINE-SCHEMA-CONTRACT < %t/baseline.tsv.schema-contract
 
 // SUMMARY: example{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}detected{{[[:space:]]}}relevant{{[[:space:]]}}coverage_percent{{[[:space:]]}}errors
 // SUMMARY: bitcnt{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}2{{[[:space:]]}}4{{[[:space:]]}}50.00{{[[:space:]]}}0
@@ -26,3 +29,5 @@
 
 // SCHEMA: v2
 // BASELINE-SCHEMA: v2
+// SCHEMA-CONTRACT: {{[0-9a-f]+}}
+// BASELINE-SCHEMA-CONTRACT: {{[0-9a-f]+}}
