@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -33,6 +34,7 @@ class ManifestRow:
     target_name: str
     fusesoc_core: str
     task: str
+    stopats: tuple[str, ...]
     flow: str
     sub_flow: str
     rel_path: str
@@ -117,6 +119,7 @@ def read_manifest(path: Path) -> list[ManifestRow]:
                     target_name=target_name,
                     fusesoc_core=fusesoc_core,
                     task=(row.get("task") or "").strip(),
+                    stopats=parse_manifest_stopats(row.get("stopats") or ""),
                     flow=(row.get("flow") or "").strip(),
                     sub_flow=(row.get("sub_flow") or "").strip(),
                     rel_path=(row.get("rel_path") or "").strip(),
@@ -166,6 +169,34 @@ def normalize_string_list(value: Any) -> list[str]:
     return [str(value)]
 
 
+def normalize_stopats(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        token = value.strip()
+        return (token,) if token else ()
+    if isinstance(value, list):
+        out: list[str] = []
+        for entry in value:
+            token = str(entry).strip()
+            if token:
+                out.append(token)
+        return tuple(out)
+    token = str(value).strip()
+    return (token,) if token else ()
+
+
+def parse_manifest_stopats(raw: str) -> tuple[str, ...]:
+    token = raw.strip()
+    if not token:
+        return ()
+    try:
+        parsed = json.loads(token)
+    except json.JSONDecodeError:
+        return normalize_stopats(token)
+    return normalize_stopats(parsed)
+
+
 def toplevel_string(value: Any) -> str:
     parts = normalize_string_list(value)
     return ",".join(parts)
@@ -203,9 +234,19 @@ def hash_lines(lines: list[str]) -> str:
 
 
 def contract_fingerprint(
-    toplevel: str, files: list[str], include_dirs: list[str], defines: list[str]
+    task: str,
+    stopats: tuple[str, ...],
+    toplevel: str,
+    files: list[str],
+    include_dirs: list[str],
+    defines: list[str],
 ) -> str:
     digest = hashlib.sha256()
+    digest.update(f"task={task}\n".encode("utf-8"))
+    digest.update(f"stopats={len(stopats)}\n".encode("utf-8"))
+    for item in stopats:
+        digest.update(item.encode("utf-8"))
+        digest.update(b"\n")
     digest.update(f"toplevel={toplevel}\n".encode("utf-8"))
     digest.update(f"files={len(files)}\n".encode("utf-8"))
     for item in files:
@@ -298,6 +339,8 @@ def main() -> None:
         "include_dirs_fingerprint",
         "defines_fingerprint",
         "contract_fingerprint",
+        "stopat_count",
+        "stopats_fingerprint",
         "eda_yml_path",
         "setup_log_path",
         "workdir",
@@ -325,6 +368,7 @@ def main() -> None:
             if eda_path is None:
                 setup_status = "error"
                 errors += 1
+                stopats_fp = hash_lines(list(row.stopats))
                 writer.writerow(
                     [
                         row.target_name,
@@ -342,6 +386,8 @@ def main() -> None:
                         "",
                         "",
                         "",
+                        str(len(row.stopats)),
+                        stopats_fp,
                         "",
                         str(log_path),
                         str(job_dir),
@@ -367,7 +413,10 @@ def main() -> None:
             files_fp = hash_lines(files)
             incdirs_fp = hash_lines(include_dirs)
             defines_fp = hash_lines(defines)
-            contract_fp = contract_fingerprint(toplevel, files, include_dirs, defines)
+            stopats_fp = hash_lines(list(row.stopats))
+            contract_fp = contract_fingerprint(
+                row.task, row.stopats, toplevel, files, include_dirs, defines
+            )
             writer.writerow(
                 [
                     row.target_name,
@@ -385,6 +434,8 @@ def main() -> None:
                     incdirs_fp,
                     defines_fp,
                     contract_fp,
+                    str(len(row.stopats)),
+                    stopats_fp,
                     str(eda_path),
                     str(log_path),
                     str(job_dir),

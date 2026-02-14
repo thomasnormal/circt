@@ -23,11 +23,13 @@ SCHEMA_MARKER = "#opentitan_compile_contract_schema_version=1"
 @dataclass(frozen=True)
 class ContractRow:
     target_name: str
+    task: str
     setup_status: str
     contract_fingerprint: str
     file_count: str
     include_dir_count: str
     define_count: str
+    stopats_fingerprint: str
 
 
 def fail(msg: str) -> None:
@@ -146,11 +148,13 @@ def read_contract_rows(path: Path) -> dict[str, ContractRow]:
             fail(f"duplicate target_name '{target_name}' in {path} row {idx}")
         out[target_name] = ContractRow(
             target_name=target_name,
+            task=(row.get("task") or "").strip(),
             setup_status=(row.get("setup_status") or "").strip(),
             contract_fingerprint=(row.get("contract_fingerprint") or "").strip(),
             file_count=(row.get("file_count") or "").strip(),
             include_dir_count=(row.get("include_dir_count") or "").strip(),
             define_count=(row.get("define_count") or "").strip(),
+            stopats_fingerprint=(row.get("stopats_fingerprint") or "").strip(),
         )
     return out
 
@@ -199,6 +203,8 @@ def main() -> None:
             continue
         b = baseline[target]
         c = current[target]
+        if b.task != c.task:
+            drift_rows.append((target, "task", b.task, c.task))
         if b.setup_status != c.setup_status:
             drift_rows.append((target, "setup_status", b.setup_status, c.setup_status))
         if b.contract_fingerprint != c.contract_fingerprint:
@@ -223,6 +229,15 @@ def main() -> None:
             )
         if b.define_count != c.define_count:
             drift_rows.append((target, "define_count", b.define_count, c.define_count))
+        if b.stopats_fingerprint != c.stopats_fingerprint:
+            drift_rows.append(
+                (
+                    target,
+                    "stopats_fingerprint",
+                    b.stopats_fingerprint,
+                    c.stopats_fingerprint,
+                )
+            )
 
     if args.out_drift_tsv:
         emit_drift_tsv(Path(args.out_drift_tsv).resolve(), drift_rows)
