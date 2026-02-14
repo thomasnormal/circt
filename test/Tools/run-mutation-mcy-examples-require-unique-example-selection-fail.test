@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --example bitcnt \
+// RUN:   --require-unique-example-selection 2>&1 | FileCheck %s
+
+// CHECK: Duplicate --example selection: bitcnt
