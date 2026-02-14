@@ -11,5 +11,8 @@
 // CHECK-DAG: --min-detected
 // CHECK-DAG: --min-coverage-percent
 // CHECK-DAG: --max-errors
+// CHECK-DAG: --baseline-file
+// CHECK-DAG: --update-baseline
+// CHECK-DAG: --fail-on-diff
 // CHECK-DAG: --smoke
 // CHECK-DAG: --keep-work

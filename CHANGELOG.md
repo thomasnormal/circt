@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1303 - February 14, 2026
+
+### Mutation Workflow: MCY Baseline Drift Governance
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with baseline governance controls:
+   - `--baseline-file FILE`
+   - `--update-baseline`
+   - `--fail-on-diff`
+2. Added machine-readable drift output (`<out-dir>/drift.tsv`) with per-example metric outcomes.
+3. Added regression criteria for baseline comparison:
+   - status regression (`PASS -> non-PASS`)
+   - detected mutants decrease
+   - coverage percent decrease
+   - errors increase
+   - relevant mutants decrease
+4. Added option dependency/conflict validation:
+   - baseline file required for baseline operations
+   - `--update-baseline` and `--fail-on-diff` are mutually exclusive
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-baseline-update.test`
+   - `test/Tools/run-mutation-mcy-examples-baseline-drift-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-baseline-flags-conflict.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-mutation-mcy-examples-help.test build-test/test/Tools/run-mutation-mcy-examples-smoke.test build-test/test/Tools/run-mutation-mcy-examples-yosys-missing.test build-test/test/Tools/run-mutation-mcy-examples-generate-forwarding.test build-test/test/Tools/run-mutation-mcy-examples-gate-thresholds.test build-test/test/Tools/run-mutation-mcy-examples-baseline-update.test build-test/test/Tools/run-mutation-mcy-examples-baseline-drift-fail.test build-test/test/Tools/run-mutation-mcy-examples-baseline-flags-conflict.test` PASS
+- `utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --example bitcnt --example picorv32_primes --smoke --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --baseline-file <tmp>/baseline.tsv --update-baseline` PASS
+- `utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --example bitcnt --example picorv32_primes --smoke --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --baseline-file <tmp>/baseline.tsv --fail-on-diff` PASS
+
+## Iteration 1302 - February 14, 2026
+
+### OpenTitan FPV Phase D: Assertion-Granular Vacuity Status Ingestion
+
+1. Extended `utils/run_pairwise_circt_bmc.py` with explicit assertion-status
+   parsing from BMC output:
+   - `BMC_ASSERTION_STATUS=PROVEN|FAILING|VACUOUS|UNKNOWN`
+2. Updated assertion-granular classification to prefer explicit
+   `BMC_ASSERTION_STATUS` over fallback `BMC_RESULT` inference.
+3. Added first-class vacuity result rows:
+   - status `VACUOUS`
+   - diagnostic bucket `UNSAT`
+   - reason `vacuous`
+4. Added focused regression:
+   - `test/Tools/run-pairwise-circt-bmc-assertion-granular-vacuous-status.test`
+
+### Validation
+
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-pairwise-circt-bmc-(assertion-granular|assertion-granular-vacuous-status|cover-granular)\\.test|run-opentitan-fpv-circt-bmc-(fpv-summary-assertion-granular|fpv-summary-cover-granular)\\.test'` PASS (5/5)
+
 ## Iteration 1301 - February 14, 2026
 
 ### OpenTitan FPV Phase D: Cover-Granular Evidence for `covered/unreachable`
