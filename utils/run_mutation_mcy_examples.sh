@@ -58,8 +58,10 @@ Options:
   --require-unique-summary-rows
                            Fail if summary.tsv contains duplicate example rows
   --drift-allowlist-file FILE
-                           Optional allowlist for drift regressions (requires
-                           --fail-on-diff). Non-empty, non-comment lines are
+                           Optional allowlist for drift/summary-contract
+                           regressions (requires --fail-on-diff or
+                           --require-unique-summary-rows). Non-empty,
+                           non-comment lines are
                            glob patterns over:
                              example::metric
                              example::metric::detail
@@ -578,12 +580,18 @@ evaluate_summary_contract() {
   printf 'example\tmetric\texpected\tcurrent\toutcome\tdetail\n' > "$contract_file"
 
   if ! IFS= read -r header_line < "$summary_file"; then
-    append_drift_row "$contract_file" "$summary_example" "header" "$(sanitize_contract_field "$expected_header")" "missing" "regression" "missing_header"
-    return 1
+    if ! append_drift_candidate "$contract_file" "$summary_example" "header" "$(sanitize_contract_field "$expected_header")" "missing" "missing_header"; then
+      regressions=$((regressions + 1))
+    fi
+    if [[ "$regressions" -gt 0 ]]; then
+      return 1
+    fi
+    return 0
   fi
   if [[ "$header_line" != "$expected_header" ]]; then
-    append_drift_row "$contract_file" "$summary_example" "header" "$(sanitize_contract_field "$expected_header")" "$(sanitize_contract_field "$header_line")" "regression" "header_mismatch"
-    regressions=$((regressions + 1))
+    if ! append_drift_candidate "$contract_file" "$summary_example" "header" "$(sanitize_contract_field "$expected_header")" "$(sanitize_contract_field "$header_line")" "header_mismatch"; then
+      regressions=$((regressions + 1))
+    fi
   fi
 
   while IFS=$'\t' read -r example status exit_code detected relevant coverage errors policy extra; do
@@ -593,53 +601,64 @@ evaluate_summary_contract() {
     fi
 
     if [[ -n "$extra" ]]; then
-      append_drift_row "$contract_file" "$example" "column_count" "8" "9+" "regression" "invalid_column_count"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$contract_file" "$example" "column_count" "8" "9+" "invalid_column_count"; then
+        regressions=$((regressions + 1))
+      fi
     fi
 
     if [[ "$status" != "PASS" && "$status" != "FAIL" ]]; then
-      append_drift_row "$contract_file" "$example" "status" "PASS_or_FAIL" "$(sanitize_contract_field "$status")" "regression" "invalid_status"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$contract_file" "$example" "status" "PASS_or_FAIL" "$(sanitize_contract_field "$status")" "invalid_status"; then
+        regressions=$((regressions + 1))
+      fi
     fi
 
     if ! is_nonneg_int "$exit_code"; then
-      append_drift_row "$contract_file" "$example" "exit_code" "nonneg_int" "$(sanitize_contract_field "$exit_code")" "regression" "invalid_exit_code"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$contract_file" "$example" "exit_code" "nonneg_int" "$(sanitize_contract_field "$exit_code")" "invalid_exit_code"; then
+        regressions=$((regressions + 1))
+      fi
     fi
     if ! is_nonneg_int "$detected"; then
-      append_drift_row "$contract_file" "$example" "detected_mutants" "nonneg_int" "$(sanitize_contract_field "$detected")" "regression" "invalid_detected"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$contract_file" "$example" "detected_mutants" "nonneg_int" "$(sanitize_contract_field "$detected")" "invalid_detected"; then
+        regressions=$((regressions + 1))
+      fi
     fi
     if ! is_nonneg_int "$relevant"; then
-      append_drift_row "$contract_file" "$example" "relevant_mutants" "nonneg_int" "$(sanitize_contract_field "$relevant")" "regression" "invalid_relevant"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$contract_file" "$example" "relevant_mutants" "nonneg_int" "$(sanitize_contract_field "$relevant")" "invalid_relevant"; then
+        regressions=$((regressions + 1))
+      fi
     fi
     if ! is_nonneg_int "$errors"; then
-      append_drift_row "$contract_file" "$example" "errors" "nonneg_int" "$(sanitize_contract_field "$errors")" "regression" "invalid_errors"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$contract_file" "$example" "errors" "nonneg_int" "$(sanitize_contract_field "$errors")" "invalid_errors"; then
+        regressions=$((regressions + 1))
+      fi
     fi
 
     if [[ "$coverage" == "-" ]]; then
       if is_nonneg_int "$relevant" && [[ "$relevant" -gt 0 ]]; then
-        append_drift_row "$contract_file" "$example" "coverage_percent" "numeric" "-" "regression" "coverage_missing_with_relevant"
-        regressions=$((regressions + 1))
+        if ! append_drift_candidate "$contract_file" "$example" "coverage_percent" "numeric" "-" "coverage_missing_with_relevant"; then
+          regressions=$((regressions + 1))
+        fi
       fi
     else
       if ! is_nonneg_decimal "$coverage"; then
-        append_drift_row "$contract_file" "$example" "coverage_percent" "nonneg_decimal_or_dash" "$(sanitize_contract_field "$coverage")" "regression" "invalid_coverage_format"
-        regressions=$((regressions + 1))
+        if ! append_drift_candidate "$contract_file" "$example" "coverage_percent" "nonneg_decimal_or_dash" "$(sanitize_contract_field "$coverage")" "invalid_coverage_format"; then
+          regressions=$((regressions + 1))
+        fi
       elif ! awk -v v="$coverage" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
-        append_drift_row "$contract_file" "$example" "coverage_percent" "0_to_100" "$(sanitize_contract_field "$coverage")" "regression" "invalid_coverage_range"
-        regressions=$((regressions + 1))
+        if ! append_drift_candidate "$contract_file" "$example" "coverage_percent" "0_to_100" "$(sanitize_contract_field "$coverage")" "invalid_coverage_range"; then
+          regressions=$((regressions + 1))
+        fi
       elif is_nonneg_int "$relevant" && [[ "$relevant" -eq 0 ]]; then
-        append_drift_row "$contract_file" "$example" "coverage_percent" "-" "$(sanitize_contract_field "$coverage")" "regression" "coverage_present_with_zero_relevant"
-        regressions=$((regressions + 1))
+        if ! append_drift_candidate "$contract_file" "$example" "coverage_percent" "-" "$(sanitize_contract_field "$coverage")" "coverage_present_with_zero_relevant"; then
+          regressions=$((regressions + 1))
+        fi
       fi
     fi
 
     if [[ -z "$policy" ]]; then
-      append_drift_row "$contract_file" "$example" "policy_fingerprint" "nonempty" "missing" "regression" "missing_policy_fingerprint"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$contract_file" "$example" "policy_fingerprint" "nonempty" "missing" "missing_policy_fingerprint"; then
+        regressions=$((regressions + 1))
+      fi
     fi
 
     if [[ -n "${summary_seen[$example]+x}" ]]; then
@@ -653,8 +672,9 @@ evaluate_summary_contract() {
   done < "$summary_file"
 
   for example in "${summary_duplicate_examples[@]}"; do
-    append_drift_row "$contract_file" "$example" "row" "single_row" "duplicate_rows" "regression" "duplicate_current_row"
-    regressions=$((regressions + 1))
+    if ! append_drift_candidate "$contract_file" "$example" "row" "single_row" "duplicate_rows" "duplicate_current_row"; then
+      regressions=$((regressions + 1))
+    fi
   done
 
   if [[ "$regressions" -gt 0 ]]; then
@@ -1039,8 +1059,8 @@ if [[ "$REQUIRE_BASELINE_EXAMPLE_PARITY" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
   echo "--require-baseline-example-parity requires --fail-on-diff" >&2
   exit 1
 fi
-if [[ -n "$DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_DIFF" -ne 1 ]]; then
-  echo "--drift-allowlist-file requires --fail-on-diff" >&2
+if [[ -n "$DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_DIFF" -ne 1 && "$REQUIRE_UNIQUE_SUMMARY_ROWS" -ne 1 ]]; then
+  echo "--drift-allowlist-file requires --fail-on-diff or --require-unique-summary-rows" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_UNUSED_DRIFT_ALLOWLIST" -eq 1 && -z "$DRIFT_ALLOWLIST_FILE" ]]; then

@@ -12,4 +12,4 @@
 // RUN:   --drift-allowlist-file %t/allowlist.txt \
 // RUN:   --out-dir %t/out 2>&1 | FileCheck %s
 
-// CHECK: --drift-allowlist-file requires --fail-on-diff
+// CHECK: --drift-allowlist-file requires --fail-on-diff or --require-unique-summary-rows
