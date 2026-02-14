@@ -81,6 +81,31 @@ class AssertionStatusPolicyRow:
     forbidden_statuses: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class TaskProfileStatusPolicyRow:
+    task_profile: str
+    required_statuses: tuple[str, ...]
+    forbidden_statuses: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AssertionStatusPolicyCheckRow:
+    target_name: str
+    required_statuses: tuple[str, ...]
+    forbidden_statuses: tuple[str, ...]
+    policy_source: str
+
+
+@dataclass(frozen=True)
+class AssertionStatusPolicyViolationRow:
+    target_name: str
+    task_profile: str
+    kind: str
+    status: str
+    evidence: str
+    policy_sources: tuple[str, ...]
+
+
 def fail(msg: str) -> None:
     print(msg, file=sys.stderr)
     raise SystemExit(1)
@@ -608,46 +633,217 @@ def read_assertion_status_policy(path: Path) -> list[AssertionStatusPolicyRow]:
     return out
 
 
+def read_task_profile_status_policy(path: Path) -> list[TaskProfileStatusPolicyRow]:
+    if not path.is_file():
+        fail(f"assertion status task-profile preset file not found: {path}")
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames is None:
+            fail(
+                "assertion status task-profile preset file missing header row: "
+                f"{path}"
+            )
+        required = {"task_profile", "required_statuses", "forbidden_statuses"}
+        missing = sorted(required.difference(reader.fieldnames))
+        if missing:
+            fail(
+                "assertion status task-profile preset file missing required "
+                f"columns {missing}: {path} (found: {reader.fieldnames})"
+            )
+        out: list[TaskProfileStatusPolicyRow] = []
+        seen_profiles: set[str] = set()
+        for idx, row in enumerate(reader, start=2):
+            task_profile = (row.get("task_profile") or "").strip()
+            if not task_profile:
+                continue
+            if task_profile in seen_profiles:
+                fail(
+                    f"duplicate task_profile '{task_profile}' in assertion status "
+                    f"task-profile preset file {path} row {idx}"
+                )
+            seen_profiles.add(task_profile)
+            out.append(
+                TaskProfileStatusPolicyRow(
+                    task_profile=task_profile,
+                    required_statuses=parse_status_token_list(
+                        row.get("required_statuses") or "",
+                        field_name="required_statuses",
+                        line_no=idx,
+                        path=path,
+                    ),
+                    forbidden_statuses=parse_status_token_list(
+                        row.get("forbidden_statuses") or "",
+                        field_name="forbidden_statuses",
+                        line_no=idx,
+                        path=path,
+                    ),
+                )
+            )
+    return out
+
+
+def collect_target_task_profiles(rows: list[ContractRow]) -> dict[str, str]:
+    target_profiles: dict[str, str] = {}
+    for row in rows:
+        profile = row.task_profile.strip()
+        existing = target_profiles.get(row.target_name)
+        if existing is None:
+            target_profiles[row.target_name] = profile
+            continue
+        if existing != profile:
+            fail(
+                "inconsistent task_profile for target "
+                f"{row.target_name}: '{existing}' vs '{profile}'"
+            )
+    return target_profiles
+
+
+def expand_assertion_status_policy_checks(
+    *,
+    target_policy_rows: list[AssertionStatusPolicyRow],
+    task_profile_policy_rows: list[TaskProfileStatusPolicyRow],
+    target_task_profiles: dict[str, str],
+) -> list[AssertionStatusPolicyCheckRow]:
+    checks: list[AssertionStatusPolicyCheckRow] = []
+
+    for policy in target_policy_rows:
+        if policy.target_name == "*":
+            targets = sorted(target_task_profiles.keys())
+        else:
+            targets = [policy.target_name]
+        for target in targets:
+            checks.append(
+                AssertionStatusPolicyCheckRow(
+                    target_name=target,
+                    required_statuses=policy.required_statuses,
+                    forbidden_statuses=policy.forbidden_statuses,
+                    policy_source=f"target:{policy.target_name}",
+                )
+            )
+
+    for policy in task_profile_policy_rows:
+        if policy.task_profile == "*":
+            targets = sorted(target_task_profiles.keys())
+        else:
+            targets = sorted(
+                target
+                for target, profile in target_task_profiles.items()
+                if profile == policy.task_profile
+            )
+        for target in targets:
+            checks.append(
+                AssertionStatusPolicyCheckRow(
+                    target_name=target,
+                    required_statuses=policy.required_statuses,
+                    forbidden_statuses=policy.forbidden_statuses,
+                    policy_source=f"task_profile:{policy.task_profile}",
+                )
+            )
+    return checks
+
+
 def evaluate_assertion_status_policy(
-    policy_rows: list[AssertionStatusPolicyRow],
+    policy_rows: list[AssertionStatusPolicyCheckRow],
     rows: list[tuple[str, ...]],
-) -> list[tuple[str, str, str, str]]:
+    target_task_profiles: dict[str, str],
+) -> list[AssertionStatusPolicyViolationRow]:
     statuses_by_target: dict[str, set[str]] = {}
     assertion_map = assertion_rows_to_map(rows)
     for assertion in assertion_map.values():
         statuses_by_target.setdefault(assertion.target_name, set()).add(assertion.status)
 
-    violations: list[tuple[str, str, str, str]] = []
+    keyed: dict[
+        tuple[str, str, str], tuple[str, str, str, str, set[str]]
+    ] = {}
     for policy in policy_rows:
-        if policy.target_name == "*":
-            targets = sorted(statuses_by_target.keys())
-        else:
-            targets = [policy.target_name]
-        for target in targets:
-            current_statuses = statuses_by_target.get(target, set())
-            evidence = ",".join(sorted(current_statuses)) if current_statuses else "absent"
-            for status in policy.required_statuses:
-                if status not in current_statuses:
-                    violations.append(
-                        (target, "required_status_missing", status, evidence)
-                    )
-            for status in policy.forbidden_statuses:
-                if status in current_statuses:
-                    violations.append(
-                        (target, "forbidden_status_present", status, evidence)
-                    )
-    return violations
+        target = policy.target_name
+        current_statuses = statuses_by_target.get(target, set())
+        evidence = ",".join(sorted(current_statuses)) if current_statuses else "absent"
+        for status in policy.required_statuses:
+            if status in current_statuses:
+                continue
+            key = (target, "required_status_missing", status)
+            if key not in keyed:
+                keyed[key] = (
+                    target,
+                    "required_status_missing",
+                    status,
+                    evidence,
+                    set(),
+                )
+            keyed[key][4].add(policy.policy_source)
+        for status in policy.forbidden_statuses:
+            if status not in current_statuses:
+                continue
+            key = (target, "forbidden_status_present", status)
+            if key not in keyed:
+                keyed[key] = (
+                    target,
+                    "forbidden_status_present",
+                    status,
+                    evidence,
+                    set(),
+                )
+            keyed[key][4].add(policy.policy_source)
+
+    out: list[AssertionStatusPolicyViolationRow] = []
+    for target, kind, status in sorted(keyed.keys()):
+        _target, _kind, _status, evidence, sources = keyed[(target, kind, status)]
+        out.append(
+            AssertionStatusPolicyViolationRow(
+                target_name=target,
+                task_profile=target_task_profiles.get(target, ""),
+                kind=kind,
+                status=status,
+                evidence=evidence,
+                policy_sources=tuple(sorted(sources)),
+            )
+        )
+    return out
 
 
 def write_assertion_status_policy_violations(
-    path: Path, rows: list[tuple[str, str, str, str]]
+    path: Path, rows: list[AssertionStatusPolicyViolationRow]
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
         writer.writerow(["target_name", "kind", "status", "evidence"])
         for row in rows:
-            writer.writerow(row)
+            writer.writerow([row.target_name, row.kind, row.status, row.evidence])
+
+
+def write_assertion_status_policy_grouped_violations(
+    path: Path, rows: list[AssertionStatusPolicyViolationRow]
+) -> None:
+    grouped: dict[tuple[str, str, str], tuple[set[str], set[str]]] = {}
+    for row in rows:
+        cohort = row.task_profile if row.task_profile else "<unknown_task_profile>"
+        key = (cohort, row.kind, row.status)
+        if key not in grouped:
+            grouped[key] = (set(), set())
+        grouped[key][0].add(row.target_name)
+        for src in row.policy_sources:
+            grouped[key][1].add(src)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(
+            ["task_profile", "kind", "status", "target_count", "targets", "policy_sources"]
+        )
+        for cohort, kind, status in sorted(grouped.keys()):
+            targets, sources = grouped[(cohort, kind, status)]
+            writer.writerow(
+                [
+                    cohort,
+                    kind,
+                    status,
+                    str(len(targets)),
+                    ";".join(sorted(targets)),
+                    ";".join(sorted(sources)),
+                ]
+            )
 
 
 def parse_args() -> argparse.Namespace:
@@ -829,11 +1025,32 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--assertion-status-policy-task-profile-presets-file",
+        default=os.environ.get(
+            "BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE", ""
+        ),
+        help=(
+            "Optional TSV presets for task_profile-based assertion status policy "
+            "(columns: task_profile,required_statuses,forbidden_statuses). "
+            "Use '*' for a global default profile."
+        ),
+    )
+    parser.add_argument(
         "--assertion-status-policy-violations-file",
         default=os.environ.get("BMC_ASSERTION_STATUS_POLICY_VIOLATIONS_OUT", ""),
         help=(
             "Optional output TSV path for assertion status policy violations "
             "(columns: target_name,kind,status,evidence)."
+        ),
+    )
+    parser.add_argument(
+        "--assertion-status-policy-grouped-violations-file",
+        default=os.environ.get(
+            "BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_OUT", ""
+        ),
+        help=(
+            "Optional output TSV path for grouped assertion status policy "
+            "violations by task_profile/status class."
         ),
     )
     parser.add_argument(
@@ -923,10 +1140,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.fail_on_assertion_status_policy and not args.assertion_status_policy_file:
+    if (
+        args.fail_on_assertion_status_policy
+        and not args.assertion_status_policy_file
+        and not args.assertion_status_policy_task_profile_presets_file
+    ):
         fail(
             "--fail-on-assertion-status-policy requires "
-            "--assertion-status-policy-file"
+            "--assertion-status-policy-file or "
+            "--assertion-status-policy-task-profile-presets-file"
         )
     contracts_path = Path(args.compile_contracts).resolve()
     contracts = read_compile_contracts(contracts_path)
@@ -1053,6 +1275,8 @@ def main() -> int:
             flush=True,
         )
         return 0
+
+    target_task_profiles = collect_target_task_profiles(selected)
 
     mode_label = os.environ.get("BMC_MODE_LABEL", "FPV_BMC").strip() or "FPV_BMC"
     bound = parse_nonnegative_int(os.environ.get("BOUND", "1"), "BOUND")
@@ -1531,11 +1755,32 @@ def main() -> int:
                     file=sys.stderr,
                 )
 
-        if args.assertion_status_policy_file:
-            policy_path = Path(args.assertion_status_policy_file).resolve()
-            policy_rows = read_assertion_status_policy(policy_path)
+        if (
+            args.assertion_status_policy_file
+            or args.assertion_status_policy_task_profile_presets_file
+        ):
+            policy_rows: list[AssertionStatusPolicyRow] = []
+            policy_sources: list[str] = []
+            if args.assertion_status_policy_file:
+                policy_path = Path(args.assertion_status_policy_file).resolve()
+                policy_rows = read_assertion_status_policy(policy_path)
+                policy_sources.append(str(policy_path))
+
+            preset_rows: list[TaskProfileStatusPolicyRow] = []
+            if args.assertion_status_policy_task_profile_presets_file:
+                preset_path = Path(
+                    args.assertion_status_policy_task_profile_presets_file
+                ).resolve()
+                preset_rows = read_task_profile_status_policy(preset_path)
+                policy_sources.append(str(preset_path))
+
+            checks = expand_assertion_status_policy_checks(
+                target_policy_rows=policy_rows,
+                task_profile_policy_rows=preset_rows,
+                target_task_profiles=target_task_profiles,
+            )
             policy_violations = evaluate_assertion_status_policy(
-                policy_rows, merged_assertion_rows
+                checks, merged_assertion_rows, target_task_profiles
             )
             if args.assertion_status_policy_violations_file:
                 violations_path = Path(
@@ -1548,17 +1793,28 @@ def main() -> int:
                     f"assertion status policy violations: {violations_path}",
                     flush=True,
                 )
+            if args.assertion_status_policy_grouped_violations_file:
+                grouped_path = Path(
+                    args.assertion_status_policy_grouped_violations_file
+                ).resolve()
+                write_assertion_status_policy_grouped_violations(
+                    grouped_path, policy_violations
+                )
+                print(
+                    f"assertion status policy grouped violations: {grouped_path}",
+                    flush=True,
+                )
             if policy_violations:
                 sample = ", ".join(
-                    f"{target}:{kind}:{status}"
-                    for target, kind, status, _ in policy_violations[:6]
+                    f"{row.target_name}:{row.kind}:{row.status}"
+                    for row in policy_violations[:6]
                 )
                 if len(policy_violations) > 6:
                     sample += ", ..."
                 message = (
                     "opentitan fpv assertion-status policy violations detected: "
                     f"rows={len(policy_violations)} sample=[{sample}] "
-                    f"policy={policy_path}"
+                    f"policy_sources={policy_sources}"
                 )
                 if args.fail_on_assertion_status_policy:
                     print(message, file=sys.stderr)
@@ -1568,7 +1824,8 @@ def main() -> int:
                 print(
                     (
                         "opentitan fpv assertion-status policy check passed: "
-                        f"rows={len(merged_assertion_rows)} policy={policy_path}"
+                        f"rows={len(merged_assertion_rows)} "
+                        f"policy_sources={policy_sources}"
                     ),
                     file=sys.stderr,
                 )

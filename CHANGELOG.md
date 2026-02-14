@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1386 - February 14, 2026
+
+### OpenTitan FPV BMC: Task-Profile Status-Policy Presets + Grouped Diagnostics
+
+1. Extended `utils/run_opentitan_fpv_circt_bmc.py` with task-profile-aware
+   status-policy presets:
+   - `--assertion-status-policy-task-profile-presets-file`
+   - preset TSV schema:
+     `task_profile`, `required_statuses`, `forbidden_statuses`
+   - supports wildcard `task_profile='*'` for default profile policy
+2. Added grouped assertion-status policy diagnostics:
+   - `--assertion-status-policy-grouped-violations-file`
+   - grouped output schema:
+     `task_profile`, `kind`, `status`, `target_count`, `targets`,
+     `policy_sources`
+3. Upgraded policy fail-mode semantics:
+   - `--fail-on-assertion-status-policy` now accepts either
+     target policy file or task-profile presets file.
+4. Extended `utils/run_formal_all.sh` with first-class wiring:
+   - `--opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file`
+   - `--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-file`
+   - strict-gate now auto-enables status-policy fail mode when either
+     status-policy source is configured.
+5. Added focused regressions:
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-forwarding.test`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-task-profile-presets-fail.test`
+   - updated:
+     - `test/Tools/run-formal-all-help.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-fail-requires-file.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-fail-requires-file.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-forwarding.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-fail.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-task-profile-presets-fail.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-fail.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-row-allowlist-requires-gate.test` PASS (9/9)
+
 ## Iteration 1385 - February 14, 2026
 
 ### Mutation Workflow: Per-Metric History Aggregation Overrides
