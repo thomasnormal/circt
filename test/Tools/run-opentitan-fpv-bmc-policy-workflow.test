@@ -11,8 +11,14 @@
 // RUN: ARG_LOG=%t/check-nostrict.args %t/utils/run_opentitan_fpv_bmc_policy_workflow.sh --run-formal-all %t/utils/fake-run-formal-all.sh --no-strict-gate check --out-dir %t/out-check-nostrict --opentitan-fpv-cfg %t/cfg.hjson --select-cfgs foo_fpv
 // RUN: FileCheck %s --check-prefix=CHECK-NOSTRICT < %t/check-nostrict.args
 // RUN: not rg -q -- '--strict-gate' %t/check-nostrict.args
+// RUN: ARG_LOG=%t/check-cache.args %t/utils/run_opentitan_fpv_bmc_policy_workflow.sh --run-formal-all %t/utils/fake-run-formal-all.sh --opentitan-fpv-bmc-verilog-cache-mode readwrite --opentitan-fpv-bmc-verilog-cache-dir %t/cache check --out-dir %t/out-check-cache --opentitan-fpv-cfg %t/cfg.hjson --select-cfgs foo_fpv
+// RUN: FileCheck %s --check-prefix=CACHE < %t/check-cache.args
 // RUN: not sh -c '%t/utils/run_opentitan_fpv_bmc_policy_workflow.sh --run-formal-all %t/utils/fake-run-formal-all.sh update --out-dir %t/out-invalid --opentitan-fpv-cfg %t/cfg.hjson --select-cfgs foo_fpv --opentitan-fpv-bmc-summary-baseline-file %t/bad.tsv > %t/err.txt 2>&1'
 // RUN: FileCheck %s --check-prefix=ERR < %t/err.txt
+// RUN: not sh -c '%t/utils/run_opentitan_fpv_bmc_policy_workflow.sh --run-formal-all %t/utils/fake-run-formal-all.sh --opentitan-fpv-bmc-verilog-cache-mode bogus check --out-dir %t/out-bad-cache-mode --opentitan-fpv-cfg %t/cfg.hjson --select-cfgs foo_fpv > %t/err-cache-mode.txt 2>&1'
+// RUN: FileCheck %s --check-prefix=ERR-CACHE-MODE < %t/err-cache-mode.txt
+// RUN: not sh -c '%t/utils/run_opentitan_fpv_bmc_policy_workflow.sh --run-formal-all %t/utils/fake-run-formal-all.sh --opentitan-fpv-bmc-verilog-cache-dir %t/cache check --out-dir %t/out-bad-cache-dir --opentitan-fpv-cfg %t/cfg.hjson --select-cfgs foo_fpv > %t/err-cache-dir.txt 2>&1'
+// RUN: FileCheck %s --check-prefix=ERR-CACHE-DIR < %t/err-cache-dir.txt
 //
 // UPDATE-DAG: --out-dir
 // UPDATE-DAG: {{.*/}}out-update
@@ -44,4 +50,11 @@
 // CHECK-NOSTRICT-DAG: --fail-on-opentitan-fpv-bmc-assertion-status-policy
 // CHECK-NOSTRICT-DAG: --fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift
 //
+// CACHE: --opentitan-fpv-bmc-verilog-cache-mode
+// CACHE-NEXT: readwrite
+// CACHE: --opentitan-fpv-bmc-verilog-cache-dir
+// CACHE-NEXT: {{.*/}}cache
+//
 // ERR: workflow-managed option must not be passed explicitly: --opentitan-fpv-bmc-summary-baseline-file
+// ERR-CACHE-MODE: invalid --opentitan-fpv-bmc-verilog-cache-mode: expected off|read|readwrite|auto
+// ERR-CACHE-DIR: --opentitan-fpv-bmc-verilog-cache-dir requires --opentitan-fpv-bmc-verilog-cache-mode
