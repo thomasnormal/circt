@@ -1142,6 +1142,13 @@ Options:
                          Deterministic OpenTitan FPV per-case cover shard
                          index in `[0, shard-count)` passed to
                          `run_opentitan_fpv_circt_bmc.py` (default: 0)
+  --opentitan-fpv-bmc-verilog-cache-mode MODE
+                         Optional OpenTitan FPV BMC verilog frontend cache mode
+                         forwarded to `run_opentitan_fpv_circt_bmc.py`
+                         (`off|read|readwrite|auto`)
+  --opentitan-fpv-bmc-verilog-cache-dir DIR
+                         Optional OpenTitan FPV BMC verilog frontend cache base
+                         dir forwarded to `run_opentitan_fpv_circt_bmc.py`
   --select-cfgs LIST
                          Optional target names selected from
                          `--opentitan-fpv-cfg` cfg files (repeatable; comma/space
@@ -2961,6 +2968,8 @@ OPENTITAN_FPV_BMC_ASSERTION_SHARD_COUNT="1"
 OPENTITAN_FPV_BMC_ASSERTION_SHARD_INDEX="0"
 OPENTITAN_FPV_BMC_COVER_SHARD_COUNT="1"
 OPENTITAN_FPV_BMC_COVER_SHARD_INDEX="0"
+OPENTITAN_FPV_BMC_VERILOG_CACHE_MODE=""
+OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR=""
 declare -a OPENTITAN_SELECT_CFGS=()
 OPENTITAN_FPV_TARGET_MANIFEST_FILE=""
 OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE=""
@@ -3193,6 +3202,10 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_BMC_COVER_SHARD_COUNT="$2"; shift 2 ;;
     --opentitan-fpv-bmc-cover-shard-index)
       OPENTITAN_FPV_BMC_COVER_SHARD_INDEX="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-verilog-cache-mode)
+      OPENTITAN_FPV_BMC_VERILOG_CACHE_MODE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-verilog-cache-dir)
+      OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR="$2"; shift 2 ;;
     --select-cfgs)
       OPENTITAN_SELECT_CFGS+=("$2"); shift 2 ;;
     --opentitan-fpv-target-manifest)
@@ -4236,6 +4249,15 @@ if (( OPENTITAN_FPV_BMC_COVER_SHARD_INDEX >= OPENTITAN_FPV_BMC_COVER_SHARD_COUNT
   echo "invalid --opentitan-fpv-bmc-cover-shard-index: expected value < --opentitan-fpv-bmc-cover-shard-count" >&2
   exit 1
 fi
+if [[ -n "$OPENTITAN_FPV_BMC_VERILOG_CACHE_MODE" ]]; then
+  case "$OPENTITAN_FPV_BMC_VERILOG_CACHE_MODE" in
+    off|read|readwrite|auto) ;;
+    *)
+      echo "invalid --opentitan-fpv-bmc-verilog-cache-mode: expected off|read|readwrite|auto" >&2
+      exit 1
+      ;;
+  esac
+fi
 if [[ -n "$OPENTITAN_CONNECTIVITY_BMC_RULE_SHARD_COUNT" && ! "$OPENTITAN_CONNECTIVITY_BMC_RULE_SHARD_COUNT" =~ ^[0-9]+$ ]]; then
   echo "invalid --opentitan-connectivity-bmc-rule-shard-count: expected integer >= 1" >&2
   exit 1
@@ -4538,6 +4560,14 @@ if [[ "$OPENTITAN_FPV_ALLOW_UNFILTERED" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "
 fi
 if [[ "$OPENTITAN_FPV_MAX_TARGETS" != "0" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
   echo "--opentitan-fpv-max-targets requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_VERILOG_CACHE_MODE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-verilog-cache-mode requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-verilog-cache-dir requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
@@ -14502,6 +14532,12 @@ run_opentitan_fpv_bmc_lane() {
     --cover-shard-count "$OPENTITAN_FPV_BMC_COVER_SHARD_COUNT"
     --cover-shard-index "$OPENTITAN_FPV_BMC_COVER_SHARD_INDEX"
   )
+  if [[ -n "$OPENTITAN_FPV_BMC_VERILOG_CACHE_MODE" ]]; then
+    opentitan_fpv_bmc_args+=(--verilog-cache-mode "$OPENTITAN_FPV_BMC_VERILOG_CACHE_MODE")
+  fi
+  if [[ -n "$OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR" ]]; then
+    opentitan_fpv_bmc_args+=(--verilog-cache-dir "$OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR")
+  fi
   if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
     opentitan_fpv_bmc_args+=(--target-filter "$OPENTITAN_FPV_TARGET_FILTER")
   fi

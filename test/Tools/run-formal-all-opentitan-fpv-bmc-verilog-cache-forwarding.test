@@ -1,0 +1,20 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: cp %S/../../utils/select_opentitan_formal_cfgs.py %t/utils/select_opentitan_formal_cfgs.py
+// RUN: cp %S/../../utils/resolve_opentitan_formal_compile_contracts.py %t/utils/resolve_opentitan_formal_compile_contracts.py
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncompile=\"\"\ncache_mode=\"\"\ncache_dir=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    --compile-contracts) compile=\"$2\"; shift 2 ;;\n    --verilog-cache-mode) cache_mode=\"$2\"; shift 2 ;;\n    --verilog-cache-dir) cache_dir=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n: \"${OUT:?}\"\nif [[ ! -f \"$compile\" ]]; then\n  echo \"missing_compile_contracts=$compile\" >&2\n  exit 10\nfi\nif [[ \"$cache_mode\" != \"readwrite\" ]]; then\n  echo \"bad_verilog_cache_mode=$cache_mode\" >&2\n  exit 11\nfi\nif [[ \"$cache_dir\" != \"%t/fpv-cache\" ]]; then\n  echo \"bad_verilog_cache_dir=$cache_dir\" >&2\n  exit 12\nfi\nprintf \"PASS\\tfoo_fpv::foo_tb\\t%t/out/opentitan-fpv-bmc-work/foo_fpv/foo_tb\\topentitan\\tFPV_BMC\\tUNSAT\\n\" > \"$OUT\"\n' > %t/utils/run_opentitan_fpv_circt_bmc.py
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib,sys\ncore = sys.argv[-1]\ntool = sys.argv[sys.argv.index(\"--tool\") + 1]\ntarget = sys.argv[sys.argv.index(\"--target\") + 1]\ncore_token = core.replace(\":\", \"_\").replace(\".\", \"_\")\nout_dir = pathlib.Path.cwd() / \"build\" / core_token / f\"{target}-{tool}\"\nout_dir.mkdir(parents=True, exist_ok=True)\neda = out_dir / f\"{core_token}.eda.yml\"\neda.write_text(\"\"\"toplevel: foo_tb\\nfiles:\\n- core: lowrisc:foo:pkg:0\\n  file_type: systemVerilogSource\\n  name: ../src/foo.sv\\n\"\"\")\n' > %t/bin/fusesoc
+// RUN: printf '{\n  "name": "top_earlgrey_fpv_prim_cfgs",\n  "flow": "formal",\n  "sub_flow": "fpv",\n  "use_cfgs": [\n    {\n      "name": "foo_fpv",\n      "dut": "foo_tb",\n      "fusesoc_core": "lowrisc:fpv:foo_fpv",\n      "task": "FpvDefault",\n      "rel_path": "hw/top_earlgrey/formal/ip/foo"\n    }\n  ]\n}\n' > %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/select_opentitan_formal_cfgs.py %t/utils/resolve_opentitan_formal_compile_contracts.py %t/utils/run_opentitan_fpv_circt_bmc.py %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec %t/bin/fusesoc
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-fpv-bmc --opentitan %t/ot --circt-verilog %t/bin/circt-verilog --include-lane-regex '^opentitan/FPV_BMC$' --opentitan-fpv-cfg %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson --select-cfgs 'foo_fpv' --opentitan-fpv-fusesoc-bin %t/bin/fusesoc --opentitan-fpv-bmc-verilog-cache-mode readwrite --opentitan-fpv-bmc-verilog-cache-dir %t/fpv-cache
+// RUN: FileCheck %s --check-prefix=SUM < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=CASE < %t/out/opentitan-fpv-bmc-results.txt
+//
+// SUM: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
+// SUM: opentitan{{[[:space:]]+}}FPV_BMC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
+// CASE: PASS{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}opentitan-fpv-bmc-work/foo_fpv/foo_tb{{[[:space:]]+}}opentitan{{[[:space:]]+}}FPV_BMC{{[[:space:]]+}}UNSAT

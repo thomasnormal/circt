@@ -288,6 +288,20 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - enables predictable frontend reuse from OpenTitan orchestration without
        hard-coding OpenTitan-only frontend behavior into the generic pairwise
        runner.
+27. OpenTitan FPV cache policy forwarding at orchestration layer completed:
+   - `run_formal_all.sh` now exposes and forwards OpenTitan FPV BMC cache
+     controls:
+     - `--opentitan-fpv-bmc-verilog-cache-mode`
+     - `--opentitan-fpv-bmc-verilog-cache-dir`
+   - added fail-closed mode validation and lane-dependency checks
+     (`--with-opentitan-fpv-bmc` required).
+   - added regressions:
+     - `test/Tools/run-formal-all-opentitan-fpv-bmc-verilog-cache-forwarding.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-bmc-verilog-cache-mode-invalid.test`
+   - impact:
+     - lets profile-pack and strict-gate workflows enable deterministic cache
+       behavior from the top-level formal entrypoint, not only runner-local
+       invocations.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
