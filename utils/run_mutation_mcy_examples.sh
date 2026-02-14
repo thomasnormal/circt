@@ -50,6 +50,8 @@ Options:
                            (default: disabled)
   --max-total-errors N     Fail if total reported errors across selected
                            examples exceed N (default: disabled)
+  --max-total-retries N    Fail if total retries across selected examples
+                           exceed N (default: disabled)
   --min-total-detected N   Fail if total detected mutants across selected
                            examples is below N (default: disabled)
   --min-total-relevant N   Fail if total relevant mutants across selected
@@ -130,6 +132,8 @@ Options:
 
 Outputs:
   <out-dir>/summary.tsv    Aggregated example status/coverage summary
+  <out-dir>/retry-summary.tsv
+                           Aggregated retry attempts/retries-used summary
   <out-dir>/summary.schema-version
                            Current summary schema-version artifact
   <out-dir>/summary.schema-contract
@@ -173,6 +177,7 @@ MIN_TOTAL_DETECTED=""
 MIN_TOTAL_RELEVANT=""
 MIN_TOTAL_COVERAGE_PERCENT=""
 MAX_TOTAL_ERRORS=""
+MAX_TOTAL_RETRIES=""
 BASELINE_FILE=""
 BASELINE_SCHEMA_VERSION_FILE=""
 BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
@@ -1262,6 +1267,9 @@ run_example_worker() {
   local fake_create_mutated=""
   local run_log=""
   local metrics_file=""
+  local retry_result_file="${result_file}.retry"
+  local retry_attempts=1
+  local retries_used=0
   local rc=0
   local detected="0"
   local relevant="0"
@@ -1455,6 +1463,8 @@ EOS
     fi
     attempt=$((attempt + 1))
   done
+  retry_attempts="$attempt"
+  retries_used=$((retry_attempts - 1))
   if [[ "$rc" -eq 0 ]]; then
     status="PASS"
   fi
@@ -1499,6 +1509,7 @@ EOS
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$status" "$rc" "$detected" "$relevant" "$coverage" "$errors" "$policy_fingerprint" "$coverage_for_gate" "$gate_failure" \
     > "$result_file"
+  printf '%s\t%s\n' "$retry_attempts" "$retries_used" > "$retry_result_file"
 
   return 0
 }
@@ -1661,6 +1672,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --max-total-errors)
       MAX_TOTAL_ERRORS="$2"
+      shift 2
+      ;;
+    --max-total-retries)
+      MAX_TOTAL_RETRIES="$2"
       shift 2
       ;;
     --baseline-file)
@@ -1843,6 +1858,10 @@ if [[ -n "$MIN_TOTAL_COVERAGE_PERCENT" ]]; then
 fi
 if [[ -n "$MAX_TOTAL_ERRORS" ]] && ! is_nonneg_int "$MAX_TOTAL_ERRORS"; then
   echo "--max-total-errors must be a non-negative integer: $MAX_TOTAL_ERRORS" >&2
+  exit 1
+fi
+if [[ -n "$MAX_TOTAL_RETRIES" ]] && ! is_nonneg_int "$MAX_TOTAL_RETRIES"; then
+  echo "--max-total-retries must be a non-negative integer: $MAX_TOTAL_RETRIES" >&2
   exit 1
 fi
 if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
@@ -2049,6 +2068,8 @@ fi
 
 SUMMARY_FILE="${OUT_DIR}/summary.tsv"
 printf '%s\n' "$CURRENT_SUMMARY_HEADER" > "$SUMMARY_FILE"
+RETRY_SUMMARY_FILE="${OUT_DIR}/retry-summary.tsv"
+printf 'example\tretry_attempts\tretries_used\n' > "$RETRY_SUMMARY_FILE"
 
 overall_rc=0
 mkdir -p "$(dirname "$SUMMARY_SCHEMA_VERSION_FILE")"
@@ -2060,6 +2081,7 @@ printf '%s\n' "$CURRENT_SUMMARY_SCHEMA_CONTRACT_FINGERPRINT" > "$SUMMARY_SCHEMA_
 total_detected=0
 total_relevant=0
 total_errors=0
+total_retries=0
 RESULT_ROOT="${OUT_DIR}/.results"
 mkdir -p "$RESULT_ROOT"
 worker_failures=0
@@ -2106,10 +2128,22 @@ for example_id in "${EXAMPLE_IDS[@]}"; do
   relevant="$(normalize_int_or_zero "$relevant")"
   errors="$(normalize_int_or_zero "$errors")"
   coverage_for_gate="$(normalize_decimal_or_zero "$coverage_for_gate")"
+  retry_result_file="${result_file}.retry"
+  retry_attempts=1
+  retries_used=0
+  if [[ -f "$retry_result_file" ]]; then
+    IFS=$'\t' read -r retry_attempts retries_used < "$retry_result_file" || true
+  fi
+  retry_attempts="$(normalize_int_or_zero "$retry_attempts")"
+  retries_used="$(normalize_int_or_zero "$retries_used")"
+  if [[ "$retry_attempts" -lt 1 ]]; then
+    retry_attempts=1
+  fi
 
   total_detected=$((total_detected + detected))
   total_relevant=$((total_relevant + relevant))
   total_errors=$((total_errors + errors))
+  total_retries=$((total_retries + retries_used))
 
   if [[ -n "$gate_failure" ]]; then
     status="FAIL"
@@ -2118,6 +2152,7 @@ for example_id in "${EXAMPLE_IDS[@]}"; do
   fi
 
   append_summary_row "$SUMMARY_FILE" "$example_id" "$status" "$rc" "$detected" "$relevant" "$coverage" "$errors" "$policy_fingerprint"
+  printf '%s\t%s\t%s\n' "$example_id" "$retry_attempts" "$retries_used" >> "$RETRY_SUMMARY_FILE"
   if [[ "$rc" -ne 0 ]]; then
     overall_rc=1
   fi
@@ -2155,6 +2190,12 @@ if [[ -n "$MAX_TOTAL_ERRORS" && "$total_errors" -gt "$MAX_TOTAL_ERRORS" ]]; then
     suite_gate_failure+=","
   fi
   suite_gate_failure+="errors>${MAX_TOTAL_ERRORS}"
+fi
+if [[ -n "$MAX_TOTAL_RETRIES" && "$total_retries" -gt "$MAX_TOTAL_RETRIES" ]]; then
+  if [[ -n "$suite_gate_failure" ]]; then
+    suite_gate_failure+=","
+  fi
+  suite_gate_failure+="retries>${MAX_TOTAL_RETRIES}"
 fi
 if [[ -n "$suite_gate_failure" ]]; then
   overall_rc=1
