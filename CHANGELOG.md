@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1396 - February 14, 2026
+
+### OpenTitan FPV BMC: Canonical Policy Bundles + Baseline Workflow
+
+1. Added canonical OpenTitan FPV BMC task-profile status-policy presets:
+   - `utils/opentitan_fpv_policy/task_profile_status_presets.tsv`
+   - default policy model:
+     - global forbidden: `ERROR,TIMEOUT,UNKNOWN`
+     - profile forbidden: `FAILING` for `fpv_default` and `fpv_sec_cm`.
+2. Extended `utils/run_formal_all.sh` with canonical preset wiring:
+   - new option:
+     `--opentitan-fpv-bmc-use-canonical-task-profile-presets`
+   - resolves to repo-managed preset path
+     (`utils/opentitan_fpv_policy/task_profile_status_presets.tsv`),
+     validates `--with-opentitan-fpv-bmc` coupling, and rejects conflict with
+     explicit `--opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file`.
+3. Added checked-in workflow wrapper for policy baseline lifecycle:
+   - `utils/run_opentitan_fpv_bmc_policy_workflow.sh`
+   - modes:
+     - `update`: updates FPV summary/per-assertion/grouped-policy baselines
+     - `check`: enforces corresponding drift gates (strict-gate on by default).
+4. Added policy workflow/bundle docs:
+   - `utils/opentitan_fpv_policy/README.md`
+   - baseline artifact anchor dir:
+     `utils/opentitan_fpv_policy/baselines/.gitkeep`.
+5. Added focused regressions:
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-canonical-task-profile-presets-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-canonical-task-profile-presets-conflict.test`
+   - `test/Tools/run-opentitan-fpv-bmc-policy-workflow.test`
+   - updated:
+     `test/Tools/run-formal-all-help.test`.
+
 ## Iteration 1395 - February 14, 2026
 
 ### Mutation Workflow: Seed-Driven Native Operator Ordering

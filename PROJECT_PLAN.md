@@ -136,15 +136,24 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - `--fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift`
    - strict-gate now auto-enables grouped status-policy drift fail mode when a
      grouped baseline is configured.
-13. Remaining limitation vs Jasper/VCF-style mature flows:
-   - policy execution is now structured, but default OpenTitan preset bundles
-     are still not shipped as canonical repo-managed artifacts.
-   - largest practical gap for OpenTitan-wide rollout remains target-level
-     default policy packaging and review workflow ergonomics.
-14. Next formal milestone (OpenTitan-aligned, backend-generic):
-   - advance per-assertion reporting parity:
-     - ship canonical OpenTitan task-profile preset bundles and
-       checked-in baseline update workflows for FPV policy governance.
+13. Canonical OpenTitan FPV BMC policy packaging completed:
+   - shipped repo-managed task-profile status-policy presets:
+     `utils/opentitan_fpv_policy/task_profile_status_presets.tsv`.
+   - added first-class CLI toggle in `run_formal_all.sh`:
+     `--opentitan-fpv-bmc-use-canonical-task-profile-presets`.
+   - added checked-in baseline workflow wrapper:
+     `utils/run_opentitan_fpv_bmc_policy_workflow.sh` (`update` / `check`).
+14. Remaining limitation vs Jasper/VCF-style mature flows:
+   - canonical policy inputs/workflow are now available, but reviewed baseline
+     snapshots for broad OpenTitan target cohorts (`ip`/`prim`/`sec_cm`) are
+     not yet materialized and governed as committed artifacts.
+   - next practical gap is scaling the new workflow from harness-only policy
+     controls to routinely updated, target-cohort baseline packs.
+15. Next formal milestone (OpenTitan-aligned, backend-generic):
+   - materialize and govern cohort baselines for canonical FPV policy packs:
+     - add curated baseline profiles for representative `ip`, `prim`, and
+       `sec_cm` target sets using the new checked-in workflow;
+     - add drift triage docs/playbook for baseline refresh vs allowlist usage.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 

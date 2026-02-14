@@ -1,0 +1,4 @@
+task_profile	required_statuses	forbidden_statuses
+*		ERROR,TIMEOUT,UNKNOWN
+fpv_default		FAILING
+fpv_sec_cm		FAILING
