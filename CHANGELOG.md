@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1316 - February 14, 2026
+
+### Mutation Workflow: Baseline Row Uniqueness Gate + O(1) Drift Lookup
+
+1. Refactored `evaluate_summary_drift()` in `utils/run_mutation_mcy_examples.sh` to preload baseline rows into associative maps and arrays.
+2. Removed per-example baseline file rescans by replacing repeated row lookup with O(1) map access.
+3. Preserved strict baseline parity semantics by iterating the original baseline row order snapshot.
+4. Added duplicate baseline-row detection:
+   - duplicate example IDs in baseline now emit drift candidates:
+     - metric: `row`
+     - detail: `duplicate_baseline_row`
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-baseline-duplicate-row-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-baseline-duplicate-row-allowlist.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (35/35)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-120330` PASS
+
 ## Iteration 1315 - February 14, 2026
 
 ### Mutation Workflow: Strict Baseline Governance Preset
