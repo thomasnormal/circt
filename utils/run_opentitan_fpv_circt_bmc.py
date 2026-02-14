@@ -61,6 +61,19 @@ class FPVSummaryRow:
     skipped: str
 
 
+@dataclass(frozen=True)
+class FPVAssertionRow:
+    key: str
+    target_name: str
+    status: str
+    case_id: str
+    case_path: str
+    assertion_id: str
+    assertion_label: str
+    solver_result: str
+    reason: str
+
+
 def fail(msg: str) -> None:
     print(msg, file=sys.stderr)
     raise SystemExit(1)
@@ -434,6 +447,76 @@ def write_fpv_summary_drift(path: Path, rows: list[tuple[str, str, str, str]]) -
             writer.writerow(row)
 
 
+def assertion_row_key(case_id: str, assertion_id: str) -> str:
+    return f"{case_id}::{assertion_id}"
+
+
+def assertion_target_from_case(case_id: str) -> str:
+    if "::" in case_id:
+        return case_id.split("::", 1)[0]
+    return case_id
+
+
+def assertion_rows_to_map(rows: list[tuple[str, ...]]) -> dict[str, FPVAssertionRow]:
+    out: dict[str, FPVAssertionRow] = {}
+    for idx, row in enumerate(rows, start=1):
+        if len(row) < 7:
+            fail(
+                "assertion results row has fewer than 7 TSV fields at "
+                f"row={idx}: {row}"
+            )
+        status = row[0].strip().upper()
+        case_id = row[1].strip()
+        case_path = row[2].strip()
+        assertion_id = row[3].strip()
+        assertion_label = row[4].strip()
+        solver_result = row[5].strip().upper()
+        reason = row[6].strip()
+        if not case_id or not assertion_id:
+            fail(
+                "assertion results row missing case_id/assertion_id at "
+                f"row={idx}: {row}"
+            )
+        key = assertion_row_key(case_id, assertion_id)
+        if key in out:
+            fail(f"duplicate assertion row key '{key}' in assertion results")
+        out[key] = FPVAssertionRow(
+            key=key,
+            target_name=assertion_target_from_case(case_id),
+            status=status,
+            case_id=case_id,
+            case_path=case_path,
+            assertion_id=assertion_id,
+            assertion_label=assertion_label,
+            solver_result=solver_result,
+            reason=reason,
+        )
+    return out
+
+
+def read_assertion_results(path: Path) -> dict[str, FPVAssertionRow]:
+    if not path.is_file():
+        fail(f"assertion results file not found: {path}")
+    rows: list[tuple[str, ...]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        rows.append(tuple(text.split("\t")))
+    return assertion_rows_to_map(rows)
+
+
+def write_assertion_results_drift(
+    path: Path, rows: list[tuple[str, str, str, str]]
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(["target_name", "kind", "baseline", "current"])
+        for row in rows:
+            writer.writerow(row)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run OpenTitan FPV targets using compile contracts."
@@ -567,9 +650,39 @@ def parse_args() -> argparse.Namespace:
         help="Optional TSV output path for per-assertion FPV BMC rows.",
     )
     parser.add_argument(
+        "--assertion-results-baseline-file",
+        default=os.environ.get("BMC_ASSERTION_RESULTS_BASELINE_FILE", ""),
+        help="Optional baseline per-assertion FPV BMC TSV file for drift checking.",
+    )
+    parser.add_argument(
+        "--assertion-results-drift-file",
+        default=os.environ.get("BMC_ASSERTION_RESULTS_DRIFT_OUT", ""),
+        help="Optional output TSV path for per-assertion FPV BMC drift rows.",
+    )
+    parser.add_argument(
+        "--assertion-results-drift-allowlist-file",
+        default=os.environ.get("BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE", ""),
+        help=(
+            "Optional target-name allowlist file for per-assertion FPV BMC "
+            "drift suppression. Each non-comment line is exact:<name>, "
+            "prefix:<prefix>, regex:<pattern>, or bare exact."
+        ),
+    )
+    parser.add_argument(
+        "--fail-on-assertion-results-drift",
+        action="store_true",
+        default=os.environ.get("BMC_FAIL_ON_ASSERTION_RESULTS_DRIFT", "0") == "1",
+        help="Fail when per-assertion FPV BMC drift is detected vs baseline.",
+    )
+    parser.add_argument(
         "--cover-results-file",
         default=os.environ.get("BMC_COVER_RESULTS_OUT", ""),
         help="Optional TSV output path for per-cover FPV BMC rows.",
+    )
+    parser.add_argument(
+        "--launch-events-file",
+        default=os.environ.get("BMC_LAUNCH_EVENTS_OUT", ""),
+        help="Optional TSV output path for launch retry/fallback events.",
     )
     parser.add_argument(
         "--assertion-granular",
@@ -877,6 +990,7 @@ def main() -> int:
     pairwise_result_files: list[Path] = []
     assertion_result_files: list[Path] = []
     cover_result_files: list[Path] = []
+    launch_event_files: list[Path] = []
     drop_case_files: list[Path] = []
     drop_reason_files: list[Path] = []
     timeout_reason_files: list[Path] = []
@@ -1017,6 +1131,15 @@ def main() -> int:
                         "--cover-results-file",
                         str(group_cover_results),
                     ]
+                if args.launch_events_file:
+                    group_launch_events = (
+                        workdir / f"pairwise-launch-events-{group_index}.tsv"
+                    )
+                    launch_event_files.append(group_launch_events)
+                    cmd += [
+                        "--launch-events-file",
+                        str(group_launch_events),
+                    ]
                 if args.assertion_granular:
                     cmd.append("--assertion-granular")
                     if assertion_granular_max > 0:
@@ -1054,6 +1177,7 @@ def main() -> int:
         merge_plain_files(timeout_reason_files, args.timeout_reasons_file)
         merge_plain_files(assertion_result_files, args.assertion_results_file)
         merge_plain_files(cover_result_files, args.cover_results_file)
+        merge_plain_files(launch_event_files, args.launch_events_file)
         merge_resolved_contract_files(resolved_contract_files, args.resolved_contracts_file)
 
         merged_rows = list(pre_rows)
@@ -1097,6 +1221,85 @@ def main() -> int:
                 if not line:
                     continue
                 merged_cover_rows.append(tuple(line.split("\t")))
+
+        if args.assertion_results_baseline_file:
+            baseline_path = Path(args.assertion_results_baseline_file).resolve()
+            current = assertion_rows_to_map(merged_assertion_rows)
+            baseline = read_assertion_results(baseline_path)
+            current_path = (
+                Path(args.assertion_results_file).resolve()
+                if args.assertion_results_file
+                else Path("<in-memory-current>")
+            )
+
+            allow_exact: set[str] = set()
+            allow_prefix: list[str] = []
+            allow_regex: list[re.Pattern[str]] = []
+            if args.assertion_results_drift_allowlist_file:
+                allow_exact, allow_prefix, allow_regex = load_allowlist(
+                    Path(args.assertion_results_drift_allowlist_file).resolve()
+                )
+
+            drift_rows: list[tuple[str, str, str, str]] = []
+            baseline_keys = set(baseline.keys())
+            current_keys = set(current.keys())
+
+            for key in sorted(baseline_keys - current_keys):
+                target_name = baseline[key].target_name
+                if is_allowlisted(target_name, allow_exact, allow_prefix, allow_regex):
+                    continue
+                drift_rows.append((target_name, "missing_assertion_row", key, "absent"))
+            for key in sorted(current_keys - baseline_keys):
+                target_name = current[key].target_name
+                if is_allowlisted(target_name, allow_exact, allow_prefix, allow_regex):
+                    continue
+                drift_rows.append((target_name, "new_assertion_row", "absent", key))
+
+            for key in sorted(baseline_keys.intersection(current_keys)):
+                b = baseline[key]
+                c = current[key]
+                target_name = c.target_name
+                if is_allowlisted(target_name, allow_exact, allow_prefix, allow_regex):
+                    continue
+                if b.status != c.status:
+                    drift_rows.append((target_name, "assertion_status", b.status, c.status))
+                if b.solver_result != c.solver_result:
+                    drift_rows.append(
+                        (target_name, "solver_result", b.solver_result, c.solver_result)
+                    )
+                if b.reason != c.reason:
+                    drift_rows.append((target_name, "reason", b.reason, c.reason))
+
+            if args.assertion_results_drift_file:
+                drift_path = Path(args.assertion_results_drift_file).resolve()
+                write_assertion_results_drift(drift_path, drift_rows)
+                print(f"assertion results drift: {drift_path}", flush=True)
+
+            if drift_rows:
+                sample = ", ".join(
+                    f"{target}:{kind}" for target, kind, _, _ in drift_rows[:6]
+                )
+                if len(drift_rows) > 6:
+                    sample += ", ..."
+                print(
+                    (
+                        "opentitan fpv assertion-results drift detected: "
+                        f"rows={len(drift_rows)} sample=[{sample}] "
+                        f"baseline={baseline_path} current={current_path}"
+                    ),
+                    file=sys.stderr,
+                )
+                if args.fail_on_assertion_results_drift:
+                    return 1
+            else:
+                print(
+                    (
+                        "opentitan fpv assertion-results drift check passed: "
+                        f"rows={len(current)} baseline={baseline_path} "
+                        f"current={current_path}"
+                    ),
+                    file=sys.stderr,
+                )
 
         if args.fpv_summary_file:
             fpv_summary_path = Path(args.fpv_summary_file)

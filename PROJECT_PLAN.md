@@ -87,10 +87,15 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      `stopat_mode`, `blackbox_policy`, `task_policy_fingerprint`.
    - strict compile-contract drift gates now catch sec_cm task-policy mapping
      drift even when filelist-level contract fingerprints are unchanged.
-5. Remaining limitation vs Jasper/VCF-style mature flows:
+5. Per-assertion drift governance completed for OpenTitan FPV BMC:
+   - added baseline/update/fail/allowlist controls for
+     per-assertion evidence drift (`opentitan-fpv-bmc-assertion-results.tsv`).
+   - strict-gate now auto-enforces per-assertion drift when an assertion
+     baseline is configured.
+6. Remaining limitation vs Jasper/VCF-style mature flows:
    - per-assertion semantic status parity remains partial (especially vacuity/
      unreachable classification and richer task-level diagnostics).
-6. Next formal milestone (OpenTitan-aligned, backend-generic):
+7. Next formal milestone (OpenTitan-aligned, backend-generic):
    - advance per-assertion reporting parity:
      - strengthen assertion-status drift governance and vacuity/unreachable
        classification coverage across OpenTitan FPV targets.

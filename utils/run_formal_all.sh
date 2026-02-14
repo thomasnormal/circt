@@ -1198,6 +1198,23 @@ Options:
   --fail-on-opentitan-fpv-bmc-summary-drift
                          Fail when OpenTitan FPV assertion-summary drift checker
                          reports non-allowlisted drift
+  --opentitan-fpv-bmc-assertion-results-baseline-file FILE
+                         Optional baseline OpenTitan FPV per-assertion TSV
+                         for drift checks
+  --opentitan-fpv-bmc-assertion-results-drift-file FILE
+                         Optional output path for OpenTitan FPV per-assertion
+                         drift TSV (default:
+                         OUT_DIR/opentitan-fpv-bmc-assertion-results-drift.tsv
+                         when baseline is set)
+  --opentitan-fpv-bmc-assertion-results-drift-allowlist-file FILE
+                         Optional allowlist file for OpenTitan FPV per-assertion
+                         drift checks (target-level exact/prefix/regex)
+  --update-opentitan-fpv-bmc-assertion-results-baseline
+                         Update --opentitan-fpv-bmc-assertion-results-baseline-file
+                         with the current OpenTitan FPV per-assertion artifact
+  --fail-on-opentitan-fpv-bmc-assertion-results-drift
+                         Fail when OpenTitan FPV per-assertion drift checker
+                         reports non-allowlisted drift
   --opentitan-fpv-bmc-evidence-parity-file FILE
                          Optional output path for OpenTitan FPV BMC evidence
                          parity TSV (summary rollup vs raw evidence; default:
@@ -2898,6 +2915,9 @@ OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE=""
 OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE=""
 OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE=""
 OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE=""
+OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE=""
+OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE=""
+OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE=""
 OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE=""
 OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE=""
 OPENTITAN_FPV_FUSESOC_BIN="fusesoc"
@@ -2909,6 +2929,8 @@ UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE=0
 FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=0
 UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE=0
 FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=0
+UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE=0
+FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT=0
 FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY=0
 UPDATE_OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE=0
 FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT=0
@@ -3123,6 +3145,12 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-summary-drift-allowlist-file)
       OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-assertion-results-baseline-file)
+      OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-assertion-results-drift-file)
+      OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-assertion-results-drift-allowlist-file)
+      OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-evidence-parity-file)
       OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-evidence-parity-allowlist-file)
@@ -3145,6 +3173,10 @@ while [[ $# -gt 0 ]]; do
       UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE=1; shift ;;
     --fail-on-opentitan-fpv-bmc-summary-drift)
       FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=1; shift ;;
+    --update-opentitan-fpv-bmc-assertion-results-baseline)
+      UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE=1; shift ;;
+    --fail-on-opentitan-fpv-bmc-assertion-results-drift)
+      FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT=1; shift ;;
     --fail-on-opentitan-fpv-bmc-evidence-parity)
       FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY=1; shift ;;
     --fail-on-opentitan-fpv-unknown-task)
@@ -3783,6 +3815,9 @@ fi
 if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && -z "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE" ]]; then
   OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE="$OUT_DIR/opentitan-fpv-bmc-fpv-summary-drift.tsv"
 fi
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" && -z "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE" ]]; then
+  OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE="$OUT_DIR/opentitan-fpv-bmc-assertion-results-drift.tsv"
+fi
 if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -z "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE" ]]; then
   OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE="$OUT_DIR/opentitan-fpv-bmc-evidence-parity.tsv"
 fi
@@ -4394,6 +4429,18 @@ if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && "$WITH_OPENTITAN_F
   echo "--opentitan-fpv-bmc-summary-drift-allowlist-file requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-assertion-results-baseline-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-assertion-results-drift-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-assertion-results-drift-allowlist-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
 if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
   echo "--opentitan-fpv-bmc-evidence-parity-file requires --with-opentitan-fpv-bmc" >&2
   exit 1
@@ -4408,6 +4455,14 @@ if [[ "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" == "1" && "$WITH_OPENTITAN_FP
 fi
 if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
   echo "--fail-on-opentitan-fpv-bmc-summary-drift requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--update-opentitan-fpv-bmc-assertion-results-baseline requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--fail-on-opentitan-fpv-bmc-assertion-results-drift requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
@@ -4450,12 +4505,28 @@ if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" == "1" && -z "$OPENTITAN_FPV_BM
   echo "--fail-on-opentitan-fpv-bmc-summary-drift requires --opentitan-fpv-bmc-summary-baseline-file" >&2
   exit 1
 fi
+if [[ "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE" == "1" && -z "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" ]]; then
+  echo "--update-opentitan-fpv-bmc-assertion-results-baseline requires --opentitan-fpv-bmc-assertion-results-baseline-file" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT" == "1" && -z "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" ]]; then
+  echo "--fail-on-opentitan-fpv-bmc-assertion-results-drift requires --opentitan-fpv-bmc-assertion-results-baseline-file" >&2
+  exit 1
+fi
 if [[ "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" == "1" && "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" == "1" ]]; then
   echo "--update-opentitan-fpv-bmc-summary-baseline cannot be combined with --fail-on-opentitan-fpv-bmc-summary-drift" >&2
   exit 1
 fi
+if [[ "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE" == "1" && "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT" == "1" ]]; then
+  echo "--update-opentitan-fpv-bmc-assertion-results-baseline cannot be combined with --fail-on-opentitan-fpv-bmc-assertion-results-drift" >&2
+  exit 1
+fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" != "1" && ! -f "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" ]]; then
   echo "missing --opentitan-fpv-bmc-summary-baseline-file: $OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE" != "1" && ! -f "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" ]]; then
+  echo "missing --opentitan-fpv-bmc-assertion-results-baseline-file: $OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" ]]; then
@@ -4468,6 +4539,10 @@ if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTIT
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" ]]; then
   echo "OpenTitan FPV BMC summary drift allowlist file not readable: $OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE" ]]; then
+  echo "OpenTitan FPV BMC assertion-results drift allowlist file not readable: $OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" ]]; then
@@ -6013,6 +6088,9 @@ fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=1
 fi
+if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" ]]; then
+  FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT=1
+fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" ]]; then
   FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY=1
 fi
@@ -6053,6 +6131,10 @@ if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPEN
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--opentitan-fpv-bmc-summary-drift-allowlist-file requires --fail-on-opentitan-fpv-bmc-summary-drift or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-assertion-results-drift-allowlist-file requires --fail-on-opentitan-fpv-bmc-assertion-results-drift or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -8677,6 +8759,9 @@ compute_lane_state_config_hash() {
     printf "opentitan_fpv_bmc_summary_baseline_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE"
     printf "opentitan_fpv_bmc_summary_drift_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE"
     printf "opentitan_fpv_bmc_summary_drift_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE"
+    printf "opentitan_fpv_bmc_assertion_results_baseline_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE"
+    printf "opentitan_fpv_bmc_assertion_results_drift_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE"
+    printf "opentitan_fpv_bmc_assertion_results_drift_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE"
     printf "opentitan_fpv_bmc_evidence_parity_file=%s\n" "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE"
     printf "opentitan_fpv_bmc_evidence_parity_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE"
     printf "opentitan_fpv_fusesoc_bin=%s\n" "$OPENTITAN_FPV_FUSESOC_BIN"
@@ -8688,6 +8773,8 @@ compute_lane_state_config_hash() {
     printf "fail_on_opentitan_fpv_compile_contract_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT"
     printf "update_opentitan_fpv_bmc_summary_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE"
     printf "fail_on_opentitan_fpv_bmc_summary_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT"
+    printf "update_opentitan_fpv_bmc_assertion_results_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE"
+    printf "fail_on_opentitan_fpv_bmc_assertion_results_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT"
     printf "fail_on_opentitan_fpv_bmc_evidence_parity=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY"
     printf "update_opentitan_connectivity_bmc_status_baseline=%s\n" "$UPDATE_OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE"
     printf "fail_on_opentitan_connectivity_bmc_status_drift=%s\n" "$FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT"
@@ -13997,6 +14084,9 @@ run_opentitan_fpv_bmc_lane() {
   if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE" ]]; then
     : > "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE"
   fi
+  if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE" ]]; then
+    : > "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE"
+  fi
   rm -rf "$workdir"
 
   local opentitan_fpv_bmc_args=(
@@ -14017,6 +14107,10 @@ run_opentitan_fpv_bmc_lane() {
   local fpv_summary_baseline_for_run=""
   if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" != "1" ]]; then
     fpv_summary_baseline_for_run="$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE"
+  fi
+  local assertion_results_baseline_for_run=""
+  if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE" != "1" ]]; then
+    assertion_results_baseline_for_run="$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE"
   fi
 
   local opentitan_fpv_bmc_env=(OUT="$case_results"
@@ -14050,6 +14144,18 @@ run_opentitan_fpv_bmc_lane() {
       opentitan_fpv_bmc_env+=("BMC_FAIL_ON_FPV_SUMMARY_DRIFT=1")
     fi
   fi
+  if [[ -n "$assertion_results_baseline_for_run" ]]; then
+    opentitan_fpv_bmc_env+=("BMC_ASSERTION_RESULTS_BASELINE_FILE=$assertion_results_baseline_for_run")
+    if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE" ]]; then
+      opentitan_fpv_bmc_env+=("BMC_ASSERTION_RESULTS_DRIFT_OUT=$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_FILE")
+    fi
+    if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE" ]]; then
+      opentitan_fpv_bmc_env+=("BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE=$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE")
+    fi
+    if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT" == "1" ]]; then
+      opentitan_fpv_bmc_env+=("BMC_FAIL_ON_ASSERTION_RESULTS_DRIFT=1")
+    fi
+  fi
   if [[ ${#FORMAL_BMC_TIMEOUT_ENV[@]} -gt 0 ]]; then
     opentitan_fpv_bmc_env+=("${FORMAL_BMC_TIMEOUT_ENV[@]}")
   fi
@@ -14065,6 +14171,19 @@ run_opentitan_fpv_bmc_lane() {
       return
     fi
     echo "warning: OpenTitan FPV BMC summary baseline update skipped; summary file is empty: $fpv_summary_file" >&2
+  }
+
+  maybe_update_opentitan_fpv_bmc_assertion_results_baseline() {
+    if [[ "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE" != "1" ]]; then
+      return
+    fi
+    mkdir -p "$(dirname "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE")"
+    if [[ -s "$assertion_results_file" ]]; then
+      cp "$assertion_results_file" "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE"
+      echo "updated OpenTitan FPV BMC assertion-results baseline: $OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" >&2
+      return
+    fi
+    echo "warning: OpenTitan FPV BMC assertion-results baseline update skipped; assertion-results file is empty: $assertion_results_file" >&2
   }
 
   run_suite "$suite_name" \
@@ -14088,6 +14207,7 @@ run_opentitan_fpv_bmc_lane() {
         no_impl_summary="${no_impl_summary} ${bmc_launch_summary}"
       fi
       maybe_update_opentitan_fpv_bmc_summary_baseline
+      maybe_update_opentitan_fpv_bmc_assertion_results_baseline
       record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 0 1 "$no_impl_summary"
       return
     fi
@@ -14106,6 +14226,7 @@ run_opentitan_fpv_bmc_lane() {
       missing_summary="${missing_summary} ${bmc_launch_summary}"
     fi
     maybe_update_opentitan_fpv_bmc_summary_baseline
+    maybe_update_opentitan_fpv_bmc_assertion_results_baseline
     record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$missing_summary"
     return
   fi
@@ -14176,6 +14297,7 @@ PY
     summary="${summary} ${bmc_launch_summary}"
   fi
   maybe_update_opentitan_fpv_bmc_summary_baseline
+  maybe_update_opentitan_fpv_bmc_assertion_results_baseline
   append_filtered_min_total_violation total summary
   maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"

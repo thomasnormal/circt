@@ -155,6 +155,11 @@
 // CHECK: --opentitan-fpv-bmc-summary-drift-allowlist-file
 // CHECK: --update-opentitan-fpv-bmc-summary-baseline
 // CHECK: --fail-on-opentitan-fpv-bmc-summary-drift
+// CHECK: --opentitan-fpv-bmc-assertion-results-baseline-file
+// CHECK: --opentitan-fpv-bmc-assertion-results-drift-file
+// CHECK: --opentitan-fpv-bmc-assertion-results-drift-allowlist-file
+// CHECK: --update-opentitan-fpv-bmc-assertion-results-baseline
+// CHECK: --fail-on-opentitan-fpv-bmc-assertion-results-drift
 // CHECK: --opentitan-fpv-bmc-evidence-parity-file
 // CHECK: --opentitan-fpv-bmc-evidence-parity-allowlist-file
 // CHECK: --fail-on-opentitan-fpv-bmc-evidence-parity
