@@ -1,0 +1,22 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt %t/bin
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nstate_file="$STATE_FILE"\ncount=0\nif [[ -f "$state_file" ]]; then\n  count="$(cat "$state_file")"\nfi\ncount=$((count + 1))\nprintf "%%%%s\\n" "$count" > "$state_file"\nif [[ "$count" -eq 1 ]]; then\n  echo "Text file busy" >&2\n  exit 126\nfi\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --work-dir) work_dir="$2"; shift 2 ;;&\n    --work-dir=*) work_dir="${1#*=}"; shift ;;&\n    *) shift ;;&\n  esac\ndone\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t1\\nrelevant_mutants\\t1\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+
+// RUN: env STATE_FILE=%t/state.txt %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --smoke \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --example-retries 1 \
+// RUN:   --example-retry-delay-ms 7 \
+// RUN:   --out-dir %t/out > %t/stdout.log 2> %t/stderr.log
+
+// RUN: FileCheck %s --check-prefix=RETRY < %t/stderr.log
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=STATE < %t/state.txt
+
+// RETRY: Retrying example (bitcnt): attempt 2/2 after transient launcher failure (rc=126, delay_ms=7)
+// SUMMARY: example{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}detected{{[[:space:]]}}relevant{{[[:space:]]}}coverage_percent{{[[:space:]]}}errors{{[[:space:]]}}policy_fingerprint
+// SUMMARY: bitcnt{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}1{{[[:space:]]}}100.00{{[[:space:]]}}0{{[[:space:]]}}{{[0-9a-f]+}}
+// STATE: 2

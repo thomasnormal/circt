@@ -1,0 +1,5 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --example-retry-delay-ms bad 2>&1 | FileCheck %s --check-prefix=BAD
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --example-retry-delay-ms -1 2>&1 | FileCheck %s --check-prefix=NEG
+
+// BAD: --example-retry-delay-ms must be a non-negative integer: bad
+// NEG: --example-retry-delay-ms must be a non-negative integer: -1
