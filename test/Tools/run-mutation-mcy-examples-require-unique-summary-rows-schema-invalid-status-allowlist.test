@@ -1,0 +1,18 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt %t/bin
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --work-dir) work_dir="$2"; shift 2 ;;\n    --work-dir=*) work_dir="${1#*=}"; shift ;;\n    *) shift ;;\n  esac\ndone\nout_dir="$(dirname "$work_dir")"\nsummary_file="$out_dir/summary.tsv"\nprintf "injected_bad_status\\tBOGUS\\t0\\t1\\t1\\t100.00\\t0\\tdeadbeef\\n" >> "$summary_file"\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t2\\nrelevant_mutants\\t4\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+// RUN: printf 'injected_bad_status::status::invalid_status\n' > %t/allowlist.txt
+
+// RUN: %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --smoke \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --require-unique-summary-rows \
+// RUN:   --drift-allowlist-file %t/allowlist.txt \
+// RUN:   --out-dir %t/out
+
+// RUN: FileCheck %s --check-prefix=CONTRACT < %t/out/summary-contract.tsv
+
+// CONTRACT: injected_bad_status{{[[:space:]]}}status{{[[:space:]]}}PASS_or_FAIL{{[[:space:]]}}BOGUS{{[[:space:]]}}allowed{{[[:space:]]}}invalid_status

@@ -1,5 +1,19 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1324 - February 14, 2026
+
+### Mutation Workflow: Allowlist Coverage for Summary Schema Violations
+
+1. Added explicit regression proving allowlist behavior for strict summary-schema violations under `--require-unique-summary-rows`.
+2. New test injects malformed summary status (`invalid_status`) and validates allowlisted outcome:
+   - `test/Tools/run-mutation-mcy-examples-require-unique-summary-rows-schema-invalid-status-allowlist.test`
+3. This closes a coverage gap by proving allowlist compatibility for non-duplicate summary-contract violations.
+
+### Validation
+
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (43/43)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-122417` PASS
+
 ## Iteration 1323 - February 14, 2026
 
 ### Mutation Workflow: Allowlist Support for Strict Summary Contract
