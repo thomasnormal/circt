@@ -1,5 +1,59 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1394 - February 14, 2026
+
+### Mutation Workflow: Configurable Native Operator Allowlist
+
+1. Added native operator allowlist control in
+   `utils/run_mutation_mcy_examples.sh`:
+   - new CLI option: `--native-mutation-ops CSV`
+   - supports operator tokens:
+     `EQ_TO_NEQ,NEQ_TO_EQ,LT_TO_LE,GT_TO_GE,LE_TO_LT,GE_TO_GT,AND_TO_OR,OR_TO_AND,XOR_TO_OR,UNARY_NOT_DROP,CONST0_TO_1,CONST1_TO_0`
+2. Extended example manifest schema with optional
+   `native_mutation_ops` column (new final optional field):
+   - enables per-example native operator allowlist overrides.
+3. Added strict validation for native-ops specs (CLI + manifest):
+   - rejects invalid, empty, or duplicate tokens with clear diagnostics.
+4. Integrated allowlist into native mutation planning:
+   - allowlist constrains candidate operators first.
+   - applicability-prioritized ordering then applies within the constrained set.
+   - policy fingerprint now includes `native_mutation_ops` only when non-empty
+     (preserves baseline stability for default runs).
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-native-mutation-ops-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-native-mutation-ops-manifest-override-pass.test`
+   - updated: `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (143 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --mutations-backend native --native-tests-mode real --native-real-tests-strict --out-dir /tmp/mcy_examples_real_native_mode_real_strict_1771085228` PASS
+  - `bitcnt`: `detected=6 relevant=8 coverage=75.00 errors=0`
+  - `picorv32_primes`: `detected=8 relevant=8 coverage=100.00 errors=0`
+
+## Iteration 1394 - February 14, 2026
+
+### OpenTitan FPV BMC: Grouped Status-Policy Drift Baselines in Formal Driver
+
+1. `utils/run_formal_all.sh` now forwards grouped status-policy drift controls
+   into `utils/run_opentitan_fpv_circt_bmc.py`:
+   - grouped baseline, drift output, target allowlist, row allowlist, fail mode
+   - grouped baseline update mode in the OpenTitan FPV lane.
+2. Strict-gate semantics now cover grouped status-policy drift when grouped
+   baseline is configured.
+3. Added dedicated regressions for grouped drift forwarding and gating:
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-allowlist-requires-gate.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-requires-gate.test`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-fail.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-task-profile-presets-fail.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-forwarding.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-fail.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-requires-gate.test` PASS (7/7)
+
 ## Iteration 1393 - February 14, 2026
 
 ### Mutation Workflow: Native Operator Applicability Prioritization

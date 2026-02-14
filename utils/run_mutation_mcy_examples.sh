@@ -32,9 +32,12 @@ Options:
                            <TAB>[max_total_coverage_drop_percent]
                            <TAB>[max_total_errors_increase]
                            <TAB>[native_real_harness_script]
+                           <TAB>[native_mutation_ops]
                            Optional fields accept '-' to inherit global values.
                            native_real_harness_script may be absolute or
                            relative to --examples-root.
+                           native_mutation_ops is a comma-separated allowlist
+                           of native mutation operator tokens.
                            Relative design paths resolve under --examples-root
   --jobs N                Max parallel examples to execute (default: 1)
   --example-timeout-sec N  Per-example timeout in seconds (default: 0, disabled)
@@ -51,6 +54,10 @@ Options:
                            In native+real mode, fail examples without a
                            configured real harness instead of falling back
                            to synthetic
+  --native-mutation-ops CSV
+                           Comma-separated native mutation operator allowlist
+                           for --mutations-backend native
+                           (default: all native operators)
   --generate-count N       Mutations to generate in non-smoke mode (default: 32)
   --mutations-seed N       Seed used with --generate-mutations (default: 1)
   --mutations-modes CSV    Comma-separated mutate modes for auto-generation
@@ -334,6 +341,7 @@ YOSYS_BIN="${YOSYS:-yosys}"
 MUTATIONS_BACKEND="yosys"
 NATIVE_TESTS_MODE="synthetic"
 NATIVE_REAL_TESTS_STRICT=0
+NATIVE_MUTATION_OPS=""
 JOBS=1
 EXAMPLE_TIMEOUT_SEC=0
 EXAMPLE_RETRIES=0
@@ -446,6 +454,7 @@ declare -A EXAMPLE_TO_MAX_ERRORS_INCREASE=()
 declare -A EXAMPLE_TO_MAX_DETECTED_DROP_PERCENT=()
 declare -A EXAMPLE_TO_MAX_RELEVANT_DROP_PERCENT=()
 declare -A EXAMPLE_TO_NATIVE_REAL_HARNESS=()
+declare -A EXAMPLE_TO_NATIVE_MUTATION_OPS=()
 declare -a AVAILABLE_EXAMPLES=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
@@ -474,6 +483,51 @@ is_nonneg_int() {
 
 is_nonneg_decimal() {
   [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+is_valid_native_mutation_op_token() {
+  case "$1" in
+    EQ_TO_NEQ|NEQ_TO_EQ|LT_TO_LE|GT_TO_GE|LE_TO_LT|GE_TO_GT|AND_TO_OR|OR_TO_AND|XOR_TO_OR|UNARY_NOT_DROP|CONST0_TO_1|CONST1_TO_0)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+validate_native_mutation_ops_spec() {
+  local spec="$1"
+  local context="$2"
+  local raw=""
+  local token=""
+  local seen=""
+  local -a parts=()
+
+  raw="$(trim_whitespace "$spec")"
+  if [[ -z "$raw" ]]; then
+    return 0
+  fi
+
+  IFS=',' read -r -a parts <<< "$raw"
+  seen=","
+  for token in "${parts[@]}"; do
+    token="$(trim_whitespace "$token")"
+    if [[ -z "$token" ]]; then
+      echo "${context}: native mutation ops contains an empty token" >&2
+      return 1
+    fi
+    if ! is_valid_native_mutation_op_token "$token"; then
+      echo "${context}: invalid native mutation op token: ${token}" >&2
+      return 1
+    fi
+    if [[ "$seen" == *",${token},"* ]]; then
+      echo "${context}: duplicate native mutation op token: ${token}" >&2
+      return 1
+    fi
+    seen+="${token},"
+  done
+  return 0
 }
 
 trim_whitespace() {
@@ -1096,6 +1150,7 @@ has_manifest_generation_overrides() {
   [[ ${#EXAMPLE_TO_MUTATIONS_PROFILES[@]} -gt 0 ]] && return 0
   [[ ${#EXAMPLE_TO_MUTATIONS_CFG[@]} -gt 0 ]] && return 0
   [[ ${#EXAMPLE_TO_MUTATIONS_SELECT[@]} -gt 0 ]] && return 0
+  [[ ${#EXAMPLE_TO_NATIVE_MUTATION_OPS[@]} -gt 0 ]] && return 0
   return 1
 }
 
@@ -1179,6 +1234,7 @@ load_example_manifest() {
   local max_total_coverage_drop_percent_override=""
   local max_total_errors_increase_override=""
   local native_real_harness_override=""
+  local native_mutation_ops_override=""
   local extra=""
   local resolved_design=""
   local manifest_max_total_detected_drop_override=""
@@ -1211,7 +1267,7 @@ load_example_manifest() {
       max_total_detected_drop_percent_override max_total_relevant_drop_override \
       max_total_relevant_drop_percent_override \
       max_total_coverage_drop_percent_override max_total_errors_increase_override \
-      native_real_harness_override extra <<< "$line"
+      native_real_harness_override native_mutation_ops_override extra <<< "$line"
 
     example_id="$(trim_whitespace "$example_id")"
     design="$(trim_whitespace "$design")"
@@ -1241,10 +1297,11 @@ load_example_manifest() {
     max_total_coverage_drop_percent_override="$(normalize_manifest_optional "${max_total_coverage_drop_percent_override:-}")"
     max_total_errors_increase_override="$(normalize_manifest_optional "${max_total_errors_increase_override:-}")"
     native_real_harness_override="$(normalize_manifest_optional "${native_real_harness_override:-}")"
+    native_mutation_ops_override="$(normalize_manifest_optional "${native_mutation_ops_override:-}")"
     extra="$(trim_whitespace "${extra:-}")"
 
     if [[ -z "$example_id" || -z "$design" || -z "$top" || -n "$extra" ]]; then
-      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 25 optional override columns)." >&2
+      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 26 optional override columns)." >&2
       return 1
     fi
 
@@ -1348,6 +1405,11 @@ load_example_manifest() {
       echo "Manifest row ${line_no} sets both mutations_mode_counts and mutations_mode_weights; choose one." >&2
       return 1
     fi
+    if [[ -n "$native_mutation_ops_override" ]]; then
+      if ! validate_native_mutation_ops_spec "$native_mutation_ops_override" "manifest row ${line_no}: invalid native_mutation_ops override"; then
+        return 1
+      fi
+    fi
 
     if [[ "$design" == /* ]]; then
       resolved_design="$design"
@@ -1416,6 +1478,9 @@ load_example_manifest() {
     fi
     if [[ -n "$native_real_harness_override" ]]; then
       EXAMPLE_TO_NATIVE_REAL_HARNESS["$example_id"]="$native_real_harness_override"
+    fi
+    if [[ -n "$native_mutation_ops_override" ]]; then
+      EXAMPLE_TO_NATIVE_MUTATION_OPS["$example_id"]="$native_mutation_ops_override"
     fi
 
     if [[ -n "$max_total_detected_drop_override" ]]; then
@@ -2561,6 +2626,7 @@ run_example_worker() {
   local retry_delay_msg=""
   local native_real_harness_override=""
   local native_real_harness_resolved=""
+  local native_mutation_ops_spec="$NATIVE_MUTATION_OPS"
 
   if [[ -n "${EXAMPLE_TO_GENERATE_COUNT[$example_id]+x}" ]]; then
     example_generate_count="${EXAMPLE_TO_GENERATE_COUNT[$example_id]}"
@@ -2600,6 +2666,9 @@ run_example_worker() {
   fi
   if [[ -n "${EXAMPLE_TO_NATIVE_REAL_HARNESS[$example_id]+x}" ]]; then
     native_real_harness_override="${EXAMPLE_TO_NATIVE_REAL_HARNESS[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_NATIVE_MUTATION_OPS[$example_id]+x}" ]]; then
+    native_mutation_ops_spec="${EXAMPLE_TO_NATIVE_MUTATION_OPS[$example_id]}"
   fi
   max_attempts=$((example_retries + 1))
 
@@ -2836,7 +2905,18 @@ EOS
         CONST1_TO_0
       )
       native_ops=("${native_ops_all[@]}")
+      native_ops_requested=()
       native_ops_applicable=()
+      if [[ -n "$native_mutation_ops_spec" ]]; then
+        IFS=',' read -r -a native_ops_requested <<< "$native_mutation_ops_spec"
+        native_ops=()
+        for native_op_name in "${native_ops_requested[@]}"; do
+          native_op_name="$(trim_whitespace "$native_op_name")"
+          if [[ -n "$native_op_name" ]]; then
+            native_ops+=("$native_op_name")
+          fi
+        done
+      fi
       if command -v python3 >/dev/null 2>&1; then
         mapfile -t native_ops_applicable < <(python3 - "$design" <<'EOS'
 import re
@@ -2864,12 +2944,21 @@ for op, pattern in ops:
 EOS
 )
       fi
+      native_ops_base=("${native_ops[@]}")
       if [[ ${#native_ops_applicable[@]} -gt 0 ]]; then
-        native_ops=("${native_ops_applicable[@]}")
-        for native_op_name in "${native_ops_all[@]}"; do
+        native_ops=()
+        for native_op_applicable in "${native_ops_applicable[@]}"; do
+          for native_op_name in "${native_ops_base[@]}"; do
+            if [[ "$native_op_name" == "$native_op_applicable" ]]; then
+              native_ops+=("$native_op_name")
+              break
+            fi
+          done
+        done
+        for native_op_name in "${native_ops_base[@]}"; do
           native_op_present=0
-          for native_op_applicable in "${native_ops_applicable[@]}"; do
-            if [[ "$native_op_applicable" == "$native_op_name" ]]; then
+          for native_op_selected in "${native_ops[@]}"; do
+            if [[ "$native_op_selected" == "$native_op_name" ]]; then
               native_op_present=1
               break
             fi
@@ -3167,6 +3256,11 @@ while [[ $# -gt 0 ]]; do
     --native-real-tests-strict)
       NATIVE_REAL_TESTS_STRICT=1
       shift
+      ;;
+    --native-mutation-ops)
+      NATIVE_MUTATION_OPS="$2"
+      MUTATION_GENERATION_FLAGS_SEEN=1
+      shift 2
       ;;
     --generate-count)
       GENERATE_COUNT="$2"
@@ -3555,6 +3649,11 @@ fi
 if [[ "$NATIVE_TESTS_MODE" != "synthetic" && "$NATIVE_TESTS_MODE" != "real" ]]; then
   echo "--native-tests-mode must be one of: synthetic|real" >&2
   exit 1
+fi
+if [[ -n "$NATIVE_MUTATION_OPS" ]]; then
+  if ! validate_native_mutation_ops_spec "$NATIVE_MUTATION_OPS" "--native-mutation-ops"; then
+    exit 1
+  fi
 fi
 if ! is_nonneg_int "$MIN_DETECTED"; then
   echo "--min-detected must be a non-negative integer: $MIN_DETECTED" >&2

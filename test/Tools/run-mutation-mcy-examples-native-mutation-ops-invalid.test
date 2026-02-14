@@ -1,0 +1,3 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --native-mutation-ops BAD_OP --smoke 2>&1 | FileCheck %s
+
+// CHECK: --native-mutation-ops: invalid native mutation op token: BAD_OP
