@@ -232,9 +232,23 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      row granularity.
 20b. Remaining high-priority limitation (objective parity depth):
    - objective parity status governance is now projected-reason aware, but
-     parity still compares normalized status classes only and does not yet
-     enforce reason-class contracts (e.g. `projected_case_eq` vs
-     `projected_case_unknown`) as a fail condition.
+   parity still compares normalized status classes only and does not yet
+   enforce reason-class contracts (e.g. `projected_case_eq` vs
+   `projected_case_unknown`) as a fail condition.
+20c. Objective reason-drift enforcement completed for OpenTitan FPV parity:
+   - `check_opentitan_fpv_objective_parity.py` now supports
+     `--reason-policy ignore|projected|all` and emits first-class
+     reason drift rows (`assertion_reason` / `cover_reason`).
+   - `run_formal_all.sh` now exposes/forwards:
+     `--opentitan-fpv-objective-parity-reason-policy`.
+   - strict-gate default now upgrades FPV objective parity reason policy to
+     `projected` when FPV LEC assertion evidence is present.
+   - lane summaries now expose reason-specific parity counters for drift triage.
+20d. Remaining high-priority limitation (OpenTitan FPV objective parity):
+   - objective reason drift is enforced per run, but there is still no
+     baseline-driven reason-drift artifact governance layer (baseline/update/
+     allowlist drift reports) for FPV objective parity rows analogous to FPV
+     BMC summary/assertion baseline flows.
 21. Frontend macro-compat retry hardening completed for FPV BMC ingestion:
    - added external preprocessor retry controls in
      `run_pairwise_circt_bmc.py`:

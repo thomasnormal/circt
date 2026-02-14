@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1421 - February 14, 2026
+
+### OpenTitan FPV Objective Parity: Reason-Drift Policy Enforcement
+
+1. Extended `utils/check_opentitan_fpv_objective_parity.py` with reason-drift
+   policy controls:
+   - new CLI:
+     - `--reason-policy ignore|projected|all`
+   - new mismatch kinds for shared-objective reason drift:
+     - `assertion_reason`
+     - `cover_reason`
+   - projected policy now catches drift such as
+     `projected_case_eq` vs `projected_case_unknown` even when statuses match.
+2. Wired reason-policy through `utils/run_formal_all.sh`:
+   - new CLI:
+     - `--opentitan-fpv-objective-parity-reason-policy ignore|projected|all`
+   - forwarded into objective parity checker invocation.
+   - strict-gate default now auto-promotes FPV objective-parity reason policy
+     from `ignore` to `projected` when FPV LEC assertion evidence is present.
+3. Extended FPV objective-parity summary counters in `run_formal_all.sh`:
+   - `fpv_objective_parity_assertion_reason_rows`
+   - `fpv_objective_parity_cover_reason_rows`
+   - `fpv_objective_parity_assertion_reason_non_allowlisted_rows`
+   - `fpv_objective_parity_cover_reason_non_allowlisted_rows`
+4. Added/updated focused regressions:
+   - added:
+     - `test/Tools/check-opentitan-fpv-objective-parity-reason-policy.test`
+   - updated:
+     - `test/Tools/run-formal-all-opentitan-fpv-objective-parity-forwarding.test`
+5. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/check-opentitan-fpv-objective-parity-fail.test build-test/test/Tools/check-opentitan-fpv-objective-parity-reason-policy.test build-test/test/Tools/run-opentitan-fpv-circt-lec-basic.test build-test/test/Tools/run-opentitan-fpv-circt-lec-failing-status.test build-test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-requires-lec-assertions.test` PASS
+
 ## Iteration 1420 - February 14, 2026
 
 ### OpenTitan FPV Objective Parity: Projected-Reason Provenance + Counters
