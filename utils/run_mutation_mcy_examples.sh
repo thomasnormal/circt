@@ -55,6 +55,8 @@ Options:
                            --require-policy-fingerprint-baseline +
                            --require-baseline-example-parity
                            (requires --fail-on-diff)
+  --require-unique-summary-rows
+                           Fail if summary.tsv contains duplicate example rows
   --drift-allowlist-file FILE
                            Optional allowlist for drift regressions (requires
                            --fail-on-diff). Non-empty, non-comment lines are
@@ -78,6 +80,8 @@ Outputs:
   <out-dir>/drift.tsv      Drift report (when --fail-on-diff)
   <out-dir>/drift-allowlist-unused.txt
                            Unused allowlist entries (when allowlist is set)
+  <out-dir>/summary-contract.tsv
+                           Summary contract report (when --require-unique-summary-rows)
   <out-dir>/<example>/     Per-example run artifacts
 USAGE
 }
@@ -107,6 +111,7 @@ FAIL_ON_DIFF=0
 REQUIRE_POLICY_FINGERPRINT_BASELINE=0
 REQUIRE_BASELINE_EXAMPLE_PARITY=0
 STRICT_BASELINE_GOVERNANCE=0
+REQUIRE_UNIQUE_SUMMARY_ROWS=0
 DRIFT_ALLOWLIST_FILE=""
 FAIL_ON_UNUSED_DRIFT_ALLOWLIST=0
 DRIFT_ALLOWLIST_UNUSED_FILE=""
@@ -543,6 +548,50 @@ append_drift_candidate() {
   return 1
 }
 
+evaluate_summary_contract() {
+  local summary_file="$1"
+  local contract_file="$2"
+  local regressions=0
+  local example=""
+  local _status=""
+  local _exit=""
+  local _detected=""
+  local _relevant=""
+  local _coverage=""
+  local _errors=""
+  local _policy=""
+  local -A summary_seen=()
+  local -A summary_duplicate_seen=()
+  local -a summary_duplicate_examples=()
+
+  printf 'example\tmetric\texpected\tcurrent\toutcome\tdetail\n' > "$contract_file"
+
+  while IFS=$'\t' read -r example _status _exit _detected _relevant _coverage _errors _policy; do
+    [[ "$example" == "example" ]] && continue
+    if [[ -z "$example" ]]; then
+      continue
+    fi
+    if [[ -n "${summary_seen[$example]+x}" ]]; then
+      if [[ -z "${summary_duplicate_seen[$example]+x}" ]]; then
+        summary_duplicate_seen["$example"]=1
+        summary_duplicate_examples+=("$example")
+      fi
+      continue
+    fi
+    summary_seen["$example"]=1
+  done < "$summary_file"
+
+  for example in "${summary_duplicate_examples[@]}"; do
+    append_drift_row "$contract_file" "$example" "row" "single_row" "duplicate_rows" "regression" "duplicate_current_row"
+    regressions=$((regressions + 1))
+  done
+
+  if [[ "$regressions" -gt 0 ]]; then
+    return 1
+  fi
+  return 0
+}
+
 evaluate_summary_drift() {
   local baseline_file="$1"
   local summary_file="$2"
@@ -821,6 +870,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --strict-baseline-governance)
       STRICT_BASELINE_GOVERNANCE=1
+      shift
+      ;;
+    --require-unique-summary-rows)
+      REQUIRE_UNIQUE_SUMMARY_ROWS=1
       shift
       ;;
     --drift-allowlist-file)
@@ -1217,6 +1270,14 @@ EOS
     overall_rc=1
   fi
 done
+
+if [[ "$REQUIRE_UNIQUE_SUMMARY_ROWS" -eq 1 ]]; then
+  SUMMARY_CONTRACT_FILE="${OUT_DIR}/summary-contract.tsv"
+  if ! evaluate_summary_contract "$SUMMARY_FILE" "$SUMMARY_CONTRACT_FILE"; then
+    overall_rc=1
+    echo "Summary contract failure: see $SUMMARY_CONTRACT_FILE" >&2
+  fi
+fi
 
 if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
   DRIFT_FILE="${OUT_DIR}/drift.tsv"
