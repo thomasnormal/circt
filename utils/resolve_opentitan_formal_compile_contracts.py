@@ -243,12 +243,13 @@ def resolve_eda_paths(entries: Any, eda_dir: Path) -> tuple[list[str], list[str]
             continue
         file_path = (eda_dir / name).resolve(strict=False)
         file_text = str(file_path)
-        files.append(file_text)
         if entry.get("is_include_file"):
             incdir = str(file_path.parent)
             if incdir not in seen_incdirs:
                 include_dirs.append(incdir)
                 seen_incdirs.add(incdir)
+            continue
+        files.append(file_text)
     return files, include_dirs
 
 

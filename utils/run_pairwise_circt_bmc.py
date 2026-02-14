@@ -55,6 +55,15 @@ General launch retry tuning:
 - BMC_LAUNCH_RETRY_BACKOFF_SECS (default: 0.2)
 - BMC_LAUNCH_RETRYABLE_EXIT_CODES (default: 126,127)
 - BMC_LAUNCH_COPY_FALLBACK (default: 0)
+- BMC_LAUNCH_EVENTS_OUT (optional TSV output)
+
+Verilog frontend mode:
+- BMC_VERILOG_SINGLE_UNIT_MODE (default: auto)
+  Values:
+  - auto: start with `--single-unit`; retry once without it for known
+    macro-preprocessor failures.
+  - on: always use `--single-unit`.
+  - off: never use `--single-unit`.
 """
 
 from __future__ import annotations
@@ -321,6 +330,14 @@ def normalize_error_reason(text: str) -> str:
     return "no_diag"
 
 
+def is_single_unit_retryable_preprocessor_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return (
+        "macro operators may only be used within a macro definition" in low
+        or "unexpected conditional directive" in low
+    )
+
+
 def run_and_log(
     cmd: list[str],
     log_path: Path,
@@ -332,6 +349,10 @@ def run_and_log(
     launch_retry_backoff_secs: float,
     launch_retryable_exit_codes: set[int],
     launch_copy_fallback: bool,
+    launch_event_rows: list[tuple[str, ...]] | None = None,
+    case_id: str = "",
+    case_path: str = "",
+    stage_label: str = "",
 ) -> subprocess.CompletedProcess[str]:
     # Binary relinking races can produce transient ETXTBSY while a tool is open
     # for writing; retry a few times with bounded backoff.
@@ -340,6 +361,32 @@ def run_and_log(
     etxtbsy_retry_count = 0
     launch_copy_fallback_used = False
     retry_notes: list[str] = []
+
+    def append_launch_event(
+        event_kind: str,
+        reason: str,
+        attempt: int | None,
+        delay_secs: float | None,
+        exit_code: int | None,
+        fallback_tool: str,
+    ) -> None:
+        if launch_event_rows is None:
+            return
+        launch_event_rows.append(
+            (
+                event_kind,
+                case_id,
+                case_path,
+                stage_label,
+                active_cmd[0] if active_cmd else "",
+                reason,
+                str(attempt) if attempt is not None else "",
+                f"{delay_secs:.3f}" if delay_secs is not None else "",
+                str(exit_code) if exit_code is not None else "",
+                fallback_tool,
+            )
+        )
+
     result: subprocess.CompletedProcess[str] | None = None
     while True:
         try:
@@ -369,6 +416,14 @@ def run_and_log(
                             f"delay_secs={delay:.3f}"
                         )
                     )
+                    append_launch_event(
+                        "RETRY",
+                        "etxtbsy",
+                        etxtbsy_retry_count,
+                        delay,
+                        None,
+                        "",
+                    )
                     time.sleep(delay)
                     continue
                 if launch_copy_fallback and not launch_copy_fallback_used:
@@ -388,6 +443,14 @@ def run_and_log(
                                 "runner_command_launch_fallback "
                                 f"tool={tool_path} fallback={fallback_tool}"
                             )
+                        )
+                        append_launch_event(
+                            "FALLBACK",
+                            "etxtbsy_retry_exhausted",
+                            None,
+                            None,
+                            None,
+                            str(fallback_tool),
                         )
                         continue
                 raise TextFileBusyRetryExhausted(
@@ -409,6 +472,14 @@ def run_and_log(
                         f"attempt={launch_retry_count} delay_secs={delay:.3f}"
                     )
                 )
+                append_launch_event(
+                    "RETRY",
+                    f"retryable_exit_code_{result.returncode}",
+                    launch_retry_count,
+                    delay,
+                    result.returncode,
+                    "",
+                )
                 time.sleep(delay)
                 continue
             if launch_copy_fallback and not launch_copy_fallback_used:
@@ -426,6 +497,14 @@ def run_and_log(
                             "runner_command_launch_fallback "
                             f"tool={tool_path} fallback={fallback_tool}"
                         )
+                    )
+                    append_launch_event(
+                        "FALLBACK",
+                        f"retryable_exit_code_{result.returncode}_retry_exhausted",
+                        None,
+                        None,
+                        result.returncode,
+                        str(fallback_tool),
                     )
                     continue
         break
@@ -759,6 +838,11 @@ def main() -> int:
         help="Optional TSV output path for per-cover BMC rows.",
     )
     parser.add_argument(
+        "--launch-events-file",
+        default=os.environ.get("BMC_LAUNCH_EVENTS_OUT", ""),
+        help="Optional TSV output path for launch retry/fallback events.",
+    )
+    parser.add_argument(
         "--assertion-granular",
         action="store_true",
         default=os.environ.get("BMC_ASSERTION_GRANULAR", "0") == "1",
@@ -853,6 +937,18 @@ def main() -> int:
     circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
     circt_bmc = os.environ.get("CIRCT_BMC", "build/bin/circt-bmc")
     circt_bmc_args = shlex.split(os.environ.get("CIRCT_BMC_ARGS", ""))
+    verilog_single_unit_mode = os.environ.get(
+        "BMC_VERILOG_SINGLE_UNIT_MODE", "auto"
+    ).strip().lower()
+    if verilog_single_unit_mode not in {"auto", "on", "off"}:
+        print(
+            (
+                "invalid BMC_VERILOG_SINGLE_UNIT_MODE: "
+                f"{verilog_single_unit_mode} (expected auto|on|off)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
     z3_lib = os.environ.get("Z3_LIB", str(Path.home() / "z3-install/lib64/libz3.so"))
     bmc_run_smtlib = os.environ.get("BMC_RUN_SMTLIB", "1") == "1"
     bmc_smoke_only = os.environ.get("BMC_SMOKE_ONLY", "0") == "1"
@@ -1080,6 +1176,7 @@ def main() -> int:
     rows: list[tuple[str, ...]] = []
     assertion_result_rows: list[tuple[str, ...]] = []
     cover_result_rows: list[tuple[str, ...]] = []
+    launch_event_rows: list[tuple[str, ...]] = []
     drop_remark_case_rows: list[tuple[str, str]] = []
     drop_remark_reason_rows: list[tuple[str, str, str]] = []
     timeout_reason_rows: list[tuple[str, str, str]] = []
@@ -1153,21 +1250,27 @@ def main() -> int:
             prepped_mlir = case_dir / "pairwise_bmc.prepared.mlir"
 
             include_dirs = global_include_dirs + case.include_dirs
-            verilog_cmd = [
-                circt_verilog,
-                "--ir-hw",
-                "-o",
-                str(out_mlir),
-                "--single-unit",
-                "--no-uvm-auto-include",
-                f"--top={case.top_module}",
-            ]
-            for include_dir in include_dirs:
-                verilog_cmd += ["-I", include_dir]
-            for define_token in case.verilog_defines:
-                verilog_cmd.append(f"-D{define_token}")
-            verilog_cmd += circt_verilog_args
-            verilog_cmd += case.source_files
+            def build_verilog_cmd(use_single_unit: bool) -> list[str]:
+                cmd = [
+                    circt_verilog,
+                    "--ir-hw",
+                    "-o",
+                    str(out_mlir),
+                    "--no-uvm-auto-include",
+                    f"--top={case.top_module}",
+                ]
+                if use_single_unit:
+                    cmd.append("--single-unit")
+                for include_dir in include_dirs:
+                    cmd += ["-I", include_dir]
+                for define_token in case.verilog_defines:
+                    cmd.append(f"-D{define_token}")
+                cmd += circt_verilog_args
+                cmd += case.source_files
+                return cmd
+
+            use_single_unit = verilog_single_unit_mode != "off"
+            verilog_cmd = build_verilog_cmd(use_single_unit)
 
             opt_cmd = [circt_opt, str(out_mlir)]
             opt_cmd += bmc_prepare_core_passes
@@ -1210,7 +1313,56 @@ def main() -> int:
                     launch_retry_backoff_secs,
                     launch_retryable_exit_codes,
                     launch_copy_fallback,
+                    launch_event_rows,
+                    case.case_id,
+                    case_path,
+                    stage,
                 )
+                if (
+                    verilog_result.returncode != 0
+                    and verilog_single_unit_mode == "auto"
+                    and use_single_unit
+                ):
+                    verilog_log_text = verilog_log_path.read_text()
+                    if is_single_unit_retryable_preprocessor_failure(
+                        verilog_log_text
+                    ):
+                        single_unit_log_path = (
+                            case_dir / "circt-verilog.single-unit.log"
+                        )
+                        shutil.copy2(verilog_log_path, single_unit_log_path)
+                        if launch_event_rows is not None:
+                            launch_event_rows.append(
+                                (
+                                    "RETRY",
+                                    case.case_id,
+                                    case_path,
+                                    stage,
+                                    circt_verilog,
+                                    "single_unit_preprocessor_failure",
+                                    "1",
+                                    "0.000",
+                                    str(verilog_result.returncode),
+                                    "",
+                                )
+                            )
+                        verilog_cmd = build_verilog_cmd(False)
+                        verilog_result = run_and_log(
+                            verilog_cmd,
+                            verilog_log_path,
+                            None,
+                            case_timeout_secs,
+                            etxtbsy_retries,
+                            etxtbsy_backoff_secs,
+                            launch_retry_attempts,
+                            launch_retry_backoff_secs,
+                            launch_retryable_exit_codes,
+                            launch_copy_fallback,
+                            launch_event_rows,
+                            case.case_id,
+                            case_path,
+                            stage,
+                        )
                 if verilog_result.returncode != 0:
                     reason = normalize_error_reason(verilog_log_path.read_text())
                     rows.append(
@@ -1253,6 +1405,10 @@ def main() -> int:
                         launch_retry_backoff_secs,
                         launch_retryable_exit_codes,
                         launch_copy_fallback,
+                        launch_event_rows,
+                        case.case_id,
+                        case_path,
+                        stage,
                     )
                     if opt_result.returncode != 0:
                         reason = normalize_error_reason(opt_log_path.read_text())
@@ -1319,6 +1475,10 @@ def main() -> int:
                                     launch_retry_backoff_secs,
                                     launch_retryable_exit_codes,
                                     launch_copy_fallback,
+                                    launch_event_rows,
+                                    case.case_id,
+                                    case_path,
+                                    stage,
                                 )
                                 combined = (
                                     cover_log.read_text() + "\n" + cover_out.read_text()
@@ -1513,6 +1673,10 @@ def main() -> int:
                                     launch_retry_backoff_secs,
                                     launch_retryable_exit_codes,
                                     launch_copy_fallback,
+                                    launch_event_rows,
+                                    case.case_id,
+                                    case_path,
+                                    stage,
                                 )
                                 combined = (
                                     assertion_log.read_text() + "\n" + assertion_out.read_text()
@@ -1775,6 +1939,10 @@ def main() -> int:
                     launch_retry_backoff_secs,
                     launch_retryable_exit_codes,
                     launch_copy_fallback,
+                    launch_event_rows,
+                    case.case_id,
+                    case_path,
+                    stage,
                 )
                 combined = bmc_log_path.read_text() + "\n" + bmc_out_path.read_text()
                 bmc_tag = parse_bmc_result(combined)
@@ -1988,6 +2156,15 @@ def main() -> int:
             ):
                 handle.write("\t".join(row) + "\n")
 
+    if args.launch_events_file:
+        launch_events_path = Path(args.launch_events_file)
+        launch_events_path.parent.mkdir(parents=True, exist_ok=True)
+        with launch_events_path.open("w", encoding="utf-8") as handle:
+            for row in sorted(
+                launch_event_rows, key=lambda item: (item[1], item[3], item[0], item[6])
+            ):
+                handle.write("\t".join(row) + "\n")
+
     print(
         f"{suite_name} BMC dropped-syntax summary: "
         f"drop_remark_cases={len(set(drop_remark_case_rows))} "
@@ -2004,6 +2181,17 @@ def main() -> int:
         print(
             f"{suite_name} BMC cover-granular summary: "
             f"covers={len(cover_result_rows)}",
+            flush=True,
+        )
+    if launch_event_rows:
+        retry_events = sum(1 for row in launch_event_rows if row and row[0] == "RETRY")
+        fallback_events = sum(
+            1 for row in launch_event_rows if row and row[0] == "FALLBACK"
+        )
+        print(
+            f"{suite_name} BMC launch-events summary: "
+            f"events={len(launch_event_rows)} retry={retry_events} "
+            f"fallback={fallback_events}",
             flush=True,
         )
     print(
