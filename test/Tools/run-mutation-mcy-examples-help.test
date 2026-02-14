@@ -15,5 +15,7 @@
 // CHECK-DAG: --update-baseline
 // CHECK-DAG: --fail-on-diff
 // CHECK-DAG: --drift-allowlist-file
+// CHECK-DAG: --fail-on-unused-drift-allowlist
+// CHECK-DAG: --drift-allowlist-unused-file
 // CHECK-DAG: --smoke
 // CHECK-DAG: --keep-work

@@ -32,6 +32,12 @@ Options:
                            glob patterns over:
                              example::metric
                              example::metric::detail
+  --fail-on-unused-drift-allowlist
+                           Fail when allowlist entries are unused by current
+                           drift candidates
+  --drift-allowlist-unused-file FILE
+                           Optional output path for unused allowlist entries
+                           (default: OUT_DIR/drift-allowlist-unused.txt)
   --smoke                  Run smoke mode without yosys:
                            - use stub mutations file
                            - use identity fake create-mutated script
@@ -41,6 +47,8 @@ Options:
 Outputs:
   <out-dir>/summary.tsv    Aggregated example status/coverage summary
   <out-dir>/drift.tsv      Drift report (when --fail-on-diff)
+  <out-dir>/drift-allowlist-unused.txt
+                           Unused allowlist entries (when allowlist is set)
   <out-dir>/<example>/     Per-example run artifacts
 USAGE
 }
@@ -61,10 +69,13 @@ BASELINE_FILE=""
 UPDATE_BASELINE=0
 FAIL_ON_DIFF=0
 DRIFT_ALLOWLIST_FILE=""
+FAIL_ON_UNUSED_DRIFT_ALLOWLIST=0
+DRIFT_ALLOWLIST_UNUSED_FILE=""
 SMOKE=0
 KEEP_WORK=0
 EXAMPLE_IDS=()
 declare -a DRIFT_ALLOW_PATTERNS=()
+declare -A DRIFT_ALLOW_PATTERN_USED=()
 
 is_pos_int() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
@@ -132,6 +143,7 @@ load_drift_allowlist() {
   local raw_line=""
   local line=""
   DRIFT_ALLOW_PATTERNS=()
+  DRIFT_ALLOW_PATTERN_USED=()
   while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
     line="${raw_line%$'\r'}"
     line="$(trim_whitespace "$line")"
@@ -151,15 +163,37 @@ is_drift_allowed() {
   local detail="${3:-}"
   local token="${example}::${metric}"
   local token_detail="${example}::${metric}::${detail}"
+  local idx=""
   local pattern=""
-  for pattern in "${DRIFT_ALLOW_PATTERNS[@]}"; do
+  for idx in "${!DRIFT_ALLOW_PATTERNS[@]}"; do
+    pattern="${DRIFT_ALLOW_PATTERNS[$idx]}"
     if [[ "$token_detail" == $pattern ]] || [[ "$token" == $pattern ]]; then
+      DRIFT_ALLOW_PATTERN_USED["$idx"]=1
       return 0
     fi
   done
   return 1
 }
 
+write_unused_drift_allowlist_report() {
+  local out_file="$1"
+  local idx=""
+  local pattern=""
+  local unused_count=0
+
+  mkdir -p "$(dirname "$out_file")"
+  : > "$out_file"
+
+  for idx in "${!DRIFT_ALLOW_PATTERNS[@]}"; do
+    if [[ -z "${DRIFT_ALLOW_PATTERN_USED[$idx]+x}" ]]; then
+      pattern="${DRIFT_ALLOW_PATTERNS[$idx]}"
+      printf '%s\n' "$pattern" >> "$out_file"
+      unused_count=$((unused_count + 1))
+    fi
+  done
+
+  printf '%s\n' "$unused_count"
+}
 append_summary_row() {
   local summary_file="$1"
   local example_id="$2"
@@ -363,6 +397,14 @@ while [[ $# -gt 0 ]]; do
       DRIFT_ALLOWLIST_FILE="$2"
       shift 2
       ;;
+    --fail-on-unused-drift-allowlist)
+      FAIL_ON_UNUSED_DRIFT_ALLOWLIST=1
+      shift
+      ;;
+    --drift-allowlist-unused-file)
+      DRIFT_ALLOWLIST_UNUSED_FILE="$2"
+      shift 2
+      ;;
     --smoke)
       SMOKE=1
       shift
@@ -423,6 +465,14 @@ if [[ -n "$DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_DIFF" -ne 1 ]]; then
   echo "--drift-allowlist-file requires --fail-on-diff" >&2
   exit 1
 fi
+if [[ "$FAIL_ON_UNUSED_DRIFT_ALLOWLIST" -eq 1 && -z "$DRIFT_ALLOWLIST_FILE" ]]; then
+  echo "--fail-on-unused-drift-allowlist requires --drift-allowlist-file" >&2
+  exit 1
+fi
+if [[ -n "$DRIFT_ALLOWLIST_UNUSED_FILE" && -z "$DRIFT_ALLOWLIST_FILE" ]]; then
+  echo "--drift-allowlist-unused-file requires --drift-allowlist-file" >&2
+  exit 1
+fi
 if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
   if [[ ! -f "$BASELINE_FILE" ]]; then
     echo "Baseline file not found: $BASELINE_FILE" >&2
@@ -472,6 +522,9 @@ else
 fi
 
 mkdir -p "$OUT_DIR"
+if [[ -n "$DRIFT_ALLOWLIST_FILE" && -z "$DRIFT_ALLOWLIST_UNUSED_FILE" ]]; then
+  DRIFT_ALLOWLIST_UNUSED_FILE="${OUT_DIR}/drift-allowlist-unused.txt"
+fi
 WORK_ROOT="${OUT_DIR}/.work"
 mkdir -p "$WORK_ROOT"
 if [[ "$KEEP_WORK" -ne 1 ]]; then
@@ -636,6 +689,14 @@ if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
   if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE"; then
     overall_rc=1
     echo "Baseline drift failure: see $DRIFT_FILE" >&2
+  fi
+fi
+
+if [[ -n "$DRIFT_ALLOWLIST_FILE" && -n "$DRIFT_ALLOWLIST_UNUSED_FILE" ]]; then
+  unused_allowlist_count="$(write_unused_drift_allowlist_report "$DRIFT_ALLOWLIST_UNUSED_FILE")"
+  if [[ "$FAIL_ON_UNUSED_DRIFT_ALLOWLIST" -eq 1 && "$unused_allowlist_count" -gt 0 ]]; then
+    overall_rc=1
+    echo "Unused drift allowlist entries: $unused_allowlist_count (see $DRIFT_ALLOWLIST_UNUSED_FILE)" >&2
   fi
 fi
 
