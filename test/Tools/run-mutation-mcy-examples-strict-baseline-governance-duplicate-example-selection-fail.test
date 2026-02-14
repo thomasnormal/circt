@@ -1,0 +1,13 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf 'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\nbitcnt\tPASS\t0\t2\t4\t50.00\t0\n' > %t/baseline.tsv
+
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --example bitcnt \
+// RUN:   --baseline-file %t/baseline.tsv \
+// RUN:   --fail-on-diff \
+// RUN:   --strict-baseline-governance 2>&1 | FileCheck %s
+
+// CHECK: Duplicate --example selection: bitcnt

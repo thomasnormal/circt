@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1328 - February 14, 2026
+
+### Mutation Workflow: Deterministic Example Selection Governance
+
+1. Added `--require-unique-example-selection` to `utils/run_mutation_mcy_examples.sh`.
+   - Fails fast when `--example` is repeated with the same ID.
+   - Error contract: `Duplicate --example selection: <id>`.
+2. Extended strict governance bundle (`--strict-baseline-governance`) to also enable:
+   - `--require-unique-example-selection`
+3. This removes accidental duplicate-lane execution in strict runs and keeps mutation summaries deterministic.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-require-unique-example-selection-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-strict-baseline-governance-duplicate-example-selection-fail.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (48/48)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-123425` PASS
+
 ## Iteration 1327 - February 14, 2026
 
 ### Mutation Workflow: Strict Governance Includes Baseline Schema-Version Gate

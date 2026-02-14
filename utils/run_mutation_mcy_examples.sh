@@ -58,8 +58,11 @@ Options:
                            Enable strict baseline governance bundle:
                            --require-policy-fingerprint-baseline +
                            --require-baseline-example-parity +
-                           --require-baseline-schema-version-match
+                           --require-baseline-schema-version-match +
+                           --require-unique-example-selection
                            (requires --fail-on-diff)
+  --require-unique-example-selection
+                           Fail if --example contains duplicate example IDs
   --require-unique-summary-rows
                            Fail if summary.tsv contains duplicate example rows
   --drift-allowlist-file FILE
@@ -118,6 +121,7 @@ FAIL_ON_DIFF=0
 REQUIRE_POLICY_FINGERPRINT_BASELINE=0
 REQUIRE_BASELINE_EXAMPLE_PARITY=0
 REQUIRE_BASELINE_SCHEMA_VERSION_MATCH=0
+REQUIRE_UNIQUE_EXAMPLE_SELECTION=0
 STRICT_BASELINE_GOVERNANCE=0
 REQUIRE_UNIQUE_SUMMARY_ROWS=0
 DRIFT_ALLOWLIST_FILE=""
@@ -906,6 +910,19 @@ evaluate_summary_drift() {
 }
 
 
+ensure_unique_example_selection() {
+  local -A seen=()
+  local example_id=""
+  for example_id in "${EXAMPLE_IDS[@]}"; do
+    if [[ -n "${seen[$example_id]+x}" ]]; then
+      echo "Duplicate --example selection: ${example_id}" >&2
+      return 1
+    fi
+    seen["$example_id"]=1
+  done
+  return 0
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --examples-root)
@@ -1015,6 +1032,10 @@ while [[ $# -gt 0 ]]; do
       STRICT_BASELINE_GOVERNANCE=1
       shift
       ;;
+    --require-unique-example-selection)
+      REQUIRE_UNIQUE_EXAMPLE_SELECTION=1
+      shift
+      ;;
     --require-unique-summary-rows)
       REQUIRE_UNIQUE_SUMMARY_ROWS=1
       shift
@@ -1055,6 +1076,7 @@ if [[ "$STRICT_BASELINE_GOVERNANCE" -eq 1 ]]; then
   REQUIRE_POLICY_FINGERPRINT_BASELINE=1
   REQUIRE_BASELINE_EXAMPLE_PARITY=1
   REQUIRE_BASELINE_SCHEMA_VERSION_MATCH=1
+  REQUIRE_UNIQUE_EXAMPLE_SELECTION=1
 fi
 
 if ! is_pos_int "$GENERATE_COUNT"; then
@@ -1182,6 +1204,10 @@ for example_id in "${EXAMPLE_IDS[@]}"; do
     exit 1
   fi
 done
+
+if [[ "$REQUIRE_UNIQUE_EXAMPLE_SELECTION" -eq 1 ]]; then
+  ensure_unique_example_selection
+fi
 
 if [[ -z "$CIRCT_MUT" ]]; then
   if [[ -x "$DEFAULT_CIRCT_MUT" ]]; then
