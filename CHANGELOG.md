@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1413 - February 14, 2026
+
+### Formal BMC/LEC: `stale_file_handle` Launch Retry Classification
+
+1. Extended formal launch retry taxonomy with explicit
+   `stale_file_handle` classification across BMC/LEC runners:
+   - `utils/run_pairwise_circt_bmc.py`
+   - `utils/run_sv_tests_circt_bmc.sh`
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - `utils/run_yosys_sva_circt_bmc.sh`
+2. Hardened pairwise retryable launcher exception mapping:
+   - `errno.ESTALE` is now classified as retryable `stale_file_handle`.
+3. Aligned sv-tests LEC retry trigger detection with taxonomy reasons:
+   - `utils/run_sv_tests_circt_lec.sh` now retries on:
+     - `Text file busy` / `ETXTBSY`
+     - `Permission denied`
+     - `posix_spawn failed`
+     - `resource temporarily unavailable`
+     - `stale file handle` / `ESTALE`
+4. Updated canonical per-reason budget policy defaults:
+   - `utils/opentitan_fpv_policy/bmc_launch_reason_event_budget.tsv` now carries
+     explicit `exact:stale_file_handle` budget row.
+5. Added/updated focused regressions:
+   - added:
+     - `test/Tools/run-pairwise-circt-bmc-launch-retry-stale-file-handle.test`
+     - `test/Tools/run-sv-tests-bmc-launch-retry-stale-file-handle.test`
+     - `test/Tools/run-sv-tests-lec-verilog-stale-file-handle-retry.test`
+     - `test/Tools/run-verilator-verification-circt-bmc-launch-retry-stale-file-handle.test`
+     - `test/Tools/run-yosys-sva-bmc-launch-retry-stale-file-handle.test`
+   - updated:
+     - `test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test`
+6. Validation:
+   - stale-classification slice:
+     - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-pairwise-circt-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-sv-tests-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-sv-tests-lec-verilog-stale-file-handle-retry.test build-test/test/Tools/run-verilator-verification-circt-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-yosys-sva-bmc-launch-retry-stale-file-handle.test build-test/test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test` PASS
+   - LEC retry regression spot-check:
+     - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-sv-tests-lec-verilog-text-file-busy-retry.test build-test/test/Tools/run-sv-tests-lec-opt-text-file-busy-retry.test` PASS
+
 ## Iteration 1412 - February 14, 2026
 
 ### Formal Strict-Gate: Per-Reason Launch Event Budget Files + Policy Wrapper Forwarding

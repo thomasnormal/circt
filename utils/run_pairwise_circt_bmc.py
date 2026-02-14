@@ -167,6 +167,8 @@ RETRYABLE_LAUNCH_PATTERNS = (
     "posix_spawn failed",
     "permission denied",
     "resource temporarily unavailable",
+    "stale file handle",
+    "estale",
 )
 
 RETRYABLE_LAUNCH_REASON_PATTERNS = (
@@ -174,6 +176,7 @@ RETRYABLE_LAUNCH_REASON_PATTERNS = (
     ("posix_spawn_failed", ("posix_spawn failed",)),
     ("permission_denied", ("permission denied",)),
     ("resource_temporarily_unavailable", ("resource temporarily unavailable",)),
+    ("stale_file_handle", ("stale file handle", "estale")),
 )
 
 UNKNOWN_MODULE_PATTERNS = (
@@ -907,6 +910,8 @@ def run_and_log(
                 os_retry_reason = "permission_denied"
             elif exc.errno in (errno.EAGAIN, errno.EBUSY):
                 os_retry_reason = "resource_temporarily_unavailable"
+            elif getattr(errno, "ESTALE", None) == exc.errno:
+                os_retry_reason = "stale_file_handle"
             if os_retry_reason:
                 if launch_retry_count < launch_retry_attempts:
                     launch_retry_count += 1

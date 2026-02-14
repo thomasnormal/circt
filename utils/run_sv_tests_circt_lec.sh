@@ -208,7 +208,18 @@ classify_retryable_launch_failure_reason() {
     echo "resource_temporarily_unavailable"
     return 0
   fi
+  if [[ -s "$log_file" ]] && grep -Eiq "Stale file handle|ESTALE" "$log_file"; then
+    echo "stale_file_handle"
+    return 0
+  fi
   echo "retryable_exit_code_${exit_code}"
+}
+
+is_retryable_launch_failure_log() {
+  local log_file="$1"
+  [[ -s "$log_file" ]] && grep -Eiq \
+    "Text file busy|ETXTBSY|posix_spawn failed|Permission denied|resource temporarily unavailable|stale file handle|ESTALE" \
+    "$log_file"
 }
 
 append_lec_launch_event() {
@@ -639,7 +650,7 @@ top_module=${top_module}
       :
     else
       verilog_status=$?
-      if grep -Eiq "failed to run command .*(text file busy|permission denied)" "$verilog_log"; then
+      if is_retryable_launch_failure_log "$verilog_log"; then
         launch_reason="$(classify_retryable_launch_failure_reason "$verilog_log" "$verilog_status")"
         append_lec_launch_event \
           "RETRY" "$base" "$sv" "frontend" "${cmd[0]}" "$launch_reason" \
@@ -695,7 +706,7 @@ top_module=${top_module}
     :
   else
     opt_status=$?
-    if grep -Eiq "failed to run command .*(text file busy|permission denied)" "$opt_log"; then
+    if is_retryable_launch_failure_log "$opt_log"; then
       launch_reason="$(classify_retryable_launch_failure_reason "$opt_log" "$opt_status")"
       append_lec_launch_event \
         "RETRY" "$base" "$sv" "opt" "${opt_cmd[0]}" "$launch_reason" \
