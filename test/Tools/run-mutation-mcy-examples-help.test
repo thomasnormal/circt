@@ -1,0 +1,12 @@
+// RUN: %S/../../utils/run_mutation_mcy_examples.sh --help | FileCheck %s
+
+// CHECK: run_mutation_mcy_examples.sh [options]
+// CHECK-DAG: --examples-root
+// CHECK-DAG: --out-dir
+// CHECK-DAG: --example
+// CHECK-DAG: --circt-mut
+// CHECK-DAG: --yosys
+// CHECK-DAG: --generate-count
+// CHECK-DAG: --mutation-limit
+// CHECK-DAG: --smoke
+// CHECK-DAG: --keep-work

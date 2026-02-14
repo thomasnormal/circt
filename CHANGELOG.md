@@ -1,5 +1,140 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1296 - February 14, 2026
+
+### Mutation Workflow: MCY Example Harness for Ongoing Regression
+
+1. Added `utils/run_mutation_mcy_examples.sh` to run mutation coverage checks against local `~/mcy/examples` designs (`bitcnt`, `picorv32_primes`).
+2. Added dual execution modes:
+   - default mode: real mutation generation (`circt-mut cover --generate-mutations ...`) with yosys.
+   - `--smoke` mode: dependency-light flow using stub mutations + identity create-mutated helper for environments without yosys.
+3. Added per-example aggregation output (`summary.tsv`) with status, exit code, detected/relevant counts, coverage percent, and errors.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-help.test`
+   - `test/Tools/run-mutation-mcy-examples-smoke.test`
+   - `test/Tools/run-mutation-mcy-examples-yosys-missing.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-mutation-mcy-examples-help.test build-test/test/Tools/run-mutation-mcy-examples-smoke.test build-test/test/Tools/run-mutation-mcy-examples-yosys-missing.test` PASS
+
+
+## Iteration 1295 - February 14, 2026
+
+### OpenTitan FPV Phase D Progress: Assertion-Granular BMC Reporting Path
+
+1. Added hierarchical stopat selector support to generic HW stopat lowering:
+   - `lib/Dialect/HW/Transforms/HWStopatSymbolic.cpp`
+   - selectors now accept `inst[.inst...].port` and enforce ambiguity-safe
+     incoming-path resolution.
+2. Updated OpenTitan FPV runner stopat normalization to accept hierarchical
+   selectors and keep malformed selector rejection deterministic:
+   - `utils/run_opentitan_fpv_circt_bmc.py`
+3. Added optional assertion-granular execution to generic pairwise BMC runner:
+   - `utils/run_pairwise_circt_bmc.py`
+   - env/CLI:
+     - `BMC_ASSERTION_GRANULAR=1` / `--assertion-granular`
+     - `BMC_ASSERTION_GRANULAR_MAX` / `--assertion-granular-max`
+     - `BMC_ASSERTION_RESULTS_OUT` / `--assertion-results-file`
+   - implementation isolates each non-`{bmc.final}` `verif.assert` by
+     rewriting other assertions to assumes and re-running BMC per assertion.
+4. Added FPV-style summary artifact support in OpenTitan FPV runner:
+   - `BMC_FPV_SUMMARY_OUT` / `--fpv-summary-file`
+   - emits per-target counts:
+     - `total_assertions`, `proven`, `failing`, `unknown`, `error`, `timeout`,
+       `skipped` (with `vacuous`/`covered`/`unreachable` placeholders as `0`
+       until semantic classification lands).
+5. Wired new artifacts into `run_formal_all.sh` OpenTitan FPV lane:
+   - `opentitan-fpv-bmc-assertion-results.tsv`
+   - `opentitan-fpv-bmc-fpv-summary.tsv`
+6. Added/updated regressions:
+   - `test/Dialect/HW/hw-stopat-symbolic.mlir`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-task-policy.test`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-stopat-selector-validation.test`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary.test`
+   - `test/Tools/run-pairwise-circt-bmc-assertion-granular.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-task-policy-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-forwarding.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `ninja -C build-test circt-opt` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-pairwise-circt-bmc-.*\\.test|run-opentitan-fpv-circt-bmc-.*\\.test|run-formal-all-opentitan-fpv-bmc.*\\.test|resolve-opentitan-formal-compile-contracts-stopats\\.test|check-opentitan-compile-contract-drift-task-stopats\\.test'` PASS
+
+## Iteration 1294 - February 14, 2026
+
+### Mutation Governance: Allowlist Controls for Mutation↔BMC Fingerprint Parity
+
+1. Added `--mutation-bmc-contract-fingerprint-parity-allowlist-file FILE` to `utils/run_formal_all.sh`.
+2. Applied allowlist filtering to both mutation/BMC parity gates:
+   - `--fail-on-mutation-bmc-contract-fingerprint-parity`
+   - `--fail-on-new-mutation-bmc-contract-fingerprint-parity`
+3. Wired allowlist file validation and gate/strict-gate requirement checks.
+4. Added focused regressions:
+   - `test/Tools/run-formal-all-mutation-bmc-contract-fingerprint-parity-allowlist.test`
+   - `test/Tools/run-formal-all-mutation-bmc-contract-fingerprint-parity-new-allowlist.test`
+   - `test/Tools/run-formal-all-mutation-bmc-contract-fingerprint-parity-allowlist-requires-gate.test`
+   - updated `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `LIT_FILTER='run-formal-all-help\.test|run-formal-all-mutation-bmc-contract-fingerprint-parity\.test|run-formal-all-mutation-bmc-contract-fingerprint-parity-new\.test|run-formal-all-strict-gate-mutation-bmc-contract-fingerprint-parity-defaults\.test|run-formal-all-mutation-bmc-contract-fingerprint-parity-allowlist\.test|run-formal-all-mutation-bmc-contract-fingerprint-parity-new-allowlist\.test|run-formal-all-mutation-bmc-contract-fingerprint-parity-allowlist-requires-gate\.test|run-formal-all-mutation-lec-contract-fingerprint-parity\.test' ninja -C build-test check-circt` PASS
+
+## Iteration 1293 - February 14, 2026
+
+### Mutation Governance: Baseline Drift Gate for Mutation↔BMC Fingerprint Parity
+
+1. Added `--fail-on-new-mutation-bmc-contract-fingerprint-parity` to `utils/run_formal_all.sh`.
+2. Implemented baseline-window drift detection for mutation provenance fingerprints missing in BMC resolved contracts, with rule id `strict_gate.mutation.parity.contract_fingerprint_values.new_missing_in_bmc`.
+3. Enabled the new drift gate by default under `--strict-gate`.
+4. Added focused regressions:
+   - `test/Tools/run-formal-all-mutation-bmc-contract-fingerprint-parity-new.test`
+   - `test/Tools/run-formal-all-strict-gate-mutation-bmc-contract-fingerprint-parity-defaults.test`
+   - updated `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `LIT_FILTER='run-formal-all-help\.test|run-formal-all-mutation-bmc-contract-fingerprint-parity\.test|run-formal-all-mutation-bmc-contract-fingerprint-parity-new\.test|run-formal-all-strict-gate-mutation-bmc-contract-fingerprint-parity-defaults\.test|run-formal-all-mutation-lec-contract-fingerprint-parity\.test' ninja -C build-test check-circt` PASS
+
+## Iteration 1292 - February 14, 2026
+
+### Mutation Governance: Mutation↔BMC Contract Fingerprint Parity Gate
+
+1. Extended `utils/run_formal_all.sh` with `--fail-on-mutation-bmc-contract-fingerprint-parity`.
+2. Wired the flag through strict-gate activation, environment forwarding, and Python strict-gate option parsing.
+3. Added a new strict-gate check that fails when mutation provenance contract fingerprints are missing from current BMC resolved-contract fingerprints (`strict_gate.mutation.parity.contract_fingerprint_values.missing_in_bmc`).
+4. Added/updated focused regressions:
+   - `test/Tools/run-formal-all-mutation-bmc-contract-fingerprint-parity.test`
+   - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity.test build-test/test/Tools/run-formal-all-mutation-bmc-contract-fingerprint-parity.test` PASS
+
+## Iteration 1291 - February 14, 2026
+
+### circt-sim UVM Sequencer Dequeue Type-Safety (func.call path)
+
+1. Hardened `seq_item_pull_*` dequeue interception in `interpretFuncCall`:
+   - resolve connected port addresses to likely owning sequencer queue address
+     before dequeueing
+   - infer expected transaction class from the current output-reference object
+   - prefer class-compatible FIFO entries before generic fallback dequeue
+2. Fixed output-reference write loops to use explicit braces and set
+   `initialized` once per completed pointer write.
+
+### Validation
+
+- `ninja -C build-test circt-sim` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/config-db-native-call-indirect-writeback.mlir build-test/test/Tools/circt-sim/config-db-native-wrapper-writeback.mlir build-test/test/Tools/circt-sim/config-db-native-impl-direct-writeback.mlir build-test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir` PASS
+
+
 ## Iteration 1289 - February 14, 2026
 
 ### OpenTitan FPV Execution Lane Bootstrap (`opentitan/FPV_BMC`)
