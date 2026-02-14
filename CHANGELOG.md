@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1375 - February 14, 2026
+
+### Mutation Workflow: Per-Example Percent Drift Budget Overrides
+
+1. Extended example-manifest drift override schema in
+   `utils/run_mutation_mcy_examples.sh` with two optional per-example
+   percentage budget fields:
+   - `max_detected_drop_percent`
+   - `max_relevant_drop_percent`
+2. Applied per-example percent overrides in baseline drift evaluation for
+   detected/relevant metrics, alongside existing absolute-drop overrides.
+3. Added manifest validation for the new percent overrides:
+   - numeric format required
+   - bounded range `[0,100]`
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-drift-percent-budget-override-pass.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-invalid-max-detected-drop-percent-override.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (108 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_iter1375` PASS
+
+
 ## Iteration 1374 - February 14, 2026
 
 ### Mutation Workflow: Percentage-Based Detected/Relevant Drift Budgets
