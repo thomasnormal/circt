@@ -1330,7 +1330,7 @@ Options:
                          Optional output path for OpenTitan FPV objective-level
                          BMC-vs-LEC parity TSV (default:
                          OUT_DIR/opentitan-fpv-objective-parity.tsv when
-                         `--opentitan-fpv-lec-assertion-results-file` is set)
+                         `opentitan/FPV_OBJECTIVE_PARITY` lane runs)
   --opentitan-fpv-objective-parity-allowlist-file FILE
                          Optional allowlist file for OpenTitan FPV objective
                          parity checks (objective/case/target exact/prefix/regex)
@@ -3064,6 +3064,7 @@ OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE=""
 OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE=""
 OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE=""
 OPENTITAN_FPV_LEC_COVER_RESULTS_FILE=""
+OPENTITAN_FPV_LEC_AUTO_PRODUCE=0
 OPENTITAN_FPV_OBJECTIVE_PARITY_FILE=""
 OPENTITAN_FPV_OBJECTIVE_PARITY_ALLOWLIST_FILE=""
 OPENTITAN_FPV_FUSESOC_BIN="fusesoc"
@@ -4013,6 +4014,18 @@ YOSYS_DIR="$YOSYS_DIR_NORMALIZED"
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="$PWD/formal-results-${DATE_STR//-/}"
 fi
+
+lane_requested_by_filters() {
+  local lane_id="$1"
+  if [[ -n "$INCLUDE_LANE_REGEX" && ! "$lane_id" =~ $INCLUDE_LANE_REGEX ]]; then
+    return 1
+  fi
+  if [[ -n "$EXCLUDE_LANE_REGEX" && "$lane_id" =~ $EXCLUDE_LANE_REGEX ]]; then
+    return 1
+  fi
+  return 0
+}
+
 if [[ -z "$OPENTITAN_UNRESOLVED_MODULES_FILE" ]]; then
   OPENTITAN_UNRESOLVED_MODULES_FILE="$OUT_DIR/opentitan-unresolved-modules.tsv"
 fi
@@ -4055,7 +4068,16 @@ fi
 if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -z "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE" ]]; then
   OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE="$OUT_DIR/opentitan-fpv-bmc-evidence-parity.tsv"
 fi
-if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" && -z "$OPENTITAN_FPV_OBJECTIVE_PARITY_FILE" ]]; then
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -z "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" ]] && \
+   lane_requested_by_filters "opentitan/FPV_OBJECTIVE_PARITY"; then
+  OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE="$OUT_DIR/opentitan-fpv-lec-assertion-results.tsv"
+  if [[ -z "$OPENTITAN_FPV_LEC_COVER_RESULTS_FILE" ]]; then
+    OPENTITAN_FPV_LEC_COVER_RESULTS_FILE="$OUT_DIR/opentitan-fpv-lec-cover-results.tsv"
+  fi
+  OPENTITAN_FPV_LEC_AUTO_PRODUCE=1
+fi
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -z "$OPENTITAN_FPV_OBJECTIVE_PARITY_FILE" ]] && \
+   lane_requested_by_filters "opentitan/FPV_OBJECTIVE_PARITY"; then
   OPENTITAN_FPV_OBJECTIVE_PARITY_FILE="$OUT_DIR/opentitan-fpv-objective-parity.tsv"
 fi
 if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && -n "$OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE_FILE" && -z "$OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_FILE" ]]; then
@@ -4963,11 +4985,11 @@ if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" && ! -r "$OPENTITAN
   echo "OpenTitan FPV BMC evidence parity allowlist file not readable: $OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" >&2
   exit 1
 fi
-if [[ -n "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" && ! -r "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" ]]; then
+if [[ -n "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" && "$OPENTITAN_FPV_LEC_AUTO_PRODUCE" != "1" && ! -r "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" ]]; then
   echo "OpenTitan FPV LEC assertion-results file not readable: $OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" >&2
   exit 1
 fi
-if [[ -n "$OPENTITAN_FPV_LEC_COVER_RESULTS_FILE" && ! -r "$OPENTITAN_FPV_LEC_COVER_RESULTS_FILE" ]]; then
+if [[ -n "$OPENTITAN_FPV_LEC_COVER_RESULTS_FILE" && "$OPENTITAN_FPV_LEC_AUTO_PRODUCE" != "1" && ! -r "$OPENTITAN_FPV_LEC_COVER_RESULTS_FILE" ]]; then
   echo "OpenTitan FPV LEC cover-results file not readable: $OPENTITAN_FPV_LEC_COVER_RESULTS_FILE" >&2
   exit 1
 fi
@@ -9274,6 +9296,7 @@ compute_lane_state_config_hash() {
     printf "opentitan_fpv_bmc_evidence_parity_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE"
     printf "opentitan_fpv_lec_assertion_results_file=%s\n" "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE"
     printf "opentitan_fpv_lec_cover_results_file=%s\n" "$OPENTITAN_FPV_LEC_COVER_RESULTS_FILE"
+    printf "opentitan_fpv_lec_auto_produce=%s\n" "$OPENTITAN_FPV_LEC_AUTO_PRODUCE"
     printf "opentitan_fpv_objective_parity_file=%s\n" "$OPENTITAN_FPV_OBJECTIVE_PARITY_FILE"
     printf "opentitan_fpv_objective_parity_allowlist_file=%s\n" "$OPENTITAN_FPV_OBJECTIVE_PARITY_ALLOWLIST_FILE"
     printf "opentitan_fpv_objective_parity_missing_policy=%s\n" "$OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY"
@@ -10251,10 +10274,6 @@ if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]] && lane_enabled "opentitan/FPV_OBJECTI
     echo "opentitan/FPV_OBJECTIVE_PARITY requires source lane in filter: include opentitan/FPV_BMC" >&2
     exit 1
   fi
-  if [[ -z "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" ]]; then
-    echo "opentitan/FPV_OBJECTIVE_PARITY requires --opentitan-fpv-lec-assertion-results-file" >&2
-    exit 1
-  fi
 fi
 if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" ]] && lane_enabled "opentitan/CONNECTIVITY_BMC"; then
   if [[ -z "$OPENTITAN_CONNECTIVITY_RULE_FILTER" ]]; then
@@ -10359,6 +10378,8 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   need_yosys_lec_runner=0
   need_opentitan_bmc_runner=0
   need_opentitan_fpv_bmc_runner=0
+  need_opentitan_fpv_lec_lanes=0
+  need_opentitan_fpv_lec_runner=0
   need_opentitan_fpv_bmc_evidence_parity_checker=0
   need_opentitan_fpv_objective_parity_checker=0
   need_opentitan_connectivity_parser=0
@@ -10428,6 +10449,10 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   fi
   if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]] && lane_enabled "opentitan/FPV_OBJECTIVE_PARITY"; then
     need_opentitan_fpv_objective_parity_checker=1
+    if [[ "$OPENTITAN_FPV_LEC_AUTO_PRODUCE" == "1" ]]; then
+      need_opentitan_fpv_lec_lanes=1
+      need_opentitan_fpv_lec_runner=1
+    fi
   fi
   if [[ "$WITH_OPENTITAN_CONNECTIVITY_PARSE" == "1" ]] && lane_enabled "opentitan/CONNECTIVITY_PARSE"; then
     need_opentitan_connectivity_parser=1
@@ -10533,6 +10558,17 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
       require_executable_tool "circt-lec for OpenTitan connectivity LEC (derived)" "$FORMAL_CIRCT_LEC_BIN_OPENTITAN"
     fi
   fi
+  if [[ "$need_opentitan_fpv_lec_lanes" == "1" ]]; then
+    if [[ "$CIRCT_VERILOG_BIN_OPENTITAN_EXPLICIT" == "0" && "$CIRCT_VERILOG_BIN_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-verilog for OpenTitan FPV LEC (default-derived)" "$CIRCT_VERILOG_BIN_OPENTITAN"
+    fi
+    if [[ "$CIRCT_OPT_ENV_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-opt for OpenTitan FPV LEC (derived)" "$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
+    fi
+    if [[ "$CIRCT_LEC_ENV_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-lec for OpenTitan FPV LEC (derived)" "$FORMAL_CIRCT_LEC_BIN_OPENTITAN"
+    fi
+  fi
 
   if [[ "$need_sv_bmc_runner" == "1" ]]; then
     require_executable_tool "sv-tests BMC runner" "utils/run_sv_tests_circt_bmc.sh"
@@ -10557,6 +10593,9 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   fi
   if [[ "$need_opentitan_fpv_bmc_runner" == "1" ]]; then
     require_executable_tool "OpenTitan FPV BMC runner" "utils/run_opentitan_fpv_circt_bmc.py"
+  fi
+  if [[ "$need_opentitan_fpv_lec_runner" == "1" ]]; then
+    require_executable_tool "OpenTitan FPV LEC runner" "utils/run_opentitan_fpv_circt_lec.py"
   fi
   if [[ "$need_opentitan_fpv_bmc_evidence_parity_checker" == "1" ]]; then
     require_executable_tool "OpenTitan FPV BMC evidence parity checker" "utils/check_opentitan_fpv_bmc_evidence_parity.py"
@@ -14754,6 +14793,53 @@ run_opentitan_fpv_objective_parity_lane() {
 
   if [[ -n "$parity_file" ]]; then
     : > "$parity_file"
+  fi
+
+  if [[ "$OPENTITAN_FPV_LEC_AUTO_PRODUCE" == "1" ]]; then
+    local fpv_lec_case_results_file="$OUT_DIR/opentitan-fpv-lec-results.txt"
+    local fpv_lec_workdir="$OUT_DIR/opentitan-fpv-lec-work"
+    : > "$fpv_lec_case_results_file"
+    : > "$lec_assertion_results_file"
+    if [[ -n "$lec_cover_results_file" ]]; then
+      : > "$lec_cover_results_file"
+    fi
+    rm -rf "$fpv_lec_workdir"
+
+    local opentitan_fpv_lec_args=(
+      --compile-contracts "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE"
+      --bmc-assertion-results "$bmc_assertion_results_file"
+      --max-targets "$OPENTITAN_FPV_MAX_TARGETS"
+      --target-shard-count "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT"
+      --target-shard-index "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
+      --results-file "$fpv_lec_case_results_file"
+      --assertion-results-file "$lec_assertion_results_file"
+      --workdir "$fpv_lec_workdir"
+      --mode-label "FPV_LEC"
+    )
+    if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
+      opentitan_fpv_lec_args+=(--target-filter "$OPENTITAN_FPV_TARGET_FILTER")
+    fi
+    if [[ -n "$bmc_cover_results_file" && -f "$bmc_cover_results_file" ]]; then
+      opentitan_fpv_lec_args+=(--bmc-cover-results "$bmc_cover_results_file")
+    fi
+    if [[ -n "$lec_cover_results_file" ]]; then
+      opentitan_fpv_lec_args+=(--cover-results-file "$lec_cover_results_file")
+    fi
+
+    local opentitan_fpv_lec_env=(
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN"
+      CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
+      CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN_OPENTITAN"
+      Z3_BIN="$Z3_BIN"
+      LEC_MODE_LABEL="FPV_LEC"
+    )
+    if [[ ${#FORMAL_LEC_TIMEOUT_ENV[@]} -gt 0 ]]; then
+      opentitan_fpv_lec_env+=("${FORMAL_LEC_TIMEOUT_ENV[@]}")
+    fi
+
+    run_suite "opentitan-fpv-lec" \
+      env "${opentitan_fpv_lec_env[@]}" \
+      "$SCRIPT_DIR/run_opentitan_fpv_circt_lec.py" "${opentitan_fpv_lec_args[@]}" || true
   fi
 
   if [[ ! -f "$bmc_assertion_results_file" || ! -f "$lec_assertion_results_file" ]]; then

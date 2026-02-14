@@ -537,6 +537,23 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - `test/Tools/check-opentitan-fpv-objective-parity-fail.test`
      - `test/Tools/run-formal-all-opentitan-fpv-objective-parity-forwarding.test`
      - `test/Tools/run-formal-all-opentitan-fpv-objective-parity-requires-lec-assertions.test`
+38. OpenTitan FPV native LEC evidence auto-production integrated:
+   - added native runner:
+     - `utils/run_opentitan_fpv_circt_lec.py`
+     - consumes FPV compile contracts + BMC objective manifests and emits:
+       - case-level LEC artifact (`OUT`)
+       - assertion objective evidence (`LEC_ASSERTION_RESULTS_OUT`)
+       - cover objective evidence (`LEC_COVER_RESULTS_OUT`).
+   - `run_formal_all.sh` objective parity lane now auto-produces FPV LEC
+     evidence when caller does not pass external
+     `--opentitan-fpv-lec-{assertion,cover}-results-file`.
+   - strict tool preflight now includes OpenTitan FPV LEC runner/tool checks
+     (`circt-verilog`, `circt-opt`, `circt-lec`) for auto-produced path.
+   - added regression coverage:
+     - `test/Tools/run-opentitan-fpv-circt-lec-basic.test`
+     - updated
+       `test/Tools/run-formal-all-opentitan-fpv-objective-parity-requires-lec-assertions.test`
+       to validate auto-production wiring.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
@@ -932,12 +949,12 @@ verilator-verification, and yosys corpora).
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.
 6. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
 7. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
-8. **FPV cross-lane parity completion gap**: OpenTitan FPV objective-level
-   BMC-vs-LEC parity governance is now wired in `run_formal_all.sh` with
-   allowlist/strict-gate/missing-policy controls, but production closure still
-   needs a first-class CIRCT FPV LEC evidence producer (assertion+cover
-   artifacts) so the parity lane can run without externally supplied LEC
-   evidence files.
+8. **FPV LEC semantic depth gap**: OpenTitan FPV objective-level parity now has
+   native CIRCT LEC evidence auto-production (no external LEC artifact
+   handoff required), but current LEC objective statuses are case-projected
+   operational evidence. Remaining maturity work is assertion-native LEC
+   objective semantics (and cover-reachability semantics) that are independent
+   from BMC objective status classes.
 9. **OpenTitan macro frontend residual gap**: for representative IP targets
    (e.g. `pinmux_fpv`), retries now progress through
    `single_unit_preprocessor_failure` + Xilinx stub + unified include fallback,
@@ -951,7 +968,6 @@ verilator-verification, and yosys corpora).
 1. Validate and tune selector-based launch reason-event budget files (and allowlists) on larger OpenTitan and non-OpenTitan cohorts, then extend retry classification with additional platform-specific transient launch classes and policy-pack defaults.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
-4. Land native OpenTitan FPV LEC evidence production (assertion/cover artifacts)
-   and connect it directly to `opentitan/FPV_OBJECTIVE_PARITY`, removing the
-   current external-file handoff requirement while keeping objective parity
-   strict-gate governed.
+4. Deepen native OpenTitan FPV LEC evidence semantics from case-projected
+   operational checks to assertion-native objective proofs/counterexamples and
+   cover-reachability classes, while preserving strict-gate parity governance.
