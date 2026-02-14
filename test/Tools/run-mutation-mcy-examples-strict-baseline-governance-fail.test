@@ -17,5 +17,6 @@
 // RUN: FileCheck %s --check-prefix=DRIFT < %t/out/drift.tsv
 
 // ERR: Baseline drift failure: see
+// DRIFT: __baseline__{{[[:space:]]}}baseline_schema_version{{[[:space:]]}}v1{{[[:space:]]}}v2{{[[:space:]]}}regression{{[[:space:]]}}baseline_schema_version_mismatch
 // DRIFT: bitcnt{{[[:space:]]}}policy_fingerprint{{[[:space:]]}}-{{[[:space:]]}}{{[0-9a-f]+}}{{[[:space:]]}}regression{{[[:space:]]}}baseline_missing_policy_fingerprint
 // DRIFT: picorv32_primes{{[[:space:]]}}row{{[[:space:]]}}present{{[[:space:]]}}missing{{[[:space:]]}}regression{{[[:space:]]}}missing_current_row

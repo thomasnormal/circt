@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1327 - February 14, 2026
+
+### Mutation Workflow: Strict Governance Includes Baseline Schema-Version Gate
+
+1. Extended `--strict-baseline-governance` in `utils/run_mutation_mcy_examples.sh` to also enable:
+   - `--require-baseline-schema-version-match`
+2. Updated strict-governance help text so the bundle is fully explicit.
+3. Strengthened regression coverage in:
+   - `test/Tools/run-mutation-mcy-examples-strict-baseline-governance-fail.test`
+   to assert schema-version drift (`baseline_schema_version_mismatch`) is now part of strict failures.
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (46/46)
+
 ## Iteration 1326 - February 14, 2026
 
 ### Mutation Workflow: Baseline Schema-Version Compatibility Gate
