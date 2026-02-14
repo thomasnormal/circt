@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1369 - February 14, 2026
+
+### Mutation Workflow: Configurable Baseline Drift Budgets
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with numeric drift budgets for
+   baseline comparison under `--fail-on-diff`:
+   - per-example:
+     - `--max-detected-drop`
+     - `--max-relevant-drop`
+     - `--max-coverage-drop-percent`
+     - `--max-errors-increase`
+   - suite aggregate:
+     - `--max-total-detected-drop`
+     - `--max-total-relevant-drop`
+     - `--max-total-coverage-drop-percent`
+     - `--max-total-errors-increase`
+2. Kept default behavior strict (`0` budgets), preserving existing regression
+   semantics when these options are not provided.
+3. Added validation for all new options (non-negative integer/decimal checks).
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-baseline-drift-tolerance-pass.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+     - `test/Tools/run-mutation-mcy-examples-min-total-thresholds-invalid.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (102 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_iter1369` PASS
+
+
 ## Iteration 1368 - February 14, 2026
 
 ### Mutation Workflow: Strict Retry-Reason Baseline Parity Governance

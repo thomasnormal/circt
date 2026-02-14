@@ -78,6 +78,29 @@ Options:
                            --retry-reason-baseline-file (or derived baseline)
                            and exit (writes .schema-version/.schema-contract)
   --fail-on-diff           Fail on metric regression vs --baseline-file
+  --max-detected-drop N    Allow per-example detected drop up to N when
+                           evaluating --fail-on-diff (default: 0)
+  --max-relevant-drop N    Allow per-example relevant drop up to N when
+                           evaluating --fail-on-diff (default: 0)
+  --max-coverage-drop-percent P
+                           Allow per-example coverage drop up to P
+                           percentage points when evaluating
+                           --fail-on-diff (default: 0)
+  --max-errors-increase N  Allow per-example errors increase up to N when
+                           evaluating --fail-on-diff (default: 0)
+  --max-total-detected-drop N
+                           Allow suite total detected drop up to N when
+                           evaluating --fail-on-diff (default: 0)
+  --max-total-relevant-drop N
+                           Allow suite total relevant drop up to N when
+                           evaluating --fail-on-diff (default: 0)
+  --max-total-coverage-drop-percent P
+                           Allow suite total coverage drop up to P
+                           percentage points when evaluating
+                           --fail-on-diff (default: 0)
+  --max-total-errors-increase N
+                           Allow suite total errors increase up to N when
+                           evaluating --fail-on-diff (default: 0)
   --retry-reason-baseline-file FILE
                            Optional retry-reason baseline summary used for
                            --fail-on-retry-reason-diff (default:
@@ -254,6 +277,14 @@ MIN_TOTAL_COVERAGE_PERCENT=""
 MAX_TOTAL_ERRORS=""
 MAX_TOTAL_RETRIES=""
 MAX_TOTAL_RETRIES_BY_REASON=""
+MAX_DETECTED_DROP=0
+MAX_RELEVANT_DROP=0
+MAX_COVERAGE_DROP_PERCENT="0"
+MAX_ERRORS_INCREASE=0
+MAX_TOTAL_DETECTED_DROP=0
+MAX_TOTAL_RELEVANT_DROP=0
+MAX_TOTAL_COVERAGE_DROP_PERCENT="0"
+MAX_TOTAL_ERRORS_INCREASE=0
 BASELINE_FILE=""
 RETRY_REASON_BASELINE_FILE=""
 RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE=""
@@ -1399,7 +1430,14 @@ evaluate_summary_drift() {
 
   local baseline_schema_contract=""
   local summary_schema_contract=""
-  local require_retry_reason_baseline_parity=""
+  local max_detected_drop="$MAX_DETECTED_DROP"
+  local max_relevant_drop="$MAX_RELEVANT_DROP"
+  local max_coverage_drop_percent="$MAX_COVERAGE_DROP_PERCENT"
+  local max_errors_increase="$MAX_ERRORS_INCREASE"
+  local max_total_detected_drop="$MAX_TOTAL_DETECTED_DROP"
+  local max_total_relevant_drop="$MAX_TOTAL_RELEVANT_DROP"
+  local max_total_coverage_drop_percent="$MAX_TOTAL_COVERAGE_DROP_PERCENT"
+  local max_total_errors_increase="$MAX_TOTAL_ERRORS_INCREASE"
   summary_schema_contract="$(summary_schema_contract_fingerprint_for_artifacts "$summary_file" "$summary_schema_version_file" "$summary_schema_contract_file")"
   baseline_schema_contract="$(summary_schema_contract_fingerprint_for_artifacts "$baseline_file" "$baseline_schema_version_file" "$baseline_schema_contract_file")"
 
@@ -1484,7 +1522,7 @@ evaluate_summary_drift() {
       append_drift_row "$drift_file" "$example" "status" "${_bs:-}" "$status" "ok" ""
     fi
 
-    if [[ "$detected" -lt "$_bd" ]]; then
+    if (( detected + max_detected_drop < _bd )); then
       if ! append_drift_candidate "$drift_file" "$example" "detected_mutants" "$_bd" "$detected" "detected_decreased"; then
         regressions=$((regressions + 1))
       fi
@@ -1492,7 +1530,9 @@ evaluate_summary_drift() {
       append_drift_row "$drift_file" "$example" "detected_mutants" "$_bd" "$detected" "ok" ""
     fi
 
-    if float_lt "$coverage_num" "$base_cov_num"; then
+    local per_example_min_coverage
+    per_example_min_coverage="$(awk -v b="$base_cov_num" -v d="$max_coverage_drop_percent" 'BEGIN { v=b-d; if (v < 0) v=0; printf "%.6f", v }')"
+    if float_lt "$coverage_num" "$per_example_min_coverage"; then
       if ! append_drift_candidate "$drift_file" "$example" "coverage_percent" "$base_cov_num" "$coverage_num" "coverage_decreased"; then
         regressions=$((regressions + 1))
       fi
@@ -1500,7 +1540,7 @@ evaluate_summary_drift() {
       append_drift_row "$drift_file" "$example" "coverage_percent" "$base_cov_num" "$coverage_num" "ok" ""
     fi
 
-    if [[ "$errors" -gt "$_berr" ]]; then
+    if (( errors > _berr + max_errors_increase )); then
       if ! append_drift_candidate "$drift_file" "$example" "errors" "$_berr" "$errors" "errors_increased"; then
         regressions=$((regressions + 1))
       fi
@@ -1508,7 +1548,7 @@ evaluate_summary_drift() {
       append_drift_row "$drift_file" "$example" "errors" "$_berr" "$errors" "ok" ""
     fi
 
-    if [[ "$relevant" -lt "$_br" ]]; then
+    if (( relevant + max_relevant_drop < _br )); then
       if ! append_drift_candidate "$drift_file" "$example" "relevant_mutants" "$_br" "$relevant" "relevant_decreased"; then
         regressions=$((regressions + 1))
       fi
@@ -1546,7 +1586,7 @@ evaluate_summary_drift() {
     summary_total_coverage="$(awk -v d="$summary_total_detected" -v r="$summary_total_relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
   fi
 
-  if [[ "$summary_total_detected" -lt "$baseline_total_detected" ]]; then
+  if (( summary_total_detected + max_total_detected_drop < baseline_total_detected )); then
     if ! append_drift_candidate "$drift_file" "__suite__" "suite_detected_mutants" "$baseline_total_detected" "$summary_total_detected" "detected_decreased"; then
       regressions=$((regressions + 1))
     fi
@@ -1554,7 +1594,7 @@ evaluate_summary_drift() {
     append_drift_row "$drift_file" "__suite__" "suite_detected_mutants" "$baseline_total_detected" "$summary_total_detected" "ok" ""
   fi
 
-  if [[ "$summary_total_relevant" -lt "$baseline_total_relevant" ]]; then
+  if (( summary_total_relevant + max_total_relevant_drop < baseline_total_relevant )); then
     if ! append_drift_candidate "$drift_file" "__suite__" "suite_relevant_mutants" "$baseline_total_relevant" "$summary_total_relevant" "relevant_decreased"; then
       regressions=$((regressions + 1))
     fi
@@ -1562,7 +1602,9 @@ evaluate_summary_drift() {
     append_drift_row "$drift_file" "__suite__" "suite_relevant_mutants" "$baseline_total_relevant" "$summary_total_relevant" "ok" ""
   fi
 
-  if float_lt "$summary_total_coverage" "$baseline_total_coverage"; then
+  local suite_min_coverage
+  suite_min_coverage="$(awk -v b="$baseline_total_coverage" -v d="$max_total_coverage_drop_percent" 'BEGIN { v=b-d; if (v < 0) v=0; printf "%.6f", v }')"
+  if float_lt "$summary_total_coverage" "$suite_min_coverage"; then
     if ! append_drift_candidate "$drift_file" "__suite__" "suite_coverage_percent" "$baseline_total_coverage" "$summary_total_coverage" "coverage_decreased"; then
       regressions=$((regressions + 1))
     fi
@@ -1570,7 +1612,7 @@ evaluate_summary_drift() {
     append_drift_row "$drift_file" "__suite__" "suite_coverage_percent" "$baseline_total_coverage" "$summary_total_coverage" "ok" ""
   fi
 
-  if [[ "$summary_total_errors" -gt "$baseline_total_errors" ]]; then
+  if (( summary_total_errors > baseline_total_errors + max_total_errors_increase )); then
     if ! append_drift_candidate "$drift_file" "__suite__" "suite_errors" "$baseline_total_errors" "$summary_total_errors" "errors_increased"; then
       regressions=$((regressions + 1))
     fi
@@ -2282,6 +2324,38 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_DIFF=1
       shift
       ;;
+    --max-detected-drop)
+      MAX_DETECTED_DROP="$2"
+      shift 2
+      ;;
+    --max-relevant-drop)
+      MAX_RELEVANT_DROP="$2"
+      shift 2
+      ;;
+    --max-coverage-drop-percent)
+      MAX_COVERAGE_DROP_PERCENT="$2"
+      shift 2
+      ;;
+    --max-errors-increase)
+      MAX_ERRORS_INCREASE="$2"
+      shift 2
+      ;;
+    --max-total-detected-drop)
+      MAX_TOTAL_DETECTED_DROP="$2"
+      shift 2
+      ;;
+    --max-total-relevant-drop)
+      MAX_TOTAL_RELEVANT_DROP="$2"
+      shift 2
+      ;;
+    --max-total-coverage-drop-percent)
+      MAX_TOTAL_COVERAGE_DROP_PERCENT="$2"
+      shift 2
+      ;;
+    --max-total-errors-increase)
+      MAX_TOTAL_ERRORS_INCREASE="$2"
+      shift 2
+      ;;
     --retry-reason-baseline-file)
       RETRY_REASON_BASELINE_FILE="$2"
       shift 2
@@ -2512,6 +2586,38 @@ if [[ -n "$MAX_TOTAL_RETRIES" ]] && ! is_nonneg_int "$MAX_TOTAL_RETRIES"; then
   exit 1
 fi
 if ! parse_retry_reason_budgets "$MAX_TOTAL_RETRIES_BY_REASON"; then
+  exit 1
+fi
+if ! is_nonneg_int "$MAX_DETECTED_DROP"; then
+  echo "--max-detected-drop must be a non-negative integer: $MAX_DETECTED_DROP" >&2
+  exit 1
+fi
+if ! is_nonneg_int "$MAX_RELEVANT_DROP"; then
+  echo "--max-relevant-drop must be a non-negative integer: $MAX_RELEVANT_DROP" >&2
+  exit 1
+fi
+if ! is_nonneg_decimal "$MAX_COVERAGE_DROP_PERCENT"; then
+  echo "--max-coverage-drop-percent must be a non-negative decimal: $MAX_COVERAGE_DROP_PERCENT" >&2
+  exit 1
+fi
+if ! is_nonneg_int "$MAX_ERRORS_INCREASE"; then
+  echo "--max-errors-increase must be a non-negative integer: $MAX_ERRORS_INCREASE" >&2
+  exit 1
+fi
+if ! is_nonneg_int "$MAX_TOTAL_DETECTED_DROP"; then
+  echo "--max-total-detected-drop must be a non-negative integer: $MAX_TOTAL_DETECTED_DROP" >&2
+  exit 1
+fi
+if ! is_nonneg_int "$MAX_TOTAL_RELEVANT_DROP"; then
+  echo "--max-total-relevant-drop must be a non-negative integer: $MAX_TOTAL_RELEVANT_DROP" >&2
+  exit 1
+fi
+if ! is_nonneg_decimal "$MAX_TOTAL_COVERAGE_DROP_PERCENT"; then
+  echo "--max-total-coverage-drop-percent must be a non-negative decimal: $MAX_TOTAL_COVERAGE_DROP_PERCENT" >&2
+  exit 1
+fi
+if ! is_nonneg_int "$MAX_TOTAL_ERRORS_INCREASE"; then
+  echo "--max-total-errors-increase must be a non-negative integer: $MAX_TOTAL_ERRORS_INCREASE" >&2
   exit 1
 fi
 if ! parse_retry_reason_drift_tolerances "$RETRY_REASON_DRIFT_TOLERANCES"; then
