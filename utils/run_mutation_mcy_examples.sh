@@ -47,6 +47,9 @@ Options:
   --require-policy-fingerprint-baseline
                            Require baseline rows to include policy_fingerprint
                            when evaluating --fail-on-diff
+  --require-baseline-example-parity
+                           Require baseline/current example-id parity when
+                           evaluating --fail-on-diff
   --drift-allowlist-file FILE
                            Optional allowlist for drift regressions (requires
                            --fail-on-diff). Non-empty, non-comment lines are
@@ -97,6 +100,7 @@ BASELINE_FILE=""
 UPDATE_BASELINE=0
 FAIL_ON_DIFF=0
 REQUIRE_POLICY_FINGERPRINT_BASELINE=0
+REQUIRE_BASELINE_EXAMPLE_PARITY=0
 DRIFT_ALLOWLIST_FILE=""
 FAIL_ON_UNUSED_DRIFT_ALLOWLIST=0
 DRIFT_ALLOWLIST_UNUSED_FILE=""
@@ -520,7 +524,17 @@ evaluate_summary_drift() {
   local summary_file="$2"
   local drift_file="$3"
   local require_policy_fingerprint_baseline="${4:-0}"
+  local require_baseline_example_parity="${5:-0}"
   local regressions=0
+  local baseline_example=""
+  local _status=""
+  local _exit=""
+  local _detected=""
+  local _relevant=""
+  local _coverage=""
+  local _errors=""
+  local _policy=""
+  local -A summary_examples_seen=()
 
   printf 'example\tmetric\tbaseline\tcurrent\toutcome\tdetail\n' > "$drift_file"
 
@@ -529,6 +543,8 @@ evaluate_summary_drift() {
     if [[ -z "$example" ]]; then
       continue
     fi
+
+    summary_examples_seen["$example"]=1
 
     detected="$(normalize_int_or_zero "$detected")"
     relevant="$(normalize_int_or_zero "$relevant")"
@@ -618,6 +634,20 @@ evaluate_summary_drift() {
       fi
     fi
   done < "$summary_file"
+
+  if [[ "$require_baseline_example_parity" -eq 1 ]]; then
+    while IFS=$'\t' read -r baseline_example _status _exit _detected _relevant _coverage _errors _policy; do
+      [[ "$baseline_example" == "example" ]] && continue
+      if [[ -z "$baseline_example" ]]; then
+        continue
+      fi
+      if [[ -z "${summary_examples_seen[$baseline_example]+x}" ]]; then
+        if ! append_drift_candidate "$drift_file" "$baseline_example" "row" "present" "missing" "missing_current_row"; then
+          regressions=$((regressions + 1))
+        fi
+      fi
+    done < "$baseline_file"
+  fi
 
   if [[ "$regressions" -gt 0 ]]; then
     return 1
@@ -723,6 +753,10 @@ while [[ $# -gt 0 ]]; do
       REQUIRE_POLICY_FINGERPRINT_BASELINE=1
       shift
       ;;
+    --require-baseline-example-parity)
+      REQUIRE_BASELINE_EXAMPLE_PARITY=1
+      shift
+      ;;
     --drift-allowlist-file)
       DRIFT_ALLOWLIST_FILE="$2"
       shift 2
@@ -801,6 +835,10 @@ if [[ "$UPDATE_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -eq 1 ]]; then
 fi
 if [[ "$REQUIRE_POLICY_FINGERPRINT_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
   echo "--require-policy-fingerprint-baseline requires --fail-on-diff" >&2
+  exit 1
+fi
+if [[ "$REQUIRE_BASELINE_EXAMPLE_PARITY" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
+  echo "--require-baseline-example-parity requires --fail-on-diff" >&2
   exit 1
 fi
 if [[ -n "$DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_DIFF" -ne 1 ]]; then
@@ -1109,7 +1147,7 @@ done
 
 if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
   DRIFT_FILE="${OUT_DIR}/drift.tsv"
-  if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE" "$REQUIRE_POLICY_FINGERPRINT_BASELINE"; then
+  if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE" "$REQUIRE_POLICY_FINGERPRINT_BASELINE" "$REQUIRE_BASELINE_EXAMPLE_PARITY"; then
     overall_rc=1
     echo "Baseline drift failure: see $DRIFT_FILE" >&2
   fi

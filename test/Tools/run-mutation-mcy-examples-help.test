@@ -23,6 +23,7 @@
 // CHECK-DAG: --update-baseline
 // CHECK-DAG: --fail-on-diff
 // CHECK-DAG: --require-policy-fingerprint-baseline
+// CHECK-DAG: --require-baseline-example-parity
 // CHECK-DAG: --drift-allowlist-file
 // CHECK-DAG: --fail-on-unused-drift-allowlist
 // CHECK-DAG: --drift-allowlist-unused-file
