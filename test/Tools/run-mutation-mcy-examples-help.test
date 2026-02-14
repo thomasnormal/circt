@@ -25,6 +25,8 @@
 // CHECK-DAG: --require-policy-fingerprint-baseline
 // CHECK-DAG: --require-baseline-example-parity
 // CHECK-DAG: --require-baseline-schema-version-match
+// CHECK-DAG: --baseline-schema-version-file
+// CHECK-DAG: --summary-schema-version-file
 // CHECK-DAG: --require-unique-example-selection
 // CHECK-DAG: --strict-baseline-governance
 // CHECK-DAG: --require-unique-summary-rows

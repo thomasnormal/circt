@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\tpolicy_fingerprint\nbitcnt\tPASS\t0\t2\t4\t50.00\t0\tdeadbeef\n' > %t/baseline.tsv
+
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --baseline-file %t/baseline.tsv \
+// RUN:   --baseline-schema-version-file %t/missing.schema-version \
+// RUN:   --fail-on-diff \
+// RUN:   --require-baseline-schema-version-match 2>&1 | FileCheck %s
+
+// CHECK: Baseline schema-version file not found: {{.*}}missing.schema-version
