@@ -655,12 +655,48 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--assertion-shard-count",
+        default=os.environ.get("BMC_ASSERTION_SHARD_COUNT", "1"),
+        help=(
+            "Optional number of deterministic assertion shards used when "
+            "--assertion-granular is enabled "
+            "(default: env BMC_ASSERTION_SHARD_COUNT or 1)."
+        ),
+    )
+    parser.add_argument(
+        "--assertion-shard-index",
+        default=os.environ.get("BMC_ASSERTION_SHARD_INDEX", "0"),
+        help=(
+            "Optional deterministic assertion shard index in "
+            "[0, assertion-shard-count) used when --assertion-granular "
+            "is enabled (default: env BMC_ASSERTION_SHARD_INDEX or 0)."
+        ),
+    )
+    parser.add_argument(
         "--cover-granular",
         action="store_true",
         default=os.environ.get("BMC_COVER_GRANULAR", "0") == "1",
         help=(
             "Run BMC per cover by isolating each verif.cover in prepared MLIR "
             "(default: env BMC_COVER_GRANULAR or off)."
+        ),
+    )
+    parser.add_argument(
+        "--cover-shard-count",
+        default=os.environ.get("BMC_COVER_SHARD_COUNT", "1"),
+        help=(
+            "Optional number of deterministic cover shards used when "
+            "--cover-granular is enabled "
+            "(default: env BMC_COVER_SHARD_COUNT or 1)."
+        ),
+    )
+    parser.add_argument(
+        "--cover-shard-index",
+        default=os.environ.get("BMC_COVER_SHARD_INDEX", "0"),
+        help=(
+            "Optional deterministic cover shard index in [0, cover-shard-count) "
+            "used when --cover-granular is enabled "
+            "(default: env BMC_COVER_SHARD_INDEX or 0)."
         ),
     )
     parser.add_argument(
@@ -734,6 +770,54 @@ def main() -> int:
     assertion_granular_max = parse_nonnegative_int(
         args.assertion_granular_max, "--assertion-granular-max"
     )
+    assertion_shard_count = parse_nonnegative_int(
+        args.assertion_shard_count, "--assertion-shard-count"
+    )
+    if assertion_shard_count <= 0:
+        print(
+            (
+                f"invalid --assertion-shard-count: {args.assertion_shard_count} "
+                "(expected >= 1)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    assertion_shard_index = parse_nonnegative_int(
+        args.assertion_shard_index, "--assertion-shard-index"
+    )
+    if assertion_shard_index >= assertion_shard_count:
+        print(
+            (
+                f"invalid --assertion-shard-index: {assertion_shard_index} "
+                f"(expected < {assertion_shard_count})"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    cover_shard_count = parse_nonnegative_int(
+        args.cover_shard_count, "--cover-shard-count"
+    )
+    if cover_shard_count <= 0:
+        print(
+            (
+                f"invalid --cover-shard-count: {args.cover_shard_count} "
+                "(expected >= 1)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    cover_shard_index = parse_nonnegative_int(
+        args.cover_shard_index, "--cover-shard-index"
+    )
+    if cover_shard_index >= cover_shard_count:
+        print(
+            (
+                f"invalid --cover-shard-index: {cover_shard_index} "
+                f"(expected < {cover_shard_count})"
+            ),
+            file=sys.stderr,
+        )
+        return 1
     case_shard_count = parse_nonnegative_int(
         args.case_shard_count, "--case-shard-count"
     )
@@ -792,6 +876,12 @@ def main() -> int:
         "pairwise BMC shard selection: "
         f"shard={case_shard_index}/{case_shard_count} "
         f"selected_cases={len(shard_case_keys)} total_cases={len(all_case_keys)}",
+        flush=True,
+    )
+    print(
+        "pairwise BMC objective sharding: "
+        f"assertion={assertion_shard_index}/{assertion_shard_count} "
+        f"cover={cover_shard_index}/{cover_shard_count}",
         flush=True,
     )
 
@@ -858,6 +948,7 @@ def main() -> int:
     errored = 0
     unknown = 0
     timeout = 0
+    skipped = 0
     total = 0
     try:
         print(f"Running BMC on {len(cases)} pairwise case(s)...", flush=True)
@@ -1037,11 +1128,16 @@ def main() -> int:
 
                 if args.cover_granular and not case_smoke_only:
                     cover_sites = collect_candidate_cover_sites(mlir_lines or [])
+                    selected_cover_sites = [
+                        site
+                        for site in cover_sites
+                        if site.ordinal % cover_shard_count == cover_shard_index
+                    ]
                     if cover_sites:
                         assertion_sites_for_cover = collect_candidate_assertion_sites(
                             mlir_lines or []
                         )
-                        for site in cover_sites:
+                        for site in selected_cover_sites:
                             cover_id = f"c{site.ordinal:04d}"
                             cover_label = f"line_{site.line_index + 1}"
                             cover_mlir = case_dir / f"pairwise_bmc.cover-{site.ordinal}.mlir"
@@ -1176,9 +1272,14 @@ def main() -> int:
 
                 if args.assertion_granular and not case_smoke_only:
                     assertion_sites = collect_candidate_assertion_sites(mlir_lines or [])
+                    selected_assertion_sites = [
+                        site
+                        for site in assertion_sites
+                        if site.ordinal % assertion_shard_count == assertion_shard_index
+                    ]
                     if (
                         assertion_granular_max > 0
-                        and len(assertion_sites) > assertion_granular_max
+                        and len(selected_assertion_sites) > assertion_granular_max
                     ):
                         rows.append(
                             (
@@ -1201,8 +1302,29 @@ def main() -> int:
                         )
                         continue
                     if assertion_sites:
+                        if not selected_assertion_sites:
+                            rows.append(
+                                (
+                                    "SKIP",
+                                    case.case_id,
+                                    case_path,
+                                    suite_name,
+                                    mode_label,
+                                    "BMC_NOT_RUN",
+                                    "assertion_shard_empty",
+                                )
+                            )
+                            skipped += 1
+                            print(
+                                (
+                                    f"{case.case_id:32} SKIP "
+                                    "(assertion_shard_empty)"
+                                ),
+                                flush=True,
+                            )
+                            continue
                         assertion_statuses: list[tuple[str, str]] = []
-                        for site in assertion_sites:
+                        for site in selected_assertion_sites:
                             assertion_id = f"a{site.ordinal:04d}"
                             assertion_label = f"line_{site.line_index + 1}"
                             assertion_mlir = (
@@ -1722,7 +1844,7 @@ def main() -> int:
         )
     print(
         f"{suite_name} BMC summary: total={total} pass={passed} fail={failed} "
-        f"xfail=0 xpass=0 error={errored} skip=0 unknown={unknown} timeout={timeout}",
+        f"xfail=0 xpass=0 error={errored} skip={skipped} unknown={unknown} timeout={timeout}",
         flush=True,
     )
 
