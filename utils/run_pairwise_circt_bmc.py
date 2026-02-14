@@ -164,9 +164,16 @@ class TextFileBusyRetryExhausted(RuntimeError):
 RETRYABLE_LAUNCH_PATTERNS = (
     "text file busy",
     "etxtbsy",
-    "permission denied",
     "posix_spawn failed",
+    "permission denied",
     "resource temporarily unavailable",
+)
+
+RETRYABLE_LAUNCH_REASON_PATTERNS = (
+    ("etxtbsy", ("text file busy", "etxtbsy")),
+    ("posix_spawn_failed", ("posix_spawn failed",)),
+    ("permission_denied", ("permission denied",)),
+    ("resource_temporarily_unavailable", ("resource temporarily unavailable",)),
 )
 
 UNKNOWN_MODULE_PATTERNS = (
@@ -238,6 +245,16 @@ def parse_exit_codes(raw: str, name: str) -> set[int]:
 def is_retryable_launch_failure_output(stdout: str, stderr: str) -> bool:
     lowered = f"{stdout}\n{stderr}".lower()
     return any(pattern in lowered for pattern in RETRYABLE_LAUNCH_PATTERNS)
+
+
+def classify_retryable_launch_failure_reason_from_output(
+    stdout: str, stderr: str, exit_code: int
+) -> str:
+    lowered = f"{stdout}\n{stderr}".lower()
+    for reason, patterns in RETRYABLE_LAUNCH_REASON_PATTERNS:
+        if any(pattern in lowered for pattern in patterns):
+            return reason
+    return f"retryable_exit_code_{exit_code}"
 
 
 def write_log(path: Path, stdout: str, stderr: str) -> None:
@@ -885,25 +902,85 @@ def run_and_log(
                 raise TextFileBusyRetryExhausted(
                     active_cmd[0], etxtbsy_retry_count + 1
                 ) from exc
+            os_retry_reason = ""
+            if exc.errno == errno.EACCES:
+                os_retry_reason = "permission_denied"
+            elif exc.errno in (errno.EAGAIN, errno.EBUSY):
+                os_retry_reason = "resource_temporarily_unavailable"
+            if os_retry_reason:
+                if launch_retry_count < launch_retry_attempts:
+                    launch_retry_count += 1
+                    delay = launch_retry_backoff_secs * launch_retry_count
+                    retry_notes.append(
+                        (
+                            "runner_command_launch_retry "
+                            f"reason={os_retry_reason} attempt={launch_retry_count} "
+                            f"delay_secs={delay:.3f}"
+                        )
+                    )
+                    append_launch_event(
+                        "RETRY",
+                        os_retry_reason,
+                        launch_retry_count,
+                        delay,
+                        exc.errno,
+                        "",
+                    )
+                    time.sleep(delay)
+                    continue
+                if launch_copy_fallback and not launch_copy_fallback_used:
+                    tool_path = Path(active_cmd[0])
+                    if tool_path.is_file():
+                        fallback_tool = (
+                            log_path.parent / f"{tool_path.name}.launch-fallback"
+                        )
+                        shutil.copy2(tool_path, fallback_tool)
+                        fallback_tool.chmod(fallback_tool.stat().st_mode | 0o111)
+                        active_cmd[0] = str(fallback_tool)
+                        launch_copy_fallback_used = True
+                        launch_retry_count = 0
+                        etxtbsy_retry_count = 0
+                        retry_notes.append(
+                            (
+                                "runner_command_launch_fallback "
+                                f"tool={tool_path} fallback={fallback_tool}"
+                            )
+                        )
+                        append_launch_event(
+                            "FALLBACK",
+                            f"{os_retry_reason}_retry_exhausted",
+                            None,
+                            None,
+                            exc.errno,
+                            str(fallback_tool),
+                        )
+                        continue
+                raise RuntimeError(
+                    f"runner_command_{os_retry_reason}_retry_exhausted "
+                    f"tool={active_cmd[0]} attempts={launch_retry_count + 1}"
+                ) from exc
             raise
         if (
             result.returncode != 0
             and result.returncode in launch_retryable_exit_codes
             and is_retryable_launch_failure_output(result.stdout, result.stderr)
         ):
+            launch_reason = classify_retryable_launch_failure_reason_from_output(
+                result.stdout, result.stderr, result.returncode
+            )
             if launch_retry_count < launch_retry_attempts:
                 launch_retry_count += 1
                 delay = launch_retry_backoff_secs * launch_retry_count
                 retry_notes.append(
                     (
                         "runner_command_launch_retry "
-                        f"reason=retryable_exit_code_{result.returncode} "
+                        f"reason={launch_reason} "
                         f"attempt={launch_retry_count} delay_secs={delay:.3f}"
                     )
                 )
                 append_launch_event(
                     "RETRY",
-                    f"retryable_exit_code_{result.returncode}",
+                    launch_reason,
                     launch_retry_count,
                     delay,
                     result.returncode,
@@ -929,7 +1006,7 @@ def run_and_log(
                     )
                     append_launch_event(
                         "FALLBACK",
-                        f"retryable_exit_code_{result.returncode}_retry_exhausted",
+                        f"{launch_reason}_retry_exhausted",
                         None,
                         None,
                         result.returncode,

@@ -36,7 +36,9 @@ is_retryable_launch_failure_log() {
   if [[ ! -s "$log_file" ]]; then
     return 1
   fi
-  grep -Eq "Text file busy|failed to run command .*: Permission denied" "$log_file"
+  grep -Eiq \
+    "Text file busy|ETXTBSY|posix_spawn failed|Permission denied|resource temporarily unavailable" \
+    "$log_file"
 }
 
 compute_retry_backoff_secs() {
@@ -50,6 +52,18 @@ classify_retryable_launch_failure_reason() {
   local exit_code="$2"
   if [[ -s "$log_file" ]] && grep -Eiq "Text file busy|ETXTBSY" "$log_file"; then
     echo "etxtbsy"
+    return 0
+  fi
+  if [[ -s "$log_file" ]] && grep -Eiq "posix_spawn failed" "$log_file"; then
+    echo "posix_spawn_failed"
+    return 0
+  fi
+  if [[ -s "$log_file" ]] && grep -Eiq "Permission denied" "$log_file"; then
+    echo "permission_denied"
+    return 0
+  fi
+  if [[ -s "$log_file" ]] && grep -Eiq "resource temporarily unavailable" "$log_file"; then
+    echo "resource_temporarily_unavailable"
     return 0
   fi
   echo "retryable_exit_code_${exit_code}"
