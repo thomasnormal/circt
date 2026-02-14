@@ -70,6 +70,12 @@ Verilog frontend mode:
     primitives, retry once with shim module definitions.
   - on: always include shim module definitions.
   - off: disable shim module retry/injection.
+- BMC_VERILOG_ASSERT_MACRO_SHIM_MODE (default: auto)
+  Values:
+  - auto: on known unknown-macro assertion failures, retry once with a
+    conservative assertion macro shim source.
+  - on: always include assertion macro shim source.
+  - off: disable assertion macro shim retry/injection.
 """
 
 from __future__ import annotations
@@ -465,6 +471,54 @@ module IOBUF(
   assign IO = T ? 1'bz : I;
   assign O = IO;
 endmodule
+""",
+        encoding="utf-8",
+    )
+
+
+def is_unknown_assert_macro_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return (
+        "unknown macro or compiler directive '`assert" in low
+        or "unknown macro or compiler directive assert" in low
+    )
+
+
+def write_assert_macro_shim_file(path: Path) -> None:
+    path.write_text(
+        """// Auto-generated assertion macro shim used for non-single-unit
+// compilation fallback when assertion helper macros are unresolved.
+`ifndef CIRCT_BMC_ASSERT_MACRO_SHIM_SV
+`define CIRCT_BMC_ASSERT_MACRO_SHIM_SV
+`define ASSERT_DEFAULT_CLK clk_i
+`define ASSERT_DEFAULT_RST !rst_ni
+`define ASSERT_ERROR(__name) $error(\"Assert failed\")
+`define ASSERT_I(__name, __prop) __name: assert (__prop) else begin `ASSERT_ERROR(__name) end
+`define ASSERT_INIT(__name, __prop) initial begin __name: assert (__prop) else begin `ASSERT_ERROR(__name) end end
+`define ASSERT_INIT_NET(__name, __prop) initial begin #1ps; __name: assert (__prop) else begin `ASSERT_ERROR(__name) end end
+`define ASSERT_FINAL(__name, __prop) final begin __name: assert (__prop) else begin `ASSERT_ERROR(__name) end end
+`define ASSERT(__name, __prop, __clk = `ASSERT_DEFAULT_CLK, __rst = `ASSERT_DEFAULT_RST) \
+  __name: assert property (@(posedge __clk) disable iff ((__rst) !== '0) (__prop)) else begin `ASSERT_ERROR(__name) end
+`define ASSERT_NEVER(__name, __prop, __clk = `ASSERT_DEFAULT_CLK, __rst = `ASSERT_DEFAULT_RST) \
+  __name: assert property (@(posedge __clk) disable iff ((__rst) !== '0) not (__prop)) else begin `ASSERT_ERROR(__name) end
+`define ASSERT_KNOWN(__name, __sig, __clk = `ASSERT_DEFAULT_CLK, __rst = `ASSERT_DEFAULT_RST) \
+  `ASSERT(__name, !$isunknown(__sig), __clk, __rst)
+`define ASSERT_IF(__name, __prop, __enable, __clk = `ASSERT_DEFAULT_CLK, __rst = `ASSERT_DEFAULT_RST) \
+  `ASSERT(__name, (__enable) |-> (__prop), __clk, __rst)
+`define ASSERT_KNOWN_IF(__name, __sig, __enable, __clk = `ASSERT_DEFAULT_CLK, __rst = `ASSERT_DEFAULT_RST) \
+  `ASSERT_KNOWN(__name``KnownEnable, __enable, __clk, __rst) \
+  `ASSERT_IF(__name, !$isunknown(__sig), __enable, __clk, __rst)
+`define COVER(__name, __prop, __clk = `ASSERT_DEFAULT_CLK, __rst = `ASSERT_DEFAULT_RST) \
+  __name: cover property (@(posedge __clk) disable iff ((__rst) !== '0) (__prop));
+`define ASSUME(__name, __prop, __clk = `ASSERT_DEFAULT_CLK, __rst = `ASSERT_DEFAULT_RST) \
+  __name: assume property (@(posedge __clk) disable iff ((__rst) !== '0) (__prop)) else begin `ASSERT_ERROR(__name) end
+`define ASSUME_I(__name, __prop) __name: assume (__prop) else begin `ASSERT_ERROR(__name) end
+`define ASSUME_FPV(__name, __prop, __clk = `ASSERT_DEFAULT_CLK, __rst = `ASSERT_DEFAULT_RST) \
+  `ASSUME(__name, __prop, __clk, __rst)
+`define ASSUME_I_FPV(__name, __prop) `ASSUME_I(__name, __prop)
+`define COVER_FPV(__name, __prop, __clk = `ASSERT_DEFAULT_CLK, __rst = `ASSERT_DEFAULT_RST) \
+  `COVER(__name, __prop, __clk, __rst)
+`endif
 """,
         encoding="utf-8",
     )
@@ -1093,6 +1147,18 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    verilog_assert_macro_shim_mode = os.environ.get(
+        "BMC_VERILOG_ASSERT_MACRO_SHIM_MODE", "auto"
+    ).strip().lower()
+    if verilog_assert_macro_shim_mode not in {"auto", "on", "off"}:
+        print(
+            (
+                "invalid BMC_VERILOG_ASSERT_MACRO_SHIM_MODE: "
+                f"{verilog_assert_macro_shim_mode} (expected auto|on|off)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
     z3_lib = os.environ.get("Z3_LIB", str(Path.home() / "z3-install/lib64/libz3.so"))
     bmc_run_smtlib = os.environ.get("BMC_RUN_SMTLIB", "1") == "1"
     bmc_smoke_only = os.environ.get("BMC_SMOKE_ONLY", "0") == "1"
@@ -1395,7 +1461,9 @@ def main() -> int:
 
             include_dirs = global_include_dirs + case.include_dirs
             def build_verilog_cmd(
-                use_single_unit: bool, extra_sources: list[str] | None = None
+                use_single_unit: bool,
+                pre_sources: list[str] | None = None,
+                post_sources: list[str] | None = None,
             ) -> list[str]:
                 cmd = [
                     circt_verilog,
@@ -1412,20 +1480,29 @@ def main() -> int:
                 for define_token in case.verilog_defines:
                     cmd.append(f"-D{define_token}")
                 cmd += circt_verilog_args
+                if pre_sources:
+                    cmd += pre_sources
                 cmd += case.source_files
-                if extra_sources:
-                    cmd += extra_sources
+                if post_sources:
+                    cmd += post_sources
                 return cmd
 
             use_single_unit = verilog_single_unit_mode != "off"
             xilinx_primitive_stub_path = (
                 case_dir / "circt-verilog.xilinx-primitives.sv"
             )
-            verilog_extra_sources: list[str] = []
+            assert_macro_shim_path = case_dir / "circt-verilog.assert-macro-shim.sv"
+            verilog_pre_sources: list[str] = []
+            verilog_post_sources: list[str] = []
+            if verilog_assert_macro_shim_mode == "on":
+                write_assert_macro_shim_file(assert_macro_shim_path)
+                verilog_pre_sources.append(str(assert_macro_shim_path))
             if verilog_xilinx_primitive_stub_mode == "on":
                 write_xilinx_primitive_stub_file(xilinx_primitive_stub_path)
-                verilog_extra_sources.append(str(xilinx_primitive_stub_path))
-            verilog_cmd = build_verilog_cmd(use_single_unit, verilog_extra_sources)
+                verilog_pre_sources.append(str(xilinx_primitive_stub_path))
+            verilog_cmd = build_verilog_cmd(
+                use_single_unit, verilog_pre_sources, verilog_post_sources
+            )
 
             opt_cmd = [circt_opt, str(out_mlir)]
             opt_cmd += bmc_prepare_core_passes
@@ -1503,7 +1580,7 @@ def main() -> int:
                             )
                         use_single_unit = False
                         verilog_cmd = build_verilog_cmd(
-                            use_single_unit, verilog_extra_sources
+                            use_single_unit, verilog_pre_sources, verilog_post_sources
                         )
                         verilog_result = run_and_log(
                             verilog_cmd,
@@ -1524,7 +1601,7 @@ def main() -> int:
                 if (
                     verilog_result.returncode != 0
                     and verilog_xilinx_primitive_stub_mode == "auto"
-                    and not verilog_extra_sources
+                    and str(xilinx_primitive_stub_path) not in verilog_pre_sources
                 ):
                     verilog_log_text = verilog_log_path.read_text()
                     if is_xilinx_primitive_stub_retryable_failure(verilog_log_text):
@@ -1533,7 +1610,7 @@ def main() -> int:
                         )
                         shutil.copy2(verilog_log_path, unknown_module_log_path)
                         write_xilinx_primitive_stub_file(xilinx_primitive_stub_path)
-                        verilog_extra_sources = [str(xilinx_primitive_stub_path)]
+                        verilog_pre_sources.append(str(xilinx_primitive_stub_path))
                         if launch_event_rows is not None:
                             launch_event_rows.append(
                                 (
@@ -1550,7 +1627,54 @@ def main() -> int:
                                 )
                             )
                         verilog_cmd = build_verilog_cmd(
-                            use_single_unit, verilog_extra_sources
+                            use_single_unit, verilog_pre_sources, verilog_post_sources
+                        )
+                        verilog_result = run_and_log(
+                            verilog_cmd,
+                            verilog_log_path,
+                            None,
+                            case_timeout_secs,
+                            etxtbsy_retries,
+                            etxtbsy_backoff_secs,
+                            launch_retry_attempts,
+                            launch_retry_backoff_secs,
+                            launch_retryable_exit_codes,
+                            launch_copy_fallback,
+                            launch_event_rows,
+                            case.case_id,
+                            case_path,
+                            stage,
+                        )
+                if (
+                    verilog_result.returncode != 0
+                    and verilog_assert_macro_shim_mode == "auto"
+                    and str(assert_macro_shim_path) not in verilog_pre_sources
+                ):
+                    verilog_log_text = verilog_log_path.read_text()
+                    if is_unknown_assert_macro_failure(verilog_log_text):
+                        unknown_macro_log_path = (
+                            case_dir / "circt-verilog.unknown-macro.log"
+                        )
+                        shutil.copy2(verilog_log_path, unknown_macro_log_path)
+                        write_assert_macro_shim_file(assert_macro_shim_path)
+                        verilog_pre_sources.append(str(assert_macro_shim_path))
+                        if launch_event_rows is not None:
+                            launch_event_rows.append(
+                                (
+                                    "RETRY",
+                                    case.case_id,
+                                    case_path,
+                                    stage,
+                                    circt_verilog,
+                                    "unknown_assert_macros",
+                                    "1",
+                                    "0.000",
+                                    str(verilog_result.returncode),
+                                    "",
+                                )
+                            )
+                        verilog_cmd = build_verilog_cmd(
+                            use_single_unit, verilog_pre_sources, verilog_post_sources
                         )
                         verilog_result = run_and_log(
                             verilog_cmd,
