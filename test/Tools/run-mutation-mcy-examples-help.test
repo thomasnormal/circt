@@ -15,6 +15,7 @@
 // CHECK-DAG: --native-tests-mode
 // CHECK-DAG: --native-real-tests-strict
 // CHECK-DAG: --native-mutation-ops
+// CHECK-DAG: --native-real-harness-args
 // CHECK-DAG: --generate-count
 // CHECK-DAG: --mutations-seed
 // CHECK-DAG: --mutations-modes
