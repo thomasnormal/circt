@@ -67270,3 +67270,11 @@ See CHANGELOG.md on recent progress.
     - Fixed manifest parsing/reset coverage for new native override maps and
       added regression coverage:
       `run-mutation-mcy-examples-native-real-harness-args-manifest-override-pass.test`.
+35. Native real harness args regression coverage hardening
+    (February 14, 2026):
+    - Added explicit lit coverage for global CLI forwarding:
+      `run-mutation-mcy-examples-native-real-harness-args-cli-pass.test`.
+    - Added validator coverage for invalid tab/newline payloads:
+      `run-mutation-mcy-examples-native-real-harness-args-invalid.test`.
+    - Revalidated full `run-mutation-mcy-examples` lit slice after
+      introducing native real harness args support.
