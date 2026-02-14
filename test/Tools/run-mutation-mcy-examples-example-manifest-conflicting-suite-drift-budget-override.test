@@ -1,0 +1,7 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'alpha\talpha/alpha.v\ttop_alpha\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t1\t-\t-\t-\t-\t-\nbeta\tbeta/beta.v\ttop_beta\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t2\t-\t-\t-\t-\t-\n' > %t/manifest.tsv
+
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --example-manifest %t/manifest.tsv 2>&1 | FileCheck %s
+
+// CHECK: Conflicting max_total_detected_drop override in manifest row 2: 2 (already set to 1)
