@@ -1,0 +1,7 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/src
+// RUN: touch %t/src/a.sv
+// RUN: printf 'a_case\ttop_a\t%t/src/a.sv\t%t/src\t%t/work/a\n' > %t/cases.tsv
+// RUN: not %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --case-shard-count 2 --case-shard-index 2 2>&1 | FileCheck %s
+//
+// CHECK: invalid --case-shard-index: 2 (expected < 2)

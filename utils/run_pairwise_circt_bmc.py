@@ -663,6 +663,22 @@ def main() -> int:
             "(default: env BMC_COVER_GRANULAR or off)."
         ),
     )
+    parser.add_argument(
+        "--case-shard-count",
+        default=os.environ.get("BMC_CASE_SHARD_COUNT", "1"),
+        help=(
+            "Optional number of deterministic case shards "
+            "(default: env BMC_CASE_SHARD_COUNT or 1)."
+        ),
+    )
+    parser.add_argument(
+        "--case-shard-index",
+        default=os.environ.get("BMC_CASE_SHARD_INDEX", "0"),
+        help=(
+            "Optional deterministic case shard index in [0, case-shard-count) "
+            "(default: env BMC_CASE_SHARD_INDEX or 0)."
+        ),
+    )
     args = parser.parse_args()
 
     cases_file = Path(args.cases_file).resolve()
@@ -717,6 +733,66 @@ def main() -> int:
     )
     assertion_granular_max = parse_nonnegative_int(
         args.assertion_granular_max, "--assertion-granular-max"
+    )
+    case_shard_count = parse_nonnegative_int(
+        args.case_shard_count, "--case-shard-count"
+    )
+    if case_shard_count <= 0:
+        print(
+            (
+                f"invalid --case-shard-count: {args.case_shard_count} "
+                "(expected >= 1)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    case_shard_index = parse_nonnegative_int(
+        args.case_shard_index, "--case-shard-index"
+    )
+    if case_shard_index >= case_shard_count:
+        print(
+            (
+                f"invalid --case-shard-index: {case_shard_index} "
+                f"(expected < {case_shard_count})"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+
+    def case_shard_key(case: CaseSpec) -> tuple[str, ...]:
+        return (
+            case.case_id,
+            case.top_module,
+            ";".join(case.source_files),
+            ";".join(case.include_dirs),
+            case.case_path,
+            str(case.timeout_secs if case.timeout_secs is not None else ""),
+            case.backend_mode,
+            str(case.bmc_bound if case.bmc_bound is not None else ""),
+            str(
+                case.ignore_asserts_until
+                if case.ignore_asserts_until is not None
+                else ""
+            ),
+            case.assume_known_inputs_mode,
+            case.allow_multi_clock_mode,
+            shlex.join(case.bmc_extra_args),
+            case.contract_source,
+            ";".join(case.verilog_defines),
+        )
+
+    all_case_keys = sorted({case_shard_key(case) for case in cases})
+    shard_case_keys = {
+        key
+        for idx, key in enumerate(all_case_keys)
+        if idx % case_shard_count == case_shard_index
+    }
+    cases = [case for case in cases if case_shard_key(case) in shard_case_keys]
+    print(
+        "pairwise BMC shard selection: "
+        f"shard={case_shard_index}/{case_shard_count} "
+        f"selected_cases={len(shard_case_keys)} total_cases={len(all_case_keys)}",
+        flush=True,
     )
 
     global_include_dirs = [str(Path(path).resolve()) for path in args.include_dir]
