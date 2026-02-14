@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1346 - February 14, 2026
+
+### Mutation Workflow: Per-Example Timeout Hardening
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with:
+   - `--example-timeout-sec N` (default `0`, disabled).
+2. Added worker-level timeout enforcement for `circt-mut cover` execution:
+   - resolves timeout utility via `TIMEOUT` env override or `timeout` default.
+   - emits explicit diagnostics on timeout:
+     - `Example timeout (<example>): exceeded <N>s`
+3. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-example-timeout-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-example-timeout-smoke.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (71/71)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 4 --example-timeout-sec 30 --out-dir /tmp/mcy_examples_smoke_jobs4_timeout30` PASS
+
+
 ## Iteration 1345 - February 14, 2026
 
 ### Mutation Workflow: Non-Blocking Worker Reaping for `--jobs`
