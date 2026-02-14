@@ -1,0 +1,28 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/picorv32_primes %t/bin
+// RUN: printf 'module picorv32(input logic clk, output logic y); assign y = clk; endmodule\n' > %t/examples/picorv32_primes/picorv32.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf "%%%%s\\n" "$@" >> "$CAPTURE"\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --work-dir) work_dir="$2"; shift 2 ;;\n    --work-dir=*) work_dir="${1#*=}"; shift ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t2\\nrelevant_mutants\\t4\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/bin/yosys
+// RUN: chmod +x %t/bin/yosys
+
+// RUN: env CAPTURE=%t/capture.log %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example picorv32_primes \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --yosys %t/bin/yosys \
+// RUN:   --generate-count 7 \
+// RUN:   --mutation-limit 3 \
+// RUN:   --out-dir %t/out
+
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=ARGS < %t/capture.log
+
+// SUMMARY: example{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}detected{{[[:space:]]}}relevant{{[[:space:]]}}coverage_percent{{[[:space:]]}}errors
+// SUMMARY: picorv32_primes{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}2{{[[:space:]]}}4{{[[:space:]]}}50.00{{[[:space:]]}}0
+
+// ARGS: --generate-mutations
+// ARGS: 7
+// ARGS: --mutations-top
+// ARGS: picorv32
+// ARGS: --mutations-yosys
+// ARGS: yosys

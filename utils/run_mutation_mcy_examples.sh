@@ -17,6 +17,12 @@ Options:
   --yosys PATH             yosys binary (default: yosys)
   --generate-count N       Mutations to generate in non-smoke mode (default: 32)
   --mutation-limit N       Per-example mutation limit (default: 8)
+  --min-detected N         Fail if detected mutants per example is below N
+                           (default: 0)
+  --min-coverage-percent P Fail if coverage percent per example is below P
+                           (0-100, default: disabled)
+  --max-errors N           Fail if reported errors per example exceed N
+                           (default: disabled)
   --smoke                  Run smoke mode without yosys:
                            - use stub mutations file
                            - use identity fake create-mutated script
@@ -38,12 +44,23 @@ CIRCT_MUT=""
 YOSYS_BIN="${YOSYS:-yosys}"
 GENERATE_COUNT=32
 MUTATION_LIMIT=8
+MIN_DETECTED=0
+MIN_COVERAGE_PERCENT=""
+MAX_ERRORS=""
 SMOKE=0
 KEEP_WORK=0
 EXAMPLE_IDS=()
 
 is_pos_int() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+is_nonneg_int() {
+  [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+is_nonneg_decimal() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
 }
 
 resolve_tool() {
@@ -120,6 +137,18 @@ while [[ $# -gt 0 ]]; do
       MUTATION_LIMIT="$2"
       shift 2
       ;;
+    --min-detected)
+      MIN_DETECTED="$2"
+      shift 2
+      ;;
+    --min-coverage-percent)
+      MIN_COVERAGE_PERCENT="$2"
+      shift 2
+      ;;
+    --max-errors)
+      MAX_ERRORS="$2"
+      shift 2
+      ;;
     --smoke)
       SMOKE=1
       shift
@@ -146,6 +175,24 @@ if ! is_pos_int "$GENERATE_COUNT"; then
 fi
 if ! is_pos_int "$MUTATION_LIMIT"; then
   echo "--mutation-limit must be a positive integer: $MUTATION_LIMIT" >&2
+  exit 1
+fi
+if ! is_nonneg_int "$MIN_DETECTED"; then
+  echo "--min-detected must be a non-negative integer: $MIN_DETECTED" >&2
+  exit 1
+fi
+if [[ -n "$MIN_COVERAGE_PERCENT" ]]; then
+  if ! is_nonneg_decimal "$MIN_COVERAGE_PERCENT"; then
+    echo "--min-coverage-percent must be numeric in range [0,100]: $MIN_COVERAGE_PERCENT" >&2
+    exit 1
+  fi
+  if ! awk -v v="$MIN_COVERAGE_PERCENT" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+    echo "--min-coverage-percent must be numeric in range [0,100]: $MIN_COVERAGE_PERCENT" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$MAX_ERRORS" ]] && ! is_nonneg_int "$MAX_ERRORS"; then
+  echo "--max-errors must be a non-negative integer: $MAX_ERRORS" >&2
   exit 1
 fi
 
@@ -287,6 +334,7 @@ EOS
   relevant="0"
   errors="0"
   coverage="-"
+  coverage_for_gate="0"
   status="FAIL"
   if [[ "$rc" -eq 0 ]]; then
     status="PASS"
@@ -295,9 +343,43 @@ EOS
     detected="$(metric_value_or_zero "$metrics_file" "detected_mutants")"
     relevant="$(metric_value_or_zero "$metrics_file" "relevant_mutants")"
     errors="$(metric_value_or_zero "$metrics_file" "errors")"
-    if [[ "$relevant" =~ ^[0-9]+$ ]] && [[ "$detected" =~ ^[0-9]+$ ]] && [[ "$relevant" -gt 0 ]]; then
-      coverage="$(awk -v d="$detected" -v r="$relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
+    if ! [[ "$detected" =~ ^[0-9]+$ ]]; then
+      detected="0"
     fi
+    if ! [[ "$relevant" =~ ^[0-9]+$ ]]; then
+      relevant="0"
+    fi
+    if ! [[ "$errors" =~ ^[0-9]+$ ]]; then
+      errors="0"
+    fi
+    if [[ "$relevant" -gt 0 ]]; then
+      coverage="$(awk -v d="$detected" -v r="$relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
+      coverage_for_gate="$coverage"
+    fi
+  fi
+
+  gate_failure=""
+  if [[ "$detected" -lt "$MIN_DETECTED" ]]; then
+    gate_failure="detected<${MIN_DETECTED}"
+  fi
+  if [[ -n "$MIN_COVERAGE_PERCENT" ]]; then
+    if ! awk -v cov="$coverage_for_gate" -v min_cov="$MIN_COVERAGE_PERCENT" 'BEGIN { exit !(cov + 0 >= min_cov + 0) }'; then
+      if [[ -n "$gate_failure" ]]; then
+        gate_failure+=","
+      fi
+      gate_failure+="coverage<${MIN_COVERAGE_PERCENT}"
+    fi
+  fi
+  if [[ -n "$MAX_ERRORS" ]] && [[ "$errors" -gt "$MAX_ERRORS" ]]; then
+    if [[ -n "$gate_failure" ]]; then
+      gate_failure+=","
+    fi
+    gate_failure+="errors>${MAX_ERRORS}"
+  fi
+  if [[ -n "$gate_failure" ]]; then
+    status="FAIL"
+    overall_rc=1
+    echo "Gate failure (${example_id}): ${gate_failure} (detected=${detected} relevant=${relevant} coverage=${coverage_for_gate} errors=${errors})" >&2
   fi
 
   append_summary_row "$SUMMARY_FILE" "$example_id" "$status" "$rc" "$detected" "$relevant" "$coverage" "$errors"
