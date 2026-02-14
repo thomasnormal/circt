@@ -73,6 +73,10 @@ Options:
                            Migrate baseline schema sidecars from
                            --baseline-file and exit
                            (writes .schema-version/.schema-contract)
+  --migrate-retry-reason-baseline-schema-artifacts
+                           Migrate retry-reason baseline schema sidecars from
+                           --retry-reason-baseline-file (or derived baseline)
+                           and exit (writes .schema-version/.schema-contract)
   --fail-on-diff           Fail on metric regression vs --baseline-file
   --retry-reason-baseline-file FILE
                            Optional retry-reason baseline summary used for
@@ -258,6 +262,7 @@ RETRY_REASON_SUMMARY_SCHEMA_CONTRACT_FILE=""
 UPDATE_BASELINE=0
 ALLOW_UPDATE_BASELINE_ON_FAILURE=0
 MIGRATE_BASELINE_SCHEMA_ARTIFACTS=0
+MIGRATE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS=0
 FAIL_ON_DIFF=0
 FAIL_ON_RETRY_REASON_DIFF=0
 REQUIRE_POLICY_FINGERPRINT_BASELINE=0
@@ -1154,6 +1159,39 @@ migrate_baseline_schema_artifacts() {
   return 0
 }
 
+migrate_retry_reason_baseline_schema_artifacts() {
+  local baseline_file="$1"
+  local baseline_schema_version_file="$2"
+  local baseline_schema_contract_file="$3"
+  local header_line=""
+  local schema_version=""
+  local schema_contract=""
+
+  if ! IFS= read -r header_line < "$baseline_file"; then
+    echo "Retry-reason baseline file is empty: $baseline_file" >&2
+    return 1
+  fi
+
+  schema_version="$(retry_reason_schema_version_from_header "$header_line")"
+  if [[ "$schema_version" == "unknown" ]]; then
+    echo "Unable to infer retry-reason baseline schema version from header in $baseline_file" >&2
+    return 1
+  fi
+
+  schema_contract="$(summary_schema_contract_fingerprint_from_components "$schema_version" "$header_line")"
+  if [[ "$schema_contract" == "unknown" ]]; then
+    echo "Unable to infer retry-reason baseline schema contract from header in $baseline_file" >&2
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$baseline_schema_version_file")"
+  printf '%s\n' "$schema_version" > "$baseline_schema_version_file"
+  mkdir -p "$(dirname "$baseline_schema_contract_file")"
+  printf '%s\n' "$schema_contract" > "$baseline_schema_contract_file"
+
+  echo "Migrated retry-reason baseline schema artifacts: $baseline_schema_version_file $baseline_schema_contract_file" >&2
+  return 0
+}
 sanitize_contract_field() {
   local value="$1"
   value="${value//$'\t'/ }"
@@ -2180,6 +2218,10 @@ while [[ $# -gt 0 ]]; do
       MIGRATE_BASELINE_SCHEMA_ARTIFACTS=1
       shift
       ;;
+    --migrate-retry-reason-baseline-schema-artifacts)
+      MIGRATE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS=1
+      shift
+      ;;
     --fail-on-diff)
       FAIL_ON_DIFF=1
       shift
@@ -2502,6 +2544,33 @@ if [[ "$MIGRATE_BASELINE_SCHEMA_ARTIFACTS" -eq 1 ]]; then
     exit 1
   fi
   if ! migrate_baseline_schema_artifacts "$BASELINE_FILE" "$BASELINE_SCHEMA_VERSION_FILE" "$BASELINE_SCHEMA_CONTRACT_FILE"; then
+    exit 1
+  fi
+  exit 0
+fi
+
+if [[ "$MIGRATE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS" -eq 1 ]]; then
+  if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
+    echo "--migrate-retry-reason-baseline-schema-artifacts cannot be combined with --update-baseline or --fail-on-diff" >&2
+    exit 1
+  fi
+  if [[ "$FAIL_ON_RETRY_REASON_DIFF" -eq 1 ]]; then
+    echo "--migrate-retry-reason-baseline-schema-artifacts cannot be combined with --fail-on-retry-reason-diff" >&2
+    exit 1
+  fi
+  if [[ -z "$RETRY_REASON_BASELINE_FILE" ]]; then
+    echo "--migrate-retry-reason-baseline-schema-artifacts requires --retry-reason-baseline-file or --baseline-file" >&2
+    exit 1
+  fi
+  if [[ ! -f "$RETRY_REASON_BASELINE_FILE" ]]; then
+    echo "Retry-reason baseline file not found: $RETRY_REASON_BASELINE_FILE" >&2
+    exit 1
+  fi
+  if [[ ! -r "$RETRY_REASON_BASELINE_FILE" ]]; then
+    echo "Retry-reason baseline file not readable: $RETRY_REASON_BASELINE_FILE" >&2
+    exit 1
+  fi
+  if ! migrate_retry_reason_baseline_schema_artifacts "$RETRY_REASON_BASELINE_FILE" "$RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE" "$RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE"; then
     exit 1
   fi
   exit 0
