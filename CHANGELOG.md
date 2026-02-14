@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1379 - February 14, 2026
+
+### OpenTitan FPV BMC: Per-Assertion Row-Level Drift Allowlist Governance
+
+1. Extended `utils/run_opentitan_fpv_circt_bmc.py` with row-level per-assertion
+   drift allowlisting:
+   - `--assertion-results-drift-row-allowlist-file`
+   - supports exact/prefix/regex tokens of the form
+     `<case_id>::<assertion_id>::<kind>`
+   - supported kinds:
+     `missing_assertion_row`, `new_assertion_row`, `assertion_status`,
+     `solver_result`, `reason`
+2. Extended `utils/run_formal_all.sh` with first-class forwarding and strict
+   validation for row-level per-assertion allowlist controls:
+   - `--opentitan-fpv-bmc-assertion-results-drift-row-allowlist-file`
+   - requires `--with-opentitan-fpv-bmc`
+   - requires
+     `--fail-on-opentitan-fpv-bmc-assertion-results-drift` or
+     `--strict-gate`
+3. Added focused regressions:
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-results-drift-row-allowlist-requires-gate.test`
+   - updated:
+     - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-results-drift-forwarding.test`
+     - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-results-drift-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-results-drift-row-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-results-drift-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-strict-gate-opentitan-fpv-bmc-assertion-results-drift-defaults.test` PASS (5/5)
+
 ## Iteration 1378 - February 14, 2026
 
 ### Mutation Workflow: Suite History-Window Percentile Drift Baselines

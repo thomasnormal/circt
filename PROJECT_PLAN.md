@@ -92,10 +92,15 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      per-assertion evidence drift (`opentitan-fpv-bmc-assertion-results.tsv`).
    - strict-gate now auto-enforces per-assertion drift when an assertion
      baseline is configured.
-6. Remaining limitation vs Jasper/VCF-style mature flows:
+6. Per-assertion row-level drift allowlisting completed for OpenTitan FPV BMC:
+   - added row-granularity allowlist controls for per-assertion drift
+     suppressions using `<case_id>::<assertion_id>::<kind>` tokens.
+   - strict-gate/fail-mode semantics are enforced for row-level allowlists to
+     prevent silent drift suppression outside governed runs.
+7. Remaining limitation vs Jasper/VCF-style mature flows:
    - per-assertion semantic status parity remains partial (especially vacuity/
      unreachable classification and richer task-level diagnostics).
-7. Next formal milestone (OpenTitan-aligned, backend-generic):
+8. Next formal milestone (OpenTitan-aligned, backend-generic):
    - advance per-assertion reporting parity:
      - strengthen assertion-status drift governance and vacuity/unreachable
        classification coverage across OpenTitan FPV targets.
