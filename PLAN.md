@@ -2,42 +2,47 @@
 
 Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbenches.
 
-## Current Status (Feb 12, 2026)
+## Current Status (Feb 14, 2026)
 
 | Metric | Count | Rate |
 |--------|-------|------|
-| circt-sim unit tests | 224/224 | 100% |
+| circt-sim unit tests | 240/241 | 99.6% (1 known: port-size-after-connect.sv) |
 | ImportVerilog tests | 268/268 | 100% |
 | sv-tests simulation | 907 total, 855 pass, 52 xfail, 0 fail | **100%** |
 | sv-tests skipped | 12 skip (should-fail/infinite-loop/no-top) | Legitimate exclusions |
 | sv-tests compile-only | 100 (UVM testbench + Ch18 UVM + SVA UVM) | Fast-skipped as PASS |
 | AVIPs (hvl_top only) | 7/9 pass | SPI/AXI4/AXI4Lite/UART/JTAG/APB/AHB; I2S+I3C stale MLIR |
-| APB AVIP (dual-top) | **EXIT 0** | 42.4 ns sim time; BFM driver active; 0 UVM errors |
-| AVIPs with transactions | 0/9 | **Blocked**: seq_item_port connection (driver can't get sequences) |
+| APB AVIP (dual-top) | **FULL TRANSACTION** | 500ns sim time; IDLE→SETUP→ACCESS→COMPLETE; master cov 100% |
+| AVIPs with transactions | 1/9 | APB completes; rest need dual-top recompilation |
 | sv-tests BMC | 26/26 | 100% (Codex) |
 | sv-tests LEC | 23/23 | 100% (Codex) |
-| Coverage collection | Working | Parametric `with function sample()` fixed |
+| Coverage collection | Working | Master 100%, slave 0% (monitor BFM blocked on reset) |
 
 ### Recent Fixes (This Session)
 
-1. **Function phase IMP sequencing** — UVM function phase IMPs (build, connect,
-   end_of_elaboration, start_of_simulation) have `predecessors=0` in the phase graph,
-   causing them to execute in arbitrary fork order. Fixed by intercepting `process_phase`
-   in the phase hopper: reads the IMP pointer from phase field offset 36, checks if the
-   predecessor IMP has completed, and blocks using currentOp-reset pattern (same as
-   sim.fork join_any) until predecessor finishes. `finish_phase` interceptor marks IMPs
-   as completed. Result: correct build→connect→EOE→SOS ordering in dual-top simulation.
+1. **Bidirectional VIF signal propagation (MAJOR)** — Fixed two bugs that prevented
+   BFM-to-routing-process signal propagation in dual-top simulation:
+   - `traceSrcLoadAddr` fix: for `insertvalue val, container[idx]`, try tracing the
+     VALUE operand first (the actual data source), then fall back to CONTAINER
+     (which is often `undef` when building a struct). This enables `childModuleCopyPairs`
+     to record child→parent init copies from BFM output fields.
+   - Child→parent reverse propagation in `interpretLLVMStore`: when a child BFM writes
+     to its local interface, also drive the parent shadow signal and update parent memory
+     so routing processes in the parent module see the change.
+   Result: APB master BFM now drives full APB transaction IDLE→SETUP→ACCESS→COMPLETE,
+   master coverage 100%, routing process properly copies signals between interfaces.
 
-2. **APB dual-top EXIT 0 milestone** — With function phase IMP sequencing, APB AVIP
-   dual-top now: completes all phases, BFM driver reaches idle state ("drive_apb_idle
-   state = IDLE"), both monitor proxies initialized, simulation reaches 42.4 ns,
-   clean exit code 0. 0 UVM_FATAL, 0 UVM_ERROR. Coverage infrastructure registers
-   (8 coverpoints) but 0% because no bus transactions flow yet.
+2. **config_db native memory write fix** — config_db::get output ref can point into
+   heap-allocated dynamic arrays (`__moore_dyn_array_new`). Fixed by falling back to
+   `findNativeMemoryBlockByAddress()` + `std::memcpy` when interpreter block lookup fails.
+   Without this fix, slave agent config was null → no slave driver proxy created.
 
-3. **Debug output cleanup** — Removed 12 DIAG-* diagnostic print blocks from the
-   interpreter (DIAG-PHASE, DIAG-SYNC, DIAG-WAIT-STATE, DIAG-HOPPER, DIAG-PIPELINE,
-   DIAG-START, DIAG-RESUME, DIAG-DRV, DIAG-WAIT, DIAG-CDB, DIAG-SHADOW, DIAG-PROP,
-   DIAG-TRACE) that were polluting stderr during simulation.
+3. **Blocking finish_item/item_done handshake** — Direct-wake mechanism with process-level
+   retry. `finish_item` pushes item to FIFO and blocks until `item_done` directly resumes
+   the waiting process.
+
+4. **Debug output cleanup** — Removed 26+ diagnostic print blocks from the interpreter
+   (DIAG-*, SHADOW-DRV, CASE3-DIAG, SEQ-*, CI-*, IMP-DIAG, WAIT-DIAG, etc.).
 
 ### xfail Breakdown (0 UVM tests remaining)
 
@@ -107,7 +112,7 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 - ✅ ~44 class-only Ch18 tests now fully simulated via auto-generated wrapper modules
 - **Remaining**: SVA concurrent assertion runtime eval (assertions compile and run through UVM but aren't actively evaluated)
 
-### Track 5: Dual-Top Simulation (**IN PROGRESS — seq_item_port + transaction flow**)
+### Track 5: Dual-Top Simulation (**IN PROGRESS — slave coverage + multi-AVIP**)
 **Goal**: Simulate both `hvl_top` and `hdl_top` together so BFMs are available.
 
 **Completed**:
@@ -121,26 +126,32 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 - ✅ config_db `call_indirect` interceptor for VTable-dispatched set/get
 - ✅ `findMemoryBlockByAddress` for process-local alloca write-back
 - ✅ Fuzzy key matching (`bfm_x` → `bfm_0`) for unresolved SV array indices
-- ✅ **Phase ordering fix** — `get_adjacent_successor_nodes` used hardcoded aligned offsets (40, 104) instead of unaligned (32, 96); replaced with `getLLVMStructFieldOffset()` from MLIR struct type
+- ✅ **Phase ordering fix** — `get_adjacent_successor_nodes` layout-safe offsets via `getLLVMStructFieldOffset()`
 - ✅ Full UVM phase traversal: all components visited during end_of_elaboration, check_phase etc.
-- ✅ **Config_db race fix** — Deferred `executeGlobalConstructors()` to `finalizeInit()`, called after ALL modules' `executeModuleLevelLLVMOps()`. Fixes hdl_top config_db::set racing with hvl_top build_phase config_db::get.
-- ✅ **Function phase IMP sequencing** — Intercept `process_phase` to enforce build→connect→EOE→SOS ordering for function phase IMPs (which have predecessors=0 in the graph). Uses currentOp-reset pattern with delta wake-ups. `finish_phase` interceptor marks completion.
-- ✅ **APB dual-top EXIT 0** — Simulation completes at 42.4 ns, BFM driver active ("drive_apb_idle state = IDLE"), 0 UVM errors, clean exit code 0
+- ✅ **Config_db race fix** — Deferred `executeGlobalConstructors()` to `finalizeInit()`
+- ✅ **Function phase IMP sequencing** — Enforce build→connect→EOE→SOS ordering
+- ✅ **APB dual-top EXIT 0** — All 9 IMP phases complete
 - ✅ Both monitor proxies initialized and running
+- ✅ **Sequencer interface** — start_item/finish_item/get/item_done native interceptors
+- ✅ **config_db native memory write** — Fallback to heap memory for output refs
+- ✅ **Bidirectional VIF propagation** — traceSrcLoadAddr fix + child→parent reverse propagation
+- ✅ **Full APB transaction** — IDLE→SETUP→ACCESS→COMPLETE with 2 wait states at 150ns
+- ✅ **Master coverage 100%** — All 8 coverpoints sampled via analysis port chain
+- ✅ **Phase hopper objection system** — get/raise/drop/wait_for for uvm_phase_hopper
+- ✅ **Die() absorption** — Scoreboard errors in check_phase don't kill remaining phases
 
-**Current Blockers**:
-1. **seq_item_port not connected** — `uvm_driver.svh(101) [DRVCONNECT]` warning: the
-   driver proxy's `seq_item_port` is not wired to the sequencer during `connect_phase`.
-   This prevents the driver from obtaining sequences to execute on the bus.
-   Root cause likely in `connect_phase` dispatching — the proxy `connect()` method
-   needs to reach the actual sequencer port.
+**Current Status**: APB master transaction completes, master coverage 100%.
+5 UVM_ERROR from scoreboard (expected — single-direction write test).
 
 **Remaining Tasks**:
-1. **Fix seq_item_port connection** — Investigate connect_phase dispatch for driver→sequencer wiring
-2. **Validate BFM data flow**: driver sends transactions → BFM drives bus → monitor samples → analysis port → scoreboard
-3. **Recompile all 9 AVIPs** — Only APB has dual-top MLIR; rest need fresh compilation
-4. **Repeat validation for all 9 AVIPs**
-5. **Compare coverage numbers vs Xcelium reference** (APB: 21-30% target)
+1. **Fix slave coverage 0%** — Slave monitor BFM's `wait_for_preset_n()` likely blocks
+   forever because `preset_n` signal edges don't propagate through slave interface VIF.
+   Both master and slave BFMs have identical `wait_for_preset_n` pattern but slave's
+   interface `intf_s[0]` may not receive the parent `preset_n` toggles correctly.
+2. **Recompile all 9 AVIPs** — Only APB has dual-top MLIR; rest need fresh compilation
+3. **Repeat validation for all 9 AVIPs**
+4. **Compare coverage numbers vs Xcelium reference** (APB: 21-30% target)
+5. **Multi-transaction test runs** — Currently only 1 transaction in 8b_write_test
 
 ### Track 6: Performance & Tech Debt (**ONGOING**)
 **Goal**: Keep simulation fast and code clean.
@@ -157,10 +168,10 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 
 | Priority | Track | Next Task | Impact |
 |----------|-------|-----------|--------|
-| P0 | Track 5 | Fix seq_item_port connection | ALL AVIP transaction flow blocked |
-| P0 | Track 5 | Validate BFM transaction flow end-to-end | Driver→BFM→Monitor→Scoreboard |
-| P1 | Track 5 | Recompile all 9 AVIPs with dual-top | Only APB has dual-top MLIR |
-| P1 | Track 3 | Coverage verification after Track 5 | End-to-end coverage numbers |
+| P0 | Track 5 | Fix slave coverage 0% (preset_n propagation) | Slave monitor blocked on reset |
+| P0 | Track 5 | Recompile all 9 AVIPs with dual-top | Only APB has dual-top MLIR |
+| P1 | Track 5 | Multi-transaction validation | More than 1 APB write |
+| P1 | Track 3 | Compare coverage vs Xcelium reference | APB 21-30% target |
 | P2 | Track 4 | SVA concurrent assertions | 26 compile-only tests |
 | P3 | Track 6 | Performance optimization | Faster simulation |
 
