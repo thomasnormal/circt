@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1336 - February 14, 2026
+
+### Mutation Workflow: Relevant-Mutant Gate for CI Reliability
+
+1. Added `--min-relevant N` to `utils/run_mutation_mcy_examples.sh`:
+   - fails an example when `relevant_mutants < N`
+   - defaults to `0` to preserve existing behavior.
+2. Integrated relevant-mutant gating into gate diagnostics:
+   - gate failure messages now include `relevant<...` when triggered.
+3. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-gate-thresholds.test` (now exercises relevant threshold)
+   - `test/Tools/run-mutation-mcy-examples-min-relevant-invalid.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`.
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (61/61)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --min-relevant 1 --out-dir /tmp/mcy-smoke-20260214-1336` PASS
+
 ## Iteration 1335 - February 14, 2026
 
 ### Mutation Workflow: Baseline Schema Sidecar Migration Mode
