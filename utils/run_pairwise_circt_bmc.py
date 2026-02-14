@@ -76,6 +76,12 @@ Verilog frontend mode:
     conservative assertion macro shim source.
   - on: always include assertion macro shim source.
   - off: disable assertion macro shim retry/injection.
+- BMC_VERILOG_UNIFIED_INCLUDE_UNIT_MODE (default: auto)
+  Values:
+  - auto: on known macro-preprocessor/macro-visibility failures, retry once
+    using a generated unified include compilation unit.
+  - on: always compile via unified include compilation unit.
+  - off: disable unified include compilation unit retry/injection.
 """
 
 from __future__ import annotations
@@ -484,6 +490,16 @@ def is_unknown_assert_macro_failure(log_text: str) -> bool:
     )
 
 
+def is_unified_include_unit_retryable_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return (
+        "unknown macro or compiler directive" in low
+        or "undefined macro" in low
+        or "macro operators may only be used within a macro definition" in low
+        or "unexpected conditional directive" in low
+    )
+
+
 def write_assert_macro_shim_file(path: Path) -> None:
     path.write_text(
         """// Auto-generated assertion macro shim used for non-single-unit
@@ -522,6 +538,18 @@ def write_assert_macro_shim_file(path: Path) -> None:
 """,
         encoding="utf-8",
     )
+
+
+def escape_sv_include_path(path: str) -> str:
+    return path.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def write_unified_include_unit(path: Path, include_files: list[str]) -> None:
+    lines = ["// Auto-generated unified include compilation unit."]
+    for file_path in include_files:
+        lines.append(f'`include "{escape_sv_include_path(file_path)}"')
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def run_and_log(
@@ -1159,6 +1187,18 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    verilog_unified_include_unit_mode = os.environ.get(
+        "BMC_VERILOG_UNIFIED_INCLUDE_UNIT_MODE", "auto"
+    ).strip().lower()
+    if verilog_unified_include_unit_mode not in {"auto", "on", "off"}:
+        print(
+            (
+                "invalid BMC_VERILOG_UNIFIED_INCLUDE_UNIT_MODE: "
+                f"{verilog_unified_include_unit_mode} (expected auto|on|off)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
     z3_lib = os.environ.get("Z3_LIB", str(Path.home() / "z3-install/lib64/libz3.so"))
     bmc_run_smtlib = os.environ.get("BMC_RUN_SMTLIB", "1") == "1"
     bmc_smoke_only = os.environ.get("BMC_SMOKE_ONLY", "0") == "1"
@@ -1464,6 +1504,7 @@ def main() -> int:
                 use_single_unit: bool,
                 pre_sources: list[str] | None = None,
                 post_sources: list[str] | None = None,
+                source_override: list[str] | None = None,
             ) -> list[str]:
                 cmd = [
                     circt_verilog,
@@ -1480,28 +1521,50 @@ def main() -> int:
                 for define_token in case.verilog_defines:
                     cmd.append(f"-D{define_token}")
                 cmd += circt_verilog_args
-                if pre_sources:
-                    cmd += pre_sources
-                cmd += case.source_files
-                if post_sources:
-                    cmd += post_sources
+                if source_override is not None:
+                    cmd += source_override
+                else:
+                    if pre_sources:
+                        cmd += pre_sources
+                    cmd += case.source_files
+                    if post_sources:
+                        cmd += post_sources
                 return cmd
 
             use_single_unit = verilog_single_unit_mode != "off"
+            use_unified_include_unit = verilog_unified_include_unit_mode == "on"
             xilinx_primitive_stub_path = (
                 case_dir / "circt-verilog.xilinx-primitives.sv"
             )
             assert_macro_shim_path = case_dir / "circt-verilog.assert-macro-shim.sv"
+            unified_include_unit_path = case_dir / "circt-verilog.unified-include.sv"
             verilog_pre_sources: list[str] = []
             verilog_post_sources: list[str] = []
+            verilog_source_override: list[str] | None = None
+
+            def refresh_unified_include_unit_sources() -> list[str] | None:
+                if not use_unified_include_unit:
+                    return None
+                include_files = (
+                    verilog_pre_sources + case.source_files + verilog_post_sources
+                )
+                write_unified_include_unit(unified_include_unit_path, include_files)
+                return [str(unified_include_unit_path)]
+
             if verilog_assert_macro_shim_mode == "on":
                 write_assert_macro_shim_file(assert_macro_shim_path)
                 verilog_pre_sources.append(str(assert_macro_shim_path))
             if verilog_xilinx_primitive_stub_mode == "on":
                 write_xilinx_primitive_stub_file(xilinx_primitive_stub_path)
                 verilog_pre_sources.append(str(xilinx_primitive_stub_path))
+            if use_unified_include_unit:
+                use_single_unit = False
+            verilog_source_override = refresh_unified_include_unit_sources()
             verilog_cmd = build_verilog_cmd(
-                use_single_unit, verilog_pre_sources, verilog_post_sources
+                use_single_unit,
+                verilog_pre_sources,
+                verilog_post_sources,
+                verilog_source_override,
             )
 
             opt_cmd = [circt_opt, str(out_mlir)]
@@ -1579,8 +1642,14 @@ def main() -> int:
                                 )
                             )
                         use_single_unit = False
+                        verilog_source_override = (
+                            refresh_unified_include_unit_sources()
+                        )
                         verilog_cmd = build_verilog_cmd(
-                            use_single_unit, verilog_pre_sources, verilog_post_sources
+                            use_single_unit,
+                            verilog_pre_sources,
+                            verilog_post_sources,
+                            verilog_source_override,
                         )
                         verilog_result = run_and_log(
                             verilog_cmd,
@@ -1611,6 +1680,9 @@ def main() -> int:
                         shutil.copy2(verilog_log_path, unknown_module_log_path)
                         write_xilinx_primitive_stub_file(xilinx_primitive_stub_path)
                         verilog_pre_sources.append(str(xilinx_primitive_stub_path))
+                        verilog_source_override = (
+                            refresh_unified_include_unit_sources()
+                        )
                         if launch_event_rows is not None:
                             launch_event_rows.append(
                                 (
@@ -1627,7 +1699,63 @@ def main() -> int:
                                 )
                             )
                         verilog_cmd = build_verilog_cmd(
-                            use_single_unit, verilog_pre_sources, verilog_post_sources
+                            use_single_unit,
+                            verilog_pre_sources,
+                            verilog_post_sources,
+                            verilog_source_override,
+                        )
+                        verilog_result = run_and_log(
+                            verilog_cmd,
+                            verilog_log_path,
+                            None,
+                            case_timeout_secs,
+                            etxtbsy_retries,
+                            etxtbsy_backoff_secs,
+                            launch_retry_attempts,
+                            launch_retry_backoff_secs,
+                            launch_retryable_exit_codes,
+                            launch_copy_fallback,
+                            launch_event_rows,
+                            case.case_id,
+                            case_path,
+                            stage,
+                        )
+                if (
+                    verilog_result.returncode != 0
+                    and verilog_unified_include_unit_mode == "auto"
+                    and not use_unified_include_unit
+                ):
+                    verilog_log_text = verilog_log_path.read_text()
+                    if is_unified_include_unit_retryable_failure(verilog_log_text):
+                        unified_include_trigger_log = (
+                            case_dir / "circt-verilog.unified-include-trigger.log"
+                        )
+                        shutil.copy2(verilog_log_path, unified_include_trigger_log)
+                        use_unified_include_unit = True
+                        use_single_unit = False
+                        verilog_source_override = (
+                            refresh_unified_include_unit_sources()
+                        )
+                        if launch_event_rows is not None:
+                            launch_event_rows.append(
+                                (
+                                    "RETRY",
+                                    case.case_id,
+                                    case_path,
+                                    stage,
+                                    circt_verilog,
+                                    "unified_include_unit_macro_visibility",
+                                    "1",
+                                    "0.000",
+                                    str(verilog_result.returncode),
+                                    "",
+                                )
+                            )
+                        verilog_cmd = build_verilog_cmd(
+                            use_single_unit,
+                            verilog_pre_sources,
+                            verilog_post_sources,
+                            verilog_source_override,
                         )
                         verilog_result = run_and_log(
                             verilog_cmd,
@@ -1658,6 +1786,9 @@ def main() -> int:
                         shutil.copy2(verilog_log_path, unknown_macro_log_path)
                         write_assert_macro_shim_file(assert_macro_shim_path)
                         verilog_pre_sources.append(str(assert_macro_shim_path))
+                        verilog_source_override = (
+                            refresh_unified_include_unit_sources()
+                        )
                         if launch_event_rows is not None:
                             launch_event_rows.append(
                                 (
@@ -1674,7 +1805,10 @@ def main() -> int:
                                 )
                             )
                         verilog_cmd = build_verilog_cmd(
-                            use_single_unit, verilog_pre_sources, verilog_post_sources
+                            use_single_unit,
+                            verilog_pre_sources,
+                            verilog_post_sources,
+                            verilog_source_override,
                         )
                         verilog_result = run_and_log(
                             verilog_cmd,

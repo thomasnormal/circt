@@ -5,7 +5,7 @@
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho \"BMC_RESULT=UNSAT\"\n' > %t/bin/circt-bmc
 // RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-bmc
 // RUN: printf 'retry_case\ttop_pass\t%t/src/a.sv\t%t/src\t%t/work/retry\n' > %t/cases.tsv
-// RUN: sh -c 'env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc BMC_RUN_SMTLIB=0 BMC_PREPARE_CORE_WITH_CIRCT_OPT=0 BMC_VERILOG_SINGLE_UNIT_MODE=off BMC_VERILOG_ASSERT_MACRO_SHIM_MODE=auto BMC_LAUNCH_EVENTS_OUT=%t/launch.tsv OUT=%t/results.tsv %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --workdir %t/work' 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: sh -c 'env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc BMC_RUN_SMTLIB=0 BMC_PREPARE_CORE_WITH_CIRCT_OPT=0 BMC_VERILOG_SINGLE_UNIT_MODE=off BMC_VERILOG_ASSERT_MACRO_SHIM_MODE=auto BMC_VERILOG_UNIFIED_INCLUDE_UNIT_MODE=off BMC_LAUNCH_EVENTS_OUT=%t/launch.tsv OUT=%t/results.tsv %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --workdir %t/work' 2>&1 | FileCheck %s --check-prefix=LOG
 // RUN: FileCheck %s --check-prefix=RES < %t/results.tsv
 // RUN: test -f %t/work/retry_case/circt-verilog.unknown-macro.log
 // RUN: rg -n 'unknown macro or compiler directive' %t/work/retry_case/circt-verilog.unknown-macro.log
