@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1352 - February 14, 2026
+
+### Pairwise BMC: General Launch-Retry Hardening Beyond ETXTBSY
+
+1. Extended `utils/run_pairwise_circt_bmc.py` launch resilience with broader
+   retry policy for transient launcher-class failures:
+   - new env controls:
+     - `BMC_LAUNCH_RETRY_ATTEMPTS` (default `4`)
+     - `BMC_LAUNCH_RETRY_BACKOFF_SECS` (default `0.2`)
+     - `BMC_LAUNCH_RETRYABLE_EXIT_CODES` (default `126,127`)
+   - retry matching now keys on retryable exit codes plus launcher-failure
+     signatures (`Permission denied`, `posix_spawn failed`,
+     `Resource temporarily unavailable`, `Text file busy`/`ETXTBSY`).
+2. Added optional copy-fallback execution path for exhausted retryable launch
+   failures:
+   - `BMC_LAUNCH_COPY_FALLBACK` (`0|1`, default `0`)
+   - retries can switch tool execution to a private copied binary
+     (`*.launch-fallback`) when relink/contention races affect the primary
+     path.
+3. Preserved existing ETXTBSY OSError retry path while integrating with the
+   broader launcher retry policy.
+4. Added focused regressions:
+   - `test/Tools/run-pairwise-circt-bmc-launch-retry-permission-denied.test`
+   - `test/Tools/run-pairwise-circt-bmc-launch-fallback-copy.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(run-pairwise-circt-bmc-(basic|etxtbsy-retry|etxtbsy-retry-exhausted|launch-retry-permission-denied|launch-fallback-copy))'` PASS (5 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-opentitan-fpv-circt-bmc-(basic|max-targets|target-shard-selection|target-shard-empty|target-shard-invalid-index|case-shard-forwarding|case-shard-invalid-index|assertion-granular-forwarding|cover-shard-invalid-index|assertion-shard-invalid-index|fpv-summary|fpv-summary-assertion-granular|fpv-summary-cover-granular)'` PASS (16 selected)
+
 ## Iteration 1351 - February 14, 2026
 
 ### Mutation Workflow: Transient Retry Controls for MCY Example Lanes

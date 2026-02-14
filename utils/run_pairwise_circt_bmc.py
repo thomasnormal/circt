@@ -49,6 +49,12 @@ Relative file paths are resolved against the manifest file directory.
 ETXTBSY launch retry tuning:
 - BMC_LAUNCH_ETXTBSY_RETRIES (default: 4)
 - BMC_LAUNCH_ETXTBSY_BACKOFF_SECS (default: 0.2)
+
+General launch retry tuning:
+- BMC_LAUNCH_RETRY_ATTEMPTS (default: 4)
+- BMC_LAUNCH_RETRY_BACKOFF_SECS (default: 0.2)
+- BMC_LAUNCH_RETRYABLE_EXIT_CODES (default: 126,127)
+- BMC_LAUNCH_COPY_FALLBACK (default: 0)
 """
 
 from __future__ import annotations
@@ -110,6 +116,15 @@ class TextFileBusyRetryExhausted(RuntimeError):
         self.attempts = attempts
 
 
+RETRYABLE_LAUNCH_PATTERNS = (
+    "text file busy",
+    "etxtbsy",
+    "permission denied",
+    "posix_spawn failed",
+    "resource temporarily unavailable",
+)
+
+
 def parse_nonnegative_int(raw: str, name: str) -> int:
     try:
         value = int(raw)
@@ -132,6 +147,32 @@ def parse_nonnegative_float(raw: str, name: str) -> float:
         print(f"invalid {name}: {raw}", file=sys.stderr)
         raise SystemExit(1)
     return value
+
+
+def parse_exit_codes(raw: str, name: str) -> set[int]:
+    value = raw.strip()
+    if not value:
+        return set()
+    out: set[int] = set()
+    for token in value.split(","):
+        piece = token.strip()
+        if not piece:
+            continue
+        try:
+            code = int(piece)
+        except ValueError:
+            print(f"invalid {name}: {raw}", file=sys.stderr)
+            raise SystemExit(1)
+        if code < 0:
+            print(f"invalid {name}: {raw}", file=sys.stderr)
+            raise SystemExit(1)
+        out.add(code)
+    return out
+
+
+def is_retryable_launch_failure_output(stdout: str, stderr: str) -> bool:
+    lowered = f"{stdout}\n{stderr}".lower()
+    return any(pattern in lowered for pattern in RETRYABLE_LAUNCH_PATTERNS)
 
 
 def write_log(path: Path, stdout: str, stderr: str) -> None:
@@ -287,20 +328,28 @@ def run_and_log(
     timeout_secs: int,
     etxtbsy_retries: int,
     etxtbsy_backoff_secs: float,
+    launch_retry_attempts: int,
+    launch_retry_backoff_secs: float,
+    launch_retryable_exit_codes: set[int],
+    launch_copy_fallback: bool,
 ) -> subprocess.CompletedProcess[str]:
     # Binary relinking races can produce transient ETXTBSY while a tool is open
     # for writing; retry a few times with bounded backoff.
+    active_cmd = list(cmd)
+    launch_retry_count = 0
+    etxtbsy_retry_count = 0
+    launch_copy_fallback_used = False
+    retry_notes: list[str] = []
     result: subprocess.CompletedProcess[str] | None = None
-    for attempt in range(etxtbsy_retries + 1):
+    while True:
         try:
             result = subprocess.run(
-                cmd,
+                active_cmd,
                 check=False,
                 capture_output=True,
                 text=True,
                 timeout=timeout_secs if timeout_secs > 0 else None,
             )
-            break
         except subprocess.TimeoutExpired as exc:
             stdout = exc.stdout or ""
             stderr = exc.stderr or ""
@@ -309,15 +358,87 @@ def run_and_log(
                 out_path.write_text(stdout)
             raise
         except OSError as exc:
-            if exc.errno == errno.ETXTBSY and attempt < etxtbsy_retries:
-                time.sleep(etxtbsy_backoff_secs * (attempt + 1))
-                continue
             if exc.errno == errno.ETXTBSY:
-                raise TextFileBusyRetryExhausted(cmd[0], attempt + 1) from exc
+                if etxtbsy_retry_count < etxtbsy_retries:
+                    etxtbsy_retry_count += 1
+                    delay = etxtbsy_backoff_secs * etxtbsy_retry_count
+                    retry_notes.append(
+                        (
+                            "runner_command_launch_retry "
+                            f"reason=etxtbsy attempt={etxtbsy_retry_count} "
+                            f"delay_secs={delay:.3f}"
+                        )
+                    )
+                    time.sleep(delay)
+                    continue
+                if launch_copy_fallback and not launch_copy_fallback_used:
+                    tool_path = Path(active_cmd[0])
+                    if tool_path.is_file():
+                        fallback_tool = (
+                            log_path.parent / f"{tool_path.name}.launch-fallback"
+                        )
+                        shutil.copy2(tool_path, fallback_tool)
+                        fallback_tool.chmod(fallback_tool.stat().st_mode | 0o111)
+                        active_cmd[0] = str(fallback_tool)
+                        launch_copy_fallback_used = True
+                        launch_retry_count = 0
+                        etxtbsy_retry_count = 0
+                        retry_notes.append(
+                            (
+                                "runner_command_launch_fallback "
+                                f"tool={tool_path} fallback={fallback_tool}"
+                            )
+                        )
+                        continue
+                raise TextFileBusyRetryExhausted(
+                    active_cmd[0], etxtbsy_retry_count + 1
+                ) from exc
             raise
+        if (
+            result.returncode != 0
+            and result.returncode in launch_retryable_exit_codes
+            and is_retryable_launch_failure_output(result.stdout, result.stderr)
+        ):
+            if launch_retry_count < launch_retry_attempts:
+                launch_retry_count += 1
+                delay = launch_retry_backoff_secs * launch_retry_count
+                retry_notes.append(
+                    (
+                        "runner_command_launch_retry "
+                        f"reason=retryable_exit_code_{result.returncode} "
+                        f"attempt={launch_retry_count} delay_secs={delay:.3f}"
+                    )
+                )
+                time.sleep(delay)
+                continue
+            if launch_copy_fallback and not launch_copy_fallback_used:
+                tool_path = Path(active_cmd[0])
+                if tool_path.is_file():
+                    fallback_tool = log_path.parent / f"{tool_path.name}.launch-fallback"
+                    shutil.copy2(tool_path, fallback_tool)
+                    fallback_tool.chmod(fallback_tool.stat().st_mode | 0o111)
+                    active_cmd[0] = str(fallback_tool)
+                    launch_copy_fallback_used = True
+                    launch_retry_count = 0
+                    etxtbsy_retry_count = 0
+                    retry_notes.append(
+                        (
+                            "runner_command_launch_fallback "
+                            f"tool={tool_path} fallback={fallback_tool}"
+                        )
+                    )
+                    continue
+        break
     if result is None:
         raise RuntimeError("internal error: subprocess result missing")
     write_log(log_path, result.stdout, result.stderr)
+    if retry_notes:
+        with log_path.open("a", encoding="utf-8") as handle:
+            if result.stdout or result.stderr:
+                handle.write("\n")
+            for note in retry_notes:
+                handle.write(note)
+                handle.write("\n")
     if out_path is not None:
         out_path.write_text(result.stdout)
     return result
@@ -761,6 +882,29 @@ def main() -> int:
         os.environ.get("BMC_LAUNCH_ETXTBSY_BACKOFF_SECS", "0.2"),
         "BMC_LAUNCH_ETXTBSY_BACKOFF_SECS",
     )
+    launch_retry_attempts = parse_nonnegative_int(
+        os.environ.get("BMC_LAUNCH_RETRY_ATTEMPTS", "4"),
+        "BMC_LAUNCH_RETRY_ATTEMPTS",
+    )
+    launch_retry_backoff_secs = parse_nonnegative_float(
+        os.environ.get("BMC_LAUNCH_RETRY_BACKOFF_SECS", "0.2"),
+        "BMC_LAUNCH_RETRY_BACKOFF_SECS",
+    )
+    launch_retryable_exit_codes = parse_exit_codes(
+        os.environ.get("BMC_LAUNCH_RETRYABLE_EXIT_CODES", "126,127"),
+        "BMC_LAUNCH_RETRYABLE_EXIT_CODES",
+    )
+    launch_copy_fallback_raw = os.environ.get("BMC_LAUNCH_COPY_FALLBACK", "0")
+    if launch_copy_fallback_raw not in {"0", "1"}:
+        print(
+            (
+                f"invalid BMC_LAUNCH_COPY_FALLBACK: {launch_copy_fallback_raw} "
+                "(expected 0 or 1)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    launch_copy_fallback = launch_copy_fallback_raw == "1"
     bound = parse_nonnegative_int(args.bound, "--bound")
     if bound == 0:
         bound = 1
@@ -1062,6 +1206,10 @@ def main() -> int:
                     case_timeout_secs,
                     etxtbsy_retries,
                     etxtbsy_backoff_secs,
+                    launch_retry_attempts,
+                    launch_retry_backoff_secs,
+                    launch_retryable_exit_codes,
+                    launch_copy_fallback,
                 )
                 if verilog_result.returncode != 0:
                     reason = normalize_error_reason(verilog_log_path.read_text())
@@ -1101,6 +1249,10 @@ def main() -> int:
                         case_timeout_secs,
                         etxtbsy_retries,
                         etxtbsy_backoff_secs,
+                        launch_retry_attempts,
+                        launch_retry_backoff_secs,
+                        launch_retryable_exit_codes,
+                        launch_copy_fallback,
                     )
                     if opt_result.returncode != 0:
                         reason = normalize_error_reason(opt_log_path.read_text())
@@ -1163,6 +1315,10 @@ def main() -> int:
                                     case_timeout_secs,
                                     etxtbsy_retries,
                                     etxtbsy_backoff_secs,
+                                    launch_retry_attempts,
+                                    launch_retry_backoff_secs,
+                                    launch_retryable_exit_codes,
+                                    launch_copy_fallback,
                                 )
                                 combined = (
                                     cover_log.read_text() + "\n" + cover_out.read_text()
@@ -1353,6 +1509,10 @@ def main() -> int:
                                     case_timeout_secs,
                                     etxtbsy_retries,
                                     etxtbsy_backoff_secs,
+                                    launch_retry_attempts,
+                                    launch_retry_backoff_secs,
+                                    launch_retryable_exit_codes,
+                                    launch_copy_fallback,
                                 )
                                 combined = (
                                     assertion_log.read_text() + "\n" + assertion_out.read_text()
@@ -1611,6 +1771,10 @@ def main() -> int:
                     case_timeout_secs,
                     etxtbsy_retries,
                     etxtbsy_backoff_secs,
+                    launch_retry_attempts,
+                    launch_retry_backoff_secs,
+                    launch_retryable_exit_codes,
+                    launch_copy_fallback,
                 )
                 combined = bmc_log_path.read_text() + "\n" + bmc_out_path.read_text()
                 bmc_tag = parse_bmc_result(combined)

@@ -425,7 +425,7 @@ verilator-verification, and yosys corpora).
 ### Remaining Formal Limitations (BMC/LEC/mutation focus)
 
 1. **FPV status derivation depth gap**: explicit assertion statuses (`PROVEN/FAILING/VACUOUS/UNKNOWN`) and cover-granular `covered/unreachable` evidence are now wired, but fully automatic vacuity/coverage derivation for targets that do not emit explicit status tags is still pending.
-2. **BMC operational robustness**: bounded ETXTBSY retry is now implemented in `run_pairwise_circt_bmc.py`; remaining gap is broader transient launch resilience/telemetry parity for other launch-failure classes.
+2. **BMC operational robustness**: `run_pairwise_circt_bmc.py` now supports broad launcher retry controls (`BMC_LAUNCH_RETRY_ATTEMPTS/BACKOFF/RETRYABLE_EXIT_CODES`) and optional copy-fallback execution (`BMC_LAUNCH_COPY_FALLBACK`) beyond ETXTBSY-only handling; remaining gap is strict-gate telemetry/counters parity for retry/fallback events across BMC/LEC lanes.
 3. **Frontend triage ergonomics**: sv-tests BMC now preserves frontend error logs via `KEEP_LOGS_DIR`, and launch retry is in place for transient launcher failures; host-side tool relink contention can still surface as launcher-level `Permission denied`/ETXTBSY noise until binaries stabilize.
 4. **Frontend scalability blocker on semantic closure buckets**: `sv-tests` UVM `16.11` (sequence-subroutine) and `16.13` (multiclock) currently hit frontend OOM in `circt-verilog` during import; this blocks clean semantic closure measurement for those buckets.
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.
