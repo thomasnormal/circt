@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1423 - February 14, 2026
+
+### OpenTitan FPV Objective Parity: Policy-Wrapper/Profile-Pack Governance
+
+1. Extended `utils/run_opentitan_fpv_bmc_policy_workflow.sh` with
+   objective-parity baseline governance controls:
+   - new wrapper options:
+     - `--enable-objective-parity`
+     - `--objective-parity-reason-policy ignore|projected|all`
+   - managed objective-parity baseline artifact:
+     - `${baseline_prefix}-objective-parity-baseline.tsv`
+   - mode wiring:
+     - `update`: forwards
+       `--update-opentitan-fpv-objective-parity-baseline`
+     - `check`: forwards
+       `--fail-on-opentitan-fpv-objective-parity-drift`
+   - fail-closed wrapper argument management now blocks direct user injection
+     of workflow-owned objective-parity baseline/drift flags.
+2. Extended `utils/run_opentitan_fpv_bmc_policy_profiles.sh` for objective-parity
+   cohort controls:
+   - new workflow-level forwards:
+     - `--workflow-enable-objective-parity`
+     - `--workflow-objective-parity-reason-policy`
+   - new per-profile TSV optional columns:
+     - `objective_parity`
+     - `objective_parity_reason_policy`
+   - profile lane regex is now objective-parity aware:
+     - default: `^opentitan/FPV_BMC$`
+     - objective-parity enabled:
+       `^opentitan/(FPV_BMC|FPV_OBJECTIVE_PARITY)$`
+3. Updated canonical profile-pack schema to include objective-parity columns:
+   - `utils/opentitan_fpv_policy/profile_packs.tsv`
+4. Added focused regressions:
+   - `test/Tools/run-opentitan-fpv-bmc-policy-workflow-objective-parity.test`
+   - `test/Tools/run-opentitan-fpv-bmc-policy-profiles-objective-parity.test`
+5. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-opentitan-fpv-bmc-policy-workflow.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-profiles.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-workflow-objective-parity.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-profiles-objective-parity.test` PASS
+
 ## Iteration 1422 - February 14, 2026
 
 ### OpenTitan FPV Objective Parity: Baseline/Drift Governance

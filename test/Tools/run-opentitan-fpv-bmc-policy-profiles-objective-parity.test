@@ -1,0 +1,29 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/ot/hw/top_earlgrey/formal %t/logs
+// RUN: cp %S/../../utils/run_opentitan_fpv_bmc_policy_profiles.sh %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${LOG_DIR:?}"\ncount_file="$LOG_DIR/count.txt"\nif [[ -f "$count_file" ]]; then\n  n=$(cat "$count_file")\nelse\n  n=0\nfi\nn=$((n + 1))\necho "$n" > "$count_file"\narg_file="$LOG_DIR/call-${n}.args"\n: > "$arg_file"\nfor arg in "$@"; do\n  echo "$arg" >> "$arg_file"\ndone\n' > %t/utils/fake-workflow.sh
+// RUN: printf '{"name":"prim"}\n' > %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson
+// RUN: printf '{"name":"sec_cm"}\n' > %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson
+// RUN: printf 'profile_name\tfpv_cfg\tbaseline_prefix\tobjective_parity\tobjective_parity_reason_policy\tselect_cfgs\nprim_all\thw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson\topentitan-fpv-bmc-prim\t1\tall\tfoo_fpv\nsec_cm_all\thw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson\topentitan-fpv-bmc-sec-cm\t0\t\t\n' > %t/profiles.tsv
+// RUN: chmod +x %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh %t/utils/fake-workflow.sh
+// RUN: LOG_DIR=%t/logs %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh --run-workflow %t/utils/fake-workflow.sh --profiles-file %t/profiles.tsv --opentitan-root %t/ot --out-dir %t/out check --circt-verilog %t/bin/circt-verilog
+// RUN: FileCheck %s --check-prefix=CALL1 < %t/logs/call-1.args
+// RUN: FileCheck %s --check-prefix=CALL2 < %t/logs/call-2.args
+// RUN: not rg -q -- '--enable-objective-parity' %t/logs/call-2.args
+// RUN: not sh -c 'LOG_DIR=%t/logs %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh --run-workflow %t/utils/fake-workflow.sh --profiles-file %t/profiles.tsv --opentitan-root %t/ot --workflow-objective-parity-reason-policy all check > %t/err-global-policy.txt 2>&1'
+// RUN: FileCheck %s --check-prefix=ERR-GLOBAL < %t/err-global-policy.txt
+// RUN: printf 'profile_name\tfpv_cfg\tbaseline_prefix\tobjective_parity\tobjective_parity_reason_policy\nbad\thw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson\topentitan-fpv-bmc-bad\t0\tprojected\n' > %t/profiles-bad.tsv
+// RUN: not sh -c 'LOG_DIR=%t/logs %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh --run-workflow %t/utils/fake-workflow.sh --profiles-file %t/profiles-bad.tsv --opentitan-root %t/ot check > %t/err-profile-policy.txt 2>&1'
+// RUN: FileCheck %s --check-prefix=ERR-PROFILE < %t/err-profile-policy.txt
+//
+// CALL1: --enable-objective-parity
+// CALL1: --objective-parity-reason-policy
+// CALL1-NEXT: all
+// CALL1: --include-lane-regex
+// CALL1-NEXT: ^opentitan/(FPV_BMC|FPV_OBJECTIVE_PARITY)$
+//
+// CALL2: --include-lane-regex
+// CALL2-NEXT: ^opentitan/FPV_BMC$
+//
+// ERR-GLOBAL: --workflow-objective-parity-reason-policy requires --workflow-enable-objective-parity
+// ERR-PROFILE: objective_parity_reason_policy requires objective_parity=1 for profile 'bad'
