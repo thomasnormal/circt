@@ -1,0 +1,14 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/src %t/work
+// RUN: cp %S/../../utils/run_opentitan_fpv_circt_bmc.py %t/utils/run_opentitan_fpv_circt_bmc.py
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib,sys\ncases=\"\"\nout=\"\"\nassert_out=\"\"\nargs=sys.argv[1:]\ni=0\nwhile i < len(args):\n  if args[i]==\"--cases-file\":\n    cases=args[i+1]; i+=2; continue\n  if args[i]==\"--results-file\":\n    out=args[i+1]; i+=2; continue\n  if args[i]==\"--assertion-results-file\":\n    assert_out=args[i+1]; i+=2; continue\n  i+=1\nif not cases or not out:\n  raise SystemExit(10)\nrows=[line for line in pathlib.Path(cases).read_text(encoding=\"utf-8\").splitlines() if line.strip()]\nif len(rows)!=1:\n  raise SystemExit(11)\nparts=rows[0].split(\"\\t\")\ncase_id=parts[0]\ncase_path=parts[4]\npathlib.Path(out).write_text(f\"PASS\\t{case_id}\\t{case_path}\\topentitan\\tFPV_BMC\\tUNSAT\\n\", encoding=\"utf-8\")\nif assert_out:\n  pathlib.Path(assert_out).write_text(f\"PROVEN\\t{case_id}\\t{case_path}\\ta0000\\tline_10\\tUNSAT\\tunsat\\n\", encoding=\"utf-8\")\n' > %t/utils/run_pairwise_circt_bmc.py
+// RUN: chmod +x %t/utils/run_opentitan_fpv_circt_bmc.py %t/utils/run_pairwise_circt_bmc.py
+// RUN: touch %t/src/foo.sv
+// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\tfusesoc_core\ttask\tflow\tsub_flow\trel_path\ttoplevel\tsetup_status\tfile_count\tinclude_dir_count\tdefine_count\tfiles_fingerprint\tinclude_dirs_fingerprint\tdefines_fingerprint\tcontract_fingerprint\tstopat_count\tstopats_fingerprint\tstopats\ttask_profile\ttask_known\tstopat_mode\tblackbox_policy\ttask_policy_fingerprint\tfiles\tinclude_dirs\tdefines\teda_yml_path\tsetup_log_path\tworkdir\nfoo_fpv\tlowrisc:fpv:foo_fpv\tFpvDefault\tformal\tfpv\thw/top_earlgrey/formal/ip/foo\tfoo_tb\tok\t1\t0\t0\tf\ti\td\tc\t0\ts\t\tfpv_default\t1\tnone\tnone\tp\t%t/src/foo.sv\t\t\t/tmp/foo.eda.yml\t/tmp/foo.log\t/tmp/foo.work\n' > %t/contracts.tsv
+// RUN: printf 'target_name\trequired_statuses\tforbidden_statuses\nfoo_fpv\tVACUOUS\t\n' > %t/policy.tsv
+// RUN: not sh -c 'OUT=%t/results.tsv %t/utils/run_opentitan_fpv_circt_bmc.py --compile-contracts %t/contracts.tsv --workdir %t/work --assertion-results-file %t/assertions.tsv --assertion-status-policy-file %t/policy.tsv --assertion-status-policy-violations-file %t/violations.tsv --fail-on-assertion-status-policy' 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=VIOL < %t/violations.tsv
+//
+// LOG: assertion-status policy violations detected
+// VIOL: target_name{{[[:space:]]+}}kind{{[[:space:]]+}}status{{[[:space:]]+}}evidence
+// VIOL: foo_fpv{{[[:space:]]+}}required_status_missing{{[[:space:]]+}}VACUOUS{{[[:space:]]+}}PROVEN

@@ -74,6 +74,13 @@ class FPVAssertionRow:
     reason: str
 
 
+@dataclass(frozen=True)
+class AssertionStatusPolicyRow:
+    target_name: str
+    required_statuses: tuple[str, ...]
+    forbidden_statuses: tuple[str, ...]
+
+
 def fail(msg: str) -> None:
     print(msg, file=sys.stderr)
     raise SystemExit(1)
@@ -125,6 +132,44 @@ def parse_blackbox_modules(raw: str) -> tuple[str, ...]:
     if not modules:
         return ()
     return tuple(modules)
+
+
+ALLOWED_ASSERTION_STATUSES = {
+    "PROVEN",
+    "FAILING",
+    "VACUOUS",
+    "COVERED",
+    "UNREACHABLE",
+    "UNKNOWN",
+    "TIMEOUT",
+    "SKIP",
+    "ERROR",
+}
+
+
+def parse_status_token_list(
+    raw: str, *, field_name: str, line_no: int, path: Path
+) -> tuple[str, ...]:
+    text = raw.strip()
+    if not text:
+        return ()
+    seen: set[str] = set()
+    out: list[str] = []
+    for token in text.split(","):
+        status = token.strip().upper()
+        if not status:
+            continue
+        if status not in ALLOWED_ASSERTION_STATUSES:
+            fail(
+                f"invalid assertion status '{status}' in {path} row {line_no} "
+                f"column {field_name}; expected one of "
+                f"{sorted(ALLOWED_ASSERTION_STATUSES)}"
+            )
+        if status in seen:
+            continue
+        seen.add(status)
+        out.append(status)
+    return tuple(out)
 
 
 def normalize_stopat_selector(raw: str) -> str:
@@ -517,6 +562,94 @@ def write_assertion_results_drift(
             writer.writerow(row)
 
 
+def read_assertion_status_policy(path: Path) -> list[AssertionStatusPolicyRow]:
+    if not path.is_file():
+        fail(f"assertion status policy file not found: {path}")
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames is None:
+            fail(f"assertion status policy file missing header row: {path}")
+        required = {"target_name", "required_statuses", "forbidden_statuses"}
+        missing = sorted(required.difference(reader.fieldnames))
+        if missing:
+            fail(
+                f"assertion status policy file missing required columns {missing}: "
+                f"{path} (found: {reader.fieldnames})"
+            )
+        out: list[AssertionStatusPolicyRow] = []
+        seen_targets: set[str] = set()
+        for idx, row in enumerate(reader, start=2):
+            target_name = (row.get("target_name") or "").strip()
+            if not target_name:
+                continue
+            if target_name in seen_targets:
+                fail(
+                    f"duplicate target_name '{target_name}' in assertion status "
+                    f"policy file {path} row {idx}"
+                )
+            seen_targets.add(target_name)
+            out.append(
+                AssertionStatusPolicyRow(
+                    target_name=target_name,
+                    required_statuses=parse_status_token_list(
+                        row.get("required_statuses") or "",
+                        field_name="required_statuses",
+                        line_no=idx,
+                        path=path,
+                    ),
+                    forbidden_statuses=parse_status_token_list(
+                        row.get("forbidden_statuses") or "",
+                        field_name="forbidden_statuses",
+                        line_no=idx,
+                        path=path,
+                    ),
+                )
+            )
+    return out
+
+
+def evaluate_assertion_status_policy(
+    policy_rows: list[AssertionStatusPolicyRow],
+    rows: list[tuple[str, ...]],
+) -> list[tuple[str, str, str, str]]:
+    statuses_by_target: dict[str, set[str]] = {}
+    assertion_map = assertion_rows_to_map(rows)
+    for assertion in assertion_map.values():
+        statuses_by_target.setdefault(assertion.target_name, set()).add(assertion.status)
+
+    violations: list[tuple[str, str, str, str]] = []
+    for policy in policy_rows:
+        if policy.target_name == "*":
+            targets = sorted(statuses_by_target.keys())
+        else:
+            targets = [policy.target_name]
+        for target in targets:
+            current_statuses = statuses_by_target.get(target, set())
+            evidence = ",".join(sorted(current_statuses)) if current_statuses else "absent"
+            for status in policy.required_statuses:
+                if status not in current_statuses:
+                    violations.append(
+                        (target, "required_status_missing", status, evidence)
+                    )
+            for status in policy.forbidden_statuses:
+                if status in current_statuses:
+                    violations.append(
+                        (target, "forbidden_status_present", status, evidence)
+                    )
+    return violations
+
+
+def write_assertion_status_policy_violations(
+    path: Path, rows: list[tuple[str, str, str, str]]
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(["target_name", "kind", "status", "evidence"])
+        for row in rows:
+            writer.writerow(row)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run OpenTitan FPV targets using compile contracts."
@@ -686,6 +819,30 @@ def parse_args() -> argparse.Namespace:
         help="Fail when per-assertion FPV BMC drift is detected vs baseline.",
     )
     parser.add_argument(
+        "--assertion-status-policy-file",
+        default=os.environ.get("BMC_ASSERTION_STATUS_POLICY_FILE", ""),
+        help=(
+            "Optional TSV status policy for per-target assertion status classes "
+            "(columns: target_name,required_statuses,forbidden_statuses). "
+            "Statuses are comma-separated and chosen from "
+            "PROVEN,FAILING,VACUOUS,COVERED,UNREACHABLE,UNKNOWN,TIMEOUT,SKIP,ERROR."
+        ),
+    )
+    parser.add_argument(
+        "--assertion-status-policy-violations-file",
+        default=os.environ.get("BMC_ASSERTION_STATUS_POLICY_VIOLATIONS_OUT", ""),
+        help=(
+            "Optional output TSV path for assertion status policy violations "
+            "(columns: target_name,kind,status,evidence)."
+        ),
+    )
+    parser.add_argument(
+        "--fail-on-assertion-status-policy",
+        action="store_true",
+        default=os.environ.get("BMC_FAIL_ON_ASSERTION_STATUS_POLICY", "0") == "1",
+        help="Fail when assertion status policy violations are detected.",
+    )
+    parser.add_argument(
         "--cover-results-file",
         default=os.environ.get("BMC_COVER_RESULTS_OUT", ""),
         help="Optional TSV output path for per-cover FPV BMC rows.",
@@ -766,6 +923,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.fail_on_assertion_status_policy and not args.assertion_status_policy_file:
+        fail(
+            "--fail-on-assertion-status-policy requires "
+            "--assertion-status-policy-file"
+        )
     contracts_path = Path(args.compile_contracts).resolve()
     contracts = read_compile_contracts(contracts_path)
     if not contracts:
@@ -1365,6 +1527,48 @@ def main() -> int:
                         "opentitan fpv assertion-results drift check passed: "
                         f"rows={len(current)} baseline={baseline_path} "
                         f"current={current_path}"
+                    ),
+                    file=sys.stderr,
+                )
+
+        if args.assertion_status_policy_file:
+            policy_path = Path(args.assertion_status_policy_file).resolve()
+            policy_rows = read_assertion_status_policy(policy_path)
+            policy_violations = evaluate_assertion_status_policy(
+                policy_rows, merged_assertion_rows
+            )
+            if args.assertion_status_policy_violations_file:
+                violations_path = Path(
+                    args.assertion_status_policy_violations_file
+                ).resolve()
+                write_assertion_status_policy_violations(
+                    violations_path, policy_violations
+                )
+                print(
+                    f"assertion status policy violations: {violations_path}",
+                    flush=True,
+                )
+            if policy_violations:
+                sample = ", ".join(
+                    f"{target}:{kind}:{status}"
+                    for target, kind, status, _ in policy_violations[:6]
+                )
+                if len(policy_violations) > 6:
+                    sample += ", ..."
+                message = (
+                    "opentitan fpv assertion-status policy violations detected: "
+                    f"rows={len(policy_violations)} sample=[{sample}] "
+                    f"policy={policy_path}"
+                )
+                if args.fail_on_assertion_status_policy:
+                    print(message, file=sys.stderr)
+                    return 1
+                print(f"warning: {message}", file=sys.stderr)
+            else:
+                print(
+                    (
+                        "opentitan fpv assertion-status policy check passed: "
+                        f"rows={len(merged_assertion_rows)} policy={policy_path}"
                     ),
                     file=sys.stderr,
                 )

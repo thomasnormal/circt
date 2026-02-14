@@ -102,14 +102,18 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      suppressions using `<target_name>::<kind>` tokens.
    - enables precise vacuous/unreachable drift rollouts without target-wide
      drift suppression.
-8. Remaining limitation vs Jasper/VCF-style mature flows:
-   - per-assertion semantic status parity remains partial (especially vacuity/
-     unreachable classification and richer task-level diagnostics).
-9. Next formal milestone (OpenTitan-aligned, backend-generic):
+8. Per-target assertion status-policy governance completed for OpenTitan FPV BMC:
+   - added first-class required/forbidden assertion status policy controls:
+     `--opentitan-fpv-bmc-assertion-status-policy-file`
+   - strict-gate auto-enables status-policy fail mode when a policy file is
+     configured.
+9. Remaining limitation vs Jasper/VCF-style mature flows:
+   - policy enforcement exists, but higher-level policy authoring and
+     diagnostics are still manual; no task-profile-to-policy presets yet.
+10. Next formal milestone (OpenTitan-aligned, backend-generic):
    - advance per-assertion reporting parity:
-     - add explicit status-policy gates for required/forbidden assertion
-       classes per target cohort (vacuous/unreachable/covered) with strict
-       baseline governance.
+     - add OpenTitan task-profile-aware status-policy presets plus richer
+       violation diagnostics (grouped by status class and target cohort).
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
