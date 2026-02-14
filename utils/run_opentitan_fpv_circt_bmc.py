@@ -209,6 +209,96 @@ def summarize(rows: list[tuple[str, ...]]) -> tuple[int, int, int, int, int, int
     return total, passed, failed, xfailed, xpassed, errored, skipped
 
 
+def write_fpv_summary(
+    case_rows: list[tuple[str, ...]],
+    assertion_rows: list[tuple[str, ...]],
+    out_path: Path,
+) -> None:
+    # status, case_id, case_path, assertion_id, assertion_label, diag, reason
+    # If no assertion rows are available, fall back to case-level accounting
+    # (one synthetic assertion per case).
+    by_target: dict[str, dict[str, int]] = {}
+
+    def init_counts(target: str) -> dict[str, int]:
+        return by_target.setdefault(
+            target,
+            {
+                "total_assertions": 0,
+                "proven": 0,
+                "failing": 0,
+                "vacuous": 0,
+                "covered": 0,
+                "unreachable": 0,
+                "unknown": 0,
+                "error": 0,
+                "timeout": 0,
+                "skipped": 0,
+            },
+        )
+
+    if assertion_rows:
+        for row in assertion_rows:
+            if len(row) < 2:
+                continue
+            status = row[0].strip().upper()
+            case_id = row[1].strip()
+            if not case_id:
+                continue
+            target_name = case_id.split("::", 1)[0]
+            counts = init_counts(target_name)
+            counts["total_assertions"] += 1
+            if status == "PROVEN":
+                counts["proven"] += 1
+            elif status == "FAILING":
+                counts["failing"] += 1
+            elif status == "UNKNOWN":
+                counts["unknown"] += 1
+            elif status == "TIMEOUT":
+                counts["timeout"] += 1
+            elif status == "SKIP":
+                counts["skipped"] += 1
+            else:
+                counts["error"] += 1
+    else:
+        for row in case_rows:
+            if len(row) < 2:
+                continue
+            status = row[0].strip().upper()
+            case_id = row[1].strip()
+            if not case_id:
+                continue
+            target_name = case_id.split("::", 1)[0]
+            counts = init_counts(target_name)
+            counts["total_assertions"] += 1
+            if status == "PASS":
+                counts["proven"] += 1
+            elif status == "FAIL":
+                counts["failing"] += 1
+            elif status == "UNKNOWN":
+                counts["unknown"] += 1
+            elif status == "TIMEOUT":
+                counts["timeout"] += 1
+            elif status == "SKIP":
+                counts["skipped"] += 1
+            else:
+                counts["error"] += 1
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as handle:
+        handle.write(
+            "target_name\ttotal_assertions\tproven\tfailing\tvacuous\tcovered\t"
+            "unreachable\tunknown\terror\ttimeout\tskipped\n"
+        )
+        for target_name in sorted(by_target):
+            c = by_target[target_name]
+            handle.write(
+                f"{target_name}\t{c['total_assertions']}\t{c['proven']}\t"
+                f"{c['failing']}\t{c['vacuous']}\t{c['covered']}\t"
+                f"{c['unreachable']}\t{c['unknown']}\t{c['error']}\t"
+                f"{c['timeout']}\t{c['skipped']}\n"
+            )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run OpenTitan FPV targets using compile contracts."
@@ -257,6 +347,16 @@ def parse_args() -> argparse.Namespace:
         "--resolved-contracts-file",
         default=os.environ.get("BMC_RESOLVED_CONTRACTS_OUT", ""),
         help="Optional TSV output path for resolved per-case contract rows.",
+    )
+    parser.add_argument(
+        "--assertion-results-file",
+        default=os.environ.get("BMC_ASSERTION_RESULTS_OUT", ""),
+        help="Optional TSV output path for per-assertion FPV BMC rows.",
+    )
+    parser.add_argument(
+        "--fpv-summary-file",
+        default=os.environ.get("BMC_FPV_SUMMARY_OUT", ""),
+        help="Optional TSV output path for FPV-style assertion summary rows.",
     )
     return parser.parse_args()
 
@@ -399,6 +499,7 @@ def main() -> int:
         fail(f"missing pairwise runner: {pairwise_runner}")
 
     pairwise_result_files: list[Path] = []
+    assertion_result_files: list[Path] = []
     drop_case_files: list[Path] = []
     drop_reason_files: list[Path] = []
     timeout_reason_files: list[Path] = []
@@ -501,6 +602,15 @@ def main() -> int:
                     )
                     resolved_contract_files.append(group_resolved_contracts)
                     cmd += ["--resolved-contracts-file", str(group_resolved_contracts)]
+                if args.assertion_results_file:
+                    group_assertion_results = (
+                        workdir / f"pairwise-assertion-results-{group_index}.tsv"
+                    )
+                    assertion_result_files.append(group_assertion_results)
+                    cmd += [
+                        "--assertion-results-file",
+                        str(group_assertion_results),
+                    ]
 
                 cmd_env = os.environ.copy()
                 policy_passes: list[str] = []
@@ -530,6 +640,7 @@ def main() -> int:
         merge_plain_files(drop_case_files, args.drop_remark_cases_file)
         merge_plain_files(drop_reason_files, args.drop_remark_reasons_file)
         merge_plain_files(timeout_reason_files, args.timeout_reasons_file)
+        merge_plain_files(assertion_result_files, args.assertion_results_file)
         merge_resolved_contract_files(resolved_contract_files, args.resolved_contracts_file)
 
         merged_rows = list(pre_rows)
@@ -554,6 +665,21 @@ def main() -> int:
                 for row in merged_rows:
                     handle.write("\t".join(row) + "\n")
             print(f"results: {out_path}", flush=True)
+
+        merged_assertion_rows: list[tuple[str, ...]] = []
+        if args.assertion_results_file:
+            assertion_path = Path(args.assertion_results_file)
+            if assertion_path.exists():
+                for line in assertion_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    merged_assertion_rows.append(tuple(line.split("\t")))
+
+        if args.fpv_summary_file:
+            fpv_summary_path = Path(args.fpv_summary_file)
+            write_fpv_summary(merged_rows, merged_assertion_rows, fpv_summary_path)
+            print(f"fpv summary: {fpv_summary_path}", flush=True)
 
         total, passed, failed, xfailed, xpassed, errored, skipped = summarize(
             merged_rows
