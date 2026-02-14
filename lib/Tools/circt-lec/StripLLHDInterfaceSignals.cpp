@@ -1647,7 +1647,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
                                       ModuleState &state, bool strictMode) {
   bool isLocalSignal = sigOp->hasAttr(kLECLocalSignalAttr);
   struct RefStep {
-    enum Kind { StructField, Extract } kind;
+    enum Kind { StructField, Extract, ArrayElement } kind;
     StringAttr field;
     Value index;
     Type elemType;
@@ -1777,6 +1777,21 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         refPaths[extract.getResult()] = derived;
         derivedRefs.push_back(extract);
         worklist.push_back(extract.getResult());
+        continue;
+      }
+      if (auto arrayGet = dyn_cast<llhd::SigArrayGetOp>(user)) {
+        RefPath derived = path;
+        auto resultRefType =
+            dyn_cast<llhd::RefType>(arrayGet.getResult().getType());
+        if (!resultRefType)
+          return arrayGet.emitError(
+              "expected llhd.ref result for sig.array_get");
+        derived.push_back(RefStep{RefStep::ArrayElement, {},
+                                  arrayGet.getIndex(),
+                                  resultRefType.getNestedType()});
+        refPaths[arrayGet.getResult()] = derived;
+        derivedRefs.push_back(arrayGet);
+        worklist.push_back(arrayGet.getResult());
         continue;
       }
       if (auto mux = dyn_cast<comb::MuxOp>(user)) {
@@ -1958,6 +1973,23 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         currentType = elemInt;
         continue;
       }
+      if (step.kind == RefStep::ArrayElement) {
+        auto arrayType = dyn_cast<hw::ArrayType>(currentType);
+        if (!arrayType)
+          return false;
+        if (arrayType.getElementType() != step.elemType)
+          return false;
+        auto indexType = dyn_cast<IntegerType>(step.index.getType());
+        if (!indexType)
+          return false;
+        if (auto constant = step.index.getDefiningOp<hw::ConstantOp>()) {
+          uint64_t index = constant.getValue().getZExtValue();
+          if (index >= arrayType.getNumElements())
+            return false;
+        }
+        currentType = arrayType.getElementType();
+        continue;
+      }
     }
     return true;
   };
@@ -1987,6 +2019,21 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
             comb::ShrUOp::create(pathBuilder, loc, value, shift);
         value = comb::ExtractOp::create(pathBuilder, loc, shifted, 0,
                                         elemType.getWidth());
+        continue;
+      }
+      if (step.kind == RefStep::ArrayElement) {
+        auto arrayType = dyn_cast<hw::ArrayType>(value.getType());
+        if (!arrayType)
+          return Value();
+        auto indexType = dyn_cast<IntegerType>(step.index.getType());
+        if (!indexType)
+          return Value();
+        if (auto constant = step.index.getDefiningOp<hw::ConstantOp>()) {
+          uint64_t index = constant.getValue().getZExtValue();
+          if (index >= arrayType.getNumElements())
+            return Value();
+        }
+        value = hw::ArrayGetOp::create(pathBuilder, loc, value, step.index);
         continue;
       }
     }
@@ -2136,6 +2183,27 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       if (pieces.size() == 1)
         return pieces.front();
       return comb::ConcatOp::create(pathBuilder, loc, pieces);
+    }
+    if (step.kind == RefStep::ArrayElement) {
+      auto arrayType = dyn_cast<hw::ArrayType>(baseValue.getType());
+      if (!arrayType)
+        return Value();
+      auto indexType = dyn_cast<IntegerType>(step.index.getType());
+      if (!indexType)
+        return Value();
+      if (auto constant = step.index.getDefiningOp<hw::ConstantOp>()) {
+        uint64_t index = constant.getValue().getZExtValue();
+        if (index >= arrayType.getNumElements())
+          return Value();
+      }
+      Value element =
+          hw::ArrayGetOp::create(pathBuilder, loc, baseValue, step.index);
+      Value updatedElement =
+          self(self, pathBuilder, element, path.drop_front(), updateValue, loc);
+      if (!updatedElement)
+        return Value();
+      return hw::ArrayInjectOp::create(pathBuilder, loc, baseValue, step.index,
+                                       updatedElement);
     }
     return Value();
   };

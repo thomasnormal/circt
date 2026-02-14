@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1400 - February 14, 2026
+
+### OpenTitan FPV BMC: LLHD `sig.array_get` Strip Closure
+
+1. Extended LLHD interface stripping to support signal-array ref users in
+   `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`:
+   - added array-element path tracking for `llhd.sig.array_get`.
+   - enabled path typing/materialization/update for array elements.
+   - rewrites now materialize through:
+     - `hw.array_get`
+     - `hw.array_inject`
+2. Added regression coverage:
+   - `test/Tools/circt-lec/lec-strip-llhd-signal-array-get.mlir`
+3. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-lec/lec-strip-llhd-signal-array-get.mlir build-test/test/Tools/circt-lec/lec-strip-llhd-local-ref-extract.mlir` PASS
+   - `BMC_SMOKE_ONLY=1 utils/run_opentitan_fpv_bmc_policy_profiles.sh --profile prim_all --opentitan-root /home/thomas-ahle/opentitan --out-dir /tmp/opentitan-prim-smoke-20260214-164415 --no-strict-gate check --circt-verilog /home/thomas-ahle/circt/build-test/bin/circt-verilog` PASS
+4. Canary status uplift:
+   - prior blocker
+     `unsupported_llhd_signal_use_in_lec_llhd_sig_array_get` is cleared.
+   - OpenTitan `prim_all` smoke lane now reports:
+     `total=1 pass=1 fail=0 error=0`.
+
 ## Iteration 1399 - February 14, 2026
 
 ### OpenTitan FPV BMC: Include-Only Contract Filtering + Single-Unit Auto-Retry

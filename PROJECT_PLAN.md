@@ -185,10 +185,10 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
    - `check` mode with workflow default `--strict-gate` still depends on
      `utils/formal-baselines.tsv` containing matching OpenTitan FPV rows;
      otherwise strict gate reports `missing baseline row`.
-   - current canary targets resolve compile contracts and execute FPV BMC, but
-     now fail at a deeper semantic stage
-     (`unsupported_llhd_signal_use_in_lec_llhd_sig_array_get`); this is the
-     next closure blocker before expected proof-status uplift.
+   - smoke canary (`prim_all`) now passes end-to-end for BMC, but broad
+     OpenTitan parity still requires scaling from single-target smoke to
+     reviewed multi-target strict-gated cohorts (`prim_all`, `ip_all`,
+     `sec_cm_all`) with stable baseline/update cadence.
 19. OpenTitan FPV frontend ingestion hardening completed:
    - compile-contract resolver now excludes `is_include_file` entries from the
      compile-unit `files` list while still forwarding include directories.
@@ -202,6 +202,16 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - initial failure log saved to `circt-verilog.single-unit.log`
      - launch telemetry emits
        `single_unit_preprocessor_failure`.
+20. LLHD signal-array reference closure completed for OpenTitan FPV BMC:
+   - `StripLLHDInterfaceSignals` now supports `llhd.sig.array_get` in LEC/BMC
+     stripping by carrying array-element ref steps and materializing updates
+     through `hw.array_get` / `hw.array_inject`.
+   - added regression:
+     - `test/Tools/circt-lec/lec-strip-llhd-signal-array-get.mlir`
+   - real canary uplift:
+     - `utils/run_opentitan_fpv_bmc_policy_profiles.sh --profile prim_all`
+       (`BMC_SMOKE_ONLY=1`, explicit `build-test` toolchain) now passes:
+       `total=1 pass=1 error=0`.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
