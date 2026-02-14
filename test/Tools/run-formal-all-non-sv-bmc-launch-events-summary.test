@@ -1,0 +1,22 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\n: "${BMC_LAUNCH_EVENTS_OUT:?}"\nprintf "PASS\\tver_case\\t/tests/ver_case.sv\\tverilator-verification\\tBMC\\n" > "$OUT"\nprintf "RETRY\\tver_case\\t/tests/ver_case.sv\\tfrontend\\t%t/bin/circt-verilog\\tretryable_exit_code_126\\t1\\t0.000\\t126\\t\\n" > "$BMC_LAUNCH_EVENTS_OUT"\nprintf "FALLBACK\\tver_case\\t/tests/ver_case.sv\\tfrontend\\t%t/bin/circt-verilog\\tretryable_exit_code_126_retry_exhausted\\t\\t\\t126\\t%t/bin/circt-verilog.launch-fallback\\n" >> "$BMC_LAUNCH_EVENTS_OUT"\necho "verilator-verification summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0"\n' > %t/utils/run_verilator_verification_circt_bmc.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\n: "${BMC_LAUNCH_EVENTS_OUT:?}"\nprintf "PASS\\tys_case\\t/tests/ys_case.sv\\tyosys/tests/sva\\tBMC\\n" > "$OUT"\nprintf "RETRY\\tys_case\\t/tests/ys_case.sv\\tfrontend\\t%t/bin/circt-verilog\\tetxtbsy\\t1\\t0.000\\t126\\t\\n" > "$BMC_LAUNCH_EVENTS_OUT"\nprintf "FALLBACK\\tys_case\\t/tests/ys_case.sv\\tfrontend\\t%t/bin/circt-verilog\\tetxtbsy_retry_exhausted\\t\\t\\t126\\t%t/bin/circt-verilog.launch-fallback\\n" >> "$BMC_LAUNCH_EVENTS_OUT"\necho "yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0"\n' > %t/utils/run_yosys_sva_circt_bmc.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_verilator_verification_circt_bmc.sh %t/utils/run_yosys_sva_circt_bmc.sh %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec
+// RUN: mkdir -p %t/out
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --circt-verilog %t/bin/circt-verilog --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^(verilator-verification/BMC|yosys/tests/sva/BMC)$' --verilator-bmc-test-filter 'ver' --yosys-bmc-test-filter 'ys'
+// RUN: FileCheck %s --check-prefix=SUM < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=VER-LAUNCH < %t/out/verilator-bmc-launch-events.tsv
+// RUN: FileCheck %s --check-prefix=YS-LAUNCH < %t/out/yosys-bmc-launch-events.tsv
+//
+// SUM: verilator-verification{{[[:space:]]+}}BMC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}{{.*}}bmc_launch_event_rows=2{{[[:space:]]+}}bmc_launch_retry_events=1{{[[:space:]]+}}bmc_launch_retry_cases=1{{[[:space:]]+}}bmc_launch_retryable_exit_events=1{{[[:space:]]+}}bmc_launch_etxtbsy_events=0{{[[:space:]]+}}bmc_launch_fallback_events=1{{[[:space:]]+}}bmc_launch_fallback_cases=1
+// SUM: yosys/tests/sva{{[[:space:]]+}}BMC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}{{.*}}bmc_launch_event_rows=2{{[[:space:]]+}}bmc_launch_retry_events=1{{[[:space:]]+}}bmc_launch_retry_cases=1{{[[:space:]]+}}bmc_launch_retryable_exit_events=0{{[[:space:]]+}}bmc_launch_etxtbsy_events=1{{[[:space:]]+}}bmc_launch_fallback_events=1{{[[:space:]]+}}bmc_launch_fallback_cases=1
+// VER-LAUNCH: RETRY{{[[:space:]]+}}ver_case
+// VER-LAUNCH: FALLBACK{{[[:space:]]+}}ver_case
+// YS-LAUNCH: RETRY{{[[:space:]]+}}ys_case
+// YS-LAUNCH: FALLBACK{{[[:space:]]+}}ys_case

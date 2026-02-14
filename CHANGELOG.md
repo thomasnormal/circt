@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1358 - February 14, 2026
+
+### Formal Lanes: BMC Launch-Event Parity for Verilator/Yosys
+
+1. Extended non-FPV BMC runners with launch retry/copy-fallback telemetry:
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - `utils/run_yosys_sva_circt_bmc.sh`
+   - new knobs (parity with sv-tests BMC runner):
+     - `BMC_LAUNCH_RETRY_ATTEMPTS`
+     - `BMC_LAUNCH_RETRY_BACKOFF_SECS`
+     - `BMC_LAUNCH_COPY_FALLBACK`
+     - `BMC_LAUNCH_EVENTS_OUT`
+   - emitted launch-event schema:
+     `event_kind`, `case_id`, `case_path`, `stage`, `tool`, `reason`,
+     `attempt`, `delay_secs`, `exit_code`, `fallback_tool`.
+2. Extended `utils/run_formal_all.sh` BMC lane forwarding/summaries:
+   - `verilator-verification/BMC` now forwards `BMC_LAUNCH_EVENTS_OUT`
+     (`verilator-bmc-launch-events.tsv`) and reports `bmc_launch_*` counters.
+   - `yosys/tests/sva/BMC` now forwards `BMC_LAUNCH_EVENTS_OUT`
+     (`yosys-bmc-launch-events.tsv`) and reports `bmc_launch_*` counters.
+3. Added focused regressions:
+   - `test/Tools/run-verilator-verification-circt-bmc-launch-events.test`
+   - `test/Tools/run-yosys-sva-bmc-launch-events.test`
+   - `test/Tools/run-formal-all-non-sv-bmc-launch-events-summary.test`
+
+### Validation
+
+- `bash -n utils/run_verilator_verification_circt_bmc.sh utils/run_yosys_sva_circt_bmc.sh utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-verilator-verification-circt-bmc-launch-events.test build-test/test/Tools/run-yosys-sva-bmc-launch-events.test build-test/test/Tools/run-formal-all-non-sv-bmc-launch-events-summary.test` PASS (3/3)
+
 ## Iteration 1357 - February 14, 2026
 
 ### Formal Lanes: Non-FPV Launch-Event Telemetry Surfacing (BMC/LEC)
