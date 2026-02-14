@@ -268,6 +268,33 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      (multi-target `prim/ip/sec_cm` cohort snapshots).
    - next step is to materialize reviewed cohort baselines and run strict-gated
      cadence checks so objective-level drift is governed at OpenTitan scale.
+20g. Objective-parity governance integrated into policy wrappers/profile packs:
+   - `utils/run_opentitan_fpv_bmc_policy_workflow.sh` now supports
+     objective-parity baseline management:
+     - `--enable-objective-parity`
+     - `--objective-parity-reason-policy`
+     - managed baseline artifact:
+       `${baseline_prefix}-objective-parity-baseline.tsv`
+     - mode wiring:
+       - update:
+         `--update-opentitan-fpv-objective-parity-baseline`
+       - check:
+         `--fail-on-opentitan-fpv-objective-parity-drift`
+   - `utils/run_opentitan_fpv_bmc_policy_profiles.sh` now supports both
+     workflow-level and per-profile objective-parity controls:
+     - workflow:
+       `--workflow-enable-objective-parity`,
+       `--workflow-objective-parity-reason-policy`
+     - profile TSV optional columns:
+       `objective_parity`, `objective_parity_reason_policy`
+     - lane routing now expands to include `opentitan/FPV_OBJECTIVE_PARITY`
+       when objective parity is enabled for a profile.
+20h. Remaining high-priority limitation (objective-parity cohort rollout):
+   - wrappers/profile packs can now govern objective-parity baselines, but
+     reviewed committed objective-parity baselines for default canary packs are
+     not yet materialized (`prim_all`, `ip_all`, `sec_cm_all`).
+   - next step is to run profile-pack update/check in real OpenTitan cohorts
+     and commit reviewed objective-parity baseline snapshots.
 21. Frontend macro-compat retry hardening completed for FPV BMC ingestion:
    - added external preprocessor retry controls in
      `run_pairwise_circt_bmc.py`:

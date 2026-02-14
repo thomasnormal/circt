@@ -35,6 +35,13 @@ Options:
   --workflow-verilog-cache-dir DIR
                           Forwarded to workflow as
                           --opentitan-fpv-bmc-verilog-cache-dir
+  --workflow-enable-objective-parity
+                          Forwarded to workflow as
+                          --enable-objective-parity
+  --workflow-objective-parity-reason-policy POLICY
+                          Forwarded to workflow as
+                          --objective-parity-reason-policy
+                          (`ignore|projected|all`)
   --workflow-check-bmc-launch-reason-key-allowlist-file FILE
                           Forwarded to workflow as
                           --check-bmc-launch-reason-key-allowlist-file
@@ -68,6 +75,7 @@ Profile TSV schema:
   Optional columns:
     select_cfgs,target_filter,allow_unfiltered,max_targets,description
     verilog_cache_mode,verilog_cache_dir
+    objective_parity,objective_parity_reason_policy
     check_bmc_launch_reason_key_allowlist_file
     check_lec_launch_reason_key_allowlist_file
     check_max_bmc_launch_reason_event_rows
@@ -168,6 +176,22 @@ parse_cache_mode_like() {
   esac
 }
 
+parse_reason_policy_like() {
+  local raw
+  raw="$(trim "$1")"
+  if [[ -z "$raw" ]]; then
+    printf ""
+    return
+  fi
+  case "${raw,,}" in
+    ignore|projected|all)
+      printf "%s" "${raw,,}" ;;
+    *)
+      echo "invalid objective parity reason policy: $raw (expected ignore|projected|all)" >&2
+      exit 1 ;;
+  esac
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_WORKFLOW="${SCRIPT_DIR}/run_opentitan_fpv_bmc_policy_workflow.sh"
 PROFILES_FILE="${SCRIPT_DIR}/opentitan_fpv_policy/profile_packs.tsv"
@@ -179,6 +203,8 @@ WORKFLOW_BASELINE_DIR=""
 WORKFLOW_PRESETS_FILE=""
 WORKFLOW_VERILOG_CACHE_MODE=""
 WORKFLOW_VERILOG_CACHE_DIR=""
+WORKFLOW_ENABLE_OBJECTIVE_PARITY=0
+WORKFLOW_OBJECTIVE_PARITY_REASON_POLICY=""
 WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
 WORKFLOW_CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
 WORKFLOW_CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS=""
@@ -209,6 +235,10 @@ while [[ $# -gt 0 ]]; do
       WORKFLOW_VERILOG_CACHE_MODE="$(parse_cache_mode_like "$2")"; shift 2 ;;
     --workflow-verilog-cache-dir)
       WORKFLOW_VERILOG_CACHE_DIR="$2"; shift 2 ;;
+    --workflow-enable-objective-parity)
+      WORKFLOW_ENABLE_OBJECTIVE_PARITY=1; shift ;;
+    --workflow-objective-parity-reason-policy)
+      WORKFLOW_OBJECTIVE_PARITY_REASON_POLICY="$(parse_reason_policy_like "$2")"; shift 2 ;;
     --workflow-check-bmc-launch-reason-key-allowlist-file)
       WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$2"; shift 2 ;;
     --workflow-check-lec-launch-reason-key-allowlist-file)
@@ -257,6 +287,10 @@ if [[ ! -d "$OPENTITAN_ROOT" ]]; then
 fi
 if [[ -n "$WORKFLOW_VERILOG_CACHE_DIR" && -z "$WORKFLOW_VERILOG_CACHE_MODE" ]]; then
   echo "--workflow-verilog-cache-dir requires --workflow-verilog-cache-mode" >&2
+  exit 1
+fi
+if [[ -n "$WORKFLOW_OBJECTIVE_PARITY_REASON_POLICY" && "$WORKFLOW_ENABLE_OBJECTIVE_PARITY" != "1" ]]; then
+  echo "--workflow-objective-parity-reason-policy requires --workflow-enable-objective-parity" >&2
   exit 1
 fi
 if [[ -n "$WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
@@ -353,6 +387,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   max_targets="$(parse_nonnegative_int_like "$(get_col max_targets)")"
   profile_verilog_cache_mode="$(parse_cache_mode_like "$(get_col verilog_cache_mode)")"
   profile_verilog_cache_dir="$(trim "$(get_col verilog_cache_dir)")"
+  profile_objective_parity="$(parse_optional_bool_like "$(get_col objective_parity)")"
+  profile_objective_parity_reason_policy="$(parse_reason_policy_like "$(get_col objective_parity_reason_policy)")"
   profile_check_bmc_launch_reason_key_allowlist_file="$(trim "$(get_col check_bmc_launch_reason_key_allowlist_file)")"
   profile_check_lec_launch_reason_key_allowlist_file="$(trim "$(get_col check_lec_launch_reason_key_allowlist_file)")"
   profile_check_max_bmc_launch_reason_event_rows="$(parse_optional_nonnegative_int_like "$(get_col check_max_bmc_launch_reason_event_rows)")"
@@ -373,6 +409,22 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   if [[ -n "$effective_verilog_cache_dir" && -z "$effective_verilog_cache_mode" ]]; then
     echo "verilog_cache_dir requires verilog_cache_mode for profile '$profile_name' in $PROFILES_FILE row $line_no" >&2
     exit 1
+  fi
+  effective_objective_parity="$WORKFLOW_ENABLE_OBJECTIVE_PARITY"
+  if [[ -n "$profile_objective_parity" ]]; then
+    effective_objective_parity="$profile_objective_parity"
+  fi
+  effective_objective_parity_reason_policy="$WORKFLOW_OBJECTIVE_PARITY_REASON_POLICY"
+  if [[ -n "$profile_objective_parity_reason_policy" ]]; then
+    effective_objective_parity_reason_policy="$profile_objective_parity_reason_policy"
+  fi
+  if [[ "$effective_objective_parity" != "1" && -n "$effective_objective_parity_reason_policy" ]]; then
+    echo "objective_parity_reason_policy requires objective_parity=1 for profile '$profile_name' in $PROFILES_FILE row $line_no" >&2
+    exit 1
+  fi
+  lane_regex='^opentitan/FPV_BMC$'
+  if [[ "$effective_objective_parity" == "1" ]]; then
+    lane_regex='^opentitan/(FPV_BMC|FPV_OBJECTIVE_PARITY)$'
   fi
   effective_check_bmc_launch_reason_key_allowlist_file="$WORKFLOW_CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE"
   if [[ -n "$profile_check_bmc_launch_reason_key_allowlist_file" ]]; then
@@ -466,6 +518,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   if [[ -n "$effective_verilog_cache_dir" ]]; then
     cmd+=(--opentitan-fpv-bmc-verilog-cache-dir "$effective_verilog_cache_dir")
   fi
+  if [[ "$effective_objective_parity" == "1" ]]; then
+    cmd+=(--enable-objective-parity)
+    if [[ -n "$effective_objective_parity_reason_policy" ]]; then
+      cmd+=(--objective-parity-reason-policy "$effective_objective_parity_reason_policy")
+    fi
+  fi
   if [[ -n "$effective_check_bmc_launch_reason_key_allowlist_file" ]]; then
     cmd+=(--check-bmc-launch-reason-key-allowlist-file "$effective_check_bmc_launch_reason_key_allowlist_file")
   fi
@@ -498,7 +556,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   cmd+=(
     --opentitan "$OPENTITAN_ROOT"
     --out-dir "${OUT_DIR}/${profile_name}"
-    --include-lane-regex '^opentitan/FPV_BMC$'
+    --include-lane-regex "$lane_regex"
     --opentitan-fpv-cfg "$fpv_cfg_path"
   )
   if [[ "$allow_unfiltered" == "1" ]]; then

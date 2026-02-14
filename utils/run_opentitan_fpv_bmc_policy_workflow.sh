@@ -29,6 +29,13 @@ Options:
                           (`off|read|readwrite|auto`)
   --opentitan-fpv-bmc-verilog-cache-dir DIR
                           OpenTitan FPV BMC verilog frontend cache base dir
+  --enable-objective-parity
+                          Also govern OpenTitan FPV objective-parity baseline
+                          drift (requires FPV_OBJECTIVE_PARITY lane selection)
+  --objective-parity-reason-policy POLICY
+                          Objective parity reason policy when
+                          --enable-objective-parity is enabled
+                          (`ignore|projected|all`, default: projected)
   --check-bmc-launch-reason-key-allowlist-file FILE
                           check mode: forward as
                           --bmc-launch-reason-key-allowlist-file
@@ -70,6 +77,8 @@ PRESETS_FILE="${SCRIPT_DIR}/opentitan_fpv_policy/task_profile_status_presets.tsv
 USE_STRICT_GATE_IN_CHECK=1
 OPENTITAN_FPV_BMC_VERILOG_CACHE_MODE=""
 OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR=""
+ENABLE_OBJECTIVE_PARITY=0
+OBJECTIVE_PARITY_REASON_POLICY="projected"
 CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
 CHECK_LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
 CHECK_MAX_BMC_LAUNCH_REASON_EVENT_ROWS=""
@@ -94,6 +103,10 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_BMC_VERILOG_CACHE_MODE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-verilog-cache-dir)
       OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR="$2"; shift 2 ;;
+    --enable-objective-parity)
+      ENABLE_OBJECTIVE_PARITY=1; shift ;;
+    --objective-parity-reason-policy)
+      OBJECTIVE_PARITY_REASON_POLICY="$2"; shift 2 ;;
     --check-bmc-launch-reason-key-allowlist-file)
       CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$2"; shift 2 ;;
     --check-lec-launch-reason-key-allowlist-file)
@@ -153,6 +166,17 @@ if [[ -n "$OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR" && -z "$OPENTITAN_FPV_BMC_VERILO
   echo "--opentitan-fpv-bmc-verilog-cache-dir requires --opentitan-fpv-bmc-verilog-cache-mode" >&2
   exit 1
 fi
+case "$OBJECTIVE_PARITY_REASON_POLICY" in
+  ignore|projected|all) ;;
+  *)
+    echo "invalid --objective-parity-reason-policy: expected ignore|projected|all" >&2
+    exit 1
+    ;;
+esac
+if [[ "$ENABLE_OBJECTIVE_PARITY" != "1" && "$OBJECTIVE_PARITY_REASON_POLICY" != "projected" ]]; then
+  echo "--objective-parity-reason-policy requires --enable-objective-parity" >&2
+  exit 1
+fi
 if [[ -n "$CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
   echo "BMC launch reason allowlist file not readable: $CHECK_BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" >&2
   exit 1
@@ -193,6 +217,10 @@ readonly MANAGED_FLAGS=(
   --fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift
   --opentitan-fpv-bmc-verilog-cache-mode
   --opentitan-fpv-bmc-verilog-cache-dir
+  --opentitan-fpv-objective-parity-baseline-file
+  --update-opentitan-fpv-objective-parity-baseline
+  --fail-on-opentitan-fpv-objective-parity-drift
+  --opentitan-fpv-objective-parity-reason-policy
   --bmc-launch-reason-key-allowlist-file
   --lec-launch-reason-key-allowlist-file
   --max-bmc-launch-reason-event-rows
@@ -215,6 +243,7 @@ mkdir -p "$BASELINE_DIR"
 SUMMARY_BASELINE="${BASELINE_DIR}/${BASELINE_PREFIX}-fpv-summary-baseline.tsv"
 ASSERTION_BASELINE="${BASELINE_DIR}/${BASELINE_PREFIX}-assertion-results-baseline.tsv"
 GROUPED_POLICY_BASELINE="${BASELINE_DIR}/${BASELINE_PREFIX}-assertion-status-policy-grouped-violations-baseline.tsv"
+OBJECTIVE_PARITY_BASELINE="${BASELINE_DIR}/${BASELINE_PREFIX}-objective-parity-baseline.tsv"
 
 workflow_args=(
   --with-opentitan-fpv-bmc
@@ -233,6 +262,12 @@ if [[ -n "$OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR" ]]; then
     --opentitan-fpv-bmc-verilog-cache-dir "$OPENTITAN_FPV_BMC_VERILOG_CACHE_DIR"
   )
 fi
+if [[ "$ENABLE_OBJECTIVE_PARITY" == "1" ]]; then
+  workflow_args+=(
+    --opentitan-fpv-objective-parity-baseline-file "$OBJECTIVE_PARITY_BASELINE"
+    --opentitan-fpv-objective-parity-reason-policy "$OBJECTIVE_PARITY_REASON_POLICY"
+  )
+fi
 
 if [[ "$MODE" == "update" ]]; then
   workflow_args+=(
@@ -240,6 +275,11 @@ if [[ "$MODE" == "update" ]]; then
     --update-opentitan-fpv-bmc-assertion-results-baseline
     --update-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline
   )
+  if [[ "$ENABLE_OBJECTIVE_PARITY" == "1" ]]; then
+    workflow_args+=(
+      --update-opentitan-fpv-objective-parity-baseline
+    )
+  fi
 elif [[ "$MODE" == "check" ]]; then
   workflow_args+=(
     --fail-on-opentitan-fpv-bmc-summary-drift
@@ -247,6 +287,11 @@ elif [[ "$MODE" == "check" ]]; then
     --fail-on-opentitan-fpv-bmc-assertion-status-policy
     --fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift
   )
+  if [[ "$ENABLE_OBJECTIVE_PARITY" == "1" ]]; then
+    workflow_args+=(
+      --fail-on-opentitan-fpv-objective-parity-drift
+    )
+  fi
   if [[ "$USE_STRICT_GATE_IN_CHECK" == "1" ]]; then
     workflow_args+=(--strict-gate)
   fi
