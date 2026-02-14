@@ -57,7 +57,8 @@ Options:
   --strict-baseline-governance
                            Enable strict baseline governance bundle:
                            --require-policy-fingerprint-baseline +
-                           --require-baseline-example-parity
+                           --require-baseline-example-parity +
+                           --require-baseline-schema-version-match
                            (requires --fail-on-diff)
   --require-unique-summary-rows
                            Fail if summary.tsv contains duplicate example rows
@@ -1053,6 +1054,7 @@ done
 if [[ "$STRICT_BASELINE_GOVERNANCE" -eq 1 ]]; then
   REQUIRE_POLICY_FINGERPRINT_BASELINE=1
   REQUIRE_BASELINE_EXAMPLE_PARITY=1
+  REQUIRE_BASELINE_SCHEMA_VERSION_MATCH=1
 fi
 
 if ! is_pos_int "$GENERATE_COUNT"; then
