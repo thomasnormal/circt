@@ -26,6 +26,12 @@ Options:
   --baseline-file FILE     Baseline summary TSV for drift checks/updates
   --update-baseline        Write current summary.tsv to --baseline-file
   --fail-on-diff           Fail on metric regression vs --baseline-file
+  --drift-allowlist-file FILE
+                           Optional allowlist for drift regressions (requires
+                           --fail-on-diff). Non-empty, non-comment lines are
+                           glob patterns over:
+                             example::metric
+                             example::metric::detail
   --smoke                  Run smoke mode without yosys:
                            - use stub mutations file
                            - use identity fake create-mutated script
@@ -54,9 +60,11 @@ MAX_ERRORS=""
 BASELINE_FILE=""
 UPDATE_BASELINE=0
 FAIL_ON_DIFF=0
+DRIFT_ALLOWLIST_FILE=""
 SMOKE=0
 KEEP_WORK=0
 EXAMPLE_IDS=()
+declare -a DRIFT_ALLOW_PATTERNS=()
 
 is_pos_int() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
@@ -68,6 +76,13 @@ is_nonneg_int() {
 
 is_nonneg_decimal() {
   [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+trim_whitespace() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s\n' "$s"
 }
 
 normalize_int_or_zero() {
@@ -109,6 +124,39 @@ resolve_tool() {
     printf '%s\n' "$resolved"
     return 0
   fi
+  return 1
+}
+
+load_drift_allowlist() {
+  local file="$1"
+  local raw_line=""
+  local line=""
+  DRIFT_ALLOW_PATTERNS=()
+  while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+    line="${raw_line%$'\r'}"
+    line="$(trim_whitespace "$line")"
+    if [[ -z "$line" ]]; then
+      continue
+    fi
+    if [[ "${line:0:1}" == "#" ]]; then
+      continue
+    fi
+    DRIFT_ALLOW_PATTERNS+=("$line")
+  done < "$file"
+}
+
+is_drift_allowed() {
+  local example="$1"
+  local metric="$2"
+  local detail="${3:-}"
+  local token="${example}::${metric}"
+  local token_detail="${example}::${metric}::${detail}"
+  local pattern=""
+  for pattern in "${DRIFT_ALLOW_PATTERNS[@]}"; do
+    if [[ "$token_detail" == $pattern ]] || [[ "$token" == $pattern ]]; then
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -157,6 +205,21 @@ append_drift_row() {
     >> "$drift_file"
 }
 
+append_drift_candidate() {
+  local drift_file="$1"
+  local example_id="$2"
+  local metric="$3"
+  local baseline_value="$4"
+  local current_value="$5"
+  local detail="$6"
+  if is_drift_allowed "$example_id" "$metric" "$detail"; then
+    append_drift_row "$drift_file" "$example_id" "$metric" "$baseline_value" "$current_value" "allowed" "$detail"
+    return 0
+  fi
+  append_drift_row "$drift_file" "$example_id" "$metric" "$baseline_value" "$current_value" "regression" "$detail"
+  return 1
+}
+
 evaluate_summary_drift() {
   local baseline_file="$1"
   local summary_file="$2"
@@ -180,8 +243,9 @@ evaluate_summary_drift() {
     local baseline_row
     baseline_row="$(lookup_baseline_row "$baseline_file" "$example")"
     if [[ -z "$baseline_row" ]]; then
-      append_drift_row "$drift_file" "$example" "row" "present" "missing" "regression" "missing_baseline_row"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$drift_file" "$example" "row" "present" "missing" "missing_baseline_row"; then
+        regressions=$((regressions + 1))
+      fi
       continue
     fi
 
@@ -195,36 +259,41 @@ evaluate_summary_drift() {
     base_cov_num="$(normalize_decimal_or_zero "${_bc:-0}")"
 
     if [[ "${_bs:-}" == "PASS" && "$status" != "PASS" ]]; then
-      append_drift_row "$drift_file" "$example" "status" "${_bs:-}" "$status" "regression" "status_regressed"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$drift_file" "$example" "status" "${_bs:-}" "$status" "status_regressed"; then
+        regressions=$((regressions + 1))
+      fi
     else
       append_drift_row "$drift_file" "$example" "status" "${_bs:-}" "$status" "ok" ""
     fi
 
     if [[ "$detected" -lt "$_bd" ]]; then
-      append_drift_row "$drift_file" "$example" "detected_mutants" "$_bd" "$detected" "regression" "detected_decreased"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$drift_file" "$example" "detected_mutants" "$_bd" "$detected" "detected_decreased"; then
+        regressions=$((regressions + 1))
+      fi
     else
       append_drift_row "$drift_file" "$example" "detected_mutants" "$_bd" "$detected" "ok" ""
     fi
 
     if float_lt "$coverage_num" "$base_cov_num"; then
-      append_drift_row "$drift_file" "$example" "coverage_percent" "$base_cov_num" "$coverage_num" "regression" "coverage_decreased"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$drift_file" "$example" "coverage_percent" "$base_cov_num" "$coverage_num" "coverage_decreased"; then
+        regressions=$((regressions + 1))
+      fi
     else
       append_drift_row "$drift_file" "$example" "coverage_percent" "$base_cov_num" "$coverage_num" "ok" ""
     fi
 
     if [[ "$errors" -gt "$_berr" ]]; then
-      append_drift_row "$drift_file" "$example" "errors" "$_berr" "$errors" "regression" "errors_increased"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$drift_file" "$example" "errors" "$_berr" "$errors" "errors_increased"; then
+        regressions=$((regressions + 1))
+      fi
     else
       append_drift_row "$drift_file" "$example" "errors" "$_berr" "$errors" "ok" ""
     fi
 
     if [[ "$relevant" -lt "$_br" ]]; then
-      append_drift_row "$drift_file" "$example" "relevant_mutants" "$_br" "$relevant" "regression" "relevant_decreased"
-      regressions=$((regressions + 1))
+      if ! append_drift_candidate "$drift_file" "$example" "relevant_mutants" "$_br" "$relevant" "relevant_decreased"; then
+        regressions=$((regressions + 1))
+      fi
     else
       append_drift_row "$drift_file" "$example" "relevant_mutants" "$_br" "$relevant" "ok" ""
     fi
@@ -290,6 +359,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_DIFF=1
       shift
       ;;
+    --drift-allowlist-file)
+      DRIFT_ALLOWLIST_FILE="$2"
+      shift 2
+      ;;
     --smoke)
       SMOKE=1
       shift
@@ -346,6 +419,10 @@ if [[ "$UPDATE_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -eq 1 ]]; then
   echo "Use either --update-baseline or --fail-on-diff, not both." >&2
   exit 1
 fi
+if [[ -n "$DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_DIFF" -ne 1 ]]; then
+  echo "--drift-allowlist-file requires --fail-on-diff" >&2
+  exit 1
+fi
 if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
   if [[ ! -f "$BASELINE_FILE" ]]; then
     echo "Baseline file not found: $BASELINE_FILE" >&2
@@ -355,6 +432,17 @@ if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
     echo "Baseline file not readable: $BASELINE_FILE" >&2
     exit 1
   fi
+fi
+if [[ -n "$DRIFT_ALLOWLIST_FILE" ]]; then
+  if [[ ! -f "$DRIFT_ALLOWLIST_FILE" ]]; then
+    echo "Drift allowlist file not found: $DRIFT_ALLOWLIST_FILE" >&2
+    exit 1
+  fi
+  if [[ ! -r "$DRIFT_ALLOWLIST_FILE" ]]; then
+    echo "Drift allowlist file not readable: $DRIFT_ALLOWLIST_FILE" >&2
+    exit 1
+  fi
+  load_drift_allowlist "$DRIFT_ALLOWLIST_FILE"
 fi
 
 if [[ ${#EXAMPLE_IDS[@]} -eq 0 ]]; then
