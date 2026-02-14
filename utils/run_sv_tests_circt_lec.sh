@@ -216,13 +216,17 @@ classify_retryable_launch_failure_reason() {
     echo "too_many_open_files"
     return 0
   fi
+  if [[ -s "$log_file" ]] && grep -Eiq "Cannot allocate memory|ENOMEM" "$log_file"; then
+    echo "cannot_allocate_memory"
+    return 0
+  fi
   echo "retryable_exit_code_${exit_code}"
 }
 
 is_retryable_launch_failure_log() {
   local log_file="$1"
   [[ -s "$log_file" ]] && grep -Eiq \
-    "Text file busy|ETXTBSY|posix_spawn failed|Permission denied|resource temporarily unavailable|stale file handle|ESTALE|too many open files|EMFILE|ENFILE" \
+    "Text file busy|ETXTBSY|posix_spawn failed|Permission denied|resource temporarily unavailable|stale file handle|ESTALE|too many open files|EMFILE|ENFILE|cannot allocate memory|ENOMEM" \
     "$log_file"
 }
 
