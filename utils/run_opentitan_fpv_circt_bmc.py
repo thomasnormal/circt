@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import os
 import re
 import shlex
@@ -44,6 +45,7 @@ class ContractRow:
     files: tuple[str, ...]
     include_dirs: tuple[str, ...]
     defines: tuple[str, ...]
+    contract_fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -170,6 +172,15 @@ def parse_blackbox_modules(raw: str) -> tuple[str, ...]:
     return tuple(modules)
 
 
+def parse_contract_fingerprint(raw: str) -> str:
+    token = raw.strip().lower()
+    if not token:
+        return ""
+    if re.fullmatch(r"[0-9a-f]{8,64}", token):
+        return token
+    return ""
+
+
 ALLOWED_ASSERTION_STATUSES = {
     "PROVEN",
     "FAILING",
@@ -288,6 +299,9 @@ def read_compile_contracts(path: Path) -> list[ContractRow]:
                     (row.get("include_dirs") or "").strip()
                 ),
                 defines=parse_semicolon_list((row.get("defines") or "").strip()),
+                contract_fingerprint=parse_contract_fingerprint(
+                    (row.get("contract_fingerprint") or "").strip()
+                ),
             )
         )
     return out
@@ -1047,6 +1061,24 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--verilog-cache-mode",
+        default=os.environ.get("BMC_OPENTITAN_VERILOG_CACHE_MODE", ""),
+        help=(
+            "Optional OpenTitan runner override for pairwise verilog cache mode: "
+            "off|read|readwrite|auto. Empty (default) preserves inherited pairwise "
+            "cache env vars."
+        ),
+    )
+    parser.add_argument(
+        "--verilog-cache-dir",
+        default=os.environ.get("BMC_OPENTITAN_VERILOG_CACHE_DIR", ""),
+        help=(
+            "Optional base cache directory for --verilog-cache-mode "
+            "read|readwrite|auto. Group-local subdirectories are derived from "
+            "compile-contract fingerprints."
+        ),
+    )
+    parser.add_argument(
         "--workdir",
         default="",
         help="Optional work directory (default: temp directory).",
@@ -1430,6 +1462,22 @@ def main() -> int:
             "invalid --cover-shard-index: "
             f"{cover_shard_index} (expected < {cover_shard_count})"
         )
+    verilog_cache_mode = args.verilog_cache_mode.strip().lower()
+    allowed_verilog_cache_modes = {"", "off", "read", "readwrite", "auto"}
+    if verilog_cache_mode not in allowed_verilog_cache_modes:
+        fail(
+            "invalid --verilog-cache-mode: "
+            f"{args.verilog_cache_mode} (expected off|read|readwrite|auto)"
+        )
+    verilog_cache_base_dir: Path | None = None
+    if verilog_cache_mode in {"read", "readwrite", "auto"}:
+        if args.verilog_cache_dir.strip():
+            verilog_cache_base_dir = Path(args.verilog_cache_dir).expanduser().resolve()
+        else:
+            verilog_cache_base_dir = (
+                Path.home() / ".cache" / "circt-opentitan-fpv-bmc-verilog-cache"
+            )
+        verilog_cache_base_dir.mkdir(parents=True, exist_ok=True)
 
     all_target_names = sorted({row.target_name for row in selected})
     shard_target_names = {
@@ -1484,6 +1532,9 @@ def main() -> int:
 
     pre_rows: list[tuple[str, ...]] = []
     grouped_case_lines: dict[tuple[tuple[str, ...], tuple[str, ...]], list[str]] = {}
+    grouped_contract_fingerprints: dict[
+        tuple[tuple[str, ...], tuple[str, ...]], set[str]
+    ] = {}
 
     def add_contract_error(row: ContractRow, reason: str) -> None:
         case_id = row.target_name
@@ -1574,6 +1625,10 @@ def main() -> int:
                     ]
                 )
             )
+            if row.contract_fingerprint:
+                grouped_contract_fingerprints.setdefault(
+                    (normalized_stopats, row.blackbox_modules), set()
+                ).add(row.contract_fingerprint)
 
     pairwise_runner = Path(__file__).resolve().with_name("run_pairwise_circt_bmc.py")
     if grouped_case_lines and not pairwise_runner.is_file():
@@ -1633,6 +1688,9 @@ def main() -> int:
             for group_index, group_key in enumerate(sorted(grouped_case_lines)):
                 stopat_selectors, blackbox_modules = group_key
                 group_cases = grouped_case_lines[group_key]
+                group_contract_fingerprint_list = sorted(
+                    grouped_contract_fingerprints.get(group_key, set())
+                )
                 group_cases_path = workdir / f"pairwise-cases-{group_index}.tsv"
                 group_results_path = workdir / f"pairwise-results-{group_index}.tsv"
                 group_workdir = workdir / f"pairwise-work-{group_index}"
@@ -1760,6 +1818,37 @@ def main() -> int:
                         f"BMC_PREPARE_CORE_PASSES={shlex.quote(cmd_env['BMC_PREPARE_CORE_PASSES'])}",
                         flush=True,
                     )
+                resolved_group_cache_mode: str | None = None
+                if verilog_cache_mode == "auto":
+                    resolved_group_cache_mode = (
+                        "readwrite"
+                        if group_contract_fingerprint_list
+                        else "off"
+                    )
+                elif verilog_cache_mode:
+                    resolved_group_cache_mode = verilog_cache_mode
+                if resolved_group_cache_mode is not None:
+                    cmd_env["BMC_VERILOG_CACHE_MODE"] = resolved_group_cache_mode
+                    if (
+                        resolved_group_cache_mode in {"read", "readwrite"}
+                        and verilog_cache_base_dir is not None
+                    ):
+                        if len(group_contract_fingerprint_list) == 1:
+                            group_cache_suffix = group_contract_fingerprint_list[0]
+                        else:
+                            group_cache_payload = "\x1f".join(
+                                [
+                                    ",".join(group_contract_fingerprint_list),
+                                    ",".join(stopat_selectors),
+                                    ",".join(blackbox_modules),
+                                ]
+                            ).encode("utf-8")
+                            group_cache_suffix = hashlib.sha256(
+                                group_cache_payload
+                            ).hexdigest()[:16]
+                        group_cache_dir = verilog_cache_base_dir / group_cache_suffix
+                        group_cache_dir.mkdir(parents=True, exist_ok=True)
+                        cmd_env["BMC_VERILOG_CACHE_DIR"] = str(group_cache_dir)
                 pairwise_rc = max(
                     pairwise_rc, subprocess.run(cmd, check=False, env=cmd_env).returncode
                 )
