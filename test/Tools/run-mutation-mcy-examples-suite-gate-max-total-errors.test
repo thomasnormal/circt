@@ -13,6 +13,6 @@
 
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
 
-// GATE: Suite gate failure: errors>1 (detected=2 relevant=4 coverage=50.00 errors=2)
+// GATE: Suite gate failure: errors>1 (detected=2 relevant=4 coverage=50.00 errors=2 retries=0)
 // SUMMARY: bitcnt{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}50.00{{[[:space:]]}}1
 // SUMMARY: picorv32_primes{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}50.00{{[[:space:]]}}1

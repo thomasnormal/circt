@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1356 - February 14, 2026
+
+### Mutation Workflow: Retry-Reason Telemetry and Budget Gates
+
+1. Extended `utils/run_mutation_mcy_examples.sh` retry observability with a
+   per-event artifact:
+   - new output: `<out-dir>/retry-events.tsv`
+   - row schema: `example`, `failed_attempt`, `next_attempt`, `exit_code`,
+     `retry_reason`, `delay_ms`.
+2. Added retry-reason classification for transient launcher failures:
+   - `etxtbsy`
+   - `posix_spawn_failed`
+   - `resource_temporarily_unavailable`
+   - `permission_denied`
+   - fallback exit-code classes: `exit_126`, `exit_127`.
+3. Added suite gate option for reason-specific retry budgets:
+   - `--max-total-retries-by-reason reason=N[,reason=N...]`
+   - gate now fails when any configured retry-reason budget is exceeded.
+4. Improved suite-gate diagnostics to include total retries in the summary
+   failure line.
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-suite-gate-max-total-retries-by-reason.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+     - `test/Tools/run-mutation-mcy-examples-min-total-thresholds-invalid.test`
+     - `test/Tools/run-mutation-mcy-examples-retry-summary-smoke.test`
+     - `test/Tools/run-mutation-mcy-examples-suite-gate-max-total-errors.test`
+     - `test/Tools/run-mutation-mcy-examples-suite-gate-max-total-retries.test`
+     - `test/Tools/run-mutation-mcy-examples-suite-gate-thresholds.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (84 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --max-total-retries-by-reason permission_denied=10,etxtbsy=10 --out-dir /tmp/mcy_examples_smoke_retry_reason` PASS
+
 ## Iteration 1355 - February 14, 2026
 
 ### Mutation Workflow: Retry Summary Artifact and Suite Retry Gate

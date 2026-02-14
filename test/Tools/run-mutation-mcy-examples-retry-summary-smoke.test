@@ -13,10 +13,13 @@
 
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
 // RUN: FileCheck %s --check-prefix=RETRY-SUMMARY < %t/out/retry-summary.tsv
+// RUN: FileCheck %s --check-prefix=RETRY-EVENTS < %t/out/retry-events.tsv
 // RUN: FileCheck %s --check-prefix=STATE < %t/state.txt
 
 // SUMMARY: example{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}detected{{[[:space:]]}}relevant{{[[:space:]]}}coverage_percent{{[[:space:]]}}errors{{[[:space:]]}}policy_fingerprint
 // SUMMARY: bitcnt{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}1{{[[:space:]]}}100.00{{[[:space:]]}}0{{[[:space:]]}}{{[0-9a-f]+}}
 // RETRY-SUMMARY: example{{[[:space:]]}}retry_attempts{{[[:space:]]}}retries_used
 // RETRY-SUMMARY: bitcnt{{[[:space:]]}}2{{[[:space:]]}}1
+// RETRY-EVENTS: example{{[[:space:]]}}failed_attempt{{[[:space:]]}}next_attempt{{[[:space:]]}}exit_code{{[[:space:]]}}retry_reason{{[[:space:]]}}delay_ms
+// RETRY-EVENTS: bitcnt{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}126{{[[:space:]]}}etxtbsy{{[[:space:]]}}0
 // STATE: 2

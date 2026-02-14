@@ -15,6 +15,6 @@
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
 // RUN: FileCheck %s --check-prefix=RETRY-SUMMARY < %t/out/retry-summary.tsv
 
-// GATE: Suite gate failure: retries>0 (detected=1 relevant=1 coverage=100.00 errors=0)
+// GATE: Suite gate failure: retries>0 (detected=1 relevant=1 coverage=100.00 errors=0 retries=1)
 // SUMMARY: bitcnt{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}1{{[[:space:]]}}100.00{{[[:space:]]}}0
 // RETRY-SUMMARY: bitcnt{{[[:space:]]}}2{{[[:space:]]}}1

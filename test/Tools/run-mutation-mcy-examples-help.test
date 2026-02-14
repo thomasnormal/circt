@@ -29,6 +29,7 @@
 // CHECK-DAG: --min-total-coverage-percent
 // CHECK-DAG: --max-total-errors
 // CHECK-DAG: --max-total-retries
+// CHECK-DAG: --max-total-retries-by-reason
 // CHECK-DAG: --baseline-file
 // CHECK-DAG: --update-baseline
 // CHECK-DAG: --allow-update-baseline-on-failure
