@@ -1,0 +1,10 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nmkdir -p "$(dirname "$OUT")"\nprintf "PASS\\tcase_launch\\t/tests/case_launch.sv\\n" > "$OUT"\nif [[ "${EMIT_BMC_LAUNCH_EVENTS:-0}" == "1" ]]; then\n  : "${BMC_LAUNCH_EVENTS_OUT:?}"\n  printf "RETRY\\tcase_launch\\t/tests/case_launch.sv\\tfrontend\\t/fake/circt-verilog\\tretryable_exit_code_126\\t1\\t0.000\\t126\\t\\n" > "$BMC_LAUNCH_EVENTS_OUT"\nfi\necho "sv-tests SVA summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0"\n' > %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-base --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^sv-tests/BMC$' --sv-tests-bmc-tag-regex 'tag_bmc' --sv-tests-bmc-test-filter 'case_launch' --baseline-file %t/formal-baselines.tsv --update-baselines
+// RUN: not sh -c 'cd %t && EMIT_BMC_LAUNCH_EVENTS=1 utils/run_formal_all.sh --out-dir %t/out-new --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/BMC$" --sv-tests-bmc-tag-regex "tag_bmc" --sv-tests-bmc-test-filter "case_launch" --baseline-file %t/formal-baselines.tsv --fail-on-any-bmc-launch-events' 2>&1 | FileCheck %s
+//
+// CHECK: strict gate failures:
+// CHECK: sv-tests BMC: bmc_launch_event_rows must be zero (current=1)

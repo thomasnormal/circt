@@ -398,6 +398,40 @@ Options:
   --fail-on-any-lec-runner-command-cases
                          Fail when any `LEC*` lane reports
                          `lec_runner_command_cases > 0` in the current run
+  --fail-on-any-bmc-launch-events
+                         Fail when any `BMC*` lane reports
+                         `bmc_launch_event_rows > 0` in the current run
+  --fail-on-any-lec-launch-events
+                         Fail when any `LEC*` lane reports
+                         `lec_launch_event_rows > 0` in the current run
+  --max-bmc-launch-event-rows N
+                         Fail when any `BMC*` lane reports
+                         `bmc_launch_event_rows > N` in the current run
+  --max-lec-launch-event-rows N
+                         Fail when any `LEC*` lane reports
+                         `lec_launch_event_rows > N` in the current run
+  --fail-on-new-bmc-launch-reason-keys
+                         Fail when new launch reason keys derived from
+                         `BMC_LAUNCH_EVENTS_OUT` appear vs baseline for any
+                         `BMC*` lane
+  --fail-on-new-lec-launch-reason-keys
+                         Fail when new launch reason keys derived from
+                         `LEC_LAUNCH_EVENTS_OUT` appear vs baseline for any
+                         `LEC*` lane
+  --bmc-launch-reason-key-allowlist-file FILE
+                         Optional allowlist file for BMC launch-reason keys
+                         (normalized token form) in strict-gate filtering.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
+  --lec-launch-reason-key-allowlist-file FILE
+                         Optional allowlist file for LEC launch-reason keys
+                         (normalized token form) in strict-gate filtering.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
   --fail-on-new-bmc-counter KEY
                          Fail when BMC summary counter KEY increases vs baseline
                          for any `BMC*` lane (repeatable)
@@ -2573,6 +2607,14 @@ FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=0
 FAIL_ON_ANY_LEC_DROP_REMARKS=0
 FAIL_ON_ANY_LEC_TIMEOUTS=0
 FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES=0
+FAIL_ON_ANY_BMC_LAUNCH_EVENTS=0
+FAIL_ON_ANY_LEC_LAUNCH_EVENTS=0
+MAX_BMC_LAUNCH_EVENT_ROWS=""
+MAX_LEC_LAUNCH_EVENT_ROWS=""
+FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS=0
+FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS=0
+BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
+LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
 LEC_DROP_REMARK_PATTERN="${LEC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
 declare -a FAIL_ON_NEW_BMC_COUNTER_KEYS=()
 declare -a FAIL_ON_NEW_BMC_COUNTER_PREFIXES=()
@@ -3311,6 +3353,22 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_ANY_LEC_TIMEOUTS=1; shift ;;
     --fail-on-any-lec-runner-command-cases)
       FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES=1; shift ;;
+    --fail-on-any-bmc-launch-events)
+      FAIL_ON_ANY_BMC_LAUNCH_EVENTS=1; shift ;;
+    --fail-on-any-lec-launch-events)
+      FAIL_ON_ANY_LEC_LAUNCH_EVENTS=1; shift ;;
+    --max-bmc-launch-event-rows)
+      MAX_BMC_LAUNCH_EVENT_ROWS="$2"; shift 2 ;;
+    --max-lec-launch-event-rows)
+      MAX_LEC_LAUNCH_EVENT_ROWS="$2"; shift 2 ;;
+    --fail-on-new-bmc-launch-reason-keys)
+      FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS=1; shift ;;
+    --fail-on-new-lec-launch-reason-keys)
+      FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS=1; shift ;;
+    --bmc-launch-reason-key-allowlist-file)
+      BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --lec-launch-reason-key-allowlist-file)
+      LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$2"; shift 2 ;;
     --fail-on-new-bmc-counter)
       FAIL_ON_NEW_BMC_COUNTER_KEYS+=("$2"); shift 2 ;;
     --fail-on-new-bmc-counter-prefix)
@@ -5967,6 +6025,24 @@ if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATIO
   echo "--mutation-gate-status-case-id-allowlist-file requires --fail-on-new-mutation-gate-status-case-ids or --strict-gate" >&2
   exit 1
 fi
+if [[ -n "$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && \
+      "$FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--bmc-launch-reason-key-allowlist-file requires --fail-on-new-bmc-launch-reason-keys or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && \
+      "$FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--lec-launch-reason-key-allowlist-file requires --fail-on-new-lec-launch-reason-keys or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
+  echo "BMC launch reason-key allowlist file not readable: $BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
+  echo "LEC launch reason-key allowlist file not readable: $LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
 if [[ -n "$MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" && "$FAIL_ON_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY" != "1" && "$FAIL_ON_NEW_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--mutation-bmc-contract-fingerprint-parity-allowlist-file requires --fail-on-mutation-bmc-contract-fingerprint-parity, --fail-on-new-mutation-bmc-contract-fingerprint-parity, or --strict-gate" >&2
   exit 1
@@ -6281,6 +6357,17 @@ if [[ "$STRICT_GATE" == "1" ]]; then
       "xprop_assume_known_result_"
     )
   fi
+fi
+
+if [[ -n "$MAX_BMC_LAUNCH_EVENT_ROWS" ]] && \
+   ! [[ "$MAX_BMC_LAUNCH_EVENT_ROWS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --max-bmc-launch-event-rows: $MAX_BMC_LAUNCH_EVENT_ROWS" >&2
+  exit 1
+fi
+if [[ -n "$MAX_LEC_LAUNCH_EVENT_ROWS" ]] && \
+   ! [[ "$MAX_LEC_LAUNCH_EVENT_ROWS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --max-lec-launch-event-rows: $MAX_LEC_LAUNCH_EVENT_ROWS" >&2
+  exit 1
 fi
 
 dedupe_array() {
@@ -8279,6 +8366,7 @@ import hmac
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 report_path = Path(os.environ["EXPECTATIONS_DRY_RUN_REPORT_JSONL"])
@@ -10959,6 +11047,7 @@ summarize_launch_events_file_with_prefix() {
   fi
   BMC_LAUNCH_EVENTS_FILE="$launch_events_file" BMC_LAUNCH_METRICS_PREFIX="$metrics_prefix" python3 - <<'PY'
 import os
+import re
 from pathlib import Path
 
 path = Path(os.environ["BMC_LAUNCH_EVENTS_FILE"])
@@ -10979,6 +11068,19 @@ retryable_exit_events = 0
 etxtbsy_events = 0
 retry_cases = set()
 fallback_cases = set()
+reason_events = {}
+
+def normalize_reason_token(reason: str) -> str:
+    token = (reason or "").strip().lower()
+    if not token:
+        return ""
+    token = re.sub(r"[^a-z0-9]+", "_", token)
+    token = re.sub(r"_+", "_", token).strip("_")
+    if not token:
+        return ""
+    if not token[0].isalpha():
+        token = f"r_{token}"
+    return token
 
 with path.open(encoding="utf-8") as handle:
   for raw in handle:
@@ -10992,6 +11094,9 @@ with path.open(encoding="utf-8") as handle:
     event_kind = (parts[0] if len(parts) > 0 else "").strip().upper()
     case_id = (parts[1] if len(parts) > 1 else "").strip()
     reason = (parts[5] if len(parts) > 5 else "").strip().lower()
+    reason_token = normalize_reason_token(reason)
+    if reason_token:
+      reason_events[reason_token] = reason_events.get(reason_token, 0) + 1
     if event_kind == "RETRY":
       retry_events += 1
       if case_id:
@@ -11005,19 +11110,22 @@ with path.open(encoding="utf-8") as handle:
       if case_id:
         fallback_cases.add(case_id)
 
-print(
-    " ".join(
-        [
-            f"{prefix}_event_rows={total}",
-            f"{prefix}_retry_events={retry_events}",
-            f"{prefix}_retry_cases={len(retry_cases)}",
-            f"{prefix}_retryable_exit_events={retryable_exit_events}",
-            f"{prefix}_etxtbsy_events={etxtbsy_events}",
-            f"{prefix}_fallback_events={fallback_events}",
-            f"{prefix}_fallback_cases={len(fallback_cases)}",
-        ]
+parts = [
+    f"{prefix}_event_rows={total}",
+    f"{prefix}_retry_events={retry_events}",
+    f"{prefix}_retry_cases={len(retry_cases)}",
+    f"{prefix}_retryable_exit_events={retryable_exit_events}",
+    f"{prefix}_etxtbsy_events={etxtbsy_events}",
+    f"{prefix}_fallback_events={fallback_events}",
+    f"{prefix}_fallback_cases={len(fallback_cases)}",
+    f"{prefix}_reason_keys={len(reason_events)}",
+]
+if reason_events:
+    parts.extend(
+        f"{prefix}_reason_{reason_key}_events={reason_events[reason_key]}"
+        for reason_key in sorted(reason_events.keys())
     )
-)
+print(" ".join(parts))
 PY
 }
 
@@ -17971,6 +18079,12 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_ANY_LEC_TIMEOUTS" == "1" || \
       "$FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES" == "1" || \
       "$FAIL_ON_ANY_LEC_DROP_REMARKS" == "1" || \
+      "$FAIL_ON_ANY_BMC_LAUNCH_EVENTS" == "1" || \
+      "$FAIL_ON_ANY_LEC_LAUNCH_EVENTS" == "1" || \
+      -n "$MAX_BMC_LAUNCH_EVENT_ROWS" || \
+      -n "$MAX_LEC_LAUNCH_EVENT_ROWS" || \
+      "$FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS" == "1" || \
+      "$FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS" == "1" || \
       -n "$BMC_COUNTER_KEYS_CSV" || \
       -n "$BMC_COUNTER_PREFIXES_CSV" || \
       -n "$LEC_COUNTER_KEYS_CSV" || \
@@ -18086,6 +18200,14 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_ANY_LEC_TIMEOUTS="$FAIL_ON_ANY_LEC_TIMEOUTS" \
   FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES="$FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES" \
   FAIL_ON_ANY_LEC_DROP_REMARKS="$FAIL_ON_ANY_LEC_DROP_REMARKS" \
+  FAIL_ON_ANY_BMC_LAUNCH_EVENTS="$FAIL_ON_ANY_BMC_LAUNCH_EVENTS" \
+  FAIL_ON_ANY_LEC_LAUNCH_EVENTS="$FAIL_ON_ANY_LEC_LAUNCH_EVENTS" \
+  MAX_BMC_LAUNCH_EVENT_ROWS="$MAX_BMC_LAUNCH_EVENT_ROWS" \
+  MAX_LEC_LAUNCH_EVENT_ROWS="$MAX_LEC_LAUNCH_EVENT_ROWS" \
+  FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS="$FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS" \
+  FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS="$FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS" \
+  BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" \
+  LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" \
   BMC_COUNTER_KEYS="$BMC_COUNTER_KEYS_CSV" \
   BMC_COUNTER_PREFIXES="$BMC_COUNTER_PREFIXES_CSV" \
   LEC_COUNTER_KEYS="$LEC_COUNTER_KEYS_CSV" \
@@ -18261,8 +18383,20 @@ def classify_gate_rule_id(suite: str, mode: str, detail: str):
 
     if detail.startswith("bmc_drop_remark_cases must be zero"):
         return "strict_gate.bmc.drop_remarks.nonzero"
+    if detail.startswith("bmc_launch_event_rows must be zero"):
+        return "strict_gate.bmc.launch.event_rows.nonzero"
+    if detail.startswith("bmc_launch_event_rows exceeds max"):
+        return "strict_gate.bmc.launch.event_rows.max_exceeded"
+    if detail.startswith("new BMC launch reason keys observed"):
+        return "strict_gate.bmc.launch.reason_keys.new"
     if detail.startswith("lec_drop_remark_cases must be zero"):
         return "strict_gate.lec.drop_remarks.nonzero"
+    if detail.startswith("lec_launch_event_rows must be zero"):
+        return "strict_gate.lec.launch.event_rows.nonzero"
+    if detail.startswith("lec_launch_event_rows exceeds max"):
+        return "strict_gate.lec.launch.event_rows.max_exceeded"
+    if detail.startswith("new LEC launch reason keys observed"):
+        return "strict_gate.lec.launch.reason_keys.new"
     if detail.startswith("bmc_drop_remark_cases increased"):
         return "strict_gate.bmc.drop_remarks.regression"
     if detail.startswith("lec_drop_remark_cases increased"):
@@ -18438,6 +18572,12 @@ mutation_lec_contract_fingerprint_lane_parity_allow_regex = []
 mutation_bmc_contract_fingerprint_parity_allow_exact = set()
 mutation_bmc_contract_fingerprint_parity_allow_prefix = []
 mutation_bmc_contract_fingerprint_parity_allow_regex = []
+bmc_launch_reason_key_allow_exact = set()
+bmc_launch_reason_key_allow_prefix = []
+bmc_launch_reason_key_allow_regex = []
+lec_launch_reason_key_allow_exact = set()
+lec_launch_reason_key_allow_prefix = []
+lec_launch_reason_key_allow_regex = []
 
 def load_strict_gate_rule_id_allowlist():
     global strict_gate_rule_id_allow_exact
@@ -18517,6 +18657,66 @@ def token_matches_allowlist(token: str, allow_exact, allow_prefix, allow_regex) 
         if pattern.search(token):
             return True
     return False
+
+def bmc_launch_reason_from_counter_key(counter_key: str):
+    prefix = "bmc_launch_reason_"
+    suffix = "_events"
+    if not (counter_key.startswith(prefix) and counter_key.endswith(suffix)):
+        return ""
+    return counter_key[len(prefix):-len(suffix)]
+
+def lec_launch_reason_from_counter_key(counter_key: str):
+    prefix = "lec_launch_reason_"
+    suffix = "_events"
+    if not (counter_key.startswith(prefix) and counter_key.endswith(suffix)):
+        return ""
+    return counter_key[len(prefix):-len(suffix)]
+
+def load_bmc_launch_reason_key_allowlist():
+    global bmc_launch_reason_key_allow_exact
+    global bmc_launch_reason_key_allow_prefix
+    global bmc_launch_reason_key_allow_regex
+    (
+        bmc_launch_reason_key_allow_exact,
+        bmc_launch_reason_key_allow_prefix,
+        bmc_launch_reason_key_allow_regex,
+    ) = load_pattern_allowlist(
+        bmc_launch_reason_key_allowlist_file,
+        "BMC launch reason-key allowlist",
+    )
+
+def is_allowed_bmc_launch_reason_key(reason_key: str) -> bool:
+    if not bmc_launch_reason_key_allowlist_file:
+        return False
+    return token_matches_allowlist(
+        reason_key,
+        bmc_launch_reason_key_allow_exact,
+        bmc_launch_reason_key_allow_prefix,
+        bmc_launch_reason_key_allow_regex,
+    )
+
+def load_lec_launch_reason_key_allowlist():
+    global lec_launch_reason_key_allow_exact
+    global lec_launch_reason_key_allow_prefix
+    global lec_launch_reason_key_allow_regex
+    (
+        lec_launch_reason_key_allow_exact,
+        lec_launch_reason_key_allow_prefix,
+        lec_launch_reason_key_allow_regex,
+    ) = load_pattern_allowlist(
+        lec_launch_reason_key_allowlist_file,
+        "LEC launch reason-key allowlist",
+    )
+
+def is_allowed_lec_launch_reason_key(reason_key: str) -> bool:
+    if not lec_launch_reason_key_allowlist_file:
+        return False
+    return token_matches_allowlist(
+        reason_key,
+        lec_launch_reason_key_allow_exact,
+        lec_launch_reason_key_allow_prefix,
+        lec_launch_reason_key_allow_regex,
+    )
 
 
 def load_mutation_lec_contract_fingerprint_lane_map():
@@ -20608,6 +20808,32 @@ fail_on_any_lec_runner_command_cases = (
 fail_on_any_lec_drop_remarks = (
     os.environ.get("FAIL_ON_ANY_LEC_DROP_REMARKS", "0") == "1"
 )
+fail_on_any_bmc_launch_events = (
+    os.environ.get("FAIL_ON_ANY_BMC_LAUNCH_EVENTS", "0") == "1"
+)
+fail_on_any_lec_launch_events = (
+    os.environ.get("FAIL_ON_ANY_LEC_LAUNCH_EVENTS", "0") == "1"
+)
+max_bmc_launch_event_rows_raw = os.environ.get("MAX_BMC_LAUNCH_EVENT_ROWS", "").strip()
+max_lec_launch_event_rows_raw = os.environ.get("MAX_LEC_LAUNCH_EVENT_ROWS", "").strip()
+max_bmc_launch_event_rows = (
+    int(max_bmc_launch_event_rows_raw) if max_bmc_launch_event_rows_raw else -1
+)
+max_lec_launch_event_rows = (
+    int(max_lec_launch_event_rows_raw) if max_lec_launch_event_rows_raw else -1
+)
+fail_on_new_bmc_launch_reason_keys = (
+    os.environ.get("FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS", "0") == "1"
+)
+fail_on_new_lec_launch_reason_keys = (
+    os.environ.get("FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS", "0") == "1"
+)
+bmc_launch_reason_key_allowlist_file = os.environ.get(
+    "BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE", ""
+).strip()
+lec_launch_reason_key_allowlist_file = os.environ.get(
+    "LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE", ""
+).strip()
 bmc_counter_keys = sorted(
     {
         token.strip()
@@ -20757,6 +20983,8 @@ def is_allowed_bmc_abstraction_provenance_token(token: str) -> bool:
     )
 
 load_strict_gate_rule_id_allowlist()
+load_bmc_launch_reason_key_allowlist()
+load_lec_launch_reason_key_allowlist()
 (
     bmc_lec_contract_fingerprint_case_id_map_exact,
     bmc_lec_contract_fingerprint_case_id_map_prefix_rules,
@@ -21482,6 +21710,9 @@ for key, current_row in summary.items():
                 )
     if mode.startswith("BMC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
+        current_launch_event_rows = int(
+            current_counts.get("bmc_launch_event_rows", 0)
+        )
         current_drop_remark = int(
             current_counts.get(
                 "bmc_drop_remark_cases",
@@ -21509,6 +21740,72 @@ for key, current_row in summary.items():
             gate_errors.append(
                 f"{suite} {mode}: bmc_drop_remark_cases must be zero (current={current_drop_remark})"
             )
+        if fail_on_any_bmc_launch_events and current_launch_event_rows > 0:
+            gate_errors.add(
+                suite,
+                mode,
+                f"bmc_launch_event_rows must be zero (current={current_launch_event_rows})",
+                rule_id="strict_gate.bmc.launch.event_rows.nonzero",
+            )
+        if (
+            max_bmc_launch_event_rows >= 0
+            and current_launch_event_rows > max_bmc_launch_event_rows
+        ):
+            gate_errors.add(
+                suite,
+                mode,
+                (
+                    "bmc_launch_event_rows exceeds max "
+                    f"(max={max_bmc_launch_event_rows}, current={current_launch_event_rows})"
+                ),
+                rule_id="strict_gate.bmc.launch.event_rows.max_exceeded",
+            )
+        if fail_on_new_bmc_launch_reason_keys:
+            baseline_reason_keys = set()
+            for counts in parsed_counts:
+                for counter_key in counts.keys():
+                    reason_key = bmc_launch_reason_from_counter_key(counter_key)
+                    if reason_key:
+                        baseline_reason_keys.add(reason_key)
+            should_enforce_launch_reason_key_drift = (
+                bool(baseline_reason_keys) or not strict_gate
+            )
+            if should_enforce_launch_reason_key_drift:
+                current_reason_keys = set()
+                for counter_key in current_counts.keys():
+                    reason_key = bmc_launch_reason_from_counter_key(counter_key)
+                    if reason_key:
+                        current_reason_keys.add(reason_key)
+                raw_new_reason_keys = sorted(current_reason_keys - baseline_reason_keys)
+                if bmc_launch_reason_key_allowlist_file:
+                    new_reason_keys = [
+                        reason_key
+                        for reason_key in raw_new_reason_keys
+                        if not is_allowed_bmc_launch_reason_key(reason_key)
+                    ]
+                else:
+                    new_reason_keys = raw_new_reason_keys
+                if new_reason_keys:
+                    sample = ", ".join(new_reason_keys[:3])
+                    if len(new_reason_keys) > 3:
+                        sample += ", ..."
+                    allowlisted = len(raw_new_reason_keys) - len(new_reason_keys)
+                    allowlisted_suffix = (
+                        f", allowlisted={allowlisted}"
+                        if allowlisted > 0
+                        else ""
+                    )
+                    gate_errors.add(
+                        suite,
+                        mode,
+                        (
+                            "new BMC launch reason keys observed "
+                            f"(baseline={len(baseline_reason_keys)} "
+                            f"current={len(current_reason_keys)}{allowlisted_suffix}, "
+                            f"window={baseline_window}): {sample}"
+                        ),
+                        rule_id="strict_gate.bmc.launch.reason_keys.new",
+                    )
         if fail_on_new_bmc_timeout_cases:
             baseline_timeout_values = []
             for counts in parsed_counts:
@@ -21773,6 +22070,9 @@ for key, current_row in summary.items():
                     )
     if mode.startswith("LEC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
+        current_launch_event_rows = int(
+            current_counts.get("lec_launch_event_rows", 0)
+        )
         current_timeout = int(
             current_counts.get(
                 "lec_timeout_cases",
@@ -21832,6 +22132,72 @@ for key, current_row in summary.items():
             gate_errors.append(
                 f"{suite} {mode}: lec_runner_command_cases must be zero (current={current_runner_command_cases})"
             )
+        if fail_on_any_lec_launch_events and current_launch_event_rows > 0:
+            gate_errors.add(
+                suite,
+                mode,
+                f"lec_launch_event_rows must be zero (current={current_launch_event_rows})",
+                rule_id="strict_gate.lec.launch.event_rows.nonzero",
+            )
+        if (
+            max_lec_launch_event_rows >= 0
+            and current_launch_event_rows > max_lec_launch_event_rows
+        ):
+            gate_errors.add(
+                suite,
+                mode,
+                (
+                    "lec_launch_event_rows exceeds max "
+                    f"(max={max_lec_launch_event_rows}, current={current_launch_event_rows})"
+                ),
+                rule_id="strict_gate.lec.launch.event_rows.max_exceeded",
+            )
+        if fail_on_new_lec_launch_reason_keys:
+            baseline_reason_keys = set()
+            for counts in parsed_counts:
+                for counter_key in counts.keys():
+                    reason_key = lec_launch_reason_from_counter_key(counter_key)
+                    if reason_key:
+                        baseline_reason_keys.add(reason_key)
+            should_enforce_launch_reason_key_drift = (
+                bool(baseline_reason_keys) or not strict_gate
+            )
+            if should_enforce_launch_reason_key_drift:
+                current_reason_keys = set()
+                for counter_key in current_counts.keys():
+                    reason_key = lec_launch_reason_from_counter_key(counter_key)
+                    if reason_key:
+                        current_reason_keys.add(reason_key)
+                raw_new_reason_keys = sorted(current_reason_keys - baseline_reason_keys)
+                if lec_launch_reason_key_allowlist_file:
+                    new_reason_keys = [
+                        reason_key
+                        for reason_key in raw_new_reason_keys
+                        if not is_allowed_lec_launch_reason_key(reason_key)
+                    ]
+                else:
+                    new_reason_keys = raw_new_reason_keys
+                if new_reason_keys:
+                    sample = ", ".join(new_reason_keys[:3])
+                    if len(new_reason_keys) > 3:
+                        sample += ", ..."
+                    allowlisted = len(raw_new_reason_keys) - len(new_reason_keys)
+                    allowlisted_suffix = (
+                        f", allowlisted={allowlisted}"
+                        if allowlisted > 0
+                        else ""
+                    )
+                    gate_errors.add(
+                        suite,
+                        mode,
+                        (
+                            "new LEC launch reason keys observed "
+                            f"(baseline={len(baseline_reason_keys)} "
+                            f"current={len(current_reason_keys)}{allowlisted_suffix}, "
+                            f"window={baseline_window}): {sample}"
+                        ),
+                        rule_id="strict_gate.lec.launch.reason_keys.new",
+                    )
         if fail_on_new_lec_drop_remark_cases:
             baseline_drop_remark_values = []
             for counts in parsed_counts:
@@ -22156,6 +22522,12 @@ for key, current_row in summary.items():
                         if key.startswith(counter_prefix):
                             candidate_keys.add(key)
                 for counter_key in sorted(candidate_keys):
+                    launch_reason_key = lec_launch_reason_from_counter_key(counter_key)
+                    if (
+                        launch_reason_key
+                        and is_allowed_lec_launch_reason_key(launch_reason_key)
+                    ):
+                        continue
                     baseline_counter = min(
                         int(counts.get(counter_key, 0)) for counts in parsed_counts
                     )
@@ -22236,6 +22608,12 @@ for key, current_row in summary.items():
                         if key.startswith(counter_prefix):
                             candidate_keys.add(key)
                 for counter_key in sorted(candidate_keys):
+                    launch_reason_key = bmc_launch_reason_from_counter_key(counter_key)
+                    if (
+                        launch_reason_key
+                        and is_allowed_bmc_launch_reason_key(launch_reason_key)
+                    ):
+                        continue
                     baseline_counter = min(
                         int(counts.get(counter_key, 0)) for counts in parsed_counts
                     )

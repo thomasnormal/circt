@@ -66,6 +66,26 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 Historical note: prior `### Formal Closure Snapshot Update (...)` entries were
 migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
 
+### Milestone Progress Update (February 14, 2026)
+
+1. Launch-telemetry strict governance completed for formal lanes:
+   - absolute launch event limits (`--fail-on-any-{bmc,lec}-launch-events`)
+   - bounded launch event limits (`--max-{bmc,lec}-launch-event-rows`)
+   - launch reason-key drift checks
+     (`--fail-on-new-{bmc,lec}-launch-reason-keys`)
+2. Launch reason-key allowlist support is now first-class and strict-gate aware:
+   - `--{bmc,lec}-launch-reason-key-allowlist-file`
+   - allowlisted reason keys no longer cause strict-gate prefix drift on
+     dynamic `*_launch_reason_*_events` counters.
+3. Remaining launch-governance gap:
+   - no dedicated baseline sidecar artifact yet for launch reason taxonomy
+     ownership across repos (currently baseline TSV + optional allowlist file).
+4. Next formal milestone (OpenTitan-aligned, backend-generic):
+   - start adapter workstream step 1 deliverable:
+     deterministic OpenTitan FPV HJSON target-manifest export with
+     `--select-cfgs` parity (`ip`, `prim`, `sec_cm`) and strict-gate drift
+     checks on selected-target metadata.
+
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
 #### Goal

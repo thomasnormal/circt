@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1367 - February 14, 2026
+
+### Formal Strict Gate: Launch-Event Absolute Policies + Reason-Key Allowlisting
+
+1. Completed launch-event strict-gate policy enforcement in
+   `utils/run_formal_all.sh`:
+   - absolute zero gates:
+     - `--fail-on-any-bmc-launch-events`
+     - `--fail-on-any-lec-launch-events`
+   - bounded row gates:
+     - `--max-bmc-launch-event-rows`
+     - `--max-lec-launch-event-rows`
+   - new reason-key drift gates:
+     - `--fail-on-new-bmc-launch-reason-keys`
+     - `--fail-on-new-lec-launch-reason-keys`
+2. Added launch reason-key allowlists:
+   - `--bmc-launch-reason-key-allowlist-file`
+   - `--lec-launch-reason-key-allowlist-file`
+   - allowlist entries support `exact:`, `prefix:`, and `regex:`.
+3. Hardened strict-gate prefix behavior:
+   - strict default launch counter-prefix checks (`bmc_launch_`, `lec_launch_`)
+     now bypass allowlisted dynamic launch reason counters
+     (`*_launch_reason_*_events`), preventing false churn when reason keys are
+     intentionally permitted.
+4. Added rule-id coverage for new launch-policy diagnostics:
+   - launch event nonzero
+   - launch event max exceeded
+   - new launch reason keys.
+5. Added focused regressions:
+   - `test/Tools/run-formal-all-launch-reason-key-allowlists-require-gate.test`
+   - `test/Tools/run-formal-all-strict-gate-bmc-launch-events-any.test`
+   - `test/Tools/run-formal-all-strict-gate-bmc-launch-events-max-rows.test`
+   - `test/Tools/run-formal-all-strict-gate-bmc-launch-reason-allowlist-prefix-bypass.test`
+   - `test/Tools/run-formal-all-strict-gate-bmc-launch-reason-keys.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-launch-events-any-max.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-launch-reason-keys.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-launch-reason-key-allowlists-require-gate.test build-test/test/Tools/run-formal-all-strict-gate-bmc-launch-events-any.test build-test/test/Tools/run-formal-all-strict-gate-bmc-launch-events-max-rows.test build-test/test/Tools/run-formal-all-strict-gate-bmc-launch-reason-allowlist-prefix-bypass.test build-test/test/Tools/run-formal-all-strict-gate-bmc-launch-reason-keys.test build-test/test/Tools/run-formal-all-strict-gate-lec-launch-events-any-max.test build-test/test/Tools/run-formal-all-strict-gate-lec-launch-reason-keys.test build-test/test/Tools/run-formal-all-strict-gate-bmc-launch-counters-defaults.test build-test/test/Tools/run-formal-all-strict-gate-lec-launch-counters-defaults.test` PASS (9/9)
+
 ## Iteration 1366 - February 14, 2026
 
 ### Mutation Workflow: Strict Retry-Reason Schema Artifact Validity Governance
