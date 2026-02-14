@@ -1,0 +1,7 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/hw/top_earlgrey/formal/conn_csvs
+// RUN: printf '{\n  "name": "chip_earlgrey_asic",\n  "fusesoc_core": "lowrisc:systems:chip_earlgrey_asic:0.1",\n  "conn_csvs_dir": "{proj_root}/hw/top_earlgrey/formal/conn_csvs",\n  "conn_csvs": ["{conn_csvs_dir}/bad.csv"]\n}\n' > %t/chip_conn_cfg.hjson
+// RUN: printf ',NAME,SRC BLOCK,SRC SIGNAL,DEST BLOCK,DEST SIGNAL\nBROKEN, BAD_ROW, top.a, sig_a, top.b, sig_b\n' > %t/hw/top_earlgrey/formal/conn_csvs/bad.csv
+// RUN: not python3 %S/../../utils/select_opentitan_connectivity_cfg.py --cfg-file %t/chip_conn_cfg.hjson --proj-root %t --out-target-manifest %t/target.tsv --out-rules-manifest %t/rules.tsv 2>&1 | FileCheck %s
+//
+// CHECK: unsupported connectivity CSV row kind 'BROKEN'

@@ -912,6 +912,9 @@ Options:
   --with-opentitan-fpv-bmc
                          Run OpenTitan FPV BMC lane from selected FPV compile
                          contracts (`opentitan/FPV_BMC`)
+  --with-opentitan-connectivity-parse
+                         Parse OpenTitan connectivity cfg+CSV artifacts into
+                         normalized manifests (`opentitan/CONNECTIVITY_PARSE`)
   --with-opentitan-lec-strict
                          Run strict OpenTitan LEC lane (LEC_X_OPTIMISTIC=0)
                          and synthesize `opentitan/LEC_MODE_DIFF` when
@@ -932,6 +935,18 @@ Options:
   --opentitan-fpv-cfg FILE
                          Optional OpenTitan FPV cfg HJSON for target-manifest
                          selection planning
+  --opentitan-connectivity-cfg FILE
+                         Optional OpenTitan connectivity cfg HJSON
+                         (e.g. chip_conn_cfg.hjson) for connectivity-manifest
+                         planning
+  --opentitan-connectivity-target-manifest FILE
+                         Optional output path for OpenTitan connectivity target
+                         manifest TSV (default:
+                         OUT_DIR/opentitan-connectivity-target-manifest.tsv)
+  --opentitan-connectivity-rules-manifest FILE
+                         Optional output path for OpenTitan connectivity rules
+                         manifest TSV (default:
+                         OUT_DIR/opentitan-connectivity-rules-manifest.tsv)
   --opentitan-fpv-target-filter REGEX
                          Regex filter for OpenTitan FPV target names in
                          `opentitan/FPV_BMC` execution (in addition to
@@ -2630,6 +2645,7 @@ WITH_OPENTITAN=0
 WITH_OPENTITAN_BMC=0
 WITH_OPENTITAN_BMC_STRICT=0
 WITH_OPENTITAN_FPV_BMC=0
+WITH_OPENTITAN_CONNECTIVITY_PARSE=0
 WITH_OPENTITAN_LEC_STRICT=0
 WITH_OPENTITAN_E2E=0
 WITH_OPENTITAN_E2E_STRICT=0
@@ -2642,6 +2658,9 @@ OPENTITAN_BMC_INCLUDE_MASKED=0
 OPENTITAN_BMC_CASE_POLICY_FILE=""
 OPENTITAN_FPV_CFG_FILE=""
 OPENTITAN_FPV_TARGET_FILTER=""
+OPENTITAN_CONNECTIVITY_CFG_FILE=""
+OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE=""
+OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE=""
 OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT="1"
 OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX="0"
 OPENTITAN_FPV_BMC_CASE_SHARD_COUNT="1"
@@ -2732,6 +2751,8 @@ while [[ $# -gt 0 ]]; do
       WITH_OPENTITAN_BMC_STRICT=1; shift ;;
     --with-opentitan-fpv-bmc)
       WITH_OPENTITAN_FPV_BMC=1; shift ;;
+    --with-opentitan-connectivity-parse)
+      WITH_OPENTITAN_CONNECTIVITY_PARSE=1; shift ;;
     --with-opentitan-lec-strict)
       WITH_OPENTITAN_LEC_STRICT=1; shift ;;
     --with-opentitan-e2e)
@@ -2752,6 +2773,12 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_BMC_CASE_POLICY_FILE="$2"; shift 2 ;;
     --opentitan-fpv-cfg)
       OPENTITAN_FPV_CFG_FILE="$2"; shift 2 ;;
+    --opentitan-connectivity-cfg)
+      OPENTITAN_CONNECTIVITY_CFG_FILE="$2"; shift 2 ;;
+    --opentitan-connectivity-target-manifest)
+      OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE="$2"; shift 2 ;;
+    --opentitan-connectivity-rules-manifest)
+      OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE="$2"; shift 2 ;;
     --opentitan-fpv-target-filter)
       OPENTITAN_FPV_TARGET_FILTER="$2"; shift 2 ;;
     --opentitan-fpv-bmc-target-shard-count)
@@ -3410,6 +3437,12 @@ fi
 if [[ -n "$OPENTITAN_FPV_CFG_FILE" && -z "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE" ]]; then
   OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE="$OUT_DIR/opentitan-fpv-compile-contract-drift.tsv"
 fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_CFG_FILE" && -z "$OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE" ]]; then
+  OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE="$OUT_DIR/opentitan-connectivity-target-manifest.tsv"
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_CFG_FILE" && -z "$OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE" ]]; then
+  OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE="$OUT_DIR/opentitan-connectivity-rules-manifest.tsv"
+fi
 if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && -z "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE" ]]; then
   OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE="$OUT_DIR/opentitan-fpv-bmc-fpv-summary-drift.tsv"
 fi
@@ -3681,8 +3714,24 @@ if [[ -n "$OPENTITAN_FPV_CFG_FILE" && ! -f "$OPENTITAN_FPV_CFG_FILE" ]]; then
   echo "missing --opentitan-fpv-cfg file: $OPENTITAN_FPV_CFG_FILE" >&2
   exit 1
 fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_CFG_FILE" && ! -f "$OPENTITAN_CONNECTIVITY_CFG_FILE" ]]; then
+  echo "missing --opentitan-connectivity-cfg file: $OPENTITAN_CONNECTIVITY_CFG_FILE" >&2
+  exit 1
+fi
 if [[ "${#OPENTITAN_SELECT_CFGS[@]}" -gt 0 && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
   echo "--select-cfgs requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ "$WITH_OPENTITAN_CONNECTIVITY_PARSE" == "1" && -z "$OPENTITAN_CONNECTIVITY_CFG_FILE" ]]; then
+  echo "--with-opentitan-connectivity-parse requires --opentitan-connectivity-cfg" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE" && -z "$OPENTITAN_CONNECTIVITY_CFG_FILE" ]]; then
+  echo "--opentitan-connectivity-target-manifest requires --opentitan-connectivity-cfg" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE" && -z "$OPENTITAN_CONNECTIVITY_CFG_FILE" ]]; then
+  echo "--opentitan-connectivity-rules-manifest requires --opentitan-connectivity-cfg" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
@@ -7643,6 +7692,14 @@ if [[ -n "$OPENTITAN_FPV_CFG_FILE" ]]; then
   fi
 fi
 
+if [[ -n "$OPENTITAN_CONNECTIVITY_CFG_FILE" ]]; then
+  python3 "$SCRIPT_DIR/select_opentitan_connectivity_cfg.py" \
+    --cfg-file "$OPENTITAN_CONNECTIVITY_CFG_FILE" \
+    --proj-root "$OPENTITAN_DIR" \
+    --out-target-manifest "$OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE" \
+    --out-rules-manifest "$OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE"
+fi
+
 emit_expectations_dry_run_run_end() {
   local exit_code="$?"
   if [[ "$EXPECTATIONS_DRY_RUN" == "1" && -n "$EXPECTATIONS_DRY_RUN_REPORT_JSONL" ]]; then
@@ -7775,6 +7832,7 @@ compute_lane_state_config_hash() {
     printf "with_opentitan_bmc=%s\n" "$WITH_OPENTITAN_BMC"
     printf "with_opentitan_lec_strict=%s\n" "$WITH_OPENTITAN_LEC_STRICT"
     printf "with_opentitan_fpv_bmc=%s\n" "$WITH_OPENTITAN_FPV_BMC"
+    printf "with_opentitan_connectivity_parse=%s\n" "$WITH_OPENTITAN_CONNECTIVITY_PARSE"
     printf "with_opentitan_e2e=%s\n" "$WITH_OPENTITAN_E2E"
     printf "with_opentitan_e2e_strict=%s\n" "$WITH_OPENTITAN_E2E_STRICT"
     printf "with_sv_tests_uvm_bmc_semantics=%s\n" "$WITH_SV_TESTS_UVM_BMC_SEMANTICS"
@@ -7798,6 +7856,9 @@ compute_lane_state_config_hash() {
     printf "opentitan_bmc_include_masked=%s\n" "$OPENTITAN_BMC_INCLUDE_MASKED"
     printf "opentitan_bmc_case_policy_file=%s\n" "$OPENTITAN_BMC_CASE_POLICY_FILE"
     printf "opentitan_fpv_cfg_file=%s\n" "$OPENTITAN_FPV_CFG_FILE"
+    printf "opentitan_connectivity_cfg_file=%s\n" "$OPENTITAN_CONNECTIVITY_CFG_FILE"
+    printf "opentitan_connectivity_target_manifest_file=%s\n" "$OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE"
+    printf "opentitan_connectivity_rules_manifest_file=%s\n" "$OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE"
     printf "opentitan_fpv_target_filter=%s\n" "$OPENTITAN_FPV_TARGET_FILTER"
     printf "opentitan_fpv_bmc_target_shard_count=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT"
     printf "opentitan_fpv_bmc_target_shard_index=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
@@ -8819,6 +8880,7 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   need_yosys_lec_runner=0
   need_opentitan_bmc_runner=0
   need_opentitan_fpv_bmc_runner=0
+  need_opentitan_connectivity_parser=0
   need_opentitan_lec_runner=0
   need_opentitan_e2e_runner=0
   need_avip_runner=0
@@ -8872,6 +8934,9 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]] && lane_enabled "opentitan/FPV_BMC"; then
     need_opentitan_bmc_lanes=1
     need_opentitan_fpv_bmc_runner=1
+  fi
+  if [[ "$WITH_OPENTITAN_CONNECTIVITY_PARSE" == "1" ]] && lane_enabled "opentitan/CONNECTIVITY_PARSE"; then
+    need_opentitan_connectivity_parser=1
   fi
 
   if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
@@ -8965,6 +9030,9 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   fi
   if [[ "$need_opentitan_fpv_bmc_runner" == "1" ]]; then
     require_executable_tool "OpenTitan FPV BMC runner" "utils/run_opentitan_fpv_circt_bmc.py"
+  fi
+  if [[ "$need_opentitan_connectivity_parser" == "1" ]]; then
+    require_executable_tool "OpenTitan connectivity parser" "utils/select_opentitan_connectivity_cfg.py"
   fi
   if [[ "$need_opentitan_lec_runner" == "1" ]]; then
     require_executable_tool "OpenTitan LEC runner" "utils/run_opentitan_circt_lec.py"
@@ -11669,6 +11737,124 @@ PY
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
 }
 
+run_opentitan_connectivity_parse_lane() {
+  local lane_id="$1"
+  local mode_name="$2"
+  local suite_name="$3"
+  local case_results="$4"
+  local target_manifest="$5"
+  local rules_manifest="$6"
+
+  if ! lane_enabled "$lane_id"; then
+    return
+  fi
+  if lane_resume_from_state "$lane_id"; then
+    return
+  fi
+
+  : > "$case_results"
+
+  if [[ ! -s "$target_manifest" || ! -s "$rules_manifest" ]]; then
+    printf "ERROR\tconnectivity_manifest\tmissing_manifest\topentitan\t%s\tCONNECTIVITY_PARSE_ERROR\tmissing_manifest\n" "$mode_name" > "$case_results"
+    local total=1
+    local pass=0
+    local fail=0
+    local xfail=0
+    local xpass=0
+    local error=1
+    local skip=0
+    local summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_manifest=1"
+    append_filtered_min_total_violation total summary
+    maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
+    record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
+    return
+  fi
+
+  local connectivity_counts
+  set +e
+  connectivity_counts="$(
+    OPENTITAN_CONNECTIVITY_TARGET_MANIFEST="$target_manifest" \
+    OPENTITAN_CONNECTIVITY_RULES_MANIFEST="$rules_manifest" \
+    python3 - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+target_path = Path(os.environ["OPENTITAN_CONNECTIVITY_TARGET_MANIFEST"])
+rules_path = Path(os.environ["OPENTITAN_CONNECTIVITY_RULES_MANIFEST"])
+
+if not target_path.is_file():
+  raise SystemExit(f"missing connectivity target manifest: {target_path}")
+if not rules_path.is_file():
+  raise SystemExit(f"missing connectivity rules manifest: {rules_path}")
+
+with target_path.open() as f:
+  target_reader = csv.DictReader(f, delimiter="\t")
+  target_rows = list(target_reader)
+if not target_rows:
+  raise SystemExit(f"empty connectivity target manifest rows: {target_path}")
+target_count = len(target_rows)
+
+with rules_path.open() as f:
+  rule_reader = csv.DictReader(f, delimiter="\t")
+  rule_rows = list(rule_reader)
+
+rule_count = len(rule_rows)
+connection_count = 0
+condition_count = 0
+for row in rule_rows:
+  rule_type = (row.get("rule_type", "") or "").strip().upper()
+  if rule_type == "CONNECTION":
+    connection_count += 1
+  elif rule_type == "CONDITION":
+    condition_count += 1
+  else:
+    raise SystemExit(
+      f"unsupported rule_type '{rule_type}' in connectivity rules manifest: {rules_path}"
+    )
+
+print(
+    f"{target_count}\t{rule_count}\t{connection_count}\t{condition_count}"
+)
+PY
+  )"
+  connectivity_ec="$?"
+  set -e
+
+  if [[ "$connectivity_ec" != "0" ]]; then
+    printf "ERROR\tconnectivity_manifest\tinvalid_manifest\topentitan\t%s\tCONNECTIVITY_PARSE_ERROR\tinvalid_manifest\n" "$mode_name" > "$case_results"
+    local total=1
+    local pass=0
+    local fail=0
+    local xfail=0
+    local xpass=0
+    local error=1
+    local skip=0
+    local summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 invalid_manifest=1"
+    append_filtered_min_total_violation total summary
+    maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
+    record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
+    return
+  fi
+
+  local target_count rule_count connection_count condition_count
+  IFS=$'\t' read -r target_count rule_count connection_count condition_count <<< "$connectivity_counts"
+  printf "PASS\tconnectivity_manifest\t%s\topentitan\t%s\tCONN_PARSED\n" "$rules_manifest" "$mode_name" > "$case_results"
+
+  local total=1
+  local pass=1
+  local fail=0
+  local xfail=0
+  local xpass=0
+  local error=0
+  local skip=0
+  local summary
+  summary="total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 target_count=${target_count} rule_count=${rule_count} connection_count=${connection_count} condition_count=${condition_count}"
+  append_filtered_min_total_violation total summary
+  maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
+  record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
+}
+
 run_opentitan_fpv_bmc_lane() {
   local lane_id="$1"
   local mode_name="$2"
@@ -11865,6 +12051,17 @@ PY
   maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
 }
+
+# OpenTitan connectivity parsing lane (optional)
+if [[ "$WITH_OPENTITAN_CONNECTIVITY_PARSE" == "1" ]]; then
+  run_opentitan_connectivity_parse_lane \
+    "opentitan/CONNECTIVITY_PARSE" \
+    "CONNECTIVITY_PARSE" \
+    "opentitan-connectivity-parse" \
+    "$OUT_DIR/opentitan-connectivity-parse-results.txt" \
+    "$OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE" \
+    "$OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE"
+fi
 
 # OpenTitan BMC (optional)
 if [[ "$WITH_OPENTITAN_BMC" == "1" ]]; then

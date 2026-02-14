@@ -1,0 +1,22 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal/conn_csvs
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: cp %S/../../utils/select_opentitan_connectivity_cfg.py %t/utils/select_opentitan_connectivity_cfg.py
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '{\n  "name": "chip_earlgrey_asic",\n  "fusesoc_core": "lowrisc:systems:chip_earlgrey_asic:0.1",\n  "conn_csvs_dir": "{proj_root}/hw/top_earlgrey/formal/conn_csvs",\n  "conn_csvs": ["{conn_csvs_dir}/chip.csv"]\n}\n' > %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson
+// RUN: printf ',NAME,SRC BLOCK,SRC SIGNAL,DEST BLOCK,DEST SIGNAL\nCONNECTION, CLK_LINK, top_earlgrey.u_a, clk_o, top_earlgrey.u_b, clk_i\nCONDITION, top_earlgrey.u_cfg, en, HIGH, LOW\n' > %t/ot/hw/top_earlgrey/formal/conn_csvs/chip.csv
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/select_opentitan_connectivity_cfg.py %t/bin/circt-verilog
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^opentitan/CONNECTIVITY_PARSE$' --with-opentitan-connectivity-parse --opentitan %t/ot --circt-verilog %t/bin/circt-verilog --opentitan-connectivity-cfg %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=CASE < %t/out/opentitan-connectivity-parse-results.txt
+// RUN: FileCheck %s --check-prefix=TARGET < %t/out/opentitan-connectivity-target-manifest.tsv
+// RUN: FileCheck %s --check-prefix=RULES < %t/out/opentitan-connectivity-rules-manifest.tsv
+//
+// SUMMARY: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
+// SUMMARY: opentitan{{[[:space:]]+}}CONNECTIVITY_PARSE{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
+// CASE: PASS{{[[:space:]]+}}connectivity_manifest{{[[:space:]]+}}{{.*}}opentitan-connectivity-rules-manifest.tsv{{[[:space:]]+}}opentitan{{[[:space:]]+}}CONNECTIVITY_PARSE{{[[:space:]]+}}CONN_PARSED
+// TARGET: target_name{{[[:space:]]+}}flow
+// TARGET: chip_earlgrey_asic
+// RULES: rule_id{{[[:space:]]+}}rule_type
+// RULES: chip.csv:CLK_LINK{{[[:space:]]+}}CONNECTION
+// RULES: chip.csv:CONDITION_1{{[[:space:]]+}}CONDITION

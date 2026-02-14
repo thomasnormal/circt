@@ -1,0 +1,21 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/common %t/hw/top_earlgrey/formal/conn_csvs
+// RUN: printf '{\n  "flow": "formal",\n  "sub_flow": "conn"\n}\n' > %t/common/common_conn_cfg.hjson
+// RUN: printf '{\n  "name": "chip_earlgrey_asic",\n  "import_cfgs": ["{proj_root}/common/common_conn_cfg.hjson"],\n  "fusesoc_core": "lowrisc:systems:chip_earlgrey_asic:0.1",\n  "bbox_cmd": "[list aon_osc io_osc]",\n  "conn_csvs_dir": "{proj_root}/hw/top_earlgrey/formal/conn_csvs",\n  "conn_csvs": ["{conn_csvs_dir}/a.csv", "{conn_csvs_dir}/b.csv"],\n  "rel_path": "hw/top_earlgrey/{sub_flow}/{tool}"\n}\n' > %t/chip_conn_cfg.hjson
+// RUN: printf ',NAME,SRC BLOCK,SRC SIGNAL,DEST BLOCK,DEST SIGNAL\nCONNECTION, CLK_LINK, top_earlgrey.u_a, clk_o, top_earlgrey.u_b, clk_i\nCONDITION, top_earlgrey.u_cfg, en, HIGH, LOW\n' > %t/hw/top_earlgrey/formal/conn_csvs/a.csv
+// RUN: printf ',NAME,SRC BLOCK,SRC SIGNAL,DEST BLOCK,DEST SIGNAL\nCONNECTION, RST_LINK, top_earlgrey.u_a, rst_no, top_earlgrey.u_b, rst_ni\n' > %t/hw/top_earlgrey/formal/conn_csvs/b.csv
+// RUN: python3 %S/../../utils/select_opentitan_connectivity_cfg.py --cfg-file %t/chip_conn_cfg.hjson --proj-root %t --out-target-manifest %t/target.tsv --out-rules-manifest %t/rules.tsv
+// RUN: FileCheck %s --check-prefix=TARGET < %t/target.tsv
+// RUN: FileCheck %s --check-prefix=RULES < %t/rules.tsv
+//
+// TARGET: target_name{{[[:space:]]+}}flow{{[[:space:]]+}}sub_flow{{[[:space:]]+}}fusesoc_core{{[[:space:]]+}}rel_path{{[[:space:]]+}}bbox_cmd{{[[:space:]]+}}conn_csv_count{{[[:space:]]+}}conn_csvs{{[[:space:]]+}}cfg_file
+// TARGET: chip_earlgrey_asic{{[[:space:]]+}}formal{{[[:space:]]+}}conn{{[[:space:]]+}}lowrisc:systems:chip_earlgrey_asic:0.1
+// TARGET: hw/top_earlgrey/{sub_flow}/{tool}
+// TARGET: [list aon_osc io_osc]
+// TARGET: {{.*}}a.csv{{.*}}b.csv
+// TARGET: {{.*}}chip_conn_cfg.hjson
+//
+// RULES: rule_id{{[[:space:]]+}}rule_type{{[[:space:]]+}}csv_file{{[[:space:]]+}}csv_row{{[[:space:]]+}}rule_name{{[[:space:]]+}}src_block{{[[:space:]]+}}src_signal{{[[:space:]]+}}dest_block{{[[:space:]]+}}dest_signal
+// RULES: a.csv:CLK_LINK{{[[:space:]]+}}CONNECTION{{[[:space:]]+}}{{.*}}a.csv{{[[:space:]]+}}2{{[[:space:]]+}}CLK_LINK{{[[:space:]]+}}top_earlgrey.u_a{{[[:space:]]+}}clk_o{{[[:space:]]+}}top_earlgrey.u_b{{[[:space:]]+}}clk_i
+// RULES: a.csv:CONDITION_1{{[[:space:]]+}}CONDITION{{[[:space:]]+}}{{.*}}a.csv{{[[:space:]]+}}3{{[[:space:]]+}}CONDITION_1{{[[:space:]]+}}top_earlgrey.u_cfg{{[[:space:]]+}}en{{[[:space:]]+}}HIGH{{[[:space:]]+}}LOW
+// RULES: b.csv:RST_LINK{{[[:space:]]+}}CONNECTION{{[[:space:]]+}}{{.*}}b.csv{{[[:space:]]+}}2{{[[:space:]]+}}RST_LINK{{[[:space:]]+}}top_earlgrey.u_a{{[[:space:]]+}}rst_no{{[[:space:]]+}}top_earlgrey.u_b{{[[:space:]]+}}rst_ni
