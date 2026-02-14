@@ -70,6 +70,9 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
 
 #### Execution Status (February 14, 2026)
 
+5. New: task-policy governance is implemented in the OpenTitan FPV compile-contract resolver (known-task mapping, unknown-task fail option, task-policy drift dimensions).
+6. Next: surface `--fail-on-opentitan-fpv-unknown-task` in `run_formal_all.sh` and tie it to strict-gate defaults for cfg-driven OpenTitan FPV runs.
+
 1. Completed: native cfg ingestion + `--select-cfgs` manifest planning is implemented and tested.
 2. Completed: FuseSoC-backed compile-contract extraction and drift checks are integrated in `run_formal_all.sh` with strict/fatal and allowlist modes.
 3. In progress: FPV task parity now carries `task` + `stopats` through selector/resolver artifacts and drift checks; stopat/blackbox execution semantics remain the next implementation step.

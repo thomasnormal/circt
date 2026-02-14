@@ -1,5 +1,23 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1287 - February 14, 2026
+
+### OpenTitan FPV Task-Policy Governance (Resolver Layer)
+
+1. Extended `utils/resolve_opentitan_formal_compile_contracts.py` with a task-policy adapter for known OpenTitan FPV task names:
+   - `FpvDefault`, `FpvSecCm`, `SecCmCFI`, `SecCmCFILinear`, `PwrmgrSecCmEsc`.
+2. Compile-contract artifacts now emit task-policy fields per target:
+   - `task_profile`, `task_known`, `stopat_mode`, `blackbox_policy`, `task_policy_fingerprint`.
+3. Added unknown-task governance option:
+   - `--fail-on-unknown-task` (fatal if selected targets use unrecognized task names).
+4. Extended drift checker to compare task-policy dimensions:
+   - `task_profile`, `task_known` (in addition to prior `task` and `stopats_fingerprint`).
+
+### Validation
+
+- Focused lit (resolver + drift task-policy suite): **10/10 PASS**
+- OpenTitan `run_formal_all` FPV integration slice: **5/5 PASS**
+
 ## Iteration 1286 - February 14, 2026
 
 ### OpenTitan FPV Phase B Integration in `run_formal_all.sh`
