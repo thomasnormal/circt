@@ -23,6 +23,7 @@ Options:
                            Optional fields accept '-' to inherit global values.
                            Relative design paths resolve under --examples-root
   --jobs N                Max parallel examples to execute (default: 1)
+  --example-timeout-sec N  Per-example timeout in seconds (default: 0, disabled)
   --circt-mut PATH         circt-mut binary or command (default: auto-detect)
   --yosys PATH             yosys binary (default: yosys)
   --generate-count N       Mutations to generate in non-smoke mode (default: 32)
@@ -147,6 +148,9 @@ OUT_DIR="${PWD}/mutation-mcy-examples-results"
 CIRCT_MUT=""
 YOSYS_BIN="${YOSYS:-yosys}"
 JOBS=1
+EXAMPLE_TIMEOUT_SEC=0
+TIMEOUT_BIN="${TIMEOUT:-timeout}"
+TIMEOUT_RESOLVED=""
 GENERATE_COUNT=32
 MUTATIONS_SEED=1
 MUTATIONS_MODES=""
@@ -1328,9 +1332,17 @@ EOS
 
   run_log="${example_out_dir}/run.log"
   set +e
-  "${cmd[@]}" >"$run_log" 2>&1
+  if [[ "$EXAMPLE_TIMEOUT_SEC" -gt 0 ]]; then
+    "$TIMEOUT_RESOLVED" "$EXAMPLE_TIMEOUT_SEC" "${cmd[@]}" >"$run_log" 2>&1
+  else
+    "${cmd[@]}" >"$run_log" 2>&1
+  fi
   rc=$?
   set -e
+
+  if [[ "$EXAMPLE_TIMEOUT_SEC" -gt 0 && "$rc" -eq 124 ]]; then
+    echo "Example timeout (${example_id}): exceeded ${EXAMPLE_TIMEOUT_SEC}s" >&2
+  fi
 
   metrics_file="${example_out_dir}/metrics.tsv"
   if [[ "$rc" -eq 0 ]]; then
@@ -1444,6 +1456,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --jobs)
       JOBS="$2"
+      shift 2
+      ;;
+    --example-timeout-sec)
+      EXAMPLE_TIMEOUT_SEC="$2"
       shift 2
       ;;
     --circt-mut)
@@ -1641,6 +1657,10 @@ if ! is_pos_int "$GENERATE_COUNT"; then
 fi
 if ! is_pos_int "$JOBS"; then
   echo "--jobs must be a positive integer: $JOBS" >&2
+  exit 1
+fi
+if ! is_nonneg_int "$EXAMPLE_TIMEOUT_SEC"; then
+  echo "--example-timeout-sec must be a non-negative integer: $EXAMPLE_TIMEOUT_SEC" >&2
   exit 1
 fi
 if ! is_nonneg_int "$MUTATIONS_SEED"; then
@@ -1871,6 +1891,15 @@ fi
 if ! CIRCT_MUT_RESOLVED="$(resolve_tool "$CIRCT_MUT")"; then
   echo "circt-mut not found or not executable: $CIRCT_MUT" >&2
   exit 1
+fi
+
+if [[ "$EXAMPLE_TIMEOUT_SEC" -gt 0 ]]; then
+  if ! TIMEOUT_RESOLVED="$(resolve_tool "$TIMEOUT_BIN")"; then
+    echo "timeout utility not found or not executable: $TIMEOUT_BIN (set TIMEOUT or disable --example-timeout-sec)" >&2
+    exit 1
+  fi
+else
+  TIMEOUT_RESOLVED=""
 fi
 
 if [[ "$SMOKE" -ne 1 ]]; then

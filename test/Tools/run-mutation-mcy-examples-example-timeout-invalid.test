@@ -1,0 +1,5 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --example-timeout-sec bad 2>&1 | FileCheck %s --check-prefix=BAD
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --example-timeout-sec -1 2>&1 | FileCheck %s --check-prefix=NEG
+
+// BAD: --example-timeout-sec must be a non-negative integer: bad
+// NEG: --example-timeout-sec must be a non-negative integer: -1
