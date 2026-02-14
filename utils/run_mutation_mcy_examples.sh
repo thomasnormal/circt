@@ -548,29 +548,100 @@ append_drift_candidate() {
   return 1
 }
 
+sanitize_contract_field() {
+  local value="$1"
+  value="${value//$'\t'/ }"
+  value="${value//$'\n'/ }"
+  printf '%s\n' "$value"
+}
+
 evaluate_summary_contract() {
   local summary_file="$1"
   local contract_file="$2"
   local regressions=0
+  local summary_example="__summary__"
+  local expected_header=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\tpolicy_fingerprint'
+  local header_line=""
   local example=""
-  local _status=""
-  local _exit=""
-  local _detected=""
-  local _relevant=""
-  local _coverage=""
-  local _errors=""
-  local _policy=""
+  local status=""
+  local exit_code=""
+  local detected=""
+  local relevant=""
+  local coverage=""
+  local errors=""
+  local policy=""
+  local extra=""
   local -A summary_seen=()
   local -A summary_duplicate_seen=()
   local -a summary_duplicate_examples=()
 
   printf 'example\tmetric\texpected\tcurrent\toutcome\tdetail\n' > "$contract_file"
 
-  while IFS=$'\t' read -r example _status _exit _detected _relevant _coverage _errors _policy; do
+  if ! IFS= read -r header_line < "$summary_file"; then
+    append_drift_row "$contract_file" "$summary_example" "header" "$(sanitize_contract_field "$expected_header")" "missing" "regression" "missing_header"
+    return 1
+  fi
+  if [[ "$header_line" != "$expected_header" ]]; then
+    append_drift_row "$contract_file" "$summary_example" "header" "$(sanitize_contract_field "$expected_header")" "$(sanitize_contract_field "$header_line")" "regression" "header_mismatch"
+    regressions=$((regressions + 1))
+  fi
+
+  while IFS=$'\t' read -r example status exit_code detected relevant coverage errors policy extra; do
     [[ "$example" == "example" ]] && continue
     if [[ -z "$example" ]]; then
       continue
     fi
+
+    if [[ -n "$extra" ]]; then
+      append_drift_row "$contract_file" "$example" "column_count" "8" "9+" "regression" "invalid_column_count"
+      regressions=$((regressions + 1))
+    fi
+
+    if [[ "$status" != "PASS" && "$status" != "FAIL" ]]; then
+      append_drift_row "$contract_file" "$example" "status" "PASS_or_FAIL" "$(sanitize_contract_field "$status")" "regression" "invalid_status"
+      regressions=$((regressions + 1))
+    fi
+
+    if ! is_nonneg_int "$exit_code"; then
+      append_drift_row "$contract_file" "$example" "exit_code" "nonneg_int" "$(sanitize_contract_field "$exit_code")" "regression" "invalid_exit_code"
+      regressions=$((regressions + 1))
+    fi
+    if ! is_nonneg_int "$detected"; then
+      append_drift_row "$contract_file" "$example" "detected_mutants" "nonneg_int" "$(sanitize_contract_field "$detected")" "regression" "invalid_detected"
+      regressions=$((regressions + 1))
+    fi
+    if ! is_nonneg_int "$relevant"; then
+      append_drift_row "$contract_file" "$example" "relevant_mutants" "nonneg_int" "$(sanitize_contract_field "$relevant")" "regression" "invalid_relevant"
+      regressions=$((regressions + 1))
+    fi
+    if ! is_nonneg_int "$errors"; then
+      append_drift_row "$contract_file" "$example" "errors" "nonneg_int" "$(sanitize_contract_field "$errors")" "regression" "invalid_errors"
+      regressions=$((regressions + 1))
+    fi
+
+    if [[ "$coverage" == "-" ]]; then
+      if is_nonneg_int "$relevant" && [[ "$relevant" -gt 0 ]]; then
+        append_drift_row "$contract_file" "$example" "coverage_percent" "numeric" "-" "regression" "coverage_missing_with_relevant"
+        regressions=$((regressions + 1))
+      fi
+    else
+      if ! is_nonneg_decimal "$coverage"; then
+        append_drift_row "$contract_file" "$example" "coverage_percent" "nonneg_decimal_or_dash" "$(sanitize_contract_field "$coverage")" "regression" "invalid_coverage_format"
+        regressions=$((regressions + 1))
+      elif ! awk -v v="$coverage" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+        append_drift_row "$contract_file" "$example" "coverage_percent" "0_to_100" "$(sanitize_contract_field "$coverage")" "regression" "invalid_coverage_range"
+        regressions=$((regressions + 1))
+      elif is_nonneg_int "$relevant" && [[ "$relevant" -eq 0 ]]; then
+        append_drift_row "$contract_file" "$example" "coverage_percent" "-" "$(sanitize_contract_field "$coverage")" "regression" "coverage_present_with_zero_relevant"
+        regressions=$((regressions + 1))
+      fi
+    fi
+
+    if [[ -z "$policy" ]]; then
+      append_drift_row "$contract_file" "$example" "policy_fingerprint" "nonempty" "missing" "regression" "missing_policy_fingerprint"
+      regressions=$((regressions + 1))
+    fi
+
     if [[ -n "${summary_seen[$example]+x}" ]]; then
       if [[ -z "${summary_duplicate_seen[$example]+x}" ]]; then
         summary_duplicate_seen["$example"]=1
@@ -591,7 +662,6 @@ evaluate_summary_contract() {
   fi
   return 0
 }
-
 evaluate_summary_drift() {
   local baseline_file="$1"
   local summary_file="$2"
