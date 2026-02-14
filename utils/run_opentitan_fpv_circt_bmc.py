@@ -465,6 +465,23 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--case-shard-count",
+        default=os.environ.get("BMC_CASE_SHARD_COUNT", "1"),
+        help=(
+            "Optional number of deterministic case shards forwarded to "
+            "run_pairwise_circt_bmc.py (default: env BMC_CASE_SHARD_COUNT or 1)."
+        ),
+    )
+    parser.add_argument(
+        "--case-shard-index",
+        default=os.environ.get("BMC_CASE_SHARD_INDEX", "0"),
+        help=(
+            "Optional deterministic case shard index in [0, case-shard-count) "
+            "forwarded to run_pairwise_circt_bmc.py "
+            "(default: env BMC_CASE_SHARD_INDEX or 0)."
+        ),
+    )
+    parser.add_argument(
         "--workdir",
         default="",
         help="Optional work directory (default: temp directory).",
@@ -607,6 +624,22 @@ def main() -> int:
         fail(
             "invalid --target-shard-index: "
             f"{target_shard_index} (expected < {target_shard_count})"
+        )
+    case_shard_count = parse_nonnegative_int(
+        args.case_shard_count, "--case-shard-count"
+    )
+    if case_shard_count <= 0:
+        fail(
+            "invalid --case-shard-count: "
+            f"{args.case_shard_count} (expected >= 1)"
+        )
+    case_shard_index = parse_nonnegative_int(
+        args.case_shard_index, "--case-shard-index"
+    )
+    if case_shard_index >= case_shard_count:
+        fail(
+            "invalid --case-shard-index: "
+            f"{case_shard_index} (expected < {case_shard_count})"
         )
 
     all_target_names = sorted({row.target_name for row in selected})
@@ -829,6 +862,10 @@ def main() -> int:
                     str(bound),
                     "--ignore-asserts-until",
                     str(ignore_asserts_until),
+                    "--case-shard-count",
+                    str(case_shard_count),
+                    "--case-shard-index",
+                    str(case_shard_index),
                     "--workdir",
                     str(group_workdir),
                     "--keep-workdir",
