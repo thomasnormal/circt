@@ -186,6 +186,44 @@ static unsigned writeConfigDbBytesToMemoryBlock(
   return maxWritable;
 }
 
+// Compute a native UVM port connection count by traversing the interpreter's
+// port connection graph and counting terminal providers.
+static int32_t getNativeUvmPortSize(
+    const llvm::DenseMap<uint64_t, llvm::SmallVector<uint64_t, 2>>
+        &analysisPortConnections,
+    uint64_t portAddr) {
+  if (portAddr == 0)
+    return 0;
+
+  auto seedIt = analysisPortConnections.find(portAddr);
+  if (seedIt == analysisPortConnections.end() || seedIt->second.empty())
+    return 0;
+
+  llvm::SmallVector<uint64_t, 8> worklist(seedIt->second.begin(),
+                                          seedIt->second.end());
+  llvm::DenseSet<uint64_t> visited;
+  llvm::DenseSet<uint64_t> terminalProviders;
+
+  while (!worklist.empty()) {
+    uint64_t addr = worklist.pop_back_val();
+    if (addr == 0 || !visited.insert(addr).second)
+      continue;
+
+    auto it = analysisPortConnections.find(addr);
+    if (it != analysisPortConnections.end() && !it->second.empty()) {
+      for (uint64_t next : it->second)
+        worklist.push_back(next);
+      continue;
+    }
+    terminalProviders.insert(addr);
+  }
+
+  if (!terminalProviders.empty())
+    return static_cast<int32_t>(terminalProviders.size());
+  // Fallback: preserve "connected means non-zero" even if graph is cyclic.
+  return static_cast<int32_t>(seedIt->second.size());
+}
+
 //===----------------------------------------------------------------------===//
 // LLHDProcessInterpreter Implementation
 //===----------------------------------------------------------------------===//
@@ -211,6 +249,16 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
        << " steps=" << state.totalSteps;
     if (state.lastOp)
       os << " lastOp=" << state.lastOp->getName().getStringRef();
+    if (!state.currentFuncName.empty())
+      os << " func=" << state.currentFuncName;
+    if (!state.callStack.empty()) {
+      const auto &top = state.callStack.back();
+      os << " callStack=" << state.callStack.size()
+         << " topFrame=" << (top.isLLVM() ? "llvm.call" : "func.call");
+    }
+    if (state.sequencerGetRetryCallOp)
+      os << " seqRetry="
+         << state.sequencerGetRetryCallOp->getName().getStringRef();
     os << "\n";
   }
   os.flush();
@@ -406,17 +454,10 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
       signalIdToName[fieldSigId] = fieldSigName;
       signalIdToType[fieldSigId] = fieldType;
 
-      // Initialize with current memory contents.
-      auto blockIt = mallocBlocks.find(mallocAddr);
-      if (blockIt != mallocBlocks.end() &&
-          fieldOffset + fieldSize <= blockIt->second.size) {
-        APInt initVal(fieldBitWidth, 0);
-        for (unsigned b = 0; b < fieldSize && b < 8; ++b) {
-          uint64_t byteVal = blockIt->second.data[fieldOffset + b];
-          initVal |= APInt(fieldBitWidth, byteVal << (b * 8));
-        }
-        scheduler.updateSignal(fieldSigId, SignalValue(initVal));
-      }
+      // Don't initialize shadow signals from memory here. Leave them as
+      // unknown (X) so that the first reconciliation pass creates proper
+      // X→value transitions visible to processes waiting for edges.
+      // This matches IEEE 1800 semantics where signals start at X.
 
       uint64_t fieldAddr = mallocAddr + fieldOffset;
       interfaceFieldSignals[fieldAddr] = fieldSigId;
@@ -426,6 +467,10 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
     }
 
     interfacePtrToFieldSignals[sigId] = std::move(fieldSignals);
+    // llvm::errs() << "[SHADOW-DIAG] Parent: created " << body.size()
+    //              << " shadow signals for '" << sigName
+    //              << "' type=" << ifaceStructTy.getName()
+    //              << " mallocAddr=0x" << llvm::format_hex(mallocAddr, 16) << "\n";
   }
 
   // Also process child instance signals (BFM interface structs).
@@ -510,16 +555,7 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
         signalIdToName[fieldSigId] = fieldSigName;
         signalIdToType[fieldSigId] = fieldType;
 
-        auto blockIt = mallocBlocks.find(mallocAddr);
-        if (blockIt != mallocBlocks.end() &&
-            fieldOffset + fieldSize <= blockIt->second.size) {
-          APInt initVal(fieldBitWidth, 0);
-          for (unsigned b = 0; b < fieldSize && b < 8; ++b) {
-            uint64_t byteVal = blockIt->second.data[fieldOffset + b];
-            initVal |= APInt(fieldBitWidth, byteVal << (b * 8));
-          }
-          scheduler.updateSignal(fieldSigId, SignalValue(initVal));
-        }
+        // Don't initialize - leave as unknown for reconciliation pass.
 
         uint64_t fieldAddr = mallocAddr + fieldOffset;
         interfaceFieldSignals[fieldAddr] = fieldSigId;
@@ -530,10 +566,11 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
 
       interfacePtrToFieldSignals[sigId] = std::move(fieldSignals);
 
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Created " << body.size()
-                 << " child interface shadow signals for '" << sigName
-                 << "' (type: " << ifaceStructTy.getName() << ")\n");
+      // llvm::errs() << "[SHADOW-DIAG] Child: created " << body.size()
+      //              << " shadow signals for '" << sigName
+      //              << "' type=" << ifaceStructTy.getName()
+      //              << " mallocAddr=0x" << llvm::format_hex(mallocAddr, 16)
+      //              << " instId=" << instId << "\n";
     }
   }
 
@@ -721,19 +758,20 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // addresses are known.
   createInterfaceFieldShadowSignals();
 
-  // Debug: report interfaceFieldSignals population
-  if (!interfaceFieldSignals.empty()) {
-    llvm::errs() << "[circt-sim] Interface field signals: "
-                 << interfaceFieldSignals.size() << " entries\n";
-    for (auto &[addr, sigId] : interfaceFieldSignals) {
-      llvm::errs() << "  addr=0x" << llvm::format_hex(addr, 16)
-                   << " -> signal " << sigId;
-      auto nameIt = signalIdToName.find(sigId);
-      if (nameIt != signalIdToName.end())
-        llvm::errs() << " (" << nameIt->second << ")";
-      llvm::errs() << "\n";
+  LLVM_DEBUG({
+    if (!interfaceFieldSignals.empty()) {
+      llvm::dbgs() << "[circt-sim] Interface field signals: "
+                   << interfaceFieldSignals.size() << " entries\n";
+      for (auto &[addr, sigId] : interfaceFieldSignals) {
+        llvm::dbgs() << "  addr=0x" << llvm::format_hex(addr, 16)
+                     << " -> signal " << sigId;
+        auto nameIt = signalIdToName.find(sigId);
+        if (nameIt != signalIdToName.end())
+          llvm::dbgs() << " (" << nameIt->second << ")";
+        llvm::dbgs() << "\n";
+      }
     }
-  }
+  });
 
   // Set up propagation links using recorded child module-level store patterns.
   // childModuleCopyPairs records (srcAddr, destAddr) pairs from store ops that
@@ -752,17 +790,18 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
 
       interfaceFieldPropagation[parentSigId].push_back(childSigId);
       childToParentFieldAddr[destAddr] = srcAddr;
+      // llvm::errs() << "[PROP-DIAG] Link: signal " << parentSigId
+      //              << " (0x" << llvm::format_hex(srcAddr, 16)
+      //              << ") -> signal " << childSigId
+      //              << " (0x" << llvm::format_hex(destAddr, 16) << ")\n";
       LLVM_DEBUG(llvm::dbgs()
                  << "  Interface propagation link: signal " << parentSigId
                  << " (0x" << llvm::format_hex(srcAddr, 16)
                  << ") -> signal " << childSigId << " (0x"
                  << llvm::format_hex(destAddr, 16) << ")\n");
     }
-    llvm::errs() << "[circt-sim] Established " << interfaceFieldPropagation.size()
-                 << " interface field propagation links from "
-                 << childModuleCopyPairs.size() << " copy pairs\n";
     LLVM_DEBUG(llvm::dbgs()
-               << "  Established " << interfaceFieldPropagation.size()
+               << "[circt-sim] Established " << interfaceFieldPropagation.size()
                << " interface field propagation links from "
                << childModuleCopyPairs.size() << " copy pairs\n");
   }
@@ -1617,6 +1656,100 @@ llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayout(
   }
 
   return adjustAPIntWidth(value, llvmWidth);
+}
+
+llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayoutByHWType(
+    llvm::APInt value, Type hwType) const {
+  if (auto refType = dyn_cast<llhd::RefType>(hwType))
+    hwType = refType.getNestedType();
+
+  unsigned hwWidth = getTypeWidth(hwType);
+  value = adjustAPIntWidth(value, hwWidth);
+
+  if (auto hwStructType = dyn_cast<hw::StructType>(hwType)) {
+    APInt result = APInt::getZero(hwWidth);
+    auto hwElements = hwStructType.getElements();
+
+    unsigned llvmOffset = 0;
+    unsigned hwOffset = hwWidth;
+    for (auto element : hwElements) {
+      unsigned fieldWidth = getTypeWidth(element.type);
+      hwOffset -= fieldWidth;
+      APInt fieldBits = value.extractBits(fieldWidth, llvmOffset);
+      APInt converted =
+          convertLLVMToHWLayoutByHWType(fieldBits, element.type);
+      converted = adjustAPIntWidth(converted, fieldWidth);
+      result.insertBits(converted, hwOffset);
+      llvmOffset += fieldWidth;
+    }
+    return result;
+  }
+
+  if (auto hwArrayType = dyn_cast<hw::ArrayType>(hwType)) {
+    APInt result = APInt::getZero(hwWidth);
+    Type elemType = hwArrayType.getElementType();
+    unsigned elemWidth = getTypeWidth(elemType);
+    unsigned numElements = hwArrayType.getNumElements();
+
+    for (unsigned i = 0; i < numElements; ++i) {
+      unsigned llvmOffset = i * elemWidth;
+      unsigned hwOffset = (numElements - 1 - i) * elemWidth;
+      APInt elemBits = value.extractBits(elemWidth, llvmOffset);
+      APInt converted = convertLLVMToHWLayoutByHWType(elemBits, elemType);
+      converted = adjustAPIntWidth(converted, elemWidth);
+      result.insertBits(converted, hwOffset);
+    }
+    return result;
+  }
+
+  return value;
+}
+
+llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayoutByHWType(
+    llvm::APInt value, Type hwType) const {
+  if (auto refType = dyn_cast<llhd::RefType>(hwType))
+    hwType = refType.getNestedType();
+
+  unsigned hwWidth = getTypeWidth(hwType);
+  value = adjustAPIntWidth(value, hwWidth);
+
+  if (auto hwStructType = dyn_cast<hw::StructType>(hwType)) {
+    APInt result = APInt::getZero(hwWidth);
+    auto hwElements = hwStructType.getElements();
+
+    unsigned hwOffset = hwWidth;
+    unsigned llvmOffset = 0;
+    for (auto element : hwElements) {
+      unsigned fieldWidth = getTypeWidth(element.type);
+      hwOffset -= fieldWidth;
+      APInt fieldBits = value.extractBits(fieldWidth, hwOffset);
+      APInt converted =
+          convertHWToLLVMLayoutByHWType(fieldBits, element.type);
+      converted = adjustAPIntWidth(converted, fieldWidth);
+      result.insertBits(converted, llvmOffset);
+      llvmOffset += fieldWidth;
+    }
+    return result;
+  }
+
+  if (auto hwArrayType = dyn_cast<hw::ArrayType>(hwType)) {
+    APInt result = APInt::getZero(hwWidth);
+    Type elemType = hwArrayType.getElementType();
+    unsigned elemWidth = getTypeWidth(elemType);
+    unsigned numElements = hwArrayType.getNumElements();
+
+    for (unsigned i = 0; i < numElements; ++i) {
+      unsigned hwOffset = (numElements - 1 - i) * elemWidth;
+      unsigned llvmOffset = i * elemWidth;
+      APInt elemBits = value.extractBits(elemWidth, hwOffset);
+      APInt converted = convertHWToLLVMLayoutByHWType(elemBits, elemType);
+      converted = adjustAPIntWidth(converted, elemWidth);
+      result.insertBits(converted, llvmOffset);
+    }
+    return result;
+  }
+
+  return value;
 }
 
 std::optional<llvm::APInt>
@@ -6278,6 +6411,7 @@ arith_dispatch:
           break;
 
         StringRef resolvedName = funcIt->second;
+        // [CI-XFALLBACK] diagnostic removed
         LLVM_DEBUG(llvm::dbgs()
                    << "  func.call_indirect: fallback vtable resolution: "
                    << vtableGlobalName << "[" << methodIndex << "] -> "
@@ -6340,11 +6474,13 @@ arith_dispatch:
                 conns.end())
               conns.push_back(providerAddr2);
           }
+          // [SEQ-CONN] X-fallback connect diagnostic removed
           resolved = true;
           break;
         }
 
         // Dispatch the call
+        // [SEQ-XFALLBACK] diagnostic removed
         auto &callState = processStates[procId];
         ++callState.callDepth;
         SmallVector<InterpretedValue, 4> results;
@@ -6532,6 +6668,7 @@ arith_dispatch:
                 conns.end())
               conns.push_back(providerAddr3);
           }
+          // [SEQ-CONN] static-fallback connect diagnostic removed
           staticResolved = true;
           break;
         }
@@ -6701,6 +6838,7 @@ arith_dispatch:
           }
         }
 
+        // [SEQ-UNMAPPED] diagnostic removed
         auto &cs2 = processStates[procId];
         ++cs2.callDepth;
         SmallVector<InterpretedValue, 4> sResults;
@@ -6732,6 +6870,7 @@ arith_dispatch:
 
     StringRef calleeName = it->second;
     std::string overriddenCalleeName;
+    // [CI-DISPATCH] diagnostic removed
     LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: resolved 0x"
                             << llvm::format_hex(funcAddr, 16)
                             << " -> " << calleeName << "\n");
@@ -6819,6 +6958,21 @@ arith_dispatch:
       calleeName = overriddenCalleeName;
     } while (false);
 
+    // Intercept end_of_elaboration_phase for any class whose EOE function
+    // body calls uvm_driver::end_of_elaboration_phase (which checks
+    // seq_item_port.size() and emits DRVCONNECT). We intercept at this
+    // level for direct uvm_driver dispatches, and also suppress derived
+    // class overrides that call super.end_of_elaboration_phase via func.call.
+    if (calleeName.contains("end_of_elaboration_phase") &&
+        calleeName.contains("uvm_driver") &&
+        !calleeName.contains("driver_proxy")) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  call_indirect: end_of_elaboration_phase "
+                 << "intercepted (no-op, suppresses DRVCONNECT): "
+                 << calleeName << "\n");
+      return success();
+    }
+
     // Look up the function
     auto &state = processStates[procId];
     Operation *parent = state.processOrInitialOp;
@@ -6843,6 +6997,25 @@ arith_dispatch:
     SmallVector<InterpretedValue, 4> args;
     for (Value arg : callIndirectOp.getArgOperands()) {
       args.push_back(getValue(procId, arg));
+    }
+
+    // Intercept uvm_port_base::size() and report count from native
+    // analysisPortConnections, not UVM's m_imp_list bookkeeping.
+    if (calleeName.contains("uvm_port_base") &&
+        calleeName.ends_with("::size") &&
+        callIndirectOp.getNumResults() >= 1) {
+      uint64_t selfAddr =
+          (!args.empty() && !args[0].isX()) ? args[0].getUInt64() : 0;
+      int32_t count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
+      Value result = callIndirectOp.getResult(0);
+      unsigned width = getTypeWidth(result.getType());
+      setValue(procId, result,
+               InterpretedValue(
+                   llvm::APInt(width, static_cast<uint64_t>(count), false)));
+      LLVM_DEBUG(llvm::dbgs() << "  call_indirect: uvm_port_base::size self=0x"
+                              << llvm::format_hex(selfAddr, 16) << " -> "
+                              << count << "\n");
+      return success();
     }
 
     // Intercept resource_db_implementation via call_indirect (vtable dispatch).
@@ -6946,14 +7119,14 @@ arith_dispatch:
               // Also write directly to memory so that llvm.load can read it.
               // The ref value holds the address of the backing memory.
               InterpretedValue refAddr = getValue(procId, outputRef);
-              if (!refAddr.isX()) {
-                uint64_t addr = refAddr.getUInt64();
-                uint64_t off3 = 0;
-                MemoryBlock *blk =
-                    findMemoryBlockByAddress(addr, procId, &off3);
-                if (!blk)
-                  blk = findBlockByAddress(addr, off3);
-                if (blk) {
+          if (!refAddr.isX()) {
+            uint64_t addr = refAddr.getUInt64();
+            uint64_t off3 = 0;
+            MemoryBlock *blk =
+                findMemoryBlockByAddress(addr, procId, &off3);
+            if (!blk)
+              blk = findBlockByAddress(addr, off3);
+            if (blk) {
                   writeConfigDbBytesToMemoryBlock(
                       blk, off3, valueData, innerBytes,
                       /*zeroFillMissing=*/true);
@@ -7245,6 +7418,7 @@ arith_dispatch:
         if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end())
           conns.push_back(providerAddr);
       }
+      // [SEQ-CONN] call_indirect connect diagnostic removed
       // Return immediately — don't fall through to UVM code which would
       // issue "Late Connection" warning and reject the connection.
       return success();
@@ -7384,7 +7558,8 @@ arith_dispatch:
          calleeName.contains("::finish_item") ||
          ((calleeName.contains("seq_item_pull_port") ||
            calleeName.contains("seq_item_pull_imp") ||
-           calleeName.contains("sqr_if_base")) &&
+           calleeName.contains("sqr_if_base") ||
+         calleeName.contains("uvm_sequencer")) &&
           (calleeName.ends_with("::get") ||
            calleeName.ends_with("::get_next_item") ||
            calleeName.ends_with("::item_done"))))) {
@@ -7458,6 +7633,7 @@ arith_dispatch:
     // handshake where finish_item blocks until the driver completes.
     // Args: (self, item, priority).
     if (calleeName.contains("::finish_item") && args.size() >= 2) {
+      // [SEQ-DIRECT] finish_item diagnostic removed
       uint64_t itemAddr = args[1].isX() ? 0 : args[1].getUInt64();
       if (itemAddr != 0) {
         // Check if item_done was already received (re-poll after wake)
@@ -7513,7 +7689,8 @@ arith_dispatch:
     // Args: (self_port, output_ref).
     if ((calleeName.contains("seq_item_pull_port") ||
          calleeName.contains("seq_item_pull_imp") ||
-         calleeName.contains("sqr_if_base")) &&
+         calleeName.contains("sqr_if_base") ||
+         calleeName.contains("uvm_sequencer")) &&
         (calleeName.ends_with("::get") ||
          calleeName.ends_with("::get_next_item") ||
          calleeName.ends_with("::try_next_item")) &&
@@ -7533,6 +7710,28 @@ arith_dispatch:
         seqrAddr = exportAddr;
       }
       uint64_t seqrQueueAddr = seqrAddr;
+      auto promoteToSequencerQueue = [&](uint64_t candidateAddr) -> uint64_t {
+        if (candidateAddr == 0 || sequencerItemFifo.contains(candidateAddr))
+          return candidateAddr;
+        uint64_t ownerOff = 0;
+        MemoryBlock *ownerBlock =
+            findMemoryBlockByAddress(candidateAddr, procId, &ownerOff);
+        if (!ownerBlock)
+          ownerBlock = findBlockByAddress(candidateAddr, ownerOff);
+        if (ownerBlock && ownerOff != 0) {
+          uint64_t ownerAddr = candidateAddr - ownerOff;
+          if (sequencerItemFifo.contains(ownerAddr))
+            return ownerAddr;
+        }
+        uint64_t nativeOff = 0;
+        if (findNativeMemoryBlockByAddress(candidateAddr, &nativeOff, nullptr) &&
+            nativeOff != 0) {
+          uint64_t ownerAddr = candidateAddr - nativeOff;
+          if (sequencerItemFifo.contains(ownerAddr))
+            return ownerAddr;
+        }
+        return candidateAddr;
+      };
       if (seqrQueueAddr != 0 &&
           !sequencerItemFifo.contains(seqrQueueAddr)) {
         // Connection maps often point to a seq_item_export object, not the
@@ -7549,27 +7748,15 @@ arith_dispatch:
                                            getCompResults, callIndirectOp);
           --cState.callDepth;
           if (succeeded(compRes) && !getCompResults.empty() &&
-              !getCompResults[0].isX()) {
-            uint64_t compAddr = getCompResults[0].getUInt64();
-            if (sequencerItemFifo.contains(compAddr)) {
-              seqrQueueAddr = compAddr;
-            } else {
-              uint64_t compOff = 0;
-              MemoryBlock *compBlock =
-                  findMemoryBlockByAddress(compAddr, procId, &compOff);
-              if (!compBlock)
-                compBlock = findBlockByAddress(compAddr, compOff);
-              if (compBlock && compOff != 0) {
-                uint64_t compOwner = compAddr - compOff;
-                if (sequencerItemFifo.contains(compOwner))
-                  seqrQueueAddr = compOwner;
-              }
-            }
-          }
+              !getCompResults[0].isX())
+            seqrQueueAddr =
+                promoteToSequencerQueue(getCompResults[0].getUInt64());
         }
 
         if (!sequencerItemFifo.contains(seqrQueueAddr)) {
           // Fallback: resolve get_comp through the runtime vtable slot.
+          uint64_t vtableAddr = 0;
+          bool hasVtableAddr = false;
           uint64_t portOff = 0;
           MemoryBlock *portBlock =
               findMemoryBlockByAddress(seqrQueueAddr, procId, &portOff);
@@ -7577,11 +7764,24 @@ arith_dispatch:
             portBlock = findBlockByAddress(seqrQueueAddr, portOff);
           if (portBlock && portBlock->initialized &&
               portOff + 12 <= portBlock->data.size()) {
-            uint64_t vtableAddr = 0;
             for (unsigned i = 0; i < 8; ++i)
               vtableAddr |= static_cast<uint64_t>(
                                 portBlock->data[portOff + 4 + i])
                             << (i * 8);
+            hasVtableAddr = true;
+          }
+          if (!hasVtableAddr) {
+            uint64_t nativeOff = 0;
+            size_t nativeSize = 0;
+            if (findNativeMemoryBlockByAddress(seqrQueueAddr, &nativeOff,
+                                               &nativeSize) &&
+                nativeOff + 12 <= nativeSize) {
+              std::memcpy(&vtableAddr,
+                          reinterpret_cast<void *>(seqrQueueAddr + 4), 8);
+              hasVtableAddr = true;
+            }
+          }
+          if (hasVtableAddr) {
             auto globalIt = addressToGlobal.find(vtableAddr);
             if (globalIt != addressToGlobal.end()) {
               auto vtableBlockIt = globalMemoryBlocks.find(globalIt->second);
@@ -7610,24 +7810,9 @@ arith_dispatch:
                           callIndirectOp);
                       --cState.callDepth;
                       if (succeeded(compRes2) && !getCompResults2.empty() &&
-                          !getCompResults2[0].isX()) {
-                        uint64_t compAddr2 = getCompResults2[0].getUInt64();
-                        if (sequencerItemFifo.contains(compAddr2)) {
-                          seqrQueueAddr = compAddr2;
-                        } else {
-                          uint64_t compOff2 = 0;
-                          MemoryBlock *compBlock2 =
-                              findMemoryBlockByAddress(compAddr2, procId,
-                                                       &compOff2);
-                          if (!compBlock2)
-                            compBlock2 = findBlockByAddress(compAddr2, compOff2);
-                          if (compBlock2 && compOff2 != 0) {
-                            uint64_t compOwner2 = compAddr2 - compOff2;
-                            if (sequencerItemFifo.contains(compOwner2))
-                              seqrQueueAddr = compOwner2;
-                          }
-                        }
-                      }
+                          !getCompResults2[0].isX())
+                        seqrQueueAddr =
+                            promoteToSequencerQueue(getCompResults2[0].getUInt64());
                     }
                   }
                 }
@@ -7636,18 +7821,24 @@ arith_dispatch:
           }
         }
 
-        if (!sequencerItemFifo.contains(seqrQueueAddr)) {
-          uint64_t ownerOff = 0;
-          MemoryBlock *ownerBlock =
-              findMemoryBlockByAddress(seqrQueueAddr, procId, &ownerOff);
-          if (!ownerBlock)
-            ownerBlock = findBlockByAddress(seqrQueueAddr, ownerOff);
-          if (ownerBlock && ownerOff != 0) {
-            uint64_t ownerAddr = seqrQueueAddr - ownerOff;
-            if (sequencerItemFifo.contains(ownerAddr))
-              seqrQueueAddr = ownerAddr;
+        if (!sequencerItemFifo.contains(seqrQueueAddr))
+          seqrQueueAddr = promoteToSequencerQueue(seqrQueueAddr);
+      }
+
+      if (seqrQueueAddr != 0 && !sequencerItemFifo.contains(seqrQueueAddr) &&
+          !sequencerItemFifo.empty()) {
+        uint64_t bestKey = 0;
+        uint64_t bestDistance = ~uint64_t(0);
+        for (auto &[key, fifo] : sequencerItemFifo) {
+          uint64_t distance = key > seqrQueueAddr ? key - seqrQueueAddr
+                                                  : seqrQueueAddr - key;
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestKey = key;
           }
         }
+        if (bestKey != 0)
+          seqrQueueAddr = bestKey;
       }
       // Try to find an item in any FIFO (prioritize matched sequencer).
       uint64_t itemAddr = 0;
@@ -7759,11 +7950,12 @@ arith_dispatch:
           uint64_t offset = 0;
           MemoryBlock *refBlock =
               findMemoryBlockByAddress(refAddr, procId, &offset);
-          if (refBlock && refBlock->initialized &&
-              offset + 8 <= refBlock->size) {
+          if (refBlock &&
+              offset + 8 <= refBlock->data.size()) {
             for (unsigned i = 0; i < 8; ++i)
               refBlock->data[offset + i] =
                   static_cast<uint8_t>((itemAddr >> (i * 8)) & 0xFF);
+            refBlock->initialized = true;
           } else {
             uint64_t nativeOffset = 0;
             size_t nativeSize = 0;
@@ -7786,10 +7978,11 @@ arith_dispatch:
           uint64_t offset = 0;
           MemoryBlock *refBlock =
               findMemoryBlockByAddress(refAddr, procId, &offset);
-          if (refBlock && refBlock->initialized &&
-              offset + 8 <= refBlock->size) {
+          if (refBlock &&
+              offset + 8 <= refBlock->data.size()) {
             for (unsigned i = 0; i < 8; ++i)
               refBlock->data[offset + i] = 0;
+            refBlock->initialized = true;
           } else {
             uint64_t nativeOffset = 0;
             size_t nativeSize = 0;
@@ -7836,7 +8029,8 @@ arith_dispatch:
     // transaction item. This unblocks the sequence's finish_item wait.
     if ((calleeName.contains("seq_item_pull_port") ||
          calleeName.contains("seq_item_pull_imp") ||
-         calleeName.contains("sqr_if_base")) &&
+         calleeName.contains("sqr_if_base") ||
+         calleeName.contains("uvm_sequencer")) &&
         calleeName.ends_with("::item_done")) {
       uint64_t portAddr =
           args.size() > 0 && !args[0].isX() ? args[0].getUInt64() : 0;
@@ -9722,9 +9916,12 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                     parentBits.insertBits(byteVal, insertPos);
                   }
                 }
-                // Extract the field
+                // Extract the field (memory is in LLVM layout).
                 APInt fieldBits =
                     parentBits.extractBits(fieldWidth, bitOffset);
+                if (isa<hw::StructType, hw::ArrayType>(currentType))
+                  fieldBits =
+                      convertLLVMToHWLayoutByHWType(fieldBits, currentType);
                 setValue(procId, probeOp.getResult(),
                          InterpretedValue(fieldBits));
               }
@@ -10779,6 +10976,9 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                     isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(llvmFieldType)) {
                   fieldValue = convertHWToLLVMLayout(fieldValue, hwFieldType,
                                                      llvmFieldType);
+                } else {
+                  fieldValue =
+                      convertHWToLLVMLayoutByHWType(fieldValue, hwFieldType);
                 }
               }
               if (fieldValue.getBitWidth() < fieldWidth)
@@ -10870,6 +11070,10 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               APInt fieldValue = driveVal.isX()
                                      ? APInt::getZero(fieldWidth)
                                      : driveVal.getAPInt();
+              if (!driveVal.isX() &&
+                  isa<hw::StructType, hw::ArrayType>(currentType))
+                fieldValue =
+                    convertHWToLLVMLayoutByHWType(fieldValue, currentType);
               if (fieldValue.getBitWidth() < fieldWidth)
                 fieldValue = fieldValue.zext(fieldWidth);
               else if (fieldValue.getBitWidth() > fieldWidth)
@@ -12076,12 +12280,68 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
+  // Intercept uvm_driver::end_of_elaboration_phase at func.call level.
+  // Derived driver proxies call super.end_of_elaboration_phase via func.call.
+  // The base function checks seq_item_port.size() which reads from UVM's
+  // m_imp_list (stays empty since we use native connections). Skip it.
+  if (calleeName.contains("uvm_driver") &&
+      calleeName.contains("end_of_elaboration_phase")) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  func.call: uvm_driver::end_of_elaboration_phase "
+               << "intercepted (no-op, suppresses DRVCONNECT)\n");
+    return success();
+  }
+
+  // Intercept uvm_port_base::connect() at func.call level.
+  // Some UVM code paths call connect directly instead of through vtables.
+  if (calleeName.contains("uvm_port_base") &&
+      calleeName.contains("::connect") &&
+      !calleeName.contains("connect_phase") &&
+      callOp.getNumOperands() >= 2) {
+    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+    InterpretedValue providerVal = getValue(procId, callOp.getOperand(1));
+    uint64_t selfAddr = selfVal.isX() ? 0 : selfVal.getUInt64();
+    uint64_t providerAddr = providerVal.isX() ? 0 : providerVal.getUInt64();
+    if (selfAddr != 0 && providerAddr != 0) {
+      auto &conns = analysisPortConnections[selfAddr];
+      if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end())
+        conns.push_back(providerAddr);
+    }
+    // [SEQ-CONN] func.call connect diagnostic removed
+    return success();
+  }
+
+  // Intercept uvm_port_base::size() and report count from native
+  // analysisPortConnections, not UVM's m_imp_list bookkeeping.
+  if (calleeName.contains("uvm_port_base") &&
+      calleeName.ends_with("::size") &&
+      callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+    uint64_t selfAddr = selfVal.isX() ? 0 : selfVal.getUInt64();
+    int32_t count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
+    Value result = callOp.getResult(0);
+    unsigned width = getTypeWidth(result.getType());
+    setValue(procId, result,
+             InterpretedValue(
+                 llvm::APInt(width, static_cast<uint64_t>(count), false)));
+    if (traceSeq)
+      llvm::errs() << "[SEQ-SIZE] func.call: " << calleeName << " self=0x"
+                   << llvm::format_hex(selfAddr, 16) << " -> " << count
+                   << " (total_conns=" << analysisPortConnections.size()
+                   << ")\n";
+    LLVM_DEBUG(llvm::dbgs() << "  func.call: uvm_port_base::size self=0x"
+                            << llvm::format_hex(selfAddr, 16) << " -> "
+                            << count << "\n");
+    return success();
+  }
+
   // Intercept sequencer pull interface at func.call level.
   // This handles wrapper calls before they dereference m_if, which can be
   // null when UVM connect bookkeeping is bypassed by native connection logic.
   if ((calleeName.contains("seq_item_pull_port") ||
        calleeName.contains("seq_item_pull_imp") ||
-       calleeName.contains("sqr_if_base")) &&
+       calleeName.contains("sqr_if_base") ||
+         calleeName.contains("uvm_sequencer")) &&
       (calleeName.ends_with("::get") ||
        calleeName.ends_with("::get_next_item") ||
        calleeName.ends_with("::try_next_item")) &&
@@ -12134,10 +12394,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         uint64_t offset = 0;
         MemoryBlock *refBlock =
             findMemoryBlockByAddress(refAddr, procId, &offset);
-        if (refBlock && refBlock->initialized && offset + 8 <= refBlock->size) {
+        if (refBlock && offset + 8 <= refBlock->data.size()) {
           for (unsigned i = 0; i < 8; ++i)
             refBlock->data[offset + i] =
                 static_cast<uint8_t>((itemAddr >> (i * 8)) & 0xFF);
+            refBlock->initialized = true;
         } else {
           uint64_t nativeOffset = 0;
           size_t nativeSize = 0;
@@ -12164,10 +12425,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         uint64_t offset = 0;
         MemoryBlock *refBlock =
             findMemoryBlockByAddress(refAddr, procId, &offset);
-        if (refBlock && refBlock->initialized &&
-            offset + 8 <= refBlock->size) {
+        if (refBlock &&
+            offset + 8 <= refBlock->data.size()) {
           for (unsigned i = 0; i < 8; ++i)
             refBlock->data[offset + i] = 0;
+            refBlock->initialized = true;
         } else {
           uint64_t nativeOffset = 0;
           size_t nativeSize = 0;
@@ -12205,7 +12467,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   if ((calleeName.contains("seq_item_pull_port") ||
        calleeName.contains("seq_item_pull_imp") ||
-       calleeName.contains("sqr_if_base")) &&
+       calleeName.contains("sqr_if_base") ||
+         calleeName.contains("uvm_sequencer")) &&
       calleeName.ends_with("::item_done") && callOp.getNumOperands() >= 1) {
     uint64_t portAddr = 0;
     InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
@@ -13964,6 +14227,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       auto impOrderIt = functionPhaseImpOrder.find(impAddr);
       if (impOrderIt != functionPhaseImpOrder.end()) {
         functionPhaseImpCompleted[impAddr] = true;
+        // [IMP-DIAG] diagnostic removed
         // Wake up processes waiting for this IMP to complete.
         auto waitIt = impWaitingProcesses.find(impAddr);
         if (waitIt != impWaitingProcesses.end()) {
@@ -16019,7 +16283,23 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     }
 
     if (sigId != 0) {
-      waitList.addLevel(sigId);
+      // Respect the edge type from the detect_event op so that
+      // @(posedge clk) only wakes on posedges, not any change.
+      switch (detectOp.getEdge()) {
+      case moore::Edge::PosEdge:
+        waitList.addPosedge(sigId);
+        break;
+      case moore::Edge::NegEdge:
+        waitList.addNegedge(sigId);
+        break;
+      case moore::Edge::BothEdges:
+        waitList.addEdge(sigId, EdgeType::AnyEdge);
+        break;
+      case moore::Edge::AnyChange:
+      default:
+        waitList.addLevel(sigId);
+        break;
+      }
     }
   });
 
@@ -16033,6 +16313,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 
     // Register the wait sensitivity with the scheduler
     scheduler.suspendProcessForEvents(procId, waitList);
+    // [WAIT-DIAG] diagnostic removed
     LLVM_DEBUG(llvm::dbgs() << "  wait_event: suspended process " << procId
                             << " on " << waitList.size() << " signals\n");
   } else {
@@ -16281,22 +16562,21 @@ unsigned LLHDProcessInterpreter::getLLVMTypeSize(Type type) {
   if (isa<LLVM::LLVMPointerType>(type))
     return 8;
 
-  // For LLVM struct types, sum the sizes of all elements.
-  // NOTE: This uses unaligned layout (no padding between fields) to match
-  // MooreToCore's sizeof computation. MooreToCore embeds struct sizes as
-  // constants in malloc/alloca calls without alignment padding.
+  // For LLVM struct/array types, use packed aggregate width in bits and
+  // round once to bytes. This matches the interpreter's aggregate bit-layout
+  // model used by llvm.insertvalue/extractvalue and avoids over-sizing nested
+  // sub-byte fields (e.g. struct<(i2, i2)> is 1 byte, not 2).
   if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
-    unsigned size = 0;
-    for (Type elemType : structType.getBody()) {
-      size += getLLVMTypeSize(elemType);
-    }
-    return size;
+    unsigned bitWidth = 0;
+    for (Type elemType : structType.getBody())
+      bitWidth += getTypeWidth(elemType);
+    return (bitWidth + 7) / 8;
   }
 
-  // For LLVM array types, multiply element size by count
   if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(type)) {
-    return getLLVMTypeSize(arrayType.getElementType()) *
-           arrayType.getNumElements();
+    unsigned bitWidth =
+        getTypeWidth(arrayType.getElementType()) * arrayType.getNumElements();
+    return (bitWidth + 7) / 8;
   }
 
   // For integer types, round up to bytes
@@ -17003,6 +17283,56 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
                        << childSigId << "\n");
           }
         }
+
+        // Reverse propagation: child → parent. When a child BFM writes to
+        // its interface, also drive the parent shadow signal and update
+        // parent memory so that routing processes in the parent module see
+        // the change.
+        auto childToParentIt = childToParentFieldAddr.find(storeAddr);
+        if (childToParentIt != childToParentFieldAddr.end()) {
+          uint64_t parentAddr = childToParentIt->second;
+          auto parentFieldIt = interfaceFieldSignals.find(parentAddr);
+          if (parentFieldIt != interfaceFieldSignals.end()) {
+            SignalId parentSigId = parentFieldIt->second;
+            const SignalValue &parentCurrent =
+                scheduler.getSignalValue(parentSigId);
+            if (!(parentCurrent == newSigVal)) {
+              pendingEpsilonDrives[parentSigId] = driveVal;
+              scheduler.updateSignal(parentSigId, newSigVal);
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  llvm.store: reverse-propagated to parent signal "
+                         << parentSigId << "\n");
+              // Also propagate parent → other children (not back to self)
+              auto parentPropIt =
+                  interfaceFieldPropagation.find(parentSigId);
+              if (parentPropIt != interfaceFieldPropagation.end()) {
+                for (SignalId otherChildSigId : parentPropIt->second) {
+                  if (otherChildSigId != fieldSigId) {
+                    pendingEpsilonDrives[otherChildSigId] = driveVal;
+                    scheduler.updateSignal(otherChildSigId, newSigVal);
+                  }
+                }
+              }
+            }
+          }
+          // Update parent memory so routing process reads correct values.
+          uint64_t parentRangeOffset = 0;
+          MemoryBlock *parentBlock =
+              findBlockByAddress(parentAddr, parentRangeOffset);
+          if (parentBlock &&
+              parentRangeOffset + storeSize <= parentBlock->size) {
+            if (!storeVal.isX()) {
+              APInt bits = storeVal.getAPInt();
+              unsigned neededWidth = storeSize * 8;
+              if (bits.getBitWidth() < neededWidth)
+                bits = bits.zext(neededWidth);
+              for (unsigned i = 0; i < storeSize && i < 8; ++i)
+                parentBlock->data[parentRangeOffset + i] =
+                    static_cast<uint8_t>(
+                        bits.extractBits(8, i * 8).getZExtValue());
+            }
+          }
+        }
       }
 
       // Also propagate to child BFM memory. When a parent interface field
@@ -17162,6 +17492,59 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
   // Debug: track current LLVM callee for crash diagnostics
   g_lastLLVMCallCallee = calleeName.data();
+
+  // Intercept uvm_port_base::connect() (llvm.call path) and record native
+  // port→provider connections before UVM phase checks can reject them.
+  if (calleeName.contains("uvm_port_base") &&
+      calleeName.contains("::connect") &&
+      !calleeName.contains("connect_phase")) {
+    SmallVector<InterpretedValue, 4> connectArgs;
+    for (Value operand : callOp.getOperands())
+      connectArgs.push_back(getValue(procId, operand));
+    if (connectArgs.size() >= 2 && !connectArgs[0].isX() &&
+        !connectArgs[1].isX()) {
+      uint64_t selfAddr = connectArgs[0].getUInt64();
+      uint64_t providerAddr = connectArgs[1].getUInt64();
+      if (selfAddr != 0 && providerAddr != 0) {
+        auto &conns = analysisPortConnections[selfAddr];
+        if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end())
+          conns.push_back(providerAddr);
+      }
+    }
+    return success();
+  }
+
+  // Intercept uvm_port_base::size() in LLVM::CallOp path and report count
+  // from native analysisPortConnections.
+  if (calleeName.contains("uvm_port_base") &&
+      calleeName.ends_with("::size") && callOp.getNumResults() >= 1) {
+    SmallVector<InterpretedValue, 2> sizeArgs;
+    for (Value operand : callOp.getOperands())
+      sizeArgs.push_back(getValue(procId, operand));
+    uint64_t selfAddr =
+        (!sizeArgs.empty() && !sizeArgs[0].isX()) ? sizeArgs[0].getUInt64() : 0;
+    int32_t count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
+    Value result = callOp.getResult();
+    unsigned width = getTypeWidth(result.getType());
+    setValue(procId, result,
+             InterpretedValue(
+                 llvm::APInt(width, static_cast<uint64_t>(count), false)));
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.call: uvm_port_base::size self=0x"
+                            << llvm::format_hex(selfAddr, 16) << " -> "
+                            << count << "\n");
+    return success();
+  }
+
+  // Intercept uvm_port_base::resolve_bindings() (LLVM::CallOp path) — skip
+  // resolution since we handle connections natively via analysisPortConnections.
+  // Without this, resolve_bindings tries to set up m_if/m_imp_list which hangs
+  // because our connect() interceptor doesn't populate UVM's internal state.
+  if (calleeName.contains("uvm_port_base") &&
+      calleeName.contains("::resolve_bindings")) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  llvm.call: resolve_bindings intercepted (no-op)\n");
+    return success();
+  }
 
   // Track UVM root construction for re-entrancy handling
   // When m_uvm_get_root is called, we need to mark root construction as started
@@ -25649,8 +26032,17 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
             if (auto *defOp = v.getDefiningOp()) {
               if (auto extractOp = dyn_cast<LLVM::ExtractValueOp>(defOp))
                 return traceSrcLoadAddr(extractOp.getContainer());
-              if (auto insertOp = dyn_cast<LLVM::InsertValueOp>(defOp))
+              if (auto insertOp = dyn_cast<LLVM::InsertValueOp>(defOp)) {
+                // Try tracing the inserted value first (data source), then
+                // fall back to the container. For BFM init patterns like
+                // load → extractvalue → insertvalue → store, the data comes
+                // from the VALUE operand, not the container (which is often
+                // undef when building a struct from scratch).
+                uint64_t addr = traceSrcLoadAddr(insertOp.getValue());
+                if (addr != 0)
+                  return addr;
                 return traceSrcLoadAddr(insertOp.getContainer());
+              }
               if (auto loadOp = dyn_cast<LLVM::LoadOp>(defOp)) {
                 uint64_t addr = getChildOrParentValue(loadOp.getAddr());
                 if (addr != 0)

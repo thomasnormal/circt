@@ -1042,11 +1042,6 @@ LogicalResult SimulationContext::run() {
       break;
     }
     ++loopIterations;
-    if (verbosity >= 3 && loopIterations <= 10) {
-      llvm::outs() << "[circt-sim] Loop iteration " << loopIterations
-                   << " at time " << scheduler.getCurrentTime().realTime << " fs\n";
-      llvm::outs().flush();
-    }
 
     // Check wall-clock timeout
     if (timeout > 0) {
@@ -1067,20 +1062,11 @@ LogicalResult SimulationContext::run() {
     }
 
     // Execute delta cycles
-    if (verbosity >= 3) {
-      llvm::outs() << "[circt-sim] Calling executeCurrentTime()...\n";
-      llvm::outs().flush();
-    }
     size_t deltasExecuted;
     if (parallelScheduler) {
       deltasExecuted = parallelScheduler->executeCurrentTimeParallel();
     } else {
       deltasExecuted = scheduler.executeCurrentTime();
-    }
-    if (verbosity >= 3) {
-      llvm::outs() << "[circt-sim] executeCurrentTime() returned "
-                   << deltasExecuted << " delta cycles\n";
-      llvm::outs().flush();
     }
 
     // Check if simulation was terminated during execution (e.g., $finish called).

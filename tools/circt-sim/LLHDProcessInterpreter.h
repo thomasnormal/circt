@@ -512,6 +512,7 @@ public:
   /// completed (including hdl_top initial blocks that call config_db::set).
   mlir::LogicalResult finalizeInit();
 
+  /// Drive all interface field shadow signals with their current memory values.
   /// Initialize child module instances using pre-discovered operations.
   /// This uses the pre-discovered hw.instance operations and registers
   /// signals/processes from the referenced modules iteratively.
@@ -677,6 +678,13 @@ private:
                                     mlir::Type hwType) const;
   llvm::APInt convertHWToLLVMLayout(llvm::APInt value, mlir::Type hwType,
                                     mlir::Type llvmType) const;
+  /// Fallback aggregate layout conversion when only the HW type is known.
+  /// This assumes a packed LLVM-style memory layout (fields/elements laid out
+  /// low-to-high in declaration order).
+  llvm::APInt convertLLVMToHWLayoutByHWType(llvm::APInt value,
+                                            mlir::Type hwType) const;
+  llvm::APInt convertHWToLLVMLayoutByHWType(llvm::APInt value,
+                                            mlir::Type hwType) const;
   /// Build an encoded unknown value for 4-state types, or return nullopt
   /// if the type cannot represent X/Z via explicit unknown bits.
   std::optional<llvm::APInt> getEncodedUnknownForType(mlir::Type type) const;

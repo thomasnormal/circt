@@ -1,4 +1,39 @@
 # CIRCT UVM Parity Changelog
+## Iteration 1280 - February 14, 2026
+
+### APB AVIP Full Transaction: Bidirectional VIF Signal Propagation
+
+1. **traceSrcLoadAddr fix (ROOT CAUSE)**: For `insertvalue val, container[idx]`,
+   the function traced CONTAINER (often `undef` when building struct from scratch)
+   instead of VALUE (the actual data source from a load). This caused child→parent
+   init copies (BFM output fields like psel, penable, paddr, etc.) to NOT be recorded
+   in `childModuleCopyPairs`, which meant `interfaceFieldPropagation` had no
+   child→parent signal links. BFM writes never propagated to parent routing process.
+   Fix: try VALUE first, then fall back to container.
+
+2. **Child→parent reverse propagation in interpretLLVMStore**: When a child BFM
+   writes to its local interface struct (different malloc from parent's), also
+   drive the parent shadow signal and update parent memory via `childToParentFieldAddr`
+   reverse mapping. Also propagates parent→other children (not back to self).
+
+3. **Result**: Full APB transaction IDLE→SETUP→ACCESS→COMPLETE with 2 wait states.
+   Master coverage 100% (all 8 coverpoints). Slave responds at 80ns, master
+   receives completion at 150ns. Simulation runs to 500ns (max-time).
+
+4. **Debug cleanup**: Removed 26+ diagnostic prints (CASE3-DIAG, SHADOW-DRV,
+   SEQ-*, CI-*, IMP-DIAG, WAIT-DIAG, etc.) from interpreter.
+
+### Remaining Gaps
+- Slave coverage 0%: slave monitor BFM's `wait_for_preset_n()` blocks forever
+  because `preset_n` signal edges don't propagate through slave interface `intf_s[0]`
+- 5 UVM_ERROR from scoreboard check_phase (expected — single transaction test)
+
+### Validation
+
+- sv-tests simulation: 907/907, 855 pass, 52 xfail, 0 fail = **100%**
+- circt-sim lit tests: 240/241 pass (1 known: port-size-after-connect.sv)
+- APB AVIP dual-top: full transaction, master coverage 100%, 0 UVM_FATAL
+
 ## Iteration 1279 - February 13, 2026
 
 ### sv-tests BMC Frontend Resilience: OOM Memory Retry + Launch Fallback Copy

@@ -91,7 +91,7 @@ to commercial simulators like Cadence Xcelium.
 | `$fopen` / `$fwrite` | WORKS | Basic file operations |
 | Malloc / free | WORKS | Heap allocation with unaligned struct layout |
 | **Simulation Infrastructure** | | |
-| Combined HdlTop+HvlTop | WORKS | Multi-top simulation; APB AVIP dual-top runs to ~60ns with virtual sequence execution; phase hopper objection fix ensures run_phase blocks correctly; graceful sim.terminate in dual-top mode; 64MB stack for deep UVM nesting; 0 UVM_FATAL, 0 UVM_ERROR |
+| Combined HdlTop+HvlTop | WORKS | Multi-top simulation; APB AVIP dual-top completes full APB transaction IDLE→SETUP→ACCESS→COMPLETE at 150ns; master coverage 100%; bidirectional VIF signal propagation; phase hopper objection fix; graceful sim.terminate; 64MB stack; 0 UVM_FATAL |
 | Function phase IMP sequencing | WORKS | Intercepts `process_phase` to block function phase IMPs until predecessor completes; `finish_phase` marks IMP done; currentOp-reset pattern for correct re-execution |
 | Phase hopper objections | WORKS | `get_objection`/`raise`/`drop`/`wait_for` interceptors for `uvm_phase_hopper::` variants; `wasEverRaised` tracking prevents premature phase completion |
 | Sub-sequence body dispatch | MISSING | Factory-created sub-sequences (`create_by_type`) get base class `uvm_sequence_base::body` instead of derived body; causes "Body definition undefined" warnings |
@@ -140,7 +140,7 @@ coverage report with 8 coverpoints runs in report_phase.
 
 | AVIP | HvlTop | HdlTop | Combined | Status | Notes |
 |------|--------|--------|----------|--------|-------|
-| APB | Full topology | ✅ Dual-top | ✅ All phases + sequences | Virtual seq runs | ~60ns sim time; 0 UVM_ERROR; BFM idle; "Body undefined" from sub-seqs |
+| APB | Full topology | ✅ Dual-top | ✅ Full transaction | **Master 100% cov** | 500ns sim; IDLE→SETUP→ACCESS→COMPLETE; 5 UVM_ERROR (scoreboard, expected); slave cov 0% (monitor BFM blocked on reset) |
 | AHB | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | No MLIR file available |
 | UART | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | hvl_top-only exits 0 |
 | I2S | UVM_FATAL (stale) | Needs compile | Not tested | Stale MLIR | Pre-compiled MLIR has parse errors |
@@ -154,10 +154,12 @@ coverage report with 8 coverpoints runs in report_phase.
 1. ~~Compile both `hdl_top.sv` + `hvl_top.sv` together via `circt-verilog`~~ ✅ APB done
 2. ~~Simulate with `circt-sim combined.mlir --top hvl_top --top hdl_top`~~ ✅ APB boots
 3. ~~Validate BFM handles flow through config_db (hdl_top sets, hvl_top gets)~~ ✅ APB works
-4. **Fix seq_item_port connection** — driver needs sequencer wiring
-5. **Implement VIF task dispatch** — BFM interface method calls
-6. **Recompile all 9 AVIPs** with dual-top support
-7. Compare coverage numbers vs Xcelium reference outputs
+4. ~~Fix seq_item_port connection~~ ✅ Native sequencer interface with FIFO + direct-wake
+5. ~~Implement VIF task dispatch~~ ✅ Bidirectional VIF propagation + shadow signals
+6. ~~Full APB transaction~~ ✅ IDLE→SETUP→ACCESS→COMPLETE, master coverage 100%
+7. **Fix slave coverage 0%** — slave monitor BFM blocked on `wait_for_preset_n()`
+8. **Recompile all 9 AVIPs** with dual-top support
+9. Compare coverage numbers vs Xcelium reference outputs (APB: 21-30%)
 
 ## Key Fixes History
 
