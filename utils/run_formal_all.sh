@@ -1241,6 +1241,29 @@ Options:
                          policy violations by task_profile/status class (default:
                          OUT_DIR/opentitan-fpv-bmc-assertion-status-policy-grouped-violations.tsv
                          when status policy source is set)
+  --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file FILE
+                         Optional baseline TSV path for grouped assertion status
+                         policy violations drift checks
+  --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-file FILE
+                         Optional output TSV path for grouped assertion status
+                         policy violations drift rows (default:
+                         OUT_DIR/opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift.tsv
+                         when grouped-violations baseline is set)
+  --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-allowlist-file FILE
+                         Optional allowlist file for grouped assertion status
+                         policy violations drift checks (task_profile
+                         exact/prefix/regex)
+  --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-file FILE
+                         Optional allowlist file for grouped assertion status
+                         policy violations drift-row checks
+                         (`task_profile::violation_kind::status::kind`,
+                         exact/prefix/regex)
+  --update-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline
+                         Update --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file
+                         with the current grouped assertion-status-policy artifact
+  --fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift
+                         Fail when OpenTitan FPV grouped assertion status policy
+                         violations drift checker reports non-allowlisted drift
   --fail-on-opentitan-fpv-bmc-assertion-status-policy
                          Fail when OpenTitan FPV assertion status policy checker
                          reports violations
@@ -2955,6 +2978,10 @@ OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_FILE=""
 OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE=""
 OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_VIOLATIONS_FILE=""
 OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE=""
+OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE=""
+OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_FILE=""
+OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE=""
+OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE=""
 OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE=""
 OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE=""
 OPENTITAN_FPV_FUSESOC_BIN="fusesoc"
@@ -2968,6 +2995,8 @@ UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE=0
 FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=0
 UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE=0
 FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT=0
+UPDATE_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE=0
+FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT=0
 FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY=0
 FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY=0
 UPDATE_OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE=0
@@ -3201,6 +3230,14 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_VIOLATIONS_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-file)
       OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file)
+      OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-file)
+      OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-allowlist-file)
+      OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-file)
+      OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-evidence-parity-file)
       OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-evidence-parity-allowlist-file)
@@ -3227,6 +3264,10 @@ while [[ $# -gt 0 ]]; do
       UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE=1; shift ;;
     --fail-on-opentitan-fpv-bmc-assertion-results-drift)
       FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT=1; shift ;;
+    --update-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline)
+      UPDATE_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE=1; shift ;;
+    --fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift)
+      FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT=1; shift ;;
     --fail-on-opentitan-fpv-bmc-assertion-status-policy)
       FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY=1; shift ;;
     --fail-on-opentitan-fpv-bmc-evidence-parity)
@@ -3882,6 +3923,9 @@ fi
 if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && ( -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_FILE" || -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE" ) && -z "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE" ]]; then
   OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE="$OUT_DIR/opentitan-fpv-bmc-assertion-status-policy-grouped-violations.tsv"
 fi
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE" && -z "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_FILE" ]]; then
+  OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_FILE="$OUT_DIR/opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift.tsv"
+fi
 if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -z "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE" ]]; then
   OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE="$OUT_DIR/opentitan-fpv-bmc-evidence-parity.tsv"
 fi
@@ -4529,6 +4573,22 @@ if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE" &&
   echo "--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-file requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-allowlist-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
 if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
   echo "--opentitan-fpv-bmc-evidence-parity-file requires --with-opentitan-fpv-bmc" >&2
   exit 1
@@ -4551,6 +4611,14 @@ if [[ "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE" == "1" && "$WITH_OP
 fi
 if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
   echo "--fail-on-opentitan-fpv-bmc-assertion-results-drift requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--update-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
@@ -4605,8 +4673,24 @@ if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT" == "1" && -z "$OPENTI
   echo "--fail-on-opentitan-fpv-bmc-assertion-results-drift requires --opentitan-fpv-bmc-assertion-results-baseline-file" >&2
   exit 1
 fi
+if [[ "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE" == "1" && -z "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE" ]]; then
+  echo "--update-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline requires --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT" == "1" && -z "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE" ]]; then
+  echo "--fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift requires --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file" >&2
+  exit 1
+fi
 if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY" == "1" && -z "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_FILE" && -z "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE" ]]; then
   echo "--fail-on-opentitan-fpv-bmc-assertion-status-policy requires --opentitan-fpv-bmc-assertion-status-policy-file or --opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT" == "1" && -z "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_FILE" && -z "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE" ]]; then
+  echo "--fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift requires --opentitan-fpv-bmc-assertion-status-policy-file or --opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE" && -z "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_FILE" && -z "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE" ]]; then
+  echo "--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file requires --opentitan-fpv-bmc-assertion-status-policy-file or --opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file" >&2
   exit 1
 fi
 if [[ "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" == "1" && "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" == "1" ]]; then
@@ -4617,12 +4701,20 @@ if [[ "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE" == "1" && "$FAIL_ON
   echo "--update-opentitan-fpv-bmc-assertion-results-baseline cannot be combined with --fail-on-opentitan-fpv-bmc-assertion-results-drift" >&2
   exit 1
 fi
+if [[ "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE" == "1" && "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT" == "1" ]]; then
+  echo "--update-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline cannot be combined with --fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift" >&2
+  exit 1
+fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" != "1" && ! -f "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" ]]; then
   echo "missing --opentitan-fpv-bmc-summary-baseline-file: $OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE" != "1" && ! -f "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" ]]; then
   echo "missing --opentitan-fpv-bmc-assertion-results-baseline-file: $OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE" != "1" && ! -f "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE" ]]; then
+  echo "missing --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file: $OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_FILE" && ! -r "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_FILE" ]]; then
@@ -4655,6 +4747,14 @@ if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE" && ! -r "$O
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ROW_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ROW_ALLOWLIST_FILE" ]]; then
   echo "OpenTitan FPV BMC assertion-results drift row allowlist file not readable: $OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ROW_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE" ]]; then
+  echo "OpenTitan FPV BMC grouped assertion-status-policy drift allowlist file not readable: $OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE" ]]; then
+  echo "OpenTitan FPV BMC grouped assertion-status-policy drift row allowlist file not readable: $OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" ]]; then
@@ -6203,6 +6303,9 @@ fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT=1
 fi
+if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE" ]]; then
+  FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT=1
+fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" && ( -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_FILE" || -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE" ) ]]; then
   FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY=1
 fi
@@ -6258,6 +6361,14 @@ if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE" && "$FAIL_O
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ROW_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--opentitan-fpv-bmc-assertion-results-drift-row-allowlist-file requires --fail-on-opentitan-fpv-bmc-assertion-results-drift or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-allowlist-file requires --fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-file requires --fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -8891,6 +9002,10 @@ compute_lane_state_config_hash() {
     printf "opentitan_fpv_bmc_assertion_status_policy_task_profile_presets_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE"
     printf "opentitan_fpv_bmc_assertion_status_policy_violations_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_VIOLATIONS_FILE"
     printf "opentitan_fpv_bmc_assertion_status_policy_grouped_violations_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE"
+    printf "opentitan_fpv_bmc_assertion_status_policy_grouped_violations_baseline_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE"
+    printf "opentitan_fpv_bmc_assertion_status_policy_grouped_violations_drift_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_FILE"
+    printf "opentitan_fpv_bmc_assertion_status_policy_grouped_violations_drift_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE"
+    printf "opentitan_fpv_bmc_assertion_status_policy_grouped_violations_drift_row_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE"
     printf "opentitan_fpv_bmc_evidence_parity_file=%s\n" "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE"
     printf "opentitan_fpv_bmc_evidence_parity_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE"
     printf "opentitan_fpv_fusesoc_bin=%s\n" "$OPENTITAN_FPV_FUSESOC_BIN"
@@ -8904,6 +9019,8 @@ compute_lane_state_config_hash() {
     printf "fail_on_opentitan_fpv_bmc_summary_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT"
     printf "update_opentitan_fpv_bmc_assertion_results_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE"
     printf "fail_on_opentitan_fpv_bmc_assertion_results_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT"
+    printf "update_opentitan_fpv_bmc_assertion_status_policy_grouped_violations_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE"
+    printf "fail_on_opentitan_fpv_bmc_assertion_status_policy_grouped_violations_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT"
     printf "fail_on_opentitan_fpv_bmc_assertion_status_policy=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY"
     printf "fail_on_opentitan_fpv_bmc_evidence_parity=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY"
     printf "update_opentitan_connectivity_bmc_status_baseline=%s\n" "$UPDATE_OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE"
@@ -14434,6 +14551,21 @@ run_opentitan_fpv_bmc_lane() {
   if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE" ]]; then
     opentitan_fpv_bmc_env+=("BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_OUT=$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE")
   fi
+  if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE" ]]; then
+    opentitan_fpv_bmc_env+=("BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE=$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE")
+  fi
+  if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_FILE" ]]; then
+    opentitan_fpv_bmc_env+=("BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_OUT=$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_FILE")
+  fi
+  if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE" ]]; then
+    opentitan_fpv_bmc_env+=("BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE=$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE")
+  fi
+  if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE" ]]; then
+    opentitan_fpv_bmc_env+=("BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE=$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE")
+  fi
+  if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT" == "1" ]]; then
+    opentitan_fpv_bmc_env+=("BMC_FAIL_ON_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT=1")
+  fi
   if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY" == "1" ]]; then
     opentitan_fpv_bmc_env+=("BMC_FAIL_ON_ASSERTION_STATUS_POLICY=1")
   fi
@@ -14467,6 +14599,19 @@ run_opentitan_fpv_bmc_lane() {
     echo "warning: OpenTitan FPV BMC assertion-results baseline update skipped; assertion-results file is empty: $assertion_results_file" >&2
   }
 
+  maybe_update_opentitan_fpv_bmc_assertion_status_policy_grouped_violations_baseline() {
+    if [[ "$UPDATE_OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE" != "1" ]]; then
+      return
+    fi
+    mkdir -p "$(dirname "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE")"
+    if [[ -s "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE" ]]; then
+      cp "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE" "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE"
+      echo "updated OpenTitan FPV BMC grouped assertion-status-policy baseline: $OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE" >&2
+      return
+    fi
+    echo "warning: OpenTitan FPV BMC grouped assertion-status-policy baseline update skipped; grouped-violations file is empty: $OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE" >&2
+  }
+
   run_suite "$suite_name" \
     env "${opentitan_fpv_bmc_env[@]}" \
     utils/run_opentitan_fpv_circt_bmc.py --workdir "$workdir" "${opentitan_fpv_bmc_args[@]}" || true
@@ -14489,6 +14634,7 @@ run_opentitan_fpv_bmc_lane() {
       fi
       maybe_update_opentitan_fpv_bmc_summary_baseline
       maybe_update_opentitan_fpv_bmc_assertion_results_baseline
+      maybe_update_opentitan_fpv_bmc_assertion_status_policy_grouped_violations_baseline
       record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 0 1 "$no_impl_summary"
       return
     fi
@@ -14510,6 +14656,7 @@ run_opentitan_fpv_bmc_lane() {
     fi
     maybe_update_opentitan_fpv_bmc_summary_baseline
     maybe_update_opentitan_fpv_bmc_assertion_results_baseline
+    maybe_update_opentitan_fpv_bmc_assertion_status_policy_grouped_violations_baseline
     record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$missing_summary"
     return
   fi
@@ -14581,6 +14728,7 @@ PY
   fi
   maybe_update_opentitan_fpv_bmc_summary_baseline
   maybe_update_opentitan_fpv_bmc_assertion_results_baseline
+  maybe_update_opentitan_fpv_bmc_assertion_status_policy_grouped_violations_baseline
   append_filtered_min_total_violation total summary
   maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"

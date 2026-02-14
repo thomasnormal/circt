@@ -106,6 +106,17 @@ class AssertionStatusPolicyViolationRow:
     policy_sources: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class AssertionStatusPolicyGroupedViolationRow:
+    key: str
+    task_profile: str
+    violation_kind: str
+    status: str
+    target_count: str
+    targets: str
+    policy_sources: str
+
+
 def fail(msg: str) -> None:
     print(msg, file=sys.stderr)
     raise SystemExit(1)
@@ -814,36 +825,133 @@ def write_assertion_status_policy_violations(
 
 
 def write_assertion_status_policy_grouped_violations(
-    path: Path, rows: list[AssertionStatusPolicyViolationRow]
+    path: Path, rows: list[AssertionStatusPolicyGroupedViolationRow]
 ) -> None:
-    grouped: dict[tuple[str, str, str], tuple[set[str], set[str]]] = {}
-    for row in rows:
-        cohort = row.task_profile if row.task_profile else "<unknown_task_profile>"
-        key = (cohort, row.kind, row.status)
-        if key not in grouped:
-            grouped[key] = (set(), set())
-        grouped[key][0].add(row.target_name)
-        for src in row.policy_sources:
-            grouped[key][1].add(src)
-
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
         writer.writerow(
             ["task_profile", "kind", "status", "target_count", "targets", "policy_sources"]
         )
-        for cohort, kind, status in sorted(grouped.keys()):
-            targets, sources = grouped[(cohort, kind, status)]
+        for row in rows:
             writer.writerow(
                 [
-                    cohort,
-                    kind,
-                    status,
-                    str(len(targets)),
-                    ";".join(sorted(targets)),
-                    ";".join(sorted(sources)),
+                    row.task_profile,
+                    row.violation_kind,
+                    row.status,
+                    row.target_count,
+                    row.targets,
+                    row.policy_sources,
                 ]
             )
+
+
+def summarize_assertion_status_policy_grouped_violations(
+    rows: list[AssertionStatusPolicyViolationRow],
+) -> list[AssertionStatusPolicyGroupedViolationRow]:
+    grouped: dict[tuple[str, str, str], tuple[set[str], set[str]]] = {}
+    for row in rows:
+        cohort = row.task_profile if row.task_profile else "<unknown_task_profile>"
+        group_key = (cohort, row.kind, row.status)
+        if group_key not in grouped:
+            grouped[group_key] = (set(), set())
+        grouped[group_key][0].add(row.target_name)
+        for src in row.policy_sources:
+            grouped[group_key][1].add(src)
+
+    out: list[AssertionStatusPolicyGroupedViolationRow] = []
+    for task_profile, violation_kind, status in sorted(grouped.keys()):
+        targets, sources = grouped[(task_profile, violation_kind, status)]
+        key = f"{task_profile}::{violation_kind}::{status}"
+        out.append(
+            AssertionStatusPolicyGroupedViolationRow(
+                key=key,
+                task_profile=task_profile,
+                violation_kind=violation_kind,
+                status=status,
+                target_count=str(len(targets)),
+                targets=";".join(sorted(targets)),
+                policy_sources=";".join(sorted(sources)),
+            )
+        )
+    return out
+
+
+def read_assertion_status_policy_grouped_violations(
+    path: Path,
+) -> dict[str, AssertionStatusPolicyGroupedViolationRow]:
+    if not path.is_file():
+        fail(f"assertion status policy grouped violations file not found: {path}")
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames is None:
+            fail(
+                "assertion status policy grouped violations file missing "
+                f"header row: {path}"
+            )
+        required = {
+            "task_profile",
+            "kind",
+            "status",
+            "target_count",
+            "targets",
+            "policy_sources",
+        }
+        missing = sorted(required.difference(reader.fieldnames))
+        if missing:
+            fail(
+                "assertion status policy grouped violations file missing required "
+                f"columns {missing}: {path} (found: {reader.fieldnames})"
+            )
+        out: dict[str, AssertionStatusPolicyGroupedViolationRow] = {}
+        for idx, row in enumerate(reader, start=2):
+            task_profile = (row.get("task_profile") or "").strip()
+            violation_kind = (row.get("kind") or "").strip()
+            status = (row.get("status") or "").strip()
+            target_count = (row.get("target_count") or "").strip()
+            targets = (row.get("targets") or "").strip()
+            policy_sources = (row.get("policy_sources") or "").strip()
+            if not task_profile or not violation_kind or not status:
+                fail(
+                    "assertion status policy grouped violations row missing "
+                    f"task_profile/kind/status in {path} row {idx}"
+                )
+            key = f"{task_profile}::{violation_kind}::{status}"
+            if key in out:
+                fail(
+                    "duplicate assertion status policy grouped-violations key "
+                    f"'{key}' in {path} row {idx}"
+                )
+            out[key] = AssertionStatusPolicyGroupedViolationRow(
+                key=key,
+                task_profile=task_profile,
+                violation_kind=violation_kind,
+                status=status,
+                target_count=target_count,
+                targets=targets,
+                policy_sources=policy_sources,
+            )
+    return out
+
+
+def write_assertion_status_policy_grouped_violations_drift(
+    path: Path, rows: list[tuple[str, str, str, str, str, str]]
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(
+            [
+                "task_profile",
+                "violation_kind",
+                "status",
+                "kind",
+                "baseline",
+                "current",
+            ]
+        )
+        for row in rows:
+            writer.writerow(row)
 
 
 def parse_args() -> argparse.Namespace:
@@ -1054,6 +1162,65 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--assertion-status-policy-grouped-violations-baseline-file",
+        default=os.environ.get(
+            "BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE", ""
+        ),
+        help=(
+            "Optional baseline TSV path for grouped assertion status policy "
+            "violations drift checks."
+        ),
+    )
+    parser.add_argument(
+        "--assertion-status-policy-grouped-violations-drift-file",
+        default=os.environ.get(
+            "BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_OUT", ""
+        ),
+        help=(
+            "Optional output TSV path for grouped assertion status policy "
+            "violations drift rows."
+        ),
+    )
+    parser.add_argument(
+        "--assertion-status-policy-grouped-violations-drift-allowlist-file",
+        default=os.environ.get(
+            "BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ALLOWLIST_FILE", ""
+        ),
+        help=(
+            "Optional task_profile allowlist file for grouped assertion status "
+            "policy violations drift suppression. Each non-comment line is "
+            "exact:<name>, prefix:<prefix>, regex:<pattern>, or bare exact."
+        ),
+    )
+    parser.add_argument(
+        "--assertion-status-policy-grouped-violations-drift-row-allowlist-file",
+        default=os.environ.get(
+            "BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT_ROW_ALLOWLIST_FILE",
+            "",
+        ),
+        help=(
+            "Optional row allowlist file for grouped assertion status policy "
+            "violations drift suppression. Match token format: "
+            "'<task_profile>::<violation_kind>::<status>::<kind>' where kind is "
+            "one of missing_group_row,new_group_row,target_count,targets,"
+            "policy_sources."
+        ),
+    )
+    parser.add_argument(
+        "--fail-on-assertion-status-policy-grouped-violations-drift",
+        action="store_true",
+        default=(
+            os.environ.get(
+                "BMC_FAIL_ON_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_DRIFT", "0"
+            )
+            == "1"
+        ),
+        help=(
+            "Fail when grouped assertion status policy violations drift is "
+            "detected vs baseline."
+        ),
+    )
+    parser.add_argument(
         "--fail-on-assertion-status-policy",
         action="store_true",
         default=os.environ.get("BMC_FAIL_ON_ASSERTION_STATUS_POLICY", "0") == "1",
@@ -1147,6 +1314,24 @@ def main() -> int:
     ):
         fail(
             "--fail-on-assertion-status-policy requires "
+            "--assertion-status-policy-file or "
+            "--assertion-status-policy-task-profile-presets-file"
+        )
+    if (
+        args.fail_on_assertion_status_policy_grouped_violations_drift
+        and not args.assertion_status_policy_grouped_violations_baseline_file
+    ):
+        fail(
+            "--fail-on-assertion-status-policy-grouped-violations-drift requires "
+            "--assertion-status-policy-grouped-violations-baseline-file"
+        )
+    if (
+        args.assertion_status_policy_grouped_violations_baseline_file
+        and not args.assertion_status_policy_file
+        and not args.assertion_status_policy_task_profile_presets_file
+    ):
+        fail(
+            "--assertion-status-policy-grouped-violations-baseline-file requires "
             "--assertion-status-policy-file or "
             "--assertion-status-policy-task-profile-presets-file"
         )
@@ -1782,6 +1967,9 @@ def main() -> int:
             policy_violations = evaluate_assertion_status_policy(
                 checks, merged_assertion_rows, target_task_profiles
             )
+            grouped_policy_violations = summarize_assertion_status_policy_grouped_violations(
+                policy_violations
+            )
             if args.assertion_status_policy_violations_file:
                 violations_path = Path(
                     args.assertion_status_policy_violations_file
@@ -1798,12 +1986,162 @@ def main() -> int:
                     args.assertion_status_policy_grouped_violations_file
                 ).resolve()
                 write_assertion_status_policy_grouped_violations(
-                    grouped_path, policy_violations
+                    grouped_path, grouped_policy_violations
                 )
                 print(
                     f"assertion status policy grouped violations: {grouped_path}",
                     flush=True,
                 )
+            if args.assertion_status_policy_grouped_violations_baseline_file:
+                baseline_path = Path(
+                    args.assertion_status_policy_grouped_violations_baseline_file
+                ).resolve()
+                baseline = read_assertion_status_policy_grouped_violations(baseline_path)
+                current = {row.key: row for row in grouped_policy_violations}
+                current_path = (
+                    Path(args.assertion_status_policy_grouped_violations_file).resolve()
+                    if args.assertion_status_policy_grouped_violations_file
+                    else Path("<in-memory-grouped-violations-current>")
+                )
+
+                allow_exact: set[str] = set()
+                allow_prefix: list[str] = []
+                allow_regex: list[re.Pattern[str]] = []
+                if args.assertion_status_policy_grouped_violations_drift_allowlist_file:
+                    allow_exact, allow_prefix, allow_regex = load_allowlist(
+                        Path(
+                            args.assertion_status_policy_grouped_violations_drift_allowlist_file
+                        ).resolve()
+                    )
+                row_allow_exact: set[str] = set()
+                row_allow_prefix: list[str] = []
+                row_allow_regex: list[re.Pattern[str]] = []
+                if (
+                    args.assertion_status_policy_grouped_violations_drift_row_allowlist_file
+                ):
+                    row_allow_exact, row_allow_prefix, row_allow_regex = load_allowlist(
+                        Path(
+                            args.assertion_status_policy_grouped_violations_drift_row_allowlist_file
+                        ).resolve()
+                    )
+
+                drift_rows: list[tuple[str, str, str, str, str, str]] = []
+                baseline_keys = set(baseline.keys())
+                current_keys = set(current.keys())
+                for key in sorted(baseline_keys - current_keys):
+                    b = baseline[key]
+                    if is_allowlisted(
+                        b.task_profile, allow_exact, allow_prefix, allow_regex
+                    ):
+                        continue
+                    drift_token = f"{key}::missing_group_row"
+                    if is_allowlisted(
+                        drift_token,
+                        row_allow_exact,
+                        row_allow_prefix,
+                        row_allow_regex,
+                    ):
+                        continue
+                    drift_rows.append(
+                        (
+                            b.task_profile,
+                            b.violation_kind,
+                            b.status,
+                            "missing_group_row",
+                            key,
+                            "absent",
+                        )
+                    )
+                for key in sorted(current_keys - baseline_keys):
+                    c = current[key]
+                    if is_allowlisted(
+                        c.task_profile, allow_exact, allow_prefix, allow_regex
+                    ):
+                        continue
+                    drift_token = f"{key}::new_group_row"
+                    if is_allowlisted(
+                        drift_token,
+                        row_allow_exact,
+                        row_allow_prefix,
+                        row_allow_regex,
+                    ):
+                        continue
+                    drift_rows.append(
+                        (
+                            c.task_profile,
+                            c.violation_kind,
+                            c.status,
+                            "new_group_row",
+                            "absent",
+                            key,
+                        )
+                    )
+                for key in sorted(baseline_keys.intersection(current_keys)):
+                    b = baseline[key]
+                    c = current[key]
+                    if is_allowlisted(
+                        b.task_profile, allow_exact, allow_prefix, allow_regex
+                    ):
+                        continue
+                    comparisons = [
+                        ("target_count", b.target_count, c.target_count),
+                        ("targets", b.targets, c.targets),
+                        ("policy_sources", b.policy_sources, c.policy_sources),
+                    ]
+                    for kind, before, after in comparisons:
+                        if before == after:
+                            continue
+                        drift_token = f"{key}::{kind}"
+                        if is_allowlisted(
+                            drift_token,
+                            row_allow_exact,
+                            row_allow_prefix,
+                            row_allow_regex,
+                        ):
+                            continue
+                        drift_rows.append(
+                            (b.task_profile, b.violation_kind, b.status, kind, before, after)
+                        )
+
+                if args.assertion_status_policy_grouped_violations_drift_file:
+                    drift_path = Path(
+                        args.assertion_status_policy_grouped_violations_drift_file
+                    ).resolve()
+                    write_assertion_status_policy_grouped_violations_drift(
+                        drift_path, drift_rows
+                    )
+                    print(
+                        f"assertion status policy grouped violations drift: {drift_path}",
+                        flush=True,
+                    )
+
+                if drift_rows:
+                    sample = ", ".join(
+                        f"{cohort}:{vk}:{status}:{kind}"
+                        for cohort, vk, status, kind, _, _ in drift_rows[:6]
+                    )
+                    if len(drift_rows) > 6:
+                        sample += ", ..."
+                    print(
+                        (
+                            "opentitan fpv assertion-status policy grouped "
+                            f"violations drift detected: rows={len(drift_rows)} "
+                            f"sample=[{sample}] baseline={baseline_path} "
+                            f"current={current_path}"
+                        ),
+                        file=sys.stderr,
+                    )
+                    if args.fail_on_assertion_status_policy_grouped_violations_drift:
+                        return 1
+                else:
+                    print(
+                        (
+                            "opentitan fpv assertion-status policy grouped "
+                            f"violations drift check passed: rows={len(current)} "
+                            f"baseline={baseline_path} current={current_path}"
+                        ),
+                        file=sys.stderr,
+                    )
             if policy_violations:
                 sample = ", ".join(
                     f"{row.target_name}:{row.kind}:{row.status}"

@@ -124,13 +124,27 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
    - `test/Tools/run-formal-all-opentitan-lec-missing-results-unknown-module.test`
    - updated:
      `test/Tools/run-formal-all-opentitan-lec-missing-results-reason.test`
-12. Remaining limitation vs Jasper/VCF-style mature flows:
+12. Grouped assertion-status-policy drift governance completed for OpenTitan FPV
+    BMC:
+   - added baseline/update/fail/allowlist controls for grouped status-policy
+     diagnostics:
+     - `--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file`
+     - `--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-file`
+     - `--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-allowlist-file`
+     - `--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-file`
+     - `--update-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline`
+     - `--fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift`
+   - strict-gate now auto-enables grouped status-policy drift fail mode when a
+     grouped baseline is configured.
+13. Remaining limitation vs Jasper/VCF-style mature flows:
    - policy execution is now structured, but default OpenTitan preset bundles
-     and drift-governed policy rollout workflows are still manual.
-13. Next formal milestone (OpenTitan-aligned, backend-generic):
+     are still not shipped as canonical repo-managed artifacts.
+   - largest practical gap for OpenTitan-wide rollout remains target-level
+     default policy packaging and review workflow ergonomics.
+14. Next formal milestone (OpenTitan-aligned, backend-generic):
    - advance per-assertion reporting parity:
-     - ship canonical OpenTitan task-profile preset bundles and add baseline/
-       fail governance for grouped status-policy diagnostics.
+     - ship canonical OpenTitan task-profile preset bundles and
+       checked-in baseline update workflows for FPV policy governance.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 

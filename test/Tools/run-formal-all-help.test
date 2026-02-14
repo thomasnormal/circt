@@ -166,6 +166,12 @@
 // CHECK: --opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file
 // CHECK: --opentitan-fpv-bmc-assertion-status-policy-violations-file
 // CHECK: --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-file
+// CHECK: --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file
+// CHECK: --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-file
+// CHECK: --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-allowlist-file
+// CHECK: --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-file
+// CHECK: --update-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline
+// CHECK: --fail-on-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift
 // CHECK: --fail-on-opentitan-fpv-bmc-assertion-status-policy
 // CHECK: --opentitan-fpv-bmc-evidence-parity-file
 // CHECK: --opentitan-fpv-bmc-evidence-parity-allowlist-file
