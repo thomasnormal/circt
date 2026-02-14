@@ -243,6 +243,12 @@ verilator-verification, and yosys corpora).
    - wire the generated target manifest into runnable OpenTitan FPV lane
      planning (currently manifest generation is integrated, execution mapping is
      still pending).
+3. Phase B bootstrap is now landed:
+   - new resolver `utils/resolve_opentitan_formal_compile_contracts.py`
+     generates deterministic per-target compile contracts from FuseSoC
+     `*.eda.yml` artifacts (with `ok`/`partial`/`error` setup status tracking).
+   - next Phase B step is wiring these contracts into formal-lane execution and
+     strict-gate drift baselines.
 
 #### Success Definition (program-level)
 

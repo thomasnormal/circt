@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1284 - February 14, 2026
+
+### OpenTitan FPV Adapter Phase B Bootstrap: FuseSoC-backed Compile Contracts
+
+1. Added a new resolver utility:
+   - `utils/resolve_opentitan_formal_compile_contracts.py`
+2. The resolver consumes selected-target manifests and runs FuseSoC setup per
+   target (`run --setup`) to extract generated `*.eda.yml` contracts.
+3. Emitted compile-contract rows now include deterministic fingerprints for:
+   - ordered file lists
+   - include directories
+   - defines
+   - aggregate per-target contract fingerprint
+4. Setup outcomes are explicitly classified per target:
+   - `ok`: FuseSoC setup succeeded and contract extracted
+   - `partial`: setup failed but `*.eda.yml` contract was still produced
+   - `error`: no contract artifact produced
+5. Added regression coverage:
+   - `test/Tools/resolve-opentitan-formal-compile-contracts-basic.test`
+   - `test/Tools/resolve-opentitan-formal-compile-contracts-partial.test`
+   - `test/Tools/resolve-opentitan-formal-compile-contracts-missing-eda.test`
+
+### Validation
+
+- `python3 -m py_compile utils/resolve_opentitan_formal_compile_contracts.py`
+  - PASS
+- Focused lit:
+  - compile-contract resolver test slice: **3/3 PASS**
+- Real OpenTitan cfg sanity:
+  - selected targets from
+    `hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson` resolved to
+    deterministic compile-contract rows with `setup_status=partial` and stable
+    fingerprints (no contract extraction errors).
+
 ## Iteration 1282 - February 14, 2026
 
 ### OpenTitan FPV Adapter Phase A: Native cfg ingestion + `--select-cfgs`
