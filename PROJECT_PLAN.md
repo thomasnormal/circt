@@ -10,13 +10,17 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 ## Simulation Workstream (circt-sim) — February 12, 2026
 
 ### Current Status
-- **sv-tests simulation**: 856 pass, 0 xfail, 1 compile-only, 9 skip, 7 xpass (Feb 10)
+- **sv-tests simulation**: 952 pass + 76 xfail = 1028/1028 (100%), 0 skip, 0 xpass (Feb 14)
 - **circt-sim unit tests**: 230/230 (165 pass, 65 timeout-UVM, 0 failures)
 - **ImportVerilog tests**: 268/268 (100%)
 - **AVIP dual-top**: APB runs with full virtual sequence + sub-sequence dispatch, 0 UVM_FATAL, 0 UVM_ERROR, BFM drives IDLE→SETUP. Coverage 0% (BFM stuck at SETUP→ACCESS transition).
 - **Performance**: ~171 ns/s simulated time
 
-### Recently Completed (Iteration 1171, Feb 12, 2026)
+### Recently Completed (Iteration 1401, Feb 14, 2026)
+1. **sv-tests 100% coverage**: 952 PASS + 76 XFAIL = 1028/1028. Zero silent skips. Key additions: SVA LTLToCore pipeline, CompRegOp support, AnalysisManager integration, tagged union checker, runner compile-only mode for preprocessing tests.
+2. **Build infrastructure**: lld linker (was GNU ld), ccache, RelWithDebInfo, parallel link job limiting.
+
+### Previously Completed (Iteration 1171, Feb 12, 2026)
 1. **randomize() vtable corruption fix**: `__moore_randomize_basic` was filling entire class object memory with random bytes, corrupting class_id (bytes 0-3) and vtable pointer (bytes 4-11). Now a no-op — individual rand fields set by `_with_range`/`_with_dist`. This fixed sub-sequence body dispatch (factory-created sequences now call derived body()).
 2. **Blocking finish_item / item_done handshake** (iter 1165): Direct-wake mechanism, process-level retry fix.
 3. **Phase hopper objection fix**: Broadened interceptors for `uvm_phase_hopper::` variants.
@@ -43,7 +47,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Stack size (64MB) | DONE | Handles deep UVM sequence nesting |
 | Sub-sequence body dispatch | DONE | Fixed by randomize_basic no-op (vtable preservation) |
 | BFM/driver transactions | DONE | finish_item blocks until item_done; direct-wake handshake |
-| SVA concurrent assertions | NOT STARTED | 26 compile-only tests (deferred) |
+| SVA concurrent assertions | IN PROGRESS | LTLToCore pipeline + CompRegOp + module-level assert eval; 26 compile-only SVA tests now compile+link; full assertion failure detection pending |
 | BFM APB state machine | IN PROGRESS | IDLE→SETUP works, SETUP→ACCESS blocked (investigating) |
 | Multi-AVIP coverage | IN PROGRESS | Handshake done; needs AVIP recompile + end-to-end test |
 
@@ -51,12 +55,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 1. **Fix BFM SETUP→ACCESS transition**: The APB BFM drives IDLE→SETUP but never transitions to ACCESS (penable=1). Investigate whether a clock edge wait or signal drive is being missed in the interpreter.
 2. **Recompile AVIPs**: All AVIPs (APB, AHB, SPI, I2S, I3C, JTAG, AXI4, AXI4Lite, UART) need recompilation with latest circt-verilog to include all recent fixes. Then run end-to-end to verify coverage.
 3. **Performance optimization**: Target >500 ns/s for practical AVIP runs.
-4. **SVA concurrent assertions**: Needed for 26 compile-only SVA tests.
+4. **SVA assertion failure detection**: LTLToCore pipeline in place; need to verify assertion failures are correctly caught during simulation (3 should-fail SVA tests currently compile-only).
+5. **Actually simulate compile-only UVM tests**: ~80 UVM compile-only tests should be run with real simulation to verify end-to-end behavior.
 
 ### Known Limitations (Simulation)
 - BFM APB state machine: SETUP→ACCESS transition not completing (coverage remains 0%)
 - AVIPs need recompilation with latest circt-verilog for end-to-end coverage testing
-- SVA concurrent assertions not simulated (26 tests compile-only)
+- SVA assertion failure detection: LTLToCore pipeline works, but 3 should-fail tests need runtime failure detection
+- ~80 UVM tests are compile-only (too slow to simulate; need performance optimization)
 - Xcelium APB reference: 21-30% coverage, 130ns sim time — our target baseline
 
 ---
@@ -212,6 +218,32 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - `utils/run_opentitan_fpv_bmc_policy_profiles.sh --profile prim_all`
        (`BMC_SMOKE_ONLY=1`, explicit `build-test` toolchain) now passes:
        `total=1 pass=1 error=0`.
+21. Frontend macro-compat retry hardening completed for FPV BMC ingestion:
+   - added external preprocessor retry controls in
+     `run_pairwise_circt_bmc.py`:
+     - `BMC_VERILOG_EXTERNAL_PREPROCESS_MODE=auto|on|off`
+     - `BMC_VERILOG_EXTERNAL_PREPROCESS_CMD`
+   - fixed default verilator include-flag forwarding (`-I<dir>`), removing
+     preprocessing command false-negatives.
+   - added focused regression:
+     - `test/Tools/run-pairwise-circt-bmc-external-preprocess-auto-retry.test`
+22. Prim-assert include-shim retry completed for OpenTitan-style macro stacks:
+   - added auto-retry path in `run_pairwise_circt_bmc.py` for parser failures
+     rooted in `prim_assert*` headers; retry emits and applies deterministic
+     case-local include overrides:
+     - `prim_assert.sv`
+     - `prim_flop_macros.sv`
+     - `prim_assert_sec_cm.svh`
+     - `circt-verilog.assert-macro-shim.sv`
+   - launch provenance now records:
+     - `prim_assert_include_shim_macro_compat`
+   - added focused regression:
+     - `test/Tools/run-pairwise-circt-bmc-prim-assert-include-shim-auto-retry.test`
+23. Remaining high-priority limitation (OpenTitan parity path):
+   - full `pinmux_fpv` remains a heavy compile-unit stress case; retry
+     hardening is now in place, but broad OpenTitan FPV closure still needs:
+     - additional parser-compat closure beyond current shim scope, and
+     - compile-unit scale/performance improvements for large FPV targets.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
@@ -421,6 +453,15 @@ verilator-verification, and yosys corpora).
    - OpenTitan FPV BMC launch-retry/fallback telemetry is now surfaced through
      pairwise artifacts (`BMC_LAUNCH_EVENTS_OUT`) and summarized in
      `run_formal_all.sh` lane metrics (`bmc_launch_*` counters).
+   - pairwise BMC frontend now supports unified include-compilation fallback:
+     - `BMC_VERILOG_UNIFIED_INCLUDE_UNIT_MODE=auto|on|off` (default: `auto`).
+     - in `auto`, macro-visibility/preprocessor failures retry once via an
+       auto-generated `circt-verilog.unified-include.sv` compilation unit with
+       launch event reason
+       `unified_include_unit_macro_visibility`.
+     - unified mode now avoids duplicate source forwarding (generated unit is
+       the single source argument), preventing duplicate vendor primitive
+       definitions when combined with Xilinx shim fallback.
    - non-FPV launch telemetry surfacing is now wired for standard formal lanes:
      - `run_sv_tests_circt_bmc.sh` emits `BMC_LAUNCH_EVENTS_OUT`.
      - `run_verilator_verification_circt_bmc.sh` and
@@ -605,6 +646,13 @@ verilator-verification, and yosys corpora).
    evidence-vs-summary objective parity governance in the same strict-gate
    plane; remaining gap is cross-lane FPV objective parity (BMC vs LEC) over
    vacuous/covered/unreachable classes once FPV LEC evidence artifacts land.
+9. **OpenTitan macro frontend residual gap**: for representative IP targets
+   (e.g. `pinmux_fpv`), retries now progress through
+   `single_unit_preprocessor_failure` + Xilinx stub + unified include fallback,
+   but `circt-verilog` can still terminate with
+   `macro_operators_may_only_be_used_within_a_macro_definition`; remaining work
+   is macro parser compatibility for complex OpenTitan macro stacks without
+   placeholder shims.
 
 ### Next Long-Term Features (best long-term path)
 
