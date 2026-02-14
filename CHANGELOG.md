@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1398 - February 14, 2026
+
+### OpenTitan FPV BMC: Compile-Contract Lifetime + Canary Baseline Materialization
+
+1. Fixed OpenTitan FPV compile-contract source-file lifetime in
+   `utils/run_formal_all.sh`:
+   - when FPV cfg selection is active and no explicit
+     `--opentitan-fpv-compile-contracts-workdir` is provided, formal driver now
+     defaults to:
+     - `OUT_DIR/opentitan-fpv-contracts-work`
+   - this prevents resolver tempdir cleanup from invalidating compile-contract
+     source paths before FPV BMC execution.
+2. Hardened OpenTitan FPV BMC assertion-results baseline update semantics:
+   - `--update-opentitan-fpv-bmc-assertion-results-baseline` now always
+     materializes the baseline file.
+   - empty assertion-results runs now produce an explicit empty baseline instead
+     of skipping baseline creation.
+3. Added focused regressions:
+   - `test/Tools/run-formal-all-opentitan-fpv-compile-contracts-default-workdir.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-empty-assertion-baseline-update.test`
+4. Materialized OpenTitan FPV BMC canary baseline artifacts for profile packs:
+   - `opentitan-fpv-bmc-prim-*`
+   - `opentitan-fpv-bmc-ip-*`
+   - `opentitan-fpv-bmc-sec-cm-*`
+   in:
+   - `utils/opentitan_fpv_policy/baselines/`
+5. Real canary execution status:
+   - profile-pack update/check executes end-to-end using real OpenTitan cfgs,
+     compile contracts, and FPV BMC lane orchestration.
+   - current canary targets terminate with
+     `warning_macro_assert_i_redefined_wredef_macro` (governed fail status),
+     so proof-status uplift remains the next semantic/tooling closure step.
+
 ## Iteration 1397 - February 14, 2026
 
 ### OpenTitan FPV BMC: Cohort Profile-Pack Baseline Orchestration

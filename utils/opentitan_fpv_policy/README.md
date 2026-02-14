@@ -41,6 +41,8 @@ With `--baseline-prefix <name>`, artifacts become:
   - baseline prefix (`baseline_prefix`)
   - optional target-selection controls (`select_cfgs`, `target_filter`,
     `allow_unfiltered`, `max_targets`)
+  - current defaults are canary seeds (one representative target per cohort)
+    for deterministic baseline bootstrap.
 
 Use `utils/run_opentitan_fpv_bmc_policy_profiles.sh` to run packs:
 
@@ -48,6 +50,9 @@ Use `utils/run_opentitan_fpv_bmc_policy_profiles.sh` to run packs:
   - `utils/run_opentitan_fpv_bmc_policy_profiles.sh update --opentitan-root ~/opentitan`
 - check all packs:
   - `utils/run_opentitan_fpv_bmc_policy_profiles.sh check --opentitan-root ~/opentitan`
+- check all packs without strict-gate dependency on global
+  `utils/formal-baselines.tsv`:
+  - `utils/run_opentitan_fpv_bmc_policy_profiles.sh --no-strict-gate check --opentitan-root ~/opentitan`
 - check one pack:
   - `utils/run_opentitan_fpv_bmc_policy_profiles.sh --profile prim_all check --opentitan-root ~/opentitan`
 
