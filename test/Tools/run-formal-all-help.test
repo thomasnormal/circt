@@ -115,4 +115,5 @@
 // CHECK: --opentitan-fpv-compile-contracts-keep-workdir
 // CHECK: --update-opentitan-fpv-compile-contracts-baseline
 // CHECK: --fail-on-opentitan-fpv-compile-contract-drift
+// CHECK: --fail-on-opentitan-fpv-unknown-task
 // CHECK: --opentitan-lec-impl-filter

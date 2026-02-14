@@ -1,0 +1,15 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: cp %S/../../utils/select_opentitan_formal_cfgs.py %t/utils/select_opentitan_formal_cfgs.py
+// RUN: cp %S/../../utils/resolve_opentitan_formal_compile_contracts.py %t/utils/resolve_opentitan_formal_compile_contracts.py
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib,sys\ncore = sys.argv[-1]\ntool = sys.argv[sys.argv.index(\"--tool\") + 1]\ntarget = sys.argv[sys.argv.index(\"--target\") + 1]\ncore_token = core.replace(\":\", \"_\").replace(\".\", \"_\")\nout_dir = pathlib.Path.cwd() / \"build\" / core_token / f\"{target}-{tool}\"\nout_dir.mkdir(parents=True, exist_ok=True)\neda = out_dir / f\"{core_token}.eda.yml\"\neda.write_text(\"\"\"toplevel: foo_tb\\nfiles:\\n- core: lowrisc:foo:pkg:0\\n  file_type: systemVerilogSource\\n  name: ../src/foo.sv\\n\"\"\")\n' > %t/bin/fusesoc
+// RUN: printf '{\n  "name": "top_earlgrey_fpv_prim_cfgs",\n  "flow": "formal",\n  "sub_flow": "fpv",\n  "use_cfgs": [\n    {\n      "name": "foo_unknown_fpv",\n      "dut": "foo_tb",\n      "fusesoc_core": "lowrisc:fpv:foo_unknown_fpv",\n      "task": "MyCustomTask",\n      "rel_path": "hw/top_earlgrey/formal/prim/foo"\n    }\n  ]\n}\n' > %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/select_opentitan_formal_cfgs.py %t/utils/resolve_opentitan_formal_compile_contracts.py %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec %t/bin/fusesoc
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --circt-verilog %t/bin/circt-verilog --include-lane-regex "^$" --opentitan %t/ot --opentitan-fpv-cfg %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson --select-cfgs "foo_unknown_fpv" --opentitan-fpv-fusesoc-bin %t/bin/fusesoc --fail-on-opentitan-fpv-unknown-task' 2>&1 | FileCheck %s
+//
+// CHECK: unknown OpenTitan FPV task names detected: MyCustomTask
