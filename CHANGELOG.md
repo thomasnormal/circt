@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1300 - February 14, 2026
+
+### Mutation Workflow: Stronger MCY Example Validation Gates
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with optional per-example quality gates:
+   - `--min-detected N`
+   - `--min-coverage-percent P`
+   - `--max-errors N`
+2. Added robust numeric validation/normalization for MCY metrics before gate evaluation.
+3. Added clear gate-failure diagnostics while preserving per-example summary output.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-generate-forwarding.test`
+   - `test/Tools/run-mutation-mcy-examples-gate-thresholds.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-mutation-mcy-examples-help.test build-test/test/Tools/run-mutation-mcy-examples-smoke.test build-test/test/Tools/run-mutation-mcy-examples-yosys-missing.test build-test/test/Tools/run-mutation-mcy-examples-generate-forwarding.test build-test/test/Tools/run-mutation-mcy-examples-gate-thresholds.test` PASS
+- `utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --example bitcnt --example picorv32_primes --smoke --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut` PASS
+- `utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --example bitcnt --example picorv32_primes --smoke --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --min-detected 1` FAIL as expected (gate enforcement)
+
 ## Iteration 1299 - February 14, 2026
 
 ### OpenTitan FPV Phase D: Assertion-Granular Forwarding and Summary Accuracy

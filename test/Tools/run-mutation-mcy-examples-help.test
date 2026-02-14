@@ -8,5 +8,8 @@
 // CHECK-DAG: --yosys
 // CHECK-DAG: --generate-count
 // CHECK-DAG: --mutation-limit
+// CHECK-DAG: --min-detected
+// CHECK-DAG: --min-coverage-percent
+// CHECK-DAG: --max-errors
 // CHECK-DAG: --smoke
 // CHECK-DAG: --keep-work

@@ -1,0 +1,20 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt %t/bin
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --work-dir) work_dir="$2"; shift 2 ;;\n    --work-dir=*) work_dir="${1#*=}"; shift ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t0\\nrelevant_mutants\\t4\\nerrors\\t2\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --smoke \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --out-dir %t/out \
+// RUN:   --min-detected 1 \
+// RUN:   --min-coverage-percent 25 \
+// RUN:   --max-errors 0 2>&1 | FileCheck %s --check-prefix=GATE
+
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+
+// GATE: Gate failure (bitcnt): detected<1,coverage<25,errors>0
+// SUMMARY: example{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}detected{{[[:space:]]}}relevant{{[[:space:]]}}coverage_percent{{[[:space:]]}}errors
+// SUMMARY: bitcnt{{[[:space:]]}}FAIL{{[[:space:]]}}0{{[[:space:]]}}0{{[[:space:]]}}4{{[[:space:]]}}0.00{{[[:space:]]}}2
