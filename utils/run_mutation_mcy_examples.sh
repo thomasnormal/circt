@@ -78,6 +78,26 @@ Options:
                            Optional retry-reason baseline summary used for
                            --fail-on-retry-reason-diff (default:
                            <baseline-file>.retry-reason-summary.tsv)
+  --retry-reason-baseline-schema-version-file FILE
+                           Optional retry-reason baseline schema-version
+                           artifact for --fail-on-retry-reason-diff
+                           (default: <retry-reason-baseline-file>.schema-version)
+  --retry-reason-baseline-schema-contract-file FILE
+                           Optional retry-reason baseline schema-contract
+                           artifact for --fail-on-retry-reason-diff
+                           (default: <retry-reason-baseline-file>.schema-contract)
+  --retry-reason-summary-schema-version-file FILE
+                           Output schema-version artifact for current
+                           retry-reason summary (default:
+                           <out-dir>/retry-reason-summary.schema-version)
+  --retry-reason-summary-schema-contract-file FILE
+                           Output schema-contract artifact for current
+                           retry-reason summary (default:
+                           <out-dir>/retry-reason-summary.schema-contract)
+  --require-retry-reason-baseline-schema-artifacts
+                           Require retry-reason baseline schema sidecars
+                           to exist and be readable when evaluating
+                           --fail-on-retry-reason-diff
   --fail-on-retry-reason-diff
                            Fail when retry-reason counts regress vs baseline
   --retry-reason-drift-tolerances SPEC
@@ -219,7 +239,9 @@ MAX_TOTAL_RETRIES_BY_REASON=""
 BASELINE_FILE=""
 RETRY_REASON_BASELINE_FILE=""
 RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE=""
+RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
 RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE=""
+RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT=0
 RETRY_REASON_DRIFT_TOLERANCES=""
 RETRY_REASON_DRIFT_PERCENT_TOLERANCES=""
 RETRY_REASON_DRIFT_SUITE_TOLERANCE=0
@@ -228,6 +250,7 @@ BASELINE_SCHEMA_VERSION_FILE=""
 BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_VERSION_FILE=""
 RETRY_REASON_SUMMARY_SCHEMA_VERSION_FILE=""
+REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS=0
 BASELINE_SCHEMA_CONTRACT_FILE=""
 BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_CONTRACT_FILE=""
@@ -2165,6 +2188,28 @@ while [[ $# -gt 0 ]]; do
       RETRY_REASON_BASELINE_FILE="$2"
       shift 2
       ;;
+    --retry-reason-baseline-schema-version-file)
+      RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE="$2"
+      RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=1
+      shift 2
+      ;;
+    --retry-reason-baseline-schema-contract-file)
+      RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE="$2"
+      RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT=1
+      shift 2
+      ;;
+    --retry-reason-summary-schema-version-file)
+      RETRY_REASON_SUMMARY_SCHEMA_VERSION_FILE="$2"
+      shift 2
+      ;;
+    --retry-reason-summary-schema-contract-file)
+      RETRY_REASON_SUMMARY_SCHEMA_CONTRACT_FILE="$2"
+      shift 2
+      ;;
+    --require-retry-reason-baseline-schema-artifacts)
+      REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS=1
+      shift
+      ;;
     --fail-on-retry-reason-diff)
       FAIL_ON_RETRY_REASON_DIFF=1
       shift
@@ -2517,6 +2562,30 @@ if [[ "$FAIL_ON_RETRY_REASON_DIFF" -eq 1 ]]; then
     echo "Retry-reason baseline file not readable: $RETRY_REASON_BASELINE_FILE" >&2
     exit 1
   fi
+  if [[ "$RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE_EXPLICIT" -eq 1 || "$REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS" -eq 1 ]]; then
+    if [[ ! -f "$RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE" ]]; then
+      echo "Retry-reason baseline schema-version file not found: $RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE" >&2
+      exit 1
+    fi
+    if [[ ! -r "$RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE" ]]; then
+      echo "Retry-reason baseline schema-version file not readable: $RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE" >&2
+      exit 1
+    fi
+  fi
+  if [[ "$RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT" -eq 1 || "$REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS" -eq 1 ]]; then
+    if [[ ! -f "$RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE" ]]; then
+      echo "Retry-reason baseline schema-contract file not found: $RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE" >&2
+      exit 1
+    fi
+    if [[ ! -r "$RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE" ]]; then
+      echo "Retry-reason baseline schema-contract file not readable: $RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE" >&2
+      exit 1
+    fi
+  fi
+fi
+if [[ "$REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS" -eq 1 && "$FAIL_ON_RETRY_REASON_DIFF" -ne 1 ]]; then
+  echo "--require-retry-reason-baseline-schema-artifacts requires --fail-on-retry-reason-diff" >&2
+  exit 1
 fi
 if [[ -n "$DRIFT_ALLOWLIST_FILE" ]]; then
   if [[ ! -f "$DRIFT_ALLOWLIST_FILE" ]]; then
