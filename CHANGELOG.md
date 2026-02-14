@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1351 - February 14, 2026
+
+### Mutation Workflow: Transient Retry Controls for MCY Example Lanes
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with resilient per-example
+   retry execution for transient launcher failures:
+   - retries are bounded by global `--example-retries` and optional per-example
+     manifest override `example_retries`.
+   - retry policy now treats launcher-class transient failures as retryable
+     (`126/127`, `Text file busy`, `ETXTBSY`, `posix_spawn failed`,
+     `Resource temporarily unavailable`, `Permission denied`).
+   - timeout exits (`124`) remain fail-fast and are not retried.
+2. Completed manifest integration for retry policy selection:
+   - parser/validation for optional `example_retries` override field.
+   - effective retry policy included in per-example policy fingerprint.
+3. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-example-retries-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-example-retries-smoke.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-invalid-retries-override.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-retries-override-smoke.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+4. Updated parity baseline fixtures impacted by policy fingerprint evolution:
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-example-parity-allowlist.test`
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-example-parity-fail.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (77/77)
+
 ## Iteration 1350 - February 14, 2026
 
 ### OpenTitan FPV Execution: Unfiltered-Run Enablement with Target Budgets

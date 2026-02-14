@@ -1,0 +1,5 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --example-retries bad 2>&1 | FileCheck %s --check-prefix=BAD
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --example-retries -1 2>&1 | FileCheck %s --check-prefix=NEG
+
+// BAD: --example-retries must be a non-negative integer: bad
+// NEG: --example-retries must be a non-negative integer: -1
