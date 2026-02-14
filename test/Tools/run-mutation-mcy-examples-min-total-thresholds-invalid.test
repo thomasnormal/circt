@@ -3,8 +3,10 @@
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --min-total-coverage-percent bad 2>&1 | FileCheck %s --check-prefix=COVERAGE
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --min-total-coverage-percent 101 2>&1 | FileCheck %s --check-prefix=COVERAGE
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-errors bad 2>&1 | FileCheck %s --check-prefix=ERRORS
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-retries bad 2>&1 | FileCheck %s --check-prefix=RETRIES
 
 // DETECTED: --min-total-detected must be a non-negative integer: bad
 // RELEVANT: --min-total-relevant must be a non-negative integer: bad
 // COVERAGE: --min-total-coverage-percent must be numeric in range [0,100]
 // ERRORS: --max-total-errors must be a non-negative integer: bad
+// RETRIES: --max-total-retries must be a non-negative integer: bad

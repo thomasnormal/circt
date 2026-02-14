@@ -1,5 +1,72 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1355 - February 14, 2026
+
+### Mutation Workflow: Retry Summary Artifact and Suite Retry Gate
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with retry observability
+   output:
+   - new artifact: `<out-dir>/retry-summary.tsv`
+   - rows capture `example`, `retry_attempts`, and `retries_used`.
+2. Added suite-level retry governance:
+   - new option: `--max-total-retries N`
+   - suite now fails when aggregated retries exceed the configured limit.
+3. Preserved summary compatibility:
+   - existing `<out-dir>/summary.tsv` schema remains unchanged.
+   - retry metrics are emitted in a dedicated companion artifact.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-retry-summary-smoke.test`
+   - `test/Tools/run-mutation-mcy-examples-suite-gate-max-total-retries.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+     - `test/Tools/run-mutation-mcy-examples-min-total-thresholds-invalid.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (83 selected)
+
+
+## Iteration 1354 - February 14, 2026
+
+### OpenTitan FPV BMC: Launch-Retry/Fallback Telemetry Surfacing
+
+1. Extended `utils/run_pairwise_circt_bmc.py` with structured launch-event
+   artifact emission:
+   - new output channel:
+     - `--launch-events-file` (env: `BMC_LAUNCH_EVENTS_OUT`)
+   - emitted rows capture retry/fallback events with case/stage context:
+     - `event_kind`, `case_id`, `case_path`, `stage`, `tool`, `reason`,
+       `attempt`, `delay_secs`, `exit_code`, `fallback_tool`
+2. Extended `utils/run_opentitan_fpv_circt_bmc.py` forwarding/merge plumbing:
+   - new option:
+     - `--launch-events-file` (env: `BMC_LAUNCH_EVENTS_OUT`)
+   - per-group pairwise launch-event artifacts are now merged deterministically.
+3. Extended `utils/run_formal_all.sh` OpenTitan FPV BMC lane summary telemetry:
+   - now forwards `BMC_LAUNCH_EVENTS_OUT` to FPV runner.
+   - new summary counters are emitted in `summary.tsv`:
+     - `bmc_launch_event_rows`
+     - `bmc_launch_retry_events`
+     - `bmc_launch_retry_cases`
+     - `bmc_launch_retryable_exit_events`
+     - `bmc_launch_etxtbsy_events`
+     - `bmc_launch_fallback_events`
+     - `bmc_launch_fallback_cases`
+4. Added focused regressions:
+   - `test/Tools/run-opentitan-fpv-circt-bmc-launch-events-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-launch-events-summary.test`
+   - updated:
+     - `test/Tools/run-pairwise-circt-bmc-launch-retry-permission-denied.test`
+     - `test/Tools/run-pairwise-circt-bmc-launch-fallback-copy.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-opentitan-fpv-circt-bmc'` PASS (19 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-pairwise-circt-bmc'` PASS (25 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-formal-all-opentitan-fpv-bmc'` PASS (20 selected)
+
 ## Iteration 1353 - February 14, 2026
 
 ### Mutation Workflow: Retry Backoff Delay Controls
