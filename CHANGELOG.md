@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1361 - February 14, 2026
+
+### Mutation Workflow: Percent-Based Retry-Reason Drift Tolerances
+
+1. Extended retry-reason drift governance in
+   `utils/run_mutation_mcy_examples.sh` with percent-based policy controls:
+   - `--retry-reason-drift-percent-tolerances reason=P[,reason=P...]`
+   - `--retry-reason-drift-suite-percent-tolerance P`
+2. Updated drift tolerance semantics to combine absolute and percent budgets:
+   - per-reason allowed retries:
+     - `baseline + abs_tolerance + ceil(baseline * percent_tolerance / 100)`
+   - suite allowed retries:
+     - `suite_baseline + suite_abs_tolerance + ceil(suite_baseline * suite_percent_tolerance / 100)`
+   - percent tolerances use non-negative decimal values.
+3. Added parser/validation coverage for percent tolerance options:
+   - malformed spec, invalid token, non-decimal value, duplicate reason,
+     invalid suite percent value.
+4. Added focused regression:
+   - `test/Tools/run-mutation-mcy-examples-retry-reason-drift-percent-tolerance-smoke.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+     - `test/Tools/run-mutation-mcy-examples-min-total-thresholds-invalid.test`.
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (89 selected)
+
 ## Iteration 1360 - February 14, 2026
 
 ### Mutation Workflow: Retry-Reason Drift Tolerance Policies

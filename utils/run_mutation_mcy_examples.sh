@@ -82,10 +82,20 @@ Options:
                            Fail when retry-reason counts regress vs baseline
   --retry-reason-drift-tolerances SPEC
                            Allow retry-reason increases up to reason-specific
-                           tolerances in SPEC format reason=N[,reason=N...]
+                           absolute tolerances in SPEC format
+                           reason=N[,reason=N...]
+  --retry-reason-drift-percent-tolerances SPEC
+                           Allow retry-reason increases up to reason-specific
+                           percent tolerances in SPEC format
+                           reason=P[,reason=P...] where P is non-negative
+                           decimal percent
   --retry-reason-drift-suite-tolerance N
                            Allow suite total retry increase up to N when
                            evaluating --fail-on-retry-reason-diff
+  --retry-reason-drift-suite-percent-tolerance P
+                           Allow suite total retry increase up to P percent
+                           over baseline when evaluating
+                           --fail-on-retry-reason-diff
   --require-policy-fingerprint-baseline
                            Require baseline rows to include policy_fingerprint
                            when evaluating --fail-on-diff
@@ -205,7 +215,9 @@ MAX_TOTAL_RETRIES_BY_REASON=""
 BASELINE_FILE=""
 RETRY_REASON_BASELINE_FILE=""
 RETRY_REASON_DRIFT_TOLERANCES=""
+RETRY_REASON_DRIFT_PERCENT_TOLERANCES=""
 RETRY_REASON_DRIFT_SUITE_TOLERANCE=0
+RETRY_REASON_DRIFT_SUITE_PERCENT_TOLERANCE="0"
 BASELINE_SCHEMA_VERSION_FILE=""
 BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_VERSION_FILE=""
@@ -251,6 +263,7 @@ declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
 declare -A RETRY_REASON_BUDGETS=()
 declare -A RETRY_REASON_DRIFT_TOLERANCE_MAP=()
+declare -A RETRY_REASON_DRIFT_PERCENT_TOLERANCE_MAP=()
 
 SUMMARY_HEADER_V1=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors'
 SUMMARY_HEADER_V2=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\tpolicy_fingerprint'
@@ -382,6 +395,57 @@ parse_retry_reason_drift_tolerances() {
   return 0
 }
 
+parse_retry_reason_drift_percent_tolerances() {
+  local spec="$1"
+  local normalized=""
+  local old_ifs=""
+  local entry=""
+  local reason=""
+  local tolerance=""
+  local -a parts=()
+
+  RETRY_REASON_DRIFT_PERCENT_TOLERANCE_MAP=()
+  normalized="$(trim_whitespace "$spec")"
+  if [[ -z "$normalized" ]]; then
+    return 0
+  fi
+
+  old_ifs="$IFS"
+  IFS=','
+  read -r -a parts <<< "$normalized"
+  IFS="$old_ifs"
+
+  for entry in "${parts[@]}"; do
+    entry="$(trim_whitespace "$entry")"
+    if [[ -z "$entry" ]]; then
+      continue
+    fi
+    if [[ "$entry" != *=* ]]; then
+      echo "--retry-reason-drift-percent-tolerances requires reason=P entries: ${entry}" >&2
+      return 1
+    fi
+    reason="${entry%%=*}"
+    tolerance="${entry#*=}"
+    reason="$(trim_whitespace "$reason")"
+    tolerance="$(trim_whitespace "$tolerance")"
+    if ! is_retry_reason_token "$reason"; then
+      echo "--retry-reason-drift-percent-tolerances has invalid reason token: ${reason}" >&2
+      return 1
+    fi
+    if ! is_nonneg_decimal "$tolerance"; then
+      echo "--retry-reason-drift-percent-tolerances has non-decimal tolerance for ${reason}: ${tolerance}" >&2
+      return 1
+    fi
+    if [[ -n "${RETRY_REASON_DRIFT_PERCENT_TOLERANCE_MAP[$reason]+x}" ]]; then
+      echo "--retry-reason-drift-percent-tolerances repeats reason token: ${reason}" >&2
+      return 1
+    fi
+    RETRY_REASON_DRIFT_PERCENT_TOLERANCE_MAP["$reason"]="$tolerance"
+  done
+
+  return 0
+}
+
 
 normalize_manifest_optional() {
   local s
@@ -415,6 +479,22 @@ float_lt() {
   local lhs="${1:-0}"
   local rhs="${2:-0}"
   awk -v a="$lhs" -v b="$rhs" 'BEGIN { exit !(a + 0 < b + 0) }'
+}
+
+percentage_ceiling_count() {
+  local base="${1:-0}"
+  local percent="${2:-0}"
+  awk -v b="$base" -v p="$percent" 'BEGIN {
+    v = (b * p) / 100.0;
+    iv = int(v);
+    if (v > iv) {
+      iv = iv + 1;
+    }
+    if (iv < 0) {
+      iv = 0;
+    }
+    printf "%d", iv;
+  }'
 }
 
 resolve_tool() {
@@ -1389,8 +1469,12 @@ evaluate_retry_reason_drift() {
   local current_reason=""
   local current_retries=""
   local reason=""
-  local tolerance=0
-  local suite_tolerance="${RETRY_REASON_DRIFT_SUITE_TOLERANCE}"
+  local absolute_tolerance=0
+  local percent_tolerance="0"
+  local percent_tolerance_count=0
+  local suite_absolute_tolerance="${RETRY_REASON_DRIFT_SUITE_TOLERANCE}"
+  local suite_percent_tolerance="${RETRY_REASON_DRIFT_SUITE_PERCENT_TOLERANCE}"
+  local suite_percent_tolerance_count=0
   local baseline_total_retries=0
   local current_total_retries=0
   local suite_allowed_retries=0
@@ -1444,8 +1528,10 @@ evaluate_retry_reason_drift() {
   for reason in "${!baseline_counts[@]}"; do
     baseline_retries="${baseline_counts[$reason]}"
     current_retries="${current_counts[$reason]:-0}"
-    tolerance="${RETRY_REASON_DRIFT_TOLERANCE_MAP[$reason]:-0}"
-    per_reason_allowed_retries=$((baseline_retries + tolerance))
+    absolute_tolerance="${RETRY_REASON_DRIFT_TOLERANCE_MAP[$reason]:-0}"
+    percent_tolerance="${RETRY_REASON_DRIFT_PERCENT_TOLERANCE_MAP[$reason]:-0}"
+    percent_tolerance_count="$(percentage_ceiling_count "$baseline_retries" "$percent_tolerance")"
+    per_reason_allowed_retries=$((baseline_retries + absolute_tolerance + percent_tolerance_count))
     if [[ "$current_retries" -gt "$per_reason_allowed_retries" ]]; then
       if ! append_drift_candidate "$drift_file" "$reason" "retry_count" "$baseline_retries" "$current_retries" "retry_count_increased_over_tolerance"; then
         regressions=$((regressions + 1))
@@ -1460,8 +1546,8 @@ evaluate_retry_reason_drift() {
       continue
     fi
     current_retries="${current_counts[$reason]}"
-    tolerance="${RETRY_REASON_DRIFT_TOLERANCE_MAP[$reason]:-0}"
-    if [[ "$current_retries" -gt "$tolerance" ]]; then
+    absolute_tolerance="${RETRY_REASON_DRIFT_TOLERANCE_MAP[$reason]:-0}"
+    if [[ "$current_retries" -gt "$absolute_tolerance" ]]; then
       if ! append_drift_candidate "$drift_file" "$reason" "retry_count" "0" "$current_retries" "new_retry_reason_over_tolerance"; then
         regressions=$((regressions + 1))
       fi
@@ -1470,7 +1556,8 @@ evaluate_retry_reason_drift() {
     fi
   done
 
-  suite_allowed_retries=$((baseline_total_retries + suite_tolerance))
+  suite_percent_tolerance_count="$(percentage_ceiling_count "$baseline_total_retries" "$suite_percent_tolerance")"
+  suite_allowed_retries=$((baseline_total_retries + suite_absolute_tolerance + suite_percent_tolerance_count))
   if [[ "$current_total_retries" -gt "$suite_allowed_retries" ]]; then
     if ! append_drift_candidate "$drift_file" "__suite__" "suite_retries" "$baseline_total_retries" "$current_total_retries" "retries_increased_over_tolerance"; then
       regressions=$((regressions + 1))
@@ -1990,8 +2077,16 @@ while [[ $# -gt 0 ]]; do
       RETRY_REASON_DRIFT_TOLERANCES="$2"
       shift 2
       ;;
+    --retry-reason-drift-percent-tolerances)
+      RETRY_REASON_DRIFT_PERCENT_TOLERANCES="$2"
+      shift 2
+      ;;
     --retry-reason-drift-suite-tolerance)
       RETRY_REASON_DRIFT_SUITE_TOLERANCE="$2"
+      shift 2
+      ;;
+    --retry-reason-drift-suite-percent-tolerance)
+      RETRY_REASON_DRIFT_SUITE_PERCENT_TOLERANCE="$2"
       shift 2
       ;;
     --require-policy-fingerprint-baseline)
@@ -2166,8 +2261,15 @@ fi
 if ! parse_retry_reason_drift_tolerances "$RETRY_REASON_DRIFT_TOLERANCES"; then
   exit 1
 fi
+if ! parse_retry_reason_drift_percent_tolerances "$RETRY_REASON_DRIFT_PERCENT_TOLERANCES"; then
+  exit 1
+fi
 if ! is_nonneg_int "$RETRY_REASON_DRIFT_SUITE_TOLERANCE"; then
   echo "--retry-reason-drift-suite-tolerance must be a non-negative integer: $RETRY_REASON_DRIFT_SUITE_TOLERANCE" >&2
+  exit 1
+fi
+if ! is_nonneg_decimal "$RETRY_REASON_DRIFT_SUITE_PERCENT_TOLERANCE"; then
+  echo "--retry-reason-drift-suite-percent-tolerance must be a non-negative decimal: $RETRY_REASON_DRIFT_SUITE_PERCENT_TOLERANCE" >&2
   exit 1
 fi
 if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
