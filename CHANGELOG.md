@@ -67430,3 +67430,11 @@ See CHANGELOG.md on recent progress.
     - Added regression coverage:
       - `run-mutation-mcy-examples-native-real-harness-manifest-override-space-path-pass.test`
       - `run-mutation-mcy-examples-native-real-harness-policy-fingerprint-normalized-path-pass.test`.
+45. Cross-root-stable native real harness fingerprint tokens
+    (February 14, 2026):
+    - Native real harness path policy tokens now normalize through
+      `EXAMPLES_ROOT`-relative rewriting when under the selected examples root.
+    - This removes false mutation policy-fingerprint drift across different
+      workspace roots using equivalent in-tree harness paths.
+    - Added regression coverage:
+      `run-mutation-mcy-examples-native-real-harness-policy-fingerprint-examples-root-parity-pass.test`.
