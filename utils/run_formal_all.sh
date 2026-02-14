@@ -896,6 +896,35 @@ Options:
                          Optional output path for selected OpenTitan FPV target
                          manifest TSV (default:
                          OUT_DIR/opentitan-fpv-target-manifest.tsv)
+  --opentitan-fpv-compile-contracts FILE
+                         Optional output path for OpenTitan FPV compile
+                         contracts TSV (default:
+                         OUT_DIR/opentitan-fpv-compile-contracts.tsv)
+  --opentitan-fpv-compile-contracts-baseline-file FILE
+                         Optional baseline OpenTitan FPV compile contracts TSV
+                         for drift checks
+  --opentitan-fpv-compile-contract-drift-file FILE
+                         Optional output path for OpenTitan FPV compile
+                         contract drift TSV (default:
+                         OUT_DIR/opentitan-fpv-compile-contract-drift.tsv)
+  --opentitan-fpv-compile-contract-drift-allowlist-file FILE
+                         Optional allowlist file for OpenTitan FPV compile
+                         contract drift checks (target-level exact/prefix/regex)
+  --opentitan-fpv-fusesoc-bin PATH
+                         FuseSoC executable used for OpenTitan FPV compile
+                         contract resolution (default: fusesoc)
+  --opentitan-fpv-compile-contracts-workdir DIR
+                         Optional persistent workdir for OpenTitan FPV compile
+                         contract resolution
+  --opentitan-fpv-compile-contracts-keep-workdir
+                         Keep auto-generated OpenTitan FPV compile-contract
+                         resolver workdirs
+  --update-opentitan-fpv-compile-contracts-baseline
+                         Update --opentitan-fpv-compile-contracts-baseline-file
+                         with the current compile-contracts artifact
+  --fail-on-opentitan-fpv-compile-contract-drift
+                         Fail when OpenTitan FPV compile-contract drift checker
+                         reports non-allowlisted drift
   --opentitan-lec-impl-filter REGEX
                          Regex filter for OpenTitan LEC implementations
   --opentitan-lec-include-masked
@@ -2506,6 +2535,15 @@ OPENTITAN_BMC_CASE_POLICY_FILE=""
 OPENTITAN_FPV_CFG_FILE=""
 declare -a OPENTITAN_SELECT_CFGS=()
 OPENTITAN_FPV_TARGET_MANIFEST_FILE=""
+OPENTITAN_FPV_COMPILE_CONTRACTS_FILE=""
+OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE=""
+OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE=""
+OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE=""
+OPENTITAN_FPV_FUSESOC_BIN="fusesoc"
+OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR=""
+OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR=0
+UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE=0
+FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=0
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
 OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES=0
@@ -2593,6 +2631,24 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_SELECT_CFGS+=("$2"); shift 2 ;;
     --opentitan-fpv-target-manifest)
       OPENTITAN_FPV_TARGET_MANIFEST_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-compile-contracts)
+      OPENTITAN_FPV_COMPILE_CONTRACTS_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-compile-contracts-baseline-file)
+      OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-compile-contract-drift-file)
+      OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-compile-contract-drift-allowlist-file)
+      OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-fusesoc-bin)
+      OPENTITAN_FPV_FUSESOC_BIN="$2"; shift 2 ;;
+    --opentitan-fpv-compile-contracts-workdir)
+      OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR="$2"; shift 2 ;;
+    --opentitan-fpv-compile-contracts-keep-workdir)
+      OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR=1; shift ;;
+    --update-opentitan-fpv-compile-contracts-baseline)
+      UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE=1; shift ;;
+    --fail-on-opentitan-fpv-compile-contract-drift)
+      FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=1; shift ;;
     --opentitan-lec-impl-filter)
       OPENTITAN_LEC_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-lec-include-masked)
@@ -3181,6 +3237,12 @@ fi
 if [[ -n "$OPENTITAN_FPV_CFG_FILE" && -z "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" ]]; then
   OPENTITAN_FPV_TARGET_MANIFEST_FILE="$OUT_DIR/opentitan-fpv-target-manifest.tsv"
 fi
+if [[ -n "$OPENTITAN_FPV_CFG_FILE" && -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE" ]]; then
+  OPENTITAN_FPV_COMPILE_CONTRACTS_FILE="$OUT_DIR/opentitan-fpv-compile-contracts.tsv"
+fi
+if [[ -n "$OPENTITAN_FPV_CFG_FILE" && -z "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE" ]]; then
+  OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE="$OUT_DIR/opentitan-fpv-compile-contract-drift.tsv"
+fi
 if ! [[ "$BASELINE_WINDOW" =~ ^[0-9]+$ ]] || [[ "$BASELINE_WINDOW" == "0" ]]; then
   echo "invalid --baseline-window: expected positive integer" >&2
   exit 1
@@ -3381,6 +3443,54 @@ if [[ "${#OPENTITAN_SELECT_CFGS[@]}" -gt 0 && -z "$OPENTITAN_FPV_CFG_FILE" ]]; t
 fi
 if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
   echo "--opentitan-fpv-target-manifest requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--opentitan-fpv-compile-contracts requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--opentitan-fpv-compile-contracts-baseline-file requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--opentitan-fpv-compile-contract-drift-file requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--opentitan-fpv-compile-contract-drift-allowlist-file requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--opentitan-fpv-compile-contracts-workdir requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--opentitan-fpv-compile-contracts-keep-workdir requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--update-opentitan-fpv-compile-contracts-baseline requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--fail-on-opentitan-fpv-compile-contract-drift requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" && -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
+  echo "--update-opentitan-fpv-compile-contracts-baseline requires --opentitan-fpv-compile-contracts-baseline-file" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" == "1" && -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
+  echo "--fail-on-opentitan-fpv-compile-contract-drift requires --opentitan-fpv-compile-contracts-baseline-file" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" != "1" && ! -f "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
+  echo "missing --opentitan-fpv-compile-contracts-baseline-file: $OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" ]]; then
+  echo "OpenTitan FPV compile-contract drift allowlist file not readable: $OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
@@ -4899,6 +5009,13 @@ if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" && ! -r "$BMC_LEC_CONT
 fi
 if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY_ALLOWLIST_FILE" && ! -r "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY_ALLOWLIST_FILE" ]]; then
   echo "BMC/LEC contract-fingerprint case-ID parity allowlist file not readable: $BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ "$STRICT_GATE" == "1" && -n "$OPENTITAN_FPV_CFG_FILE" && -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
+  FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=1
+fi
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--opentitan-fpv-compile-contract-drift-allowlist-file requires --fail-on-opentitan-fpv-compile-contract-drift or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -7141,6 +7258,53 @@ if [[ -n "$OPENTITAN_FPV_CFG_FILE" ]]; then
     --proj-root "$OPENTITAN_DIR" \
     --out-manifest "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" \
     "${opentitan_select_cfg_args[@]}"
+
+  opentitan_contract_resolver_args=(
+    --manifest "$OPENTITAN_FPV_TARGET_MANIFEST_FILE"
+    --opentitan-root "$OPENTITAN_DIR"
+    --out-contracts "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE"
+    --fusesoc-bin "$OPENTITAN_FPV_FUSESOC_BIN"
+  )
+  if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR" ]]; then
+    opentitan_contract_resolver_args+=(--workdir "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR")
+  fi
+  if [[ "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR" == "1" ]]; then
+    opentitan_contract_resolver_args+=(--keep-workdir)
+  fi
+  python3 "$SCRIPT_DIR/resolve_opentitan_formal_compile_contracts.py" \
+    "${opentitan_contract_resolver_args[@]}"
+
+  if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" ]]; then
+    mkdir -p "$(dirname "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE")"
+    cp -f "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE" \
+      "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE"
+  fi
+
+  if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
+    opentitan_contract_drift_args=(
+      --baseline "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE"
+      --current "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE"
+      --out-drift-tsv "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE"
+    )
+    if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" ]]; then
+      opentitan_contract_drift_args+=(
+        --allowlist-file "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE"
+      )
+    fi
+    if [[ "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" == "1" ]]; then
+      python3 "$SCRIPT_DIR/check_opentitan_compile_contract_drift.py" \
+        "${opentitan_contract_drift_args[@]}"
+    else
+      set +e
+      python3 "$SCRIPT_DIR/check_opentitan_compile_contract_drift.py" \
+        "${opentitan_contract_drift_args[@]}"
+      opentitan_contract_drift_ec="$?"
+      set -e
+      if [[ "$opentitan_contract_drift_ec" != "0" ]]; then
+        echo "warning: OpenTitan FPV compile-contract drift detected (non-fatal; enable --fail-on-opentitan-fpv-compile-contract-drift to fail)" >&2
+      fi
+    fi
+  fi
 fi
 
 emit_expectations_dry_run_run_end() {
@@ -7298,6 +7462,15 @@ compute_lane_state_config_hash() {
     printf "opentitan_bmc_case_policy_file=%s\n" "$OPENTITAN_BMC_CASE_POLICY_FILE"
     printf "opentitan_fpv_cfg_file=%s\n" "$OPENTITAN_FPV_CFG_FILE"
     printf "opentitan_fpv_target_manifest_file=%s\n" "$OPENTITAN_FPV_TARGET_MANIFEST_FILE"
+    printf "opentitan_fpv_compile_contracts_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE"
+    printf "opentitan_fpv_compile_contracts_baseline_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE"
+    printf "opentitan_fpv_compile_contract_drift_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE"
+    printf "opentitan_fpv_compile_contract_drift_allowlist_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE"
+    printf "opentitan_fpv_fusesoc_bin=%s\n" "$OPENTITAN_FPV_FUSESOC_BIN"
+    printf "opentitan_fpv_compile_contracts_workdir=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR"
+    printf "opentitan_fpv_compile_contracts_keep_workdir=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR"
+    printf "update_opentitan_fpv_compile_contracts_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE"
+    printf "fail_on_opentitan_fpv_compile_contract_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT"
     for opentitan_select_cfg in "${OPENTITAN_SELECT_CFGS[@]}"; do
       printf "opentitan_select_cfgs[]=%s\n" "$opentitan_select_cfg"
     done

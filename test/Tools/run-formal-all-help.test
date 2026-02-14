@@ -106,4 +106,13 @@
 // CHECK: --opentitan-fpv-cfg
 // CHECK: --select-cfgs
 // CHECK: --opentitan-fpv-target-manifest
+// CHECK: --opentitan-fpv-compile-contracts
+// CHECK: --opentitan-fpv-compile-contracts-baseline-file
+// CHECK: --opentitan-fpv-compile-contract-drift-file
+// CHECK: --opentitan-fpv-compile-contract-drift-allowlist-file
+// CHECK: --opentitan-fpv-fusesoc-bin
+// CHECK: --opentitan-fpv-compile-contracts-workdir
+// CHECK: --opentitan-fpv-compile-contracts-keep-workdir
+// CHECK: --update-opentitan-fpv-compile-contracts-baseline
+// CHECK: --fail-on-opentitan-fpv-compile-contract-drift
 // CHECK: --opentitan-lec-impl-filter
