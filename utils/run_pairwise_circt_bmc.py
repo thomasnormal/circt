@@ -82,6 +82,16 @@ Verilog frontend mode:
     using a generated unified include compilation unit.
   - on: always compile via unified include compilation unit.
   - off: disable unified include compilation unit retry/injection.
+- BMC_VERILOG_EXTERNAL_PREPROCESS_MODE (default: off)
+  Values:
+  - auto: on known macro-operator/preprocessor compatibility failures, retry
+    once by preprocessing sources with an external preprocessor command.
+  - on: always preprocess sources with an external preprocessor command before
+    invoking circt-verilog.
+  - off: disable external preprocessor retry/injection.
+- BMC_VERILOG_EXTERNAL_PREPROCESS_CMD (default: "verilator -E")
+  External preprocessor command used by
+  BMC_VERILOG_EXTERNAL_PREPROCESS_MODE=auto|on.
 """
 
 from __future__ import annotations
@@ -500,6 +510,25 @@ def is_unified_include_unit_retryable_failure(log_text: str) -> bool:
     )
 
 
+def is_external_preprocess_retryable_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return (
+        "macro operators may only be used within a macro definition" in low
+        or "unexpected conditional directive" in low
+    )
+
+
+def is_prim_assert_include_shim_retryable_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    if not is_external_preprocess_retryable_failure(low):
+        return False
+    return (
+        "prim_assert.sv" in low
+        or "prim_flop_macros.sv" in low
+        or "prim_assert_sec_cm.svh" in low
+    )
+
+
 def write_assert_macro_shim_file(path: Path) -> None:
     path.write_text(
         """// Auto-generated assertion macro shim used for non-single-unit
@@ -508,6 +537,7 @@ def write_assert_macro_shim_file(path: Path) -> None:
 `define CIRCT_BMC_ASSERT_MACRO_SHIM_SV
 `define ASSERT_DEFAULT_CLK clk_i
 `define ASSERT_DEFAULT_RST !rst_ni
+`define PRIM_STRINGIFY(__x) `"__x`"
 `define ASSERT_ERROR(__name) $error(\"Assert failed\")
 `define ASSERT_I(__name, __prop) __name: assert (__prop) else begin `ASSERT_ERROR(__name) end
 `define ASSERT_INIT(__name, __prop) initial begin __name: assert (__prop) else begin `ASSERT_ERROR(__name) end end
@@ -540,6 +570,120 @@ def write_assert_macro_shim_file(path: Path) -> None:
     )
 
 
+def write_prim_assert_include_shim_files(
+    prim_assert_path: Path,
+    prim_flop_macros_path: Path,
+    prim_assert_sec_cm_path: Path,
+    assert_macro_shim_basename: str,
+) -> None:
+    prim_assert_path.write_text(
+        f"""// Auto-generated prim_assert shim for CIRCT BMC frontend compatibility.
+`ifndef PRIM_ASSERT_SV
+`define PRIM_ASSERT_SV
+`include "{escape_sv_include_path(assert_macro_shim_basename)}"
+`include "prim_assert_sec_cm.svh"
+`include "prim_flop_macros.sv"
+`endif
+""",
+        encoding="utf-8",
+    )
+    prim_flop_macros_path.write_text(
+        """// Auto-generated prim_flop_macros shim for CIRCT BMC frontend compatibility.
+`ifndef PRIM_FLOP_MACROS_SV
+`define PRIM_FLOP_MACROS_SV
+`ifndef PRIM_FLOP_CLK
+`define PRIM_FLOP_CLK clk_i
+`endif
+`ifndef PRIM_FLOP_RST
+`define PRIM_FLOP_RST rst_ni
+`endif
+`ifndef PRIM_FLOP_RESVAL
+`define PRIM_FLOP_RESVAL '0
+`endif
+`define PRIM_FLOP_A(__d, __q, __resval = `PRIM_FLOP_RESVAL, __clk = `PRIM_FLOP_CLK, __rst_n = `PRIM_FLOP_RST) \
+  always_ff @(posedge __clk or negedge __rst_n) begin \
+    if (!__rst_n) begin                               \
+      __q <= __resval;                                \
+    end else begin                                    \
+      __q <= __d;                                     \
+    end                                               \
+  end
+`define PRIM_FLOP_SPARSE_FSM(__name, __d, __q, __type, __resval = `PRIM_FLOP_RESVAL, __clk = `PRIM_FLOP_CLK, __rst_n = `PRIM_FLOP_RST, __alert_trigger_sva_en = 1) \
+  prim_sparse_fsm_flop #(                             \
+    .StateEnumT(__type),                              \
+    .Width($bits(__type)),                            \
+    .ResetValue($bits(__type)'(__resval)),            \
+    .EnableAlertTriggerSVA(__alert_trigger_sva_en)    \
+  ) __name (                                          \
+    .clk_i(__clk),                                    \
+    .rst_ni(__rst_n),                                 \
+    .state_i(__d),                                    \
+    .state_o(__q)                                     \
+  );
+`endif
+""",
+        encoding="utf-8",
+    )
+    prim_assert_sec_cm_path.write_text(
+        """// Auto-generated prim_assert_sec_cm shim for CIRCT BMC frontend compatibility.
+`ifndef PRIM_ASSERT_SEC_CM_SVH
+`define PRIM_ASSERT_SEC_CM_SVH
+`define _SEC_CM_ALERT_MAX_CYC 30
+`define ASSERT_ERROR_TRIGGER_ERR(NAME_, HIER_, ERR_, GATE_, MAX_CYCLES_, ERR_NAME_, CLK_, RST_) \
+  `ASSERT(FpvSecCm``NAME_``,                                                                    \
+          $rose(HIER_.ERR_NAME_) && !(GATE_) |-> ##[0:MAX_CYCLES_] (ERR_),                      \
+          CLK_, RST_)
+`define ASSERT_ERROR_TRIGGER_ALERT(NAME_, HIER_, ALERT_, GATE_, MAX_CYCLES_, ERR_NAME_)    \
+  `ASSERT_ERROR_TRIGGER_ERR(NAME_, HIER_, (ALERT_.alert_p), GATE_, MAX_CYCLES_, ERR_NAME_, \
+                            `ASSERT_DEFAULT_CLK, `ASSERT_DEFAULT_RST)                      \
+  `ASSUME_FPV(``NAME_``TriggerAfterAlertInit_S,                                            \
+              $stable(rst_ni) == 0 |-> HIER_.ERR_NAME_ == 0 [*10])
+`define ASSERT_ERROR_TRIGGER_ALERT_IN(NAME_, HIER_, ALERT_IN_, GATE_, MAX_CYCLES_, ERR_NAME_) \
+  `ASSERT_ERROR_TRIGGER_ERR(NAME_, HIER_, ALERT_IN_, GATE_, MAX_CYCLES_, ERR_NAME_,           \
+                            `ASSERT_DEFAULT_CLK, `ASSERT_DEFAULT_RST)
+`define ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(NAME_, HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = `_SEC_CM_ALERT_MAX_CYC) \
+  `ASSERT_ERROR_TRIGGER_ALERT(NAME_, HIER_, ALERT_, GATE_, MAX_CYCLES_, err_o)
+`define ASSERT_PRIM_DOUBLE_LFSR_ERROR_TRIGGER_ALERT(NAME_, HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = `_SEC_CM_ALERT_MAX_CYC) \
+  `ASSERT_ERROR_TRIGGER_ALERT(NAME_, HIER_, ALERT_, GATE_, MAX_CYCLES_, err_o)
+`define ASSERT_PRIM_FSM_ERROR_TRIGGER_ALERT(NAME_, HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = `_SEC_CM_ALERT_MAX_CYC) \
+  `ASSERT_ERROR_TRIGGER_ALERT(NAME_, HIER_, ALERT_, GATE_, MAX_CYCLES_, unused_err_o)
+`define ASSERT_PRIM_ONEHOT_ERROR_TRIGGER_ALERT(NAME_, HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = `_SEC_CM_ALERT_MAX_CYC) \
+  `ASSERT_ERROR_TRIGGER_ALERT(NAME_, HIER_, ALERT_, GATE_, MAX_CYCLES_, err_o)
+`define ASSERT_PRIM_REG_WE_ONEHOT_ERROR_TRIGGER_ALERT(NAME_, REG_TOP_HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = `_SEC_CM_ALERT_MAX_CYC) \
+  `ASSERT_PRIM_ONEHOT_ERROR_TRIGGER_ALERT(NAME_, \
+    REG_TOP_HIER_.u_prim_reg_we_check.u_prim_onehot_check, ALERT_, GATE_, MAX_CYCLES_)
+`define ASSERT_PRIM_FIFO_SYNC_SINGLETON_ERROR_TRIGGER_ALERT(NAME_, HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = `_SEC_CM_ALERT_MAX_CYC) \
+  `ASSERT_ERROR_TRIGGER_ALERT(NAME_, HIER_, ALERT_, GATE_, MAX_CYCLES_, err_o)
+`define ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT_IN(NAME_, HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = 2) \
+  `ASSERT_ERROR_TRIGGER_ALERT_IN(NAME_, HIER_, ALERT_, GATE_, MAX_CYCLES_, err_o)
+`define ASSERT_PRIM_DOUBLE_LFSR_ERROR_TRIGGER_ALERT_IN(NAME_, HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = 2) \
+  `ASSERT_ERROR_TRIGGER_ALERT_IN(NAME_, HIER_, ALERT_, GATE_, MAX_CYCLES_, err_o)
+`define ASSERT_PRIM_FSM_ERROR_TRIGGER_ALERT_IN(NAME_, HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = 2) \
+  `ASSERT_ERROR_TRIGGER_ALERT_IN(NAME_, HIER_, ALERT_, GATE_, MAX_CYCLES_, unused_err_o)
+`define ASSERT_PRIM_ONEHOT_ERROR_TRIGGER_ALERT_IN(NAME_, HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = 2) \
+  `ASSERT_ERROR_TRIGGER_ALERT_IN(NAME_, HIER_, ALERT_, GATE_, MAX_CYCLES_, err_o)
+`define ASSERT_PRIM_REG_WE_ONEHOT_ERROR_TRIGGER_ALERT_IN(NAME_, REG_TOP_HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = 2) \
+  `ASSERT_PRIM_ONEHOT_ERROR_TRIGGER_ALERT_IN(NAME_, \
+    REG_TOP_HIER_.u_prim_reg_we_check.u_prim_onehot_check, ALERT_, GATE_, MAX_CYCLES_)
+`define ASSERT_PRIM_FIFO_SYNC_SINGLETON_ERROR_TRIGGER_ALERT_IN(NAME_, HIER_, ALERT_, GATE_ = 0, MAX_CYCLES_ = 2) \
+  `ASSERT_ERROR_TRIGGER_ALERT_IN(NAME_, HIER_, ALERT_, GATE_, MAX_CYCLES_, err_o)
+`define ASSERT_PRIM_FSM_ERROR_TRIGGER_ERR(NAME_, HIER_, ERR_, GATE_ = 0, MAX_CYCLES_ = 2, CLK_ = clk_i, RST_ = !rst_ni) \
+  `ASSERT_ERROR_TRIGGER_ERR(NAME_, HIER_, ERR_, GATE_, MAX_CYCLES_, unused_err_o, CLK_, RST_)
+`define ASSERT_PRIM_COUNT_ERROR_TRIGGER_ERR(NAME_, HIER_, ERR_, GATE_ = 0, MAX_CYCLES_ = 2, CLK_ = clk_i, RST_ = !rst_ni) \
+  `ASSERT_ERROR_TRIGGER_ERR(NAME_, HIER_, ERR_, GATE_, MAX_CYCLES_, err_o, CLK_, RST_)
+`define ASSERT_PRIM_DOUBLE_LFSR_ERROR_TRIGGER_ERR(NAME_, HIER_, ERR_, GATE_ = 0, MAX_CYCLES_ = 2, CLK_ = clk_i, RST_ = !rst_ni) \
+  `ASSERT_ERROR_TRIGGER_ERR(NAME_, HIER_, ERR_, GATE_, MAX_CYCLES_, err_o, CLK_, RST_)
+`define ASSERT_PRIM_ONEHOT_ERROR_TRIGGER_ERR(NAME_, HIER_, ERR_, GATE_ = 0, MAX_CYCLES_ = `_SEC_CM_ALERT_MAX_CYC, CLK_ = clk_i, RST_ = !rst_ni) \
+  `ASSERT_ERROR_TRIGGER_ERR(NAME_, HIER_, ERR_, GATE_, MAX_CYCLES_, err_o, CLK_, RST_)
+`define ASSERT_PRIM_REG_WE_ONEHOT_ERROR_TRIGGER_ERR(NAME_, REG_TOP_HIER_, ERR_, GATE_ = 0, MAX_CYCLES_ = `_SEC_CM_ALERT_MAX_CYC, CLK_ = clk_i, RST_ = !rst_ni) \
+  `ASSERT_PRIM_ONEHOT_ERROR_TRIGGER_ERR(NAME_, \
+    REG_TOP_HIER_.u_prim_reg_we_check.u_prim_onehot_check, ERR_, GATE_, MAX_CYCLES_, CLK_, RST_)
+`endif
+""",
+        encoding="utf-8",
+    )
+
+
 def escape_sv_include_path(path: str) -> str:
     return path.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -550,6 +694,69 @@ def write_unified_include_unit(path: Path, include_files: list[str]) -> None:
         lines.append(f'`include "{escape_sv_include_path(file_path)}"')
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def unique_preserve_order(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def run_external_preprocessor(
+    preprocess_cmd_template: list[str],
+    include_dirs: list[str],
+    define_tokens: list[str],
+    input_sources: list[str],
+    output_path: Path,
+    log_path: Path,
+    timeout_secs: int,
+) -> tuple[bool, str]:
+    if not preprocess_cmd_template:
+        return False, "external_preprocess_command_empty"
+    cmd = list(preprocess_cmd_template)
+    for include_dir in include_dirs:
+        cmd.append(f"-I{include_dir}")
+    for define_token in define_tokens:
+        cmd.append(f"-D{define_token}")
+    cmd += input_sources
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_secs if timeout_secs > 0 else None,
+        )
+    except FileNotFoundError:
+        log_path.write_text(
+            "external preprocessor command not found: "
+            f"{shlex.join(preprocess_cmd_template)}\n",
+            encoding="utf-8",
+        )
+        return False, "external_preprocess_command_not_found"
+    except subprocess.TimeoutExpired:
+        log_path.write_text(
+            "external preprocessor timed out: "
+            f"{shlex.join(cmd)}\n",
+            encoding="utf-8",
+        )
+        return False, "external_preprocess_timeout"
+
+    log_lines = [f"$ {shlex.join(cmd)}", ""]
+    if result.stderr:
+        log_lines.append(result.stderr.rstrip())
+    log_lines.append("")
+    log_lines.append(f"exit_code={result.returncode}")
+    log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+    if result.returncode != 0:
+        return False, f"external_preprocess_exit_{result.returncode}"
+    output_path.write_text(result.stdout, encoding="utf-8")
+    return True, "ok"
 
 
 def run_and_log(
@@ -1199,6 +1406,30 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    verilog_external_preprocess_mode = os.environ.get(
+        "BMC_VERILOG_EXTERNAL_PREPROCESS_MODE", "off"
+    ).strip().lower()
+    if verilog_external_preprocess_mode not in {"auto", "on", "off"}:
+        print(
+            (
+                "invalid BMC_VERILOG_EXTERNAL_PREPROCESS_MODE: "
+                f"{verilog_external_preprocess_mode} (expected auto|on|off)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    verilog_external_preprocess_cmd = shlex.split(
+        os.environ.get("BMC_VERILOG_EXTERNAL_PREPROCESS_CMD", "verilator -E")
+    )
+    if verilog_external_preprocess_mode != "off" and not verilog_external_preprocess_cmd:
+        print(
+            (
+                "invalid BMC_VERILOG_EXTERNAL_PREPROCESS_CMD: "
+                "expected non-empty command for external preprocess mode"
+            ),
+            file=sys.stderr,
+        )
+        return 1
     z3_lib = os.environ.get("Z3_LIB", str(Path.home() / "z3-install/lib64/libz3.so"))
     bmc_run_smtlib = os.environ.get("BMC_RUN_SMTLIB", "1") == "1"
     bmc_smoke_only = os.environ.get("BMC_SMOKE_ONLY", "0") == "1"
@@ -1500,6 +1731,13 @@ def main() -> int:
             prepped_mlir = case_dir / "pairwise_bmc.prepared.mlir"
 
             include_dirs = global_include_dirs + case.include_dirs
+            verilog_include_dir_prefixes: list[str] = []
+
+            def current_verilog_include_dirs() -> list[str]:
+                return unique_preserve_order(
+                    verilog_include_dir_prefixes + include_dirs
+                )
+
             def build_verilog_cmd(
                 use_single_unit: bool,
                 pre_sources: list[str] | None = None,
@@ -1516,7 +1754,7 @@ def main() -> int:
                 ]
                 if use_single_unit:
                     cmd.append("--single-unit")
-                for include_dir in include_dirs:
+                for include_dir in current_verilog_include_dirs():
                     cmd += ["-I", include_dir]
                 for define_token in case.verilog_defines:
                     cmd.append(f"-D{define_token}")
@@ -1533,11 +1771,22 @@ def main() -> int:
 
             use_single_unit = verilog_single_unit_mode != "off"
             use_unified_include_unit = verilog_unified_include_unit_mode == "on"
+            use_external_preprocess = verilog_external_preprocess_mode == "on"
             xilinx_primitive_stub_path = (
                 case_dir / "circt-verilog.xilinx-primitives.sv"
             )
             assert_macro_shim_path = case_dir / "circt-verilog.assert-macro-shim.sv"
+            prim_assert_shim_path = case_dir / "prim_assert.sv"
+            prim_flop_macros_shim_path = case_dir / "prim_flop_macros.sv"
+            prim_assert_sec_cm_shim_path = case_dir / "prim_assert_sec_cm.svh"
             unified_include_unit_path = case_dir / "circt-verilog.unified-include.sv"
+            external_preprocessed_path = (
+                case_dir / "circt-verilog.external-preprocessed.sv"
+            )
+            external_preprocess_log_path = (
+                case_dir / "circt-verilog.external-preprocess.log"
+            )
+            use_prim_assert_include_shims = False
             verilog_pre_sources: list[str] = []
             verilog_post_sources: list[str] = []
             verilog_source_override: list[str] | None = None
@@ -1551,15 +1800,66 @@ def main() -> int:
                 write_unified_include_unit(unified_include_unit_path, include_files)
                 return [str(unified_include_unit_path)]
 
-            if verilog_assert_macro_shim_mode == "on":
+            def current_verilog_input_sources() -> list[str]:
+                if verilog_source_override is not None:
+                    return list(verilog_source_override)
+                return (
+                    list(verilog_pre_sources)
+                    + list(case.source_files)
+                    + list(verilog_post_sources)
+                )
+
+            def current_external_preprocess_include_dirs() -> list[str]:
+                source_dirs = [str(Path(path).parent) for path in current_verilog_input_sources()]
+                case_source_dirs = [str(Path(path).parent) for path in case.source_files]
+                pre_source_dirs = [str(Path(path).parent) for path in verilog_pre_sources]
+                post_source_dirs = [str(Path(path).parent) for path in verilog_post_sources]
+                return unique_preserve_order(
+                    current_verilog_include_dirs()
+                    + case_source_dirs
+                    + pre_source_dirs
+                    + post_source_dirs
+                    + source_dirs
+                )
+
+            def enable_prim_assert_include_shims() -> None:
+                nonlocal use_prim_assert_include_shims
+                if use_prim_assert_include_shims:
+                    return
                 write_assert_macro_shim_file(assert_macro_shim_path)
-                verilog_pre_sources.append(str(assert_macro_shim_path))
+                write_prim_assert_include_shim_files(
+                    prim_assert_shim_path,
+                    prim_flop_macros_shim_path,
+                    prim_assert_sec_cm_shim_path,
+                    assert_macro_shim_path.name,
+                )
+                if str(assert_macro_shim_path) not in verilog_pre_sources:
+                    verilog_pre_sources.append(str(assert_macro_shim_path))
+                verilog_include_dir_prefixes[:] = unique_preserve_order(
+                    [str(case_dir)] + verilog_include_dir_prefixes
+                )
+                use_prim_assert_include_shims = True
+
+            if verilog_assert_macro_shim_mode == "on":
+                enable_prim_assert_include_shims()
             if verilog_xilinx_primitive_stub_mode == "on":
                 write_xilinx_primitive_stub_file(xilinx_primitive_stub_path)
                 verilog_pre_sources.append(str(xilinx_primitive_stub_path))
             if use_unified_include_unit:
                 use_single_unit = False
             verilog_source_override = refresh_unified_include_unit_sources()
+            if use_external_preprocess:
+                preprocess_ok, _ = run_external_preprocessor(
+                    verilog_external_preprocess_cmd,
+                    current_external_preprocess_include_dirs(),
+                    case.verilog_defines,
+                    current_verilog_input_sources(),
+                    external_preprocessed_path,
+                    external_preprocess_log_path,
+                    case_timeout_secs,
+                )
+                if preprocess_ok:
+                    verilog_source_override = [str(external_preprocessed_path)]
             verilog_cmd = build_verilog_cmd(
                 use_single_unit,
                 verilog_pre_sources,
@@ -1775,6 +2075,140 @@ def main() -> int:
                         )
                 if (
                     verilog_result.returncode != 0
+                    and verilog_external_preprocess_mode == "auto"
+                    and not use_external_preprocess
+                ):
+                    verilog_log_text = verilog_log_path.read_text()
+                    if is_external_preprocess_retryable_failure(verilog_log_text):
+                        external_preprocess_trigger_log = (
+                            case_dir / "circt-verilog.external-preprocess-trigger.log"
+                        )
+                        shutil.copy2(verilog_log_path, external_preprocess_trigger_log)
+                        use_external_preprocess = True
+                        preprocess_ok, preprocess_reason = run_external_preprocessor(
+                            verilog_external_preprocess_cmd,
+                            current_external_preprocess_include_dirs(),
+                            case.verilog_defines,
+                            current_verilog_input_sources(),
+                            external_preprocessed_path,
+                            external_preprocess_log_path,
+                            case_timeout_secs,
+                        )
+                        if preprocess_ok:
+                            verilog_source_override = [str(external_preprocessed_path)]
+                            if launch_event_rows is not None:
+                                launch_event_rows.append(
+                                    (
+                                        "RETRY",
+                                        case.case_id,
+                                        case_path,
+                                        stage,
+                                        circt_verilog,
+                                        "external_preprocess_macro_compat",
+                                        "1",
+                                        "0.000",
+                                        str(verilog_result.returncode),
+                                        "",
+                                    )
+                                )
+                            verilog_cmd = build_verilog_cmd(
+                                use_single_unit,
+                                verilog_pre_sources,
+                                verilog_post_sources,
+                                verilog_source_override,
+                            )
+                            verilog_result = run_and_log(
+                                verilog_cmd,
+                                verilog_log_path,
+                                None,
+                                case_timeout_secs,
+                                etxtbsy_retries,
+                                etxtbsy_backoff_secs,
+                                launch_retry_attempts,
+                                launch_retry_backoff_secs,
+                                launch_retryable_exit_codes,
+                                launch_copy_fallback,
+                                launch_event_rows,
+                                case.case_id,
+                                case_path,
+                                stage,
+                            )
+                        elif launch_event_rows is not None:
+                            launch_event_rows.append(
+                                (
+                                    "RETRY",
+                                    case.case_id,
+                                    case_path,
+                                    stage,
+                                    circt_verilog,
+                                    preprocess_reason,
+                                    "1",
+                                    "0.000",
+                                    str(verilog_result.returncode),
+                                    "",
+                                )
+                            )
+                if (
+                    verilog_result.returncode != 0
+                    and verilog_assert_macro_shim_mode == "auto"
+                    and not use_prim_assert_include_shims
+                ):
+                    verilog_log_text = verilog_log_path.read_text()
+                    if is_prim_assert_include_shim_retryable_failure(
+                        verilog_log_text
+                    ):
+                        prim_assert_include_shim_trigger_log = (
+                            case_dir
+                            / "circt-verilog.prim-assert-include-shim-trigger.log"
+                        )
+                        shutil.copy2(
+                            verilog_log_path, prim_assert_include_shim_trigger_log
+                        )
+                        enable_prim_assert_include_shims()
+                        if use_external_preprocess:
+                            use_external_preprocess = False
+                        verilog_source_override = (
+                            refresh_unified_include_unit_sources()
+                        )
+                        if launch_event_rows is not None:
+                            launch_event_rows.append(
+                                (
+                                    "RETRY",
+                                    case.case_id,
+                                    case_path,
+                                    stage,
+                                    circt_verilog,
+                                    "prim_assert_include_shim_macro_compat",
+                                    "1",
+                                    "0.000",
+                                    str(verilog_result.returncode),
+                                    "",
+                                )
+                            )
+                        verilog_cmd = build_verilog_cmd(
+                            use_single_unit,
+                            verilog_pre_sources,
+                            verilog_post_sources,
+                            verilog_source_override,
+                        )
+                        verilog_result = run_and_log(
+                            verilog_cmd,
+                            verilog_log_path,
+                            None,
+                            case_timeout_secs,
+                            etxtbsy_retries,
+                            etxtbsy_backoff_secs,
+                            launch_retry_attempts,
+                            launch_retry_backoff_secs,
+                            launch_retryable_exit_codes,
+                            launch_copy_fallback,
+                            launch_event_rows,
+                            case.case_id,
+                            case_path,
+                            stage,
+                        )
+                if (
+                    verilog_result.returncode != 0
                     and verilog_assert_macro_shim_mode == "auto"
                     and str(assert_macro_shim_path) not in verilog_pre_sources
                 ):
@@ -1784,8 +2218,7 @@ def main() -> int:
                             case_dir / "circt-verilog.unknown-macro.log"
                         )
                         shutil.copy2(verilog_log_path, unknown_macro_log_path)
-                        write_assert_macro_shim_file(assert_macro_shim_path)
-                        verilog_pre_sources.append(str(assert_macro_shim_path))
+                        enable_prim_assert_include_shims()
                         verilog_source_override = (
                             refresh_unified_include_unit_sources()
                         )

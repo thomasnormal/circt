@@ -1,5 +1,149 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1403 - February 14, 2026
+
+### OpenTitan FPV BMC: Macro-Compatibility Retry Hardening
+
+1. Extended `utils/run_pairwise_circt_bmc.py` with external preprocessor retry
+   controls for frontend macro-compatibility failures:
+   - `BMC_VERILOG_EXTERNAL_PREPROCESS_MODE=auto|on|off` (default: `off`)
+   - `BMC_VERILOG_EXTERNAL_PREPROCESS_CMD` (default: `verilator -E`)
+   - `auto` now retries on:
+     - `macro operators may only be used within a macro definition`
+     - `unexpected conditional directive`
+   - launch provenance records:
+     - `external_preprocess_macro_compat`
+     - `external_preprocess_exit_<code>` on preprocessing failure.
+2. Fixed external preprocessor include flag forwarding for default verilator
+   command (`-I<dir>` form), eliminating false command failures caused by
+   split `-I <dir>` argument handling.
+3. Added OpenTitan-oriented prim assertion include-shim retry in
+   `run_pairwise_circt_bmc.py`:
+   - on macro-compat failures rooted in `prim_assert.sv`,
+     `prim_flop_macros.sv`, or `prim_assert_sec_cm.svh`, `auto` mode now:
+     - emits generated shim files in the case workdir:
+       - `prim_assert.sv`
+       - `prim_flop_macros.sv`
+       - `prim_assert_sec_cm.svh`
+       - `circt-verilog.assert-macro-shim.sv`
+     - prepends case workdir include path for deterministic include override.
+   - launch provenance records:
+     - `prim_assert_include_shim_macro_compat`.
+4. Added focused regression coverage:
+   - `test/Tools/run-pairwise-circt-bmc-external-preprocess-auto-retry.test`
+   - `test/Tools/run-pairwise-circt-bmc-prim-assert-include-shim-auto-retry.test`
+5. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-pairwise-circt-bmc-prim-assert-include-shim-auto-retry.test build-test/test/Tools/run-pairwise-circt-bmc-external-preprocess-auto-retry.test build-test/test/Tools/run-pairwise-circt-bmc-unified-include-unit-auto-retry.test build-test/test/Tools/run-pairwise-circt-bmc-assert-macro-shim-auto-retry.test` PASS
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-opentitan-bmc.test build-test/test/Tools/run-formal-all-opentitan-bmc-mode-diff.test build-test/test/Tools/run-formal-all-opentitan-bmc-opentitan-toolchain-fallback.test build-test/test/Tools/run-formal-all-opentitan-bmc-case-policy-forwarding.test build-test/test/Tools/run-opentitan-bmc-case-policy-provenance.test` PASS
+   - focused real OpenTitan source smoke:
+     - `prim_flop_no_rst` case from OpenTitan pinmux build contracts: PASS
+       under `BMC_SMOKE_ONLY=1` with all frontend auto-retry modes enabled.
+6. Remaining limitation:
+   - full `pinmux_fpv` compile-unit remains a heavy end-to-end stress case;
+     this milestone hardens retry mechanisms and provenance, but further parser
+     compatibility and large-unit performance tuning are still required for
+     broad OpenTitan FPV closure.
+
+## Iteration 1402 - February 14, 2026
+
+### OpenTitan FPV BMC: Unified Include-Unit Macro-Visibility Fallback
+
+1. Extended `utils/run_pairwise_circt_bmc.py` with a new frontend retry mode:
+   - `BMC_VERILOG_UNIFIED_INCLUDE_UNIT_MODE=auto|on|off` (default: `auto`).
+   - `auto` now retries macro/preprocessor visibility failures by generating
+     `circt-verilog.unified-include.sv` with ordered `` `include `` of active
+     verilog sources.
+   - launch provenance now records:
+     - `unified_include_unit_macro_visibility`.
+2. Fixed unified-source command construction:
+   - when unified include mode is active, verilog invocation now uses the
+     generated unit as the sole source argument (no duplicate forwarding of
+     pre/post/source files), preventing duplicate module-definition failures
+     under combined shim fallback paths.
+3. Added regression coverage:
+   - `test/Tools/run-pairwise-circt-bmc-unified-include-unit-auto-retry.test`
+     - validates retry trigger on macro error,
+     - validates generated include-unit contents,
+     - validates no explicit-source duplication alongside unified input.
+   - updated isolation in
+     `test/Tools/run-pairwise-circt-bmc-assert-macro-shim-auto-retry.test`
+     (`BMC_VERILOG_UNIFIED_INCLUDE_UNIT_MODE=off`) to keep shim-specific
+     behavior deterministic.
+4. Validation:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-pairwise-circt-bmc-single-unit-auto-retry.test build-test/test/Tools/run-pairwise-circt-bmc-xilinx-primitive-stub-auto-retry.test build-test/test/Tools/run-pairwise-circt-bmc-assert-macro-shim-auto-retry.test build-test/test/Tools/run-pairwise-circt-bmc-unified-include-unit-auto-retry.test` PASS
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-opentitan-bmc.test build-test/test/Tools/run-formal-all-opentitan-bmc-mode-diff.test build-test/test/Tools/run-formal-all-opentitan-bmc-opentitan-toolchain-fallback.test build-test/test/Tools/run-formal-all-opentitan-bmc-case-policy-forwarding.test build-test/test/Tools/run-opentitan-bmc-case-policy-provenance.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-launch-events-summary.test` PASS
+   - real OpenTitan `pinmux_fpv` FPV-BMC smoke now shows retry-chain execution
+     with unified include launch provenance:
+     - `single_unit_preprocessor_failure`
+     - `unknown_module_xilinx_primitives`
+     - `unified_include_unit_macro_visibility`
+5. Remaining blocker after this milestone:
+   - `pinmux_fpv` still fails in `circt-verilog` with
+     `macro_operators_may_only_be_used_within_a_macro_definition`; this is now
+     a narrower parser/macro compatibility issue after retry-pipeline closure.
+
+## Iteration 1401 - February 14, 2026
+
+### sv-tests Simulation: 100% Coverage (1028/1028, 0 Silent Skips)
+
+1. **SVA concurrent assertion evaluation pipeline** in circt-sim:
+   - Added LTLToCore pass integration (`circt-sim.cpp`): lowers
+     `verif.clocked_assert` + LTL property trees to `verif.assert` +
+     `seq.compreg` hardware monitors.
+   - Added `seq::CompRegOp` support in LLHD process interpreter
+     (`LLHDProcessInterpreter.cpp/h`): positive-edge triggered clocked
+     registers mirroring the existing `seq::FirRegOp` pattern.
+   - Added module-level `verif::AssertOp` handling: assertions at hw.module
+     level (post-LTLToCore lowering) are evaluated reactively when their
+     input signals change.
+   - Added conditional SVA pass detection: LTLToCore and canonicalizer passes
+     only run when the module contains LTL/SVA ops, avoiding overhead for
+     non-SVA tests.
+   - Added `SymbolDCE` pass before canonicalizer: removes ~65% dead UVM
+     library functions, significantly reducing pass pipeline time.
+   - Updated `tools/circt-sim/CMakeLists.txt`: added `CIRCTLTL` and
+     `CIRCTLTLToCore` library dependencies.
+
+2. **slang AnalysisManager integration** in ImportVerilog:
+   - Added `slang::analysis::AnalysisManager` call after compilation in
+     `lib/Conversion/ImportVerilog/ImportVerilog.cpp`.
+   - Catches mixed procedural/continuous assignments
+     (`6.5--variable_mixed_assignments`) and multiple continuous assignments
+     (`6.5--variable_multiple_assignments`) at compile time.
+
+3. **Tagged union member access checker** in slang:
+   - Added `TaggedUnionExprChecker` in
+     `build-test/_deps/slang-src/source/analysis/AnalyzedProcedure.cpp`.
+   - Statically detects wrong-tag member access (e.g., assigning `Invalid`
+     then accessing `.Valid`) within sequential code blocks.
+   - Conservative: clears knowledge at control flow merge points.
+
+4. **Runner improvements** (`utils/run_sv_tests_circt_sim.sh`):
+   - Non-simulation/elaboration tests (preprocessing, parsing) now run as
+     compile-only checks instead of being silently skipped.
+   - Fixed basename collisions for tests in different subdirectories
+     (e.g., `arrays/packed/basic.sv` vs `arrays/dynamic/basic.sv`).
+   - Added `expect=xfail` override: expect file can mark compilation failure
+     as expected even without `should_fail_because` metadata.
+
+5. **Expect file updates** (`utils/sv-tests-sim-expect.txt`):
+   - Converted all 6 `skip` entries to `compile-only` (zero silent skips).
+   - Added 3 SVA should-fail tests as `compile-only` (awaiting full SVA
+     concurrent assertion failure detection in simulation).
+   - Added `22.5.1--define-expansion_26` as `xfail` (preprocessing token
+     pasting produces valid macro output but undeclared identifier).
+
+6. **Build infrastructure**:
+   - Switched from GNU ld to lld (instant link vs 1.5hr hang at 28GB).
+   - Added ccache for faster incremental rebuilds.
+   - Set `CMAKE_BUILD_TYPE=RelWithDebInfo` and `LLVM_PARALLEL_LINK_JOBS=2`.
+
+7. Results:
+   - **sv-tests**: 952 PASS + 76 XFAIL = 1028/1028 (100%), 0 skip, 0 XPASS,
+     0 COMPILE_FAIL.
+   - Key tests validated: tagged union (XFAIL), driver analysis (XFAIL),
+     SVA compile-only (PASS), preprocessing xfail (XFAIL).
+
 ## Iteration 1400 - February 14, 2026
 
 ### OpenTitan FPV BMC: LLHD `sig.array_get` Strip Closure
