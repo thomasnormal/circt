@@ -8,6 +8,11 @@
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-retries-by-reason no-dashes=1 2>&1 | FileCheck %s --check-prefix=RETRY-REASON-TOKEN
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-retries-by-reason permission_denied=bad 2>&1 | FileCheck %s --check-prefix=RETRY-REASON-BUDGET
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-retries-by-reason permission_denied=1,permission_denied=2 2>&1 | FileCheck %s --check-prefix=RETRY-REASON-DUP
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-tolerances bad 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-FORMAT
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-tolerances no-dashes=1 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-TOKEN
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-tolerances permission_denied=bad 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-VALUE
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-tolerances permission_denied=1,permission_denied=2 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-DUP
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --retry-reason-drift-suite-tolerance bad 2>&1 | FileCheck %s --check-prefix=RETRY-DRIFT-SUITE
 
 // DETECTED: --min-total-detected must be a non-negative integer: bad
 // RELEVANT: --min-total-relevant must be a non-negative integer: bad
@@ -18,3 +23,8 @@
 // RETRY-REASON-TOKEN: --max-total-retries-by-reason has invalid reason token: no-dashes
 // RETRY-REASON-BUDGET: --max-total-retries-by-reason has non-integer budget for permission_denied: bad
 // RETRY-REASON-DUP: --max-total-retries-by-reason repeats reason token: permission_denied
+// RETRY-DRIFT-FORMAT: --retry-reason-drift-tolerances requires reason=N entries: bad
+// RETRY-DRIFT-TOKEN: --retry-reason-drift-tolerances has invalid reason token: no-dashes
+// RETRY-DRIFT-VALUE: --retry-reason-drift-tolerances has non-integer tolerance for permission_denied: bad
+// RETRY-DRIFT-DUP: --retry-reason-drift-tolerances repeats reason token: permission_denied
+// RETRY-DRIFT-SUITE: --retry-reason-drift-suite-tolerance must be a non-negative integer: bad

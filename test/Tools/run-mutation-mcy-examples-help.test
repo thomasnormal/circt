@@ -33,6 +33,8 @@
 // CHECK-DAG: --baseline-file
 // CHECK-DAG: --retry-reason-baseline-file
 // CHECK-DAG: --fail-on-retry-reason-diff
+// CHECK-DAG: --retry-reason-drift-tolerances
+// CHECK-DAG: --retry-reason-drift-suite-tolerance
 // CHECK-DAG: --update-baseline
 // CHECK-DAG: --allow-update-baseline-on-failure
 // CHECK-DAG: --migrate-baseline-schema-artifacts

@@ -80,6 +80,12 @@ Options:
                            <baseline-file>.retry-reason-summary.tsv)
   --fail-on-retry-reason-diff
                            Fail when retry-reason counts regress vs baseline
+  --retry-reason-drift-tolerances SPEC
+                           Allow retry-reason increases up to reason-specific
+                           tolerances in SPEC format reason=N[,reason=N...]
+  --retry-reason-drift-suite-tolerance N
+                           Allow suite total retry increase up to N when
+                           evaluating --fail-on-retry-reason-diff
   --require-policy-fingerprint-baseline
                            Require baseline rows to include policy_fingerprint
                            when evaluating --fail-on-diff
@@ -198,6 +204,8 @@ MAX_TOTAL_RETRIES=""
 MAX_TOTAL_RETRIES_BY_REASON=""
 BASELINE_FILE=""
 RETRY_REASON_BASELINE_FILE=""
+RETRY_REASON_DRIFT_TOLERANCES=""
+RETRY_REASON_DRIFT_SUITE_TOLERANCE=0
 BASELINE_SCHEMA_VERSION_FILE=""
 BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_VERSION_FILE=""
@@ -242,6 +250,7 @@ declare -a AVAILABLE_EXAMPLES=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
 declare -A RETRY_REASON_BUDGETS=()
+declare -A RETRY_REASON_DRIFT_TOLERANCE_MAP=()
 
 SUMMARY_HEADER_V1=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors'
 SUMMARY_HEADER_V2=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\tpolicy_fingerprint'
@@ -317,6 +326,57 @@ parse_retry_reason_budgets() {
       return 1
     fi
     RETRY_REASON_BUDGETS["$reason"]="$budget"
+  done
+
+  return 0
+}
+
+parse_retry_reason_drift_tolerances() {
+  local spec="$1"
+  local normalized=""
+  local old_ifs=""
+  local entry=""
+  local reason=""
+  local tolerance=""
+  local -a parts=()
+
+  RETRY_REASON_DRIFT_TOLERANCE_MAP=()
+  normalized="$(trim_whitespace "$spec")"
+  if [[ -z "$normalized" ]]; then
+    return 0
+  fi
+
+  old_ifs="$IFS"
+  IFS=','
+  read -r -a parts <<< "$normalized"
+  IFS="$old_ifs"
+
+  for entry in "${parts[@]}"; do
+    entry="$(trim_whitespace "$entry")"
+    if [[ -z "$entry" ]]; then
+      continue
+    fi
+    if [[ "$entry" != *=* ]]; then
+      echo "--retry-reason-drift-tolerances requires reason=N entries: ${entry}" >&2
+      return 1
+    fi
+    reason="${entry%%=*}"
+    tolerance="${entry#*=}"
+    reason="$(trim_whitespace "$reason")"
+    tolerance="$(trim_whitespace "$tolerance")"
+    if ! is_retry_reason_token "$reason"; then
+      echo "--retry-reason-drift-tolerances has invalid reason token: ${reason}" >&2
+      return 1
+    fi
+    if ! is_nonneg_int "$tolerance"; then
+      echo "--retry-reason-drift-tolerances has non-integer tolerance for ${reason}: ${tolerance}" >&2
+      return 1
+    fi
+    if [[ -n "${RETRY_REASON_DRIFT_TOLERANCE_MAP[$reason]+x}" ]]; then
+      echo "--retry-reason-drift-tolerances repeats reason token: ${reason}" >&2
+      return 1
+    fi
+    RETRY_REASON_DRIFT_TOLERANCE_MAP["$reason"]="$tolerance"
   done
 
   return 0
@@ -1329,8 +1389,12 @@ evaluate_retry_reason_drift() {
   local current_reason=""
   local current_retries=""
   local reason=""
+  local tolerance=0
+  local suite_tolerance="${RETRY_REASON_DRIFT_SUITE_TOLERANCE}"
   local baseline_total_retries=0
   local current_total_retries=0
+  local suite_allowed_retries=0
+  local per_reason_allowed_retries=0
   local -A baseline_counts=()
   local -A current_counts=()
   local -A baseline_duplicate_seen=()
@@ -1338,7 +1402,8 @@ evaluate_retry_reason_drift() {
   local -a baseline_duplicates=()
   local -a current_duplicates=()
 
-  printf 'example\tmetric\tbaseline\tcurrent\toutcome\tdetail\n' > "$drift_file"
+  printf 'example	metric	baseline	current	outcome	detail
+' > "$drift_file"
 
   while IFS=$'	' read -r baseline_reason baseline_retries; do
     [[ "$baseline_reason" == "retry_reason" ]] && continue
@@ -1379,8 +1444,10 @@ evaluate_retry_reason_drift() {
   for reason in "${!baseline_counts[@]}"; do
     baseline_retries="${baseline_counts[$reason]}"
     current_retries="${current_counts[$reason]:-0}"
-    if [[ "$current_retries" -gt "$baseline_retries" ]]; then
-      if ! append_drift_candidate "$drift_file" "$reason" "retry_count" "$baseline_retries" "$current_retries" "retry_count_increased"; then
+    tolerance="${RETRY_REASON_DRIFT_TOLERANCE_MAP[$reason]:-0}"
+    per_reason_allowed_retries=$((baseline_retries + tolerance))
+    if [[ "$current_retries" -gt "$per_reason_allowed_retries" ]]; then
+      if ! append_drift_candidate "$drift_file" "$reason" "retry_count" "$baseline_retries" "$current_retries" "retry_count_increased_over_tolerance"; then
         regressions=$((regressions + 1))
       fi
     else
@@ -1393,8 +1460,9 @@ evaluate_retry_reason_drift() {
       continue
     fi
     current_retries="${current_counts[$reason]}"
-    if [[ "$current_retries" -gt 0 ]]; then
-      if ! append_drift_candidate "$drift_file" "$reason" "retry_count" "0" "$current_retries" "new_retry_reason"; then
+    tolerance="${RETRY_REASON_DRIFT_TOLERANCE_MAP[$reason]:-0}"
+    if [[ "$current_retries" -gt "$tolerance" ]]; then
+      if ! append_drift_candidate "$drift_file" "$reason" "retry_count" "0" "$current_retries" "new_retry_reason_over_tolerance"; then
         regressions=$((regressions + 1))
       fi
     else
@@ -1402,8 +1470,9 @@ evaluate_retry_reason_drift() {
     fi
   done
 
-  if [[ "$current_total_retries" -gt "$baseline_total_retries" ]]; then
-    if ! append_drift_candidate "$drift_file" "__suite__" "suite_retries" "$baseline_total_retries" "$current_total_retries" "retries_increased"; then
+  suite_allowed_retries=$((baseline_total_retries + suite_tolerance))
+  if [[ "$current_total_retries" -gt "$suite_allowed_retries" ]]; then
+    if ! append_drift_candidate "$drift_file" "__suite__" "suite_retries" "$baseline_total_retries" "$current_total_retries" "retries_increased_over_tolerance"; then
       regressions=$((regressions + 1))
     fi
   else
@@ -1427,7 +1496,6 @@ evaluate_retry_reason_drift() {
   fi
   return 0
 }
-
 
 ensure_unique_example_selection() {
   local -A seen=()
@@ -1918,6 +1986,14 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_RETRY_REASON_DIFF=1
       shift
       ;;
+    --retry-reason-drift-tolerances)
+      RETRY_REASON_DRIFT_TOLERANCES="$2"
+      shift 2
+      ;;
+    --retry-reason-drift-suite-tolerance)
+      RETRY_REASON_DRIFT_SUITE_TOLERANCE="$2"
+      shift 2
+      ;;
     --require-policy-fingerprint-baseline)
       REQUIRE_POLICY_FINGERPRINT_BASELINE=1
       shift
@@ -2085,6 +2161,13 @@ if [[ -n "$MAX_TOTAL_RETRIES" ]] && ! is_nonneg_int "$MAX_TOTAL_RETRIES"; then
   exit 1
 fi
 if ! parse_retry_reason_budgets "$MAX_TOTAL_RETRIES_BY_REASON"; then
+  exit 1
+fi
+if ! parse_retry_reason_drift_tolerances "$RETRY_REASON_DRIFT_TOLERANCES"; then
+  exit 1
+fi
+if ! is_nonneg_int "$RETRY_REASON_DRIFT_SUITE_TOLERANCE"; then
+  echo "--retry-reason-drift-suite-tolerance must be a non-negative integer: $RETRY_REASON_DRIFT_SUITE_TOLERANCE" >&2
   exit 1
 fi
 if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
