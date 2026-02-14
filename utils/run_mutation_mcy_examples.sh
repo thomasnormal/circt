@@ -109,8 +109,13 @@ Options:
   --strict-retry-reason-baseline-governance
                            Enable strict retry-reason baseline governance:
                            --require-retry-reason-baseline-schema-artifacts +
-                           --require-retry-reason-schema-artifact-validity
+                           --require-retry-reason-schema-artifact-validity +
+                           --require-retry-reason-baseline-parity
                            (requires --fail-on-retry-reason-diff)
+  --require-retry-reason-baseline-parity
+                           Require retry-reason key parity between baseline
+                           and current summary when evaluating
+                           --fail-on-retry-reason-diff
   --fail-on-retry-reason-diff
                            Fail when retry-reason counts regress vs baseline
   --retry-reason-drift-tolerances SPEC
@@ -265,6 +270,7 @@ SUMMARY_SCHEMA_VERSION_FILE=""
 RETRY_REASON_SUMMARY_SCHEMA_VERSION_FILE=""
 REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS=0
 REQUIRE_RETRY_REASON_SCHEMA_ARTIFACT_VALIDITY=0
+REQUIRE_RETRY_REASON_BASELINE_PARITY=0
 STRICT_RETRY_REASON_BASELINE_GOVERNANCE=0
 BASELINE_SCHEMA_CONTRACT_FILE=""
 BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT=0
@@ -1393,6 +1399,7 @@ evaluate_summary_drift() {
 
   local baseline_schema_contract=""
   local summary_schema_contract=""
+  local require_retry_reason_baseline_parity=""
   summary_schema_contract="$(summary_schema_contract_fingerprint_for_artifacts "$summary_file" "$summary_schema_version_file" "$summary_schema_contract_file")"
   baseline_schema_contract="$(summary_schema_contract_fingerprint_for_artifacts "$baseline_file" "$baseline_schema_version_file" "$baseline_schema_contract_file")"
 
@@ -1732,8 +1739,24 @@ evaluate_retry_reason_drift() {
     fi
   done
 
+  if [[ "$REQUIRE_RETRY_REASON_BASELINE_PARITY" -eq 1 ]]; then
+    for reason in "${!baseline_counts[@]}"; do
+      if [[ -z "${current_counts[$reason]+x}" ]]; then
+        if ! append_drift_candidate "$drift_file" "$reason" "row" "present" "missing" "missing_current_row"; then
+          regressions=$((regressions + 1))
+        fi
+      fi
+    done
+  fi
+
   for reason in "${!current_counts[@]}"; do
     if [[ -n "${baseline_counts[$reason]+x}" ]]; then
+      continue
+    fi
+    if [[ "$REQUIRE_RETRY_REASON_BASELINE_PARITY" -eq 1 ]]; then
+      if ! append_drift_candidate "$drift_file" "$reason" "row" "absent" "present" "unexpected_current_row"; then
+        regressions=$((regressions + 1))
+      fi
       continue
     fi
     current_retries="${current_counts[$reason]}"
@@ -2293,6 +2316,10 @@ while [[ $# -gt 0 ]]; do
       STRICT_RETRY_REASON_BASELINE_GOVERNANCE=1
       shift
       ;;
+    --require-retry-reason-baseline-parity)
+      REQUIRE_RETRY_REASON_BASELINE_PARITY=1
+      shift
+      ;;
     --fail-on-retry-reason-diff)
       FAIL_ON_RETRY_REASON_DIFF=1
       shift
@@ -2401,6 +2428,7 @@ fi
 if [[ "$STRICT_RETRY_REASON_BASELINE_GOVERNANCE" -eq 1 ]]; then
   REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS=1
   REQUIRE_RETRY_REASON_SCHEMA_ARTIFACT_VALIDITY=1
+  REQUIRE_RETRY_REASON_BASELINE_PARITY=1
 fi
 
 if ! is_pos_int "$GENERATE_COUNT"; then
@@ -2707,6 +2735,10 @@ if [[ "$REQUIRE_RETRY_REASON_BASELINE_SCHEMA_ARTIFACTS" -eq 1 && "$FAIL_ON_RETRY
 fi
 if [[ "$REQUIRE_RETRY_REASON_SCHEMA_ARTIFACT_VALIDITY" -eq 1 && "$FAIL_ON_RETRY_REASON_DIFF" -ne 1 ]]; then
   echo "--require-retry-reason-schema-artifact-validity requires --fail-on-retry-reason-diff" >&2
+  exit 1
+fi
+if [[ "$REQUIRE_RETRY_REASON_BASELINE_PARITY" -eq 1 && "$FAIL_ON_RETRY_REASON_DIFF" -ne 1 ]]; then
+  echo "--require-retry-reason-baseline-parity requires --fail-on-retry-reason-diff" >&2
   exit 1
 fi
 if [[ -n "$DRIFT_ALLOWLIST_FILE" ]]; then

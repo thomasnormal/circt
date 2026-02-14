@@ -1,0 +1,23 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt %t/bin
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nstate_file="$STATE_FILE"\ncount=0\nif [[ -f "$state_file" ]]; then\n  count="$(cat "$state_file")"\nfi\ncount=$((count + 1))\nprintf "%%%%s\\n" "$count" > "$state_file"\nif [[ "$count" -eq 1 ]]; then\n  echo "Permission denied" >&2\n  exit 126\nfi\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --work-dir) work_dir="$2"; shift 2 ;;&\n    --work-dir=*) work_dir="${1#*=}"; shift ;;&\n    *) shift ;;&\n  esac\ndone\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t1\\nrelevant_mutants\\t1\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+// RUN: printf 'retry_reason\tretries\n' > %t/retry-baseline.tsv
+
+// RUN: not env STATE_FILE=%t/state.txt %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --smoke \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --example-retries 1 \
+// RUN:   --retry-reason-baseline-file %t/retry-baseline.tsv \
+// RUN:   --fail-on-retry-reason-diff \
+// RUN:   --require-retry-reason-baseline-parity \
+// RUN:   --retry-reason-drift-tolerances permission_denied=1 \
+// RUN:   --retry-reason-drift-suite-tolerance 1 \
+// RUN:   --out-dir %t/out 2>&1 | FileCheck %s --check-prefix=ERR
+
+// RUN: FileCheck %s --check-prefix=DRIFT < %t/out/retry-reason-drift.tsv
+
+// ERR: Retry-reason drift failure: see
+// DRIFT: permission_denied{{[[:space:]]}}row{{[[:space:]]}}absent{{[[:space:]]}}present{{[[:space:]]}}regression{{[[:space:]]}}unexpected_current_row

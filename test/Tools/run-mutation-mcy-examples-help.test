@@ -39,6 +39,7 @@
 // CHECK-DAG: --require-retry-reason-baseline-schema-artifacts
 // CHECK-DAG: --require-retry-reason-schema-artifact-validity
 // CHECK-DAG: --strict-retry-reason-baseline-governance
+// CHECK-DAG: --require-retry-reason-baseline-parity
 // CHECK-DAG: --fail-on-retry-reason-diff
 // CHECK-DAG: --retry-reason-drift-tolerances
 // CHECK-DAG: --retry-reason-drift-suite-tolerance
