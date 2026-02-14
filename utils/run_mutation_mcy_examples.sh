@@ -2649,6 +2649,58 @@ EOS
         printf 'sim_real	bash %s ../mutant.v	result.txt	^DETECTED$	^SURVIVED$
 ' "$real_test_script" > "$tests_manifest"
         ;;
+      picorv32_primes)
+        real_test_script="${helper_dir}/real_picorv32_primes_test.sh"
+        cp "$(dirname "$design")/sim_simple.v" "${helper_dir}/sim_simple.v"
+        cp "$(dirname "$design")/sim_simple.hex" "${helper_dir}/sim_simple.hex"
+        cp "$design" "${helper_dir}/original_design.v"
+        cat > "$real_test_script" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+mutant_path="${1:-../mutant.v}"
+helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+iverilog_bin="${IVERILOG:-iverilog}"
+vvp_bin="${VVP:-vvp}"
+
+native_tb="${helper_dir}/sim_simple.native.v"
+good_hash_file="${helper_dir}/sim_simple.good.md5"
+
+if [[ ! -f "$native_tb" ]]; then
+  sed "s#../../sim_simple.hex#${helper_dir}/sim_simple.hex#g" "${helper_dir}/sim_simple.v" > "$native_tb"
+fi
+
+if [[ ! -f "$good_hash_file" ]]; then
+  if ! "$iverilog_bin" -g2012 -o "${helper_dir}/sim_ref" "$native_tb" "${helper_dir}/original_design.v" > "${helper_dir}/sim_ref.compile.log" 2>&1; then
+    echo DETECTED > result.txt
+    exit 0
+  fi
+  if ! (cd "$helper_dir" && "$vvp_bin" -N ./sim_ref +mut=0 > sim_ref.out 2>&1); then
+    echo DETECTED > result.txt
+    exit 0
+  fi
+  md5sum "${helper_dir}/sim_ref.out" | awk '{ print $1; }' > "$good_hash_file"
+fi
+
+good_md5sum="$(cat "$good_hash_file")"
+if ! "$iverilog_bin" -g2012 -o "${helper_dir}/sim_mut" "$native_tb" "$mutant_path" > "${helper_dir}/sim_mut.compile.log" 2>&1; then
+  echo DETECTED > result.txt
+  exit 0
+fi
+if ! (cd "$helper_dir" && "$vvp_bin" -N ./sim_mut +mut=1 > sim_mut.out 2>&1); then
+  echo DETECTED > result.txt
+  exit 0
+fi
+this_md5sum="$(md5sum "${helper_dir}/sim_mut.out" | awk '{ print $1; }')"
+if [[ "$good_md5sum" == "$this_md5sum" ]]; then
+  echo SURVIVED > result.txt
+else
+  echo DETECTED > result.txt
+fi
+EOS
+        chmod +x "$real_test_script"
+        printf 'sim_real	bash %s ../mutant.v	result.txt	^DETECTED$	^SURVIVED$
+' "$real_test_script" > "$tests_manifest"
+        ;;
       *)
         echo "warning: native real tests not configured for ${example_id}; falling back to synthetic harness" >&2
         ;;

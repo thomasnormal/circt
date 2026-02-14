@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1390 - February 14, 2026
+
+### Mutation Workflow: Native Real Harness for `picorv32_primes`
+
+1. Extended `utils/run_mutation_mcy_examples.sh` real native mode with a
+   dedicated `picorv32_primes` harness:
+   - generates `real_picorv32_primes_test.sh`
+   - uses `sim_simple.v` and `sim_simple.hex` from example assets
+   - rewrites `readmemh` path into a helper-local native testbench copy
+   - computes/caches unmodified baseline output hash (`sim_simple.good.md5`)
+   - classifies each mutant as `DETECTED`/`SURVIVED` by output-hash comparison
+2. Removed `picorv32_primes` dependency on synthetic fallback in native real mode
+   (fallback warning no longer emitted for this example).
+3. Added focused regression:
+   - `test/Tools/run-mutation-mcy-examples-native-real-picorv32-manifest-pass.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (137 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --mutations-backend native --native-tests-mode real --out-dir /tmp/mcy_examples_real_native_mode_real_1771084357` PASS
+  - `bitcnt`: `detected=6 relevant=8 coverage=75.00 errors=0`
+  - `picorv32_primes`: `detected=8 relevant=8 coverage=100.00 errors=0`
+
 ## Iteration 1389 - February 14, 2026
 
 ### Mutation Workflow: Native Real Harness Reliability + Safer Native Mutations
