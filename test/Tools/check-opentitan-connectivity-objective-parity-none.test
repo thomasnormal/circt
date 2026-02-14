@@ -1,0 +1,11 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'PASS\tconnectivity::chip.csv:RULE_CLK\t/tmp/chip.csv:2\topentitan\tCONNECTIVITY_BMC\tUNSAT\n' > %t/bmc-case.tsv
+// RUN: printf 'PASS\tconnectivity::chip.csv:RULE_CLK\t/tmp/chip.csv:2\topentitan\tCONNECTIVITY_LEC\tEQ\n' > %t/lec-case.tsv
+// RUN: printf 'COVERED\tconnectivity::chip.csv:RULE_CLK\t/tmp/chip.csv:2\topentitan\tCONNECTIVITY_BMC\tcover\n' > %t/bmc-cover.tsv
+// RUN: python3 %S/../../utils/check_opentitan_connectivity_objective_parity.py --bmc-case-results %t/bmc-case.tsv --lec-case-results %t/lec-case.tsv --bmc-cover-results %t/bmc-cover.tsv --out-parity-tsv %t/parity.tsv 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=PARITY < %t/parity.tsv
+//
+// LOG: objective parity check passed
+// PARITY: objective_id{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}allowlisted
+// PARITY-NOT: case::connectivity::chip.csv:RULE_CLK
