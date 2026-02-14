@@ -51,11 +51,15 @@
 // CHECK-DAG: --migrate-retry-reason-baseline-schema-artifacts
 // CHECK-DAG: --fail-on-diff
 // CHECK-DAG: --max-detected-drop
+// CHECK-DAG: --max-detected-drop-percent
 // CHECK-DAG: --max-relevant-drop
+// CHECK-DAG: --max-relevant-drop-percent
 // CHECK-DAG: --max-coverage-drop-percent
 // CHECK-DAG: --max-errors-increase
 // CHECK-DAG: --max-total-detected-drop
+// CHECK-DAG: --max-total-detected-drop-percent
 // CHECK-DAG: --max-total-relevant-drop
+// CHECK-DAG: --max-total-relevant-drop-percent
 // CHECK-DAG: --max-total-coverage-drop-percent
 // CHECK-DAG: --max-total-errors-increase
 // CHECK-DAG: --require-policy-fingerprint-baseline
