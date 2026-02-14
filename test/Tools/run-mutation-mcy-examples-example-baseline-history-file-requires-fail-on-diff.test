@@ -1,0 +1,3 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --example-baseline-history-file /tmp/history.tsv 2>&1 | FileCheck %s
+
+// CHECK: --example-baseline-history-file requires --fail-on-diff

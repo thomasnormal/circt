@@ -33,34 +33,47 @@
 
 ## Iteration 1378 - February 14, 2026
 
-### Mutation Workflow: Suite History-Window Percentile Drift Baselines
+### Mutation Workflow: Suite + Per-Example History-Window Percentile Drift Baselines
 
 1. Added suite history-window drift support in
    `utils/run_mutation_mcy_examples.sh` for `--fail-on-diff`:
    - `--suite-baseline-history-file FILE` (repeatable)
    - `--suite-history-percentile P` (default `50`)
-2. Implemented percentile-derived suite baseline anchors from
+2. Added per-example history-window drift support in
+   `utils/run_mutation_mcy_examples.sh` for `--fail-on-diff`:
+   - `--example-baseline-history-file FILE` (repeatable)
+   - `--example-history-percentile P` (default `50`)
+3. Implemented percentile-derived suite baseline anchors from
    baseline+history files for suite drift metrics:
    - `suite_detected_mutants`
    - `suite_relevant_mutants`
    - `suite_coverage_percent`
    - `suite_errors`
-3. Added validation and guardrails:
+4. Implemented percentile-derived per-example baseline anchors from
+   baseline+history files for per-example drift metrics:
+   - `detected_mutants`
+   - `relevant_mutants`
+   - `coverage_percent`
+   - `errors`
+5. Added validation and guardrails:
    - history files require `--fail-on-diff`
    - percentile must be numeric in `[0,100]`
    - history files must exist and be readable
-4. Added focused regressions:
+6. Added focused regressions:
    - `test/Tools/run-mutation-mcy-examples-suite-baseline-history-file-requires-fail-on-diff.test`
    - `test/Tools/run-mutation-mcy-examples-suite-history-percentile-invalid.test`
    - `test/Tools/run-mutation-mcy-examples-suite-history-percentile-pass.test`
+   - `test/Tools/run-mutation-mcy-examples-example-baseline-history-file-requires-fail-on-diff.test`
+   - `test/Tools/run-mutation-mcy-examples-example-history-percentile-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-example-history-percentile-pass.test`
    - updated:
      - `test/Tools/run-mutation-mcy-examples-help.test`
 
 ### Validation
 
 - `bash -n utils/run_mutation_mcy_examples.sh` PASS
-- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (114 selected)
-- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_iter1377` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (117 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_1771082297` PASS
 
 
 ## Iteration 1377 - February 14, 2026

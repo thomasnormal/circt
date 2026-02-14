@@ -84,6 +84,14 @@ Options:
                            Percentile [0,100] used when deriving suite
                            baselines from baseline+history files
                            (default: 50)
+  --example-baseline-history-file FILE
+                           Additional per-example baseline summary TSV used
+                           to derive percentile per-example baselines for
+                           --fail-on-diff (repeatable)
+  --example-history-percentile P
+                           Percentile [0,100] used when deriving per-example
+                           baselines from baseline+history files
+                           (default: 50)
   --update-baseline        Write current summary.tsv to --baseline-file
   --allow-update-baseline-on-failure
                            Allow --update-baseline even when run exits failing
@@ -326,6 +334,7 @@ MAX_TOTAL_COVERAGE_DROP_PERCENT="0"
 MAX_TOTAL_ERRORS_INCREASE=0
 BASELINE_FILE=""
 SUITE_HISTORY_PERCENTILE="50"
+EXAMPLE_HISTORY_PERCENTILE="50"
 RETRY_REASON_BASELINE_FILE=""
 RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE=""
 RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
@@ -369,6 +378,7 @@ MUTATION_GENERATION_FLAGS_SEEN=0
 EXAMPLE_MANIFEST=""
 EXAMPLE_IDS=()
 SUITE_BASELINE_HISTORY_FILES=()
+EXAMPLE_BASELINE_HISTORY_FILES=()
 declare -A EXAMPLE_TO_DESIGN=()
 declare -A EXAMPLE_TO_TOP=()
 declare -A EXAMPLE_TO_GENERATE_COUNT=()
@@ -683,6 +693,44 @@ compute_suite_totals_from_summary() {
       printf "%d\t%d\t%.2f\t%d\n", detected, relevant, coverage, errors;
     }
   ' "$summary_file"
+}
+
+compute_example_metric_percentile_from_histories() {
+  local example="$1"
+  local field_index="$2"
+  local baseline_value="$3"
+  local value_kind="$4"
+  local tmp_values_file=""
+  local history_file=""
+  local value=""
+
+  tmp_values_file="$(mktemp "${OUT_DIR}/example-history-values.XXXXXX")"
+  printf '%s\n' "$baseline_value" > "$tmp_values_file"
+
+  for history_file in "${EXAMPLE_BASELINE_HISTORY_FILES[@]}"; do
+    value="$(awk -F '\t' -v ex="$example" -v idx="$field_index" '
+      NR == 1 { next }
+      $1 == ex { print $idx; exit }
+    ' "$history_file")"
+    if [[ -z "$value" ]]; then
+      continue
+    fi
+    if [[ "$value_kind" == "int" ]]; then
+      value="$(normalize_int_or_zero "$value")"
+    else
+      value="$(normalize_decimal_or_zero "$value")"
+    fi
+    printf '%s\n' "$value" >> "$tmp_values_file"
+  done
+
+  if [[ "$value_kind" == "int" ]]; then
+    value="$(percentile_int_from_file "$tmp_values_file" "$EXAMPLE_HISTORY_PERCENTILE")"
+  else
+    value="$(percentile_decimal_from_file "$tmp_values_file" "$EXAMPLE_HISTORY_PERCENTILE")"
+  fi
+
+  rm -f "$tmp_values_file"
+  printf '%s\n' "$value"
 }
 
 resolve_tool() {
@@ -1820,6 +1868,13 @@ evaluate_summary_drift() {
     local base_cov_num
     base_cov_num="$(normalize_decimal_or_zero "${_bc:-0}")"
 
+    if [[ ${#EXAMPLE_BASELINE_HISTORY_FILES[@]} -gt 0 ]]; then
+      _bd="$(compute_example_metric_percentile_from_histories "$example" 4 "$_bd" int)"
+      _br="$(compute_example_metric_percentile_from_histories "$example" 5 "$_br" int)"
+      base_cov_num="$(compute_example_metric_percentile_from_histories "$example" 6 "$base_cov_num" decimal)"
+      _berr="$(compute_example_metric_percentile_from_histories "$example" 7 "$_berr" int)"
+    fi
+
     if [[ "${_bs:-}" == "PASS" && "$status" != "PASS" ]]; then
       if ! append_drift_candidate "$drift_file" "$example" "status" "${_bs:-}" "$status" "status_regressed"; then
         regressions=$((regressions + 1))
@@ -2687,6 +2742,14 @@ while [[ $# -gt 0 ]]; do
       SUITE_HISTORY_PERCENTILE="$2"
       shift 2
       ;;
+    --example-baseline-history-file)
+      EXAMPLE_BASELINE_HISTORY_FILES+=("$2")
+      shift 2
+      ;;
+    --example-history-percentile)
+      EXAMPLE_HISTORY_PERCENTILE="$2"
+      shift 2
+      ;;
     --update-baseline)
       UPDATE_BASELINE=1
       shift
@@ -3083,12 +3146,24 @@ if [[ ${#SUITE_BASELINE_HISTORY_FILES[@]} -gt 0 && "$FAIL_ON_DIFF" -ne 1 ]]; the
   echo "--suite-baseline-history-file requires --fail-on-diff" >&2
   exit 1
 fi
+if [[ ${#EXAMPLE_BASELINE_HISTORY_FILES[@]} -gt 0 && "$FAIL_ON_DIFF" -ne 1 ]]; then
+  echo "--example-baseline-history-file requires --fail-on-diff" >&2
+  exit 1
+fi
 if ! is_nonneg_decimal "$SUITE_HISTORY_PERCENTILE"; then
   echo "--suite-history-percentile must be numeric in range [0,100]: $SUITE_HISTORY_PERCENTILE" >&2
   exit 1
 fi
 if ! awk -v v="$SUITE_HISTORY_PERCENTILE" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
   echo "--suite-history-percentile must be numeric in range [0,100]: $SUITE_HISTORY_PERCENTILE" >&2
+  exit 1
+fi
+if ! is_nonneg_decimal "$EXAMPLE_HISTORY_PERCENTILE"; then
+  echo "--example-history-percentile must be numeric in range [0,100]: $EXAMPLE_HISTORY_PERCENTILE" >&2
+  exit 1
+fi
+if ! awk -v v="$EXAMPLE_HISTORY_PERCENTILE" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+  echo "--example-history-percentile must be numeric in range [0,100]: $EXAMPLE_HISTORY_PERCENTILE" >&2
   exit 1
 fi
 for history_file in "${SUITE_BASELINE_HISTORY_FILES[@]}"; do
@@ -3098,6 +3173,16 @@ for history_file in "${SUITE_BASELINE_HISTORY_FILES[@]}"; do
   fi
   if [[ ! -r "$history_file" ]]; then
     echo "Suite baseline history file not readable: $history_file" >&2
+    exit 1
+  fi
+done
+for history_file in "${EXAMPLE_BASELINE_HISTORY_FILES[@]}"; do
+  if [[ ! -f "$history_file" ]]; then
+    echo "Example baseline history file not found: $history_file" >&2
+    exit 1
+  fi
+  if [[ ! -r "$history_file" ]]; then
+    echo "Example baseline history file not readable: $history_file" >&2
     exit 1
   fi
 done
