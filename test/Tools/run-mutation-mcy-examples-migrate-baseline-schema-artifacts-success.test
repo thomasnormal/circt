@@ -1,0 +1,16 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\nbitcnt\tPASS\t0\t2\t4\t50.00\t0\n' > %t/baseline.tsv
+
+// RUN: %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --baseline-file %t/baseline.tsv \
+// RUN:   --baseline-schema-version-file %t/custom.schema-version \
+// RUN:   --baseline-schema-contract-file %t/custom.schema-contract \
+// RUN:   --migrate-baseline-schema-artifacts
+
+// RUN: test ! -e %t/baseline.tsv.schema-version
+// RUN: test ! -e %t/baseline.tsv.schema-contract
+// RUN: FileCheck %s --check-prefix=VERSION < %t/custom.schema-version
+// RUN: FileCheck %s --check-prefix=CONTRACT < %t/custom.schema-contract
+
+// VERSION: v1
+// CONTRACT: {{[0-9a-f]+}}

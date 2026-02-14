@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1335 - February 14, 2026
+
+### Mutation Workflow: Baseline Schema Sidecar Migration Mode
+
+1. Added `--migrate-baseline-schema-artifacts` to `utils/run_mutation_mcy_examples.sh`:
+   - reads schema version and contract from `--baseline-file` header
+   - writes sidecars to:
+     - `--baseline-schema-version-file` (default `<baseline>.schema-version`)
+     - `--baseline-schema-contract-file` (default `<baseline>.schema-contract`)
+   - exits after migration without running mutation jobs.
+2. Added argument safety checks for migration mode:
+   - requires `--baseline-file`
+   - rejects combination with `--update-baseline` or `--fail-on-diff`
+   - fails clearly on empty/unknown baseline headers.
+3. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-migrate-baseline-schema-artifacts-requires-baseline-file.test`
+   - `test/Tools/run-mutation-mcy-examples-migrate-baseline-schema-artifacts-success.test`
+   - `test/Tools/run-mutation-mcy-examples-migrate-baseline-schema-artifacts-unknown-header.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (60/60)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-1335` PASS
+
 ## Iteration 1334 - February 14, 2026
 
 ### OpenTitan Connectivity: Cross-Lane Contract-Fingerprint Parity Governance

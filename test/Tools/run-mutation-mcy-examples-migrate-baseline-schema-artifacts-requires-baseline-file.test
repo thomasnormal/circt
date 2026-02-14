@@ -1,0 +1,4 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --migrate-baseline-schema-artifacts 2>&1 | FileCheck %s
+
+// CHECK: --baseline-file is required with --migrate-baseline-schema-artifacts
