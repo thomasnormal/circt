@@ -40,6 +40,25 @@ class ManifestRow:
     rel_path: str
 
 
+@dataclass(frozen=True)
+class TaskPolicy:
+    task_profile: str
+    task_known: str
+    stopat_mode: str
+    blackbox_policy: str
+    task_policy_fingerprint: str
+
+
+KNOWN_TASK_POLICIES: dict[str, tuple[str, str, str]] = {
+    "": ("fpv_default", "none", "none"),
+    "FpvDefault": ("fpv_default", "none", "none"),
+    "FpvSecCm": ("fpv_sec_cm", "task_defined", "prim_count,prim_double_lfsr"),
+    "SecCmCFI": ("sec_cm_cfi", "task_defined", "none"),
+    "SecCmCFILinear": ("sec_cm_cfi_linear", "task_defined", "none"),
+    "PwrmgrSecCmEsc": ("pwrmgr_sec_cm_esc", "none", "none"),
+}
+
+
 def fail(msg: str) -> None:
     print(msg, file=sys.stderr)
     raise SystemExit(1)
@@ -82,6 +101,14 @@ def parse_args() -> argparse.Namespace:
         "--fusesoc-tool",
         default="symbiyosys",
         help="FuseSoC tool name (default: symbiyosys)",
+    )
+    parser.add_argument(
+        "--fail-on-unknown-task",
+        action="store_true",
+        help=(
+            "Fail when manifest rows contain OpenTitan FPV task names that are "
+            "not recognized by the CIRCT task-policy adapter"
+        ),
     )
     return parser.parse_args()
 
@@ -233,6 +260,36 @@ def hash_lines(lines: list[str]) -> str:
     return digest.hexdigest()
 
 
+def resolve_task_policy(task: str, stopats: tuple[str, ...]) -> TaskPolicy:
+    raw_task = task.strip()
+    policy = KNOWN_TASK_POLICIES.get(raw_task)
+    if policy is None:
+        task_profile = "unknown_task"
+        task_known = "0"
+        stopat_mode = "task_defined"
+        blackbox_policy = "none"
+    else:
+        task_profile, stopat_mode, blackbox_policy = policy
+        task_known = "1"
+    digest = hashlib.sha256()
+    digest.update(f"task={raw_task}\n".encode("utf-8"))
+    digest.update(f"profile={task_profile}\n".encode("utf-8"))
+    digest.update(f"known={task_known}\n".encode("utf-8"))
+    digest.update(f"stopat_mode={stopat_mode}\n".encode("utf-8"))
+    digest.update(f"blackbox_policy={blackbox_policy}\n".encode("utf-8"))
+    digest.update(f"stopats={len(stopats)}\n".encode("utf-8"))
+    for stopat in stopats:
+        digest.update(stopat.encode("utf-8"))
+        digest.update(b"\n")
+    return TaskPolicy(
+        task_profile=task_profile,
+        task_known=task_known,
+        stopat_mode=stopat_mode,
+        blackbox_policy=blackbox_policy,
+        task_policy_fingerprint=digest.hexdigest()[:16],
+    )
+
+
 def contract_fingerprint(
     task: str,
     stopats: tuple[str, ...],
@@ -341,6 +398,11 @@ def main() -> None:
         "contract_fingerprint",
         "stopat_count",
         "stopats_fingerprint",
+        "task_profile",
+        "task_known",
+        "stopat_mode",
+        "blackbox_policy",
+        "task_policy_fingerprint",
         "eda_yml_path",
         "setup_log_path",
         "workdir",
@@ -348,11 +410,15 @@ def main() -> None:
     out_contracts.parent.mkdir(parents=True, exist_ok=True)
 
     errors = 0
+    unknown_tasks: set[str] = set()
     with out_contracts.open("w", encoding="utf-8", newline="") as handle:
         handle.write(f"#opentitan_compile_contract_schema_version={SCHEMA_VERSION}\n")
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
         writer.writerow(contracts_header)
         for idx, row in enumerate(rows):
+            task_policy = resolve_task_policy(row.task, row.stopats)
+            if task_policy.task_known != "1":
+                unknown_tasks.add(row.task.strip())
             job_dir = workdir_root / f"{idx:04d}-{sanitize_token(row.target_name)}"
             job_dir.mkdir(parents=True, exist_ok=True)
             rc, log_path = run_fusesoc_setup(
@@ -388,6 +454,11 @@ def main() -> None:
                         "",
                         str(len(row.stopats)),
                         stopats_fp,
+                        task_policy.task_profile,
+                        task_policy.task_known,
+                        task_policy.stopat_mode,
+                        task_policy.blackbox_policy,
+                        task_policy.task_policy_fingerprint,
                         "",
                         str(log_path),
                         str(job_dir),
@@ -436,6 +507,11 @@ def main() -> None:
                     contract_fp,
                     str(len(row.stopats)),
                     stopats_fp,
+                    task_policy.task_profile,
+                    task_policy.task_known,
+                    task_policy.stopat_mode,
+                    task_policy.blackbox_policy,
+                    task_policy.task_policy_fingerprint,
                     str(eda_path),
                     str(log_path),
                     str(job_dir),
@@ -444,6 +520,20 @@ def main() -> None:
 
     if temp_workdir_obj is not None and not args.keep_workdir:
         temp_workdir_obj.cleanup()
+
+    if unknown_tasks:
+        unknown_rendered = ", ".join(sorted(task for task in unknown_tasks if task))
+        if args.fail_on_unknown_task:
+            fail(
+                "unknown OpenTitan FPV task names detected: "
+                + unknown_rendered
+                + " (set task profile mapping in resolve_opentitan_formal_compile_contracts.py)"
+            )
+        print(
+            "warning: unknown OpenTitan FPV task names detected: "
+            + unknown_rendered,
+            file=sys.stderr,
+        )
 
     status = "ok" if errors == 0 else "error"
     print(

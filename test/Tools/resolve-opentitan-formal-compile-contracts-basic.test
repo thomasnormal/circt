@@ -8,4 +8,5 @@
 //
 // CHECK: #opentitan_compile_contract_schema_version=1
 // CHECK: target_name{{[[:space:]]+}}fusesoc_core{{[[:space:]]+}}task{{[[:space:]]+}}flow{{[[:space:]]+}}sub_flow{{[[:space:]]+}}rel_path{{[[:space:]]+}}toplevel{{[[:space:]]+}}setup_status
-// CHECK: foo_fpv{{[[:space:]]+}}lowrisc:fpv:foo_fpv{{[[:space:]]+}}FpvDefault{{[[:space:]]+}}formal{{[[:space:]]+}}fpv{{[[:space:]]+}}hw/top_earlgrey/formal/ip/foo{{[[:space:]]+}}foo_tb{{[[:space:]]+}}ok{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}
+// CHECK: task_profile{{[[:space:]]+}}task_known{{[[:space:]]+}}stopat_mode{{[[:space:]]+}}blackbox_policy{{[[:space:]]+}}task_policy_fingerprint
+// CHECK: foo_fpv{{[[:space:]]+}}lowrisc:fpv:foo_fpv{{[[:space:]]+}}FpvDefault{{[[:space:]]+}}formal{{[[:space:]]+}}fpv{{[[:space:]]+}}hw/top_earlgrey/formal/ip/foo{{[[:space:]]+}}foo_tb{{[[:space:]]+}}ok{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}0{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}fpv_default{{[[:space:]]+}}1{{[[:space:]]+}}none{{[[:space:]]+}}none{{[[:space:]]+}}{{[0-9a-f]+}}
