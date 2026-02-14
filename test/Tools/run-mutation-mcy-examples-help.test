@@ -38,6 +38,9 @@
 // CHECK-DAG: --example-history-missing-policy
 // CHECK-DAG: --history-aggregation-mode
 // CHECK-DAG: --history-ewma-alpha
+// CHECK-DAG: --history-detected-aggregation-mode
+// CHECK-DAG: --history-relevant-aggregation-mode
+// CHECK-DAG: --history-coverage-aggregation-mode
 // CHECK-DAG: --history-errors-aggregation-mode
 // CHECK-DAG: --retry-reason-baseline-file
 // CHECK-DAG: --retry-reason-baseline-schema-version-file

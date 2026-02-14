@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1385 - February 14, 2026
+
+### Mutation Workflow: Per-Metric History Aggregation Overrides
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with dedicated history
+   aggregation overrides for non-error drift metrics:
+   - `--history-detected-aggregation-mode MODE`
+   - `--history-relevant-aggregation-mode MODE`
+   - `--history-coverage-aggregation-mode MODE`
+   - all support `inherit|percentile|ewma|max` (default: `inherit`)
+2. Generalized history mode resolution to per-metric policy for both history
+   baseline lanes:
+   - per-example baseline anchors (`detected`, `relevant`, `coverage`, `errors`)
+   - suite baseline anchors (`suite_detected`, `suite_relevant`,
+     `suite_coverage`, `suite_errors`)
+3. Added decimal `max` aggregation helper for coverage metrics so `max` mode is
+   available consistently across all metric types.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-history-detected-aggregation-mode-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-example-history-detected-aggregation-override-pass.test`
+   - `test/Tools/run-mutation-mcy-examples-suite-history-coverage-aggregation-override-pass.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (130 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_1771083087` PASS
+
 ## Iteration 1384 - February 14, 2026
 
 ### Mutation Workflow: Error-Metric History Aggregation Override

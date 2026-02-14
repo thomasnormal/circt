@@ -101,6 +101,18 @@ Options:
   --history-ewma-alpha A
                            EWMA alpha in range (0,1] when aggregation mode is
                            ewma (default: 0.5)
+  --history-detected-aggregation-mode MODE
+                           Detected-metric aggregation override for history
+                           baselines: inherit|percentile|ewma|max
+                           (default: inherit)
+  --history-relevant-aggregation-mode MODE
+                           Relevant-metric aggregation override for history
+                           baselines: inherit|percentile|ewma|max
+                           (default: inherit)
+  --history-coverage-aggregation-mode MODE
+                           Coverage-metric aggregation override for history
+                           baselines: inherit|percentile|ewma|max
+                           (default: inherit)
   --history-errors-aggregation-mode MODE
                            Error-metric aggregation override for history
                            baselines: inherit|percentile|ewma|max
@@ -351,6 +363,9 @@ EXAMPLE_HISTORY_PERCENTILE="50"
 EXAMPLE_HISTORY_MISSING_POLICY="ignore"
 HISTORY_AGGREGATION_MODE="percentile"
 HISTORY_EWMA_ALPHA="0.5"
+HISTORY_DETECTED_AGGREGATION_MODE="inherit"
+HISTORY_RELEVANT_AGGREGATION_MODE="inherit"
+HISTORY_COVERAGE_AGGREGATION_MODE="inherit"
 HISTORY_ERRORS_AGGREGATION_MODE="inherit"
 RETRY_REASON_BASELINE_FILE=""
 RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE=""
@@ -749,13 +764,41 @@ max_int_from_file() {
   ' "$file"
 }
 
-resolved_history_errors_aggregation_mode() {
-  if [[ "$HISTORY_ERRORS_AGGREGATION_MODE" == "inherit" ]]; then
-    printf '%s
-' "$HISTORY_AGGREGATION_MODE"
+max_decimal_from_file() {
+  local file="$1"
+  awk '
+    NR == 1 { max = $1 + 0; seen = 1; next }
+    {
+      if (!seen || ($1 + 0) > max) {
+        max = $1 + 0;
+        seen = 1;
+      }
+    }
+    END {
+      if (!seen) {
+        printf "0.00";
+        exit;
+      }
+      printf "%.2f", max;
+    }
+  ' "$file"
+}
+
+resolved_history_metric_aggregation_mode() {
+  local metric="$1"
+  local configured="inherit"
+  case "$metric" in
+    detected) configured="$HISTORY_DETECTED_AGGREGATION_MODE" ;;
+    relevant) configured="$HISTORY_RELEVANT_AGGREGATION_MODE" ;;
+    coverage) configured="$HISTORY_COVERAGE_AGGREGATION_MODE" ;;
+    errors) configured="$HISTORY_ERRORS_AGGREGATION_MODE" ;;
+    *) configured="inherit" ;;
+  esac
+
+  if [[ "$configured" == "inherit" ]]; then
+    printf '%s\n' "$HISTORY_AGGREGATION_MODE"
   else
-    printf '%s
-' "$HISTORY_ERRORS_AGGREGATION_MODE"
+    printf '%s\n' "$configured"
   fi
 }
 
@@ -832,9 +875,18 @@ compute_example_metric_percentile_from_histories() {
     printf '%s\n' "$value" >> "$tmp_values_file"
   done
 
+  local metric_name=""
+  case "$field_index" in
+    4) metric_name="detected" ;;
+    5) metric_name="relevant" ;;
+    6) metric_name="coverage" ;;
+    7) metric_name="errors" ;;
+    *) metric_name="" ;;
+  esac
+
   local effective_mode="$HISTORY_AGGREGATION_MODE"
-  if [[ "$value_kind" == "int" && "$field_index" == "7" ]]; then
-    effective_mode="$(resolved_history_errors_aggregation_mode)"
+  if [[ -n "$metric_name" ]]; then
+    effective_mode="$(resolved_history_metric_aggregation_mode "$metric_name")"
   fi
 
   if [[ "$effective_mode" == "ewma" ]]; then
@@ -844,7 +896,11 @@ compute_example_metric_percentile_from_histories() {
       value="$(ewma_decimal_from_file "$tmp_values_file" "$HISTORY_EWMA_ALPHA")"
     fi
   elif [[ "$effective_mode" == "max" ]]; then
-    value="$(max_int_from_file "$tmp_values_file")"
+    if [[ "$value_kind" == "int" ]]; then
+      value="$(max_int_from_file "$tmp_values_file")"
+    else
+      value="$(max_decimal_from_file "$tmp_values_file")"
+    fi
   else
     if [[ "$value_kind" == "int" ]]; then
       value="$(percentile_int_from_file "$tmp_values_file" "$EXAMPLE_HISTORY_PERCENTILE")"
@@ -2114,37 +2170,47 @@ evaluate_summary_drift() {
     history_relevant_file="$(mktemp "${OUT_DIR}/suite-history-relevant.XXXXXX")"
     history_coverage_file="$(mktemp "${OUT_DIR}/suite-history-coverage.XXXXXX")"
     history_errors_file="$(mktemp "${OUT_DIR}/suite-history-errors.XXXXXX")"
-    printf '%s
-' "$baseline_total_detected" > "$history_detected_file"
-    printf '%s
-' "$baseline_total_relevant" > "$history_relevant_file"
-    printf '%s
-' "$baseline_total_coverage" > "$history_coverage_file"
-    printf '%s
-' "$baseline_total_errors" > "$history_errors_file"
+    printf '%s\n' "$baseline_total_detected" > "$history_detected_file"
+    printf '%s\n' "$baseline_total_relevant" > "$history_relevant_file"
+    printf '%s\n' "$baseline_total_coverage" > "$history_coverage_file"
+    printf '%s\n' "$baseline_total_errors" > "$history_errors_file"
     for history_file in "${SUITE_BASELINE_HISTORY_FILES[@]}"; do
       IFS=$'	' read -r history_detected history_relevant history_coverage history_errors <<< "$(compute_suite_totals_from_summary "$history_file")"
-      printf '%s
-' "$history_detected" >> "$history_detected_file"
-      printf '%s
-' "$history_relevant" >> "$history_relevant_file"
-      printf '%s
-' "$history_coverage" >> "$history_coverage_file"
-      printf '%s
-' "$history_errors" >> "$history_errors_file"
+      printf '%s\n' "$history_detected" >> "$history_detected_file"
+      printf '%s\n' "$history_relevant" >> "$history_relevant_file"
+      printf '%s\n' "$history_coverage" >> "$history_coverage_file"
+      printf '%s\n' "$history_errors" >> "$history_errors_file"
     done
-    if [[ "$HISTORY_AGGREGATION_MODE" == "ewma" ]]; then
+    local effective_detected_mode effective_relevant_mode effective_coverage_mode effective_errors_mode
+    effective_detected_mode="$(resolved_history_metric_aggregation_mode detected)"
+    effective_relevant_mode="$(resolved_history_metric_aggregation_mode relevant)"
+    effective_coverage_mode="$(resolved_history_metric_aggregation_mode coverage)"
+    effective_errors_mode="$(resolved_history_metric_aggregation_mode errors)"
+
+    if [[ "$effective_detected_mode" == "ewma" ]]; then
       baseline_total_detected="$(ewma_int_from_file "$history_detected_file" "$HISTORY_EWMA_ALPHA")"
-      baseline_total_relevant="$(ewma_int_from_file "$history_relevant_file" "$HISTORY_EWMA_ALPHA")"
-      baseline_total_coverage="$(ewma_decimal_from_file "$history_coverage_file" "$HISTORY_EWMA_ALPHA")"
+    elif [[ "$effective_detected_mode" == "max" ]]; then
+      baseline_total_detected="$(max_int_from_file "$history_detected_file")"
     else
       baseline_total_detected="$(percentile_int_from_file "$history_detected_file" "$SUITE_HISTORY_PERCENTILE")"
+    fi
+
+    if [[ "$effective_relevant_mode" == "ewma" ]]; then
+      baseline_total_relevant="$(ewma_int_from_file "$history_relevant_file" "$HISTORY_EWMA_ALPHA")"
+    elif [[ "$effective_relevant_mode" == "max" ]]; then
+      baseline_total_relevant="$(max_int_from_file "$history_relevant_file")"
+    else
       baseline_total_relevant="$(percentile_int_from_file "$history_relevant_file" "$SUITE_HISTORY_PERCENTILE")"
+    fi
+
+    if [[ "$effective_coverage_mode" == "ewma" ]]; then
+      baseline_total_coverage="$(ewma_decimal_from_file "$history_coverage_file" "$HISTORY_EWMA_ALPHA")"
+    elif [[ "$effective_coverage_mode" == "max" ]]; then
+      baseline_total_coverage="$(max_decimal_from_file "$history_coverage_file")"
+    else
       baseline_total_coverage="$(percentile_decimal_from_file "$history_coverage_file" "$SUITE_HISTORY_PERCENTILE")"
     fi
 
-    local effective_errors_mode
-    effective_errors_mode="$(resolved_history_errors_aggregation_mode)"
     if [[ "$effective_errors_mode" == "ewma" ]]; then
       baseline_total_errors="$(ewma_int_from_file "$history_errors_file" "$HISTORY_EWMA_ALPHA")"
     elif [[ "$effective_errors_mode" == "max" ]]; then
@@ -2906,6 +2972,18 @@ while [[ $# -gt 0 ]]; do
       HISTORY_EWMA_ALPHA="$2"
       shift 2
       ;;
+    --history-detected-aggregation-mode)
+      HISTORY_DETECTED_AGGREGATION_MODE="$2"
+      shift 2
+      ;;
+    --history-relevant-aggregation-mode)
+      HISTORY_RELEVANT_AGGREGATION_MODE="$2"
+      shift 2
+      ;;
+    --history-coverage-aggregation-mode)
+      HISTORY_COVERAGE_AGGREGATION_MODE="$2"
+      shift 2
+      ;;
     --history-errors-aggregation-mode)
       HISTORY_ERRORS_AGGREGATION_MODE="$2"
       shift 2
@@ -3340,6 +3418,18 @@ if ! is_nonneg_decimal "$HISTORY_EWMA_ALPHA"; then
 fi
 if ! awk -v v="$HISTORY_EWMA_ALPHA" 'BEGIN { exit !(v > 0 && v <= 1) }'; then
   echo "--history-ewma-alpha must be numeric in range (0,1]: $HISTORY_EWMA_ALPHA" >&2
+  exit 1
+fi
+if [[ "$HISTORY_DETECTED_AGGREGATION_MODE" != "inherit" && "$HISTORY_DETECTED_AGGREGATION_MODE" != "percentile" && "$HISTORY_DETECTED_AGGREGATION_MODE" != "ewma" && "$HISTORY_DETECTED_AGGREGATION_MODE" != "max" ]]; then
+  echo "--history-detected-aggregation-mode must be one of: inherit|percentile|ewma|max" >&2
+  exit 1
+fi
+if [[ "$HISTORY_RELEVANT_AGGREGATION_MODE" != "inherit" && "$HISTORY_RELEVANT_AGGREGATION_MODE" != "percentile" && "$HISTORY_RELEVANT_AGGREGATION_MODE" != "ewma" && "$HISTORY_RELEVANT_AGGREGATION_MODE" != "max" ]]; then
+  echo "--history-relevant-aggregation-mode must be one of: inherit|percentile|ewma|max" >&2
+  exit 1
+fi
+if [[ "$HISTORY_COVERAGE_AGGREGATION_MODE" != "inherit" && "$HISTORY_COVERAGE_AGGREGATION_MODE" != "percentile" && "$HISTORY_COVERAGE_AGGREGATION_MODE" != "ewma" && "$HISTORY_COVERAGE_AGGREGATION_MODE" != "max" ]]; then
+  echo "--history-coverage-aggregation-mode must be one of: inherit|percentile|ewma|max" >&2
   exit 1
 fi
 if [[ "$HISTORY_ERRORS_AGGREGATION_MODE" != "inherit" && "$HISTORY_ERRORS_AGGREGATION_MODE" != "percentile" && "$HISTORY_ERRORS_AGGREGATION_MODE" != "ewma" && "$HISTORY_ERRORS_AGGREGATION_MODE" != "max" ]]; then
