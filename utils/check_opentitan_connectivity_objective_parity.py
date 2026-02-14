@@ -15,14 +15,27 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-STATUS_MAP = {
+CASE_STATUS_MAP = {
     "PASS": "pass",
+    "PROVEN": "pass",
     "FAIL": "fail",
+    "FAILING": "fail",
     "XFAIL": "xfail",
     "XPASS": "xpass",
+    "VACUOUS": "vacuous",
+    "UNREACHABLE": "unreachable",
     "SKIP": "skip",
-    "UNKNOWN": "error",
-    "TIMEOUT": "error",
+    "UNKNOWN": "unknown",
+    "TIMEOUT": "timeout",
+    "ERROR": "error",
+}
+
+COVER_STATUS_MAP = {
+    "COVERED": "covered",
+    "UNREACHABLE": "unreachable",
+    "SKIP": "skip",
+    "UNKNOWN": "unknown",
+    "TIMEOUT": "timeout",
     "ERROR": "error",
 }
 
@@ -155,10 +168,14 @@ def is_allowlisted(
     return False
 
 
-def normalize_status(raw: str) -> str:
+def normalize_status(raw: str, objective_class: str) -> str:
     token = raw.strip().upper()
-    if token in STATUS_MAP:
-        return STATUS_MAP[token]
+    if objective_class == "cover":
+        if token in COVER_STATUS_MAP:
+            return COVER_STATUS_MAP[token]
+        return "error"
+    if token in CASE_STATUS_MAP:
+        return CASE_STATUS_MAP[token]
     return "error"
 
 
@@ -185,7 +202,7 @@ def read_objective_rows(
                 f"{lane_name} {objective_class} results malformed row {line_no}: "
                 f"expected >=2 columns"
             )
-        status = normalize_status(parts[0])
+        status = normalize_status(parts[0], objective_class)
         objective_key = parts[1].strip()
         if not objective_key:
             continue
@@ -309,6 +326,11 @@ def main() -> None:
             return entry.objective_class == "case"
         return True
 
+    def mismatch_kind(entry: ObjectiveEntry) -> str:
+        if entry.objective_class == "cover":
+            return "cover_status"
+        return "case_status"
+
     bmc_ids = set(bmc.keys())
     lec_ids = set(lec.keys())
 
@@ -335,7 +357,7 @@ def main() -> None:
         if bmc_entry.status != lec_entry.status:
             add_row(
                 bmc_entry,
-                "status",
+                mismatch_kind(bmc_entry),
                 bmc_entry.status,
                 lec_entry.status,
                 lec_entry.case_path,

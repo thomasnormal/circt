@@ -1,0 +1,13 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'PASS\tconnectivity::chip.csv:RULE_COV\t/tmp/chip.csv:4\topentitan\tCONNECTIVITY_BMC\tUNSAT\n' > %t/bmc-case.tsv
+// RUN: printf 'PASS\tconnectivity::chip.csv:RULE_COV\t/tmp/chip.csv:4\topentitan\tCONNECTIVITY_LEC\tEQ\n' > %t/lec-case.tsv
+// RUN: printf 'COVERED\tconnectivity::chip.csv:RULE_COV\t/tmp/chip.csv:4\topentitan\tCONNECTIVITY_BMC\tcover\n' > %t/bmc-cover.tsv
+// RUN: printf 'UNREACHABLE\tconnectivity::chip.csv:RULE_COV\t/tmp/chip.csv:4\topentitan\tCONNECTIVITY_LEC\tcover\n' > %t/lec-cover.tsv
+// RUN: not python3 %S/../../utils/check_opentitan_connectivity_objective_parity.py --bmc-case-results %t/bmc-case.tsv --lec-case-results %t/lec-case.tsv --bmc-cover-results %t/bmc-cover.tsv --lec-cover-results %t/lec-cover.tsv --out-parity-tsv %t/parity.tsv --fail-on-mismatch 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=PARITY < %t/parity.tsv
+//
+// LOG: objective parity mismatches detected
+// LOG: cover::connectivity::chip.csv:RULE_COV:cover_status
+// PARITY: objective_id{{[[:space:]]+}}objective_class{{[[:space:]]+}}objective_key{{[[:space:]]+}}rule_id{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}bmc_case_path{{[[:space:]]+}}lec_case_path{{[[:space:]]+}}allowlisted
+// PARITY: cover::connectivity::chip.csv:RULE_COV{{[[:space:]]+}}cover{{[[:space:]]+}}connectivity::chip.csv:RULE_COV{{[[:space:]]+}}chip.csv:RULE_COV{{[[:space:]]+}}cover_status{{[[:space:]]+}}covered{{[[:space:]]+}}unreachable{{[[:space:]]+}}/tmp/chip.csv:4{{[[:space:]]+}}/tmp/chip.csv:4{{[[:space:]]+}}0

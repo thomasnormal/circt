@@ -2,10 +2,10 @@
 // RUN: mkdir -p %t
 // RUN: printf 'PASS\tconnectivity::chip.csv:RULE_CLK\t/tmp/chip.csv:2\topentitan\tCONNECTIVITY_BMC\tUNSAT\n' > %t/bmc-case.tsv
 // RUN: printf 'FAIL\tconnectivity::chip.csv:RULE_CLK\t/tmp/chip.csv:2\topentitan\tCONNECTIVITY_LEC\tNEQ\n' > %t/lec-case.tsv
-// RUN: printf 'exact:case::connectivity::chip.csv:RULE_CLK::status\n' > %t/allow.txt
+// RUN: printf 'exact:case::connectivity::chip.csv:RULE_CLK::case_status\n' > %t/allow.txt
 // RUN: python3 %S/../../utils/check_opentitan_connectivity_objective_parity.py --bmc-case-results %t/bmc-case.tsv --lec-case-results %t/lec-case.tsv --allowlist-file %t/allow.txt --out-parity-tsv %t/parity.tsv --fail-on-mismatch 2>&1 | FileCheck %s --check-prefix=LOG
 // RUN: FileCheck %s --check-prefix=PARITY < %t/parity.tsv
 //
 // LOG: objective parity check passed
 // PARITY: objective_id{{[[:space:]]+}}objective_class{{[[:space:]]+}}objective_key{{[[:space:]]+}}rule_id{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}bmc_case_path{{[[:space:]]+}}lec_case_path{{[[:space:]]+}}allowlisted
-// PARITY: case::connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}case{{[[:space:]]+}}connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}chip.csv:RULE_CLK{{[[:space:]]+}}status{{[[:space:]]+}}pass{{[[:space:]]+}}fail{{[[:space:]]+}}/tmp/chip.csv:2{{[[:space:]]+}}/tmp/chip.csv:2{{[[:space:]]+}}1
+// PARITY: case::connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}case{{[[:space:]]+}}connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}chip.csv:RULE_CLK{{[[:space:]]+}}case_status{{[[:space:]]+}}pass{{[[:space:]]+}}fail{{[[:space:]]+}}/tmp/chip.csv:2{{[[:space:]]+}}/tmp/chip.csv:2{{[[:space:]]+}}1
