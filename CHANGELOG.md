@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1407 - February 14, 2026
+
+### OpenTitan FPV BMC: `run_formal_all.sh` Cache Policy Forwarding
+
+1. Extended `utils/run_formal_all.sh` with first-class OpenTitan FPV BMC cache
+   controls:
+   - `--opentitan-fpv-bmc-verilog-cache-mode` (`off|read|readwrite|auto`)
+   - `--opentitan-fpv-bmc-verilog-cache-dir`
+2. Added parser/default wiring and lane-specific validation:
+   - mode value validation with fail-closed error on invalid mode.
+   - `--with-opentitan-fpv-bmc` dependency checks for both new options.
+3. Forwarded new controls into delegated OpenTitan FPV BMC runner invocation:
+   - `run_opentitan_fpv_circt_bmc.py --verilog-cache-mode ... --verilog-cache-dir ...`
+4. Added focused regressions:
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-verilog-cache-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-verilog-cache-mode-invalid.test`
+5. Validation:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-verilog-cache-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-verilog-cache-mode-invalid.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-target-shard-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-launch-events-summary.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-verilog-cache-forwarding.test` PASS
+
 ## Iteration 1406 - February 14, 2026
 
 ### OpenTitan FPV BMC: Compile-Contract Scoped Frontend Cache Forwarding
