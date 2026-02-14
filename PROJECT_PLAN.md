@@ -480,6 +480,28 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - `test/Tools/run-yosys-sva-bmc-launch-retry-cannot-allocate-memory.test`
      - updated:
        `test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test`
+36. Canonical OpenTitan profile-pack launch budget parity completed (BMC + LEC):
+   - added canonical LEC per-reason launch budget defaults:
+     - `utils/opentitan_fpv_policy/lec_launch_reason_event_budget.tsv`
+       (explicit `stale_file_handle` / `too_many_open_files` /
+       `cannot_allocate_memory` + wildcard default).
+   - wired checked-in profile packs to carry both BMC and LEC check-mode launch
+     budget controls:
+     - `utils/opentitan_fpv_policy/profile_packs.tsv` now includes:
+       - `check_max_lec_launch_reason_event_rows`
+       - `check_lec_launch_reason_event_budget_file`
+       - `check_fail_on_any_lec_launch_reason_events`
+     - existing BMC launch budget fields remain unchanged.
+   - docs aligned:
+     - `utils/opentitan_fpv_policy/README.md` now documents per-pack and
+       workflow-level BMC+LEC launch reason-event budget controls.
+   - regression coverage added/extended:
+     - added:
+       `test/Tools/run-opentitan-fpv-bmc-policy-profile-packs-launch-budget-parity.test`
+     - updated:
+       `test/Tools/run-opentitan-fpv-bmc-policy-profiles.test`
+       to validate workflow defaults + per-profile overrides for both BMC and
+       LEC launch reason allowlists, max rows, budget files, and fail flags.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
@@ -869,7 +891,7 @@ verilator-verification, and yosys corpora).
 ### Remaining Formal Limitations (BMC/LEC/mutation focus)
 
 1. **FPV status derivation depth gap**: explicit assertion statuses (`PROVEN/FAILING/VACUOUS/UNKNOWN`) and cover-granular `covered/unreachable` evidence are now wired, but fully automatic vacuity/coverage derivation for targets that do not emit explicit status tags is still pending.
-2. **BMC/LEC operational robustness**: launcher retry/copy-fallback controls are telemetry-visible in OpenTitan FPV and non-FPV formal lanes (`bmc_launch_*`, `lec_launch_*`), strict-gate enforces launch-counter drift plus nonzero/max reason-event budgets and selector-based per-reason budget files (`exact|prefix|regex|*`) with allowlist-aware semantics, OpenTitan FPV policy-pack wrappers now carry check-only budget-file forwarding/defaults, and retry reason taxonomy includes `permission_denied` / `posix_spawn_failed` / `resource_temporarily_unavailable` / `stale_file_handle` / `too_many_open_files` / `cannot_allocate_memory`; remaining gap is cohort-scale budget tuning and adding further platform-specific transient classes with deterministic governance.
+2. **BMC/LEC operational robustness**: launcher retry/copy-fallback controls are telemetry-visible in OpenTitan FPV and non-FPV formal lanes (`bmc_launch_*`, `lec_launch_*`), strict-gate enforces launch-counter drift plus nonzero/max reason-event budgets and selector-based per-reason budget files (`exact|prefix|regex|*`) with allowlist-aware semantics, OpenTitan FPV policy-pack wrappers now carry canonical check-only budget-file forwarding/defaults for both BMC and LEC, and retry reason taxonomy includes `permission_denied` / `posix_spawn_failed` / `resource_temporarily_unavailable` / `stale_file_handle` / `too_many_open_files` / `cannot_allocate_memory`; remaining gap is cohort-scale budget tuning and adding further platform-specific transient classes with deterministic governance.
 3. **Frontend triage ergonomics**: sv-tests BMC now preserves frontend error logs via `KEEP_LOGS_DIR`, and launch retry is in place for transient launcher failures; host-side tool relink contention can still surface as launcher-level `Permission denied`/ETXTBSY noise until binaries stabilize.
 4. **Frontend scalability blocker on semantic closure buckets**: `sv-tests` UVM `16.11` (sequence-subroutine) and `16.13` (multiclock) currently hit frontend OOM in `circt-verilog` during import; this blocks clean semantic closure measurement for those buckets.
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.

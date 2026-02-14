@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1416 - February 14, 2026
+
+### OpenTitan FPV Policy Packs: Canonical BMC+LEC Launch Budget Parity
+
+1. Added canonical LEC per-reason launch reason-event budget defaults:
+   - `utils/opentitan_fpv_policy/lec_launch_reason_event_budget.tsv`
+   - includes explicit transient-class rows:
+     - `stale_file_handle`
+     - `too_many_open_files`
+     - `cannot_allocate_memory`
+   - wildcard default remains fail-closed (`* -> 0`).
+2. Extended checked-in OpenTitan profile packs to carry both BMC and LEC launch
+   budget governance in check mode:
+   - `utils/opentitan_fpv_policy/profile_packs.tsv` now includes per-pack:
+     - `check_max_lec_launch_reason_event_rows`
+     - `check_lec_launch_reason_event_budget_file`
+     - `check_fail_on_any_lec_launch_reason_events`
+   - all canary profiles now wire:
+     - BMC budget file: `bmc_launch_reason_event_budget.tsv`
+     - LEC budget file: `lec_launch_reason_event_budget.tsv`
+     - max rows: `0` for both BMC and LEC
+     - fail-on-any reason events: `1` for both BMC and LEC
+3. Extended profile orchestration regression to validate BMC+LEC symmetry:
+   - updated `test/Tools/run-opentitan-fpv-bmc-policy-profiles.test` to assert
+     workflow defaults and per-profile overrides for:
+     - allowlist files
+     - max reason-event rows
+     - reason-event budget files
+     - fail-on-any reason-event flags
+4. Added canonical profile-pack parity regression:
+   - `test/Tools/run-opentitan-fpv-bmc-policy-profile-packs-launch-budget-parity.test`
+   - validates checked-in profile pack schema wiring and canonical budget-file
+     presence for both BMC and LEC.
+5. Updated policy docs:
+   - `utils/opentitan_fpv_policy/README.md` now documents:
+     - `check_bmc_launch_reason_event_budget_file`
+     - `check_lec_launch_reason_event_budget_file`
+     at profile-pack and workflow-default layers.
+6. Validation:
+   - policy wrapper/profile slice:
+     - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-opentitan-fpv-bmc-policy-workflow.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-profiles.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-profile-packs-launch-budget-parity.test` PASS
+   - compatibility slice:
+     - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-strict-gate-bmc-launch-reason-event-budget-file.test build-test/test/Tools/run-formal-all-strict-gate-lec-launch-reason-event-budget-file.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-workflow.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-profiles.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-profile-packs-launch-budget-parity.test` PASS
+
 ## Iteration 1415 - February 14, 2026
 
 ### Formal BMC/LEC: `cannot_allocate_memory` Launch Retry Classification

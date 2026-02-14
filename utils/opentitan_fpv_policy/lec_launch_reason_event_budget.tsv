@@ -1,0 +1,13 @@
+# OpenTitan FPV LEC launch reason-event per-key budgets.
+# Format:
+#   <selector><TAB><max_rows>
+# selector supports:
+#   exact:<token> (or bare token), prefix:<prefix>, regex:<pattern>, *
+#
+# Keep known transient classes explicit so profile overrides can selectively
+# relax budgets without changing the wildcard default.
+exact:stale_file_handle	0
+exact:too_many_open_files	0
+exact:cannot_allocate_memory	0
+# Default canary posture keeps non-allowlisted launch reason-event rows at zero.
+*	0
