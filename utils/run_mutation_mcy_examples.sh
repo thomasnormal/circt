@@ -12,8 +12,15 @@ Options:
   --examples-root DIR      MCY examples root (default: ~/mcy/examples)
   --out-dir DIR            Output directory (default: ./mutation-mcy-examples-results)
   --example NAME           Example to run (repeatable; default: all known examples)
-  --example-manifest FILE  Optional TSV mapping of examples to design/top:
-                           example<TAB>design<TAB>top
+  --example-manifest FILE  Optional TSV mapping of examples to design/top and
+                           per-example mutation policy:
+                           example<TAB>design<TAB>top<TAB>[generate_count]
+                           <TAB>[mutations_seed]<TAB>[mutations_modes]
+                           <TAB>[mutations_mode_counts]
+                           <TAB>[mutations_mode_weights]
+                           <TAB>[mutations_profiles]<TAB>[mutations_cfg]
+                           <TAB>[mutations_select]<TAB>[mutation_limit]
+                           Optional fields accept '-' to inherit global values.
                            Relative design paths resolve under --examples-root
   --circt-mut PATH         circt-mut binary or command (default: auto-detect)
   --yosys PATH             yosys binary (default: yosys)
@@ -96,6 +103,15 @@ EXAMPLE_MANIFEST=""
 EXAMPLE_IDS=()
 declare -A EXAMPLE_TO_DESIGN=()
 declare -A EXAMPLE_TO_TOP=()
+declare -A EXAMPLE_TO_GENERATE_COUNT=()
+declare -A EXAMPLE_TO_MUTATIONS_SEED=()
+declare -A EXAMPLE_TO_MUTATIONS_MODES=()
+declare -A EXAMPLE_TO_MUTATIONS_MODE_COUNTS=()
+declare -A EXAMPLE_TO_MUTATIONS_MODE_WEIGHTS=()
+declare -A EXAMPLE_TO_MUTATIONS_PROFILES=()
+declare -A EXAMPLE_TO_MUTATIONS_CFG=()
+declare -A EXAMPLE_TO_MUTATIONS_SELECT=()
+declare -A EXAMPLE_TO_MUTATION_LIMIT=()
 declare -a AVAILABLE_EXAMPLES=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
@@ -117,6 +133,17 @@ trim_whitespace() {
   s="${s#"${s%%[![:space:]]*}"}"
   s="${s%"${s##*[![:space:]]}"}"
   printf '%s\n' "$s"
+}
+
+
+normalize_manifest_optional() {
+  local s
+  s="$(trim_whitespace "${1:-}")"
+  if [[ "$s" == "-" ]]; then
+    echo ""
+  else
+    echo "$s"
+  fi
 }
 
 normalize_int_or_zero() {
@@ -231,12 +258,37 @@ register_example_mapping() {
   return 0
 }
 
-load_default_examples() {
+reset_example_mappings() {
   EXAMPLE_TO_DESIGN=()
   EXAMPLE_TO_TOP=()
+  EXAMPLE_TO_GENERATE_COUNT=()
+  EXAMPLE_TO_MUTATIONS_SEED=()
+  EXAMPLE_TO_MUTATIONS_MODES=()
+  EXAMPLE_TO_MUTATIONS_MODE_COUNTS=()
+  EXAMPLE_TO_MUTATIONS_MODE_WEIGHTS=()
+  EXAMPLE_TO_MUTATIONS_PROFILES=()
+  EXAMPLE_TO_MUTATIONS_CFG=()
+  EXAMPLE_TO_MUTATIONS_SELECT=()
+  EXAMPLE_TO_MUTATION_LIMIT=()
   AVAILABLE_EXAMPLES=()
+}
+
+load_default_examples() {
+  reset_example_mappings
   register_example_mapping "bitcnt" "${EXAMPLES_ROOT}/bitcnt/bitcnt.v" "bitcnt"
   register_example_mapping "picorv32_primes" "${EXAMPLES_ROOT}/picorv32_primes/picorv32.v" "picorv32"
+}
+
+has_manifest_generation_overrides() {
+  [[ ${#EXAMPLE_TO_GENERATE_COUNT[@]} -gt 0 ]] && return 0
+  [[ ${#EXAMPLE_TO_MUTATIONS_SEED[@]} -gt 0 ]] && return 0
+  [[ ${#EXAMPLE_TO_MUTATIONS_MODES[@]} -gt 0 ]] && return 0
+  [[ ${#EXAMPLE_TO_MUTATIONS_MODE_COUNTS[@]} -gt 0 ]] && return 0
+  [[ ${#EXAMPLE_TO_MUTATIONS_MODE_WEIGHTS[@]} -gt 0 ]] && return 0
+  [[ ${#EXAMPLE_TO_MUTATIONS_PROFILES[@]} -gt 0 ]] && return 0
+  [[ ${#EXAMPLE_TO_MUTATIONS_CFG[@]} -gt 0 ]] && return 0
+  [[ ${#EXAMPLE_TO_MUTATIONS_SELECT[@]} -gt 0 ]] && return 0
+  return 1
 }
 
 load_example_manifest() {
@@ -247,12 +299,19 @@ load_example_manifest() {
   local example_id=""
   local design=""
   local top=""
+  local generate_count_override=""
+  local mutations_seed_override=""
+  local mutations_modes_override=""
+  local mutations_mode_counts_override=""
+  local mutations_mode_weights_override=""
+  local mutations_profiles_override=""
+  local mutations_cfg_override=""
+  local mutations_select_override=""
+  local mutation_limit_override=""
   local extra=""
   local resolved_design=""
 
-  EXAMPLE_TO_DESIGN=()
-  EXAMPLE_TO_TOP=()
-  AVAILABLE_EXAMPLES=()
+  reset_example_mappings
 
   while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
     line_no=$((line_no + 1))
@@ -262,14 +321,46 @@ load_example_manifest() {
       continue
     fi
 
-    IFS=$'\t' read -r example_id design top extra <<< "$line"
+    IFS=$'\t' read -r \
+      example_id design top \
+      generate_count_override mutations_seed_override mutations_modes_override \
+      mutations_mode_counts_override mutations_mode_weights_override \
+      mutations_profiles_override mutations_cfg_override mutations_select_override \
+      mutation_limit_override extra <<< "$line"
+
     example_id="$(trim_whitespace "$example_id")"
     design="$(trim_whitespace "$design")"
     top="$(trim_whitespace "$top")"
+    generate_count_override="$(normalize_manifest_optional "${generate_count_override:-}")"
+    mutations_seed_override="$(normalize_manifest_optional "${mutations_seed_override:-}")"
+    mutations_modes_override="$(normalize_manifest_optional "${mutations_modes_override:-}")"
+    mutations_mode_counts_override="$(normalize_manifest_optional "${mutations_mode_counts_override:-}")"
+    mutations_mode_weights_override="$(normalize_manifest_optional "${mutations_mode_weights_override:-}")"
+    mutations_profiles_override="$(normalize_manifest_optional "${mutations_profiles_override:-}")"
+    mutations_cfg_override="$(normalize_manifest_optional "${mutations_cfg_override:-}")"
+    mutations_select_override="$(normalize_manifest_optional "${mutations_select_override:-}")"
+    mutation_limit_override="$(normalize_manifest_optional "${mutation_limit_override:-}")"
     extra="$(trim_whitespace "${extra:-}")"
 
     if [[ -z "$example_id" || -z "$design" || -z "$top" || -n "$extra" ]]; then
-      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top)." >&2
+      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 9 optional override columns)." >&2
+      return 1
+    fi
+
+    if [[ -n "$generate_count_override" && ! "$generate_count_override" =~ ^[1-9][0-9]*$ ]]; then
+      echo "Invalid generate_count override in manifest row ${line_no}: ${generate_count_override}" >&2
+      return 1
+    fi
+    if [[ -n "$mutations_seed_override" && ! "$mutations_seed_override" =~ ^[0-9]+$ ]]; then
+      echo "Invalid mutations_seed override in manifest row ${line_no}: ${mutations_seed_override}" >&2
+      return 1
+    fi
+    if [[ -n "$mutation_limit_override" && ! "$mutation_limit_override" =~ ^[1-9][0-9]*$ ]]; then
+      echo "Invalid mutation_limit override in manifest row ${line_no}: ${mutation_limit_override}" >&2
+      return 1
+    fi
+    if [[ -n "$mutations_mode_counts_override" && -n "$mutations_mode_weights_override" ]]; then
+      echo "Manifest row ${line_no} sets both mutations_mode_counts and mutations_mode_weights; choose one." >&2
       return 1
     fi
 
@@ -282,6 +373,34 @@ load_example_manifest() {
     if ! register_example_mapping "$example_id" "$resolved_design" "$top"; then
       echo "Duplicate example id in manifest row ${line_no}: ${example_id}" >&2
       return 1
+    fi
+
+    if [[ -n "$generate_count_override" ]]; then
+      EXAMPLE_TO_GENERATE_COUNT["$example_id"]="$generate_count_override"
+    fi
+    if [[ -n "$mutations_seed_override" ]]; then
+      EXAMPLE_TO_MUTATIONS_SEED["$example_id"]="$mutations_seed_override"
+    fi
+    if [[ -n "$mutations_modes_override" ]]; then
+      EXAMPLE_TO_MUTATIONS_MODES["$example_id"]="$mutations_modes_override"
+    fi
+    if [[ -n "$mutations_mode_counts_override" ]]; then
+      EXAMPLE_TO_MUTATIONS_MODE_COUNTS["$example_id"]="$mutations_mode_counts_override"
+    fi
+    if [[ -n "$mutations_mode_weights_override" ]]; then
+      EXAMPLE_TO_MUTATIONS_MODE_WEIGHTS["$example_id"]="$mutations_mode_weights_override"
+    fi
+    if [[ -n "$mutations_profiles_override" ]]; then
+      EXAMPLE_TO_MUTATIONS_PROFILES["$example_id"]="$mutations_profiles_override"
+    fi
+    if [[ -n "$mutations_cfg_override" ]]; then
+      EXAMPLE_TO_MUTATIONS_CFG["$example_id"]="$mutations_cfg_override"
+    fi
+    if [[ -n "$mutations_select_override" ]]; then
+      EXAMPLE_TO_MUTATIONS_SELECT["$example_id"]="$mutations_select_override"
+    fi
+    if [[ -n "$mutation_limit_override" ]]; then
+      EXAMPLE_TO_MUTATION_LIMIT["$example_id"]="$mutation_limit_override"
     fi
   done < "$file"
 
@@ -653,9 +772,11 @@ else
   load_default_examples
 fi
 
-if [[ "$SMOKE" -eq 1 && "$MUTATION_GENERATION_FLAGS_SEEN" -eq 1 ]]; then
-  echo "Mutation generation options (--mutations-*) require non-smoke mode." >&2
-  exit 1
+if [[ "$SMOKE" -eq 1 ]]; then
+  if [[ "$MUTATION_GENERATION_FLAGS_SEEN" -eq 1 ]] || has_manifest_generation_overrides; then
+    echo "Mutation generation options (--mutations-*) require non-smoke mode." >&2
+    exit 1
+  fi
 fi
 
 if [[ ${#EXAMPLE_IDS[@]} -eq 0 ]]; then
@@ -709,6 +830,48 @@ overall_rc=0
 for example_id in "${EXAMPLE_IDS[@]}"; do
   design="${EXAMPLE_TO_DESIGN[$example_id]}"
   top="${EXAMPLE_TO_TOP[$example_id]}"
+  example_generate_count="$GENERATE_COUNT"
+  example_mutations_seed="$MUTATIONS_SEED"
+  example_mutations_modes="$MUTATIONS_MODES"
+  example_mutations_mode_counts="$MUTATIONS_MODE_COUNTS"
+  example_mutations_mode_weights="$MUTATIONS_MODE_WEIGHTS"
+  example_mutations_profiles="$MUTATIONS_PROFILES"
+  example_mutations_cfg="$MUTATIONS_CFG"
+  example_mutations_select="$MUTATIONS_SELECT"
+  example_mutation_limit="$MUTATION_LIMIT"
+
+  if [[ -n "${EXAMPLE_TO_GENERATE_COUNT[$example_id]+x}" ]]; then
+    example_generate_count="${EXAMPLE_TO_GENERATE_COUNT[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_SEED[$example_id]+x}" ]]; then
+    example_mutations_seed="${EXAMPLE_TO_MUTATIONS_SEED[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_MODES[$example_id]+x}" ]]; then
+    example_mutations_modes="${EXAMPLE_TO_MUTATIONS_MODES[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_MODE_COUNTS[$example_id]+x}" ]]; then
+    example_mutations_mode_counts="${EXAMPLE_TO_MUTATIONS_MODE_COUNTS[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_MODE_WEIGHTS[$example_id]+x}" ]]; then
+    example_mutations_mode_weights="${EXAMPLE_TO_MUTATIONS_MODE_WEIGHTS[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_PROFILES[$example_id]+x}" ]]; then
+    example_mutations_profiles="${EXAMPLE_TO_MUTATIONS_PROFILES[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_CFG[$example_id]+x}" ]]; then
+    example_mutations_cfg="${EXAMPLE_TO_MUTATIONS_CFG[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_SELECT[$example_id]+x}" ]]; then
+    example_mutations_select="${EXAMPLE_TO_MUTATIONS_SELECT[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATION_LIMIT[$example_id]+x}" ]]; then
+    example_mutation_limit="${EXAMPLE_TO_MUTATION_LIMIT[$example_id]}"
+  fi
+
+  if [[ -n "$example_mutations_mode_counts" && -n "$example_mutations_mode_weights" ]]; then
+    echo "Resolved mutation mode allocation conflict for ${example_id}: both mode-counts and mode-weights are set." >&2
+    exit 1
+  fi
 
   if [[ ! -f "$design" ]]; then
     echo "Missing example design for ${example_id}: $design" >&2
@@ -737,7 +900,7 @@ EOS
     --work-dir "$example_out_dir"
     --skip-baseline
     --jobs 1
-    --mutation-limit "$MUTATION_LIMIT"
+    --mutation-limit "$example_mutation_limit"
   )
 
   if [[ "$SMOKE" -eq 1 ]]; then
@@ -777,28 +940,28 @@ EOS
     )
   else
     cmd+=(
-      --generate-mutations "$GENERATE_COUNT"
+      --generate-mutations "$example_generate_count"
       --mutations-top "$top"
       --mutations-yosys "$YOSYS_RESOLVED"
-      --mutations-seed "$MUTATIONS_SEED"
+      --mutations-seed "$example_mutations_seed"
     )
-    if [[ -n "$MUTATIONS_MODES" ]]; then
-      cmd+=(--mutations-modes "$MUTATIONS_MODES")
+    if [[ -n "$example_mutations_modes" ]]; then
+      cmd+=(--mutations-modes "$example_mutations_modes")
     fi
-    if [[ -n "$MUTATIONS_MODE_COUNTS" ]]; then
-      cmd+=(--mutations-mode-counts "$MUTATIONS_MODE_COUNTS")
+    if [[ -n "$example_mutations_mode_counts" ]]; then
+      cmd+=(--mutations-mode-counts "$example_mutations_mode_counts")
     fi
-    if [[ -n "$MUTATIONS_MODE_WEIGHTS" ]]; then
-      cmd+=(--mutations-mode-weights "$MUTATIONS_MODE_WEIGHTS")
+    if [[ -n "$example_mutations_mode_weights" ]]; then
+      cmd+=(--mutations-mode-weights "$example_mutations_mode_weights")
     fi
-    if [[ -n "$MUTATIONS_PROFILES" ]]; then
-      cmd+=(--mutations-profiles "$MUTATIONS_PROFILES")
+    if [[ -n "$example_mutations_profiles" ]]; then
+      cmd+=(--mutations-profiles "$example_mutations_profiles")
     fi
-    if [[ -n "$MUTATIONS_CFG" ]]; then
-      cmd+=(--mutations-cfg "$MUTATIONS_CFG")
+    if [[ -n "$example_mutations_cfg" ]]; then
+      cmd+=(--mutations-cfg "$example_mutations_cfg")
     fi
-    if [[ -n "$MUTATIONS_SELECT" ]]; then
-      cmd+=(--mutations-select "$MUTATIONS_SELECT")
+    if [[ -n "$example_mutations_select" ]]; then
+      cmd+=(--mutations-select "$example_mutations_select")
     fi
   fi
 

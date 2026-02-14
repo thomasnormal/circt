@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1309 - February 14, 2026
+
+### Mutation Workflow: Manifest-Scoped Generation Policy Overrides
+
+1. Extended `utils/run_mutation_mcy_examples.sh` `--example-manifest` schema to accept optional per-example override columns:
+   - `generate_count`
+   - `mutations_seed`
+   - `mutations_modes`
+   - `mutations_mode_counts`
+   - `mutations_mode_weights`
+   - `mutations_profiles`
+   - `mutations_cfg`
+   - `mutations_select`
+   - `mutation_limit`
+   - `-` in optional fields inherits the global CLI setting.
+2. Added manifest override validation:
+   - integer checks for `generate_count`, `mutations_seed`, `mutation_limit`
+   - conflict rejection when both `mutations_mode_counts` and
+     `mutations_mode_weights` are set in the same row.
+3. Added smoke-mode policy enforcement for manifest generation overrides:
+   - `--smoke` now rejects mutation generation options from CLI or manifest.
+4. Wired resolved per-example policy into command construction so each example
+   can run with distinct generation controls while preserving global defaults.
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-overrides-forwarding.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-invalid-generate-count-override.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-mode-allocation-conflict.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-smoke-generation-options-require-non-smoke.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (22/22)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-114350` PASS
+
 ## Iteration 1308 - February 14, 2026
 
 ### OpenTitan Formal Phase E Bootstrap: Connectivity CFG+CSV Ingestion Lane
