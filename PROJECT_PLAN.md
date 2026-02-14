@@ -186,9 +186,22 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      `utils/formal-baselines.tsv` containing matching OpenTitan FPV rows;
      otherwise strict gate reports `missing baseline row`.
    - current canary targets resolve compile contracts and execute FPV BMC, but
-     terminate with `warning_macro_assert_i_redefined_wredef_macro` in this
-     environment; this blocks progression from stable fail-governance to
-     expected proof statuses.
+     now fail at a deeper semantic stage
+     (`unsupported_llhd_signal_use_in_lec_llhd_sig_array_get`); this is the
+     next closure blocker before expected proof-status uplift.
+19. OpenTitan FPV frontend ingestion hardening completed:
+   - compile-contract resolver now excludes `is_include_file` entries from the
+     compile-unit `files` list while still forwarding include directories.
+   - `run_pairwise_circt_bmc.py` now supports generic single-unit policy mode
+     via `BMC_VERILOG_SINGLE_UNIT_MODE` (`auto|on|off`, default `auto`).
+   - in `auto`, verilog frontend now retries once without `--single-unit` when
+     diagnostics match known macro-preprocessor single-unit failures:
+     - `macro operators may only be used within a macro definition`
+     - `unexpected conditional directive`
+   - retry provenance is preserved:
+     - initial failure log saved to `circt-verilog.single-unit.log`
+     - launch telemetry emits
+       `single_unit_preprocessor_failure`.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
