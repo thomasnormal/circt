@@ -256,6 +256,21 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - reduces avoidable heavyweight preprocessing retries in the dominant
        OpenTitan prim-assert failure family, improving scale behavior while
        preserving generic fallback coverage.
+25. Frontend compile caching milestone completed (generic, backend-agnostic):
+   - `run_pairwise_circt_bmc.py` now supports deterministic frontend artifact
+     caching for verilog import outputs:
+     - `BMC_VERILOG_CACHE_MODE=off|read|readwrite`
+     - `BMC_VERILOG_CACHE_DIR`
+   - cache key includes tool fingerprint + frontend option surface + source
+     file fingerprints, enabling safe cross-run reuse under stable contracts.
+   - cache operation is fail-open to preserve run reliability under cache I/O
+     faults.
+   - added regression:
+     - `test/Tools/run-pairwise-circt-bmc-verilog-cache-basic.test`
+   - impact:
+     - reduces repeated `circt-verilog` cost for large OpenTitan FPV reruns and
+       sharded re-execution paths, moving toward Jasper/VCF-scale throughput
+       expectations without sacrificing determinism.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
