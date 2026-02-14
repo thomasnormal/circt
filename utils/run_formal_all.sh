@@ -1066,6 +1066,14 @@ Options:
                          Regex filter for OpenTitan FPV target names in
                          `opentitan/FPV_BMC` execution (in addition to
                          `--select-cfgs`)
+  --opentitan-fpv-allow-unfiltered
+                         Allow `opentitan/FPV_BMC` execution without
+                         `--select-cfgs`/`--opentitan-fpv-target-filter`
+                         (otherwise filter is required)
+  --opentitan-fpv-max-targets N
+                         Maximum selected FPV targets per invocation after
+                         filter and before target sharding (0: unlimited;
+                         default: 0)
   --opentitan-fpv-bmc-target-shard-count N
                          Deterministic number of OpenTitan FPV target shards
                          passed to `run_opentitan_fpv_circt_bmc.py`
@@ -2785,6 +2793,8 @@ OPENTITAN_BMC_INCLUDE_MASKED=0
 OPENTITAN_BMC_CASE_POLICY_FILE=""
 declare -a OPENTITAN_FPV_CFG_FILES=()
 OPENTITAN_FPV_TARGET_FILTER=""
+OPENTITAN_FPV_ALLOW_UNFILTERED=0
+OPENTITAN_FPV_MAX_TARGETS="0"
 OPENTITAN_CONNECTIVITY_CFG_FILE=""
 OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE=""
 OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE=""
@@ -3003,6 +3013,10 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY="$2"; OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY_EXPLICIT=1; shift 2 ;;
     --opentitan-fpv-target-filter)
       OPENTITAN_FPV_TARGET_FILTER="$2"; shift 2 ;;
+    --opentitan-fpv-allow-unfiltered)
+      OPENTITAN_FPV_ALLOW_UNFILTERED=1; shift ;;
+    --opentitan-fpv-max-targets)
+      OPENTITAN_FPV_MAX_TARGETS="$2"; shift 2 ;;
     --opentitan-fpv-bmc-target-shard-count)
       OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT="$2"; shift 2 ;;
     --opentitan-fpv-bmc-target-shard-index)
@@ -3887,6 +3901,10 @@ if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
     exit 1
   fi
 fi
+if [[ -n "$OPENTITAN_FPV_MAX_TARGETS" && ! "$OPENTITAN_FPV_MAX_TARGETS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-fpv-max-targets: expected non-negative integer" >&2
+  exit 1
+fi
 if [[ -n "$OPENTITAN_CONNECTIVITY_RULE_FILTER" ]]; then
   set +e
   printf '' | grep -Eq "$OPENTITAN_CONNECTIVITY_RULE_FILTER" 2>/dev/null
@@ -4239,6 +4257,14 @@ if [[ "$FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK" == "1" && "${#OPENTITAN_FPV_CFG_FILE
 fi
 if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--with-opentitan-fpv-bmc requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ "$OPENTITAN_FPV_ALLOW_UNFILTERED" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-allow-unfiltered requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ "$OPENTITAN_FPV_MAX_TARGETS" != "0" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-max-targets requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
@@ -8424,6 +8450,8 @@ compute_lane_state_config_hash() {
     printf "opentitan_connectivity_objective_parity_allowlist_file=%s\n" "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_ALLOWLIST_FILE"
     printf "opentitan_connectivity_objective_parity_missing_policy=%s\n" "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY"
     printf "opentitan_fpv_target_filter=%s\n" "$OPENTITAN_FPV_TARGET_FILTER"
+    printf "opentitan_fpv_allow_unfiltered=%s\n" "$OPENTITAN_FPV_ALLOW_UNFILTERED"
+    printf "opentitan_fpv_max_targets=%s\n" "$OPENTITAN_FPV_MAX_TARGETS"
     printf "opentitan_fpv_bmc_target_shard_count=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT"
     printf "opentitan_fpv_bmc_target_shard_index=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
     printf "opentitan_fpv_bmc_case_shard_count=%s\n" "$OPENTITAN_FPV_BMC_CASE_SHARD_COUNT"
@@ -9389,8 +9417,11 @@ if [[ "$WITH_OPENTITAN_BMC_STRICT" == "1" ]] && lane_enabled "opentitan/BMC_STRI
 fi
 if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]] && lane_enabled "opentitan/FPV_BMC"; then
   if [[ "${#OPENTITAN_SELECT_CFGS[@]}" == "0" && -z "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
-    echo "opentitan/FPV_BMC requires explicit filter: set --select-cfgs or --opentitan-fpv-target-filter" >&2
-    exit 1
+    if [[ "$OPENTITAN_FPV_ALLOW_UNFILTERED" != "1" ]]; then
+      echo "opentitan/FPV_BMC requires explicit filter: set --select-cfgs or --opentitan-fpv-target-filter (or pass --opentitan-fpv-allow-unfiltered)" >&2
+      exit 1
+    fi
+    echo "warning: opentitan/FPV_BMC running unfiltered across selected cfg targets (--opentitan-fpv-allow-unfiltered enabled)" >&2
   fi
 fi
 if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]] && lane_enabled "opentitan/FPV_BMC_EVIDENCE_PARITY"; then
@@ -13595,6 +13626,7 @@ run_opentitan_fpv_bmc_lane() {
 
   local opentitan_fpv_bmc_args=(
     --compile-contracts "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE"
+    --max-targets "$OPENTITAN_FPV_MAX_TARGETS"
     --target-shard-count "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT"
     --target-shard-index "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
     --case-shard-count "$OPENTITAN_FPV_BMC_CASE_SHARD_COUNT"

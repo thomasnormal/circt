@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1350 - February 14, 2026
+
+### OpenTitan FPV Execution: Unfiltered-Run Enablement with Target Budgets
+
+1. Extended `utils/run_formal_all.sh` FPV controls with:
+   - `--opentitan-fpv-allow-unfiltered`
+   - `--opentitan-fpv-max-targets`
+2. Preserved safe default behavior:
+   - `opentitan/FPV_BMC` still requires explicit filtering unless
+     `--opentitan-fpv-allow-unfiltered` is set.
+   - missing-filter diagnostics now include the explicit opt-in path.
+3. Added FPV target-budget forwarding from `run_formal_all.sh` to
+   `utils/run_opentitan_fpv_circt_bmc.py`:
+   - `--max-targets` is always forwarded.
+4. Added runner-level target-budget enforcement in
+   `utils/run_opentitan_fpv_circt_bmc.py`:
+   - fails early when selected targets exceed configured `--max-targets`
+     (after target filtering and before target sharding).
+5. Added focused regressions:
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-allow-unfiltered-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-allow-unfiltered-requires-fpv-bmc.test`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-max-targets.test`
+   - updated:
+     - `test/Tools/run-formal-all-opentitan-fpv-bmc-requires-filter.test`
+     - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(run-formal-all-opentitan-fpv-bmc-requires-filter|run-formal-all-opentitan-fpv-bmc-allow-unfiltered-forwarding|run-formal-all-opentitan-fpv-allow-unfiltered-requires-fpv-bmc|run-opentitan-fpv-circt-bmc-max-targets|run-formal-all-help|run-opentitan-fpv-circt-bmc-(basic|target-shard-selection|target-shard-empty|target-shard-invalid-index))'` PASS (9 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(run-formal-all-opentitan-fpv|run-opentitan-fpv-circt-bmc|run-formal-all-opentitan-select-cfgs-requires-fpv-cfg|run-formal-all-help)'` PASS (49 selected)
+
 ## Iteration 1349 - February 14, 2026
 
 ### OpenTitan FPV Planning: Multi-CFG HJSON Ingestion Hardening

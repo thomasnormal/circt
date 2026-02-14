@@ -1,0 +1,20 @@
+// RUN: rm -rf %t.unfiltered
+// RUN: mkdir -p %t.unfiltered/utils %t.unfiltered/bin %t.unfiltered/sv-tests %t.unfiltered/verilator %t.unfiltered/yosys %t.unfiltered/ot/hw/top_earlgrey/formal
+// RUN: cp %S/../../utils/run_formal_all.sh %t.unfiltered/utils/run_formal_all.sh
+// RUN: cp %S/../../utils/select_opentitan_formal_cfgs.py %t.unfiltered/utils/select_opentitan_formal_cfgs.py
+// RUN: cp %S/../../utils/resolve_opentitan_formal_compile_contracts.py %t.unfiltered/utils/resolve_opentitan_formal_compile_contracts.py
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncompile=\"\"\nmax_targets=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    --compile-contracts) compile=\"$2\"; shift 2 ;;\n    --max-targets) max_targets=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n: \"${OUT:?}\"\nif [[ ! -f \"$compile\" ]]; then\n  echo \"missing_compile_contracts=$compile\" >&2\n  exit 10\nfi\nif [[ \"$max_targets\" != \"17\" ]]; then\n  echo \"bad_max_targets=$max_targets\" >&2\n  exit 11\nfi\nprintf \"PASS\\tfoo_fpv::foo_tb\\t%t.unfiltered/out/opentitan-fpv-bmc-work/foo_fpv/foo_tb\\topentitan\\tFPV_BMC\\tUNSAT\\n\" > \"$OUT\"\n' > %t.unfiltered/utils/run_opentitan_fpv_circt_bmc.py
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t.unfiltered/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t.unfiltered/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t.unfiltered/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t.unfiltered/bin/circt-lec
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib,sys\ncore = sys.argv[-1]\ntool = sys.argv[sys.argv.index(\"--tool\") + 1]\ntarget = sys.argv[sys.argv.index(\"--target\") + 1]\ncore_token = core.replace(\":\", \"_\").replace(\".\", \"_\")\nout_dir = pathlib.Path.cwd() / \"build\" / core_token / f\"{target}-{tool}\"\nout_dir.mkdir(parents=True, exist_ok=True)\neda = out_dir / f\"{core_token}.eda.yml\"\neda.write_text(\"\"\"toplevel: foo_tb\\nfiles:\\n- core: lowrisc:foo:pkg:0\\n  file_type: systemVerilogSource\\n  name: ../src/foo.sv\\n\"\"\")\n' > %t.unfiltered/bin/fusesoc
+// RUN: printf '{\n  "name": "top_earlgrey_fpv_prim_cfgs",\n  "flow": "formal",\n  "sub_flow": "fpv",\n  "use_cfgs": [\n    {\n      "name": "foo_fpv",\n      "dut": "foo_tb",\n      "fusesoc_core": "lowrisc:fpv:foo_fpv",\n      "task": "FpvDefault",\n      "rel_path": "hw/top_earlgrey/formal/ip/foo"\n    }\n  ]\n}\n' > %t.unfiltered/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson
+// RUN: chmod +x %t.unfiltered/utils/run_formal_all.sh %t.unfiltered/utils/select_opentitan_formal_cfgs.py %t.unfiltered/utils/resolve_opentitan_formal_compile_contracts.py %t.unfiltered/utils/run_opentitan_fpv_circt_bmc.py %t.unfiltered/bin/circt-verilog %t.unfiltered/bin/circt-opt %t.unfiltered/bin/circt-bmc %t.unfiltered/bin/circt-lec %t.unfiltered/bin/fusesoc
+// RUN: cd %t.unfiltered && utils/run_formal_all.sh --out-dir %t.unfiltered/out --sv-tests %t.unfiltered/sv-tests --verilator %t.unfiltered/verilator --yosys %t.unfiltered/yosys --with-opentitan-fpv-bmc --opentitan-fpv-allow-unfiltered --opentitan-fpv-max-targets 17 --opentitan %t.unfiltered/ot --circt-verilog %t.unfiltered/bin/circt-verilog --include-lane-regex '^opentitan/FPV_BMC$' --opentitan-fpv-cfg %t.unfiltered/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson --opentitan-fpv-fusesoc-bin %t.unfiltered/bin/fusesoc
+// RUN: FileCheck %s --check-prefix=SUM < %t.unfiltered/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=CASE < %t.unfiltered/out/opentitan-fpv-bmc-results.txt
+//
+// SUM: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
+// SUM: opentitan{{[[:space:]]+}}FPV_BMC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
+// CASE: PASS{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}opentitan-fpv-bmc-work/foo_fpv/foo_tb{{[[:space:]]+}}opentitan{{[[:space:]]+}}FPV_BMC{{[[:space:]]+}}UNSAT
