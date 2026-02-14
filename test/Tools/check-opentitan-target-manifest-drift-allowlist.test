@@ -1,0 +1,9 @@
+// RUN: printf "target_name\tdut\tfusesoc_core\ttask\tstopats\tflow\tsub_flow\trel_path\tsource_kind\tsource_cfg_file\troot_cfg_file\nfoo_fpv\tfoo_tb\tlowrisc:fpv:foo_fpv\tFpvDefault\t[]\tformal\tfpv\thw/top_earlgrey/formal/ip/foo\tinline\t/a/cfg.hjson\t/a/cfg.hjson\n" > %t.base.tsv
+// RUN: printf "target_name\tdut\tfusesoc_core\ttask\tstopats\tflow\tsub_flow\trel_path\tsource_kind\tsource_cfg_file\troot_cfg_file\nfoo_fpv\tbar_tb\tlowrisc:fpv:foo_fpv\tFpvDefault\t[]\tformal\tfpv\thw/top_earlgrey/formal/ip/foo\tinline\t/a/cfg.hjson\t/a/cfg.hjson\n" > %t.current.tsv
+// RUN: printf "exact:foo_fpv\n" > %t.allow.tsv
+// RUN: %S/../../utils/check_opentitan_target_manifest_drift.py --baseline %t.base.tsv --current %t.current.tsv --allowlist-file %t.allow.tsv --out-drift-tsv %t.drift.tsv 2>&1 | FileCheck %s --check-prefix=PASS
+// RUN: FileCheck %s --check-prefix=DRIFT < %t.drift.tsv
+//
+// PASS: opentitan fpv target-manifest drift check passed
+// DRIFT: target_name{{[[:space:]]+}}kind{{[[:space:]]+}}baseline{{[[:space:]]+}}current
+// DRIFT-NOT: foo_fpv
