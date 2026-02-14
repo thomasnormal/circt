@@ -2626,8 +2626,19 @@ mutant_path="${1:-../mutant.v}"
 helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 iverilog_bin="${IVERILOG:-iverilog}"
 vvp_bin="${VVP:-vvp}"
-"$iverilog_bin" -g2012 -o sim "${helper_dir}/bitcnt_tb.v" "$mutant_path"
-"$vvp_bin" -n sim > sim.out
+rm -f compile.log sim.out
+# bitcnt_tb.v uses identifier `do`, which is accepted in Verilog-2005 but a
+# keyword in SystemVerilog; try 2005 first, then 2012 for broader compatibility.
+if ! "$iverilog_bin" -g2005 -o sim "${helper_dir}/bitcnt_tb.v" "$mutant_path" > compile.log 2>&1; then
+  if ! "$iverilog_bin" -g2012 -o sim "${helper_dir}/bitcnt_tb.v" "$mutant_path" >> compile.log 2>&1; then
+    echo DETECTED > result.txt
+    exit 0
+  fi
+fi
+if ! "$vvp_bin" -n sim > sim.out 2>&1; then
+  echo DETECTED > result.txt
+  exit 0
+fi
 if grep -q 'ERROR' sim.out; then
   echo DETECTED > result.txt
 else
@@ -2724,11 +2735,12 @@ EOS
         NEQ_TO_EQ
         LT_TO_LE
         GT_TO_GE
+        LE_TO_LT
+        GE_TO_GT
         AND_TO_OR
         OR_TO_AND
         XOR_TO_OR
-        PLUS_TO_MINUS
-        MINUS_TO_PLUS
+        UNARY_NOT_DROP
         CONST0_TO_1
         CONST1_TO_0
       )
@@ -2778,34 +2790,33 @@ elif op == 'LT_TO_LE':
 elif op == 'GT_TO_GE':
     text, count = replace_once(r'(?<![<>=!])>(?![<>=])', '>=')
     changed = count > 0
+elif op == 'LE_TO_LT':
+    text, count = replace_once(r'<=', '<')
+    changed = count > 0
+elif op == 'GE_TO_GT':
+    text, count = replace_once(r'>=', '>')
+    changed = count > 0
 elif op == 'AND_TO_OR':
     text, count = replace_once(r'&&', '||')
-    if count == 0:
-      text, count = replace_once(r'&', '|')
     changed = count > 0
 elif op == 'OR_TO_AND':
     text, count = replace_once(r'\|\|', '&&')
-    if count == 0:
-      text, count = replace_once(r'\|', '&')
     changed = count > 0
 elif op == 'XOR_TO_OR':
     text, count = replace_once(r'\^', '|')
     changed = count > 0
-elif op == 'PLUS_TO_MINUS':
-    text, count = replace_once(r'\+', '-')
-    changed = count > 0
-elif op == 'MINUS_TO_PLUS':
-    text, count = replace_once(r'-', '+')
+elif op == 'UNARY_NOT_DROP':
+    text, count = replace_once(r'!\s*(?=[A-Za-z_(])', '')
     changed = count > 0
 elif op == 'CONST0_TO_1':
     text, count = replace_once(r"1'b0", "1'b1")
     if count == 0:
-      text, count = replace_once(r'\b0\b', '1')
+      text, count = replace_once(r"1'd0", "1'd1")
     changed = count > 0
 elif op == 'CONST1_TO_0':
     text, count = replace_once(r"1'b1", "1'b0")
     if count == 0:
-      text, count = replace_once(r'\b1\b', '0')
+      text, count = replace_once(r"1'd1", "1'd0")
     changed = count > 0
 
 if not changed:
