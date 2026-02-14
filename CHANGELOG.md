@@ -67355,3 +67355,12 @@ See CHANGELOG.md on recent progress.
       `policy_fingerprint` while preserving harness execution behavior.
     - Added regression coverage:
       `run-mutation-mcy-examples-native-real-harness-policy-fingerprint-canonical-pass.test`.
+41. Explicit non-empty contract for native mutation policy CLI options
+    (February 14, 2026):
+    - `--native-mutation-ops` and `--native-real-harness-args` now fail fast
+      when explicitly provided with empty/whitespace-only values.
+    - This avoids ambiguous "explicit-but-empty" policy state and prevents
+      accidental no-op overrides in governance-controlled runs.
+    - Added regression coverage:
+      - `run-mutation-mcy-examples-native-mutation-ops-empty-invalid.test`
+      - `run-mutation-mcy-examples-native-real-harness-args-empty-invalid.test`.

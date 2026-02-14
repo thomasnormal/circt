@@ -348,7 +348,9 @@ MUTATIONS_BACKEND="yosys"
 NATIVE_TESTS_MODE="synthetic"
 NATIVE_REAL_TESTS_STRICT=0
 NATIVE_MUTATION_OPS=""
+NATIVE_MUTATION_OPS_EXPLICIT=0
 NATIVE_REAL_HARNESS_ARGS=""
+NATIVE_REAL_HARNESS_ARGS_EXPLICIT=0
 JOBS=1
 EXAMPLE_TIMEOUT_SEC=0
 EXAMPLE_RETRIES=0
@@ -3370,11 +3372,13 @@ while [[ $# -gt 0 ]]; do
       ;;
     --native-mutation-ops)
       NATIVE_MUTATION_OPS="$2"
+      NATIVE_MUTATION_OPS_EXPLICIT=1
       MUTATION_GENERATION_FLAGS_SEEN=1
       shift 2
       ;;
     --native-real-harness-args)
       NATIVE_REAL_HARNESS_ARGS="$2"
+      NATIVE_REAL_HARNESS_ARGS_EXPLICIT=1
       MUTATION_GENERATION_FLAGS_SEEN=1
       shift 2
       ;;
@@ -3766,16 +3770,25 @@ if [[ "$NATIVE_TESTS_MODE" != "synthetic" && "$NATIVE_TESTS_MODE" != "real" ]]; 
   echo "--native-tests-mode must be one of: synthetic|real" >&2
   exit 1
 fi
+if [[ "$NATIVE_MUTATION_OPS_EXPLICIT" -eq 1 && -z "$(trim_whitespace "$NATIVE_MUTATION_OPS")" ]]; then
+  echo "--native-mutation-ops must not be empty when provided" >&2
+  exit 1
+fi
 if [[ -n "$NATIVE_MUTATION_OPS" ]]; then
   if ! validate_native_mutation_ops_spec "$NATIVE_MUTATION_OPS" "--native-mutation-ops"; then
     exit 1
   fi
   NATIVE_MUTATION_OPS="$(canonicalize_native_mutation_ops_spec "$NATIVE_MUTATION_OPS")"
 fi
+if [[ "$NATIVE_REAL_HARNESS_ARGS_EXPLICIT" -eq 1 && -z "$(trim_whitespace "$NATIVE_REAL_HARNESS_ARGS")" ]]; then
+  echo "--native-real-harness-args must not be empty when provided" >&2
+  exit 1
+fi
 if [[ -n "$NATIVE_REAL_HARNESS_ARGS" ]]; then
   if ! validate_native_real_harness_args_spec "$NATIVE_REAL_HARNESS_ARGS" "--native-real-harness-args"; then
     exit 1
   fi
+  NATIVE_REAL_HARNESS_ARGS="$(trim_whitespace "$NATIVE_REAL_HARNESS_ARGS")"
 fi
 if ! is_nonneg_int "$MIN_DETECTED"; then
   echo "--min-detected must be a non-negative integer: $MIN_DETECTED" >&2
