@@ -19,6 +19,10 @@ policy baselines:
   - `utils/run_opentitan_fpv_bmc_policy_workflow.sh check ...`
 - per-cohort baseline prefixing:
   - `utils/run_opentitan_fpv_bmc_policy_workflow.sh --baseline-prefix opentitan-fpv-bmc-prim update ...`
+- verilog frontend cache controls (forwarded to OpenTitan FPV BMC lane):
+  - `--opentitan-fpv-bmc-verilog-cache-mode off|read|readwrite|auto`
+  - `--opentitan-fpv-bmc-verilog-cache-dir <dir>`
+  - `--opentitan-fpv-bmc-verilog-cache-dir` requires mode.
 
 By default, baselines are written under:
 
@@ -41,6 +45,8 @@ With `--baseline-prefix <name>`, artifacts become:
   - baseline prefix (`baseline_prefix`)
   - optional target-selection controls (`select_cfgs`, `target_filter`,
     `allow_unfiltered`, `max_targets`)
+  - optional OpenTitan FPV BMC verilog cache controls
+    (`verilog_cache_mode`, `verilog_cache_dir`)
   - current defaults are canary seeds (one representative target per cohort)
     for deterministic baseline bootstrap.
 
@@ -55,6 +61,9 @@ Use `utils/run_opentitan_fpv_bmc_policy_profiles.sh` to run packs:
   - `utils/run_opentitan_fpv_bmc_policy_profiles.sh --no-strict-gate check --opentitan-root ~/opentitan`
 - check one pack:
   - `utils/run_opentitan_fpv_bmc_policy_profiles.sh --profile prim_all check --opentitan-root ~/opentitan`
+- set workflow-level verilog cache defaults for all selected packs:
+  - `utils/run_opentitan_fpv_bmc_policy_profiles.sh check --opentitan-root ~/opentitan --workflow-verilog-cache-mode read --workflow-verilog-cache-dir /tmp/circt-fpv-cache`
+  - per-pack TSV values (`verilog_cache_mode`, `verilog_cache_dir`) override workflow defaults.
 
 ## Drift Triage
 

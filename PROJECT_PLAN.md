@@ -302,6 +302,28 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - lets profile-pack and strict-gate workflows enable deterministic cache
        behavior from the top-level formal entrypoint, not only runner-local
        invocations.
+28. OpenTitan FPV policy-wrapper cache governance completed:
+   - `utils/run_opentitan_fpv_bmc_policy_workflow.sh` now supports and
+     forwards:
+     - `--opentitan-fpv-bmc-verilog-cache-mode`
+     - `--opentitan-fpv-bmc-verilog-cache-dir`
+   - `utils/run_opentitan_fpv_bmc_policy_profiles.sh` now supports:
+     - workflow defaults:
+       - `--workflow-verilog-cache-mode`
+       - `--workflow-verilog-cache-dir`
+     - optional per-profile overrides in TSV:
+       - `verilog_cache_mode`
+       - `verilog_cache_dir`
+   - both wrappers enforce fail-closed validation:
+     - invalid cache mode rejected.
+     - cache dir requires cache mode.
+   - added/updated regressions:
+     - `test/Tools/run-opentitan-fpv-bmc-policy-workflow.test`
+     - `test/Tools/run-opentitan-fpv-bmc-policy-profiles.test`
+   - impact:
+     - OpenTitan policy pack runs can now deterministically control frontend
+       cache reuse per cohort/profile, enabling stable large-target cadence
+       without introducing OpenTitan-specific behavior into generic runners.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 

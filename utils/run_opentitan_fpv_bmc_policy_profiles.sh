@@ -28,6 +28,13 @@ Options:
                           Forwarded to workflow as --baseline-dir
   --workflow-presets-file FILE
                           Forwarded to workflow as --presets-file
+  --workflow-verilog-cache-mode MODE
+                          Forwarded to workflow as
+                          --opentitan-fpv-bmc-verilog-cache-mode
+                          (`off|read|readwrite|auto`)
+  --workflow-verilog-cache-dir DIR
+                          Forwarded to workflow as
+                          --opentitan-fpv-bmc-verilog-cache-dir
   --no-strict-gate        check mode: forward --no-strict-gate to workflow
   -h, --help              Show this help
 
@@ -36,6 +43,7 @@ Profile TSV schema:
     profile_name,fpv_cfg,baseline_prefix
   Optional columns:
     select_cfgs,target_filter,allow_unfiltered,max_targets,description
+    verilog_cache_mode,verilog_cache_dir
 
 Notes:
   - Each profile executes one workflow invocation with:
@@ -88,6 +96,22 @@ parse_nonnegative_int_like() {
   printf "%s" "$raw"
 }
 
+parse_cache_mode_like() {
+  local raw
+  raw="$(trim "$1")"
+  if [[ -z "$raw" ]]; then
+    printf ""
+    return
+  fi
+  case "${raw,,}" in
+    off|read|readwrite|auto)
+      printf "%s" "${raw,,}" ;;
+    *)
+      echo "invalid cache mode value: $raw (expected off|read|readwrite|auto)" >&2
+      exit 1 ;;
+  esac
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_WORKFLOW="${SCRIPT_DIR}/run_opentitan_fpv_bmc_policy_workflow.sh"
 PROFILES_FILE="${SCRIPT_DIR}/opentitan_fpv_policy/profile_packs.tsv"
@@ -97,6 +121,8 @@ MODE=""
 NO_STRICT_GATE=0
 WORKFLOW_BASELINE_DIR=""
 WORKFLOW_PRESETS_FILE=""
+WORKFLOW_VERILOG_CACHE_MODE=""
+WORKFLOW_VERILOG_CACHE_DIR=""
 declare -a PROFILE_FILTERS=()
 
 while [[ $# -gt 0 ]]; do
@@ -115,6 +141,10 @@ while [[ $# -gt 0 ]]; do
       WORKFLOW_BASELINE_DIR="$2"; shift 2 ;;
     --workflow-presets-file)
       WORKFLOW_PRESETS_FILE="$2"; shift 2 ;;
+    --workflow-verilog-cache-mode)
+      WORKFLOW_VERILOG_CACHE_MODE="$(parse_cache_mode_like "$2")"; shift 2 ;;
+    --workflow-verilog-cache-dir)
+      WORKFLOW_VERILOG_CACHE_DIR="$2"; shift 2 ;;
     --no-strict-gate)
       NO_STRICT_GATE=1; shift ;;
     update|check)
@@ -143,6 +173,10 @@ if [[ ! -r "$PROFILES_FILE" ]]; then
 fi
 if [[ ! -d "$OPENTITAN_ROOT" ]]; then
   echo "OpenTitan root not found: $OPENTITAN_ROOT" >&2
+  exit 1
+fi
+if [[ -n "$WORKFLOW_VERILOG_CACHE_DIR" && -z "$WORKFLOW_VERILOG_CACHE_MODE" ]]; then
+  echo "--workflow-verilog-cache-dir requires --workflow-verilog-cache-mode" >&2
   exit 1
 fi
 if [[ -z "$OUT_DIR" ]]; then
@@ -220,6 +254,21 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   target_filter="$(get_col target_filter)"
   allow_unfiltered="$(parse_bool_like "$(get_col allow_unfiltered)")"
   max_targets="$(parse_nonnegative_int_like "$(get_col max_targets)")"
+  profile_verilog_cache_mode="$(parse_cache_mode_like "$(get_col verilog_cache_mode)")"
+  profile_verilog_cache_dir="$(trim "$(get_col verilog_cache_dir)")"
+
+  effective_verilog_cache_mode="$WORKFLOW_VERILOG_CACHE_MODE"
+  if [[ -n "$profile_verilog_cache_mode" ]]; then
+    effective_verilog_cache_mode="$profile_verilog_cache_mode"
+  fi
+  effective_verilog_cache_dir="$WORKFLOW_VERILOG_CACHE_DIR"
+  if [[ -n "$profile_verilog_cache_dir" ]]; then
+    effective_verilog_cache_dir="$profile_verilog_cache_dir"
+  fi
+  if [[ -n "$effective_verilog_cache_dir" && -z "$effective_verilog_cache_mode" ]]; then
+    echo "verilog_cache_dir requires verilog_cache_mode for profile '$profile_name' in $PROFILES_FILE row $line_no" >&2
+    exit 1
+  fi
 
   if [[ -z "$fpv_cfg" ]]; then
     echo "empty fpv_cfg for profile '$profile_name' in $PROFILES_FILE row $line_no" >&2
@@ -245,6 +294,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   fi
   if [[ -n "$WORKFLOW_PRESETS_FILE" ]]; then
     cmd+=(--presets-file "$WORKFLOW_PRESETS_FILE")
+  fi
+  if [[ -n "$effective_verilog_cache_mode" ]]; then
+    cmd+=(--opentitan-fpv-bmc-verilog-cache-mode "$effective_verilog_cache_mode")
+  fi
+  if [[ -n "$effective_verilog_cache_dir" ]]; then
+    cmd+=(--opentitan-fpv-bmc-verilog-cache-dir "$effective_verilog_cache_dir")
   fi
   if [[ "$NO_STRICT_GATE" == "1" ]]; then
     cmd+=(--no-strict-gate)

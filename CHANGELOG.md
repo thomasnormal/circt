@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1408 - February 14, 2026
+
+### OpenTitan FPV BMC: Cache Controls in Policy Workflow Wrappers
+
+1. Extended policy workflow wrapper
+   (`utils/run_opentitan_fpv_bmc_policy_workflow.sh`) with first-class
+   OpenTitan FPV BMC cache controls:
+   - `--opentitan-fpv-bmc-verilog-cache-mode` (`off|read|readwrite|auto`)
+   - `--opentitan-fpv-bmc-verilog-cache-dir`
+2. Extended profile-pack wrapper
+   (`utils/run_opentitan_fpv_bmc_policy_profiles.sh`) with cache control
+   layering:
+   - workflow defaults:
+     - `--workflow-verilog-cache-mode`
+     - `--workflow-verilog-cache-dir`
+   - optional per-profile TSV overrides:
+     - `verilog_cache_mode`
+     - `verilog_cache_dir`
+3. Added fail-closed validation across both wrappers:
+   - invalid cache mode values are rejected.
+   - cache-dir options require explicit cache mode.
+4. Updated policy docs:
+   - `utils/opentitan_fpv_policy/README.md` now documents wrapper cache
+     options and profile TSV cache columns.
+5. Added/updated focused regressions:
+   - `test/Tools/run-opentitan-fpv-bmc-policy-workflow.test`
+   - `test/Tools/run-opentitan-fpv-bmc-policy-profiles.test`
+6. Validation:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-opentitan-fpv-bmc-policy-workflow.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-workflow-baseline-prefix.test build-test/test/Tools/run-opentitan-fpv-bmc-policy-profiles.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-verilog-cache-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-verilog-cache-mode-invalid.test` PASS
+
 ## Iteration 1407 - February 14, 2026
 
 ### OpenTitan FPV BMC: `run_formal_all.sh` Cache Policy Forwarding
