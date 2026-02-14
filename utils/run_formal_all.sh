@@ -1058,6 +1058,10 @@ Options:
                          Include objective IDs present in one lane and missing
                          in the other (default compares only shared objective
                          IDs)
+  --opentitan-connectivity-objective-parity-missing-policy POLICY
+                         Missing-objective drift policy for objective parity:
+                         ignore (default), case (only case objectives),
+                         all (case+cover objectives)
   --opentitan-fpv-target-filter REGEX
                          Regex filter for OpenTitan FPV target names in
                          `opentitan/FPV_BMC` execution (in addition to
@@ -2826,6 +2830,8 @@ FAIL_ON_OPENTITAN_CONNECTIVITY_CONTRACT_PARITY=0
 FAIL_ON_OPENTITAN_CONNECTIVITY_COVER_PARITY=0
 FAIL_ON_OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY=0
 OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_INCLUDE_MISSING=0
+OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY="ignore"
+OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY_EXPLICIT=0
 FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=0
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
@@ -2980,6 +2986,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY=1; shift ;;
     --opentitan-connectivity-objective-parity-include-missing)
       OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_INCLUDE_MISSING=1; shift ;;
+    --opentitan-connectivity-objective-parity-missing-policy)
+      OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY="$2"; OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY_EXPLICIT=1; shift 2 ;;
     --opentitan-fpv-target-filter)
       OPENTITAN_FPV_TARGET_FILTER="$2"; shift 2 ;;
     --opentitan-fpv-bmc-target-shard-count)
@@ -4153,6 +4161,12 @@ if [[ "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_INCLUDE_MISSING" == "1" && ! ( "
 fi
 if [[ -n "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_ALLOWLIST_FILE" && ! -r "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_ALLOWLIST_FILE" ]]; then
   echo "OpenTitan connectivity objective parity allowlist file not readable: $OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY" != "ignore" && \
+      "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY" != "case" && \
+      "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY" != "all" ]]; then
+  echo "invalid --opentitan-connectivity-objective-parity-missing-policy: $OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY (expected ignore|case|all)" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
@@ -5812,6 +5826,12 @@ if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WI
 fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ]]; then
   FAIL_ON_OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY=1
+fi
+if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" && \
+      "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY_EXPLICIT" != "1" && \
+      "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_INCLUDE_MISSING" != "1" && \
+      "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY" == "ignore" ]]; then
+  OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY="case"
 fi
 if [[ "$STRICT_GATE" == "1" && -n "$OPENTITAN_FPV_CFG_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=1
@@ -8345,6 +8365,7 @@ compute_lane_state_config_hash() {
     printf "opentitan_connectivity_cover_parity_allowlist_file=%s\n" "$OPENTITAN_CONNECTIVITY_COVER_PARITY_ALLOWLIST_FILE"
     printf "opentitan_connectivity_objective_parity_file=%s\n" "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_FILE"
     printf "opentitan_connectivity_objective_parity_allowlist_file=%s\n" "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_ALLOWLIST_FILE"
+    printf "opentitan_connectivity_objective_parity_missing_policy=%s\n" "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY"
     printf "opentitan_fpv_target_filter=%s\n" "$OPENTITAN_FPV_TARGET_FILTER"
     printf "opentitan_fpv_bmc_target_shard_count=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT"
     printf "opentitan_fpv_bmc_target_shard_index=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
@@ -13219,6 +13240,9 @@ run_opentitan_connectivity_objective_parity_lane() {
   fi
   if [[ "$FAIL_ON_OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY" == "1" ]]; then
     parity_args+=(--fail-on-mismatch)
+  fi
+  if [[ "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY" != "ignore" ]]; then
+    parity_args+=(--missing-objective-policy "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY")
   fi
   if [[ "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_INCLUDE_MISSING" == "1" ]]; then
     parity_args+=(--include-missing-objectives)

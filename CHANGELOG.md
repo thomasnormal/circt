@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1342 - February 14, 2026
+
+### OpenTitan Connectivity Objective Parity: Missing-Policy + Metadata Hardening
+
+1. Extended `utils/check_opentitan_connectivity_objective_parity.py` with
+   explicit missing-objective policy control:
+   - `--missing-objective-policy {ignore|case|all}`
+   - `--include-missing-objectives` retained as backward-compatible alias.
+2. Expanded objective-parity output schema with structured objective metadata:
+   - `objective_id`
+   - `objective_class`
+   - `objective_key`
+   - `rule_id`
+   - `kind`
+   - `bmc`
+   - `lec`
+   - `bmc_case_path`
+   - `lec_case_path`
+   - `allowlisted`
+3. Extended `utils/run_formal_all.sh` objective-parity lane with:
+   - `--opentitan-connectivity-objective-parity-missing-policy`
+   - strict-gate default policy uplift (`ignore -> case`) when connectivity
+     BMC+LEC+objective-parity are active and no explicit missing policy is set.
+4. Added focused regressions:
+   - `test/Tools/check-opentitan-connectivity-objective-parity-missing-policy-case.test`
+   - `test/Tools/check-opentitan-connectivity-objective-parity-missing-policy-all.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-objective-parity-missing-policy-invalid.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-objective-parity-missing-policy-forwarding.test`
+   - updated objective-parity checker/driver tests for the expanded TSV schema.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/check_opentitan_connectivity_objective_parity.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(check-opentitan-connectivity-objective-parity|run-formal-all-opentitan-connectivity-objective-parity|run-formal-all-help)'` PASS (12 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(run-formal-all-opentitan|check-opentitan-connectivity)'` PASS (94 selected)
+
 ## Iteration 1341 - February 14, 2026
 
 ### Mutation Workflow: Baseline Drift Governance for Suite Aggregates
