@@ -1,0 +1,12 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '#resolved_contract_schema_version=1\nconnectivity::chip.csv:RULE_CLK\t/tmp/chip.csv:2\tmanifest\tjit\t0\t0\t300\t1\t0\t0\t0\t\taaaa1111aaaa1111\n' > %t/bmc.tsv
+// RUN: printf '#resolved_contract_schema_version=1\nconnectivity::chip.csv:RULE_CLK\t/tmp/chip.csv:2\tmanifest\tsmtlib\t300\tlec\t0\t0\t\txxxx9999xxxx9999\n' > %t/lec.tsv
+// RUN: not python3 %S/../../utils/check_opentitan_connectivity_contract_fingerprint_parity.py --bmc-resolved-contracts %t/bmc.tsv --lec-resolved-contracts %t/lec.tsv --out-parity-tsv %t/parity.tsv --fail-on-mismatch 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=PARITY < %t/parity.tsv
+//
+// LOG: contract-fingerprint parity mismatches detected
+// LOG: connectivity::chip.csv:RULE_CLK::aaaa1111aaaa1111:missing_in_lec
+// PARITY: case_id{{[[:space:]]+}}contract_fingerprint{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}allowlisted
+// PARITY: connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}aaaa1111aaaa1111{{[[:space:]]+}}missing_in_lec{{[[:space:]]+}}present{{[[:space:]]+}}absent{{[[:space:]]+}}0
+// PARITY: connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}xxxx9999xxxx9999{{[[:space:]]+}}missing_in_bmc{{[[:space:]]+}}absent{{[[:space:]]+}}present{{[[:space:]]+}}0

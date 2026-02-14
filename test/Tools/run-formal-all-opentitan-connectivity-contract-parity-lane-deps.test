@@ -1,0 +1,9 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: cp %S/../../utils/select_opentitan_connectivity_cfg.py %t/utils/select_opentitan_connectivity_cfg.py
+// RUN: printf '{\n  "name": "chip_earlgrey_asic",\n  "fusesoc_core": "lowrisc:systems:chip_earlgrey_asic:0.1",\n  "conn_csvs": []\n}\n' > %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/select_opentitan_connectivity_cfg.py
+// RUN: not bash -lc 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-connectivity-bmc --with-opentitan-connectivity-lec --opentitan %t/ot --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/CONNECTIVITY_CONTRACT_PARITY$" --opentitan-connectivity-cfg %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson --opentitan-connectivity-rule-filter ".*"' 2>&1 | FileCheck %s
+//
+// CHECK: opentitan/CONNECTIVITY_CONTRACT_PARITY requires source lanes in filter: include opentitan/CONNECTIVITY_BMC and opentitan/CONNECTIVITY_LEC

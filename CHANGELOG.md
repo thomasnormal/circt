@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1334 - February 14, 2026
+
+### OpenTitan Connectivity: Cross-Lane Contract-Fingerprint Parity Governance
+
+1. Added a new parity checker utility:
+   - `utils/check_opentitan_connectivity_contract_fingerprint_parity.py`
+   - compares BMC vs LEC connectivity resolved-contract tokens keyed as:
+     - `<case_id>::<contract_fingerprint>`
+   - supports mismatch allowlists via:
+     - `exact:`
+     - `prefix:`
+     - `regex:`
+   - emits deterministic parity artifact rows:
+     - `case_id`, `contract_fingerprint`, `kind`, `bmc`, `lec`, `allowlisted`
+2. Extended `utils/run_formal_all.sh` with contract-parity lane wiring:
+   - lane:
+     - `opentitan/CONNECTIVITY_CONTRACT_PARITY`
+   - new CLI controls:
+     - `--opentitan-connectivity-contract-parity-file`
+     - `--opentitan-connectivity-contract-parity-allowlist-file`
+     - `--fail-on-opentitan-connectivity-contract-parity`
+   - strict-gate behavior:
+     - auto-enables contract-parity fail-on when both connectivity lanes are active.
+   - lane-filter dependency enforcement:
+     - contract-parity lane now requires source lanes in filter
+       (`CONNECTIVITY_BMC` + `CONNECTIVITY_LEC`).
+3. Added focused regressions:
+   - checker-level:
+     - `test/Tools/check-opentitan-connectivity-contract-fingerprint-parity-none.test`
+     - `test/Tools/check-opentitan-connectivity-contract-fingerprint-parity-fail.test`
+     - `test/Tools/check-opentitan-connectivity-contract-fingerprint-parity-allowlist.test`
+   - formal-driver-level:
+     - `test/Tools/run-formal-all-opentitan-connectivity-contract-parity-forwarding.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-contract-parity-fail.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-contract-parity-lane-deps.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-contract-parity-allowlist-requires-gate.test`
+   - updated:
+     - `test/Tools/run-formal-all-help.test`
+4. Fixed token-splitting semantics in parity row materialization:
+   - parse now uses right split (`rsplit("::", 1)`) so connectivity case IDs
+     that already contain `::` remain intact and fingerprints are parsed correctly.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/check_opentitan_connectivity_contract_fingerprint_parity.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(check-opentitan-connectivity-contract-fingerprint-parity|run-formal-all-opentitan-connectivity-contract-parity|run-formal-all-help)'` PASS (8 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(run-formal-all-opentitan|check-opentitan-connectivity-contract-fingerprint-parity)'` PASS (73 selected)
+
 ## Iteration 1333 - February 14, 2026
 
 ### Mutation Workflow: Safe Baseline Update Guard (Failure Refusal by Default)
