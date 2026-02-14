@@ -404,12 +404,28 @@ Options:
   --fail-on-any-lec-launch-events
                          Fail when any `LEC*` lane reports
                          `lec_launch_event_rows > 0` in the current run
+  --fail-on-any-bmc-launch-reason-events
+                         Fail when any non-allowlisted BMC launch-reason
+                         event counter (`bmc_launch_reason_*_events`) is
+                         nonzero in the current run
+  --fail-on-any-lec-launch-reason-events
+                         Fail when any non-allowlisted LEC launch-reason
+                         event counter (`lec_launch_reason_*_events`) is
+                         nonzero in the current run
   --max-bmc-launch-event-rows N
                          Fail when any `BMC*` lane reports
                          `bmc_launch_event_rows > N` in the current run
   --max-lec-launch-event-rows N
                          Fail when any `LEC*` lane reports
                          `lec_launch_event_rows > N` in the current run
+  --max-bmc-launch-reason-event-rows N
+                         Fail when any `BMC*` lane reports non-allowlisted
+                         launch-reason event rows sum
+                         (`sum(bmc_launch_reason_*_events) > N`)
+  --max-lec-launch-reason-event-rows N
+                         Fail when any `LEC*` lane reports non-allowlisted
+                         launch-reason event rows sum
+                         (`sum(lec_launch_reason_*_events) > N`)
   --fail-on-new-bmc-launch-reason-keys
                          Fail when new launch reason keys derived from
                          `BMC_LAUNCH_EVENTS_OUT` appear vs baseline for any
@@ -2708,8 +2724,12 @@ FAIL_ON_ANY_LEC_TIMEOUTS=0
 FAIL_ON_ANY_LEC_RUNNER_COMMAND_CASES=0
 FAIL_ON_ANY_BMC_LAUNCH_EVENTS=0
 FAIL_ON_ANY_LEC_LAUNCH_EVENTS=0
+FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS=0
+FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS=0
 MAX_BMC_LAUNCH_EVENT_ROWS=""
 MAX_LEC_LAUNCH_EVENT_ROWS=""
+MAX_BMC_LAUNCH_REASON_EVENT_ROWS=""
+MAX_LEC_LAUNCH_REASON_EVENT_ROWS=""
 FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS=0
 FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS=0
 BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE=""
@@ -3534,10 +3554,18 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_ANY_BMC_LAUNCH_EVENTS=1; shift ;;
     --fail-on-any-lec-launch-events)
       FAIL_ON_ANY_LEC_LAUNCH_EVENTS=1; shift ;;
+    --fail-on-any-bmc-launch-reason-events)
+      FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS=1; shift ;;
+    --fail-on-any-lec-launch-reason-events)
+      FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS=1; shift ;;
     --max-bmc-launch-event-rows)
       MAX_BMC_LAUNCH_EVENT_ROWS="$2"; shift 2 ;;
     --max-lec-launch-event-rows)
       MAX_LEC_LAUNCH_EVENT_ROWS="$2"; shift 2 ;;
+    --max-bmc-launch-reason-event-rows)
+      MAX_BMC_LAUNCH_REASON_EVENT_ROWS="$2"; shift 2 ;;
+    --max-lec-launch-reason-event-rows)
+      MAX_LEC_LAUNCH_REASON_EVENT_ROWS="$2"; shift 2 ;;
     --fail-on-new-bmc-launch-reason-keys)
       FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS=1; shift ;;
     --fail-on-new-lec-launch-reason-keys)
@@ -6473,13 +6501,19 @@ if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATIO
   exit 1
 fi
 if [[ -n "$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && \
-      "$FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS" != "1" && "$STRICT_GATE" != "1" ]]; then
-  echo "--bmc-launch-reason-key-allowlist-file requires --fail-on-new-bmc-launch-reason-keys or --strict-gate" >&2
+      "$FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS" != "1" && \
+      "$FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS" != "1" && \
+      -z "$MAX_BMC_LAUNCH_REASON_EVENT_ROWS" && \
+      "$STRICT_GATE" != "1" ]]; then
+  echo "--bmc-launch-reason-key-allowlist-file requires --fail-on-new-bmc-launch-reason-keys, --fail-on-any-bmc-launch-reason-events, --max-bmc-launch-reason-event-rows, or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$LEC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && \
-      "$FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS" != "1" && "$STRICT_GATE" != "1" ]]; then
-  echo "--lec-launch-reason-key-allowlist-file requires --fail-on-new-lec-launch-reason-keys or --strict-gate" >&2
+      "$FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS" != "1" && \
+      "$FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS" != "1" && \
+      -z "$MAX_LEC_LAUNCH_REASON_EVENT_ROWS" && \
+      "$STRICT_GATE" != "1" ]]; then
+  echo "--lec-launch-reason-key-allowlist-file requires --fail-on-new-lec-launch-reason-keys, --fail-on-any-lec-launch-reason-events, --max-lec-launch-reason-event-rows, or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" && ! -r "$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" ]]; then
@@ -6814,6 +6848,16 @@ fi
 if [[ -n "$MAX_LEC_LAUNCH_EVENT_ROWS" ]] && \
    ! [[ "$MAX_LEC_LAUNCH_EVENT_ROWS" =~ ^[0-9]+$ ]]; then
   echo "invalid --max-lec-launch-event-rows: $MAX_LEC_LAUNCH_EVENT_ROWS" >&2
+  exit 1
+fi
+if [[ -n "$MAX_BMC_LAUNCH_REASON_EVENT_ROWS" ]] && \
+   ! [[ "$MAX_BMC_LAUNCH_REASON_EVENT_ROWS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --max-bmc-launch-reason-event-rows: $MAX_BMC_LAUNCH_REASON_EVENT_ROWS" >&2
+  exit 1
+fi
+if [[ -n "$MAX_LEC_LAUNCH_REASON_EVENT_ROWS" ]] && \
+   ! [[ "$MAX_LEC_LAUNCH_REASON_EVENT_ROWS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --max-lec-launch-reason-event-rows: $MAX_LEC_LAUNCH_REASON_EVENT_ROWS" >&2
   exit 1
 fi
 
@@ -18822,8 +18866,12 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_ANY_LEC_DROP_REMARKS" == "1" || \
       "$FAIL_ON_ANY_BMC_LAUNCH_EVENTS" == "1" || \
       "$FAIL_ON_ANY_LEC_LAUNCH_EVENTS" == "1" || \
+      "$FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS" == "1" || \
+      "$FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS" == "1" || \
       -n "$MAX_BMC_LAUNCH_EVENT_ROWS" || \
       -n "$MAX_LEC_LAUNCH_EVENT_ROWS" || \
+      -n "$MAX_BMC_LAUNCH_REASON_EVENT_ROWS" || \
+      -n "$MAX_LEC_LAUNCH_REASON_EVENT_ROWS" || \
       "$FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS" == "1" || \
       "$FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS" == "1" || \
       -n "$BMC_COUNTER_KEYS_CSV" || \
@@ -18943,8 +18991,12 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_ANY_LEC_DROP_REMARKS="$FAIL_ON_ANY_LEC_DROP_REMARKS" \
   FAIL_ON_ANY_BMC_LAUNCH_EVENTS="$FAIL_ON_ANY_BMC_LAUNCH_EVENTS" \
   FAIL_ON_ANY_LEC_LAUNCH_EVENTS="$FAIL_ON_ANY_LEC_LAUNCH_EVENTS" \
+  FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS="$FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS" \
+  FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS="$FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS" \
   MAX_BMC_LAUNCH_EVENT_ROWS="$MAX_BMC_LAUNCH_EVENT_ROWS" \
   MAX_LEC_LAUNCH_EVENT_ROWS="$MAX_LEC_LAUNCH_EVENT_ROWS" \
+  MAX_BMC_LAUNCH_REASON_EVENT_ROWS="$MAX_BMC_LAUNCH_REASON_EVENT_ROWS" \
+  MAX_LEC_LAUNCH_REASON_EVENT_ROWS="$MAX_LEC_LAUNCH_REASON_EVENT_ROWS" \
   FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS="$FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS" \
   FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS="$FAIL_ON_NEW_LEC_LAUNCH_REASON_KEYS" \
   BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE="$BMC_LAUNCH_REASON_KEY_ALLOWLIST_FILE" \
@@ -21555,6 +21607,12 @@ fail_on_any_bmc_launch_events = (
 fail_on_any_lec_launch_events = (
     os.environ.get("FAIL_ON_ANY_LEC_LAUNCH_EVENTS", "0") == "1"
 )
+fail_on_any_bmc_launch_reason_events = (
+    os.environ.get("FAIL_ON_ANY_BMC_LAUNCH_REASON_EVENTS", "0") == "1"
+)
+fail_on_any_lec_launch_reason_events = (
+    os.environ.get("FAIL_ON_ANY_LEC_LAUNCH_REASON_EVENTS", "0") == "1"
+)
 max_bmc_launch_event_rows_raw = os.environ.get("MAX_BMC_LAUNCH_EVENT_ROWS", "").strip()
 max_lec_launch_event_rows_raw = os.environ.get("MAX_LEC_LAUNCH_EVENT_ROWS", "").strip()
 max_bmc_launch_event_rows = (
@@ -21562,6 +21620,22 @@ max_bmc_launch_event_rows = (
 )
 max_lec_launch_event_rows = (
     int(max_lec_launch_event_rows_raw) if max_lec_launch_event_rows_raw else -1
+)
+max_bmc_launch_reason_event_rows_raw = os.environ.get(
+    "MAX_BMC_LAUNCH_REASON_EVENT_ROWS", ""
+).strip()
+max_lec_launch_reason_event_rows_raw = os.environ.get(
+    "MAX_LEC_LAUNCH_REASON_EVENT_ROWS", ""
+).strip()
+max_bmc_launch_reason_event_rows = (
+    int(max_bmc_launch_reason_event_rows_raw)
+    if max_bmc_launch_reason_event_rows_raw
+    else -1
+)
+max_lec_launch_reason_event_rows = (
+    int(max_lec_launch_reason_event_rows_raw)
+    if max_lec_launch_reason_event_rows_raw
+    else -1
 )
 fail_on_new_bmc_launch_reason_keys = (
     os.environ.get("FAIL_ON_NEW_BMC_LAUNCH_REASON_KEYS", "0") == "1"
@@ -22501,6 +22575,63 @@ for key, current_row in summary.items():
                 ),
                 rule_id="strict_gate.bmc.launch.event_rows.max_exceeded",
             )
+        current_bmc_reason_event_counts = {}
+        for counter_key, counter_value in current_counts.items():
+            reason_key = bmc_launch_reason_from_counter_key(counter_key)
+            if not reason_key:
+                continue
+            try:
+                event_rows = int(counter_value)
+            except (TypeError, ValueError):
+                event_rows = 0
+            if event_rows < 0:
+                event_rows = 0
+            current_bmc_reason_event_counts[reason_key] = event_rows
+        current_bmc_reason_event_rows_total = sum(
+            current_bmc_reason_event_counts.values()
+        )
+        current_bmc_reason_event_rows_allowlisted = 0
+        current_bmc_reason_event_rows_nonallowlisted = 0
+        for reason_key, event_rows in current_bmc_reason_event_counts.items():
+            if (
+                bmc_launch_reason_key_allowlist_file
+                and is_allowed_bmc_launch_reason_key(reason_key)
+            ):
+                current_bmc_reason_event_rows_allowlisted += event_rows
+            else:
+                current_bmc_reason_event_rows_nonallowlisted += event_rows
+        if (
+            fail_on_any_bmc_launch_reason_events
+            and current_bmc_reason_event_rows_nonallowlisted > 0
+        ):
+            gate_errors.add(
+                suite,
+                mode,
+                (
+                    "non-allowlisted bmc_launch_reason_*_events must be zero "
+                    f"(current_nonallowlisted={current_bmc_reason_event_rows_nonallowlisted}, "
+                    f"current_total={current_bmc_reason_event_rows_total}, "
+                    f"allowlisted={current_bmc_reason_event_rows_allowlisted})"
+                ),
+                rule_id="strict_gate.bmc.launch.reason_event_rows.nonallowlisted.nonzero",
+            )
+        if (
+            max_bmc_launch_reason_event_rows >= 0
+            and current_bmc_reason_event_rows_nonallowlisted
+            > max_bmc_launch_reason_event_rows
+        ):
+            gate_errors.add(
+                suite,
+                mode,
+                (
+                    "non-allowlisted bmc_launch_reason_*_events exceeds max "
+                    f"(max={max_bmc_launch_reason_event_rows}, "
+                    f"current_nonallowlisted={current_bmc_reason_event_rows_nonallowlisted}, "
+                    f"current_total={current_bmc_reason_event_rows_total}, "
+                    f"allowlisted={current_bmc_reason_event_rows_allowlisted})"
+                ),
+                rule_id="strict_gate.bmc.launch.reason_event_rows.nonallowlisted.max_exceeded",
+            )
         if fail_on_new_bmc_launch_reason_keys:
             baseline_reason_keys = set()
             for counts in parsed_counts:
@@ -22512,11 +22643,7 @@ for key, current_row in summary.items():
                 bool(baseline_reason_keys) or not strict_gate
             )
             if should_enforce_launch_reason_key_drift:
-                current_reason_keys = set()
-                for counter_key in current_counts.keys():
-                    reason_key = bmc_launch_reason_from_counter_key(counter_key)
-                    if reason_key:
-                        current_reason_keys.add(reason_key)
+                current_reason_keys = set(current_bmc_reason_event_counts.keys())
                 raw_new_reason_keys = sorted(current_reason_keys - baseline_reason_keys)
                 if bmc_launch_reason_key_allowlist_file:
                     new_reason_keys = [
@@ -22893,6 +23020,63 @@ for key, current_row in summary.items():
                 ),
                 rule_id="strict_gate.lec.launch.event_rows.max_exceeded",
             )
+        current_lec_reason_event_counts = {}
+        for counter_key, counter_value in current_counts.items():
+            reason_key = lec_launch_reason_from_counter_key(counter_key)
+            if not reason_key:
+                continue
+            try:
+                event_rows = int(counter_value)
+            except (TypeError, ValueError):
+                event_rows = 0
+            if event_rows < 0:
+                event_rows = 0
+            current_lec_reason_event_counts[reason_key] = event_rows
+        current_lec_reason_event_rows_total = sum(
+            current_lec_reason_event_counts.values()
+        )
+        current_lec_reason_event_rows_allowlisted = 0
+        current_lec_reason_event_rows_nonallowlisted = 0
+        for reason_key, event_rows in current_lec_reason_event_counts.items():
+            if (
+                lec_launch_reason_key_allowlist_file
+                and is_allowed_lec_launch_reason_key(reason_key)
+            ):
+                current_lec_reason_event_rows_allowlisted += event_rows
+            else:
+                current_lec_reason_event_rows_nonallowlisted += event_rows
+        if (
+            fail_on_any_lec_launch_reason_events
+            and current_lec_reason_event_rows_nonallowlisted > 0
+        ):
+            gate_errors.add(
+                suite,
+                mode,
+                (
+                    "non-allowlisted lec_launch_reason_*_events must be zero "
+                    f"(current_nonallowlisted={current_lec_reason_event_rows_nonallowlisted}, "
+                    f"current_total={current_lec_reason_event_rows_total}, "
+                    f"allowlisted={current_lec_reason_event_rows_allowlisted})"
+                ),
+                rule_id="strict_gate.lec.launch.reason_event_rows.nonallowlisted.nonzero",
+            )
+        if (
+            max_lec_launch_reason_event_rows >= 0
+            and current_lec_reason_event_rows_nonallowlisted
+            > max_lec_launch_reason_event_rows
+        ):
+            gate_errors.add(
+                suite,
+                mode,
+                (
+                    "non-allowlisted lec_launch_reason_*_events exceeds max "
+                    f"(max={max_lec_launch_reason_event_rows}, "
+                    f"current_nonallowlisted={current_lec_reason_event_rows_nonallowlisted}, "
+                    f"current_total={current_lec_reason_event_rows_total}, "
+                    f"allowlisted={current_lec_reason_event_rows_allowlisted})"
+                ),
+                rule_id="strict_gate.lec.launch.reason_event_rows.nonallowlisted.max_exceeded",
+            )
         if fail_on_new_lec_launch_reason_keys:
             baseline_reason_keys = set()
             for counts in parsed_counts:
@@ -22904,11 +23088,7 @@ for key, current_row in summary.items():
                 bool(baseline_reason_keys) or not strict_gate
             )
             if should_enforce_launch_reason_key_drift:
-                current_reason_keys = set()
-                for counter_key in current_counts.keys():
-                    reason_key = lec_launch_reason_from_counter_key(counter_key)
-                    if reason_key:
-                        current_reason_keys.add(reason_key)
+                current_reason_keys = set(current_lec_reason_event_counts.keys())
                 raw_new_reason_keys = sorted(current_reason_keys - baseline_reason_keys)
                 if lec_launch_reason_key_allowlist_file:
                     new_reason_keys = [

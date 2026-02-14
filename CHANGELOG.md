@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1409 - February 14, 2026
+
+### Formal Strict-Gate: BMC/LEC Launch Reason-Event Budget Policies
+
+1. Extended `utils/run_formal_all.sh` with first-class launch reason-event
+   budget controls:
+   - `--fail-on-any-bmc-launch-reason-events`
+   - `--fail-on-any-lec-launch-reason-events`
+   - `--max-bmc-launch-reason-event-rows`
+   - `--max-lec-launch-reason-event-rows`
+2. Added strict-gate enforcement for non-allowlisted reason-event rows in both
+   BMC and LEC lanes:
+   - nonzero gate: fail when non-allowlisted reason-event rows are nonzero.
+   - max gate: fail when non-allowlisted reason-event rows exceed configured
+     per-lane threshold.
+3. Integrated reason-event budget policies with existing launch reason-key
+   allowlists:
+   - allowlisted reason keys are excluded from reason-event budget violations.
+   - allowlist precondition checks now accept reason-event budget gates in
+     addition to new-reason-key drift mode and strict-gate.
+4. Added/updated focused regressions:
+   - `test/Tools/run-formal-all-strict-gate-bmc-launch-reason-events-budget.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-launch-reason-events-budget.test`
+   - `test/Tools/run-formal-all-launch-reason-key-allowlists-require-gate.test`
+5. Validation:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-formal-all-launch-reason-key-allowlists-require-gate.test build-test/test/Tools/run-formal-all-strict-gate-bmc-launch-reason-events-budget.test build-test/test/Tools/run-formal-all-strict-gate-lec-launch-reason-events-budget.test` PASS
+
 ## Iteration 1408 - February 14, 2026
 
 ### OpenTitan FPV BMC: Cache Controls in Policy Workflow Wrappers
