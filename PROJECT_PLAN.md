@@ -218,6 +218,23 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - `utils/run_opentitan_fpv_bmc_policy_profiles.sh --profile prim_all`
        (`BMC_SMOKE_ONLY=1`, explicit `build-test` toolchain) now passes:
        `total=1 pass=1 error=0`.
+20a. OpenTitan FPV objective-parity projected-evidence governance completed:
+   - `utils/check_opentitan_fpv_objective_parity.py` now preserves lane
+     evidence/reason metadata in parity TSV rows:
+     - `bmc_evidence`, `lec_evidence`, `bmc_reason`, `lec_reason`.
+   - `run_formal_all.sh` now reports projected-reason parity counters:
+     - `fpv_objective_parity_projected_rows`
+     - `fpv_objective_parity_projected_non_allowlisted_rows`
+     - `fpv_objective_parity_projected_assertion_rows`
+     - `fpv_objective_parity_projected_cover_rows`.
+   - this closes a visibility gap for native FPV LEC auto-produced evidence
+     (`projected_case_*`) and makes strict-gate triage auditable at objective
+     row granularity.
+20b. Remaining high-priority limitation (objective parity depth):
+   - objective parity status governance is now projected-reason aware, but
+     parity still compares normalized status classes only and does not yet
+     enforce reason-class contracts (e.g. `projected_case_eq` vs
+     `projected_case_unknown`) as a fail condition.
 21. Frontend macro-compat retry hardening completed for FPV BMC ingestion:
    - added external preprocessor retry controls in
      `run_pairwise_circt_bmc.py`:

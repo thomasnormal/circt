@@ -14893,6 +14893,10 @@ run_opentitan_fpv_objective_parity_lane() {
   local parity_cover_status_rows=0
   local parity_assertion_non_allowlisted_rows=0
   local parity_cover_non_allowlisted_rows=0
+  local parity_projected_rows=0
+  local parity_projected_non_allowlisted_rows=0
+  local parity_projected_assertion_rows=0
+  local parity_projected_cover_rows=0
   if [[ -n "$parity_file" && -f "$parity_file" ]]; then
     local parity_counts
     parity_counts="$(
@@ -14911,6 +14915,10 @@ assertion_status_rows = 0
 cover_status_rows = 0
 assertion_non_allowlisted_rows = 0
 cover_non_allowlisted_rows = 0
+projected_rows = 0
+projected_non_allowlisted_rows = 0
+projected_assertion_rows = 0
+projected_cover_rows = 0
 if path.is_file():
   with path.open(encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
@@ -14920,26 +14928,41 @@ if path.is_file():
         objective_class = (row.get("objective_class") or "").strip()
         kind = (row.get("kind") or "").strip()
         is_allowlisted = (row.get("allowlisted") or "").strip() == "1"
+        bmc_reason = (row.get("bmc_reason") or "").strip()
+        lec_reason = (row.get("lec_reason") or "").strip()
+        is_projected = bmc_reason.startswith("projected_case_") or lec_reason.startswith(
+            "projected_case_"
+        )
         if objective_class == "assertion":
           assertion_rows += 1
           if not is_allowlisted:
             assertion_non_allowlisted_rows += 1
+          if is_projected:
+            projected_assertion_rows += 1
         elif objective_class == "cover":
           cover_rows += 1
           if not is_allowlisted:
             cover_non_allowlisted_rows += 1
+          if is_projected:
+            projected_cover_rows += 1
         if kind.startswith("missing_in_"):
           missing_rows += 1
         elif kind == "assertion_status":
           assertion_status_rows += 1
         elif kind == "cover_status":
           cover_status_rows += 1
+        if is_projected:
+          projected_rows += 1
+          if not is_allowlisted:
+            projected_non_allowlisted_rows += 1
         if is_allowlisted:
           allowlisted += 1
 print(
     f"{total}\t{allowlisted}\t{assertion_rows}\t{cover_rows}\t{missing_rows}\t"
     f"{assertion_status_rows}\t{cover_status_rows}\t"
-    f"{assertion_non_allowlisted_rows}\t{cover_non_allowlisted_rows}"
+    f"{assertion_non_allowlisted_rows}\t{cover_non_allowlisted_rows}\t"
+    f"{projected_rows}\t{projected_non_allowlisted_rows}\t"
+    f"{projected_assertion_rows}\t{projected_cover_rows}"
 )
 PY
     )"
@@ -14947,7 +14970,9 @@ PY
       parity_total_rows parity_allowlisted_rows \
       parity_assertion_rows parity_cover_rows parity_missing_rows \
       parity_assertion_status_rows parity_cover_status_rows \
-      parity_assertion_non_allowlisted_rows parity_cover_non_allowlisted_rows <<< "$parity_counts"
+      parity_assertion_non_allowlisted_rows parity_cover_non_allowlisted_rows \
+      parity_projected_rows parity_projected_non_allowlisted_rows \
+      parity_projected_assertion_rows parity_projected_cover_rows <<< "$parity_counts"
   fi
   local parity_non_allowlisted_rows=$((parity_total_rows - parity_allowlisted_rows))
   if (( parity_non_allowlisted_rows < 0 )); then
@@ -14966,7 +14991,7 @@ PY
   else
     error=1
   fi
-  local summary="total=1 pass=${pass} fail=0 xfail=0 xpass=0 error=${error} skip=0 fpv_objective_parity_rows=${parity_total_rows} fpv_objective_parity_non_allowlisted_rows=${parity_non_allowlisted_rows} fpv_objective_parity_allowlisted_rows=${parity_allowlisted_rows} fpv_objective_parity_assertion_rows=${parity_assertion_rows} fpv_objective_parity_cover_rows=${parity_cover_rows} fpv_objective_parity_missing_rows=${parity_missing_rows} fpv_objective_parity_assertion_status_rows=${parity_assertion_status_rows} fpv_objective_parity_cover_status_rows=${parity_cover_status_rows} fpv_objective_parity_assertion_non_allowlisted_rows=${parity_assertion_non_allowlisted_rows} fpv_objective_parity_cover_non_allowlisted_rows=${parity_cover_non_allowlisted_rows}"
+  local summary="total=1 pass=${pass} fail=0 xfail=0 xpass=0 error=${error} skip=0 fpv_objective_parity_rows=${parity_total_rows} fpv_objective_parity_non_allowlisted_rows=${parity_non_allowlisted_rows} fpv_objective_parity_allowlisted_rows=${parity_allowlisted_rows} fpv_objective_parity_assertion_rows=${parity_assertion_rows} fpv_objective_parity_cover_rows=${parity_cover_rows} fpv_objective_parity_missing_rows=${parity_missing_rows} fpv_objective_parity_assertion_status_rows=${parity_assertion_status_rows} fpv_objective_parity_cover_status_rows=${parity_cover_status_rows} fpv_objective_parity_assertion_non_allowlisted_rows=${parity_assertion_non_allowlisted_rows} fpv_objective_parity_cover_non_allowlisted_rows=${parity_cover_non_allowlisted_rows} fpv_objective_parity_projected_rows=${parity_projected_rows} fpv_objective_parity_projected_non_allowlisted_rows=${parity_projected_non_allowlisted_rows} fpv_objective_parity_projected_assertion_rows=${parity_projected_assertion_rows} fpv_objective_parity_projected_cover_rows=${parity_projected_cover_rows}"
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
 }
 

@@ -7,5 +7,5 @@
 //
 // LOG: opentitan fpv objective parity mismatches detected
 // LOG: assertion::foo_fpv::foo_tb::a0000:assertion_status
-// PARITY: objective_id{{[[:space:]]+}}objective_class{{[[:space:]]+}}target_name{{[[:space:]]+}}case_id{{[[:space:]]+}}objective_key{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}bmc_case_path{{[[:space:]]+}}lec_case_path{{[[:space:]]+}}allowlisted
-// PARITY: assertion::foo_fpv::foo_tb::a0000{{[[:space:]]+}}assertion{{[[:space:]]+}}foo_fpv{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}foo_fpv::foo_tb::a0000{{[[:space:]]+}}assertion_status{{[[:space:]]+}}proven{{[[:space:]]+}}failing{{[[:space:]]+}}/tmp/foo.sv{{[[:space:]]+}}/tmp/foo.sv{{[[:space:]]+}}0
+// PARITY: objective_id{{[[:space:]]+}}objective_class{{[[:space:]]+}}target_name{{[[:space:]]+}}case_id{{[[:space:]]+}}objective_key{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}bmc_case_path{{[[:space:]]+}}lec_case_path{{[[:space:]]+}}bmc_evidence{{[[:space:]]+}}lec_evidence{{[[:space:]]+}}bmc_reason{{[[:space:]]+}}lec_reason{{[[:space:]]+}}allowlisted
+// PARITY: assertion::foo_fpv::foo_tb::a0000{{[[:space:]]+}}assertion{{[[:space:]]+}}foo_fpv{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}foo_fpv::foo_tb::a0000{{[[:space:]]+}}assertion_status{{[[:space:]]+}}proven{{[[:space:]]+}}failing{{[[:space:]]+}}/tmp/foo.sv{{[[:space:]]+}}/tmp/foo.sv{{[[:space:]]+}}UNSAT{{[[:space:]]+}}SAT{{[[:space:]]+}}unsat{{[[:space:]]+}}sat{{[[:space:]]+}}0
