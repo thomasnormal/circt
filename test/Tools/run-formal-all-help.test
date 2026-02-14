@@ -141,6 +141,11 @@
 // CHECK: --opentitan-fpv-bmc-target-shard-index
 // CHECK: --select-cfgs
 // CHECK: --opentitan-fpv-target-manifest
+// CHECK: --opentitan-fpv-target-manifest-baseline-file
+// CHECK: --opentitan-fpv-target-manifest-drift-file
+// CHECK: --opentitan-fpv-target-manifest-drift-allowlist-file
+// CHECK: --update-opentitan-fpv-target-manifest-baseline
+// CHECK: --fail-on-opentitan-fpv-target-manifest-drift
 // CHECK: --opentitan-fpv-compile-contracts
 // CHECK: --opentitan-fpv-compile-contracts-baseline-file
 // CHECK: --opentitan-fpv-compile-contract-drift-file

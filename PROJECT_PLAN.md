@@ -77,14 +77,19 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
    - `--{bmc,lec}-launch-reason-key-allowlist-file`
    - allowlisted reason keys no longer cause strict-gate prefix drift on
      dynamic `*_launch_reason_*_events` counters.
-3. Remaining launch-governance gap:
-   - no dedicated baseline sidecar artifact yet for launch reason taxonomy
-     ownership across repos (currently baseline TSV + optional allowlist file).
-4. Next formal milestone (OpenTitan-aligned, backend-generic):
-   - start adapter workstream step 1 deliverable:
-     deterministic OpenTitan FPV HJSON target-manifest export with
-     `--select-cfgs` parity (`ip`, `prim`, `sec_cm`) and strict-gate drift
-     checks on selected-target metadata.
+3. OpenTitan FPV target-selection governance completed:
+   - added baseline/update/fail/allowlist controls for
+     `opentitan-fpv-target-manifest.tsv` drift.
+   - strict-gate now auto-enforces target-manifest drift when a target-manifest
+     baseline is configured.
+4. Remaining limitation vs Jasper/VCF-style mature flows:
+   - per-assertion semantic status parity remains partial (especially vacuity/
+     unreachable classification and richer task-level diagnostics).
+5. Next formal milestone (OpenTitan-aligned, backend-generic):
+   - strengthen compile-contract parity and FPV task-policy coverage:
+     - tighten stopat/blackbox task-profile propagation checks (`FpvSecCm`).
+     - add strict drift governance for task-policy metadata alongside compile
+       contracts and target manifests.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 

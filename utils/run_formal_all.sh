@@ -1150,6 +1150,23 @@ Options:
                          Optional output path for selected OpenTitan FPV target
                          manifest TSV (default:
                          OUT_DIR/opentitan-fpv-target-manifest.tsv)
+  --opentitan-fpv-target-manifest-baseline-file FILE
+                         Optional baseline OpenTitan FPV target-manifest TSV
+                         for drift checks
+  --opentitan-fpv-target-manifest-drift-file FILE
+                         Optional output path for OpenTitan FPV target-manifest
+                         drift TSV (default:
+                         OUT_DIR/opentitan-fpv-target-manifest-drift.tsv
+                         when baseline is set)
+  --opentitan-fpv-target-manifest-drift-allowlist-file FILE
+                         Optional allowlist file for OpenTitan FPV target-manifest
+                         drift checks (target-level exact/prefix/regex)
+  --update-opentitan-fpv-target-manifest-baseline
+                         Update --opentitan-fpv-target-manifest-baseline-file with
+                         the current OpenTitan FPV target-manifest artifact
+  --fail-on-opentitan-fpv-target-manifest-drift
+                         Fail when OpenTitan FPV target-manifest drift checker
+                         reports non-allowlisted drift
   --opentitan-fpv-compile-contracts FILE
                          Optional output path for OpenTitan FPV compile
                          contracts TSV (default:
@@ -2871,6 +2888,9 @@ OPENTITAN_FPV_BMC_COVER_SHARD_COUNT="1"
 OPENTITAN_FPV_BMC_COVER_SHARD_INDEX="0"
 declare -a OPENTITAN_SELECT_CFGS=()
 OPENTITAN_FPV_TARGET_MANIFEST_FILE=""
+OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE=""
+OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_FILE=""
+OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE=""
 OPENTITAN_FPV_COMPILE_CONTRACTS_FILE=""
 OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE=""
 OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE=""
@@ -2883,6 +2903,8 @@ OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE=""
 OPENTITAN_FPV_FUSESOC_BIN="fusesoc"
 OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR=""
 OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR=0
+UPDATE_OPENTITAN_FPV_TARGET_MANIFEST_BASELINE=0
+FAIL_ON_OPENTITAN_FPV_TARGET_MANIFEST_DRIFT=0
 UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE=0
 FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=0
 UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE=0
@@ -3081,6 +3103,12 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_SELECT_CFGS+=("$2"); shift 2 ;;
     --opentitan-fpv-target-manifest)
       OPENTITAN_FPV_TARGET_MANIFEST_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-target-manifest-baseline-file)
+      OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-target-manifest-drift-file)
+      OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-target-manifest-drift-allowlist-file)
+      OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE="$2"; shift 2 ;;
     --opentitan-fpv-compile-contracts)
       OPENTITAN_FPV_COMPILE_CONTRACTS_FILE="$2"; shift 2 ;;
     --opentitan-fpv-compile-contracts-baseline-file)
@@ -3105,6 +3133,10 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR="$2"; shift 2 ;;
     --opentitan-fpv-compile-contracts-keep-workdir)
       OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR=1; shift ;;
+    --update-opentitan-fpv-target-manifest-baseline)
+      UPDATE_OPENTITAN_FPV_TARGET_MANIFEST_BASELINE=1; shift ;;
+    --fail-on-opentitan-fpv-target-manifest-drift)
+      FAIL_ON_OPENTITAN_FPV_TARGET_MANIFEST_DRIFT=1; shift ;;
     --update-opentitan-fpv-compile-contracts-baseline)
       UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE=1; shift ;;
     --fail-on-opentitan-fpv-compile-contract-drift)
@@ -3733,6 +3765,9 @@ fi
 if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 && -z "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" ]]; then
   OPENTITAN_FPV_TARGET_MANIFEST_FILE="$OUT_DIR/opentitan-fpv-target-manifest.tsv"
 fi
+if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 && -n "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE" && -z "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_FILE" ]]; then
+  OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_FILE="$OUT_DIR/opentitan-fpv-target-manifest-drift.tsv"
+fi
 if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 && -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE" ]]; then
   OPENTITAN_FPV_COMPILE_CONTRACTS_FILE="$OUT_DIR/opentitan-fpv-compile-contracts.tsv"
 fi
@@ -4279,6 +4314,18 @@ if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" && "${#OPENTITAN_FPV_CFG_FILES[@]
   echo "--opentitan-fpv-target-manifest requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
+if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
+  echo "--opentitan-fpv-target-manifest-baseline-file requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_FILE" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
+  echo "--opentitan-fpv-target-manifest-drift-file requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
+  echo "--opentitan-fpv-target-manifest-drift-allowlist-file requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
 if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--opentitan-fpv-compile-contracts requires --opentitan-fpv-cfg" >&2
   exit 1
@@ -4301,6 +4348,14 @@ if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR" && "${#OPENTITAN_FPV_CFG_FIL
 fi
 if [[ "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--opentitan-fpv-compile-contracts-keep-workdir requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ "$UPDATE_OPENTITAN_FPV_TARGET_MANIFEST_BASELINE" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
+  echo "--update-opentitan-fpv-target-manifest-baseline requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_TARGET_MANIFEST_DRIFT" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
+  echo "--fail-on-opentitan-fpv-target-manifest-drift requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
 if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
@@ -4359,6 +4414,22 @@ if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY" == "1" && "$WITH_OPENTITAN_FP
   echo "--fail-on-opentitan-fpv-bmc-evidence-parity requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
+if [[ "$UPDATE_OPENTITAN_FPV_TARGET_MANIFEST_BASELINE" == "1" && -z "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE" ]]; then
+  echo "--update-opentitan-fpv-target-manifest-baseline requires --opentitan-fpv-target-manifest-baseline-file" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_TARGET_MANIFEST_DRIFT" == "1" && -z "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE" ]]; then
+  echo "--fail-on-opentitan-fpv-target-manifest-drift requires --opentitan-fpv-target-manifest-baseline-file" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_TARGET_MANIFEST_BASELINE" != "1" && ! -f "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE" ]]; then
+  echo "missing --opentitan-fpv-target-manifest-baseline-file: $OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE" >&2
+  exit 1
+fi
+if [[ "$UPDATE_OPENTITAN_FPV_TARGET_MANIFEST_BASELINE" == "1" && "$FAIL_ON_OPENTITAN_FPV_TARGET_MANIFEST_DRIFT" == "1" ]]; then
+  echo "--update-opentitan-fpv-target-manifest-baseline cannot be combined with --fail-on-opentitan-fpv-target-manifest-drift" >&2
+  exit 1
+fi
 if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" && -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
   echo "--update-opentitan-fpv-compile-contracts-baseline requires --opentitan-fpv-compile-contracts-baseline-file" >&2
   exit 1
@@ -4389,6 +4460,10 @@ if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_BM
 fi
 if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" ]]; then
   echo "OpenTitan FPV compile-contract drift allowlist file not readable: $OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE" ]]; then
+  echo "OpenTitan FPV target-manifest drift allowlist file not readable: $OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" ]]; then
@@ -5932,6 +6007,9 @@ fi
 if [[ "$STRICT_GATE" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 && -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=1
 fi
+if [[ "$STRICT_GATE" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 && -n "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE" ]]; then
+  FAIL_ON_OPENTITAN_FPV_TARGET_MANIFEST_DRIFT=1
+fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=1
 fi
@@ -5967,6 +6045,10 @@ if [[ "$STRICT_GATE" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 ]]; then
 fi
 if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--opentitan-fpv-compile-contract-drift-allowlist-file requires --fail-on-opentitan-fpv-compile-contract-drift or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_TARGET_MANIFEST_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--opentitan-fpv-target-manifest-drift-allowlist-file requires --fail-on-opentitan-fpv-target-manifest-drift or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -8292,6 +8374,38 @@ if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 ]]; then
     --out-manifest "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" \
     "${opentitan_select_cfg_args[@]}"
 
+  if [[ "$UPDATE_OPENTITAN_FPV_TARGET_MANIFEST_BASELINE" == "1" ]]; then
+    mkdir -p "$(dirname "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE")"
+    cp -f "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" \
+      "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE"
+  fi
+
+  if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE" ]]; then
+    opentitan_target_manifest_drift_args=(
+      --baseline "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE"
+      --current "$OPENTITAN_FPV_TARGET_MANIFEST_FILE"
+      --out-drift-tsv "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_FILE"
+    )
+    if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE" ]]; then
+      opentitan_target_manifest_drift_args+=(
+        --allowlist-file "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE"
+      )
+    fi
+    if [[ "$FAIL_ON_OPENTITAN_FPV_TARGET_MANIFEST_DRIFT" == "1" ]]; then
+      python3 "$SCRIPT_DIR/check_opentitan_target_manifest_drift.py" \
+        "${opentitan_target_manifest_drift_args[@]}"
+    else
+      set +e
+      python3 "$SCRIPT_DIR/check_opentitan_target_manifest_drift.py" \
+        "${opentitan_target_manifest_drift_args[@]}"
+      opentitan_target_manifest_drift_ec="$?"
+      set -e
+      if [[ "$opentitan_target_manifest_drift_ec" != "0" ]]; then
+        echo "warning: OpenTitan FPV target-manifest drift detected (non-fatal; enable --fail-on-opentitan-fpv-target-manifest-drift to fail)" >&2
+      fi
+    fi
+  fi
+
   opentitan_contract_resolver_args=(
     --manifest "$OPENTITAN_FPV_TARGET_MANIFEST_FILE"
     --opentitan-root "$OPENTITAN_DIR"
@@ -8553,6 +8667,9 @@ compute_lane_state_config_hash() {
     printf "opentitan_fpv_bmc_cover_shard_count=%s\n" "$OPENTITAN_FPV_BMC_COVER_SHARD_COUNT"
     printf "opentitan_fpv_bmc_cover_shard_index=%s\n" "$OPENTITAN_FPV_BMC_COVER_SHARD_INDEX"
     printf "opentitan_fpv_target_manifest_file=%s\n" "$OPENTITAN_FPV_TARGET_MANIFEST_FILE"
+    printf "opentitan_fpv_target_manifest_baseline_file=%s\n" "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE"
+    printf "opentitan_fpv_target_manifest_drift_file=%s\n" "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_FILE"
+    printf "opentitan_fpv_target_manifest_drift_allowlist_file=%s\n" "$OPENTITAN_FPV_TARGET_MANIFEST_DRIFT_ALLOWLIST_FILE"
     printf "opentitan_fpv_compile_contracts_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE"
     printf "opentitan_fpv_compile_contracts_baseline_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE"
     printf "opentitan_fpv_compile_contract_drift_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE"
@@ -8565,6 +8682,8 @@ compute_lane_state_config_hash() {
     printf "opentitan_fpv_fusesoc_bin=%s\n" "$OPENTITAN_FPV_FUSESOC_BIN"
     printf "opentitan_fpv_compile_contracts_workdir=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR"
     printf "opentitan_fpv_compile_contracts_keep_workdir=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR"
+    printf "update_opentitan_fpv_target_manifest_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_TARGET_MANIFEST_BASELINE"
+    printf "fail_on_opentitan_fpv_target_manifest_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_TARGET_MANIFEST_DRIFT"
     printf "update_opentitan_fpv_compile_contracts_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE"
     printf "fail_on_opentitan_fpv_compile_contract_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT"
     printf "update_opentitan_fpv_bmc_summary_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE"
