@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1359 - February 14, 2026
+
+### Mutation Workflow: Retry-Reason Baseline Drift Governance
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with retry-reason baseline
+   drift mode:
+   - new options:
+     - `--retry-reason-baseline-file FILE`
+     - `--fail-on-retry-reason-diff`
+   - default retry-reason baseline sidecar when `--baseline-file` is set:
+     - `<baseline-file>.retry-reason-summary.tsv`.
+2. Added retry-reason summary artifact generation:
+   - new output: `<out-dir>/retry-reason-summary.tsv`
+   - schema: `retry_reason`, `retries`.
+3. Added retry-reason drift reporting:
+   - new output: `<out-dir>/retry-reason-drift.tsv`
+   - regressions trigger on:
+     - per-reason retry count increase,
+     - newly introduced retry reasons,
+     - suite-level total retry increase,
+     - duplicate reason rows in baseline/current files.
+4. Extended baseline update flow:
+   - `--update-baseline` now also writes retry-reason sidecar baseline file.
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-fail-on-retry-reason-diff-requires-baseline.test`
+   - `test/Tools/run-mutation-mcy-examples-retry-reason-drift-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-update-baseline-conflicts-retry-reason-diff.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+     - `test/Tools/run-mutation-mcy-examples-baseline-update.test`.
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (87 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --baseline-file /tmp/mcy_retry_reason_baseline.tsv --update-baseline --out-dir /tmp/mcy_retry_reason_update` PASS
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --baseline-file /tmp/mcy_retry_reason_baseline.tsv --fail-on-retry-reason-diff --out-dir /tmp/mcy_retry_reason_drift_check` PASS
+
 ## Iteration 1358 - February 14, 2026
 
 ### Formal Lanes: BMC Launch-Event Parity for Verilator/Yosys

@@ -1,0 +1,4 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --fail-on-retry-reason-diff 2>&1 | FileCheck %s
+
+// CHECK: --fail-on-retry-reason-diff requires --retry-reason-baseline-file or --baseline-file

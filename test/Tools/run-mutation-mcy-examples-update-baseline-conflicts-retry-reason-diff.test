@@ -1,0 +1,6 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --baseline-file %t/baseline.tsv \
+// RUN:   --update-baseline \
+// RUN:   --fail-on-retry-reason-diff 2>&1 | FileCheck %s
+
+// CHECK: Use either --update-baseline or --fail-on-retry-reason-diff, not both.

@@ -31,6 +31,8 @@
 // CHECK-DAG: --max-total-retries
 // CHECK-DAG: --max-total-retries-by-reason
 // CHECK-DAG: --baseline-file
+// CHECK-DAG: --retry-reason-baseline-file
+// CHECK-DAG: --fail-on-retry-reason-diff
 // CHECK-DAG: --update-baseline
 // CHECK-DAG: --allow-update-baseline-on-failure
 // CHECK-DAG: --migrate-baseline-schema-artifacts
