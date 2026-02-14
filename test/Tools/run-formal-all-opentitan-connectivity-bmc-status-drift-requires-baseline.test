@@ -1,0 +1,14 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal/conn_csvs
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '{\n  "name": "chip_earlgrey_asic",\n  "fusesoc_core": "lowrisc:systems:chip_earlgrey_asic:0.1",\n  "conn_csvs_dir": "{proj_root}/hw/top_earlgrey/formal/conn_csvs",\n  "conn_csvs": ["{conn_csvs_dir}/chip.csv"]\n}\n' > %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson
+// RUN: printf ',NAME,SRC BLOCK,SRC SIGNAL,DEST BLOCK,DEST SIGNAL\nCONNECTION, RULE_CLK, top_earlgrey.u_src, clk_o, top_earlgrey.u_dst, clk_i\n' > %t/ot/hw/top_earlgrey/formal/conn_csvs/chip.csv
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-connectivity-bmc --opentitan %t/ot --circt-verilog %t/bin/circt-verilog --include-lane-regex "^opentitan/CONNECTIVITY_BMC$" --opentitan-connectivity-cfg %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson --opentitan-connectivity-rule-filter "^RULE_" --fail-on-opentitan-connectivity-bmc-status-drift > %t/err.txt 2>&1'
+// RUN: FileCheck %s --check-prefix=ERR < %t/err.txt
+//
+// ERR: --fail-on-opentitan-connectivity-bmc-status-drift requires --opentitan-connectivity-bmc-status-baseline-file
