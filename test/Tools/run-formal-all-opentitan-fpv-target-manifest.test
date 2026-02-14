@@ -1,0 +1,16 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: cp %S/../../utils/select_opentitan_formal_cfgs.py %t/utils/select_opentitan_formal_cfgs.py
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '{\n  "name": "top_earlgrey_fpv_prim_cfgs",\n  "flow": "formal",\n  "sub_flow": "fpv",\n  "use_cfgs": [\n    {\n      "name": "prim_fifo_sync_fpv",\n      "dut": "prim_fifo_sync",\n      "fusesoc_core": "lowrisc:dv:prim_fifo_sync_fpv",\n      "task": "FpvDefault",\n      "rel_path": "hw/top_earlgrey/formal/prim/prim_fifo_sync"\n    },\n    {\n      "name": "prim_count_fpv",\n      "dut": "prim_count",\n      "fusesoc_core": "lowrisc:dv:prim_count_fpv",\n      "task": "FpvDefault",\n      "rel_path": "hw/top_earlgrey/formal/prim/prim_count"\n    }\n  ]\n}\n' > %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/select_opentitan_formal_cfgs.py %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --circt-verilog %t/bin/circt-verilog --include-lane-regex '^$' --opentitan %t/ot --opentitan-fpv-cfg %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson --select-cfgs 'prim_fifo_sync_fpv'
+// RUN: FileCheck %s --check-prefix=MANIFEST < %t/out/opentitan-fpv-target-manifest.tsv
+//
+// MANIFEST: target_name{{[[:space:]]+}}dut{{[[:space:]]+}}fusesoc_core{{[[:space:]]+}}task{{[[:space:]]+}}flow{{[[:space:]]+}}sub_flow{{[[:space:]]+}}rel_path{{[[:space:]]+}}source_kind{{[[:space:]]+}}source_cfg_file{{[[:space:]]+}}root_cfg_file
+// MANIFEST-NEXT: prim_fifo_sync_fpv{{[[:space:]]+}}prim_fifo_sync{{[[:space:]]+}}lowrisc:dv:prim_fifo_sync_fpv{{[[:space:]]+}}FpvDefault{{[[:space:]]+}}formal{{[[:space:]]+}}fpv{{[[:space:]]+}}hw/top_earlgrey/formal/prim/prim_fifo_sync{{[[:space:]]+}}inline{{[[:space:]]+}}{{.*}}top_earlgrey_fpv_prim_cfgs.hjson{{[[:space:]]+}}{{.*}}top_earlgrey_fpv_prim_cfgs.hjson
+// MANIFEST-NOT: prim_count_fpv

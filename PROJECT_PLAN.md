@@ -232,6 +232,18 @@ verilator-verification, and yosys corpora).
 6. Phase F (scale hardening):
    - complete item 6, deliver sharding, artifact stability, and runtime SLAs.
 
+#### Execution Status (February 14, 2026)
+
+1. Phase A is in progress with first runnable slice landed:
+   - `run_formal_all.sh` now accepts `--opentitan-fpv-cfg`, `--select-cfgs`,
+     and `--opentitan-fpv-target-manifest`.
+   - new utility `utils/select_opentitan_formal_cfgs.py` resolves cfg import
+     graphs and emits deterministic selected-target manifests.
+2. Remaining work for Phase A completion:
+   - wire the generated target manifest into runnable OpenTitan FPV lane
+     planning (currently manifest generation is integrated, execution mapping is
+     still pending).
+
 #### Success Definition (program-level)
 
 1. CIRCT can run selected OpenTitan FPV targets from official formal cfg HJSON

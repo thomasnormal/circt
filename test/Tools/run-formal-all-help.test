@@ -56,6 +56,7 @@
 // CHECK: --fail-on-mutation-lec-contract-fingerprint-lane-map-identity-fallback
 // CHECK: --fail-on-new-mutation-lec-contract-fingerprint-lane-map-identity-fallback
 // CHECK: --mutation-lec-contract-fingerprint-lane-map-file
+// CHECK: --mutation-lec-contract-fingerprint-lane-parity-allowlist-file
 // CHECK: --mutation-contract-fingerprint-case-id-allowlist-file
 // CHECK: --mutation-source-fingerprint-case-id-allowlist-file
 // CHECK: --mutation-provenance-tuple-id-allowlist-file
@@ -102,4 +103,7 @@
 // CHECK: --opentitan-bmc-bound
 // CHECK: --opentitan-bmc-include-masked
 // CHECK: --opentitan-bmc-case-policy-file
+// CHECK: --opentitan-fpv-cfg
+// CHECK: --select-cfgs
+// CHECK: --opentitan-fpv-target-manifest
 // CHECK: --opentitan-lec-impl-filter

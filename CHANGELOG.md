@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1282 - February 14, 2026
+
+### OpenTitan FPV Adapter Phase A: Native cfg ingestion + `--select-cfgs`
+
+1. Added a new OpenTitan formal cfg selector utility:
+   - `utils/select_opentitan_formal_cfgs.py`
+   - supports recursive `import_cfgs`, `use_cfgs` expansion (inline and
+     reference forms), deterministic de-dup, and dvsim-style ordered
+     `--select-cfgs` filtering.
+2. Extended `utils/run_formal_all.sh` with Phase-A planner CLI:
+   - `--opentitan-fpv-cfg FILE`
+   - `--select-cfgs LIST`
+   - `--opentitan-fpv-target-manifest FILE`
+3. Integrated manifest generation into `run_formal_all.sh` pre-lane setup so a
+   selected-target TSV is always produced when OpenTitan FPV cfg selection is
+   requested.
+4. Added focused regressions:
+   - `test/Tools/select-opentitan-formal-cfgs-basic.test`
+   - `test/Tools/select-opentitan-formal-cfgs-unknown-select.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-target-manifest.test`
+   - `test/Tools/run-formal-all-opentitan-select-cfgs-requires-fpv-cfg.test`
+   - updated `test/Tools/run-formal-all-help.test` for new flags.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/select_opentitan_formal_cfgs.py` PASS
+- Focused lit:
+  - new selector + run-formal-all option tests: **5/5 PASS**
+  - existing OpenTitan BMC policy/mode/toolchain suite:
+    - `run-formal-all-opentitan-bmc.test`
+    - `run-formal-all-opentitan-bmc-mode-diff.test`
+    - `run-formal-all-opentitan-bmc-opentitan-toolchain-fallback.test`
+    - `run-formal-all-opentitan-bmc-case-policy-forwarding.test`
+    - `run-opentitan-bmc-case-policy-provenance.test`
+    - **5/5 PASS**
+- Real OpenTitan cfg sanity:
+  - selected subset from
+    `hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson` emitted
+    deterministic manifest rows for requested targets.
+
 ## Iteration 1281 - February 14, 2026
 
 ### Formal Strict-Gate: BMC/LEC Case-ID Parity and Unmapped Allowlist Controls
