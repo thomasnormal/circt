@@ -164,6 +164,10 @@ Outputs:
                            Per-retry event trace with classified reason
   <out-dir>/retry-reason-summary.tsv
                            Aggregated retry counts by retry_reason
+  <out-dir>/retry-reason-summary.schema-version
+                           Retry-reason summary schema-version artifact
+  <out-dir>/retry-reason-summary.schema-contract
+                           Retry-reason summary schema-contract artifact
   <out-dir>/retry-reason-drift.tsv
                            Retry-reason drift report
                            (when --fail-on-retry-reason-diff)
@@ -214,6 +218,8 @@ MAX_TOTAL_RETRIES=""
 MAX_TOTAL_RETRIES_BY_REASON=""
 BASELINE_FILE=""
 RETRY_REASON_BASELINE_FILE=""
+RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE=""
+RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE=""
 RETRY_REASON_DRIFT_TOLERANCES=""
 RETRY_REASON_DRIFT_PERCENT_TOLERANCES=""
 RETRY_REASON_DRIFT_SUITE_TOLERANCE=0
@@ -221,9 +227,11 @@ RETRY_REASON_DRIFT_SUITE_PERCENT_TOLERANCE="0"
 BASELINE_SCHEMA_VERSION_FILE=""
 BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_VERSION_FILE=""
+RETRY_REASON_SUMMARY_SCHEMA_VERSION_FILE=""
 BASELINE_SCHEMA_CONTRACT_FILE=""
 BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_CONTRACT_FILE=""
+RETRY_REASON_SUMMARY_SCHEMA_CONTRACT_FILE=""
 UPDATE_BASELINE=0
 ALLOW_UPDATE_BASELINE_ON_FAILURE=0
 MIGRATE_BASELINE_SCHEMA_ARTIFACTS=0
@@ -267,8 +275,11 @@ declare -A RETRY_REASON_DRIFT_PERCENT_TOLERANCE_MAP=()
 
 SUMMARY_HEADER_V1=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors'
 SUMMARY_HEADER_V2=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\tpolicy_fingerprint'
+RETRY_REASON_SUMMARY_HEADER_V1=$'retry_reason\tretries'
 CURRENT_SUMMARY_SCHEMA_VERSION="v2"
 CURRENT_SUMMARY_HEADER="$SUMMARY_HEADER_V2"
+CURRENT_RETRY_REASON_SUMMARY_SCHEMA_VERSION="v1"
+CURRENT_RETRY_REASON_SUMMARY_HEADER="$RETRY_REASON_SUMMARY_HEADER_V1"
 
 is_pos_int() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
@@ -1029,6 +1040,63 @@ summary_schema_contract_fingerprint_for_artifacts() {
   summary_schema_contract_fingerprint_from_components "$schema_version" "$header_line"
 }
 
+
+retry_reason_schema_version_from_header() {
+  local header_line="$1"
+  if [[ "$header_line" == "$RETRY_REASON_SUMMARY_HEADER_V1" ]]; then
+    printf 'v1\n'
+    return 0
+  fi
+  printf 'unknown\n'
+}
+
+retry_reason_schema_version_for_artifacts() {
+  local summary_file="$1"
+  local schema_file="${2:-}"
+  local schema_line=""
+  local header_line=""
+
+  if [[ -n "$schema_file" && -f "$schema_file" ]]; then
+    if ! IFS= read -r schema_line < "$schema_file"; then
+      printf 'unknown\n'
+      return 0
+    fi
+    summary_schema_version_from_metadata "$schema_line"
+    return 0
+  fi
+
+  if ! IFS= read -r header_line < "$summary_file"; then
+    printf 'unknown\n'
+    return 0
+  fi
+  retry_reason_schema_version_from_header "$header_line"
+}
+
+retry_reason_schema_contract_fingerprint_for_artifacts() {
+  local summary_file="$1"
+  local schema_file="${2:-}"
+  local contract_file="${3:-}"
+  local contract_line=""
+  local header_line=""
+  local schema_version=""
+
+  if [[ -n "$contract_file" && -f "$contract_file" ]]; then
+    if ! IFS= read -r contract_line < "$contract_file"; then
+      printf 'unknown\n'
+      return 0
+    fi
+    summary_schema_contract_fingerprint_from_metadata "$contract_line"
+    return 0
+  fi
+
+  if ! IFS= read -r header_line < "$summary_file"; then
+    printf 'unknown\n'
+    return 0
+  fi
+  schema_version="$(retry_reason_schema_version_for_artifacts "$summary_file" "$schema_file")"
+  summary_schema_contract_fingerprint_from_components "$schema_version" "$header_line"
+}
+
 migrate_baseline_schema_artifacts() {
   local baseline_file="$1"
   local baseline_schema_version_file="$2"
@@ -1463,6 +1531,10 @@ evaluate_retry_reason_drift() {
   local baseline_file="$1"
   local summary_file="$2"
   local drift_file="$3"
+  local baseline_schema_version_file="${4:-}"
+  local summary_schema_version_file="${5:-}"
+  local baseline_schema_contract_file="${6:-}"
+  local summary_schema_contract_file="${7:-}"
   local regressions=0
   local baseline_reason=""
   local baseline_retries=""
@@ -1485,9 +1557,33 @@ evaluate_retry_reason_drift() {
   local -A current_duplicate_seen=()
   local -a baseline_duplicates=()
   local -a current_duplicates=()
+  local baseline_schema_version=""
+  local summary_schema_version=""
+  local baseline_schema_contract=""
+  local summary_schema_contract=""
 
   printf 'example	metric	baseline	current	outcome	detail
 ' > "$drift_file"
+
+  summary_schema_version="$(retry_reason_schema_version_for_artifacts "$summary_file" "$summary_schema_version_file")"
+  baseline_schema_version="$(retry_reason_schema_version_for_artifacts "$baseline_file" "$baseline_schema_version_file")"
+  if [[ "$baseline_schema_version" != "$summary_schema_version" ]]; then
+    if ! append_drift_candidate "$drift_file" "__baseline__" "retry_reason_schema_version" "$baseline_schema_version" "$summary_schema_version" "retry_reason_schema_version_mismatch"; then
+      regressions=$((regressions + 1))
+    fi
+  else
+    append_drift_row "$drift_file" "__baseline__" "retry_reason_schema_version" "$baseline_schema_version" "$summary_schema_version" "ok" ""
+  fi
+
+  summary_schema_contract="$(retry_reason_schema_contract_fingerprint_for_artifacts "$summary_file" "$summary_schema_version_file" "$summary_schema_contract_file")"
+  baseline_schema_contract="$(retry_reason_schema_contract_fingerprint_for_artifacts "$baseline_file" "$baseline_schema_version_file" "$baseline_schema_contract_file")"
+  if [[ "$baseline_schema_contract" != "$summary_schema_contract" ]]; then
+    if ! append_drift_candidate "$drift_file" "__baseline__" "retry_reason_schema_contract" "$baseline_schema_contract" "$summary_schema_contract" "retry_reason_schema_contract_mismatch"; then
+      regressions=$((regressions + 1))
+    fi
+  else
+    append_drift_row "$drift_file" "__baseline__" "retry_reason_schema_contract" "$baseline_schema_contract" "$summary_schema_contract" "ok" ""
+  fi
 
   while IFS=$'	' read -r baseline_reason baseline_retries; do
     [[ "$baseline_reason" == "retry_reason" ]] && continue
@@ -2299,6 +2395,18 @@ fi
 if [[ -z "$RETRY_REASON_BASELINE_FILE" && -n "$BASELINE_FILE" ]]; then
   RETRY_REASON_BASELINE_FILE="${BASELINE_FILE}.retry-reason-summary.tsv"
 fi
+if [[ -z "$RETRY_REASON_SUMMARY_SCHEMA_VERSION_FILE" ]]; then
+  RETRY_REASON_SUMMARY_SCHEMA_VERSION_FILE="${OUT_DIR}/retry-reason-summary.schema-version"
+fi
+if [[ -z "$RETRY_REASON_SUMMARY_SCHEMA_CONTRACT_FILE" ]]; then
+  RETRY_REASON_SUMMARY_SCHEMA_CONTRACT_FILE="${OUT_DIR}/retry-reason-summary.schema-contract"
+fi
+if [[ -z "$RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE" && -n "$RETRY_REASON_BASELINE_FILE" ]]; then
+  RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE="${RETRY_REASON_BASELINE_FILE}.schema-version"
+fi
+if [[ -z "$RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE" && -n "$RETRY_REASON_BASELINE_FILE" ]]; then
+  RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE="${RETRY_REASON_BASELINE_FILE}.schema-contract"
+fi
 if [[ "$BASELINE_SCHEMA_VERSION_FILE_EXPLICIT" -eq 1 && "$FAIL_ON_DIFF" -eq 1 && "$REQUIRE_BASELINE_SCHEMA_VERSION_MATCH" -eq 1 ]]; then
   if [[ ! -f "$BASELINE_SCHEMA_VERSION_FILE" ]]; then
     echo "Baseline schema-version file not found: $BASELINE_SCHEMA_VERSION_FILE" >&2
@@ -2507,6 +2615,11 @@ RETRY_EVENTS_FILE="${OUT_DIR}/retry-events.tsv"
 printf 'example\tfailed_attempt\tnext_attempt\texit_code\tretry_reason\tdelay_ms\n' > "$RETRY_EVENTS_FILE"
 RETRY_REASON_SUMMARY_FILE="${OUT_DIR}/retry-reason-summary.tsv"
 printf 'retry_reason\tretries\n' > "$RETRY_REASON_SUMMARY_FILE"
+mkdir -p "$(dirname "$RETRY_REASON_SUMMARY_SCHEMA_VERSION_FILE")"
+printf '%s\n' "$CURRENT_RETRY_REASON_SUMMARY_SCHEMA_VERSION" > "$RETRY_REASON_SUMMARY_SCHEMA_VERSION_FILE"
+CURRENT_RETRY_REASON_SUMMARY_SCHEMA_CONTRACT_FINGERPRINT="$(summary_schema_contract_fingerprint_from_components "$CURRENT_RETRY_REASON_SUMMARY_SCHEMA_VERSION" "$CURRENT_RETRY_REASON_SUMMARY_HEADER")"
+mkdir -p "$(dirname "$RETRY_REASON_SUMMARY_SCHEMA_CONTRACT_FILE")"
+printf '%s\n' "$CURRENT_RETRY_REASON_SUMMARY_SCHEMA_CONTRACT_FINGERPRINT" > "$RETRY_REASON_SUMMARY_SCHEMA_CONTRACT_FILE"
 
 overall_rc=0
 mkdir -p "$(dirname "$SUMMARY_SCHEMA_VERSION_FILE")"
@@ -2689,7 +2802,7 @@ fi
 
 if [[ "$FAIL_ON_RETRY_REASON_DIFF" -eq 1 ]]; then
   RETRY_REASON_DRIFT_FILE="${OUT_DIR}/retry-reason-drift.tsv"
-  if ! evaluate_retry_reason_drift "$RETRY_REASON_BASELINE_FILE" "$RETRY_REASON_SUMMARY_FILE" "$RETRY_REASON_DRIFT_FILE"; then
+  if ! evaluate_retry_reason_drift "$RETRY_REASON_BASELINE_FILE" "$RETRY_REASON_SUMMARY_FILE" "$RETRY_REASON_DRIFT_FILE" "$RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE" "$RETRY_REASON_SUMMARY_SCHEMA_VERSION_FILE" "$RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE" "$RETRY_REASON_SUMMARY_SCHEMA_CONTRACT_FILE"; then
     overall_rc=1
     echo "Retry-reason drift failure: see $RETRY_REASON_DRIFT_FILE" >&2
   fi
@@ -2720,6 +2833,14 @@ if [[ "$UPDATE_BASELINE" -eq 1 ]]; then
     if [[ -n "$RETRY_REASON_BASELINE_FILE" ]]; then
       mkdir -p "$(dirname "$RETRY_REASON_BASELINE_FILE")"
       cp "$RETRY_REASON_SUMMARY_FILE" "$RETRY_REASON_BASELINE_FILE"
+    fi
+    if [[ -n "$RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE" ]]; then
+      mkdir -p "$(dirname "$RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE")"
+      cp "$RETRY_REASON_SUMMARY_SCHEMA_VERSION_FILE" "$RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE"
+    fi
+    if [[ -n "$RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE" ]]; then
+      mkdir -p "$(dirname "$RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE")"
+      cp "$RETRY_REASON_SUMMARY_SCHEMA_CONTRACT_FILE" "$RETRY_REASON_BASELINE_SCHEMA_CONTRACT_FILE"
     fi
     echo "Updated baseline: $BASELINE_FILE" >&2
   fi

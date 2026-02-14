@@ -21,6 +21,10 @@
 // RUN: FileCheck %s --check-prefix=SCHEMA-CONTRACT < %t/out/custom.schema-contract
 // RUN: FileCheck %s --check-prefix=BASELINE-SCHEMA-CONTRACT < %t/baseline.tsv.schema-contract
 // RUN: FileCheck %s --check-prefix=RETRY-BASELINE < %t/baseline.tsv.retry-reason-summary.tsv
+// RUN: FileCheck %s --check-prefix=RETRY-SCHEMA < %t/out/retry-reason-summary.schema-version
+// RUN: FileCheck %s --check-prefix=RETRY-BASELINE-SCHEMA < %t/baseline.tsv.retry-reason-summary.tsv.schema-version
+// RUN: FileCheck %s --check-prefix=RETRY-SCHEMA-CONTRACT < %t/out/retry-reason-summary.schema-contract
+// RUN: FileCheck %s --check-prefix=RETRY-BASELINE-SCHEMA-CONTRACT < %t/baseline.tsv.retry-reason-summary.tsv.schema-contract
 
 // SUMMARY: example{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}detected{{[[:space:]]}}relevant{{[[:space:]]}}coverage_percent{{[[:space:]]}}errors
 // SUMMARY: bitcnt{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}2{{[[:space:]]}}4{{[[:space:]]}}50.00{{[[:space:]]}}0
@@ -34,3 +38,7 @@
 // BASELINE-SCHEMA-CONTRACT: {{[0-9a-f]+}}
 
 // RETRY-BASELINE: retry_reason{{[[:space:]]}}retries
+// RETRY-SCHEMA: v1
+// RETRY-BASELINE-SCHEMA: v1
+// RETRY-SCHEMA-CONTRACT: {{[0-9a-f]+}}
+// RETRY-BASELINE-SCHEMA-CONTRACT: {{[0-9a-f]+}}
