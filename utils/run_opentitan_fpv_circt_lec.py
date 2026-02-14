@@ -8,7 +8,10 @@
 
 This runner consumes OpenTitan FPV compile contracts and BMC-produced objective
 manifests (assertion/cover TSVs). It executes a native CIRCT LEC health check
-per selected FPV case and projects case-level LEC status onto objective rows.
+per selected FPV case and emits assertion-oriented objective evidence.
+
+Cover objective evidence is optional and disabled by default because current
+case-level LEC health checks do not derive native reachability semantics.
 """
 
 from __future__ import annotations
@@ -227,7 +230,7 @@ def run_with_log(
 
 def project_assertion_status(case_status: str, bmc_status: str) -> str:
     if case_status == "PASS":
-        return bmc_status
+        return "PROVEN"
     if case_status == "FAIL":
         return "FAILING"
     if case_status in {"UNKNOWN", "TIMEOUT", "SKIP", "ERROR"}:
@@ -237,7 +240,7 @@ def project_assertion_status(case_status: str, bmc_status: str) -> str:
 
 def project_cover_status(case_status: str, bmc_status: str) -> str:
     if case_status == "PASS":
-        return bmc_status
+        return "UNKNOWN"
     if case_status == "FAIL":
         return "UNKNOWN"
     if case_status in {"UNKNOWN", "TIMEOUT", "SKIP", "ERROR"}:
@@ -386,6 +389,16 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("LEC_COVER_RESULTS_OUT", ""),
         help="Optional output per-cover FPV LEC evidence TSV path.",
     )
+    parser.add_argument(
+        "--emit-cover-evidence",
+        action="store_true",
+        default=os.environ.get("LEC_FPV_EMIT_COVER_EVIDENCE", "0") == "1",
+        help=(
+            "Emit FPV LEC cover objective rows. Disabled by default because "
+            "case-level LEC health checks cannot yet derive native cover "
+            "reachability semantics."
+        ),
+    )
     parser.add_argument("--workdir", default="")
     parser.add_argument("--keep-workdir", action="store_true")
     parser.add_argument(
@@ -448,7 +461,7 @@ def main() -> int:
 
     assertion_objectives = read_objective_rows(bmc_assertions_path, "assertion")
     cover_objectives: list[ObjectiveRow] = []
-    if bmc_cover_path is not None and bmc_cover_path.is_file():
+    if args.emit_cover_evidence and bmc_cover_path is not None and bmc_cover_path.is_file():
         cover_objectives = read_objective_rows(bmc_cover_path, "cover")
 
     objectives_by_case: dict[str, list[ObjectiveRow]] = {}

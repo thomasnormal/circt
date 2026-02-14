@@ -2,7 +2,7 @@
 // RUN: mkdir -p %t/utils %t/bin %t/src
 // RUN: cp %S/../../utils/run_opentitan_fpv_circt_lec.py %t/utils/run_opentitan_fpv_circt_lec.py
 // RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\tsetup_status\ttoplevel\tfiles\tinclude_dirs\tdefines\nfoo_fpv\tok\tfoo_tb\t%t/src/foo.sv\t%t/src\tFORMAL=1\n' > %t/contracts.tsv
-// RUN: printf 'PROVEN\tfoo_fpv::foo_tb\t%t/work/foo_tb\ta0000\tline_10\tUNSAT\tunsat\n' > %t/bmc-assertions.tsv
+// RUN: printf 'VACUOUS\tfoo_fpv::foo_tb\t%t/work/foo_tb\ta0000\tline_10\tUNSAT\tunsat\n' > %t/bmc-assertions.tsv
 // RUN: printf 'COVERED\tfoo_fpv::foo_tb\t%t/work/foo_tb\tc0000\tline_20\tSAT\tsat\n' > %t/bmc-cover.tsv
 // RUN: printf 'module foo_tb; endmodule\n' > %t/src/foo.sv
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho \"module { hw.module @foo_tb() }\"\n' > %t/bin/circt-verilog
@@ -10,10 +10,12 @@
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho \"LEC_RESULT=EQ\"\n' > %t/bin/circt-lec
 // RUN: chmod +x %t/utils/run_opentitan_fpv_circt_lec.py %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-lec
 // RUN: LEC_RUN_SMTLIB=0 CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec python3 %t/utils/run_opentitan_fpv_circt_lec.py --compile-contracts %t/contracts.tsv --bmc-assertion-results %t/bmc-assertions.tsv --bmc-cover-results %t/bmc-cover.tsv --results-file %t/lec-results.tsv --assertion-results-file %t/lec-assertions.tsv --cover-results-file %t/lec-cover.tsv --workdir %t/workdir
+// RUN: LEC_RUN_SMTLIB=0 CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec python3 %t/utils/run_opentitan_fpv_circt_lec.py --compile-contracts %t/contracts.tsv --bmc-assertion-results %t/bmc-assertions.tsv --bmc-cover-results %t/bmc-cover.tsv --results-file %t/lec-results-cover.tsv --assertion-results-file %t/lec-assertions-cover.tsv --cover-results-file %t/lec-cover-with-mode.tsv --emit-cover-evidence --workdir %t/workdir-cover
 // RUN: FileCheck %s --check-prefix=ASSERT < %t/lec-assertions.tsv
-// RUN: FileCheck %s --check-prefix=COVER < %t/lec-cover.tsv
+// RUN: test ! -s %t/lec-cover.tsv
+// RUN: FileCheck %s --check-prefix=COVER < %t/lec-cover-with-mode.tsv
 // RUN: FileCheck %s --check-prefix=CASE < %t/lec-results.tsv
 //
 // ASSERT: PROVEN{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}a0000{{[[:space:]]+}}line_10{{[[:space:]]+}}EQ{{[[:space:]]+}}eq
-// COVER: COVERED{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}c0000{{[[:space:]]+}}line_20{{[[:space:]]+}}EQ{{[[:space:]]+}}eq
+// COVER: UNKNOWN{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}c0000{{[[:space:]]+}}line_20{{[[:space:]]+}}EQ{{[[:space:]]+}}eq
 // CASE: PASS{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}opentitan{{[[:space:]]+}}FPV_LEC{{[[:space:]]+}}LEC_RESULT_EQ{{[[:space:]]+}}eq

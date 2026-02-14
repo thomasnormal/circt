@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1419 - February 14, 2026
+
+### OpenTitan FPV LEC: Assertion-Native Status Mapping + Cover Opt-In
+
+1. Hardened OpenTitan FPV LEC evidence semantics in
+   `utils/run_opentitan_fpv_circt_lec.py`:
+   - assertion rows no longer reuse BMC status classes.
+   - case-projected assertion mapping is now:
+     - `PASS -> PROVEN`
+     - `FAIL -> FAILING`
+     - `UNKNOWN|TIMEOUT|SKIP|ERROR -> same status`.
+2. Made FPV LEC cover evidence explicit opt-in:
+   - new CLI/env control:
+     - `--emit-cover-evidence`
+     - `LEC_FPV_EMIT_COVER_EVIDENCE=1`
+   - default path now suppresses implicit cover pseudo-semantics from
+     case-level LEC checks.
+3. Added focused regression coverage:
+   - `test/Tools/run-opentitan-fpv-circt-lec-basic.test`
+     - validates assertion-native mapping and cover opt-in behavior.
+   - `test/Tools/run-opentitan-fpv-circt-lec-failing-status.test`
+     - validates `LEC_RESULT=NEQ` maps to `FAILING` assertion rows.
+4. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-opentitan-fpv-circt-lec-basic.test build-test/test/Tools/run-opentitan-fpv-circt-lec-failing-status.test build-test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-requires-lec-assertions.test build-test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-forwarding.test build-test/test/Tools/check-opentitan-fpv-objective-parity-fail.test` PASS
+
 ## Iteration 1418 - February 14, 2026
 
 ### OpenTitan FPV: Native LEC Evidence Auto-Production for Objective Parity
