@@ -87,6 +87,13 @@ class CaseSpec:
     verilog_defines: list[str]
 
 
+@dataclass(frozen=True)
+class AssertionSite:
+    ordinal: int
+    line_index: int
+    line_text: str
+
+
 class TextFileBusyRetryExhausted(RuntimeError):
     def __init__(self, tool: str, attempts: int):
         super().__init__(
@@ -136,6 +143,39 @@ def parse_bmc_result(text: str) -> str | None:
     if not match:
         return None
     return match.group(1)
+
+
+def collect_candidate_assertion_sites(lines: list[str]) -> list[AssertionSite]:
+    sites: list[AssertionSite] = []
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        if "verif.assert" not in stripped:
+            continue
+        if "{bmc.final}" in stripped:
+            continue
+        sites.append(
+            AssertionSite(
+                ordinal=len(sites),
+                line_index=idx,
+                line_text=stripped,
+            )
+        )
+    return sites
+
+
+def build_isolated_assertion_mlir(
+    lines: list[str], sites: list[AssertionSite], keep_ordinal: int
+) -> str:
+    isolated = list(lines)
+    for site in sites:
+        if site.ordinal == keep_ordinal:
+            continue
+        isolated[site.line_index] = isolated[site.line_index].replace(
+            "verif.assert", "verif.assume", 1
+        )
+    return "\n".join(isolated) + "\n"
 
 
 def normalize_drop_reason(line: str) -> str:
@@ -536,6 +576,28 @@ def main() -> int:
         default=os.environ.get("BMC_RESOLVED_CONTRACTS_OUT", ""),
         help="Optional TSV output path for resolved per-case contract rows.",
     )
+    parser.add_argument(
+        "--assertion-results-file",
+        default=os.environ.get("BMC_ASSERTION_RESULTS_OUT", ""),
+        help="Optional TSV output path for per-assertion BMC rows.",
+    )
+    parser.add_argument(
+        "--assertion-granular",
+        action="store_true",
+        default=os.environ.get("BMC_ASSERTION_GRANULAR", "0") == "1",
+        help=(
+            "Run BMC per assertion by isolating each verif.assert in prepared MLIR "
+            "(default: env BMC_ASSERTION_GRANULAR or off)."
+        ),
+    )
+    parser.add_argument(
+        "--assertion-granular-max",
+        default=os.environ.get("BMC_ASSERTION_GRANULAR_MAX", "0"),
+        help=(
+            "Maximum assertions per case for --assertion-granular "
+            "(0 means unlimited)."
+        ),
+    )
     args = parser.parse_args()
 
     cases_file = Path(args.cases_file).resolve()
@@ -588,6 +650,9 @@ def main() -> int:
     ignore_asserts_until = parse_nonnegative_int(
         args.ignore_asserts_until, "--ignore-asserts-until"
     )
+    assertion_granular_max = parse_nonnegative_int(
+        args.assertion_granular_max, "--assertion-granular-max"
+    )
 
     global_include_dirs = [str(Path(path).resolve()) for path in args.include_dir]
     mode_label = args.mode_label.strip() or "BMC"
@@ -638,6 +703,7 @@ def main() -> int:
         keep_workdir = args.keep_workdir
 
     rows: list[tuple[str, ...]] = []
+    assertion_result_rows: list[tuple[str, ...]] = []
     drop_remark_case_rows: list[tuple[str, str]] = []
     drop_remark_reason_rows: list[tuple[str, str, str]] = []
     timeout_reason_rows: list[tuple[str, str, str]] = []
@@ -818,6 +884,264 @@ def main() -> int:
                         )
                         errored += 1
                         print(f"{case.case_id:32} ERROR (CIRCT_OPT_ERROR)", flush=True)
+                        continue
+
+                bmc_input_mlir = (
+                    prepped_mlir if bmc_prepare_core_with_circt_opt else out_mlir
+                )
+                if args.assertion_granular and not case_smoke_only:
+                    mlir_lines = bmc_input_mlir.read_text(encoding="utf-8").splitlines()
+                    assertion_sites = collect_candidate_assertion_sites(mlir_lines)
+                    if (
+                        assertion_granular_max > 0
+                        and len(assertion_sites) > assertion_granular_max
+                    ):
+                        rows.append(
+                            (
+                                "ERROR",
+                                case.case_id,
+                                case_path,
+                                suite_name,
+                                mode_label,
+                                "CIRCT_BMC_ERROR",
+                                "assertion_granular_limit_exceeded",
+                            )
+                        )
+                        errored += 1
+                        print(
+                            (
+                                f"{case.case_id:32} ERROR "
+                                "(assertion_granular_limit_exceeded)"
+                            ),
+                            flush=True,
+                        )
+                        continue
+                    if assertion_sites:
+                        assertion_statuses: list[tuple[str, str]] = []
+                        for site in assertion_sites:
+                            assertion_id = f"a{site.ordinal:04d}"
+                            assertion_label = f"line_{site.line_index + 1}"
+                            assertion_mlir = (
+                                case_dir / f"pairwise_bmc.assertion-{site.ordinal}.mlir"
+                            )
+                            assertion_mlir.write_text(
+                                build_isolated_assertion_mlir(
+                                    mlir_lines, assertion_sites, site.ordinal
+                                ),
+                                encoding="utf-8",
+                            )
+                            assertion_log = (
+                                case_dir / f"circt-bmc.assertion-{site.ordinal}.log"
+                            )
+                            assertion_out = (
+                                case_dir / f"circt-bmc.assertion-{site.ordinal}.out"
+                            )
+                            assertion_cmd = list(bmc_cmd)
+                            assertion_cmd[1] = str(assertion_mlir)
+                            stage = f"bmc.assertion.{site.ordinal}"
+                            try:
+                                assertion_run = run_and_log(
+                                    assertion_cmd,
+                                    assertion_log,
+                                    assertion_out,
+                                    case_timeout_secs,
+                                    etxtbsy_retries,
+                                    etxtbsy_backoff_secs,
+                                )
+                                combined = (
+                                    assertion_log.read_text() + "\n" + assertion_out.read_text()
+                                )
+                                bmc_tag = parse_bmc_result(combined)
+                                if bmc_tag == "UNSAT":
+                                    assertion_result_rows.append(
+                                        (
+                                            "PROVEN",
+                                            case.case_id,
+                                            case_path,
+                                            assertion_id,
+                                            assertion_label,
+                                            "UNSAT",
+                                            "unsat",
+                                        )
+                                    )
+                                    assertion_statuses.append(("PROVEN", "unsat"))
+                                elif bmc_tag == "SAT":
+                                    assertion_result_rows.append(
+                                        (
+                                            "FAILING",
+                                            case.case_id,
+                                            case_path,
+                                            assertion_id,
+                                            assertion_label,
+                                            "SAT",
+                                            "sat",
+                                        )
+                                    )
+                                    assertion_statuses.append(("FAILING", "sat"))
+                                elif bmc_tag == "UNKNOWN":
+                                    assertion_result_rows.append(
+                                        (
+                                            "UNKNOWN",
+                                            case.case_id,
+                                            case_path,
+                                            assertion_id,
+                                            assertion_label,
+                                            "UNKNOWN",
+                                            "unknown",
+                                        )
+                                    )
+                                    assertion_statuses.append(("UNKNOWN", "unknown"))
+                                elif assertion_run.returncode != 0:
+                                    reason = normalize_error_reason(combined)
+                                    assertion_result_rows.append(
+                                        (
+                                            "ERROR",
+                                            case.case_id,
+                                            case_path,
+                                            assertion_id,
+                                            assertion_label,
+                                            "CIRCT_BMC_ERROR",
+                                            reason,
+                                        )
+                                    )
+                                    assertion_statuses.append(("ERROR", reason))
+                                else:
+                                    reason = normalize_error_reason(combined)
+                                    assertion_result_rows.append(
+                                        (
+                                            "ERROR",
+                                            case.case_id,
+                                            case_path,
+                                            assertion_id,
+                                            assertion_label,
+                                            "CIRCT_BMC_ERROR",
+                                            reason,
+                                        )
+                                    )
+                                    assertion_statuses.append(("ERROR", reason))
+                            except subprocess.TimeoutExpired:
+                                assertion_result_rows.append(
+                                    (
+                                        "TIMEOUT",
+                                        case.case_id,
+                                        case_path,
+                                        assertion_id,
+                                        assertion_label,
+                                        "BMC_TIMEOUT",
+                                        "solver_command_timeout",
+                                    )
+                                )
+                                assertion_statuses.append(
+                                    ("TIMEOUT", "solver_command_timeout")
+                                )
+                            except Exception as exc:
+                                append_exception_log(assertion_log, stage, exc)
+                                if isinstance(exc, TextFileBusyRetryExhausted):
+                                    reason = (
+                                        "runner_command_exception_bmc_"
+                                        "runner_command_etxtbsy_retry_exhausted"
+                                    )
+                                else:
+                                    reason_body = normalize_error_reason(
+                                        f"{type(exc).__name__}: {exc}"
+                                    )
+                                    reason = (
+                                        "runner_command_exception"
+                                        if reason_body == "no_diag"
+                                        else f"runner_command_exception_bmc_{reason_body}"
+                                    )
+                                assertion_result_rows.append(
+                                    (
+                                        "ERROR",
+                                        case.case_id,
+                                        case_path,
+                                        assertion_id,
+                                        assertion_label,
+                                        "CIRCT_BMC_ERROR",
+                                        reason,
+                                    )
+                                )
+                                assertion_statuses.append(("ERROR", reason))
+
+                        status_set = {status for status, _ in assertion_statuses}
+                        if "ERROR" in status_set:
+                            reason = next(
+                                reason
+                                for status, reason in assertion_statuses
+                                if status == "ERROR"
+                            )
+                            rows.append(
+                                (
+                                    "ERROR",
+                                    case.case_id,
+                                    case_path,
+                                    suite_name,
+                                    mode_label,
+                                    "CIRCT_BMC_ERROR",
+                                    reason,
+                                )
+                            )
+                            errored += 1
+                            print(
+                                f"{case.case_id:32} ERROR (CIRCT_BMC_ERROR)",
+                                flush=True,
+                            )
+                        elif "TIMEOUT" in status_set:
+                            rows.append(
+                                (
+                                    "TIMEOUT",
+                                    case.case_id,
+                                    case_path,
+                                    suite_name,
+                                    mode_label,
+                                    "BMC_TIMEOUT",
+                                    "solver_command_timeout",
+                                )
+                            )
+                            timeout += 1
+                            print(
+                                f"{case.case_id:32} TIMEOUT (BMC_TIMEOUT)",
+                                flush=True,
+                            )
+                        elif "FAILING" in status_set:
+                            rows.append(
+                                (
+                                    "FAIL",
+                                    case.case_id,
+                                    f"{case_path}#SAT",
+                                    suite_name,
+                                    mode_label,
+                                    "SAT",
+                                )
+                            )
+                            failed += 1
+                            print(f"{case.case_id:32} FAIL (SAT)", flush=True)
+                        elif "UNKNOWN" in status_set:
+                            rows.append(
+                                (
+                                    "UNKNOWN",
+                                    case.case_id,
+                                    f"{case_path}#UNKNOWN",
+                                    suite_name,
+                                    mode_label,
+                                    "UNKNOWN",
+                                )
+                            )
+                            unknown += 1
+                            print(f"{case.case_id:32} UNKNOWN", flush=True)
+                        else:
+                            rows.append(
+                                (
+                                    "PASS",
+                                    case.case_id,
+                                    case_path,
+                                    suite_name,
+                                    mode_label,
+                                    "UNSAT",
+                                )
+                            )
+                            passed += 1
+                            print(f"{case.case_id:32} OK", flush=True)
                         continue
 
                 stage = "bmc"
@@ -1023,12 +1347,27 @@ def main() -> int:
             for row in sorted(resolved_contract_rows, key=lambda item: (item[0], item[1])):
                 handle.write("\t".join(row) + "\n")
 
+    if args.assertion_results_file:
+        assertion_results_path = Path(args.assertion_results_file)
+        assertion_results_path.parent.mkdir(parents=True, exist_ok=True)
+        with assertion_results_path.open("w", encoding="utf-8") as handle:
+            for row in sorted(
+                assertion_result_rows, key=lambda item: (item[1], item[3], item[0])
+            ):
+                handle.write("\t".join(row) + "\n")
+
     print(
         f"{suite_name} BMC dropped-syntax summary: "
         f"drop_remark_cases={len(set(drop_remark_case_rows))} "
         f"pattern='{drop_remark_pattern}'",
         flush=True,
     )
+    if args.assertion_granular:
+        print(
+            f"{suite_name} BMC assertion-granular summary: "
+            f"assertions={len(assertion_result_rows)}",
+            flush=True,
+        )
     print(
         f"{suite_name} BMC summary: total={total} pass={passed} fail={failed} "
         f"xfail=0 xpass=0 error={errored} skip=0 unknown={unknown} timeout={timeout}",
