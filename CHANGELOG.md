@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1384 - February 14, 2026
+
+### Mutation Workflow: Error-Metric History Aggregation Override
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with dedicated error-metric
+   history aggregation control:
+   - `--history-errors-aggregation-mode MODE`
+   - supported: `inherit|percentile|ewma|max` (default: `inherit`)
+2. Added `max` history aggregation for integer error baselines and wired it
+   into both drift lanes:
+   - per-example `errors` history anchor derivation
+   - suite `suite_errors` history anchor derivation
+3. Preserved default behavior by inheriting from
+   `--history-aggregation-mode` unless override is explicitly set.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-history-errors-aggregation-mode-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-example-history-errors-max-pass.test`
+   - `test/Tools/run-mutation-mcy-examples-suite-history-errors-max-pass.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (127 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_1771082829` PASS
+
 ## Iteration 1383 - February 14, 2026
 
 ### Mutation Workflow: EWMA History-Window Drift Baselines
