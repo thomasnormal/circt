@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1311 - February 14, 2026
+
+### Mutation Workflow: Policy Fingerprint Drift Gating
+
+1. Extended `utils/run_mutation_mcy_examples.sh` summary contract with a new
+   `policy_fingerprint` column derived from resolved per-example mutation policy:
+   - example id, top
+   - design content hash
+   - resolved generation controls (`generate_count`, seed, modes/counts/weights,
+     profiles/cfg/select, `mutation_limit`)
+   - smoke/non-smoke mode
+2. Added robust SHA-256 helper fallbacks for hashing:
+   - prefer `sha256sum`, then `shasum -a 256`, then `python3`, then `cksum`.
+3. Extended baseline drift evaluation to compare `policy_fingerprint` when
+   baseline rows include it, emitting regression metric:
+   - `policy_fingerprint` + detail `policy_changed`
+4. Preserved backward compatibility with existing baselines that predate
+   fingerprinting:
+   - non-regressing informational drift row:
+     - `policy_fingerprint` with detail `baseline_missing_policy_fingerprint`.
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-policy-fingerprint-emitted.test`
+   - `test/Tools/run-mutation-mcy-examples-policy-fingerprint-drift-fail.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (24/24)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-114945` PASS
+
 ## Iteration 1310 - February 14, 2026
 
 ### OpenTitan Formal Phase E: Connectivity BMC Execution Lane

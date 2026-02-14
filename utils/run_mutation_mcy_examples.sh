@@ -188,6 +188,45 @@ resolve_tool() {
   return 1
 }
 
+
+hash_stream_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+    return 0
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+    return 0
+  fi
+  cksum | awk '{print $1}'
+}
+
+hash_string_sha256() {
+  local value="$1"
+  printf '%s' "$value" | hash_stream_sha256
+}
+
+hash_file_sha256() {
+  local file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+    return 0
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$file"
+    return 0
+  fi
+  cksum "$file" | awk '{print $1}'
+}
+
 load_drift_allowlist() {
   local file="$1"
   local raw_line=""
@@ -419,10 +458,12 @@ append_summary_row() {
   local relevant="$6"
   local coverage="$7"
   local errors="$8"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$example_id" "$status" "$exit_code" "$detected" "$relevant" "$coverage" "$errors" \
+  local policy_fingerprint="$9"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$example_id" "$status" "$exit_code" "$detected" "$relevant" "$coverage" "$errors" "$policy_fingerprint" \
     >> "$summary_file"
 }
+
 
 metric_value_or_zero() {
   local file="$1"
@@ -478,7 +519,7 @@ evaluate_summary_drift() {
 
   printf 'example\tmetric\tbaseline\tcurrent\toutcome\tdetail\n' > "$drift_file"
 
-  while IFS=$'\t' read -r example status exit_code detected relevant coverage errors; do
+  while IFS=$'\t' read -r example status exit_code detected relevant coverage errors policy_fingerprint; do
     [[ "$example" == "example" ]] && continue
     if [[ -z "$example" ]]; then
       continue
@@ -487,6 +528,7 @@ evaluate_summary_drift() {
     detected="$(normalize_int_or_zero "$detected")"
     relevant="$(normalize_int_or_zero "$relevant")"
     errors="$(normalize_int_or_zero "$errors")"
+    policy_fingerprint="$(trim_whitespace "${policy_fingerprint:-}")"
     local coverage_num
     coverage_num="$(normalize_decimal_or_zero "$coverage")"
 
@@ -499,12 +541,13 @@ evaluate_summary_drift() {
       continue
     fi
 
-    local _be _bs _bexit _bd _br _bc _berr
-    IFS=$'\t' read -r _be _bs _bexit _bd _br _bc _berr <<< "$baseline_row"
+    local _be _bs _bexit _bd _br _bc _berr _bpolicy
+    IFS=$'\t' read -r _be _bs _bexit _bd _br _bc _berr _bpolicy <<< "$baseline_row"
 
     _bd="$(normalize_int_or_zero "${_bd:-0}")"
     _br="$(normalize_int_or_zero "${_br:-0}")"
     _berr="$(normalize_int_or_zero "${_berr:-0}")"
+    _bpolicy="$(trim_whitespace "${_bpolicy:-}")"
     local base_cov_num
     base_cov_num="$(normalize_decimal_or_zero "${_bc:-0}")"
 
@@ -547,6 +590,22 @@ evaluate_summary_drift() {
     else
       append_drift_row "$drift_file" "$example" "relevant_mutants" "$_br" "$relevant" "ok" ""
     fi
+
+    if [[ -n "$_bpolicy" ]]; then
+      if [[ -z "$policy_fingerprint" ]]; then
+        if ! append_drift_candidate "$drift_file" "$example" "policy_fingerprint" "$_bpolicy" "missing" "policy_missing"; then
+          regressions=$((regressions + 1))
+        fi
+      elif [[ "$policy_fingerprint" != "$_bpolicy" ]]; then
+        if ! append_drift_candidate "$drift_file" "$example" "policy_fingerprint" "$_bpolicy" "$policy_fingerprint" "policy_changed"; then
+          regressions=$((regressions + 1))
+        fi
+      else
+        append_drift_row "$drift_file" "$example" "policy_fingerprint" "$_bpolicy" "$policy_fingerprint" "ok" ""
+      fi
+    else
+      append_drift_row "$drift_file" "$example" "policy_fingerprint" "-" "${policy_fingerprint:-missing}" "ok" "baseline_missing_policy_fingerprint"
+    fi
   done < "$summary_file"
 
   if [[ "$regressions" -gt 0 ]]; then
@@ -554,6 +613,7 @@ evaluate_summary_drift() {
   fi
   return 0
 }
+
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -823,7 +883,7 @@ if [[ "$KEEP_WORK" -ne 1 ]]; then
 fi
 
 SUMMARY_FILE="${OUT_DIR}/summary.tsv"
-printf 'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\n' > "$SUMMARY_FILE"
+printf 'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\tpolicy_fingerprint\n' > "$SUMMARY_FILE"
 
 overall_rc=0
 
@@ -877,6 +937,10 @@ for example_id in "${EXAMPLE_IDS[@]}"; do
     echo "Missing example design for ${example_id}: $design" >&2
     exit 1
   fi
+
+  design_content_hash="$(hash_file_sha256 "$design")"
+  policy_fingerprint_input="${example_id}"$'\n'"${top}"$'\n'"${design_content_hash}"$'\n'"${example_generate_count}"$'\n'"${example_mutations_seed}"$'\n'"${example_mutations_modes}"$'\n'"${example_mutations_mode_counts}"$'\n'"${example_mutations_mode_weights}"$'\n'"${example_mutations_profiles}"$'\n'"${example_mutations_cfg}"$'\n'"${example_mutations_select}"$'\n'"${example_mutation_limit}"$'\n'"${SMOKE}"
+  policy_fingerprint="$(hash_string_sha256 "$policy_fingerprint_input")"
 
   example_out_dir="${OUT_DIR}/${example_id}"
   helper_dir="${WORK_ROOT}/${example_id}"
@@ -1018,7 +1082,7 @@ EOS
     echo "Gate failure (${example_id}): ${gate_failure} (detected=${detected} relevant=${relevant} coverage=${coverage_for_gate} errors=${errors})" >&2
   fi
 
-  append_summary_row "$SUMMARY_FILE" "$example_id" "$status" "$rc" "$detected" "$relevant" "$coverage" "$errors"
+  append_summary_row "$SUMMARY_FILE" "$example_id" "$status" "$rc" "$detected" "$relevant" "$coverage" "$errors" "$policy_fingerprint"
   if [[ "$rc" -ne 0 ]]; then
     overall_rc=1
   fi
