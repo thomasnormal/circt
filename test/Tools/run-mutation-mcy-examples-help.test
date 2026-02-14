@@ -36,6 +36,8 @@
 // CHECK-DAG: --example-baseline-history-file
 // CHECK-DAG: --example-history-percentile
 // CHECK-DAG: --example-history-missing-policy
+// CHECK-DAG: --history-aggregation-mode
+// CHECK-DAG: --history-ewma-alpha
 // CHECK-DAG: --retry-reason-baseline-file
 // CHECK-DAG: --retry-reason-baseline-schema-version-file
 // CHECK-DAG: --retry-reason-baseline-schema-contract-file

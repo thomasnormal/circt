@@ -1,0 +1,6 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --history-ewma-alpha bad 2>&1 | FileCheck %s --check-prefix=BAD
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --history-ewma-alpha 0 2>&1 | FileCheck %s --check-prefix=RANGE
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --history-ewma-alpha 1.5 2>&1 | FileCheck %s --check-prefix=RANGE
+
+// BAD: --history-ewma-alpha must be numeric in range (0,1]: bad
+// RANGE: --history-ewma-alpha must be numeric in range (0,1]
