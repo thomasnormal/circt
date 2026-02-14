@@ -22,6 +22,7 @@
 // CHECK-DAG: --baseline-file
 // CHECK-DAG: --update-baseline
 // CHECK-DAG: --allow-update-baseline-on-failure
+// CHECK-DAG: --migrate-baseline-schema-artifacts
 // CHECK-DAG: --fail-on-diff
 // CHECK-DAG: --require-policy-fingerprint-baseline
 // CHECK-DAG: --require-baseline-example-parity

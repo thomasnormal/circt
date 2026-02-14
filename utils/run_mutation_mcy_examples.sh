@@ -46,6 +46,10 @@ Options:
   --allow-update-baseline-on-failure
                            Allow --update-baseline even when run exits failing
                            (default: refuse baseline update on failure)
+  --migrate-baseline-schema-artifacts
+                           Migrate baseline schema sidecars from
+                           --baseline-file and exit
+                           (writes .schema-version/.schema-contract)
   --fail-on-diff           Fail on metric regression vs --baseline-file
   --require-policy-fingerprint-baseline
                            Require baseline rows to include policy_fingerprint
@@ -150,6 +154,7 @@ BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_CONTRACT_FILE=""
 UPDATE_BASELINE=0
 ALLOW_UPDATE_BASELINE_ON_FAILURE=0
+MIGRATE_BASELINE_SCHEMA_ARTIFACTS=0
 FAIL_ON_DIFF=0
 REQUIRE_POLICY_FINGERPRINT_BASELINE=0
 REQUIRE_BASELINE_EXAMPLE_PARITY=0
@@ -694,6 +699,40 @@ summary_schema_contract_fingerprint_for_artifacts() {
   summary_schema_contract_fingerprint_from_components "$schema_version" "$header_line"
 }
 
+migrate_baseline_schema_artifacts() {
+  local baseline_file="$1"
+  local baseline_schema_version_file="$2"
+  local baseline_schema_contract_file="$3"
+  local header_line=""
+  local schema_version=""
+  local schema_contract=""
+
+  if ! IFS= read -r header_line < "$baseline_file"; then
+    echo "Baseline file is empty: $baseline_file" >&2
+    return 1
+  fi
+
+  schema_version="$(summary_schema_version_from_header "$header_line")"
+  if [[ "$schema_version" == "unknown" ]]; then
+    echo "Unable to infer baseline schema version from header in $baseline_file" >&2
+    return 1
+  fi
+
+  schema_contract="$(summary_schema_contract_fingerprint_from_components "$schema_version" "$header_line")"
+  if [[ "$schema_contract" == "unknown" ]]; then
+    echo "Unable to infer baseline schema contract from header in $baseline_file" >&2
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$baseline_schema_version_file")"
+  printf '%s\n' "$schema_version" > "$baseline_schema_version_file"
+  mkdir -p "$(dirname "$baseline_schema_contract_file")"
+  printf '%s\n' "$schema_contract" > "$baseline_schema_contract_file"
+
+  echo "Migrated baseline schema artifacts: $baseline_schema_version_file $baseline_schema_contract_file" >&2
+  return 0
+}
+
 sanitize_contract_field() {
   local value="$1"
   value="${value//$'\t'/ }"
@@ -1143,6 +1182,10 @@ while [[ $# -gt 0 ]]; do
       ALLOW_UPDATE_BASELINE_ON_FAILURE=1
       shift
       ;;
+    --migrate-baseline-schema-artifacts)
+      MIGRATE_BASELINE_SCHEMA_ARTIFACTS=1
+      shift
+      ;;
     --fail-on-diff)
       FAIL_ON_DIFF=1
       shift
@@ -1313,6 +1356,29 @@ if [[ "$BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT" -eq 1 && "$FAIL_ON_DIFF" -eq 1 &
     echo "Baseline schema-contract file not readable: $BASELINE_SCHEMA_CONTRACT_FILE" >&2
     exit 1
   fi
+fi
+
+if [[ "$MIGRATE_BASELINE_SCHEMA_ARTIFACTS" -eq 1 ]]; then
+  if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
+    echo "--migrate-baseline-schema-artifacts cannot be combined with --update-baseline or --fail-on-diff" >&2
+    exit 1
+  fi
+  if [[ -z "$BASELINE_FILE" ]]; then
+    echo "--baseline-file is required with --migrate-baseline-schema-artifacts" >&2
+    exit 1
+  fi
+  if [[ ! -f "$BASELINE_FILE" ]]; then
+    echo "Baseline file not found: $BASELINE_FILE" >&2
+    exit 1
+  fi
+  if [[ ! -r "$BASELINE_FILE" ]]; then
+    echo "Baseline file not readable: $BASELINE_FILE" >&2
+    exit 1
+  fi
+  if ! migrate_baseline_schema_artifacts "$BASELINE_FILE" "$BASELINE_SCHEMA_VERSION_FILE" "$BASELINE_SCHEMA_CONTRACT_FILE"; then
+    exit 1
+  fi
+  exit 0
 fi
 
 if [[ "$STRICT_BASELINE_GOVERNANCE" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
