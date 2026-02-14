@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1378 - February 14, 2026
+
+### Mutation Workflow: Suite History-Window Percentile Drift Baselines
+
+1. Added suite history-window drift support in
+   `utils/run_mutation_mcy_examples.sh` for `--fail-on-diff`:
+   - `--suite-baseline-history-file FILE` (repeatable)
+   - `--suite-history-percentile P` (default `50`)
+2. Implemented percentile-derived suite baseline anchors from
+   baseline+history files for suite drift metrics:
+   - `suite_detected_mutants`
+   - `suite_relevant_mutants`
+   - `suite_coverage_percent`
+   - `suite_errors`
+3. Added validation and guardrails:
+   - history files require `--fail-on-diff`
+   - percentile must be numeric in `[0,100]`
+   - history files must exist and be readable
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-suite-baseline-history-file-requires-fail-on-diff.test`
+   - `test/Tools/run-mutation-mcy-examples-suite-history-percentile-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-suite-history-percentile-pass.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (114 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_iter1377` PASS
+
+
 ## Iteration 1377 - February 14, 2026
 
 ### OpenTitan FPV BMC: Per-Assertion Drift Governance

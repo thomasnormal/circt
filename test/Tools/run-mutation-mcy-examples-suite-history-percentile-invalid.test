@@ -1,0 +1,5 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --suite-history-percentile bad 2>&1 | FileCheck %s --check-prefix=BAD
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --suite-history-percentile 101 2>&1 | FileCheck %s --check-prefix=RANGE
+
+// BAD: --suite-history-percentile must be numeric in range [0,100]: bad
+// RANGE: --suite-history-percentile must be numeric in range [0,100]: 101
