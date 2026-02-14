@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1315 - February 14, 2026
+
+### Mutation Workflow: Strict Baseline Governance Preset
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with:
+   - `--strict-baseline-governance`
+2. Added strict preset semantics:
+   - automatically enables:
+     - `--require-policy-fingerprint-baseline`
+     - `--require-baseline-example-parity`
+   - requires `--fail-on-diff`.
+3. Added strict-option validation:
+   - `--strict-baseline-governance` now errors without `--fail-on-diff`.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-strict-baseline-governance-requires-fail-on-diff.test`
+   - `test/Tools/run-mutation-mcy-examples-strict-baseline-governance-fail.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (33/33)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-115839` PASS
+
 ## Iteration 1314 - February 14, 2026
 
 ### Mutation Workflow: Strict Baseline Example-Parity Requirement
