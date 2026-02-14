@@ -20,6 +20,9 @@ Options:
                            <TAB>[mutations_mode_weights]
                            <TAB>[mutations_profiles]<TAB>[mutations_cfg]
                            <TAB>[mutations_select]<TAB>[mutation_limit]<TAB>[example_timeout_sec]<TAB>[example_retries]<TAB>[example_retry_delay_ms]
+                           <TAB>[max_detected_drop]<TAB>[max_relevant_drop]
+                           <TAB>[max_coverage_drop_percent]
+                           <TAB>[max_errors_increase]
                            Optional fields accept '-' to inherit global values.
                            Relative design paths resolve under --examples-root
   --jobs N                Max parallel examples to execute (default: 1)
@@ -342,6 +345,10 @@ declare -A EXAMPLE_TO_MUTATION_LIMIT=()
 declare -A EXAMPLE_TO_TIMEOUT_SEC=()
 declare -A EXAMPLE_TO_RETRIES=()
 declare -A EXAMPLE_TO_RETRY_DELAY_MS=()
+declare -A EXAMPLE_TO_MAX_DETECTED_DROP=()
+declare -A EXAMPLE_TO_MAX_RELEVANT_DROP=()
+declare -A EXAMPLE_TO_MAX_COVERAGE_DROP_PERCENT=()
+declare -A EXAMPLE_TO_MAX_ERRORS_INCREASE=()
 declare -a AVAILABLE_EXAMPLES=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
@@ -726,6 +733,10 @@ reset_example_mappings() {
   EXAMPLE_TO_TIMEOUT_SEC=()
   EXAMPLE_TO_RETRIES=()
   EXAMPLE_TO_RETRY_DELAY_MS=()
+  EXAMPLE_TO_MAX_DETECTED_DROP=()
+  EXAMPLE_TO_MAX_RELEVANT_DROP=()
+  EXAMPLE_TO_MAX_COVERAGE_DROP_PERCENT=()
+  EXAMPLE_TO_MAX_ERRORS_INCREASE=()
   AVAILABLE_EXAMPLES=()
 }
 
@@ -814,6 +825,10 @@ load_example_manifest() {
   local example_timeout_override=""
   local example_retries_override=""
   local example_retry_delay_ms_override=""
+  local max_detected_drop_override=""
+  local max_relevant_drop_override=""
+  local max_coverage_drop_percent_override=""
+  local max_errors_increase_override=""
   local extra=""
   local resolved_design=""
 
@@ -833,7 +848,9 @@ load_example_manifest() {
       mutations_mode_counts_override mutations_mode_weights_override \
       mutations_profiles_override mutations_cfg_override mutations_select_override \
       mutation_limit_override example_timeout_override example_retries_override \
-      example_retry_delay_ms_override extra <<< "$line"
+      example_retry_delay_ms_override max_detected_drop_override \
+      max_relevant_drop_override max_coverage_drop_percent_override \
+      max_errors_increase_override extra <<< "$line"
 
     example_id="$(trim_whitespace "$example_id")"
     design="$(trim_whitespace "$design")"
@@ -850,10 +867,14 @@ load_example_manifest() {
     example_timeout_override="$(normalize_manifest_optional "${example_timeout_override:-}")"
     example_retries_override="$(normalize_manifest_optional "${example_retries_override:-}")"
     example_retry_delay_ms_override="$(normalize_manifest_optional "${example_retry_delay_ms_override:-}")"
+    max_detected_drop_override="$(normalize_manifest_optional "${max_detected_drop_override:-}")"
+    max_relevant_drop_override="$(normalize_manifest_optional "${max_relevant_drop_override:-}")"
+    max_coverage_drop_percent_override="$(normalize_manifest_optional "${max_coverage_drop_percent_override:-}")"
+    max_errors_increase_override="$(normalize_manifest_optional "${max_errors_increase_override:-}")"
     extra="$(trim_whitespace "${extra:-}")"
 
     if [[ -z "$example_id" || -z "$design" || -z "$top" || -n "$extra" ]]; then
-      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 12 optional override columns)." >&2
+      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 16 optional override columns)." >&2
       return 1
     fi
 
@@ -879,6 +900,22 @@ load_example_manifest() {
     fi
     if [[ -n "$example_retry_delay_ms_override" && ! "$example_retry_delay_ms_override" =~ ^[0-9]+$ ]]; then
       echo "Invalid example_retry_delay_ms override in manifest row ${line_no}: ${example_retry_delay_ms_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_detected_drop_override" && ! "$max_detected_drop_override" =~ ^[0-9]+$ ]]; then
+      echo "Invalid max_detected_drop override in manifest row ${line_no}: ${max_detected_drop_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_relevant_drop_override" && ! "$max_relevant_drop_override" =~ ^[0-9]+$ ]]; then
+      echo "Invalid max_relevant_drop override in manifest row ${line_no}: ${max_relevant_drop_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_coverage_drop_percent_override" && ! "$max_coverage_drop_percent_override" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      echo "Invalid max_coverage_drop_percent override in manifest row ${line_no}: ${max_coverage_drop_percent_override}" >&2
+      return 1
+    fi
+    if [[ -n "$max_errors_increase_override" && ! "$max_errors_increase_override" =~ ^[0-9]+$ ]]; then
+      echo "Invalid max_errors_increase override in manifest row ${line_no}: ${max_errors_increase_override}" >&2
       return 1
     fi
     if [[ -n "$mutations_mode_counts_override" && -n "$mutations_mode_weights_override" ]]; then
@@ -932,6 +969,18 @@ load_example_manifest() {
     fi
     if [[ -n "$example_retry_delay_ms_override" ]]; then
       EXAMPLE_TO_RETRY_DELAY_MS["$example_id"]="$example_retry_delay_ms_override"
+    fi
+    if [[ -n "$max_detected_drop_override" ]]; then
+      EXAMPLE_TO_MAX_DETECTED_DROP["$example_id"]="$max_detected_drop_override"
+    fi
+    if [[ -n "$max_relevant_drop_override" ]]; then
+      EXAMPLE_TO_MAX_RELEVANT_DROP["$example_id"]="$max_relevant_drop_override"
+    fi
+    if [[ -n "$max_coverage_drop_percent_override" ]]; then
+      EXAMPLE_TO_MAX_COVERAGE_DROP_PERCENT["$example_id"]="$max_coverage_drop_percent_override"
+    fi
+    if [[ -n "$max_errors_increase_override" ]]; then
+      EXAMPLE_TO_MAX_ERRORS_INCREASE["$example_id"]="$max_errors_increase_override"
     fi
   done < "$file"
 
@@ -1522,7 +1571,25 @@ evaluate_summary_drift() {
       append_drift_row "$drift_file" "$example" "status" "${_bs:-}" "$status" "ok" ""
     fi
 
-    if (( detected + max_detected_drop < _bd )); then
+    local effective_max_detected_drop="$max_detected_drop"
+    local effective_max_relevant_drop="$max_relevant_drop"
+    local effective_max_coverage_drop_percent="$max_coverage_drop_percent"
+    local effective_max_errors_increase="$max_errors_increase"
+
+    if [[ -n "${EXAMPLE_TO_MAX_DETECTED_DROP[$example]+x}" ]]; then
+      effective_max_detected_drop="${EXAMPLE_TO_MAX_DETECTED_DROP[$example]}"
+    fi
+    if [[ -n "${EXAMPLE_TO_MAX_RELEVANT_DROP[$example]+x}" ]]; then
+      effective_max_relevant_drop="${EXAMPLE_TO_MAX_RELEVANT_DROP[$example]}"
+    fi
+    if [[ -n "${EXAMPLE_TO_MAX_COVERAGE_DROP_PERCENT[$example]+x}" ]]; then
+      effective_max_coverage_drop_percent="${EXAMPLE_TO_MAX_COVERAGE_DROP_PERCENT[$example]}"
+    fi
+    if [[ -n "${EXAMPLE_TO_MAX_ERRORS_INCREASE[$example]+x}" ]]; then
+      effective_max_errors_increase="${EXAMPLE_TO_MAX_ERRORS_INCREASE[$example]}"
+    fi
+
+    if (( detected + effective_max_detected_drop < _bd )); then
       if ! append_drift_candidate "$drift_file" "$example" "detected_mutants" "$_bd" "$detected" "detected_decreased"; then
         regressions=$((regressions + 1))
       fi
@@ -1531,7 +1598,7 @@ evaluate_summary_drift() {
     fi
 
     local per_example_min_coverage
-    per_example_min_coverage="$(awk -v b="$base_cov_num" -v d="$max_coverage_drop_percent" 'BEGIN { v=b-d; if (v < 0) v=0; printf "%.6f", v }')"
+    per_example_min_coverage="$(awk -v b="$base_cov_num" -v d="$effective_max_coverage_drop_percent" 'BEGIN { v=b-d; if (v < 0) v=0; printf "%.6f", v }')"
     if float_lt "$coverage_num" "$per_example_min_coverage"; then
       if ! append_drift_candidate "$drift_file" "$example" "coverage_percent" "$base_cov_num" "$coverage_num" "coverage_decreased"; then
         regressions=$((regressions + 1))
@@ -1540,7 +1607,7 @@ evaluate_summary_drift() {
       append_drift_row "$drift_file" "$example" "coverage_percent" "$base_cov_num" "$coverage_num" "ok" ""
     fi
 
-    if (( errors > _berr + max_errors_increase )); then
+    if (( errors > _berr + effective_max_errors_increase )); then
       if ! append_drift_candidate "$drift_file" "$example" "errors" "$_berr" "$errors" "errors_increased"; then
         regressions=$((regressions + 1))
       fi
@@ -1548,7 +1615,7 @@ evaluate_summary_drift() {
       append_drift_row "$drift_file" "$example" "errors" "$_berr" "$errors" "ok" ""
     fi
 
-    if (( relevant + max_relevant_drop < _br )); then
+    if (( relevant + effective_max_relevant_drop < _br )); then
       if ! append_drift_candidate "$drift_file" "$example" "relevant_mutants" "$_br" "$relevant" "relevant_decreased"; then
         regressions=$((regressions + 1))
       fi

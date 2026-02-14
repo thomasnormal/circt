@@ -1,5 +1,73 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1371 - February 14, 2026
+
+### Mutation Workflow: Per-Example Manifest Drift-Budget Overrides
+
+1. Extended example-manifest schema in
+   `utils/run_mutation_mcy_examples.sh` with optional per-example baseline
+   drift budget override columns:
+   - `max_detected_drop`
+   - `max_relevant_drop`
+   - `max_coverage_drop_percent`
+   - `max_errors_increase`
+2. Applied manifest override budgets during per-example `--fail-on-diff`
+   regression checks, while keeping suite-aggregate drift budgets controlled by
+   existing global CLI options.
+3. Added manifest parsing validation for new override columns.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-drift-budget-override-pass.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-invalid-max-detected-drop-override.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (104 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_iter1370` PASS
+
+
+## Iteration 1370 - February 14, 2026
+
+### OpenTitan FPV: Target-Manifest Baseline Drift Governance
+
+1. Added a dedicated OpenTitan FPV target-manifest drift checker:
+   - `utils/check_opentitan_target_manifest_drift.py`
+   - compares baseline/current selected-target metadata and reports deterministic
+     target-level drift rows.
+2. Extended `utils/run_formal_all.sh` with first-class target-manifest drift
+   controls:
+   - `--opentitan-fpv-target-manifest-baseline-file`
+   - `--opentitan-fpv-target-manifest-drift-file`
+   - `--opentitan-fpv-target-manifest-drift-allowlist-file`
+   - `--update-opentitan-fpv-target-manifest-baseline`
+   - `--fail-on-opentitan-fpv-target-manifest-drift`
+3. Integrated strict-gate defaults for OpenTitan FPV target selection:
+   - with `--strict-gate` and a target-manifest baseline configured,
+     target-manifest drift is now enforced by default.
+4. Added allowlist governance and validation:
+   - allowlist requires `--fail-on-opentitan-fpv-target-manifest-drift` or
+     `--strict-gate`
+   - allowlist readability and baseline preconditions validated up-front.
+5. Added focused regressions:
+   - checker-level:
+     - `test/Tools/check-opentitan-target-manifest-drift-none.test`
+     - `test/Tools/check-opentitan-target-manifest-drift-fields.test`
+     - `test/Tools/check-opentitan-target-manifest-drift-allowlist.test`
+   - runner integration:
+     - `test/Tools/run-formal-all-opentitan-fpv-target-manifest-drift-requires-baseline.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-target-manifest-drift-allowlist-requires-gate.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-target-manifest-drift.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-target-manifest-drift-allowlist.test`
+     - `test/Tools/run-formal-all-strict-gate-opentitan-fpv-target-manifest-drift-defaults.test`
+   - updated:
+     - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/check_opentitan_target_manifest_drift.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/check-opentitan-target-manifest-drift-none.test build-test/test/Tools/check-opentitan-target-manifest-drift-fields.test build-test/test/Tools/check-opentitan-target-manifest-drift-allowlist.test build-test/test/Tools/run-formal-all-opentitan-fpv-target-manifest-drift-requires-baseline.test build-test/test/Tools/run-formal-all-opentitan-fpv-target-manifest-drift-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-opentitan-fpv-target-manifest-drift.test build-test/test/Tools/run-formal-all-opentitan-fpv-target-manifest-drift-allowlist.test build-test/test/Tools/run-formal-all-strict-gate-opentitan-fpv-target-manifest-drift-defaults.test build-test/test/Tools/run-formal-all-opentitan-fpv-target-manifest.test build-test/test/Tools/run-formal-all-opentitan-fpv-target-manifest-multi-cfg.test build-test/test/Tools/run-formal-all-opentitan-fpv-compile-contract-drift.test build-test/test/Tools/run-formal-all-opentitan-fpv-compile-contract-drift-allowlist.test build-test/test/Tools/run-formal-all-help.test` PASS (13/13)
+
 ## Iteration 1369 - February 14, 2026
 
 ### Mutation Workflow: Configurable Baseline Drift Budgets
