@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1360 - February 14, 2026
+
+### Mutation Workflow: Retry-Reason Drift Tolerance Policies
+
+1. Extended retry-reason drift governance in
+   `utils/run_mutation_mcy_examples.sh` with tolerance controls:
+   - `--retry-reason-drift-tolerances reason=N[,reason=N...]`
+   - `--retry-reason-drift-suite-tolerance N`
+2. Updated retry-reason drift policy semantics:
+   - baseline reason regressions now trigger only when
+     `current > baseline + per_reason_tolerance`.
+   - newly introduced reasons are allowed up to configured per-reason
+     tolerance before failing.
+   - suite-level retry regression now triggers only when
+     `suite_current > suite_baseline + suite_tolerance`.
+3. Added validation/parsing coverage for tolerance options:
+   - malformed spec, invalid token, non-integer value, duplicate reason.
+4. Added focused regression:
+   - `test/Tools/run-mutation-mcy-examples-retry-reason-drift-tolerance-smoke.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+     - `test/Tools/run-mutation-mcy-examples-min-total-thresholds-invalid.test`.
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (88 selected)
+
 ## Iteration 1359 - February 14, 2026
 
 ### Mutation Workflow: Retry-Reason Baseline Drift Governance
