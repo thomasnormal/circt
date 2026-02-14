@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1339 - February 14, 2026
+
+### Mutation Workflow: Aggregate Error-Budget Gate
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with:
+   - `--max-total-errors N`
+   - fails when total `errors` across selected examples exceeds `N`.
+2. Integrated aggregate error gating into suite diagnostics:
+   - appended to suite gate output as `errors>...` alongside existing
+     aggregate detected/relevant/coverage checks.
+3. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-suite-gate-max-total-errors.test`
+   - updated `test/Tools/run-mutation-mcy-examples-min-total-thresholds-invalid.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`.
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (64/64)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --max-total-errors 0 --out-dir /tmp/mcy-smoke-20260214-1339` PASS
+
 ## Iteration 1338 - February 14, 2026
 
 ### Mutation Workflow: Suite-Level Aggregate Gates for MCY Runner

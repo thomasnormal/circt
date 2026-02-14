@@ -43,6 +43,8 @@ Options:
                            (0-100, default: disabled)
   --max-errors N           Fail if reported errors per example exceed N
                            (default: disabled)
+  --max-total-errors N     Fail if total reported errors across selected
+                           examples exceed N (default: disabled)
   --min-total-detected N   Fail if total detected mutants across selected
                            examples is below N (default: disabled)
   --min-total-relevant N   Fail if total relevant mutants across selected
@@ -159,6 +161,7 @@ MAX_ERRORS=""
 MIN_TOTAL_DETECTED=""
 MIN_TOTAL_RELEVANT=""
 MIN_TOTAL_COVERAGE_PERCENT=""
+MAX_TOTAL_ERRORS=""
 BASELINE_FILE=""
 BASELINE_SCHEMA_VERSION_FILE=""
 BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
@@ -1200,6 +1203,10 @@ while [[ $# -gt 0 ]]; do
       MIN_TOTAL_COVERAGE_PERCENT="$2"
       shift 2
       ;;
+    --max-total-errors)
+      MAX_TOTAL_ERRORS="$2"
+      shift 2
+      ;;
     --baseline-file)
       BASELINE_FILE="$2"
       shift 2
@@ -1361,6 +1368,10 @@ if [[ -n "$MIN_TOTAL_COVERAGE_PERCENT" ]]; then
     echo "--min-total-coverage-percent must be numeric in range [0,100]: $MIN_TOTAL_COVERAGE_PERCENT" >&2
     exit 1
   fi
+fi
+if [[ -n "$MAX_TOTAL_ERRORS" ]] && ! is_nonneg_int "$MAX_TOTAL_ERRORS"; then
+  echo "--max-total-errors must be a non-negative integer: $MAX_TOTAL_ERRORS" >&2
+  exit 1
 fi
 if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
   if [[ -z "$BASELINE_FILE" ]]; then
@@ -1800,6 +1811,12 @@ if [[ -n "$MIN_TOTAL_COVERAGE_PERCENT" ]]; then
     fi
     suite_gate_failure+="coverage<${MIN_TOTAL_COVERAGE_PERCENT}"
   fi
+fi
+if [[ -n "$MAX_TOTAL_ERRORS" && "$total_errors" -gt "$MAX_TOTAL_ERRORS" ]]; then
+  if [[ -n "$suite_gate_failure" ]]; then
+    suite_gate_failure+=","
+  fi
+  suite_gate_failure+="errors>${MAX_TOTAL_ERRORS}"
 fi
 if [[ -n "$suite_gate_failure" ]]; then
   overall_rc=1
