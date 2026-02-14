@@ -288,6 +288,14 @@ verilator-verification, and yosys corpora).
      - `utils/run_opentitan_connectivity_circt_bmc.py`
    - `CONNECTION` rules are synthesized into bind-check cases and executed via
      generic `run_pairwise_circt_bmc.py` with deterministic rule sharding.
+   - `CONDITION` rows are now consumed as guard semantics on the owning
+     connectivity assertion:
+     - conditions are associated to the preceding `CONNECTION` in CSV order.
+     - `--opentitan-connectivity-rule-filter` now matches both connection rule
+       IDs/names and associated condition rule IDs/names.
+     - guarded implication lowering uses:
+       - conjunction of all expected-true condition checks
+       - OR fallback over expected-false condition checks (when provided).
 6. Phase F scalability bootstrap is landed for deterministic sharded execution:
    - `run_opentitan_fpv_circt_bmc.py` now supports deterministic target sharding
      (`--target-shard-count`, `--target-shard-index`).
@@ -325,10 +333,10 @@ verilator-verification, and yosys corpora).
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.
 6. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
 7. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
-8. **Connectivity semantic depth gap**: `CONNECTION` rows are executable through
-   BMC, but `CONDITION` rule semantics, connectivity-specific LEC parity, and
-   richer connectivity status buckets (`covered`/`unreachable`) are still
-   pending.
+8. **Connectivity semantic depth gap**: `CONNECTION` + attached `CONDITION`
+   guard semantics are executable through BMC, but connectivity-specific LEC
+   parity and richer connectivity status buckets (`covered`/`unreachable`) are
+   still pending.
 
 ### Next Long-Term Features (best long-term path)
 

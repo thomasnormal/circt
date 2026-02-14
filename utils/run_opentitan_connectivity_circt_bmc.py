@@ -48,6 +48,12 @@ class ConnectivityRule:
     dest_signal: str
 
 
+@dataclass(frozen=True)
+class ConnectivityConnectionGroup:
+    connection: ConnectivityRule
+    conditions: tuple[ConnectivityRule, ...]
+
+
 def fail(msg: str) -> None:
     print(msg, file=sys.stderr)
     raise SystemExit(1)
@@ -144,6 +150,68 @@ def parse_rules_manifest(path: Path) -> list[ConnectivityRule]:
     return out
 
 
+def build_connection_groups(
+    rules: list[ConnectivityRule],
+) -> list[ConnectivityConnectionGroup]:
+    groups: list[ConnectivityConnectionGroup] = []
+    current_connection: ConnectivityRule | None = None
+    current_conditions: list[ConnectivityRule] = []
+    orphan_conditions: list[ConnectivityRule] = []
+
+    for rule in rules:
+        if rule.rule_type == "CONNECTION":
+            if current_connection is not None:
+                groups.append(
+                    ConnectivityConnectionGroup(
+                        connection=current_connection,
+                        conditions=tuple(current_conditions),
+                    )
+                )
+            current_connection = rule
+            current_conditions = []
+            continue
+        if rule.rule_type != "CONDITION":
+            fail(
+                "unsupported connectivity rule type in manifest: "
+                f"{rule.rule_type} ({rule.rule_id})"
+            )
+        if current_connection is None or rule.csv_file != current_connection.csv_file:
+            orphan_conditions.append(rule)
+            continue
+        current_conditions.append(rule)
+
+    if current_connection is not None:
+        groups.append(
+            ConnectivityConnectionGroup(
+                connection=current_connection,
+                conditions=tuple(current_conditions),
+            )
+        )
+
+    if orphan_conditions:
+        first = orphan_conditions[0]
+        fail(
+            "orphan CONDITION row without preceding CONNECTION in manifest: "
+            f"{first.csv_file}:{first.csv_row} ({first.rule_id})"
+        )
+    return groups
+
+
+def group_matches_rule_filter(
+    group: ConnectivityConnectionGroup, rule_filter_re: re.Pattern[str] | None
+) -> bool:
+    if rule_filter_re is None:
+        return True
+    tokens = [group.connection.rule_id, group.connection.rule_name]
+    for condition in group.conditions:
+        tokens.append(condition.rule_id)
+        tokens.append(condition.rule_name)
+    for token in tokens:
+        if token and rule_filter_re.search(token):
+            return True
+    return False
+
+
 def normalize_string_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -180,6 +248,7 @@ def run_fusesoc_setup(
     target: str,
     tool: str,
 ) -> tuple[int, Path]:
+    job_dir.mkdir(parents=True, exist_ok=True)
     log_path = job_dir / "fusesoc-setup.log"
     cmd = [
         fusesoc_bin,
@@ -268,6 +337,41 @@ def block_signal_expr(block: str, signal: str, top_module: str) -> str:
     return b or s
 
 
+def build_condition_guard_expr(
+    conditions: tuple[ConnectivityRule, ...],
+    top_module: str,
+) -> str:
+    if not conditions:
+        return ""
+    true_terms: list[str] = []
+    false_terms: list[str] = []
+    for condition in conditions:
+        cond_expr = block_signal_expr(
+            condition.src_block, condition.src_signal, top_module
+        )
+        if not cond_expr:
+            fail(
+                "invalid CONDITION row missing signal expression: "
+                f"{condition.csv_file}:{condition.csv_row} ({condition.rule_id})"
+            )
+        expected_true = condition.dest_block.strip()
+        if not expected_true:
+            fail(
+                "invalid CONDITION row missing expected-true value: "
+                f"{condition.csv_file}:{condition.csv_row} ({condition.rule_id})"
+            )
+        true_terms.append(f"(({cond_expr}) === ({expected_true}))")
+        expected_false = condition.dest_signal.strip()
+        if expected_false:
+            false_terms.append(f"(({cond_expr}) === ({expected_false}))")
+
+    true_expr = " && ".join(true_terms)
+    if false_terms:
+        false_expr = " || ".join(false_terms)
+        return f"(({true_expr}) || ({false_expr}))"
+    return f"({true_expr})"
+
+
 def synthesize_rule_checker(
     out_path: Path,
     module_name: str,
@@ -275,11 +379,15 @@ def synthesize_rule_checker(
     src_expr: str,
     dst_expr: str,
     rule_id: str,
+    guard_expr: str,
 ) -> None:
+    assertion_expr = f"(({src_expr}) === ({dst_expr}))"
+    if guard_expr:
+        assertion_expr = f"((!({guard_expr})) || {assertion_expr})"
     body = f"""// Auto-generated connectivity check for {rule_id}
 module {module_name};
   always_comb begin
-    assert (({src_expr}) === ({dst_expr}));
+    assert ({assertion_expr});
   end
 endmodule
 
@@ -294,13 +402,14 @@ def build_case_manifest(
     base_source_files: list[str],
     include_dirs: list[str],
     defines: list[str],
-    rules: list[ConnectivityRule],
+    groups: list[ConnectivityConnectionGroup],
     generated_sv_files: dict[str, Path],
     bound: int,
     ignore_asserts_until: int,
 ) -> None:
     lines: list[str] = []
-    for rule in rules:
+    for group in groups:
+        rule = group.connection
         generated = generated_sv_files.get(rule.rule_id)
         if generated is None:
             continue
@@ -427,20 +536,21 @@ def main() -> int:
 
     target = parse_target_manifest(target_manifest)
     rules = parse_rules_manifest(rules_manifest)
-    connection_rules = [r for r in rules if r.rule_type == "CONNECTION"]
-    if rule_filter_re is not None:
-        connection_rules = [
-            r
-            for r in connection_rules
-            if rule_filter_re.search(r.rule_id) or rule_filter_re.search(r.rule_name)
-        ]
-    selected_rules = [
-        r for idx, r in enumerate(connection_rules) if (idx % rule_shard_count) == rule_shard_index
+    connection_groups = build_connection_groups(rules)
+    filtered_groups = [
+        group
+        for group in connection_groups
+        if group_matches_rule_filter(group, rule_filter_re)
+    ]
+    selected_groups = [
+        group
+        for idx, group in enumerate(filtered_groups)
+        if (idx % rule_shard_count) == rule_shard_index
     ]
 
     results_file.parent.mkdir(parents=True, exist_ok=True)
     results_file.write_text("", encoding="utf-8")
-    if not selected_rules:
+    if not selected_groups:
         print(
             "No OpenTitan connectivity BMC cases selected.",
             file=sys.stderr,
@@ -513,13 +623,15 @@ def main() -> int:
         checks_dir = workdir / "checks"
         checks_dir.mkdir(parents=True, exist_ok=True)
         generated_sv_files: dict[str, Path] = {}
-        skipped_rules = 0
-        for index, rule in enumerate(selected_rules):
+        skipped_connections = 0
+        for index, group in enumerate(selected_groups):
+            rule = group.connection
             src_expr = block_signal_expr(rule.src_block, rule.src_signal, top_module)
             dst_expr = block_signal_expr(rule.dest_block, rule.dest_signal, top_module)
             if not src_expr or not dst_expr:
-                skipped_rules += 1
+                skipped_connections += 1
                 continue
+            guard_expr = build_condition_guard_expr(group.conditions, top_module)
             module_token = sanitize_token(f"conn_rule_{index}_{rule.rule_name}")
             if not module_token:
                 module_token = f"conn_rule_{index}"
@@ -532,6 +644,7 @@ def main() -> int:
                 src_expr,
                 dst_expr,
                 rule.rule_id,
+                guard_expr,
             )
             generated_sv_files[rule.rule_id] = out_sv
 
@@ -542,7 +655,7 @@ def main() -> int:
             source_files,
             include_dirs,
             defines,
-            selected_rules,
+            selected_groups,
             generated_sv_files,
             bound if bound > 0 else 1,
             ignore_asserts_until,
@@ -590,8 +703,10 @@ def main() -> int:
 
         print(
             "opentitan connectivity bmc: "
-            f"target={target.target_name} selected_rules={len(selected_rules)} "
-            f"generated_cases={len(generated_sv_files)} skipped_rules={skipped_rules} "
+            f"target={target.target_name} selected_connections={len(selected_groups)} "
+            f"selected_conditions={sum(len(group.conditions) for group in selected_groups)} "
+            f"generated_cases={len(generated_sv_files)} "
+            f"skipped_connections={skipped_connections} "
             f"top={top_module} shard={rule_shard_index}/{rule_shard_count}",
             file=sys.stderr,
             flush=True,
