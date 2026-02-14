@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1343 - February 14, 2026
+
+### Mutation Workflow: Parallel Example Execution (`--jobs`)
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with:
+   - `--jobs N` to cap concurrent example workers (default: `1`).
+2. Refactored per-example execution into `run_example_worker` and a separate
+   deterministic aggregation pass:
+   - preserves stable summary row ordering by selected example list.
+   - preserves existing per-example and suite gate semantics.
+   - reports worker-level failures without suppressing aggregate diagnostics.
+3. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-jobs-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-jobs-smoke.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+4. Restored default non-smoke tooling behavior by retaining
+   `YOSYS_BIN="${YOSYS:-yosys}"` as the default resolver input.
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (68/68)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 4 --out-dir /tmp/mcy_examples_smoke_jobs4` PASS
+
+
 ## Iteration 1342 - February 14, 2026
 
 ### OpenTitan Connectivity Objective Parity: Missing-Policy + Metadata Hardening
