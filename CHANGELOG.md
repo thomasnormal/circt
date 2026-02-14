@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1363 - February 14, 2026
+
+### Mutation Workflow: Retry-Reason Sidecar Controls and Strict Baseline Artifact Gates
+
+1. Extended `utils/run_mutation_mcy_examples.sh` retry-reason schema governance
+   with explicit sidecar path controls:
+   - `--retry-reason-baseline-schema-version-file FILE`
+   - `--retry-reason-baseline-schema-contract-file FILE`
+   - `--retry-reason-summary-schema-version-file FILE`
+   - `--retry-reason-summary-schema-contract-file FILE`
+2. Added strict retry-reason baseline schema-artifact gating:
+   - `--require-retry-reason-baseline-schema-artifacts`
+   - requires `--fail-on-retry-reason-diff`
+   - enforces baseline retry-reason schema sidecars exist and are readable.
+3. Strengthened explicit-path validation for retry-reason drift mode:
+   - when explicit retry-reason baseline schema sidecar paths are provided,
+     missing/unreadable files now fail fast before drift evaluation.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-require-retry-reason-baseline-schema-artifacts-requires-retry-reason-diff.test`
+   - `test/Tools/run-mutation-mcy-examples-retry-reason-baseline-schema-version-file-missing.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-mutation-mcy-examples-help.test build-test/test/Tools/run-mutation-mcy-examples-require-retry-reason-baseline-schema-artifacts-requires-retry-reason-diff.test build-test/test/Tools/run-mutation-mcy-examples-retry-reason-baseline-schema-version-file-missing.test` PASS (3/3)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (92 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --baseline-file /tmp/mcy_retry_schema_req_baseline.tsv --update-baseline --out-dir /tmp/mcy_retry_schema_req_update` PASS
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --baseline-file /tmp/mcy_retry_schema_req_baseline.tsv --fail-on-retry-reason-diff --require-retry-reason-baseline-schema-artifacts --out-dir /tmp/mcy_retry_schema_req_check` PASS
+
+
 ## Iteration 1362 - February 14, 2026
 
 ### Mutation Workflow: Retry-Reason Schema Artifact Governance

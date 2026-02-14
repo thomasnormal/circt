@@ -32,6 +32,11 @@
 // CHECK-DAG: --max-total-retries-by-reason
 // CHECK-DAG: --baseline-file
 // CHECK-DAG: --retry-reason-baseline-file
+// CHECK-DAG: --retry-reason-baseline-schema-version-file
+// CHECK-DAG: --retry-reason-baseline-schema-contract-file
+// CHECK-DAG: --retry-reason-summary-schema-version-file
+// CHECK-DAG: --retry-reason-summary-schema-contract-file
+// CHECK-DAG: --require-retry-reason-baseline-schema-artifacts
 // CHECK-DAG: --fail-on-retry-reason-diff
 // CHECK-DAG: --retry-reason-drift-tolerances
 // CHECK-DAG: --retry-reason-drift-suite-tolerance
