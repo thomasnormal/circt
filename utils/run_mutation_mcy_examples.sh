@@ -2744,6 +2744,8 @@ run_example_worker() {
   local native_real_harness_override=""
   local native_real_harness_resolved=""
   local native_real_harness_cmd_script=""
+  local native_real_harness_policy_token=""
+  local examples_root_policy=""
   local native_real_harness_args_spec="$NATIVE_REAL_HARNESS_ARGS"
   local native_real_harness_args_suffix=""
   local native_mutation_ops_spec="$NATIVE_MUTATION_OPS"
@@ -2808,7 +2810,14 @@ run_example_worker() {
   design_content_hash="$(hash_file_sha256 "$design")"
   policy_fingerprint_input="${example_id}"$'\n'"${top}"$'\n'"${design_content_hash}"$'\n'"${example_generate_count}"$'\n'"${example_mutations_seed}"$'\n'"${example_mutations_modes}"$'\n'"${example_mutations_mode_counts}"$'\n'"${example_mutations_mode_weights}"$'\n'"${example_mutations_profiles}"$'\n'"${example_mutations_cfg}"$'\n'"${example_mutations_select}"$'\n'"${example_mutation_limit}"$'\n'"${example_timeout_sec}"$'\n'"${example_retries}"$'\n'"${example_retry_delay_ms}"$'\n'"${SMOKE}"
   if [[ -n "$native_real_harness_override" ]]; then
-    policy_fingerprint_input+=$'\n'"${native_real_harness_override}"
+    native_real_harness_policy_token="$native_real_harness_override"
+    examples_root_policy="$(canonicalize_path_for_policy "$EXAMPLES_ROOT")"
+    if [[ "$native_real_harness_policy_token" == "$examples_root_policy" ]]; then
+      native_real_harness_policy_token="EXAMPLES_ROOT"
+    elif [[ "$native_real_harness_policy_token" == "$examples_root_policy/"* ]]; then
+      native_real_harness_policy_token="EXAMPLES_ROOT/${native_real_harness_policy_token#"$examples_root_policy/"}"
+    fi
+    policy_fingerprint_input+=$'\n'"${native_real_harness_policy_token}"
   fi
   if [[ -n "$native_mutation_ops_spec" ]]; then
     policy_fingerprint_input+=$'\n'"${native_mutation_ops_spec}"
