@@ -269,8 +269,25 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - `test/Tools/run-pairwise-circt-bmc-verilog-cache-basic.test`
    - impact:
      - reduces repeated `circt-verilog` cost for large OpenTitan FPV reruns and
-       sharded re-execution paths, moving toward Jasper/VCF-scale throughput
-       expectations without sacrificing determinism.
+     sharded re-execution paths, moving toward Jasper/VCF-scale throughput
+     expectations without sacrificing determinism.
+26. OpenTitan compile-contract scoped cache forwarding completed:
+   - `run_opentitan_fpv_circt_bmc.py` now supports OpenTitan-runner-level
+     cache controls:
+     - `--verilog-cache-mode` (`off|read|readwrite|auto`)
+     - `--verilog-cache-dir`
+     - env defaults:
+       - `BMC_OPENTITAN_VERILOG_CACHE_MODE`
+       - `BMC_OPENTITAN_VERILOG_CACHE_DIR`
+   - compile contracts now ingest `contract_fingerprint` into per-target
+     metadata and use it to derive deterministic cache namespaces per policy
+     group (`stopat`/`blackbox` partition).
+   - added regression:
+     - `test/Tools/run-opentitan-fpv-circt-bmc-verilog-cache-forwarding.test`
+   - impact:
+     - enables predictable frontend reuse from OpenTitan orchestration without
+       hard-coding OpenTitan-only frontend behavior into the generic pairwise
+       runner.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 

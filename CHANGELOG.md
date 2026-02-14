@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1406 - February 14, 2026
+
+### OpenTitan FPV BMC: Compile-Contract Scoped Frontend Cache Forwarding
+
+1. Extended `utils/run_opentitan_fpv_circt_bmc.py` with first-class verilog
+   cache controls for delegated pairwise runs:
+   - `--verilog-cache-mode` (`off|read|readwrite|auto`)
+   - `--verilog-cache-dir`
+   - env defaults:
+     - `BMC_OPENTITAN_VERILOG_CACHE_MODE`
+     - `BMC_OPENTITAN_VERILOG_CACHE_DIR`
+2. Added compile-contract fingerprint ingestion to OpenTitan compile-contract
+   rows:
+   - `contract_fingerprint` is now parsed and normalized in
+     `ContractRow.contract_fingerprint`.
+3. Implemented deterministic group-scoped cache directory derivation:
+   - for groups with a single contract fingerprint, cache subdir uses that
+     fingerprint directly.
+   - otherwise, cache subdir uses a stable hash over group fingerprints +
+     task-policy selectors (`stopat`/`blackbox`) to preserve deterministic
+     namespace partitioning.
+4. Added focused regression:
+   - `test/Tools/run-opentitan-fpv-circt-bmc-verilog-cache-forwarding.test`
+   - validates that OpenTitan runner forwards cache mode and deterministic
+     contract-scoped cache dirs into pairwise BMC invocations.
+5. Validation:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-opentitan-fpv-circt-bmc-verilog-cache-forwarding.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-basic.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-task-policy.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-launch-events-forwarding.test build-test/test/Tools/run-formal-all-opentitan-bmc.test build-test/test/Tools/run-formal-all-opentitan-bmc-mode-diff.test build-test/test/Tools/run-formal-all-opentitan-bmc-opentitan-toolchain-fallback.test build-test/test/Tools/run-formal-all-opentitan-bmc-case-policy-forwarding.test build-test/test/Tools/run-opentitan-bmc-case-policy-provenance.test` PASS
+
 ## Iteration 1405 - February 14, 2026
 
 ### Pairwise BMC: Frontend Verilog Artifact Cache
