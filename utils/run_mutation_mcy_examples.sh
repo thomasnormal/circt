@@ -43,6 +43,14 @@ Options:
                            (0-100, default: disabled)
   --max-errors N           Fail if reported errors per example exceed N
                            (default: disabled)
+  --min-total-detected N   Fail if total detected mutants across selected
+                           examples is below N (default: disabled)
+  --min-total-relevant N   Fail if total relevant mutants across selected
+                           examples is below N (default: disabled)
+  --min-total-coverage-percent P
+                           Fail if total detected/relevant coverage percent
+                           across selected examples is below P
+                           (0-100, default: disabled)
   --baseline-file FILE     Baseline summary TSV for drift checks/updates
   --update-baseline        Write current summary.tsv to --baseline-file
   --allow-update-baseline-on-failure
@@ -148,6 +156,9 @@ MIN_DETECTED=0
 MIN_RELEVANT=0
 MIN_COVERAGE_PERCENT=""
 MAX_ERRORS=""
+MIN_TOTAL_DETECTED=""
+MIN_TOTAL_RELEVANT=""
+MIN_TOTAL_COVERAGE_PERCENT=""
 BASELINE_FILE=""
 BASELINE_SCHEMA_VERSION_FILE=""
 BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
@@ -1177,6 +1188,18 @@ while [[ $# -gt 0 ]]; do
       MAX_ERRORS="$2"
       shift 2
       ;;
+    --min-total-detected)
+      MIN_TOTAL_DETECTED="$2"
+      shift 2
+      ;;
+    --min-total-relevant)
+      MIN_TOTAL_RELEVANT="$2"
+      shift 2
+      ;;
+    --min-total-coverage-percent)
+      MIN_TOTAL_COVERAGE_PERCENT="$2"
+      shift 2
+      ;;
     --baseline-file)
       BASELINE_FILE="$2"
       shift 2
@@ -1320,6 +1343,24 @@ fi
 if [[ -n "$MAX_ERRORS" ]] && ! is_nonneg_int "$MAX_ERRORS"; then
   echo "--max-errors must be a non-negative integer: $MAX_ERRORS" >&2
   exit 1
+fi
+if [[ -n "$MIN_TOTAL_DETECTED" ]] && ! is_nonneg_int "$MIN_TOTAL_DETECTED"; then
+  echo "--min-total-detected must be a non-negative integer: $MIN_TOTAL_DETECTED" >&2
+  exit 1
+fi
+if [[ -n "$MIN_TOTAL_RELEVANT" ]] && ! is_nonneg_int "$MIN_TOTAL_RELEVANT"; then
+  echo "--min-total-relevant must be a non-negative integer: $MIN_TOTAL_RELEVANT" >&2
+  exit 1
+fi
+if [[ -n "$MIN_TOTAL_COVERAGE_PERCENT" ]]; then
+  if ! is_nonneg_decimal "$MIN_TOTAL_COVERAGE_PERCENT"; then
+    echo "--min-total-coverage-percent must be numeric in range [0,100]: $MIN_TOTAL_COVERAGE_PERCENT" >&2
+    exit 1
+  fi
+  if ! awk -v v="$MIN_TOTAL_COVERAGE_PERCENT" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+    echo "--min-total-coverage-percent must be numeric in range [0,100]: $MIN_TOTAL_COVERAGE_PERCENT" >&2
+    exit 1
+  fi
 fi
 if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
   if [[ -z "$BASELINE_FILE" ]]; then
@@ -1524,6 +1565,10 @@ CURRENT_SUMMARY_SCHEMA_CONTRACT_FINGERPRINT="$(summary_schema_contract_fingerpri
 mkdir -p "$(dirname "$SUMMARY_SCHEMA_CONTRACT_FILE")"
 printf '%s\n' "$CURRENT_SUMMARY_SCHEMA_CONTRACT_FINGERPRINT" > "$SUMMARY_SCHEMA_CONTRACT_FILE"
 
+total_detected=0
+total_relevant=0
+total_errors=0
+
 for example_id in "${EXAMPLE_IDS[@]}"; do
   design="${EXAMPLE_TO_DESIGN[$example_id]}"
   top="${EXAMPLE_TO_TOP[$example_id]}"
@@ -1693,6 +1738,10 @@ EOS
     fi
   fi
 
+  total_detected=$((total_detected + detected))
+  total_relevant=$((total_relevant + relevant))
+  total_errors=$((total_errors + errors))
+
   gate_failure=""
   if [[ "$detected" -lt "$MIN_DETECTED" ]]; then
     gate_failure="detected<${MIN_DETECTED}"
@@ -1728,6 +1777,34 @@ EOS
     overall_rc=1
   fi
 done
+
+total_coverage_for_gate="0"
+if [[ "$total_relevant" -gt 0 ]]; then
+  total_coverage_for_gate="$(awk -v d="$total_detected" -v r="$total_relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
+fi
+
+suite_gate_failure=""
+if [[ -n "$MIN_TOTAL_DETECTED" && "$total_detected" -lt "$MIN_TOTAL_DETECTED" ]]; then
+  suite_gate_failure="detected<${MIN_TOTAL_DETECTED}"
+fi
+if [[ -n "$MIN_TOTAL_RELEVANT" && "$total_relevant" -lt "$MIN_TOTAL_RELEVANT" ]]; then
+  if [[ -n "$suite_gate_failure" ]]; then
+    suite_gate_failure+=","
+  fi
+  suite_gate_failure+="relevant<${MIN_TOTAL_RELEVANT}"
+fi
+if [[ -n "$MIN_TOTAL_COVERAGE_PERCENT" ]]; then
+  if float_lt "$total_coverage_for_gate" "$MIN_TOTAL_COVERAGE_PERCENT"; then
+    if [[ -n "$suite_gate_failure" ]]; then
+      suite_gate_failure+=","
+    fi
+    suite_gate_failure+="coverage<${MIN_TOTAL_COVERAGE_PERCENT}"
+  fi
+fi
+if [[ -n "$suite_gate_failure" ]]; then
+  overall_rc=1
+  echo "Suite gate failure: ${suite_gate_failure} (detected=${total_detected} relevant=${total_relevant} coverage=${total_coverage_for_gate} errors=${total_errors})" >&2
+fi
 
 if [[ "$REQUIRE_UNIQUE_SUMMARY_ROWS" -eq 1 ]]; then
   SUMMARY_CONTRACT_FILE="${OUT_DIR}/summary-contract.tsv"

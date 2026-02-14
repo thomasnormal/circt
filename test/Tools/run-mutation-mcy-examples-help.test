@@ -20,6 +20,9 @@
 // CHECK-DAG: --min-relevant
 // CHECK-DAG: --min-coverage-percent
 // CHECK-DAG: --max-errors
+// CHECK-DAG: --min-total-detected
+// CHECK-DAG: --min-total-relevant
+// CHECK-DAG: --min-total-coverage-percent
 // CHECK-DAG: --baseline-file
 // CHECK-DAG: --update-baseline
 // CHECK-DAG: --allow-update-baseline-on-failure

@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1338 - February 14, 2026
+
+### Mutation Workflow: Suite-Level Aggregate Gates for MCY Runner
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with aggregate gate options:
+   - `--min-total-detected N`
+   - `--min-total-relevant N`
+   - `--min-total-coverage-percent P`
+2. Added suite-level gate evaluation across all selected examples:
+   - computes total detected/relevant/errors and aggregate coverage percent
+   - emits explicit failure diagnostics via:
+     - `Suite gate failure: ... (detected=... relevant=... coverage=... errors=...)`
+3. Added argument contract enforcement for new suite thresholds:
+   - integer validation for total detected/relevant thresholds
+   - `[0,100]` validation for total coverage threshold.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-suite-gate-thresholds.test`
+   - `test/Tools/run-mutation-mcy-examples-min-total-thresholds-invalid.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`.
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (63/63)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --min-total-detected 0 --min-total-relevant 6 --min-total-coverage-percent 0 --out-dir /tmp/mcy-smoke-20260214-1337` PASS
+
 ## Iteration 1337 - February 14, 2026
 
 ### OpenTitan Connectivity: Cross-Lane Cover-Counter Parity Governance
