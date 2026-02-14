@@ -669,6 +669,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--assertion-results-drift-row-allowlist-file",
+        default=os.environ.get("BMC_ASSERTION_RESULTS_DRIFT_ROW_ALLOWLIST_FILE", ""),
+        help=(
+            "Optional assertion-row allowlist file for per-assertion FPV BMC "
+            "drift suppression. Match token format: "
+            "'<case_id>::<assertion_id>::<kind>' where kind is one of "
+            "missing_assertion_row,new_assertion_row,assertion_status,"
+            "solver_result,reason."
+        ),
+    )
+    parser.add_argument(
         "--fail-on-assertion-results-drift",
         action="store_true",
         default=os.environ.get("BMC_FAIL_ON_ASSERTION_RESULTS_DRIFT", "0") == "1",
@@ -1239,6 +1250,13 @@ def main() -> int:
                 allow_exact, allow_prefix, allow_regex = load_allowlist(
                     Path(args.assertion_results_drift_allowlist_file).resolve()
                 )
+            row_allow_exact: set[str] = set()
+            row_allow_prefix: list[str] = []
+            row_allow_regex: list[re.Pattern[str]] = []
+            if args.assertion_results_drift_row_allowlist_file:
+                row_allow_exact, row_allow_prefix, row_allow_regex = load_allowlist(
+                    Path(args.assertion_results_drift_row_allowlist_file).resolve()
+                )
 
             drift_rows: list[tuple[str, str, str, str]] = []
             baseline_keys = set(baseline.keys())
@@ -1246,12 +1264,28 @@ def main() -> int:
 
             for key in sorted(baseline_keys - current_keys):
                 target_name = baseline[key].target_name
+                drift_token = f"{key}::missing_assertion_row"
                 if is_allowlisted(target_name, allow_exact, allow_prefix, allow_regex):
+                    continue
+                if is_allowlisted(
+                    drift_token,
+                    row_allow_exact,
+                    row_allow_prefix,
+                    row_allow_regex,
+                ):
                     continue
                 drift_rows.append((target_name, "missing_assertion_row", key, "absent"))
             for key in sorted(current_keys - baseline_keys):
                 target_name = current[key].target_name
+                drift_token = f"{key}::new_assertion_row"
                 if is_allowlisted(target_name, allow_exact, allow_prefix, allow_regex):
+                    continue
+                if is_allowlisted(
+                    drift_token,
+                    row_allow_exact,
+                    row_allow_prefix,
+                    row_allow_regex,
+                ):
                     continue
                 drift_rows.append((target_name, "new_assertion_row", "absent", key))
 
@@ -1262,12 +1296,36 @@ def main() -> int:
                 if is_allowlisted(target_name, allow_exact, allow_prefix, allow_regex):
                     continue
                 if b.status != c.status:
+                    drift_token = f"{key}::assertion_status"
+                    if is_allowlisted(
+                        drift_token,
+                        row_allow_exact,
+                        row_allow_prefix,
+                        row_allow_regex,
+                    ):
+                        continue
                     drift_rows.append((target_name, "assertion_status", b.status, c.status))
                 if b.solver_result != c.solver_result:
+                    drift_token = f"{key}::solver_result"
+                    if is_allowlisted(
+                        drift_token,
+                        row_allow_exact,
+                        row_allow_prefix,
+                        row_allow_regex,
+                    ):
+                        continue
                     drift_rows.append(
                         (target_name, "solver_result", b.solver_result, c.solver_result)
                     )
                 if b.reason != c.reason:
+                    drift_token = f"{key}::reason"
+                    if is_allowlisted(
+                        drift_token,
+                        row_allow_exact,
+                        row_allow_prefix,
+                        row_allow_regex,
+                    ):
+                        continue
                     drift_rows.append((target_name, "reason", b.reason, c.reason))
 
             if args.assertion_results_drift_file:
