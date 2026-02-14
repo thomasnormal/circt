@@ -23,6 +23,9 @@ Options:
                            (0-100, default: disabled)
   --max-errors N           Fail if reported errors per example exceed N
                            (default: disabled)
+  --baseline-file FILE     Baseline summary TSV for drift checks/updates
+  --update-baseline        Write current summary.tsv to --baseline-file
+  --fail-on-diff           Fail on metric regression vs --baseline-file
   --smoke                  Run smoke mode without yosys:
                            - use stub mutations file
                            - use identity fake create-mutated script
@@ -31,6 +34,7 @@ Options:
 
 Outputs:
   <out-dir>/summary.tsv    Aggregated example status/coverage summary
+  <out-dir>/drift.tsv      Drift report (when --fail-on-diff)
   <out-dir>/<example>/     Per-example run artifacts
 USAGE
 }
@@ -47,6 +51,9 @@ MUTATION_LIMIT=8
 MIN_DETECTED=0
 MIN_COVERAGE_PERCENT=""
 MAX_ERRORS=""
+BASELINE_FILE=""
+UPDATE_BASELINE=0
+FAIL_ON_DIFF=0
 SMOKE=0
 KEEP_WORK=0
 EXAMPLE_IDS=()
@@ -61,6 +68,30 @@ is_nonneg_int() {
 
 is_nonneg_decimal() {
   [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+normalize_int_or_zero() {
+  local raw="${1:-0}"
+  if [[ "$raw" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$raw"
+  else
+    printf '0\n'
+  fi
+}
+
+normalize_decimal_or_zero() {
+  local raw="${1:-0}"
+  if [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    printf '%s\n' "$raw"
+  else
+    printf '0\n'
+  fi
+}
+
+float_lt() {
+  local lhs="${1:-0}"
+  local rhs="${2:-0}"
+  awk -v a="$lhs" -v b="$rhs" 'BEGIN { exit !(a + 0 < b + 0) }'
 }
 
 resolve_tool() {
@@ -107,6 +138,104 @@ metric_value_or_zero() {
   fi
 }
 
+lookup_baseline_row() {
+  local baseline_file="$1"
+  local example_id="$2"
+  awk -F '\t' -v e="$example_id" 'NR > 1 && $1 == e { print; exit }' "$baseline_file"
+}
+
+append_drift_row() {
+  local drift_file="$1"
+  local example_id="$2"
+  local metric="$3"
+  local baseline_value="$4"
+  local current_value="$5"
+  local outcome="$6"
+  local detail="$7"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$example_id" "$metric" "$baseline_value" "$current_value" "$outcome" "$detail" \
+    >> "$drift_file"
+}
+
+evaluate_summary_drift() {
+  local baseline_file="$1"
+  local summary_file="$2"
+  local drift_file="$3"
+  local regressions=0
+
+  printf 'example\tmetric\tbaseline\tcurrent\toutcome\tdetail\n' > "$drift_file"
+
+  while IFS=$'\t' read -r example status exit_code detected relevant coverage errors; do
+    [[ "$example" == "example" ]] && continue
+    if [[ -z "$example" ]]; then
+      continue
+    fi
+
+    detected="$(normalize_int_or_zero "$detected")"
+    relevant="$(normalize_int_or_zero "$relevant")"
+    errors="$(normalize_int_or_zero "$errors")"
+    local coverage_num
+    coverage_num="$(normalize_decimal_or_zero "$coverage")"
+
+    local baseline_row
+    baseline_row="$(lookup_baseline_row "$baseline_file" "$example")"
+    if [[ -z "$baseline_row" ]]; then
+      append_drift_row "$drift_file" "$example" "row" "present" "missing" "regression" "missing_baseline_row"
+      regressions=$((regressions + 1))
+      continue
+    fi
+
+    local _be _bs _bexit _bd _br _bc _berr
+    IFS=$'\t' read -r _be _bs _bexit _bd _br _bc _berr <<< "$baseline_row"
+
+    _bd="$(normalize_int_or_zero "${_bd:-0}")"
+    _br="$(normalize_int_or_zero "${_br:-0}")"
+    _berr="$(normalize_int_or_zero "${_berr:-0}")"
+    local base_cov_num
+    base_cov_num="$(normalize_decimal_or_zero "${_bc:-0}")"
+
+    if [[ "${_bs:-}" == "PASS" && "$status" != "PASS" ]]; then
+      append_drift_row "$drift_file" "$example" "status" "${_bs:-}" "$status" "regression" "status_regressed"
+      regressions=$((regressions + 1))
+    else
+      append_drift_row "$drift_file" "$example" "status" "${_bs:-}" "$status" "ok" ""
+    fi
+
+    if [[ "$detected" -lt "$_bd" ]]; then
+      append_drift_row "$drift_file" "$example" "detected_mutants" "$_bd" "$detected" "regression" "detected_decreased"
+      regressions=$((regressions + 1))
+    else
+      append_drift_row "$drift_file" "$example" "detected_mutants" "$_bd" "$detected" "ok" ""
+    fi
+
+    if float_lt "$coverage_num" "$base_cov_num"; then
+      append_drift_row "$drift_file" "$example" "coverage_percent" "$base_cov_num" "$coverage_num" "regression" "coverage_decreased"
+      regressions=$((regressions + 1))
+    else
+      append_drift_row "$drift_file" "$example" "coverage_percent" "$base_cov_num" "$coverage_num" "ok" ""
+    fi
+
+    if [[ "$errors" -gt "$_berr" ]]; then
+      append_drift_row "$drift_file" "$example" "errors" "$_berr" "$errors" "regression" "errors_increased"
+      regressions=$((regressions + 1))
+    else
+      append_drift_row "$drift_file" "$example" "errors" "$_berr" "$errors" "ok" ""
+    fi
+
+    if [[ "$relevant" -lt "$_br" ]]; then
+      append_drift_row "$drift_file" "$example" "relevant_mutants" "$_br" "$relevant" "regression" "relevant_decreased"
+      regressions=$((regressions + 1))
+    else
+      append_drift_row "$drift_file" "$example" "relevant_mutants" "$_br" "$relevant" "ok" ""
+    fi
+  done < "$summary_file"
+
+  if [[ "$regressions" -gt 0 ]]; then
+    return 1
+  fi
+  return 0
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --examples-root)
@@ -148,6 +277,18 @@ while [[ $# -gt 0 ]]; do
     --max-errors)
       MAX_ERRORS="$2"
       shift 2
+      ;;
+    --baseline-file)
+      BASELINE_FILE="$2"
+      shift 2
+      ;;
+    --update-baseline)
+      UPDATE_BASELINE=1
+      shift
+      ;;
+    --fail-on-diff)
+      FAIL_ON_DIFF=1
+      shift
       ;;
     --smoke)
       SMOKE=1
@@ -194,6 +335,26 @@ fi
 if [[ -n "$MAX_ERRORS" ]] && ! is_nonneg_int "$MAX_ERRORS"; then
   echo "--max-errors must be a non-negative integer: $MAX_ERRORS" >&2
   exit 1
+fi
+if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
+  if [[ -z "$BASELINE_FILE" ]]; then
+    echo "--baseline-file is required with --update-baseline or --fail-on-diff" >&2
+    exit 1
+  fi
+fi
+if [[ "$UPDATE_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -eq 1 ]]; then
+  echo "Use either --update-baseline or --fail-on-diff, not both." >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
+  if [[ ! -f "$BASELINE_FILE" ]]; then
+    echo "Baseline file not found: $BASELINE_FILE" >&2
+    exit 1
+  fi
+  if [[ ! -r "$BASELINE_FILE" ]]; then
+    echo "Baseline file not readable: $BASELINE_FILE" >&2
+    exit 1
+  fi
 fi
 
 if [[ ${#EXAMPLE_IDS[@]} -eq 0 ]]; then
@@ -343,15 +504,9 @@ EOS
     detected="$(metric_value_or_zero "$metrics_file" "detected_mutants")"
     relevant="$(metric_value_or_zero "$metrics_file" "relevant_mutants")"
     errors="$(metric_value_or_zero "$metrics_file" "errors")"
-    if ! [[ "$detected" =~ ^[0-9]+$ ]]; then
-      detected="0"
-    fi
-    if ! [[ "$relevant" =~ ^[0-9]+$ ]]; then
-      relevant="0"
-    fi
-    if ! [[ "$errors" =~ ^[0-9]+$ ]]; then
-      errors="0"
-    fi
+    detected="$(normalize_int_or_zero "$detected")"
+    relevant="$(normalize_int_or_zero "$relevant")"
+    errors="$(normalize_int_or_zero "$errors")"
     if [[ "$relevant" -gt 0 ]]; then
       coverage="$(awk -v d="$detected" -v r="$relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
       coverage_for_gate="$coverage"
@@ -363,7 +518,7 @@ EOS
     gate_failure="detected<${MIN_DETECTED}"
   fi
   if [[ -n "$MIN_COVERAGE_PERCENT" ]]; then
-    if ! awk -v cov="$coverage_for_gate" -v min_cov="$MIN_COVERAGE_PERCENT" 'BEGIN { exit !(cov + 0 >= min_cov + 0) }'; then
+    if float_lt "$coverage_for_gate" "$MIN_COVERAGE_PERCENT"; then
       if [[ -n "$gate_failure" ]]; then
         gate_failure+=","
       fi
@@ -387,6 +542,20 @@ EOS
     overall_rc=1
   fi
 done
+
+if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
+  DRIFT_FILE="${OUT_DIR}/drift.tsv"
+  if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE"; then
+    overall_rc=1
+    echo "Baseline drift failure: see $DRIFT_FILE" >&2
+  fi
+fi
+
+if [[ "$UPDATE_BASELINE" -eq 1 ]]; then
+  mkdir -p "$(dirname "$BASELINE_FILE")"
+  cp "$SUMMARY_FILE" "$BASELINE_FILE"
+  echo "Updated baseline: $BASELINE_FILE" >&2
+fi
 
 cat "$SUMMARY_FILE"
 exit "$overall_rc"
