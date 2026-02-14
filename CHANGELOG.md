@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1377 - February 14, 2026
+
+### OpenTitan FPV BMC: Per-Assertion Drift Governance
+
+1. Extended `utils/run_opentitan_fpv_circt_bmc.py` with per-assertion drift
+   baseline checks:
+   - `--assertion-results-baseline-file`
+   - `--assertion-results-drift-file`
+   - `--assertion-results-drift-allowlist-file`
+   - `--fail-on-assertion-results-drift`
+2. Added per-assertion drift classification across baseline/current evidence:
+   - `missing_assertion_row`
+   - `new_assertion_row`
+   - `assertion_status`
+   - `solver_result`
+   - `reason`
+3. Extended `utils/run_formal_all.sh` to expose first-class OpenTitan FPV BMC
+   per-assertion drift controls:
+   - `--opentitan-fpv-bmc-assertion-results-baseline-file`
+   - `--opentitan-fpv-bmc-assertion-results-drift-file`
+   - `--opentitan-fpv-bmc-assertion-results-drift-allowlist-file`
+   - `--update-opentitan-fpv-bmc-assertion-results-baseline`
+   - `--fail-on-opentitan-fpv-bmc-assertion-results-drift`
+4. Strict-gate integration:
+   - with `--strict-gate` and assertion-results baseline configured,
+     per-assertion drift fail-mode is now enabled by default.
+5. Added focused regressions:
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-results-drift-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-results-drift-allowlist-requires-gate.test`
+   - `test/Tools/run-formal-all-strict-gate-opentitan-fpv-bmc-assertion-results-drift-defaults.test`
+   - updated:
+     - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-results-drift-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-results-drift-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-strict-gate-opentitan-fpv-bmc-assertion-results-drift-defaults.test` PASS (6/6)
+
 ## Iteration 1376 - February 14, 2026
 
 ### Mutation Workflow: Manifest Suite Drift-Budget Overrides
