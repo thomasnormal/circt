@@ -112,10 +112,22 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      `--opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file`
    - added grouped violation diagnostics by task_profile/status class:
      `--opentitan-fpv-bmc-assertion-status-policy-grouped-violations-file`
-10. Remaining limitation vs Jasper/VCF-style mature flows:
+10. OpenTitan missing-results diagnostics hardened for FPV BMC + LEC lanes:
+   - missing-results classification now recognizes unresolved module failures as
+     first-class reason `runner_command_unknown_module`.
+   - `opentitan-missing-results-diagnostics.tsv` now carries extracted
+     `unknown_modules` context for triage.
+   - `opentitan-unresolved-modules.tsv` now receives deterministic per-module
+     rows from both FPV BMC and LEC missing-results paths.
+11. Regression coverage added for missing-results unknown-module paths:
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-missing-results-unknown-module.test`
+   - `test/Tools/run-formal-all-opentitan-lec-missing-results-unknown-module.test`
+   - updated:
+     `test/Tools/run-formal-all-opentitan-lec-missing-results-reason.test`
+12. Remaining limitation vs Jasper/VCF-style mature flows:
    - policy execution is now structured, but default OpenTitan preset bundles
      and drift-governed policy rollout workflows are still manual.
-11. Next formal milestone (OpenTitan-aligned, backend-generic):
+13. Next formal milestone (OpenTitan-aligned, backend-generic):
    - advance per-assertion reporting parity:
      - ship canonical OpenTitan task-profile preset bundles and add baseline/
        fail governance for grouped status-policy diagnostics.

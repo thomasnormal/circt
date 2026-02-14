@@ -2559,6 +2559,8 @@ YOSYS_SVA_LAYOUT_STATUS="unknown"
 YOSYS_DIR_NORMALIZED="$YOSYS_DIR"
 OPENTITAN_DIR="${HOME}/opentitan"
 AVIP_GLOB="${HOME}/mbit/*avip*"
+OPENTITAN_UNRESOLVED_MODULES_FILE=""
+OPENTITAN_MISSING_RESULTS_DIAGNOSTICS_FILE=""
 CIRCT_VERILOG_BIN="$REPO_ROOT/build/bin/circt-verilog"
 CIRCT_VERILOG_BIN_AVIP=""
 CIRCT_VERILOG_BIN_OPENTITAN=""
@@ -3843,6 +3845,12 @@ YOSYS_DIR="$YOSYS_DIR_NORMALIZED"
 
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="$PWD/formal-results-${DATE_STR//-/}"
+fi
+if [[ -z "$OPENTITAN_UNRESOLVED_MODULES_FILE" ]]; then
+  OPENTITAN_UNRESOLVED_MODULES_FILE="$OUT_DIR/opentitan-unresolved-modules.tsv"
+fi
+if [[ -z "$OPENTITAN_MISSING_RESULTS_DIAGNOSTICS_FILE" ]]; then
+  OPENTITAN_MISSING_RESULTS_DIAGNOSTICS_FILE="$OUT_DIR/opentitan-missing-results-diagnostics.tsv"
 fi
 if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 && -z "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" ]]; then
   OPENTITAN_FPV_TARGET_MANIFEST_FILE="$OUT_DIR/opentitan-fpv-target-manifest.tsv"
@@ -12253,6 +12261,16 @@ PY
 
 results_tsv="$OUT_DIR/summary.tsv"
 : > "$results_tsv"
+if [[ -n "$OPENTITAN_UNRESOLVED_MODULES_FILE" ]]; then
+  : > "$OPENTITAN_UNRESOLVED_MODULES_FILE"
+  printf "lane_id\tsuite_name\tmode_name\tdiag\treason\tmodule_name\tsuite_log\n" \
+    >> "$OPENTITAN_UNRESOLVED_MODULES_FILE"
+fi
+if [[ -n "$OPENTITAN_MISSING_RESULTS_DIAGNOSTICS_FILE" ]]; then
+  : > "$OPENTITAN_MISSING_RESULTS_DIAGNOSTICS_FILE"
+  printf "lane_id\tsuite_name\tmode_name\tcase_kind\tdiag\treason\tunknown_modules\tsuite_log\tcase_results\n" \
+    >> "$OPENTITAN_MISSING_RESULTS_DIAGNOSTICS_FILE"
+fi
 
 printf "suite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tsummary\n" >> "$results_tsv"
 
@@ -12903,10 +12921,118 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
   fi
 fi
 
+collect_opentitan_unknown_modules_csv() {
+  local suite_log="$1"
+  if [[ ! -f "$suite_log" ]]; then
+    printf ""
+    return
+  fi
+  SUITE_LOG_PATH="$suite_log" python3 - <<'PY'
+import os
+import pathlib
+import re
+
+path = pathlib.Path(os.environ["SUITE_LOG_PATH"])
+if not path.is_file():
+  print("")
+  raise SystemExit(0)
+text = path.read_text(encoding="utf-8", errors="replace")
+patterns = [
+    r"unknown module ['\"]([^'\"]+)['\"]",
+    r"unknown module [`]([^`]+)[`]",
+    r"unknown module \\([^\\]+)\\",
+    r"unknown module ([A-Za-z_][A-Za-z0-9_$.:/-]*)",
+]
+modules = set()
+for pattern in patterns:
+  modules.update(re.findall(pattern, text))
+modules = sorted(modules)
+print(",".join(modules))
+PY
+}
+
+record_opentitan_missing_results_diag() {
+  local lane_id="$1"
+  local suite_name="$2"
+  local mode_name="$3"
+  local case_kind="$4"
+  local diag="$5"
+  local reason="$6"
+  local suite_log="$7"
+  local case_results="$8"
+  local unknown_modules_csv=""
+  unknown_modules_csv="$(collect_opentitan_unknown_modules_csv "$suite_log")"
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    "$lane_id" "$suite_name" "$mode_name" "$case_kind" "$diag" "$reason" \
+    "$unknown_modules_csv" "$suite_log" "$case_results" \
+    >> "$OPENTITAN_MISSING_RESULTS_DIAGNOSTICS_FILE"
+}
+
+record_opentitan_unresolved_modules_from_log() {
+  local lane_id="$1"
+  local suite_name="$2"
+  local mode_name="$3"
+  local diag="$4"
+  local reason="$5"
+  local suite_log="$6"
+  SUITE_LOG_PATH="$suite_log" \
+  LANE_ID="$lane_id" \
+  SUITE_NAME="$suite_name" \
+  MODE_NAME="$mode_name" \
+  DIAG="$diag" \
+  REASON="$reason" \
+  OUT_PATH="$OPENTITAN_UNRESOLVED_MODULES_FILE" \
+  python3 - <<'PY'
+import csv
+import os
+import pathlib
+import re
+
+suite_log = pathlib.Path(os.environ["SUITE_LOG_PATH"])
+if not suite_log.is_file():
+  raise SystemExit(0)
+text = suite_log.read_text(encoding="utf-8", errors="replace")
+patterns = [
+    r"unknown module ['\"]([^'\"]+)['\"]",
+    r"unknown module [`]([^`]+)[`]",
+    r"unknown module \\([^\\]+)\\",
+    r"unknown module ([A-Za-z_][A-Za-z0-9_$.:/-]*)",
+]
+mods_set = set()
+for pattern in patterns:
+  mods_set.update(re.findall(pattern, text))
+mods = sorted(mods_set)
+if not mods:
+  raise SystemExit(0)
+out_path = pathlib.Path(os.environ["OUT_PATH"])
+out_path.parent.mkdir(parents=True, exist_ok=True)
+with out_path.open("a", encoding="utf-8", newline="") as handle:
+  writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+  for module_name in mods:
+    writer.writerow(
+      [
+        os.environ["LANE_ID"],
+        os.environ["SUITE_NAME"],
+        os.environ["MODE_NAME"],
+        os.environ["DIAG"],
+        os.environ["REASON"],
+        module_name,
+        str(suite_log),
+      ]
+    )
+PY
+}
+
 classify_opentitan_bmc_missing_results_reason() {
   local suite_log="$1"
   if [[ ! -f "$suite_log" ]]; then
     printf "runner_command_no_log\n"
+    return
+  fi
+  local unknown_modules_csv
+  unknown_modules_csv="$(collect_opentitan_unknown_modules_csv "$suite_log")"
+  if [[ -n "$unknown_modules_csv" ]]; then
+    printf "runner_command_unknown_module\n"
     return
   fi
   if grep -Fq "missing_OUT" "$suite_log"; then
@@ -13019,6 +13145,8 @@ run_opentitan_bmc_lane() {
     fi
     local missing_reason
     missing_reason="$(classify_opentitan_bmc_missing_results_reason "$suite_log")"
+    record_opentitan_missing_results_diag "$lane_id" "$suite_name" "$mode_name" "aes_sbox" "CIRCT_BMC_ERROR" "$missing_reason" "$suite_log" "$case_results"
+    record_opentitan_unresolved_modules_from_log "$lane_id" "$suite_name" "$mode_name" "CIRCT_BMC_ERROR" "$missing_reason" "$suite_log"
     printf "ERROR\taes_sbox\tmissing_results\topentitan\t%s\tCIRCT_BMC_ERROR\t%s\n" "$mode_name" "$missing_reason" > "$case_results"
     local missing_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
     local bmc_case_summary
@@ -13323,6 +13451,8 @@ run_opentitan_connectivity_bmc_lane() {
     fi
     local missing_reason
     missing_reason="$(classify_opentitan_bmc_missing_results_reason "$suite_log")"
+    record_opentitan_missing_results_diag "$lane_id" "$suite_name" "$mode_name" "connectivity_rule" "CIRCT_BMC_ERROR" "$missing_reason" "$suite_log" "$case_results"
+    record_opentitan_unresolved_modules_from_log "$lane_id" "$suite_name" "$mode_name" "CIRCT_BMC_ERROR" "$missing_reason" "$suite_log"
     printf "ERROR\tconnectivity_rule\tmissing_results\topentitan\t%s\tCIRCT_BMC_ERROR\t%s\n" "$mode_name" "$missing_reason" > "$case_results"
     local missing_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
     maybe_update_opentitan_connectivity_bmc_status_baseline
@@ -13508,7 +13638,9 @@ run_opentitan_connectivity_lec_lane() {
       return
     fi
     local missing_reason
-    missing_reason="$(classify_opentitan_bmc_missing_results_reason "$suite_log")"
+    missing_reason="$(classify_opentitan_lec_missing_results_reason "$suite_log")"
+    record_opentitan_missing_results_diag "$lane_id" "$suite_name" "$mode_name" "connectivity_rule" "CIRCT_LEC_ERROR" "$missing_reason" "$suite_log" "$case_results"
+    record_opentitan_unresolved_modules_from_log "$lane_id" "$suite_name" "$mode_name" "CIRCT_LEC_ERROR" "$missing_reason" "$suite_log"
     printf "ERROR\tconnectivity_rule\tmissing_results\topentitan\t%s\tCIRCT_LEC_ERROR\t%s\n" "$mode_name" "$missing_reason" > "$case_results"
     local missing_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
     local lec_case_summary
@@ -14362,6 +14494,8 @@ run_opentitan_fpv_bmc_lane() {
     fi
     local missing_reason
     missing_reason="$(classify_opentitan_bmc_missing_results_reason "$suite_log")"
+    record_opentitan_missing_results_diag "$lane_id" "$suite_name" "$mode_name" "fpv_target" "CIRCT_BMC_ERROR" "$missing_reason" "$suite_log" "$case_results"
+    record_opentitan_unresolved_modules_from_log "$lane_id" "$suite_name" "$mode_name" "CIRCT_BMC_ERROR" "$missing_reason" "$suite_log"
     printf "ERROR\tfpv_target\tmissing_results\topentitan\t%s\tCIRCT_BMC_ERROR\t%s\n" "$mode_name" "$missing_reason" > "$case_results"
     local missing_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
     local bmc_case_summary
@@ -14785,6 +14919,12 @@ classify_opentitan_lec_missing_results_reason() {
     printf "runner_command_no_log\n"
     return
   fi
+  local unknown_modules_csv
+  unknown_modules_csv="$(collect_opentitan_unknown_modules_csv "$suite_log")"
+  if [[ -n "$unknown_modules_csv" ]]; then
+    printf "runner_command_unknown_module\n"
+    return
+  fi
   if grep -Fq "missing_OUT" "$suite_log"; then
     printf "runner_command_missing_out\n"
     return
@@ -14881,6 +15021,8 @@ run_opentitan_lec_lane() {
     fi
     local missing_reason
     missing_reason="$(classify_opentitan_lec_missing_results_reason "$suite_log")"
+    record_opentitan_missing_results_diag "$lane_id" "$suite_name" "$mode_name" "aes_sbox" "CIRCT_LEC_ERROR" "$missing_reason" "$suite_log" "$case_results"
+    record_opentitan_unresolved_modules_from_log "$lane_id" "$suite_name" "$mode_name" "CIRCT_LEC_ERROR" "$missing_reason" "$suite_log"
     printf "ERROR\taes_sbox\tmissing_results\topentitan\t%s\tCIRCT_LEC_ERROR\t%s\n" "$mode_name" "$missing_reason" > "$case_results"
     local missing_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
     local lec_case_summary
