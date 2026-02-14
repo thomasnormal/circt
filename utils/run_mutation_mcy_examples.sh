@@ -50,6 +50,11 @@ Options:
   --require-baseline-example-parity
                            Require baseline/current example-id parity when
                            evaluating --fail-on-diff
+  --strict-baseline-governance
+                           Enable strict baseline governance bundle:
+                           --require-policy-fingerprint-baseline +
+                           --require-baseline-example-parity
+                           (requires --fail-on-diff)
   --drift-allowlist-file FILE
                            Optional allowlist for drift regressions (requires
                            --fail-on-diff). Non-empty, non-comment lines are
@@ -101,6 +106,7 @@ UPDATE_BASELINE=0
 FAIL_ON_DIFF=0
 REQUIRE_POLICY_FINGERPRINT_BASELINE=0
 REQUIRE_BASELINE_EXAMPLE_PARITY=0
+STRICT_BASELINE_GOVERNANCE=0
 DRIFT_ALLOWLIST_FILE=""
 FAIL_ON_UNUSED_DRIFT_ALLOWLIST=0
 DRIFT_ALLOWLIST_UNUSED_FILE=""
@@ -757,6 +763,10 @@ while [[ $# -gt 0 ]]; do
       REQUIRE_BASELINE_EXAMPLE_PARITY=1
       shift
       ;;
+    --strict-baseline-governance)
+      STRICT_BASELINE_GOVERNANCE=1
+      shift
+      ;;
     --drift-allowlist-file)
       DRIFT_ALLOWLIST_FILE="$2"
       shift 2
@@ -788,6 +798,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$STRICT_BASELINE_GOVERNANCE" -eq 1 ]]; then
+  REQUIRE_POLICY_FINGERPRINT_BASELINE=1
+  REQUIRE_BASELINE_EXAMPLE_PARITY=1
+fi
 
 if ! is_pos_int "$GENERATE_COUNT"; then
   echo "--generate-count must be a positive integer: $GENERATE_COUNT" >&2
@@ -831,6 +846,10 @@ if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
 fi
 if [[ "$UPDATE_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -eq 1 ]]; then
   echo "Use either --update-baseline or --fail-on-diff, not both." >&2
+  exit 1
+fi
+if [[ "$STRICT_BASELINE_GOVERNANCE" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
+  echo "--strict-baseline-governance requires --fail-on-diff" >&2
   exit 1
 fi
 if [[ "$REQUIRE_POLICY_FINGERPRINT_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
