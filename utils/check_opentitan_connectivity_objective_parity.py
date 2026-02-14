@@ -11,6 +11,7 @@ import argparse
 import csv
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -24,6 +25,18 @@ STATUS_MAP = {
     "TIMEOUT": "error",
     "ERROR": "error",
 }
+
+MISSING_POLICY_VALUES = ("ignore", "case", "all")
+
+
+@dataclass(frozen=True)
+class ObjectiveEntry:
+    objective_id: str
+    objective_class: str
+    objective_key: str
+    rule_id: str
+    status: str
+    case_path: str
 
 
 def fail(msg: str) -> None:
@@ -59,7 +72,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Optional allowlist file. Each non-comment line is exact:<token>, "
             "prefix:<prefix>, regex:<pattern>, or bare exact. Supported tokens are "
-            "<objective_id> and <objective_id>::<kind>."
+            "<objective_id>, <objective_id>::<kind>, and <rule_id>."
         ),
     )
     parser.add_argument(
@@ -76,8 +89,17 @@ def parse_args() -> argparse.Namespace:
         "--include-missing-objectives",
         action="store_true",
         help=(
-            "Also report objectives present in one lane and missing in the other. "
-            "Default compares only shared objective IDs."
+            "Deprecated alias for --missing-objective-policy=all. "
+            "Include objective IDs present in one lane and missing in the other."
+        ),
+    )
+    parser.add_argument(
+        "--missing-objective-policy",
+        choices=MISSING_POLICY_VALUES,
+        default="ignore",
+        help=(
+            "Policy for objectives present in one lane and missing in the other: "
+            "ignore (default), case (only case objectives), all (case+cover)."
         ),
     )
     return parser.parse_args()
@@ -140,8 +162,17 @@ def normalize_status(raw: str) -> str:
     return "error"
 
 
-def read_objective_rows(path: Path, lane_name: str, kind: str) -> dict[str, str]:
-    out: dict[str, str] = {}
+def parse_rule_id(objective_key: str) -> str:
+    prefix = "connectivity::"
+    if objective_key.startswith(prefix):
+        return objective_key[len(prefix) :]
+    return objective_key
+
+
+def read_objective_rows(
+    path: Path, lane_name: str, objective_class: str
+) -> dict[str, ObjectiveEntry]:
+    out: dict[str, ObjectiveEntry] = {}
     if not path.is_file():
         return out
     for line_no, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -151,37 +182,72 @@ def read_objective_rows(path: Path, lane_name: str, kind: str) -> dict[str, str]
         parts = line.split("\t")
         if len(parts) < 2:
             fail(
-                f"{lane_name} {kind} results malformed row {line_no}: "
+                f"{lane_name} {objective_class} results malformed row {line_no}: "
                 f"expected >=2 columns"
             )
         status = normalize_status(parts[0])
-        objective_payload = parts[1].strip()
-        if not objective_payload:
+        objective_key = parts[1].strip()
+        if not objective_key:
             continue
-        objective_id = f"{kind}::{objective_payload}"
+        objective_id = f"{objective_class}::{objective_key}"
+        case_path = parts[2].strip() if len(parts) >= 3 else ""
         if objective_id in out:
             fail(
                 f"duplicate objective_id '{objective_id}' in {path} row {line_no}"
             )
-        out[objective_id] = status
+        out[objective_id] = ObjectiveEntry(
+            objective_id=objective_id,
+            objective_class=objective_class,
+            objective_key=objective_key,
+            rule_id=parse_rule_id(objective_key),
+            status=status,
+            case_path=case_path,
+        )
     return out
 
 
-def emit_parity_tsv(path: Path, rows: list[tuple[str, str, str, str, str]]) -> None:
+def emit_parity_tsv(
+    path: Path, rows: list[tuple[str, str, str, str, str, str, str, str, str, str]]
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
-        writer.writerow(["objective_id", "kind", "bmc", "lec", "allowlisted"])
+        writer.writerow(
+            [
+                "objective_id",
+                "objective_class",
+                "objective_key",
+                "rule_id",
+                "kind",
+                "bmc",
+                "lec",
+                "bmc_case_path",
+                "lec_case_path",
+                "allowlisted",
+            ]
+        )
         for row in rows:
             writer.writerow(row)
+
+
+def missing_policy_for_args(args: argparse.Namespace) -> str:
+    policy = args.missing_objective_policy
+    if args.include_missing_objectives and policy == "ignore":
+        return "all"
+    return policy
 
 
 def main() -> None:
     args = parse_args()
     bmc_case_path = Path(args.bmc_case_results).resolve()
     lec_case_path = Path(args.lec_case_results).resolve()
-    bmc_cover_path = Path(args.bmc_cover_results).resolve() if args.bmc_cover_results else None
-    lec_cover_path = Path(args.lec_cover_results).resolve() if args.lec_cover_results else None
+    bmc_cover_path = (
+        Path(args.bmc_cover_results).resolve() if args.bmc_cover_results else None
+    )
+    lec_cover_path = (
+        Path(args.lec_cover_results).resolve() if args.lec_cover_results else None
+    )
+    missing_policy = missing_policy_for_args(args)
 
     if not bmc_case_path.is_file():
         fail(f"connectivity BMC case-results file not found: {bmc_case_path}")
@@ -203,49 +269,92 @@ def main() -> None:
     if lec_cover_path is not None:
         lec.update(read_objective_rows(lec_cover_path, "connectivity LEC", "cover"))
 
-    parity_rows: list[tuple[str, str, str, str, str]] = []
-    non_allowlisted_rows: list[tuple[str, str, str, str, str]] = []
+    parity_rows: list[tuple[str, str, str, str, str, str, str, str, str, str]] = []
+    non_allowlisted_rows: list[
+        tuple[str, str, str, str, str, str, str, str, str, str]
+    ] = []
 
-    def add_row(objective_id: str, kind: str, bmc_value: str, lec_value: str) -> None:
-        tokens = (f"{objective_id}::{kind}", objective_id)
+    def add_row(
+        entry: ObjectiveEntry, kind: str, bmc_value: str, lec_value: str, lec_path: str
+    ) -> None:
+        tokens = (
+            f"{entry.objective_id}::{kind}",
+            entry.objective_id,
+            entry.rule_id,
+        )
         allowlisted = any(
             is_allowlisted(token, allow_exact, allow_prefix, allow_regex)
             for token in tokens
         )
-        row = (objective_id, kind, bmc_value, lec_value, "1" if allowlisted else "0")
+        row = (
+            entry.objective_id,
+            entry.objective_class,
+            entry.objective_key,
+            entry.rule_id,
+            kind,
+            bmc_value,
+            lec_value,
+            entry.case_path,
+            lec_path,
+            "1" if allowlisted else "0",
+        )
         parity_rows.append(row)
         if not allowlisted:
             non_allowlisted_rows.append(row)
 
+    def include_missing_entry(entry: ObjectiveEntry) -> bool:
+        if missing_policy == "ignore":
+            return False
+        if missing_policy == "case":
+            return entry.objective_class == "case"
+        return True
+
     bmc_ids = set(bmc.keys())
     lec_ids = set(lec.keys())
 
-    if args.include_missing_objectives:
-        for objective_id in sorted(bmc_ids - lec_ids):
-            add_row(objective_id, "missing_in_lec", "present", "absent")
-        for objective_id in sorted(lec_ids - bmc_ids):
-            add_row(objective_id, "missing_in_bmc", "absent", "present")
+    for objective_id in sorted(bmc_ids - lec_ids):
+        entry = bmc[objective_id]
+        if include_missing_entry(entry):
+            add_row(entry, "missing_in_lec", "present", "absent", "")
+    for objective_id in sorted(lec_ids - bmc_ids):
+        entry = lec[objective_id]
+        if include_missing_entry(entry):
+            mirror_entry = ObjectiveEntry(
+                objective_id=entry.objective_id,
+                objective_class=entry.objective_class,
+                objective_key=entry.objective_key,
+                rule_id=entry.rule_id,
+                status=entry.status,
+                case_path="",
+            )
+            add_row(mirror_entry, "missing_in_bmc", "absent", "present", entry.case_path)
 
     for objective_id in sorted(bmc_ids.intersection(lec_ids)):
-        bmc_status = bmc[objective_id]
-        lec_status = lec[objective_id]
-        if bmc_status != lec_status:
-            add_row(objective_id, "status", bmc_status, lec_status)
+        bmc_entry = bmc[objective_id]
+        lec_entry = lec[objective_id]
+        if bmc_entry.status != lec_entry.status:
+            add_row(
+                bmc_entry,
+                "status",
+                bmc_entry.status,
+                lec_entry.status,
+                lec_entry.case_path,
+            )
 
     if args.out_parity_tsv:
         emit_parity_tsv(Path(args.out_parity_tsv).resolve(), parity_rows)
 
     if non_allowlisted_rows:
         sample = ", ".join(
-            f"{objective_id}:{kind}"
-            for objective_id, kind, _, _, _ in non_allowlisted_rows[:6]
+            f"{row[0]}:{row[4]}" for row in non_allowlisted_rows[:6]
         )
         if len(non_allowlisted_rows) > 6:
             sample += ", ..."
         message = (
             "opentitan connectivity objective parity mismatches detected: "
             f"rows={len(non_allowlisted_rows)} sample=[{sample}] "
-            f"bmc_case={bmc_case_path} lec_case={lec_case_path}"
+            f"bmc_case={bmc_case_path} lec_case={lec_case_path} "
+            f"missing_policy={missing_policy}"
         )
         if args.fail_on_mismatch:
             print(message, file=sys.stderr)
@@ -256,7 +365,8 @@ def main() -> None:
     print(
         "opentitan connectivity objective parity check passed: "
         f"objectives_bmc={len(bmc)} objectives_lec={len(lec)} "
-        f"shared={len(bmc_ids.intersection(lec_ids))}",
+        f"shared={len(bmc_ids.intersection(lec_ids))} "
+        f"missing_policy={missing_policy}",
         file=sys.stderr,
     )
 

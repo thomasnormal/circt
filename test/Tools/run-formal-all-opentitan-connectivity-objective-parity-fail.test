@@ -19,5 +19,5 @@
 // SUMMARY: opentitan{{[[:space:]]+}}CONNECTIVITY_BMC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
 // SUMMARY: opentitan{{[[:space:]]+}}CONNECTIVITY_LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}1
 // SUMMARY: opentitan{{[[:space:]]+}}CONNECTIVITY_OBJECTIVE_PARITY{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{.*}}objective_parity_rows=1{{.*}}objective_parity_non_allowlisted_rows=1{{.*}}objective_parity_allowlisted_rows=0
-// PARITY: objective_id{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}allowlisted
-// PARITY: case::connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}status{{[[:space:]]+}}pass{{[[:space:]]+}}fail{{[[:space:]]+}}0
+// PARITY: objective_id{{[[:space:]]+}}objective_class{{[[:space:]]+}}objective_key{{[[:space:]]+}}rule_id{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}bmc_case_path{{[[:space:]]+}}lec_case_path{{[[:space:]]+}}allowlisted
+// PARITY: case::connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}case{{[[:space:]]+}}connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}chip.csv:RULE_CLK{{[[:space:]]+}}status{{[[:space:]]+}}pass{{[[:space:]]+}}fail{{[[:space:]]+}}{{.*}}opentitan-connectivity-bmc-work{{[[:space:]]+}}{{.*}}opentitan-connectivity-lec-work{{[[:space:]]+}}0

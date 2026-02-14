@@ -362,13 +362,17 @@ verilator-verification, and yosys corpora).
        - `utils/check_opentitan_connectivity_objective_parity.py`
      - parity lane in `run_formal_all.sh`:
        - `opentitan/CONNECTIVITY_OBJECTIVE_PARITY`
-     - parity controls through `run_formal_all.sh`:
+   - parity controls through `run_formal_all.sh`:
        - `--opentitan-connectivity-objective-parity-file`
        - `--opentitan-connectivity-objective-parity-allowlist-file`
        - `--fail-on-opentitan-connectivity-objective-parity`
        - `--opentitan-connectivity-objective-parity-include-missing`
-     - checker compares normalized objective-level statuses across shared
-       objective IDs by default, with optional missing-objective drift mode.
+       - `--opentitan-connectivity-objective-parity-missing-policy`
+    - checker now emits structured objective metadata rows
+      (`objective_id/objective_class/objective_key/rule_id/kind`) and compares
+      normalized objective-level statuses across shared objective IDs by
+      default, with explicit missing-objective policy controls
+      (`ignore|case|all`).
    - new connectivity runner:
      - `utils/run_opentitan_connectivity_circt_bmc.py`
      - `utils/run_opentitan_connectivity_circt_lec.py`
@@ -420,17 +424,17 @@ verilator-verification, and yosys corpora).
 6. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
 7. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
 8. **Connectivity parity depth gap**: connectivity cross-lane parity now covers
-   per-rule case counters, resolved-contract fingerprints, and shared
-   cover-counters, plus objective-level status drift over shared objectives;
-   remaining gap is richer objective-level explainability and optional
-   governance policies for missing-objective drift.
+   per-rule case counters, resolved-contract fingerprints, shared
+   cover-counters, and objective-level status drift with structured metadata
+   and explicit missing-objective policies; remaining gap is deeper
+   objective-semantics parity (vacuous/covered/unreachable evidence alignment
+   and deterministic objective-class rollups across backends).
 
 ### Next Long-Term Features (best long-term path)
 
 1. Extend launch-resilience policy beyond ETXTBSY (e.g., selected transient I/O launch races) with explicit strict-gate counters and per-reason retry telemetry.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
-4. Extend connectivity objective-level parity explainability:
-   add structured per-objective metadata (rule source row, objective class,
-   backend context) and richer drift reasons, with optional strict policies for
-   missing-objective drift.
+4. Extend connectivity objective-level parity beyond status mismatch detection:
+   align vacuous/covered/unreachable-style objective evidence across backends
+   and add deterministic objective-class rollups for strict-gate governance.

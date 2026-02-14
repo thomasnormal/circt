@@ -7,5 +7,5 @@
 //
 // LOG: objective parity mismatches detected
 // LOG: case::connectivity::chip.csv:RULE_CLK:status
-// PARITY: objective_id{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}allowlisted
-// PARITY: case::connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}status{{[[:space:]]+}}pass{{[[:space:]]+}}fail{{[[:space:]]+}}0
+// PARITY: objective_id{{[[:space:]]+}}objective_class{{[[:space:]]+}}objective_key{{[[:space:]]+}}rule_id{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}bmc_case_path{{[[:space:]]+}}lec_case_path{{[[:space:]]+}}allowlisted
+// PARITY: case::connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}case{{[[:space:]]+}}connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}chip.csv:RULE_CLK{{[[:space:]]+}}status{{[[:space:]]+}}pass{{[[:space:]]+}}fail{{[[:space:]]+}}/tmp/chip.csv:2{{[[:space:]]+}}/tmp/chip.csv:2{{[[:space:]]+}}0
