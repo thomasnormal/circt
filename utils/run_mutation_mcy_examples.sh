@@ -559,6 +559,31 @@ trim_whitespace() {
   printf '%s\n' "$s"
 }
 
+render_native_real_harness_args_suffix() {
+  local spec="$1"
+  local context="$2"
+  local trimmed=""
+  local token=""
+  local out=""
+  local -a parts=()
+
+  trimmed="$(trim_whitespace "$spec")"
+  if [[ -z "$trimmed" ]]; then
+    printf '\n'
+    return 0
+  fi
+  if [[ "$trimmed" == *$'\t'* || "$trimmed" == *$'\n'* || "$trimmed" == *$'\r'* ]]; then
+    echo "${context}: native real harness args must not contain tabs or newlines" >&2
+    return 1
+  fi
+
+  read -r -a parts <<< "$trimmed"
+  for token in "${parts[@]}"; do
+    out+=" $(printf '%q' "$token")"
+  done
+  printf '%s\n' "$out"
+}
+
 is_retry_reason_token() {
   [[ "$1" =~ ^[a-z][a-z0-9_]*$ ]]
 }
@@ -2733,12 +2758,11 @@ run_example_worker() {
     policy_fingerprint_input+=$'\n'"${native_mutation_ops_spec}"
   fi
   if [[ -n "$native_real_harness_args_spec" ]]; then
-    policy_fingerprint_input+=$'\n'"${native_real_harness_args_spec}"
+    if ! native_real_harness_args_suffix="$(render_native_real_harness_args_suffix "$native_real_harness_args_spec" "example ${example_id}: invalid native real harness args")"; then
+      return 2
+    fi
   fi
   policy_fingerprint="$(hash_string_sha256 "$policy_fingerprint_input")"
-  if [[ -n "$native_real_harness_args_spec" ]]; then
-    native_real_harness_args_suffix=" ${native_real_harness_args_spec}"
-  fi
 
   example_out_dir="${OUT_DIR}/${example_id}"
   helper_dir="${WORK_ROOT}/${example_id}"

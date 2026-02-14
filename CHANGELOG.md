@@ -67289,3 +67289,12 @@ See CHANGELOG.md on recent progress.
       overrides) are configured, preventing no-op policy drift in smoke lanes.
     - Added dedicated regression tests for CLI and manifest native real override
       smoke rejection.
+37. Shell-safe native real harness args forwarding in mutation runner
+    (February 14, 2026):
+    - `run_mutation_mcy_examples.sh` now canonicalizes/escapes
+      `native_real_harness_args` tokens before injecting them into
+      tests-manifest commands (using `%q` per token).
+    - This preserves expected CLI/manifest forwarding semantics while making
+      shell metacharacters inert in generated real-harness command lines.
+    - Added regression coverage:
+      `run-mutation-mcy-examples-native-real-harness-args-shell-escape-pass.test`.
