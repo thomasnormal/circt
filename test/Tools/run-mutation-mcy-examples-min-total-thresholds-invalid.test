@@ -4,9 +4,17 @@
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --min-total-coverage-percent 101 2>&1 | FileCheck %s --check-prefix=COVERAGE
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-errors bad 2>&1 | FileCheck %s --check-prefix=ERRORS
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-retries bad 2>&1 | FileCheck %s --check-prefix=RETRIES
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-retries-by-reason bad 2>&1 | FileCheck %s --check-prefix=RETRY-REASON-FORMAT
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-retries-by-reason no-dashes=1 2>&1 | FileCheck %s --check-prefix=RETRY-REASON-TOKEN
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-retries-by-reason permission_denied=bad 2>&1 | FileCheck %s --check-prefix=RETRY-REASON-BUDGET
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-retries-by-reason permission_denied=1,permission_denied=2 2>&1 | FileCheck %s --check-prefix=RETRY-REASON-DUP
 
 // DETECTED: --min-total-detected must be a non-negative integer: bad
 // RELEVANT: --min-total-relevant must be a non-negative integer: bad
 // COVERAGE: --min-total-coverage-percent must be numeric in range [0,100]
 // ERRORS: --max-total-errors must be a non-negative integer: bad
 // RETRIES: --max-total-retries must be a non-negative integer: bad
+// RETRY-REASON-FORMAT: --max-total-retries-by-reason requires reason=N entries: bad
+// RETRY-REASON-TOKEN: --max-total-retries-by-reason has invalid reason token: no-dashes
+// RETRY-REASON-BUDGET: --max-total-retries-by-reason has non-integer budget for permission_denied: bad
+// RETRY-REASON-DUP: --max-total-retries-by-reason repeats reason token: permission_denied

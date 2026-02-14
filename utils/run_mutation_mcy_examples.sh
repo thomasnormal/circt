@@ -52,6 +52,10 @@ Options:
                            examples exceed N (default: disabled)
   --max-total-retries N    Fail if total retries across selected examples
                            exceed N (default: disabled)
+  --max-total-retries-by-reason SPEC
+                           Fail if total retries for any reason exceed
+                           configured budget(s), where SPEC is
+                           reason=N[,reason=N...]
   --min-total-detected N   Fail if total detected mutants across selected
                            examples is below N (default: disabled)
   --min-total-relevant N   Fail if total relevant mutants across selected
@@ -134,6 +138,8 @@ Outputs:
   <out-dir>/summary.tsv    Aggregated example status/coverage summary
   <out-dir>/retry-summary.tsv
                            Aggregated retry attempts/retries-used summary
+  <out-dir>/retry-events.tsv
+                           Per-retry event trace with classified reason
   <out-dir>/summary.schema-version
                            Current summary schema-version artifact
   <out-dir>/summary.schema-contract
@@ -178,6 +184,7 @@ MIN_TOTAL_RELEVANT=""
 MIN_TOTAL_COVERAGE_PERCENT=""
 MAX_TOTAL_ERRORS=""
 MAX_TOTAL_RETRIES=""
+MAX_TOTAL_RETRIES_BY_REASON=""
 BASELINE_FILE=""
 BASELINE_SCHEMA_VERSION_FILE=""
 BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
@@ -221,6 +228,7 @@ declare -A EXAMPLE_TO_RETRY_DELAY_MS=()
 declare -a AVAILABLE_EXAMPLES=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
+declare -A RETRY_REASON_BUDGETS=()
 
 SUMMARY_HEADER_V1=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors'
 SUMMARY_HEADER_V2=$'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\tpolicy_fingerprint'
@@ -244,6 +252,61 @@ trim_whitespace() {
   s="${s#"${s%%[![:space:]]*}"}"
   s="${s%"${s##*[![:space:]]}"}"
   printf '%s\n' "$s"
+}
+
+is_retry_reason_token() {
+  [[ "$1" =~ ^[a-z][a-z0-9_]*$ ]]
+}
+
+parse_retry_reason_budgets() {
+  local spec="$1"
+  local normalized=""
+  local old_ifs=""
+  local entry=""
+  local reason=""
+  local budget=""
+  local -a parts=()
+
+  RETRY_REASON_BUDGETS=()
+  normalized="$(trim_whitespace "$spec")"
+  if [[ -z "$normalized" ]]; then
+    return 0
+  fi
+
+  old_ifs="$IFS"
+  IFS=','
+  read -r -a parts <<< "$normalized"
+  IFS="$old_ifs"
+
+  for entry in "${parts[@]}"; do
+    entry="$(trim_whitespace "$entry")"
+    if [[ -z "$entry" ]]; then
+      continue
+    fi
+    if [[ "$entry" != *=* ]]; then
+      echo "--max-total-retries-by-reason requires reason=N entries: ${entry}" >&2
+      return 1
+    fi
+    reason="${entry%%=*}"
+    budget="${entry#*=}"
+    reason="$(trim_whitespace "$reason")"
+    budget="$(trim_whitespace "$budget")"
+    if ! is_retry_reason_token "$reason"; then
+      echo "--max-total-retries-by-reason has invalid reason token: ${reason}" >&2
+      return 1
+    fi
+    if ! is_nonneg_int "$budget"; then
+      echo "--max-total-retries-by-reason has non-integer budget for ${reason}: ${budget}" >&2
+      return 1
+    fi
+    if [[ -n "${RETRY_REASON_BUDGETS[$reason]+x}" ]]; then
+      echo "--max-total-retries-by-reason repeats reason token: ${reason}" >&2
+      return 1
+    fi
+    RETRY_REASON_BUDGETS["$reason"]="$budget"
+  done
+
+  return 0
 }
 
 
@@ -454,21 +517,39 @@ has_manifest_timeout_overrides_enabled() {
   return 1
 }
 
-is_retryable_transient_failure() {
+classify_retryable_transient_failure_reason() {
   local rc="$1"
   local log_file="${2:-}"
 
-  case "$rc" in
-    126|127)
-      return 0
-      ;;
-  esac
-
   if [[ -n "$log_file" && -f "$log_file" ]]; then
-    if grep -Eiq 'Text file busy|ETXTBSY|posix_spawn failed|Resource temporarily unavailable|Permission denied' "$log_file"; then
+    if grep -Eiq 'Text file busy|ETXTBSY' "$log_file"; then
+      echo "etxtbsy"
+      return 0
+    fi
+    if grep -Eiq 'posix_spawn failed' "$log_file"; then
+      echo "posix_spawn_failed"
+      return 0
+    fi
+    if grep -Eiq 'Resource temporarily unavailable' "$log_file"; then
+      echo "resource_temporarily_unavailable"
+      return 0
+    fi
+    if grep -Eiq 'Permission denied' "$log_file"; then
+      echo "permission_denied"
       return 0
     fi
   fi
+
+  case "$rc" in
+    126)
+      echo "exit_126"
+      return 0
+      ;;
+    127)
+      echo "exit_127"
+      return 0
+      ;;
+  esac
 
   return 1
 }
@@ -1268,8 +1349,10 @@ run_example_worker() {
   local run_log=""
   local metrics_file=""
   local retry_result_file="${result_file}.retry"
+  local retry_events_file="${result_file}.retry_events"
   local retry_attempts=1
   local retries_used=0
+  local retry_reason=""
   local rc=0
   local detected="0"
   local relevant="0"
@@ -1425,6 +1508,7 @@ EOS
 
   metrics_file="${example_out_dir}/metrics.tsv"
   run_log="${example_out_dir}/run.log"
+  : > "$retry_events_file"
   while true; do
     rm -f "$metrics_file"
     set +e
@@ -1446,7 +1530,8 @@ EOS
     if [[ "$attempt" -ge "$max_attempts" ]]; then
       break
     fi
-    if ! is_retryable_transient_failure "$rc" "$run_log"; then
+    retry_reason="$(classify_retryable_transient_failure_reason "$rc" "$run_log" || true)"
+    if [[ -z "$retry_reason" ]]; then
       break
     fi
 
@@ -1458,6 +1543,7 @@ EOS
       retry_delay_msg=""
     fi
     echo "Retrying example (${example_id}): attempt $((attempt + 1))/${max_attempts} after transient launcher failure (rc=${rc}${retry_delay_msg})" >&2
+    printf '%s\t%s\t%s\t%s\t%s\n' "$attempt" "$((attempt + 1))" "$rc" "$retry_reason" "${example_retry_delay_ms}" >> "$retry_events_file"
     if [[ -n "$retry_sleep_sec" ]]; then
       sleep "$retry_sleep_sec"
     fi
@@ -1678,6 +1764,10 @@ while [[ $# -gt 0 ]]; do
       MAX_TOTAL_RETRIES="$2"
       shift 2
       ;;
+    --max-total-retries-by-reason)
+      MAX_TOTAL_RETRIES_BY_REASON="$2"
+      shift 2
+      ;;
     --baseline-file)
       BASELINE_FILE="$2"
       shift 2
@@ -1862,6 +1952,9 @@ if [[ -n "$MAX_TOTAL_ERRORS" ]] && ! is_nonneg_int "$MAX_TOTAL_ERRORS"; then
 fi
 if [[ -n "$MAX_TOTAL_RETRIES" ]] && ! is_nonneg_int "$MAX_TOTAL_RETRIES"; then
   echo "--max-total-retries must be a non-negative integer: $MAX_TOTAL_RETRIES" >&2
+  exit 1
+fi
+if ! parse_retry_reason_budgets "$MAX_TOTAL_RETRIES_BY_REASON"; then
   exit 1
 fi
 if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
@@ -2070,6 +2163,8 @@ SUMMARY_FILE="${OUT_DIR}/summary.tsv"
 printf '%s\n' "$CURRENT_SUMMARY_HEADER" > "$SUMMARY_FILE"
 RETRY_SUMMARY_FILE="${OUT_DIR}/retry-summary.tsv"
 printf 'example\tretry_attempts\tretries_used\n' > "$RETRY_SUMMARY_FILE"
+RETRY_EVENTS_FILE="${OUT_DIR}/retry-events.tsv"
+printf 'example\tfailed_attempt\tnext_attempt\texit_code\tretry_reason\tdelay_ms\n' > "$RETRY_EVENTS_FILE"
 
 overall_rc=0
 mkdir -p "$(dirname "$SUMMARY_SCHEMA_VERSION_FILE")"
@@ -2082,6 +2177,7 @@ total_detected=0
 total_relevant=0
 total_errors=0
 total_retries=0
+declare -A RETRY_REASON_TOTALS=()
 RESULT_ROOT="${OUT_DIR}/.results"
 mkdir -p "$RESULT_ROOT"
 worker_failures=0
@@ -2129,6 +2225,7 @@ for example_id in "${EXAMPLE_IDS[@]}"; do
   errors="$(normalize_int_or_zero "$errors")"
   coverage_for_gate="$(normalize_decimal_or_zero "$coverage_for_gate")"
   retry_result_file="${result_file}.retry"
+  retry_events_file="${result_file}.retry_events"
   retry_attempts=1
   retries_used=0
   if [[ -f "$retry_result_file" ]]; then
@@ -2144,6 +2241,20 @@ for example_id in "${EXAMPLE_IDS[@]}"; do
   total_relevant=$((total_relevant + relevant))
   total_errors=$((total_errors + errors))
   total_retries=$((total_retries + retries_used))
+  if [[ -f "$retry_events_file" ]]; then
+    while IFS=$'\t' read -r failed_attempt next_attempt event_rc retry_reason delay_ms; do
+      failed_attempt="$(normalize_int_or_zero "$failed_attempt")"
+      next_attempt="$(normalize_int_or_zero "$next_attempt")"
+      event_rc="$(normalize_int_or_zero "$event_rc")"
+      retry_reason="$(trim_whitespace "${retry_reason:-}")"
+      delay_ms="$(normalize_int_or_zero "$delay_ms")"
+      if [[ -z "$retry_reason" ]]; then
+        retry_reason="unknown"
+      fi
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$example_id" "$failed_attempt" "$next_attempt" "$event_rc" "$retry_reason" "$delay_ms" >> "$RETRY_EVENTS_FILE"
+      RETRY_REASON_TOTALS["$retry_reason"]=$(( ${RETRY_REASON_TOTALS[$retry_reason]:-0} + 1 ))
+    done < "$retry_events_file"
+  fi
 
   if [[ -n "$gate_failure" ]]; then
     status="FAIL"
@@ -2197,9 +2308,19 @@ if [[ -n "$MAX_TOTAL_RETRIES" && "$total_retries" -gt "$MAX_TOTAL_RETRIES" ]]; t
   fi
   suite_gate_failure+="retries>${MAX_TOTAL_RETRIES}"
 fi
+for retry_reason in "${!RETRY_REASON_BUDGETS[@]}"; do
+  retry_reason_total="${RETRY_REASON_TOTALS[$retry_reason]:-0}"
+  retry_reason_budget="${RETRY_REASON_BUDGETS[$retry_reason]}"
+  if [[ "$retry_reason_total" -gt "$retry_reason_budget" ]]; then
+    if [[ -n "$suite_gate_failure" ]]; then
+      suite_gate_failure+=","
+    fi
+    suite_gate_failure+="retry_${retry_reason}>${retry_reason_budget}"
+  fi
+done
 if [[ -n "$suite_gate_failure" ]]; then
   overall_rc=1
-  echo "Suite gate failure: ${suite_gate_failure} (detected=${total_detected} relevant=${total_relevant} coverage=${total_coverage_for_gate} errors=${total_errors})" >&2
+  echo "Suite gate failure: ${suite_gate_failure} (detected=${total_detected} relevant=${total_relevant} coverage=${total_coverage_for_gate} errors=${total_errors} retries=${total_retries})" >&2
 fi
 
 if [[ "$REQUIRE_UNIQUE_SUMMARY_ROWS" -eq 1 ]]; then
