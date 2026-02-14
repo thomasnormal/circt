@@ -7,4 +7,4 @@
 // RUN: FileCheck %s < %t/contracts.tsv
 //
 // CHECK: #opentitan_compile_contract_schema_version=1
-// CHECK: bar_fpv{{[[:space:]]+}}lowrisc:fpv:bar_fpv{{[[:space:]]+}}FpvSecCm{{[[:space:]]+}}formal{{[[:space:]]+}}fpv{{[[:space:]]+}}hw/top_earlgrey/formal/ip/bar{{[[:space:]]+}}bar_tb{{[[:space:]]+}}partial{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}{{[0-9a-f]+}}
+// CHECK: bar_fpv{{[[:space:]]+}}lowrisc:fpv:bar_fpv{{[[:space:]]+}}FpvSecCm{{[[:space:]]+}}formal{{[[:space:]]+}}fpv{{[[:space:]]+}}hw/top_earlgrey/formal/ip/bar{{[[:space:]]+}}bar_tb{{[[:space:]]+}}partial{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}0{{[[:space:]]+}}{{[0-9a-f]+}}{{[[:space:]]+}}fpv_sec_cm{{[[:space:]]+}}1{{[[:space:]]+}}task_defined{{[[:space:]]+}}prim_count,prim_double_lfsr{{[[:space:]]+}}{{[0-9a-f]+}}

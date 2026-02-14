@@ -1,0 +1,11 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin %t/ot %t/work
+// RUN: printf 'target_name\tfusesoc_core\ttask\tflow\tsub_flow\trel_path\tsource_kind\tsource_cfg_file\troot_cfg_file\nmystery_fpv\tlowrisc:fpv:mystery_fpv\tMyCustomTask\tformal\tfpv\thw/top_earlgrey/formal/ip/mystery\tinline\t%t/top.hjson\t%t/top.hjson\n' > %t/manifest.tsv
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib,sys\ncore = sys.argv[-1]\ntool = sys.argv[sys.argv.index(\"--tool\") + 1]\ntarget = sys.argv[sys.argv.index(\"--target\") + 1]\ncore_token = core.replace(\":\", \"_\").replace(\".\", \"_\")\nout_dir = pathlib.Path.cwd() / \"build\" / core_token / f\"{target}-{tool}\"\nout_dir.mkdir(parents=True, exist_ok=True)\neda = out_dir / f\"{core_token}.eda.yml\"\neda.write_text(\"\"\"toplevel: mystery_tb\\nfiles:\\n- core: lowrisc:mystery:pkg:0\\n  file_type: systemVerilogSource\\n  name: ../src/mystery.sv\\n\"\"\")\n' > %t/bin/fusesoc
+// RUN: chmod +x %t/bin/fusesoc
+// RUN: python3 %S/../../utils/resolve_opentitan_formal_compile_contracts.py --manifest %t/manifest.tsv --opentitan-root %t/ot --out-contracts %t/contracts.tsv --workdir %t/work --fusesoc-bin %t/bin/fusesoc 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=ROW < %t/contracts.tsv
+//
+// LOG: warning: unknown OpenTitan FPV task names detected: MyCustomTask
+// ROW: mystery_fpv{{[[:space:]]+}}lowrisc:fpv:mystery_fpv{{[[:space:]]+}}MyCustomTask
+// ROW: unknown_task{{[[:space:]]+}}0{{[[:space:]]+}}task_defined{{[[:space:]]+}}none{{[[:space:]]+}}{{[0-9a-f]+}}

@@ -24,6 +24,8 @@ SCHEMA_MARKER = "#opentitan_compile_contract_schema_version=1"
 class ContractRow:
     target_name: str
     task: str
+    task_profile: str
+    task_known: str
     setup_status: str
     contract_fingerprint: str
     file_count: str
@@ -149,6 +151,8 @@ def read_contract_rows(path: Path) -> dict[str, ContractRow]:
         out[target_name] = ContractRow(
             target_name=target_name,
             task=(row.get("task") or "").strip(),
+            task_profile=(row.get("task_profile") or "").strip(),
+            task_known=(row.get("task_known") or "").strip(),
             setup_status=(row.get("setup_status") or "").strip(),
             contract_fingerprint=(row.get("contract_fingerprint") or "").strip(),
             file_count=(row.get("file_count") or "").strip(),
@@ -205,6 +209,10 @@ def main() -> None:
         c = current[target]
         if b.task != c.task:
             drift_rows.append((target, "task", b.task, c.task))
+        if b.task_profile != c.task_profile:
+            drift_rows.append((target, "task_profile", b.task_profile, c.task_profile))
+        if b.task_known != c.task_known:
+            drift_rows.append((target, "task_known", b.task_known, c.task_known))
         if b.setup_status != c.setup_status:
             drift_rows.append((target, "setup_status", b.setup_status, c.setup_status))
         if b.contract_fingerprint != c.contract_fingerprint:
