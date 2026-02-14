@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1312 - February 14, 2026
+
+### OpenTitan Formal Phase E: Execute Connectivity `CONDITION` Guard Semantics
+
+1. Extended `utils/run_opentitan_connectivity_circt_bmc.py` to consume
+   `CONDITION` rows as first-class guard semantics for connectivity checks.
+2. Added deterministic connection+condition grouping:
+   - associates each `CONDITION` row with the preceding `CONNECTION` row from
+     the same CSV stream.
+   - rejects orphan `CONDITION` rows without a preceding `CONNECTION`.
+3. Extended rule-selection semantics:
+   - `--rule-filter` now matches both connection IDs/names and associated
+     condition IDs/names, allowing condition-driven selection of guarded
+     connectivity checks.
+4. Guard lowering semantics now applied to generated bind assertions:
+   - expected-true checks are conjoined.
+   - expected-false checks (when present) are OR-ed as bypass terms.
+   - final check shape:
+     - `(!guard) || (src === dst)`.
+5. Added fusesoc setup-path robustness:
+   - `run_fusesoc_setup` now ensures job-dir creation before setup/log
+     emission.
+6. Added focused regression:
+   - `test/Tools/run-opentitan-connectivity-circt-bmc-condition-filter.test`
+   - validates condition-name filtering selects owning connection and verifies
+     generated guard tokens in synthesized checker source.
+
+### Validation
+
+- `python3 -m py_compile utils/run_opentitan_connectivity_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-opentitan-connectivity-circt-bmc-basic.test build-test/test/Tools/run-opentitan-connectivity-circt-bmc-invalid-shard-index.test build-test/test/Tools/run-opentitan-connectivity-circt-bmc-condition-filter.test build-test/test/Tools/run-formal-all-opentitan-connectivity-bmc.test build-test/test/Tools/run-formal-all-opentitan-connectivity-bmc-requires-filter.test build-test/test/Tools/run-formal-all-opentitan-connectivity-bmc-rule-shard-index-validation.test` PASS (6/6)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-formal-all-opentitan-.*\\.test|run-opentitan-.*\\.test'` PASS (96/96)
+
 ## Iteration 1311 - February 14, 2026
 
 ### Mutation Workflow: Policy Fingerprint Drift Gating
