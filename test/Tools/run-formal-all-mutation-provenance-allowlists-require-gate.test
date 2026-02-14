@@ -2,7 +2,9 @@
 // RUN: not %S/../../utils/run_formal_all.sh --mutation-contract-fingerprint-case-id-allowlist-file %t.allowlist 2>&1 | FileCheck %s --check-prefix=CONTRACT
 // RUN: not %S/../../utils/run_formal_all.sh --mutation-source-fingerprint-case-id-allowlist-file %t.allowlist 2>&1 | FileCheck %s --check-prefix=SOURCE
 // RUN: not %S/../../utils/run_formal_all.sh --mutation-provenance-tuple-id-allowlist-file %t.allowlist 2>&1 | FileCheck %s --check-prefix=TUPLE
+// RUN: not %S/../../utils/run_formal_all.sh --mutation-lec-contract-fingerprint-lane-parity-allowlist-file %t.allowlist 2>&1 | FileCheck %s --check-prefix=LANEPARITY
 
 // CONTRACT: --mutation-contract-fingerprint-case-id-allowlist-file requires --fail-on-new-mutation-contract-fingerprint-case-ids or --strict-gate
 // SOURCE: --mutation-source-fingerprint-case-id-allowlist-file requires --fail-on-new-mutation-source-fingerprint-case-ids or --strict-gate
 // TUPLE: --mutation-provenance-tuple-id-allowlist-file requires --fail-on-new-mutation-provenance-tuple-ids or --strict-gate
+// LANEPARITY: --mutation-lec-contract-fingerprint-lane-parity-allowlist-file requires --fail-on-mutation-lec-contract-fingerprint-lane-parity, --fail-on-new-mutation-lec-contract-fingerprint-lane-parity, --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped, --fail-on-new-mutation-lec-contract-fingerprint-lane-map-unmapped, --fail-on-mutation-lec-contract-fingerprint-lane-map-identity-fallback, --fail-on-new-mutation-lec-contract-fingerprint-lane-map-identity-fallback, or --strict-gate

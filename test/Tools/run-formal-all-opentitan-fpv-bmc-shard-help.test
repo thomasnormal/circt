@@ -1,0 +1,10 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh
+// RUN: %t/utils/run_formal_all.sh --help | FileCheck %s
+//
+// CHECK: --opentitan-fpv-bmc-target-shard-count
+// CHECK: --opentitan-fpv-bmc-target-shard-index
+// CHECK: --opentitan-fpv-bmc-case-shard-count
+// CHECK: --opentitan-fpv-bmc-case-shard-index
