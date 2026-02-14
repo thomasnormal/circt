@@ -31,7 +31,10 @@ Options:
                            <TAB>[max_total_relevant_drop_percent]
                            <TAB>[max_total_coverage_drop_percent]
                            <TAB>[max_total_errors_increase]
+                           <TAB>[native_real_harness_script]
                            Optional fields accept '-' to inherit global values.
+                           native_real_harness_script may be absolute or
+                           relative to --examples-root.
                            Relative design paths resolve under --examples-root
   --jobs N                Max parallel examples to execute (default: 1)
   --example-timeout-sec N  Per-example timeout in seconds (default: 0, disabled)
@@ -442,6 +445,7 @@ declare -A EXAMPLE_TO_MAX_COVERAGE_DROP_PERCENT=()
 declare -A EXAMPLE_TO_MAX_ERRORS_INCREASE=()
 declare -A EXAMPLE_TO_MAX_DETECTED_DROP_PERCENT=()
 declare -A EXAMPLE_TO_MAX_RELEVANT_DROP_PERCENT=()
+declare -A EXAMPLE_TO_NATIVE_REAL_HARNESS=()
 declare -a AVAILABLE_EXAMPLES=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
@@ -1073,6 +1077,7 @@ reset_example_mappings() {
   EXAMPLE_TO_MAX_ERRORS_INCREASE=()
   EXAMPLE_TO_MAX_DETECTED_DROP_PERCENT=()
   EXAMPLE_TO_MAX_RELEVANT_DROP_PERCENT=()
+  EXAMPLE_TO_NATIVE_REAL_HARNESS=()
   AVAILABLE_EXAMPLES=()
 }
 
@@ -1173,6 +1178,7 @@ load_example_manifest() {
   local max_total_relevant_drop_percent_override=""
   local max_total_coverage_drop_percent_override=""
   local max_total_errors_increase_override=""
+  local native_real_harness_override=""
   local extra=""
   local resolved_design=""
   local manifest_max_total_detected_drop_override=""
@@ -1205,7 +1211,7 @@ load_example_manifest() {
       max_total_detected_drop_percent_override max_total_relevant_drop_override \
       max_total_relevant_drop_percent_override \
       max_total_coverage_drop_percent_override max_total_errors_increase_override \
-      extra <<< "$line"
+      native_real_harness_override extra <<< "$line"
 
     example_id="$(trim_whitespace "$example_id")"
     design="$(trim_whitespace "$design")"
@@ -1234,10 +1240,11 @@ load_example_manifest() {
     max_total_relevant_drop_percent_override="$(normalize_manifest_optional "${max_total_relevant_drop_percent_override:-}")"
     max_total_coverage_drop_percent_override="$(normalize_manifest_optional "${max_total_coverage_drop_percent_override:-}")"
     max_total_errors_increase_override="$(normalize_manifest_optional "${max_total_errors_increase_override:-}")"
+    native_real_harness_override="$(normalize_manifest_optional "${native_real_harness_override:-}")"
     extra="$(trim_whitespace "${extra:-}")"
 
     if [[ -z "$example_id" || -z "$design" || -z "$top" || -n "$extra" ]]; then
-      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 24 optional override columns)." >&2
+      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 25 optional override columns)." >&2
       return 1
     fi
 
@@ -1406,6 +1413,9 @@ load_example_manifest() {
     fi
     if [[ -n "$max_relevant_drop_percent_override" ]]; then
       EXAMPLE_TO_MAX_RELEVANT_DROP_PERCENT["$example_id"]="$max_relevant_drop_percent_override"
+    fi
+    if [[ -n "$native_real_harness_override" ]]; then
+      EXAMPLE_TO_NATIVE_REAL_HARNESS["$example_id"]="$native_real_harness_override"
     fi
 
     if [[ -n "$max_total_detected_drop_override" ]]; then
@@ -2549,6 +2559,8 @@ run_example_worker() {
   local attempt=1
   local retry_sleep_sec=""
   local retry_delay_msg=""
+  local native_real_harness_override=""
+  local native_real_harness_resolved=""
 
   if [[ -n "${EXAMPLE_TO_GENERATE_COUNT[$example_id]+x}" ]]; then
     example_generate_count="${EXAMPLE_TO_GENERATE_COUNT[$example_id]}"
@@ -2586,6 +2598,9 @@ run_example_worker() {
   if [[ -n "${EXAMPLE_TO_RETRY_DELAY_MS[$example_id]+x}" ]]; then
     example_retry_delay_ms="${EXAMPLE_TO_RETRY_DELAY_MS[$example_id]}"
   fi
+  if [[ -n "${EXAMPLE_TO_NATIVE_REAL_HARNESS[$example_id]+x}" ]]; then
+    native_real_harness_override="${EXAMPLE_TO_NATIVE_REAL_HARNESS[$example_id]}"
+  fi
   max_attempts=$((example_retries + 1))
 
   if [[ -n "$example_mutations_mode_counts" && -n "$example_mutations_mode_weights" ]]; then
@@ -2600,6 +2615,9 @@ run_example_worker() {
 
   design_content_hash="$(hash_file_sha256 "$design")"
   policy_fingerprint_input="${example_id}"$'\n'"${top}"$'\n'"${design_content_hash}"$'\n'"${example_generate_count}"$'\n'"${example_mutations_seed}"$'\n'"${example_mutations_modes}"$'\n'"${example_mutations_mode_counts}"$'\n'"${example_mutations_mode_weights}"$'\n'"${example_mutations_profiles}"$'\n'"${example_mutations_cfg}"$'\n'"${example_mutations_select}"$'\n'"${example_mutation_limit}"$'\n'"${example_timeout_sec}"$'\n'"${example_retries}"$'\n'"${example_retry_delay_ms}"$'\n'"${SMOKE}"
+  if [[ -n "$native_real_harness_override" ]]; then
+    policy_fingerprint_input+=$'\n'"${native_real_harness_override}"
+  fi
   policy_fingerprint="$(hash_string_sha256 "$policy_fingerprint_input")"
 
   example_out_dir="${OUT_DIR}/${example_id}"
@@ -2618,7 +2636,20 @@ EOS
   printf 'smoke\tbash %s\tresult.txt\t^DETECTED$\t^SURVIVED$\n' "$fake_test_script" > "$tests_manifest"
 
   if [[ "$SMOKE" -ne 1 && "$MUTATIONS_BACKEND" == "native" && "$NATIVE_TESTS_MODE" == "real" ]]; then
-    case "$example_id" in
+    if [[ -n "$native_real_harness_override" ]]; then
+      if [[ "$native_real_harness_override" == /* ]]; then
+        native_real_harness_resolved="$native_real_harness_override"
+      else
+        native_real_harness_resolved="${EXAMPLES_ROOT}/${native_real_harness_override}"
+      fi
+      if [[ ! -f "$native_real_harness_resolved" ]]; then
+        echo "configured native_real_harness_script is missing or not a file for ${example_id}: ${native_real_harness_resolved}" >&2
+        return 2
+      fi
+      printf 'sim_real	bash %s ../mutant.v	result.txt	^DETECTED$	^SURVIVED$
+' "$native_real_harness_resolved" > "$tests_manifest"
+    else
+      case "$example_id" in
       bitcnt)
         real_test_script="${helper_dir}/real_bitcnt_test.sh"
         cp "$(dirname "$design")/bitcnt_tb.v" "${helper_dir}/bitcnt_tb.v"
@@ -2711,7 +2742,8 @@ EOS
         fi
         echo "warning: native real tests not configured for ${example_id}; falling back to synthetic harness" >&2
         ;;
-    esac
+      esac
+    fi
   fi
 
   cmd=(
