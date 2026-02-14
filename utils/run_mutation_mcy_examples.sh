@@ -11,8 +11,10 @@ Run circt-mut mutation coverage lanes on local MCY examples.
 Options:
   --examples-root DIR      MCY examples root (default: ~/mcy/examples)
   --out-dir DIR            Output directory (default: ./mutation-mcy-examples-results)
-  --example NAME           Example to run (repeatable; default: bitcnt,picorv32_primes)
-                           Supported: bitcnt, picorv32_primes
+  --example NAME           Example to run (repeatable; default: all known examples)
+  --example-manifest FILE  Optional TSV mapping of examples to design/top:
+                           example<TAB>design<TAB>top
+                           Relative design paths resolve under --examples-root
   --circt-mut PATH         circt-mut binary or command (default: auto-detect)
   --yosys PATH             yosys binary (default: yosys)
   --generate-count N       Mutations to generate in non-smoke mode (default: 32)
@@ -90,7 +92,11 @@ DRIFT_ALLOWLIST_UNUSED_FILE=""
 SMOKE=0
 KEEP_WORK=0
 MUTATION_GENERATION_FLAGS_SEEN=0
+EXAMPLE_MANIFEST=""
 EXAMPLE_IDS=()
+declare -A EXAMPLE_TO_DESIGN=()
+declare -A EXAMPLE_TO_TOP=()
+declare -a AVAILABLE_EXAMPLES=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
 
@@ -211,6 +217,80 @@ write_unused_drift_allowlist_report() {
 
   printf '%s\n' "$unused_count"
 }
+
+register_example_mapping() {
+  local id="$1"
+  local design="$2"
+  local top="$3"
+  if [[ -n "${EXAMPLE_TO_DESIGN[$id]+x}" ]]; then
+    return 1
+  fi
+  EXAMPLE_TO_DESIGN["$id"]="$design"
+  EXAMPLE_TO_TOP["$id"]="$top"
+  AVAILABLE_EXAMPLES+=("$id")
+  return 0
+}
+
+load_default_examples() {
+  EXAMPLE_TO_DESIGN=()
+  EXAMPLE_TO_TOP=()
+  AVAILABLE_EXAMPLES=()
+  register_example_mapping "bitcnt" "${EXAMPLES_ROOT}/bitcnt/bitcnt.v" "bitcnt"
+  register_example_mapping "picorv32_primes" "${EXAMPLES_ROOT}/picorv32_primes/picorv32.v" "picorv32"
+}
+
+load_example_manifest() {
+  local file="$1"
+  local raw_line=""
+  local line=""
+  local line_no=0
+  local example_id=""
+  local design=""
+  local top=""
+  local extra=""
+  local resolved_design=""
+
+  EXAMPLE_TO_DESIGN=()
+  EXAMPLE_TO_TOP=()
+  AVAILABLE_EXAMPLES=()
+
+  while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+    line_no=$((line_no + 1))
+    line="${raw_line%$'\r'}"
+    line="$(trim_whitespace "$line")"
+    if [[ -z "$line" || "${line:0:1}" == "#" ]]; then
+      continue
+    fi
+
+    IFS=$'\t' read -r example_id design top extra <<< "$line"
+    example_id="$(trim_whitespace "$example_id")"
+    design="$(trim_whitespace "$design")"
+    top="$(trim_whitespace "$top")"
+    extra="$(trim_whitespace "${extra:-}")"
+
+    if [[ -z "$example_id" || -z "$design" || -z "$top" || -n "$extra" ]]; then
+      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top)." >&2
+      return 1
+    fi
+
+    if [[ "$design" == /* ]]; then
+      resolved_design="$design"
+    else
+      resolved_design="${EXAMPLES_ROOT}/${design}"
+    fi
+
+    if ! register_example_mapping "$example_id" "$resolved_design" "$top"; then
+      echo "Duplicate example id in manifest row ${line_no}: ${example_id}" >&2
+      return 1
+    fi
+  done < "$file"
+
+  if [[ ${#AVAILABLE_EXAMPLES[@]} -eq 0 ]]; then
+    echo "Example manifest has no usable rows: ${file}" >&2
+    return 1
+  fi
+}
+
 append_summary_row() {
   local summary_file="$1"
   local example_id="$2"
@@ -368,6 +448,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --example)
       EXAMPLE_IDS+=("$2")
+      shift 2
+      ;;
+    --example-manifest)
+      EXAMPLE_MANIFEST="$2"
       shift 2
       ;;
     --circt-mut)
@@ -555,14 +639,35 @@ if [[ -n "$DRIFT_ALLOWLIST_FILE" ]]; then
   load_drift_allowlist "$DRIFT_ALLOWLIST_FILE"
 fi
 
+if [[ -n "$EXAMPLE_MANIFEST" ]]; then
+  if [[ ! -f "$EXAMPLE_MANIFEST" ]]; then
+    echo "Example manifest file not found: $EXAMPLE_MANIFEST" >&2
+    exit 1
+  fi
+  if [[ ! -r "$EXAMPLE_MANIFEST" ]]; then
+    echo "Example manifest file not readable: $EXAMPLE_MANIFEST" >&2
+    exit 1
+  fi
+  load_example_manifest "$EXAMPLE_MANIFEST"
+else
+  load_default_examples
+fi
+
 if [[ "$SMOKE" -eq 1 && "$MUTATION_GENERATION_FLAGS_SEEN" -eq 1 ]]; then
   echo "Mutation generation options (--mutations-*) require non-smoke mode." >&2
   exit 1
 fi
 
 if [[ ${#EXAMPLE_IDS[@]} -eq 0 ]]; then
-  EXAMPLE_IDS=("bitcnt" "picorv32_primes")
+  EXAMPLE_IDS=("${AVAILABLE_EXAMPLES[@]}")
 fi
+
+for example_id in "${EXAMPLE_IDS[@]}"; do
+  if [[ -z "${EXAMPLE_TO_DESIGN[$example_id]+x}" ]]; then
+    echo "Unknown --example value: $example_id" >&2
+    exit 1
+  fi
+done
 
 if [[ -z "$CIRCT_MUT" ]]; then
   if [[ -x "$DEFAULT_CIRCT_MUT" ]]; then
@@ -602,20 +707,8 @@ printf 'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors
 overall_rc=0
 
 for example_id in "${EXAMPLE_IDS[@]}"; do
-  case "$example_id" in
-    bitcnt)
-      design="${EXAMPLES_ROOT}/bitcnt/bitcnt.v"
-      top="bitcnt"
-      ;;
-    picorv32_primes)
-      design="${EXAMPLES_ROOT}/picorv32_primes/picorv32.v"
-      top="picorv32"
-      ;;
-    *)
-      echo "Unsupported --example value: $example_id" >&2
-      exit 1
-      ;;
-  esac
+  design="${EXAMPLE_TO_DESIGN[$example_id]}"
+  top="${EXAMPLE_TO_TOP[$example_id]}"
 
   if [[ ! -f "$design" ]]; then
     echo "Missing example design for ${example_id}: $design" >&2
