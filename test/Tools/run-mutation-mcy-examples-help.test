@@ -17,6 +17,7 @@
 // CHECK-DAG: --mutations-select
 // CHECK-DAG: --mutation-limit
 // CHECK-DAG: --min-detected
+// CHECK-DAG: --min-relevant
 // CHECK-DAG: --min-coverage-percent
 // CHECK-DAG: --max-errors
 // CHECK-DAG: --baseline-file

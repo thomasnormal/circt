@@ -37,6 +37,8 @@ Options:
   --mutation-limit N       Per-example mutation limit (default: 8)
   --min-detected N         Fail if detected mutants per example is below N
                            (default: 0)
+  --min-relevant N         Fail if relevant mutants per example is below N
+                           (default: 0)
   --min-coverage-percent P Fail if coverage percent per example is below P
                            (0-100, default: disabled)
   --max-errors N           Fail if reported errors per example exceed N
@@ -143,6 +145,7 @@ MUTATIONS_CFG=""
 MUTATIONS_SELECT=""
 MUTATION_LIMIT=8
 MIN_DETECTED=0
+MIN_RELEVANT=0
 MIN_COVERAGE_PERCENT=""
 MAX_ERRORS=""
 BASELINE_FILE=""
@@ -1162,6 +1165,10 @@ while [[ $# -gt 0 ]]; do
       MIN_DETECTED="$2"
       shift 2
       ;;
+    --min-relevant)
+      MIN_RELEVANT="$2"
+      shift 2
+      ;;
     --min-coverage-percent)
       MIN_COVERAGE_PERCENT="$2"
       shift 2
@@ -1294,6 +1301,10 @@ if ! is_pos_int "$MUTATION_LIMIT"; then
 fi
 if ! is_nonneg_int "$MIN_DETECTED"; then
   echo "--min-detected must be a non-negative integer: $MIN_DETECTED" >&2
+  exit 1
+fi
+if ! is_nonneg_int "$MIN_RELEVANT"; then
+  echo "--min-relevant must be a non-negative integer: $MIN_RELEVANT" >&2
   exit 1
 fi
 if [[ -n "$MIN_COVERAGE_PERCENT" ]]; then
@@ -1685,6 +1696,12 @@ EOS
   gate_failure=""
   if [[ "$detected" -lt "$MIN_DETECTED" ]]; then
     gate_failure="detected<${MIN_DETECTED}"
+  fi
+  if [[ "$relevant" -lt "$MIN_RELEVANT" ]]; then
+    if [[ -n "$gate_failure" ]]; then
+      gate_failure+=","
+    fi
+    gate_failure+="relevant<${MIN_RELEVANT}"
   fi
   if [[ -n "$MIN_COVERAGE_PERCENT" ]]; then
     if float_lt "$coverage_for_gate" "$MIN_COVERAGE_PERCENT"; then

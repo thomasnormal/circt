@@ -10,11 +10,12 @@
 // RUN:   --circt-mut %t/bin/circt-mut \
 // RUN:   --out-dir %t/out \
 // RUN:   --min-detected 1 \
+// RUN:   --min-relevant 5 \
 // RUN:   --min-coverage-percent 25 \
 // RUN:   --max-errors 0 2>&1 | FileCheck %s --check-prefix=GATE
 
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
 
-// GATE: Gate failure (bitcnt): detected<1,coverage<25,errors>0
+// GATE: Gate failure (bitcnt): detected<1,relevant<5,coverage<25,errors>0
 // SUMMARY: example{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}detected{{[[:space:]]}}relevant{{[[:space:]]}}coverage_percent{{[[:space:]]}}errors
 // SUMMARY: bitcnt{{[[:space:]]}}FAIL{{[[:space:]]}}0{{[[:space:]]}}0{{[[:space:]]}}4{{[[:space:]]}}0.00{{[[:space:]]}}2
