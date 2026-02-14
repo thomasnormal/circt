@@ -615,6 +615,23 @@ shell_escape_word() {
   printf "%q\n" "$1"
 }
 
+canonicalize_path_for_policy() {
+  local path="$1"
+  if [[ -z "$path" ]]; then
+    printf "\n"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import os,sys; print(os.path.abspath(os.path.realpath(sys.argv[1])))' "$path"
+    return 0
+  fi
+  if [[ "$path" == /* ]]; then
+    printf "%s\n" "$path"
+  else
+    printf "%s\n" "$PWD/$path"
+  fi
+}
+
 is_retry_reason_token() {
   [[ "$1" =~ ^[a-z][a-z0-9_]*$ ]]
 }
@@ -1383,6 +1400,9 @@ load_example_manifest() {
     native_real_harness_override="$(normalize_manifest_optional "${native_real_harness_override:-}")"
     if [[ -n "$native_real_harness_override" && "$native_real_harness_override" != /* ]]; then
       native_real_harness_override="${EXAMPLES_ROOT}/${native_real_harness_override}"
+    fi
+    if [[ -n "$native_real_harness_override" ]]; then
+      native_real_harness_override="$(canonicalize_path_for_policy "$native_real_harness_override")"
     fi
     native_mutation_ops_override="$(normalize_manifest_optional "${native_mutation_ops_override:-}")"
     native_real_harness_args_override="$(normalize_manifest_optional "${native_real_harness_args_override:-}")"

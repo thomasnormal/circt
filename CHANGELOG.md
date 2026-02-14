@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1399 - February 14, 2026
+
+### OpenTitan FPV BMC: Include-Only Contract Filtering + Single-Unit Auto-Retry
+
+1. Hardened OpenTitan FPV compile-contract filelist extraction:
+   - `utils/resolve_opentitan_formal_compile_contracts.py` now excludes
+     `is_include_file` entries from compile-unit `files`.
+   - include-only paths still contribute their parent directories to
+     `include_dirs`.
+2. Added generic pairwise BMC frontend retry control for macro-preprocessor
+   single-unit failures:
+   - new env mode in `utils/run_pairwise_circt_bmc.py`:
+     - `BMC_VERILOG_SINGLE_UNIT_MODE=auto|on|off` (default: `auto`).
+   - in `auto`, verilog stage retries once without `--single-unit` when
+     diagnostics match:
+     - `macro operators may only be used within a macro definition`
+     - `unexpected conditional directive`.
+   - retry preserves provenance:
+     - first failure log copied to `circt-verilog.single-unit.log`
+     - launch event row emitted with reason
+       `single_unit_preprocessor_failure`.
+3. Added/updated regressions:
+   - updated:
+     - `test/Tools/resolve-opentitan-formal-compile-contracts-basic.test`
+   - new:
+     - `test/Tools/resolve-opentitan-formal-compile-contracts-include-file-filter.test`
+     - `test/Tools/run-pairwise-circt-bmc-single-unit-auto-retry.test`
+4. Validation:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-pairwise-circt-bmc-basic.test build-test/test/Tools/run-pairwise-circt-bmc-single-unit-auto-retry.test` PASS
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/resolve-opentitan-formal-compile-contracts-basic.test build-test/test/Tools/resolve-opentitan-formal-compile-contracts-include-file-filter.test build-test/test/Tools/run-formal-all-opentitan-fpv-compile-contracts-default-workdir.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-empty-assertion-baseline-update.test` PASS
+5. Real OpenTitan prim canary progression (`prim_all`, smoke, no-strict-gate):
+   - previous frontend macro parse failure is now bypassed by auto-retry.
+   - current blocker advances to BMC semantic unsupported op:
+     `unsupported_llhd_signal_use_in_lec_llhd_sig_array_get`.
+
 ## Iteration 1398 - February 14, 2026
 
 ### OpenTitan FPV BMC: Compile-Contract Lifetime + Canary Baseline Materialization
@@ -67383,3 +67418,15 @@ See CHANGELOG.md on recent progress.
       prevents command-splitting path bugs in real harness mode.
     - Added regression coverage:
       `run-mutation-mcy-examples-native-real-harness-manifest-override-space-path-pass.test`.
+44. Canonicalized and shell-safe native real harness path handling
+    (February 14, 2026):
+    - Added path canonicalization helper for policy use
+      (`canonicalize_path_for_policy`) and normalized manifest
+      `native_real_harness_script` entries through it.
+    - This removes `..`-path false drift in mutation policy fingerprints.
+    - Hardened real harness tests-manifest command emission to shell-escape
+      harness script paths, including custom override and built-in real
+      harness scripts.
+    - Added regression coverage:
+      - `run-mutation-mcy-examples-native-real-harness-manifest-override-space-path-pass.test`
+      - `run-mutation-mcy-examples-native-real-harness-policy-fingerprint-normalized-path-pass.test`.
