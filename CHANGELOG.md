@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1325 - February 14, 2026
+
+### OpenTitan Connectivity BMC: Per-Rule Status Drift Governance
+
+1. Extended `utils/run_opentitan_connectivity_circt_bmc.py` with status-governance artifacts:
+   - per-rule status summary output:
+     - `BMC_CONNECTIVITY_STATUS_SUMMARY_OUT`
+   - baseline/diff controls:
+     - `BMC_CONNECTIVITY_STATUS_BASELINE_FILE`
+     - `BMC_CONNECTIVITY_STATUS_DRIFT_OUT`
+     - `BMC_CONNECTIVITY_STATUS_DRIFT_ALLOWLIST_FILE`
+     - `BMC_FAIL_ON_CONNECTIVITY_STATUS_DRIFT`
+   - drift model is keyed by stable `rule_id` and tracks:
+     - case counts (`case_pass/fail/xfail/xpass/error/skip`)
+     - cover counts (`cover_covered/unreachable/timeout/unknown/skip/error`)
+   - fail-on drift appends an explicit `ERROR` row to case results
+     (`BMC_DRIFT_ERROR`) to preserve lane-level failure visibility.
+2. Extended `utils/run_formal_all.sh` connectivity BMC lane wiring:
+   - new CLI options:
+     - `--opentitan-connectivity-bmc-status-baseline-file`
+     - `--opentitan-connectivity-bmc-status-drift-file`
+     - `--opentitan-connectivity-bmc-status-drift-allowlist-file`
+     - `--update-opentitan-connectivity-bmc-status-baseline`
+     - `--fail-on-opentitan-connectivity-bmc-status-drift`
+   - lane now forwards status-governance env to connectivity BMC runner.
+   - baseline update workflow added for connectivity BMC status artifacts.
+   - strict-gate behavior:
+     - auto-enables connectivity BMC drift failure when baseline is configured.
+     - enforces allowlist gating requirements.
+3. Added focused regressions:
+   - `test/Tools/run-opentitan-connectivity-circt-bmc-status-summary.test`
+   - `test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-fail.test`
+   - `test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-bmc-status-drift-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-bmc-status-drift-requires-baseline.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-bmc-status-drift-allowlist-requires-gate.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-bmc-status-baseline-update.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_opentitan_connectivity_circt_bmc.py` PASS
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-(opentitan-connectivity-circt-bmc-status-|formal-all-opentitan-connectivity-bmc-status-|formal-all-help).*\\.test'` PASS (7 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-formal-all-opentitan-connectivity-bmc-status-.*\\.test'` PASS (4 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-(opentitan-connectivity-circt-bmc|opentitan-connectivity-circt-lec|formal-all-opentitan-connectivity-).*\\.test'` PASS (24 selected)
+
 ## Iteration 1324 - February 14, 2026
 
 ### Mutation Workflow: Allowlist Coverage for Summary Schema Violations

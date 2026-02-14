@@ -54,6 +54,24 @@ class ConnectivityConnectionGroup:
     conditions: tuple[ConnectivityRule, ...]
 
 
+CONNECTIVITY_STATUS_FIELDS = (
+    "case_total",
+    "case_pass",
+    "case_fail",
+    "case_xfail",
+    "case_xpass",
+    "case_error",
+    "case_skip",
+    "cover_total",
+    "cover_covered",
+    "cover_unreachable",
+    "cover_timeout",
+    "cover_unknown",
+    "cover_skip",
+    "cover_error",
+)
+
+
 def fail(msg: str) -> None:
     print(msg, file=sys.stderr)
     raise SystemExit(1)
@@ -67,6 +85,201 @@ def parse_nonnegative_int(raw: str, name: str) -> int:
     if value < 0:
         fail(f"invalid {name}: {raw}")
     return value
+
+
+def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
+    exact: set[str] = set()
+    prefixes: list[str] = []
+    regex_rules: list[re.Pattern[str]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line_no, raw in enumerate(handle, start=1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            mode = "exact"
+            payload = line
+            if ":" in line:
+                mode, payload = line.split(":", 1)
+                mode = mode.strip()
+                payload = payload.strip()
+            if not payload:
+                fail(f"invalid allowlist row {line_no}: empty pattern")
+            if mode == "exact":
+                exact.add(payload)
+            elif mode == "prefix":
+                prefixes.append(payload)
+            elif mode == "regex":
+                try:
+                    regex_rules.append(re.compile(payload))
+                except re.error as exc:
+                    fail(
+                        f"invalid allowlist row {line_no}: bad regex '{payload}': {exc}"
+                    )
+            else:
+                fail(
+                    f"invalid allowlist row {line_no}: unsupported mode '{mode}' "
+                    "(expected exact|prefix|regex)"
+                )
+    return exact, prefixes, regex_rules
+
+
+def is_allowlisted(
+    token: str, exact: set[str], prefixes: list[str], regex_rules: list[re.Pattern[str]]
+) -> bool:
+    if token in exact:
+        return True
+    for prefix in prefixes:
+        if token.startswith(prefix):
+            return True
+    for pattern in regex_rules:
+        if pattern.search(token):
+            return True
+    return False
+
+
+def normalize_connectivity_rule_id(case_id: str) -> str:
+    token = case_id.strip()
+    prefix = "connectivity::"
+    if token.startswith(prefix):
+        return token[len(prefix) :]
+    return token
+
+
+def init_connectivity_status_counts() -> dict[str, int]:
+    return {field: 0 for field in CONNECTIVITY_STATUS_FIELDS}
+
+
+def collect_connectivity_status_counts(
+    case_rows: list[tuple[str, ...]],
+    cover_rows: list[tuple[str, ...]],
+) -> dict[str, dict[str, int]]:
+    by_rule: dict[str, dict[str, int]] = {}
+
+    def get_counts(rule_id: str) -> dict[str, int]:
+        return by_rule.setdefault(rule_id, init_connectivity_status_counts())
+
+    for row in case_rows:
+        if len(row) < 2:
+            continue
+        rule_id = normalize_connectivity_rule_id(row[1])
+        if not rule_id:
+            continue
+        status = (row[0] if row else "").strip().upper()
+        counts = get_counts(rule_id)
+        counts["case_total"] += 1
+        if status == "PASS":
+            counts["case_pass"] += 1
+        elif status == "FAIL":
+            counts["case_fail"] += 1
+        elif status == "XFAIL":
+            counts["case_xfail"] += 1
+        elif status == "XPASS":
+            counts["case_xpass"] += 1
+        elif status == "SKIP":
+            counts["case_skip"] += 1
+        else:
+            counts["case_error"] += 1
+
+    for row in cover_rows:
+        if len(row) < 2:
+            continue
+        rule_id = normalize_connectivity_rule_id(row[1])
+        if not rule_id:
+            continue
+        status = (row[0] if row else "").strip().upper()
+        counts = get_counts(rule_id)
+        counts["cover_total"] += 1
+        if status == "COVERED":
+            counts["cover_covered"] += 1
+        elif status == "UNREACHABLE":
+            counts["cover_unreachable"] += 1
+        elif status == "TIMEOUT":
+            counts["cover_timeout"] += 1
+        elif status == "UNKNOWN":
+            counts["cover_unknown"] += 1
+        elif status == "SKIP":
+            counts["cover_skip"] += 1
+        else:
+            counts["cover_error"] += 1
+
+    return by_rule
+
+
+def write_connectivity_status_summary(
+    path: Path,
+    by_rule: dict[str, dict[str, int]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(["rule_id", *CONNECTIVITY_STATUS_FIELDS])
+        for rule_id in sorted(by_rule.keys()):
+            counts = by_rule[rule_id]
+            writer.writerow([rule_id, *[counts[field] for field in CONNECTIVITY_STATUS_FIELDS]])
+
+
+def read_connectivity_status_summary(path: Path) -> dict[str, dict[str, str]]:
+    if not path.is_file():
+        fail(f"connectivity status summary file not found: {path}")
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames is None:
+            fail(f"connectivity status summary missing header row: {path}")
+        required = {"rule_id", *CONNECTIVITY_STATUS_FIELDS}
+        missing = sorted(required.difference(reader.fieldnames))
+        if missing:
+            fail(
+                f"connectivity status summary missing required columns {missing}: {path} "
+                f"(found: {reader.fieldnames})"
+            )
+        out: dict[str, dict[str, str]] = {}
+        for idx, row in enumerate(reader, start=2):
+            rule_id = (row.get("rule_id") or "").strip()
+            if not rule_id:
+                continue
+            if rule_id in out:
+                fail(f"duplicate rule_id '{rule_id}' in {path} row {idx}")
+            out[rule_id] = {
+                field: (row.get(field) or "").strip() for field in CONNECTIVITY_STATUS_FIELDS
+            }
+    return out
+
+
+def write_connectivity_status_drift(
+    path: Path,
+    rows: list[tuple[str, str, str, str, str]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(["rule_id", "kind", "baseline", "current", "allowlisted"])
+        for row in rows:
+            writer.writerow(row)
+
+
+def append_status_drift_error_row(
+    results_path: Path,
+    mode_label: str,
+    baseline_path: Path,
+) -> None:
+    with results_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "ERROR\tconnectivity_status_drift\t"
+            f"{baseline_path}\topentitan\t{mode_label}\t"
+            "BMC_DRIFT_ERROR\tconnectivity_status_drift\n"
+        )
+
+
+def read_tsv_rows(path: Path) -> list[tuple[str, ...]]:
+    if not path.is_file():
+        return []
+    rows: list[tuple[str, ...]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rows.append(tuple(line.split("\t")))
+    return rows
 
 
 def parse_target_manifest(path: Path) -> ConnectivityTarget:
@@ -532,6 +745,41 @@ def main() -> int:
         default=os.environ.get("OUT", ""),
         help="Output results TSV path (default: env OUT).",
     )
+    parser.add_argument(
+        "--status-summary-file",
+        default=os.environ.get("BMC_CONNECTIVITY_STATUS_SUMMARY_OUT", ""),
+        help=(
+            "Optional output TSV path for per-rule connectivity BMC status "
+            "counters."
+        ),
+    )
+    parser.add_argument(
+        "--status-baseline-file",
+        default=os.environ.get("BMC_CONNECTIVITY_STATUS_BASELINE_FILE", ""),
+        help=(
+            "Optional baseline per-rule connectivity status summary TSV used for "
+            "drift checking."
+        ),
+    )
+    parser.add_argument(
+        "--status-drift-file",
+        default=os.environ.get("BMC_CONNECTIVITY_STATUS_DRIFT_OUT", ""),
+        help="Optional output TSV path for connectivity status drift rows.",
+    )
+    parser.add_argument(
+        "--status-drift-allowlist-file",
+        default=os.environ.get("BMC_CONNECTIVITY_STATUS_DRIFT_ALLOWLIST_FILE", ""),
+        help=(
+            "Optional allowlist file for connectivity status drift suppression "
+            "(rule_id exact/prefix/regex)."
+        ),
+    )
+    parser.add_argument(
+        "--fail-on-status-drift",
+        action="store_true",
+        default=os.environ.get("BMC_FAIL_ON_CONNECTIVITY_STATUS_DRIFT", "0") == "1",
+        help="Fail when connectivity status drift is detected vs baseline.",
+    )
     args = parser.parse_args()
 
     if not args.results_file:
@@ -556,6 +804,10 @@ def main() -> int:
         fail("invalid --cover-shard-count: expected integer >= 1")
     if cover_shard_index >= cover_shard_count:
         fail("invalid --cover-shard-index: expected value < --cover-shard-count")
+    if args.fail_on_status_drift and not args.status_baseline_file:
+        fail("--fail-on-status-drift requires --status-baseline-file")
+    if args.status_drift_allowlist_file and not args.status_baseline_file:
+        fail("--status-drift-allowlist-file requires --status-baseline-file")
     bound = parse_nonnegative_int(args.bound, "bound")
     ignore_asserts_until = parse_nonnegative_int(
         args.ignore_asserts_until, "ignore-asserts-until"
@@ -584,7 +836,116 @@ def main() -> int:
 
     results_file.parent.mkdir(parents=True, exist_ok=True)
     results_file.write_text("", encoding="utf-8")
+    status_summary_path = (
+        Path(args.status_summary_file).resolve() if args.status_summary_file else None
+    )
+    status_baseline_path = (
+        Path(args.status_baseline_file).resolve() if args.status_baseline_file else None
+    )
+    status_drift_path = (
+        Path(args.status_drift_file).resolve() if args.status_drift_file else None
+    )
+    status_allowlist_path = (
+        Path(args.status_drift_allowlist_file).resolve()
+        if args.status_drift_allowlist_file
+        else None
+    )
+    if status_baseline_path is not None and not status_baseline_path.is_file():
+        fail(f"connectivity status baseline file not found: {status_baseline_path}")
+    if status_allowlist_path is not None and not status_allowlist_path.is_file():
+        fail(
+            "connectivity status drift allowlist file not found: "
+            f"{status_allowlist_path}"
+        )
+
+    allow_exact: set[str] = set()
+    allow_prefix: list[str] = []
+    allow_regex: list[re.Pattern[str]] = []
+    if status_allowlist_path is not None:
+        allow_exact, allow_prefix, allow_regex = load_allowlist(status_allowlist_path)
+
+    def evaluate_status_governance(
+        case_rows: list[tuple[str, ...]],
+        cover_rows: list[tuple[str, ...]],
+    ) -> int:
+        current_counts = collect_connectivity_status_counts(case_rows, cover_rows)
+        if status_summary_path is not None:
+            write_connectivity_status_summary(status_summary_path, current_counts)
+            print(f"connectivity status summary: {status_summary_path}", flush=True)
+        if status_baseline_path is None:
+            return 0
+
+        baseline = read_connectivity_status_summary(status_baseline_path)
+        current = {
+            rule_id: {
+                field: str(counts[field]) for field in CONNECTIVITY_STATUS_FIELDS
+            }
+            for rule_id, counts in current_counts.items()
+        }
+
+        drift_rows: list[tuple[str, str, str, str, str]] = []
+        non_allowlisted_rows: list[tuple[str, str, str, str, str]] = []
+        baseline_rules = set(baseline.keys())
+        current_rules = set(current.keys())
+
+        def add_drift(rule_id: str, kind: str, before: str, after: str) -> None:
+            allowlisted = is_allowlisted(rule_id, allow_exact, allow_prefix, allow_regex)
+            row = (rule_id, kind, before, after, "1" if allowlisted else "0")
+            drift_rows.append(row)
+            if not allowlisted:
+                non_allowlisted_rows.append(row)
+
+        for rule_id in sorted(baseline_rules - current_rules):
+            add_drift(rule_id, "missing_in_current", "present", "absent")
+        for rule_id in sorted(current_rules - baseline_rules):
+            add_drift(rule_id, "new_in_current", "absent", "present")
+        for rule_id in sorted(baseline_rules.intersection(current_rules)):
+            before_row = baseline[rule_id]
+            after_row = current[rule_id]
+            for kind in CONNECTIVITY_STATUS_FIELDS:
+                before = before_row.get(kind, "")
+                after = after_row.get(kind, "")
+                if before != after:
+                    add_drift(rule_id, kind, before, after)
+
+        if status_drift_path is not None:
+            write_connectivity_status_drift(status_drift_path, drift_rows)
+            print(f"connectivity status drift: {status_drift_path}", flush=True)
+
+        if non_allowlisted_rows:
+            sample = ", ".join(
+                f"{rule_id}:{kind}"
+                for rule_id, kind, _, _, _ in non_allowlisted_rows[:6]
+            )
+            if len(non_allowlisted_rows) > 6:
+                sample += ", ..."
+            message = (
+                "opentitan connectivity status drift detected: "
+                f"rows={len(non_allowlisted_rows)} sample=[{sample}] "
+                f"baseline={status_baseline_path}"
+            )
+            if args.fail_on_status_drift:
+                append_status_drift_error_row(
+                    results_file, args.mode_label, status_baseline_path
+                )
+                print(message, file=sys.stderr)
+                return 1
+            print(f"warning: {message}", file=sys.stderr)
+        else:
+            print(
+                "opentitan connectivity status drift check passed: "
+                f"rules={len(current)} baseline={status_baseline_path}",
+                file=sys.stderr,
+            )
+        return 0
+
     if not selected_groups:
+        if status_summary_path is not None:
+            write_connectivity_status_summary(status_summary_path, {})
+            print(f"connectivity status summary: {status_summary_path}", flush=True)
+        if status_drift_path is not None:
+            write_connectivity_status_drift(status_drift_path, [])
+            print(f"connectivity status drift: {status_drift_path}", flush=True)
         print(
             "No OpenTitan connectivity BMC cases selected.",
             file=sys.stderr,
@@ -695,6 +1056,12 @@ def main() -> int:
             ignore_asserts_until,
         )
         if not cases_file.read_text(encoding="utf-8").strip():
+            if status_summary_path is not None:
+                write_connectivity_status_summary(status_summary_path, {})
+                print(f"connectivity status summary: {status_summary_path}", flush=True)
+            if status_drift_path is not None:
+                write_connectivity_status_drift(status_drift_path, [])
+                print(f"connectivity status drift: {status_drift_path}", flush=True)
             print(
                 "No OpenTitan connectivity BMC cases selected.",
                 file=sys.stderr,
@@ -744,6 +1111,9 @@ def main() -> int:
         timeout_reasons_out = os.environ.get("BMC_TIMEOUT_REASON_CASES_OUT", "").strip()
         if timeout_reasons_out:
             cmd.extend(["--timeout-reasons-file", timeout_reasons_out])
+        cover_results_path = (
+            Path(cover_results_out).resolve() if cover_results_out else None
+        )
 
         print(
             "opentitan connectivity bmc: "
@@ -758,7 +1128,14 @@ def main() -> int:
             flush=True,
         )
         proc = subprocess.run(cmd, check=False)
-        return proc.returncode
+        case_rows = read_tsv_rows(results_file)
+        cover_rows = (
+            read_tsv_rows(cover_results_path)
+            if cover_results_path is not None
+            else []
+        )
+        governance_rc = evaluate_status_governance(case_rows, cover_rows)
+        return max(proc.returncode, governance_rc)
     finally:
         if temp_dir_obj is not None:
             temp_dir_obj.cleanup()

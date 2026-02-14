@@ -50,6 +50,8 @@
 // CHECK: --fail-on-new-mutation-bmc-contract-fingerprint-parity
 // CHECK: --mutation-bmc-contract-fingerprint-parity-allowlist-file
 // CHECK: --fail-on-mutation-lec-contract-fingerprint-parity
+// CHECK: --fail-on-new-mutation-lec-contract-fingerprint-parity
+// CHECK: --mutation-lec-contract-fingerprint-parity-allowlist-file
 // CHECK: --fail-on-mutation-lec-contract-fingerprint-lane-parity
 // CHECK: --fail-on-new-mutation-lec-contract-fingerprint-lane-parity
 // CHECK: --strict-gate-mutation-lane-parity-priority
@@ -108,7 +110,14 @@
 // CHECK: --opentitan-bmc-include-masked
 // CHECK: --opentitan-bmc-case-policy-file
 // CHECK: --opentitan-fpv-cfg
+// CHECK: --opentitan-connectivity-bmc-status-baseline-file
+// CHECK: --opentitan-connectivity-bmc-status-drift-file
+// CHECK: --opentitan-connectivity-bmc-status-drift-allowlist-file
+// CHECK: --update-opentitan-connectivity-bmc-status-baseline
+// CHECK: --fail-on-opentitan-connectivity-bmc-status-drift
 // CHECK: --opentitan-fpv-target-filter
+// CHECK: --opentitan-fpv-bmc-target-shard-count
+// CHECK: --opentitan-fpv-bmc-target-shard-index
 // CHECK: --select-cfgs
 // CHECK: --opentitan-fpv-target-manifest
 // CHECK: --opentitan-fpv-compile-contracts
