@@ -1381,6 +1381,49 @@ EOS
   return 0
 }
 
+remove_running_pid() {
+  local pid_to_remove="$1"
+  local running_pid=""
+  local updated_pids=()
+  for running_pid in "${RUNNING_PIDS[@]}"; do
+    if [[ "$running_pid" != "$pid_to_remove" ]]; then
+      updated_pids+=("$running_pid")
+    fi
+  done
+  RUNNING_PIDS=("${updated_pids[@]}")
+}
+
+reap_worker_pid() {
+  local finished_pid="$1"
+  local wrc=0
+  set +e
+  wait "$finished_pid"
+  wrc=$?
+  set -e
+  if [[ "$wrc" -ne 0 ]]; then
+    echo "Example worker failed (${PID_TO_EXAMPLE[$finished_pid]}) with exit code $wrc" >&2
+    worker_failures=1
+  fi
+  remove_running_pid "$finished_pid"
+  unset "PID_TO_EXAMPLE[$finished_pid]"
+}
+
+wait_for_any_worker_completion() {
+  local finished_pid=""
+
+  while [[ "${#RUNNING_PIDS[@]}" -gt 0 ]]; do
+    for finished_pid in "${RUNNING_PIDS[@]}"; do
+      if ! kill -0 "$finished_pid" 2>/dev/null; then
+        reap_worker_pid "$finished_pid"
+        return 0
+      fi
+    done
+    sleep 0.05
+  done
+
+  return 0
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --examples-root)
@@ -1885,32 +1928,12 @@ else
     PID_TO_EXAMPLE["$pid"]="$example_id"
 
     while [[ "${#RUNNING_PIDS[@]}" -ge "$JOBS" ]]; do
-      pid="${RUNNING_PIDS[0]}"
-      set +e
-      wait "$pid"
-      wrc=$?
-      set -e
-      if [[ "$wrc" -ne 0 ]]; then
-        echo "Example worker failed (${PID_TO_EXAMPLE[$pid]}) with exit code $wrc" >&2
-        worker_failures=1
-      fi
-      RUNNING_PIDS=("${RUNNING_PIDS[@]:1}")
-      unset "PID_TO_EXAMPLE[$pid]"
+      wait_for_any_worker_completion
     done
   done
 
   while [[ "${#RUNNING_PIDS[@]}" -gt 0 ]]; do
-    pid="${RUNNING_PIDS[0]}"
-    set +e
-    wait "$pid"
-    wrc=$?
-    set -e
-    if [[ "$wrc" -ne 0 ]]; then
-      echo "Example worker failed (${PID_TO_EXAMPLE[$pid]}) with exit code $wrc" >&2
-      worker_failures=1
-    fi
-    RUNNING_PIDS=("${RUNNING_PIDS[@]:1}")
-    unset "PID_TO_EXAMPLE[$pid]"
+    wait_for_any_worker_completion
   done
 fi
 

@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1345 - February 14, 2026
+
+### Mutation Workflow: Non-Blocking Worker Reaping for `--jobs`
+
+1. Improved `utils/run_mutation_mcy_examples.sh` parallel scheduling to avoid
+   head-of-line blocking under `--jobs > 1`:
+   - added helper reaper flow (`remove_running_pid`, `reap_worker_pid`,
+     `wait_for_any_worker_completion`).
+   - worker-slot replenishment now waits for any completed worker instead of
+     always waiting on the oldest PID.
+2. Preserved deterministic output semantics:
+   - summary ordering remains tied to selected example order.
+   - per-example and suite gate diagnostics remain unchanged.
+3. Added a focused scheduling regression:
+   - `test/Tools/run-mutation-mcy-examples-jobs-no-head-of-line-blocking.test`
+
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (69/69)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 4 --out-dir /tmp/mcy_examples_smoke_jobs4_scheduler` PASS
+
+
 ## Iteration 1344 - February 14, 2026
 
 ### OpenTitan Connectivity Objective Parity: Semantic-Kind and Rollup Hardening
@@ -63,7 +87,7 @@
 ### Validation
 
 - `bash -n utils/run_mutation_mcy_examples.sh` PASS
-- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (68/68)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (69/69)
 - `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 4 --out-dir /tmp/mcy_examples_smoke_jobs4` PASS
 
 
@@ -16885,7 +16909,7 @@ Reduced UVM xfails from 7 to 1 with three major fixes:
 ### Validation
 
 - `ninja -C build circt-mut`: PASS
-- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-*.test test/Tools/circt-mut-matrix-*.test test/Tools/circt-mut-generate-native-*.test`: PASS (68/68)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-*.test test/Tools/circt-mut-matrix-*.test test/Tools/circt-mut-generate-native-*.test`: PASS (69/69)
 - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test test/Tools/run-mutation-generate*.test`: PASS (28/28)
 - External filtered cadence:
   - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-mode-validation --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
@@ -17488,7 +17512,7 @@ Reduced UVM xfails from 7 to 1 with three major fixes:
 - `ninja -C build circt-mut`: PASS
 - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-cover-config.test test/Tools/circt-mut-run-cover-config-bool-flags.test test/Tools/circt-mut-run-cover-config-bool-invalid.test test/Tools/circt-mut-run-cover-config-formal-bool-flags.test test/Tools/circt-mut-run-cover-config-formal-bool-invalid.test`: PASS (5/5)
 - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test`: PASS (82/82)
-- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (68/68)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (69/69)
 - External filtered cadence:
   - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-run-cover-formal-bool-fix --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
   - summary:
