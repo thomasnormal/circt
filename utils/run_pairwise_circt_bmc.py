@@ -2079,7 +2079,14 @@ def main() -> int:
                     and not use_external_preprocess
                 ):
                     verilog_log_text = verilog_log_path.read_text()
-                    if is_external_preprocess_retryable_failure(verilog_log_text):
+                    if (
+                        not is_prim_assert_include_shim_retryable_failure(
+                            verilog_log_text
+                        )
+                        and is_external_preprocess_retryable_failure(
+                            verilog_log_text
+                        )
+                    ):
                         external_preprocess_trigger_log = (
                             case_dir / "circt-verilog.external-preprocess-trigger.log"
                         )
