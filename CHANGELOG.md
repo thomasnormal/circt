@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1364 - February 14, 2026
+
+### Mutation Workflow: Dedicated Retry-Reason Baseline Schema Migration
+
+1. Added a first-class retry-reason schema migration mode to
+   `utils/run_mutation_mcy_examples.sh`:
+   - `--migrate-retry-reason-baseline-schema-artifacts`
+   - migrates retry-reason baseline schema sidecars and exits.
+2. Implemented retry-reason baseline migration helper:
+   - infers retry-reason schema version from retry summary header
+   - computes retry-reason schema contract fingerprint from
+     inferred version + header
+   - writes sidecars to configured paths (defaulting to
+     `<retry-reason-baseline-file>.schema-version` and
+     `<retry-reason-baseline-file>.schema-contract`).
+3. Added migration-time guardrails:
+   - incompatible combinations rejected with update/diff modes
+   - requires retry-reason baseline source via
+     `--retry-reason-baseline-file` (or derived from `--baseline-file`)
+   - validates baseline retry-reason file exists/readable before migration.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-migrate-retry-reason-baseline-schema-artifacts-requires-baseline-file.test`
+   - `test/Tools/run-mutation-mcy-examples-migrate-retry-reason-baseline-schema-artifacts-success.test`
+   - `test/Tools/run-mutation-mcy-examples-migrate-retry-reason-baseline-schema-artifacts-unknown-header.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-mutation-mcy-examples-help.test build-test/test/Tools/run-mutation-mcy-examples-migrate-retry-reason-baseline-schema-artifacts-requires-baseline-file.test build-test/test/Tools/run-mutation-mcy-examples-migrate-retry-reason-baseline-schema-artifacts-success.test build-test/test/Tools/run-mutation-mcy-examples-migrate-retry-reason-baseline-schema-artifacts-unknown-header.test` PASS (4/4)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (95 selected)
+- `utils/run_mutation_mcy_examples.sh --retry-reason-baseline-file /tmp/mcy_retry_reason_migrate.tsv --retry-reason-baseline-schema-version-file /tmp/mcy_retry_reason_migrate.custom.schema-version --retry-reason-baseline-schema-contract-file /tmp/mcy_retry_reason_migrate.custom.schema-contract --migrate-retry-reason-baseline-schema-artifacts` PASS
+
+
 ## Iteration 1363 - February 14, 2026
 
 ### Mutation Workflow: Retry-Reason Sidecar Controls and Strict Baseline Artifact Gates

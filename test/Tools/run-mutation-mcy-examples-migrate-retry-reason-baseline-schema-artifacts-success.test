@@ -1,0 +1,16 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'retry_reason\tretries\npermission_denied\t2\n' > %t/retry-baseline.tsv
+
+// RUN: %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --retry-reason-baseline-file %t/retry-baseline.tsv \
+// RUN:   --retry-reason-baseline-schema-version-file %t/custom.retry.schema-version \
+// RUN:   --retry-reason-baseline-schema-contract-file %t/custom.retry.schema-contract \
+// RUN:   --migrate-retry-reason-baseline-schema-artifacts
+
+// RUN: test ! -e %t/retry-baseline.tsv.schema-version
+// RUN: test ! -e %t/retry-baseline.tsv.schema-contract
+// RUN: FileCheck %s --check-prefix=VERSION < %t/custom.retry.schema-version
+// RUN: FileCheck %s --check-prefix=CONTRACT < %t/custom.retry.schema-contract
+
+// VERSION: v1
+// CONTRACT: {{[0-9a-f]+}}
