@@ -1,0 +1,11 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'PASS\tfoo_fpv::foo_tb\t/tmp/foo.sv\topentitan\tFPV_BMC\tUNSAT\n' > %t/case.tsv
+// RUN: printf 'PROVEN\tfoo_fpv::foo_tb\t/tmp/foo.sv\ta0000\tline_10\tUNSAT\tunsat\n' > %t/assertions.tsv
+// RUN: printf 'target_name\ttotal_assertions\tproven\tfailing\tvacuous\tcovered\tunreachable\tunknown\terror\ttimeout\tskipped\nfoo_fpv\t1\t1\t0\t0\t0\t0\t0\t0\t0\t0\n' > %t/summary.tsv
+// RUN: python3 %S/../../utils/check_opentitan_fpv_bmc_evidence_parity.py --case-results %t/case.tsv --assertion-results %t/assertions.tsv --fpv-summary %t/summary.tsv --out-parity-tsv %t/parity.tsv 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=PARITY < %t/parity.tsv
+//
+// LOG: opentitan fpv bmc evidence parity check passed
+// PARITY: target_name{{[[:space:]]+}}objective_class{{[[:space:]]+}}kind{{[[:space:]]+}}evidence{{[[:space:]]+}}summary{{[[:space:]]+}}allowlisted
+// PARITY-NOT: foo_fpv
