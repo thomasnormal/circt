@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1322 - February 14, 2026
+
+### Mutation Workflow: Strict Summary Contract Schema Validation
+
+1. Extended `evaluate_summary_contract()` in `utils/run_mutation_mcy_examples.sh` to validate `summary.tsv` schema and data contracts when `--require-unique-summary-rows` is enabled.
+2. Added strict contract checks:
+   - header exact-match validation for summary schema columns
+   - per-row column-count validation (`invalid_column_count`)
+   - status enum validation (`PASS`/`FAIL`)
+   - integer field validation for `exit_code`, `detected`, `relevant`, `errors`
+   - coverage contract checks (`-` vs numeric + range + relevant-consistency)
+   - non-empty `policy_fingerprint` requirement
+3. Kept existing duplicate-row contract checks (`duplicate_current_row`) as part of the same strict summary gate.
+4. Added focused regression for schema violation injection:
+   - `test/Tools/run-mutation-mcy-examples-require-unique-summary-rows-schema-invalid-status-fail.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (41/41)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-122056` PASS
+
 ## Iteration 1321 - February 14, 2026
 
 ### Mutation Workflow: Optional Strict Summary Row Uniqueness Gate
