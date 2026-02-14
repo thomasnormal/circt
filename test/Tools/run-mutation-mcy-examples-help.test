@@ -24,6 +24,7 @@
 // CHECK-DAG: --fail-on-diff
 // CHECK-DAG: --require-policy-fingerprint-baseline
 // CHECK-DAG: --require-baseline-example-parity
+// CHECK-DAG: --require-baseline-schema-version-match
 // CHECK-DAG: --strict-baseline-governance
 // CHECK-DAG: --require-unique-summary-rows
 // CHECK-DAG: --drift-allowlist-file

@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1326 - February 14, 2026
+
+### Mutation Workflow: Baseline Schema-Version Compatibility Gate
+
+1. Added explicit schema-version modeling for mutation summary TSV contracts in `utils/run_mutation_mcy_examples.sh`:
+   - `SUMMARY_HEADER_V1`
+   - `SUMMARY_HEADER_V2`
+   - `CURRENT_SUMMARY_SCHEMA_VERSION` (`v2`)
+2. Added schema-version detection helpers:
+   - `summary_schema_version_from_header()`
+   - `summary_schema_version_for_file()`
+3. Added strict baseline compatibility option:
+   - `--require-baseline-schema-version-match`
+   - requires `--fail-on-diff`.
+4. Extended drift evaluation with schema-version parity checks:
+   - drift metric: `baseline_schema_version`
+   - mismatch detail: `baseline_schema_version_mismatch`
+   - uses allowlist-aware candidate handling.
+5. Kept summary generation consistent via `CURRENT_SUMMARY_HEADER` constant to reduce header drift tech debt.
+6. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-schema-version-match-requires-fail-on-diff.test`
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-schema-version-match-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-schema-version-match-allowlist.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (46/46)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-122822` PASS
+
 ## Iteration 1325 - February 14, 2026
 
 ### OpenTitan Connectivity BMC: Per-Rule Status Drift Governance
