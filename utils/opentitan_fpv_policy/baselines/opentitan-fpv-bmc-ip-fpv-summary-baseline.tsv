@@ -1,0 +1,2 @@
+target_name	total_assertions	proven	failing	vacuous	covered	unreachable	unknown	error	timeout	skipped
+pinmux_fpv	1	0	0	0	0	0	0	1	0	0

@@ -168,6 +168,27 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
        and `sec_cm_all`;
      - wire recurring profile-pack `check` invocation into formal cadence
        workflows for early drift detection.
+17. OpenTitan FPV profile-pack execution hardening completed:
+   - fixed compile-contract lifetime for FPV BMC runs by defaulting
+     `--opentitan-fpv-compile-contracts-workdir` to a persistent path under
+     `OUT_DIR` when FPV cfg selection is active.
+   - fixed FPV BMC baseline update behavior to always materialize
+     assertion-results baselines (including empty baselines), preventing
+     follow-on `check` mode failures due missing baseline files.
+   - added focused regressions:
+     - `test/Tools/run-formal-all-opentitan-fpv-compile-contracts-default-workdir.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-bmc-empty-assertion-baseline-update.test`
+   - materialized canary baseline pack artifacts for:
+     - `prim_all`, `ip_all`, `sec_cm_all`
+     under `utils/opentitan_fpv_policy/baselines/`.
+18. Remaining high-priority limitations (OpenTitan FPV cadence):
+   - `check` mode with workflow default `--strict-gate` still depends on
+     `utils/formal-baselines.tsv` containing matching OpenTitan FPV rows;
+     otherwise strict gate reports `missing baseline row`.
+   - current canary targets resolve compile contracts and execute FPV BMC, but
+     terminate with `warning_macro_assert_i_redefined_wredef_macro` in this
+     environment; this blocks progression from stable fail-governance to
+     expected proof statuses.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 

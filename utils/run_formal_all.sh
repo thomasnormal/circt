@@ -8696,6 +8696,11 @@ fi
 
 mkdir -p "$OUT_DIR"
 
+if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 && \
+      -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR" ]]; then
+  OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR="$OUT_DIR/opentitan-fpv-contracts-work"
+fi
+
 if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 ]]; then
   opentitan_select_cfg_args=()
   for opentitan_fpv_cfg in "${OPENTITAN_FPV_CFG_FILES[@]}"; do
@@ -14615,7 +14620,8 @@ run_opentitan_fpv_bmc_lane() {
       echo "updated OpenTitan FPV BMC assertion-results baseline: $OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" >&2
       return
     fi
-    echo "warning: OpenTitan FPV BMC assertion-results baseline update skipped; assertion-results file is empty: $assertion_results_file" >&2
+    : > "$OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE"
+    echo "updated OpenTitan FPV BMC assertion-results baseline (empty): $OPENTITAN_FPV_BMC_ASSERTION_RESULTS_BASELINE_FILE" >&2
   }
 
   maybe_update_opentitan_fpv_bmc_assertion_status_policy_grouped_violations_baseline() {
