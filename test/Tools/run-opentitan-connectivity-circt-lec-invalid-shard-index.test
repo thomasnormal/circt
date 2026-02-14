@@ -1,0 +1,8 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: cp %S/../../utils/run_opentitan_connectivity_circt_lec.py %t/run_opentitan_connectivity_circt_lec.py
+// RUN: printf 'target_name\tflow\tsub_flow\tfusesoc_core\trel_path\tbbox_cmd\tconn_csv_count\tconn_csvs\tcfg_file\nchip_earlgrey_asic\tformal\tconn\tlowrisc:systems:chip_earlgrey_asic:0.1\thw/top_earlgrey/formal\t\t1\t[]\t%t/chip_conn_cfg.hjson\n' > %t/target.tsv
+// RUN: printf 'rule_id\trule_type\tcsv_file\tcsv_row\trule_name\tsrc_block\tsrc_signal\tdest_block\tdest_signal\nchip.csv:RULE_CLK\tCONNECTION\t%t/chip.csv\t10\tRULE_CLK\ttop_earlgrey.u_src\tclk_o\ttop_earlgrey.u_dst\tclk_i\n' > %t/rules.tsv
+// RUN: not python3 %t/run_opentitan_connectivity_circt_lec.py --target-manifest %t/target.tsv --rules-manifest %t/rules.tsv --opentitan-root %t --rule-shard-count 2 --rule-shard-index 2 --results-file %t/results.tsv 2>&1 | FileCheck %s
+//
+// CHECK: invalid --rule-shard-index: expected value < --rule-shard-count

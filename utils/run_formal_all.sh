@@ -918,6 +918,9 @@ Options:
   --with-opentitan-connectivity-bmc
                          Run OpenTitan connectivity checks through CIRCT BMC
                          (`opentitan/CONNECTIVITY_BMC`)
+  --with-opentitan-connectivity-lec
+                         Run OpenTitan connectivity checks through CIRCT LEC
+                         (`opentitan/CONNECTIVITY_LEC`)
   --with-opentitan-lec-strict
                          Run strict OpenTitan LEC lane (LEC_X_OPTIMISTIC=0)
                          and synthesize `opentitan/LEC_MODE_DIFF` when
@@ -959,6 +962,13 @@ Options:
   --opentitan-connectivity-bmc-rule-shard-index N
                          Deterministic OpenTitan connectivity rule shard index
                          in `[0, shard-count)` passed to connectivity BMC
+                         runner (default: 0)
+  --opentitan-connectivity-lec-rule-shard-count N
+                         Deterministic number of OpenTitan connectivity rule
+                         shards passed to connectivity LEC runner (default: 1)
+  --opentitan-connectivity-lec-rule-shard-index N
+                         Deterministic OpenTitan connectivity rule shard index
+                         in `[0, shard-count)` passed to connectivity LEC
                          runner (default: 0)
   --opentitan-fpv-target-filter REGEX
                          Regex filter for OpenTitan FPV target names in
@@ -2660,6 +2670,7 @@ WITH_OPENTITAN_BMC_STRICT=0
 WITH_OPENTITAN_FPV_BMC=0
 WITH_OPENTITAN_CONNECTIVITY_PARSE=0
 WITH_OPENTITAN_CONNECTIVITY_BMC=0
+WITH_OPENTITAN_CONNECTIVITY_LEC=0
 WITH_OPENTITAN_LEC_STRICT=0
 WITH_OPENTITAN_E2E=0
 WITH_OPENTITAN_E2E_STRICT=0
@@ -2678,6 +2689,8 @@ OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE=""
 OPENTITAN_CONNECTIVITY_RULE_FILTER=""
 OPENTITAN_CONNECTIVITY_BMC_RULE_SHARD_COUNT="1"
 OPENTITAN_CONNECTIVITY_BMC_RULE_SHARD_INDEX="0"
+OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_COUNT="1"
+OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_INDEX="0"
 OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT="1"
 OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX="0"
 OPENTITAN_FPV_BMC_CASE_SHARD_COUNT="1"
@@ -2772,6 +2785,8 @@ while [[ $# -gt 0 ]]; do
       WITH_OPENTITAN_CONNECTIVITY_PARSE=1; shift ;;
     --with-opentitan-connectivity-bmc)
       WITH_OPENTITAN_CONNECTIVITY_BMC=1; shift ;;
+    --with-opentitan-connectivity-lec)
+      WITH_OPENTITAN_CONNECTIVITY_LEC=1; shift ;;
     --with-opentitan-lec-strict)
       WITH_OPENTITAN_LEC_STRICT=1; shift ;;
     --with-opentitan-e2e)
@@ -2804,6 +2819,10 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_CONNECTIVITY_BMC_RULE_SHARD_COUNT="$2"; shift 2 ;;
     --opentitan-connectivity-bmc-rule-shard-index)
       OPENTITAN_CONNECTIVITY_BMC_RULE_SHARD_INDEX="$2"; shift 2 ;;
+    --opentitan-connectivity-lec-rule-shard-count)
+      OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_COUNT="$2"; shift 2 ;;
+    --opentitan-connectivity-lec-rule-shard-index)
+      OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_INDEX="$2"; shift 2 ;;
     --opentitan-fpv-target-filter)
       OPENTITAN_FPV_TARGET_FILTER="$2"; shift 2 ;;
     --opentitan-fpv-bmc-target-shard-count)
@@ -3757,6 +3776,22 @@ if (( OPENTITAN_CONNECTIVITY_BMC_RULE_SHARD_INDEX >= OPENTITAN_CONNECTIVITY_BMC_
   echo "invalid --opentitan-connectivity-bmc-rule-shard-index: expected value < --opentitan-connectivity-bmc-rule-shard-count" >&2
   exit 1
 fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_COUNT" && ! "$OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_COUNT" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-connectivity-lec-rule-shard-count: expected integer >= 1" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_INDEX" && ! "$OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_INDEX" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-connectivity-lec-rule-shard-index: expected non-negative integer" >&2
+  exit 1
+fi
+if (( OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_COUNT < 1 )); then
+  echo "invalid --opentitan-connectivity-lec-rule-shard-count: expected integer >= 1" >&2
+  exit 1
+fi
+if (( OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_INDEX >= OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_COUNT )); then
+  echo "invalid --opentitan-connectivity-lec-rule-shard-index: expected value < --opentitan-connectivity-lec-rule-shard-count" >&2
+  exit 1
+fi
 if [[ -n "$OPENTITAN_BMC_CASE_POLICY_FILE" && ! -f "$OPENTITAN_BMC_CASE_POLICY_FILE" ]]; then
   echo "missing --opentitan-bmc-case-policy-file: $OPENTITAN_BMC_CASE_POLICY_FILE" >&2
   exit 1
@@ -3779,6 +3814,10 @@ if [[ "$WITH_OPENTITAN_CONNECTIVITY_PARSE" == "1" && -z "$OPENTITAN_CONNECTIVITY
 fi
 if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && -z "$OPENTITAN_CONNECTIVITY_CFG_FILE" ]]; then
   echo "--with-opentitan-connectivity-bmc requires --opentitan-connectivity-cfg" >&2
+  exit 1
+fi
+if [[ "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" && -z "$OPENTITAN_CONNECTIVITY_CFG_FILE" ]]; then
+  echo "--with-opentitan-connectivity-lec requires --opentitan-connectivity-cfg" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE" && -z "$OPENTITAN_CONNECTIVITY_CFG_FILE" ]]; then
@@ -5665,6 +5704,7 @@ if [[ "$WITH_OPENTITAN" == "1" || \
       "$WITH_OPENTITAN_BMC_STRICT" == "1" || \
       "$WITH_OPENTITAN_FPV_BMC" == "1" || \
       "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" || \
+      "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" || \
       "$WITH_OPENTITAN_LEC_STRICT" == "1" || \
       "$WITH_OPENTITAN_E2E" == "1" || \
       "$WITH_OPENTITAN_E2E_STRICT" == "1" ]]; then
@@ -7894,6 +7934,7 @@ compute_lane_state_config_hash() {
     printf "with_opentitan_fpv_bmc=%s\n" "$WITH_OPENTITAN_FPV_BMC"
     printf "with_opentitan_connectivity_parse=%s\n" "$WITH_OPENTITAN_CONNECTIVITY_PARSE"
     printf "with_opentitan_connectivity_bmc=%s\n" "$WITH_OPENTITAN_CONNECTIVITY_BMC"
+    printf "with_opentitan_connectivity_lec=%s\n" "$WITH_OPENTITAN_CONNECTIVITY_LEC"
     printf "with_opentitan_e2e=%s\n" "$WITH_OPENTITAN_E2E"
     printf "with_opentitan_e2e_strict=%s\n" "$WITH_OPENTITAN_E2E_STRICT"
     printf "with_sv_tests_uvm_bmc_semantics=%s\n" "$WITH_SV_TESTS_UVM_BMC_SEMANTICS"
@@ -7923,6 +7964,8 @@ compute_lane_state_config_hash() {
     printf "opentitan_connectivity_rule_filter=%s\n" "$OPENTITAN_CONNECTIVITY_RULE_FILTER"
     printf "opentitan_connectivity_bmc_rule_shard_count=%s\n" "$OPENTITAN_CONNECTIVITY_BMC_RULE_SHARD_COUNT"
     printf "opentitan_connectivity_bmc_rule_shard_index=%s\n" "$OPENTITAN_CONNECTIVITY_BMC_RULE_SHARD_INDEX"
+    printf "opentitan_connectivity_lec_rule_shard_count=%s\n" "$OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_COUNT"
+    printf "opentitan_connectivity_lec_rule_shard_index=%s\n" "$OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_INDEX"
     printf "opentitan_fpv_target_filter=%s\n" "$OPENTITAN_FPV_TARGET_FILTER"
     printf "opentitan_fpv_bmc_target_shard_count=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT"
     printf "opentitan_fpv_bmc_target_shard_index=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
@@ -8887,6 +8930,12 @@ if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" ]] && lane_enabled "opentitan/CO
     exit 1
   fi
 fi
+if [[ "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ]] && lane_enabled "opentitan/CONNECTIVITY_LEC"; then
+  if [[ -z "$OPENTITAN_CONNECTIVITY_RULE_FILTER" ]]; then
+    echo "opentitan/CONNECTIVITY_LEC requires explicit filter: set --opentitan-connectivity-rule-filter" >&2
+    exit 1
+  fi
+fi
 if [[ "$WITH_OPENTITAN_BMC" == "1" && "$WITH_OPENTITAN_BMC_STRICT" == "1" ]] && \
    lane_enabled "opentitan/BMC_MODE_DIFF"; then
   if [[ -z "$OPENTITAN_BMC_IMPL_FILTER" ]]; then
@@ -8952,6 +9001,8 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   need_opentitan_fpv_bmc_runner=0
   need_opentitan_connectivity_parser=0
   need_opentitan_connectivity_bmc_runner=0
+  need_opentitan_connectivity_lec_runner=0
+  need_opentitan_connectivity_lec_lanes=0
   need_opentitan_lec_runner=0
   need_opentitan_e2e_runner=0
   need_avip_runner=0
@@ -9012,6 +9063,12 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" ]] && lane_enabled "opentitan/CONNECTIVITY_BMC"; then
     need_opentitan_bmc_lanes=1
     need_opentitan_connectivity_bmc_runner=1
+    need_opentitan_connectivity_parser=1
+  fi
+  if [[ "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ]] && lane_enabled "opentitan/CONNECTIVITY_LEC"; then
+    need_opentitan_connectivity_lec_lanes=1
+    need_opentitan_connectivity_lec_runner=1
+    need_opentitan_connectivity_parser=1
   fi
 
   if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
@@ -9081,6 +9138,17 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
       require_executable_tool "circt-bmc for OpenTitan BMC (derived)" "$FORMAL_CIRCT_BMC_BIN_OPENTITAN"
     fi
   fi
+  if [[ "$need_opentitan_connectivity_lec_lanes" == "1" ]]; then
+    if [[ "$CIRCT_VERILOG_BIN_OPENTITAN_EXPLICIT" == "0" && "$CIRCT_VERILOG_BIN_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-verilog for OpenTitan connectivity LEC (default-derived)" "$CIRCT_VERILOG_BIN_OPENTITAN"
+    fi
+    if [[ "$CIRCT_OPT_ENV_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-opt for OpenTitan connectivity LEC (derived)" "$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
+    fi
+    if [[ "$CIRCT_LEC_ENV_EXPLICIT" == "0" ]]; then
+      require_executable_tool "circt-lec for OpenTitan connectivity LEC (derived)" "$FORMAL_CIRCT_LEC_BIN_OPENTITAN"
+    fi
+  fi
 
   if [[ "$need_sv_bmc_runner" == "1" ]]; then
     require_executable_tool "sv-tests BMC runner" "utils/run_sv_tests_circt_bmc.sh"
@@ -9111,6 +9179,9 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   fi
   if [[ "$need_opentitan_connectivity_bmc_runner" == "1" ]]; then
     require_executable_tool "OpenTitan connectivity BMC runner" "utils/run_opentitan_connectivity_circt_bmc.py"
+  fi
+  if [[ "$need_opentitan_connectivity_lec_runner" == "1" ]]; then
+    require_executable_tool "OpenTitan connectivity LEC runner" "utils/run_opentitan_connectivity_circt_lec.py"
   fi
   if [[ "$need_opentitan_lec_runner" == "1" ]]; then
     require_executable_tool "OpenTitan LEC runner" "utils/run_opentitan_circt_lec.py"
@@ -12074,6 +12145,153 @@ PY
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
 }
 
+run_opentitan_connectivity_lec_lane() {
+  local lane_id="$1"
+  local mode_name="$2"
+  local suite_name="$3"
+  local case_results="$4"
+  local workdir="$5"
+  local drop_remark_cases_file="$6"
+  local drop_remark_reasons_file="$7"
+  local resolved_contracts_file="$8"
+
+  if ! lane_enabled "$lane_id"; then
+    return
+  fi
+  if lane_resume_from_state "$lane_id"; then
+    return
+  fi
+
+  : > "$case_results"
+  : > "$drop_remark_cases_file"
+  : > "$drop_remark_reasons_file"
+  : > "$resolved_contracts_file"
+  rm -rf "$workdir"
+
+  local opentitan_connectivity_args=(
+    --target-manifest "$OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE"
+    --rules-manifest "$OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE"
+    --opentitan-root "$OPENTITAN_DIR"
+    --workdir "$workdir"
+    --rule-filter "$OPENTITAN_CONNECTIVITY_RULE_FILTER"
+    --rule-shard-count "$OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_COUNT"
+    --rule-shard-index "$OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_INDEX"
+    --fusesoc-bin "$OPENTITAN_FPV_FUSESOC_BIN"
+    --mode-label "$mode_name"
+  )
+
+  local opentitan_connectivity_env=(OUT="$case_results"
+    LEC_DROP_REMARK_CASES_OUT="$drop_remark_cases_file"
+    LEC_DROP_REMARK_REASONS_OUT="$drop_remark_reasons_file"
+    LEC_RESOLVED_CONTRACTS_OUT="$resolved_contracts_file"
+    CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN"
+    CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
+    CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN_OPENTITAN"
+    CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN_OPENTITAN"
+    LEC_MODE_LABEL="$mode_name"
+    LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
+    LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY"
+    Z3_BIN="$Z3_BIN")
+  if [[ ${#FORMAL_LEC_TIMEOUT_ENV[@]} -gt 0 ]]; then
+    opentitan_connectivity_env+=("${FORMAL_LEC_TIMEOUT_ENV[@]}")
+  fi
+
+  run_suite "$suite_name" \
+    env "${opentitan_connectivity_env[@]}" \
+    utils/run_opentitan_connectivity_circt_lec.py "${opentitan_connectivity_args[@]}" || true
+
+  if [[ ! -s "$case_results" ]]; then
+    local suite_log="$OUT_DIR/${suite_name}.log"
+    if [[ -f "$suite_log" ]] && \
+       grep -q "No OpenTitan connectivity LEC cases selected." "$suite_log"; then
+      printf "SKIP\tconnectivity_rule\tno_matching_rule_filter\topentitan\t%s\tLEC_NOT_RUN\trule_filter\n" "$mode_name" > "$case_results"
+      local no_cases_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=0 skip=1 no_matching_rule_filter=1"
+      local lec_case_summary
+      lec_case_summary="$(summarize_lec_case_file "$case_results")"
+      if [[ -n "$lec_case_summary" ]]; then
+        no_cases_summary="${no_cases_summary} ${lec_case_summary}"
+      fi
+      record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 0 1 "$no_cases_summary"
+      return
+    fi
+    local missing_reason
+    missing_reason="$(classify_opentitan_bmc_missing_results_reason "$suite_log")"
+    printf "ERROR\tconnectivity_rule\tmissing_results\topentitan\t%s\tCIRCT_LEC_ERROR\t%s\n" "$mode_name" "$missing_reason" > "$case_results"
+    local missing_summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
+    local lec_case_summary
+    lec_case_summary="$(summarize_lec_case_file "$case_results")"
+    if [[ -n "$lec_case_summary" ]]; then
+      missing_summary="${missing_summary} ${lec_case_summary}"
+    fi
+    record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$missing_summary"
+    return
+  fi
+
+  local counts total pass fail xfail xpass error skip
+  counts="$(
+    OPENTITAN_CASE_RESULTS_FILE="$case_results" python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["OPENTITAN_CASE_RESULTS_FILE"])
+counts = {
+    "total": 0,
+    "pass": 0,
+    "fail": 0,
+    "xfail": 0,
+    "xpass": 0,
+    "error": 0,
+    "skip": 0,
+}
+for line in path.read_text().splitlines():
+  parts = line.split("\t")
+  if not parts or not parts[0]:
+    continue
+  status = parts[0].strip().upper()
+  counts["total"] += 1
+  if status == "PASS":
+    counts["pass"] += 1
+  elif status == "FAIL":
+    counts["fail"] += 1
+  elif status == "XFAIL":
+    counts["xfail"] += 1
+  elif status == "XPASS":
+    counts["xpass"] += 1
+  elif status == "SKIP":
+    counts["skip"] += 1
+  elif status in ("UNKNOWN", "TIMEOUT", "ERROR"):
+    counts["error"] += 1
+  else:
+    counts["error"] += 1
+print(
+    f"{counts['total']}\t{counts['pass']}\t{counts['fail']}\t"
+    f"{counts['xfail']}\t{counts['xpass']}\t{counts['error']}\t{counts['skip']}"
+)
+PY
+  )"
+  IFS=$'\t' read -r total pass fail xfail xpass error skip <<< "$counts"
+
+  local summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
+  local lec_drop_summary
+  lec_drop_summary="$(summarize_lec_drop_remark_log "$OUT_DIR/${suite_name}.log")"
+  if [[ -n "$lec_drop_summary" ]]; then
+    summary="${summary} ${lec_drop_summary}"
+  fi
+  local lec_case_summary
+  lec_case_summary="$(summarize_lec_case_file "$case_results")"
+  if [[ -n "$lec_case_summary" ]]; then
+    summary="${summary} ${lec_case_summary}"
+  fi
+  local lec_contract_summary
+  lec_contract_summary="$(summarize_lec_resolved_contracts_file "$resolved_contracts_file")"
+  if [[ -n "$lec_contract_summary" ]]; then
+    summary="${summary} ${lec_contract_summary}"
+  fi
+  append_filtered_min_total_violation total summary
+  maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
+  record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
+}
+
 run_opentitan_fpv_bmc_lane() {
   local lane_id="$1"
   local mode_name="$2"
@@ -12292,6 +12510,19 @@ if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" ]]; then
     "$OUT_DIR/opentitan-connectivity-bmc-work" \
     "$OUT_DIR/opentitan-connectivity-bmc-timeout-reasons.tsv" \
     "$OUT_DIR/opentitan-connectivity-bmc-resolved-contracts.tsv"
+fi
+
+# OpenTitan connectivity LEC lane (optional)
+if [[ "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ]]; then
+  run_opentitan_connectivity_lec_lane \
+    "opentitan/CONNECTIVITY_LEC" \
+    "CONNECTIVITY_LEC" \
+    "opentitan-connectivity-lec" \
+    "$OUT_DIR/opentitan-connectivity-lec-results.txt" \
+    "$OUT_DIR/opentitan-connectivity-lec-work" \
+    "$OUT_DIR/opentitan-connectivity-lec-drop-remark-cases.tsv" \
+    "$OUT_DIR/opentitan-connectivity-lec-drop-remark-reasons.tsv" \
+    "$OUT_DIR/opentitan-connectivity-lec-resolved-contracts.tsv"
 fi
 
 # OpenTitan BMC (optional)
