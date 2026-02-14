@@ -52,6 +52,7 @@ DROP_REMARK_PATTERN="${DROP_REMARK_PATTERN:-will be dropped during lowering}"
 LEC_DROP_REMARK_CASES_OUT="${LEC_DROP_REMARK_CASES_OUT:-}"
 LEC_DROP_REMARK_REASONS_OUT="${LEC_DROP_REMARK_REASONS_OUT:-}"
 LEC_RESOLVED_CONTRACTS_OUT="${LEC_RESOLVED_CONTRACTS_OUT:-}"
+LEC_LAUNCH_EVENTS_OUT="${LEC_LAUNCH_EVENTS_OUT:-}"
 
 resolve_default_uvm_path() {
   local candidate
@@ -115,6 +116,10 @@ trap cleanup EXIT
 
 results_tmp="$tmpdir/results.txt"
 touch "$results_tmp"
+if [[ -n "$LEC_LAUNCH_EVENTS_OUT" ]]; then
+  mkdir -p "$(dirname "$LEC_LAUNCH_EVENTS_OUT")"
+  : > "$LEC_LAUNCH_EVENTS_OUT"
+fi
 if [[ -n "$LEC_RESOLVED_CONTRACTS_OUT" ]]; then
   mkdir -p "$(dirname "$LEC_RESOLVED_CONTRACTS_OUT")"
   : > "$LEC_RESOLVED_CONTRACTS_OUT"
@@ -182,6 +187,36 @@ record_drop_remark_case() {
   if [[ -n "$LEC_DROP_REMARK_CASES_OUT" ]]; then
     printf "%s\t%s\n" "$case_id" "$case_path" >> "$LEC_DROP_REMARK_CASES_OUT"
   fi
+}
+
+classify_retryable_launch_failure_reason() {
+  local log_file="$1"
+  local exit_code="$2"
+  if [[ -s "$log_file" ]] && grep -Eiq "Text file busy|ETXTBSY" "$log_file"; then
+    echo "etxtbsy"
+    return 0
+  fi
+  echo "retryable_exit_code_${exit_code}"
+}
+
+append_lec_launch_event() {
+  local event_kind="$1"
+  local case_id="$2"
+  local case_path="$3"
+  local stage="$4"
+  local tool="$5"
+  local reason="$6"
+  local attempt="$7"
+  local delay_secs="$8"
+  local exit_code="$9"
+  local fallback_tool="${10}"
+  if [[ -z "$LEC_LAUNCH_EVENTS_OUT" ]]; then
+    return
+  fi
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    "$event_kind" "$case_id" "$case_path" "$stage" "$tool" \
+    "$reason" "$attempt" "$delay_secs" "$exit_code" "$fallback_tool" \
+    >> "$LEC_LAUNCH_EVENTS_OUT"
 }
 
 read_meta() {
@@ -593,11 +628,19 @@ top_module=${top_module}
     else
       verilog_status=$?
       if grep -Eiq "failed to run command .*(text file busy|permission denied)" "$verilog_log"; then
+        launch_reason="$(classify_retryable_launch_failure_reason "$verilog_log" "$verilog_status")"
+        append_lec_launch_event \
+          "RETRY" "$base" "$sv" "frontend" "${cmd[0]}" "$launch_reason" \
+          "1" "$CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS" "$verilog_status" ""
         sleep "$CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS"
+        original_verilog_tool="${cmd[0]}"
         fallback_verilog="$tmpdir/${base}.circt-verilog.retry.bin"
         if cp -f "$CIRCT_VERILOG" "$fallback_verilog" 2>/dev/null; then
           chmod +x "$fallback_verilog" 2>/dev/null || true
           cmd[0]="$fallback_verilog"
+          append_lec_launch_event \
+            "FALLBACK" "$base" "$sv" "frontend" "$original_verilog_tool" \
+            "${launch_reason}_retry_exhausted" "" "" "$verilog_status" "$fallback_verilog"
         fi
         if run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
           verilog_status=0
@@ -641,11 +684,19 @@ top_module=${top_module}
   else
     opt_status=$?
     if grep -Eiq "failed to run command .*(text file busy|permission denied)" "$opt_log"; then
+      launch_reason="$(classify_retryable_launch_failure_reason "$opt_log" "$opt_status")"
+      append_lec_launch_event \
+        "RETRY" "$base" "$sv" "opt" "${opt_cmd[0]}" "$launch_reason" \
+        "1" "$CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS" "$opt_status" ""
       sleep "$CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS"
+      original_opt_tool="${opt_cmd[0]}"
       fallback_opt="$tmpdir/${base}.circt-opt.retry.bin"
       if cp -f "$CIRCT_OPT" "$fallback_opt" 2>/dev/null; then
         chmod +x "$fallback_opt" 2>/dev/null || true
         opt_cmd[0]="$fallback_opt"
+        append_lec_launch_event \
+          "FALLBACK" "$base" "$sv" "opt" "$original_opt_tool" \
+          "${launch_reason}_retry_exhausted" "" "" "$opt_status" "$fallback_opt"
       fi
       if run_limited "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
         opt_status=0

@@ -271,6 +271,18 @@ verilator-verification, and yosys corpora).
    - `run_formal_all.sh` now forwards OpenTitan FPV summary-drift governance
      controls (`baseline/drift/allowlist/fail/update`) into `opentitan/FPV_BMC`,
      with strict-gate auto-enabling drift failure when a baseline is configured.
+   - OpenTitan FPV BMC launch-retry/fallback telemetry is now surfaced through
+     pairwise artifacts (`BMC_LAUNCH_EVENTS_OUT`) and summarized in
+     `run_formal_all.sh` lane metrics (`bmc_launch_*` counters).
+   - non-FPV launch telemetry surfacing is now wired for standard formal lanes:
+     - `run_sv_tests_circt_bmc.sh` emits `BMC_LAUNCH_EVENTS_OUT`.
+     - `run_sv_tests_circt_lec.sh`,
+       `run_verilator_verification_circt_lec.sh`, and
+       `run_yosys_sva_circt_lec.sh` emit `LEC_LAUNCH_EVENTS_OUT`.
+     - `run_formal_all.sh` now forwards and summarizes:
+       - `bmc_launch_*` in `sv-tests/BMC` and `sv-tests-uvm/BMC_SEMANTICS`
+       - `lec_launch_*` in `sv-tests/LEC`,
+         `verilator-verification/LEC`, and `yosys/tests/sva/LEC`.
 5. Phase E execution lane is landed:
    - new connectivity adapter utility:
      - `utils/select_opentitan_connectivity_cfg.py`
@@ -425,7 +437,7 @@ verilator-verification, and yosys corpora).
 ### Remaining Formal Limitations (BMC/LEC/mutation focus)
 
 1. **FPV status derivation depth gap**: explicit assertion statuses (`PROVEN/FAILING/VACUOUS/UNKNOWN`) and cover-granular `covered/unreachable` evidence are now wired, but fully automatic vacuity/coverage derivation for targets that do not emit explicit status tags is still pending.
-2. **BMC operational robustness**: `run_pairwise_circt_bmc.py` now supports broad launcher retry controls (`BMC_LAUNCH_RETRY_ATTEMPTS/BACKOFF/RETRYABLE_EXIT_CODES`) and optional copy-fallback execution (`BMC_LAUNCH_COPY_FALLBACK`) beyond ETXTBSY-only handling; remaining gap is strict-gate telemetry/counters parity for retry/fallback events across BMC/LEC lanes.
+2. **BMC/LEC operational robustness**: launcher retry/copy-fallback controls are now telemetry-visible in OpenTitan FPV and non-FPV formal lanes (`bmc_launch_*`, `lec_launch_*`), but strict-gate policy coupling for launch-event budgets is still pending, and non-FPV BMC telemetry parity outside `sv-tests` (notably `verilator`/`yosys` BMC runners) is not yet complete.
 3. **Frontend triage ergonomics**: sv-tests BMC now preserves frontend error logs via `KEEP_LOGS_DIR`, and launch retry is in place for transient launcher failures; host-side tool relink contention can still surface as launcher-level `Permission denied`/ETXTBSY noise until binaries stabilize.
 4. **Frontend scalability blocker on semantic closure buckets**: `sv-tests` UVM `16.11` (sequence-subroutine) and `16.13` (multiclock) currently hit frontend OOM in `circt-verilog` during import; this blocks clean semantic closure measurement for those buckets.
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.

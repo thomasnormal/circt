@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1357 - February 14, 2026
+
+### Formal Lanes: Non-FPV Launch-Event Telemetry Surfacing (BMC/LEC)
+
+1. Extended non-FPV formal runners with structured launch-event artifacts:
+   - `utils/run_sv_tests_circt_bmc.sh` now emits `BMC_LAUNCH_EVENTS_OUT`.
+   - `utils/run_sv_tests_circt_lec.sh`,
+     `utils/run_verilator_verification_circt_lec.sh`, and
+     `utils/run_yosys_sva_circt_lec.sh` now emit `LEC_LAUNCH_EVENTS_OUT`.
+   - shared row schema matches FPV/pairwise launch-event artifacts:
+     `event_kind`, `case_id`, `case_path`, `stage`, `tool`, `reason`,
+     `attempt`, `delay_secs`, `exit_code`, `fallback_tool`.
+2. Extended `utils/run_formal_all.sh` summary plumbing:
+   - generalized launch-event summarization helper with prefix support.
+   - added `summarize_lec_launch_events_file()` and `lec_launch_*` counters.
+   - lane forwarding + summary integration:
+     - `sv-tests/BMC` and `sv-tests-uvm/BMC_SEMANTICS` now surface
+       `bmc_launch_*`.
+     - `sv-tests/LEC`, `verilator-verification/LEC`, and
+       `yosys/tests/sva/LEC` now surface `lec_launch_*`.
+3. Added/updated regressions:
+   - new:
+     - `test/Tools/run-formal-all-sv-tests-launch-events-summary.test`
+   - updated:
+     - `test/Tools/run-sv-tests-bmc-launch-retry-etxtbsy.test`
+     - `test/Tools/run-sv-tests-bmc-launch-fallback-copy.test`
+     - `test/Tools/run-sv-tests-lec-verilog-text-file-busy-retry.test`
+     - `test/Tools/run-sv-tests-lec-opt-text-file-busy-retry.test`
+     - `test/Tools/run-verilator-verification-circt-lec-verilog-text-file-busy-retry.test`
+     - `test/Tools/run-yosys-sva-circt-lec-verilog-text-file-busy-retry.test`
+
+### Validation
+
+- `bash -n utils/run_sv_tests_circt_bmc.sh utils/run_sv_tests_circt_lec.sh utils/run_verilator_verification_circt_lec.sh utils/run_yosys_sva_circt_lec.sh utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-bmc-launch-retry-etxtbsy.test build-test/test/Tools/run-sv-tests-bmc-launch-fallback-copy.test build-test/test/Tools/run-sv-tests-lec-verilog-text-file-busy-retry.test build-test/test/Tools/run-sv-tests-lec-opt-text-file-busy-retry.test build-test/test/Tools/run-verilator-verification-circt-lec-verilog-text-file-busy-retry.test build-test/test/Tools/run-yosys-sva-circt-lec-verilog-text-file-busy-retry.test build-test/test/Tools/run-formal-all-sv-tests-launch-events-summary.test` PASS (7/7)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter 'run-(verilator-verification-circt-lec-(verilog|opt)-(text-file-busy|permission-denied)-retry|yosys-sva-circt-lec-(verilog|opt)-(text-file-busy|permission-denied)-retry)\\.test'` PASS (8 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(run-formal-all-sv-tests-launch-events-summary|run-formal-all-opentitan-fpv-bmc-launch-events-summary|run-opentitan-fpv-circt-bmc-launch-events-forwarding|run-formal-all-circt-toolchain-forwarding|run-formal-all-sv-tests-tag-regex-forwarding)\\.test'` PASS (5 selected)
+
 ## Iteration 1356 - February 14, 2026
 
 ### Mutation Workflow: Retry-Reason Telemetry and Budget Gates
