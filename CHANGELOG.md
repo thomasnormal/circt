@@ -67364,3 +67364,14 @@ See CHANGELOG.md on recent progress.
     - Added regression coverage:
       - `run-mutation-mcy-examples-native-mutation-ops-empty-invalid.test`
       - `run-mutation-mcy-examples-native-real-harness-args-empty-invalid.test`.
+42. Missing-value contract for native mutation option arguments
+    (February 14, 2026):
+    - Added explicit parser checks so these options fail fast when passed
+      without a value:
+      - `--native-mutation-ops`
+      - `--native-real-harness-args`
+    - This avoids implicit shell positional failures and gives deterministic,
+      user-facing diagnostics for malformed invocations.
+    - Added regression coverage:
+      - `run-mutation-mcy-examples-native-mutation-ops-missing-value.test`
+      - `run-mutation-mcy-examples-native-real-harness-args-missing-value.test`.
