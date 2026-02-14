@@ -1,0 +1,18 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin %t/src
+// RUN: printf 'module top_pass(input logic clk); endmodule\n' > %t/src/a.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nout=\"\"\nhas_stub=0\nfor ((i=1; i<=$#; ++i)); do\n  arg=\"${!i}\"\n  if [[ \"$arg\" == \"-o\" ]]; then\n    j=$((i+1))\n    out=\"${!j}\"\n  fi\n  if [[ \"$arg\" == *\"circt-verilog.xilinx-primitives.sv\"* ]]; then\n    has_stub=1\n  fi\ndone\n: \"${out:?}\"\nif [[ \"$has_stub\" == \"0\" ]]; then\n  echo \"%t/src/a.sv:1:1: error: unknown module 'BUFG'\" >&2\n  exit 1\nfi\n: > \"$out\"\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho \"BMC_RESULT=UNSAT\"\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-bmc
+// RUN: printf 'retry_case\ttop_pass\t%t/src/a.sv\t%t/src\t%t/work/retry\n' > %t/cases.tsv
+// RUN: sh -c 'env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc BMC_RUN_SMTLIB=0 BMC_PREPARE_CORE_WITH_CIRCT_OPT=0 BMC_VERILOG_SINGLE_UNIT_MODE=off BMC_VERILOG_XILINX_PRIMITIVE_STUB_MODE=auto BMC_LAUNCH_EVENTS_OUT=%t/launch.tsv OUT=%t/results.tsv %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --workdir %t/work' 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RES < %t/results.tsv
+// RUN: test -f %t/work/retry_case/circt-verilog.unknown-module.log
+// RUN: rg -n 'unknown module BUFG|unknown module .BUFG.' %t/work/retry_case/circt-verilog.unknown-module.log
+// RUN: not rg -n 'unknown module BUFG|unknown module .BUFG.' %t/work/retry_case/circt-verilog.log
+// RUN: FileCheck %s --check-prefix=LAUNCH < %t/launch.tsv
+//
+// LOG: Running BMC on 1 pairwise case(s)...
+// LOG: pairwise BMC summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// RES: PASS{{[[:space:]]+}}retry_case{{[[:space:]]+}}{{.*}}work/retry{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
+// LAUNCH: RETRY{{[[:space:]]+}}retry_case{{[[:space:]]+}}{{.*}}work/retry{{[[:space:]]+}}verilog{{[[:space:]]+}}{{.*}}circt-verilog{{[[:space:]]+}}unknown_module_xilinx_primitives{{[[:space:]]+}}1

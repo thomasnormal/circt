@@ -248,7 +248,12 @@ def resolve_eda_paths(entries: Any, eda_dir: Path) -> tuple[list[str], list[str]
             if incdir not in seen_incdirs:
                 include_dirs.append(incdir)
                 seen_incdirs.add(incdir)
-            continue
+            # Keep include-marked Verilog source files in the compile unit.
+            # OpenTitan/formal flows rely on some `.sv` macro libraries
+            # (for example `prim_assert.sv`) being compiled, while header-only
+            # include files (`.svh`, `.vh`) should remain include-only.
+            if file_path.suffix.lower() not in {".sv", ".v"}:
+                continue
         files.append(file_text)
     return files, include_dirs
 

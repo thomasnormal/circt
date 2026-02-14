@@ -64,6 +64,12 @@ Verilog frontend mode:
     macro-preprocessor failures.
   - on: always use `--single-unit`.
   - off: never use `--single-unit`.
+- BMC_VERILOG_XILINX_PRIMITIVE_STUB_MODE (default: auto)
+  Values:
+  - auto: on known unknown-module failures for common Xilinx clock/pad
+    primitives, retry once with shim module definitions.
+  - on: always include shim module definitions.
+  - off: disable shim module retry/injection.
 """
 
 from __future__ import annotations
@@ -131,6 +137,26 @@ RETRYABLE_LAUNCH_PATTERNS = (
     "permission denied",
     "posix_spawn failed",
     "resource temporarily unavailable",
+)
+
+UNKNOWN_MODULE_PATTERNS = (
+    r"unknown module ['\"]([^'\"]+)['\"]",
+    r"unknown module [`]([^`]+)[`]",
+    r"unknown module \\([^\\]+)\\",
+    r"unknown module ([A-Za-z_][A-Za-z0-9_$.:/-]*)",
+)
+
+XILINX_PRIMITIVE_STUB_MODULES = frozenset(
+    {
+        "BUFG",
+        "BUFGCE",
+        "BUFGCE_DIV",
+        "BUFGCTRL",
+        "BUFGMUX",
+        "BUFR",
+        "IBUF_IBUFDISABLE",
+        "IOBUF",
+    }
 )
 
 
@@ -335,6 +361,112 @@ def is_single_unit_retryable_preprocessor_failure(log_text: str) -> bool:
     return (
         "macro operators may only be used within a macro definition" in low
         or "unexpected conditional directive" in low
+    )
+
+
+def extract_unknown_modules(log_text: str) -> set[str]:
+    modules: set[str] = set()
+    for line in log_text.splitlines():
+        for pattern in UNKNOWN_MODULE_PATTERNS:
+            match = re.search(pattern, line)
+            if not match:
+                continue
+            module = match.group(1).strip()
+            if module:
+                modules.add(module)
+    return modules
+
+
+def is_xilinx_primitive_stub_retryable_failure(log_text: str) -> bool:
+    unknown_modules = extract_unknown_modules(log_text)
+    if not unknown_modules:
+        return False
+    return any(mod in XILINX_PRIMITIVE_STUB_MODULES for mod in unknown_modules)
+
+
+def write_xilinx_primitive_stub_file(path: Path) -> None:
+    path.write_text(
+        """// Auto-generated fallback shims for common Xilinx primitives used in
+// clock/pad wrappers. This preserves conservative, deterministic behavior for
+// formal frontend ingestion when vendor primitive libraries are unavailable.
+module BUFG(input I, output O);
+  assign O = I;
+endmodule
+
+module BUFR(input I, output O);
+  assign O = I;
+endmodule
+
+module BUFGMUX(input S, input I0, input I1, output O);
+  assign O = S ? I1 : I0;
+endmodule
+
+module BUFGCE #(
+  parameter string SIM_DEVICE = "ULTRASCALE",
+  parameter bit IS_I_INVERTED = 1'b0
+) (
+  input I,
+  input CE,
+  output O
+);
+  wire i_eff = IS_I_INVERTED ? ~I : I;
+  assign O = CE ? i_eff : 1'b0;
+endmodule
+
+module BUFGCE_DIV #(
+  parameter integer BUFGCE_DIVIDE = 1,
+  parameter bit IS_CLR_INVERTED = 1'b0
+) (
+  input I,
+  input CE,
+  input CLR,
+  output O
+);
+  wire clr_eff = IS_CLR_INVERTED ? ~CLR : CLR;
+  assign O = clr_eff ? 1'b0 : (CE ? I : 1'b0);
+endmodule
+
+module BUFGCTRL #(
+  parameter bit INIT_OUT = 1'b0,
+  parameter bit IS_I0_INVERTED = 1'b0,
+  parameter bit IS_S0_INVERTED = 1'b0
+) (
+  input I0,
+  input I1,
+  input CE0,
+  input CE1,
+  input IGNORE0 = 1'b0,
+  input IGNORE1 = 1'b0,
+  input S0,
+  input S1,
+  output O
+);
+  wire i0_eff = IS_I0_INVERTED ? ~I0 : I0;
+  wire s0_eff = IS_S0_INVERTED ? ~S0 : S0;
+  wire sel0 = (s0_eff & CE0) | IGNORE0;
+  wire sel1 = (S1 & CE1) | IGNORE1;
+  assign O = sel0 ? i0_eff : (sel1 ? I1 : INIT_OUT);
+endmodule
+
+module IBUF_IBUFDISABLE(
+  input I,
+  input IBUFDISABLE,
+  output O
+);
+  assign O = IBUFDISABLE ? 1'b0 : I;
+endmodule
+
+module IOBUF(
+  input T,
+  input I,
+  output O,
+  inout IO
+);
+  assign IO = T ? 1'bz : I;
+  assign O = IO;
+endmodule
+""",
+        encoding="utf-8",
     )
 
 
@@ -949,6 +1081,18 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    verilog_xilinx_primitive_stub_mode = os.environ.get(
+        "BMC_VERILOG_XILINX_PRIMITIVE_STUB_MODE", "auto"
+    ).strip().lower()
+    if verilog_xilinx_primitive_stub_mode not in {"auto", "on", "off"}:
+        print(
+            (
+                "invalid BMC_VERILOG_XILINX_PRIMITIVE_STUB_MODE: "
+                f"{verilog_xilinx_primitive_stub_mode} (expected auto|on|off)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
     z3_lib = os.environ.get("Z3_LIB", str(Path.home() / "z3-install/lib64/libz3.so"))
     bmc_run_smtlib = os.environ.get("BMC_RUN_SMTLIB", "1") == "1"
     bmc_smoke_only = os.environ.get("BMC_SMOKE_ONLY", "0") == "1"
@@ -1250,7 +1394,9 @@ def main() -> int:
             prepped_mlir = case_dir / "pairwise_bmc.prepared.mlir"
 
             include_dirs = global_include_dirs + case.include_dirs
-            def build_verilog_cmd(use_single_unit: bool) -> list[str]:
+            def build_verilog_cmd(
+                use_single_unit: bool, extra_sources: list[str] | None = None
+            ) -> list[str]:
                 cmd = [
                     circt_verilog,
                     "--ir-hw",
@@ -1267,10 +1413,19 @@ def main() -> int:
                     cmd.append(f"-D{define_token}")
                 cmd += circt_verilog_args
                 cmd += case.source_files
+                if extra_sources:
+                    cmd += extra_sources
                 return cmd
 
             use_single_unit = verilog_single_unit_mode != "off"
-            verilog_cmd = build_verilog_cmd(use_single_unit)
+            xilinx_primitive_stub_path = (
+                case_dir / "circt-verilog.xilinx-primitives.sv"
+            )
+            verilog_extra_sources: list[str] = []
+            if verilog_xilinx_primitive_stub_mode == "on":
+                write_xilinx_primitive_stub_file(xilinx_primitive_stub_path)
+                verilog_extra_sources.append(str(xilinx_primitive_stub_path))
+            verilog_cmd = build_verilog_cmd(use_single_unit, verilog_extra_sources)
 
             opt_cmd = [circt_opt, str(out_mlir)]
             opt_cmd += bmc_prepare_core_passes
@@ -1346,7 +1501,57 @@ def main() -> int:
                                     "",
                                 )
                             )
-                        verilog_cmd = build_verilog_cmd(False)
+                        use_single_unit = False
+                        verilog_cmd = build_verilog_cmd(
+                            use_single_unit, verilog_extra_sources
+                        )
+                        verilog_result = run_and_log(
+                            verilog_cmd,
+                            verilog_log_path,
+                            None,
+                            case_timeout_secs,
+                            etxtbsy_retries,
+                            etxtbsy_backoff_secs,
+                            launch_retry_attempts,
+                            launch_retry_backoff_secs,
+                            launch_retryable_exit_codes,
+                            launch_copy_fallback,
+                            launch_event_rows,
+                            case.case_id,
+                            case_path,
+                            stage,
+                        )
+                if (
+                    verilog_result.returncode != 0
+                    and verilog_xilinx_primitive_stub_mode == "auto"
+                    and not verilog_extra_sources
+                ):
+                    verilog_log_text = verilog_log_path.read_text()
+                    if is_xilinx_primitive_stub_retryable_failure(verilog_log_text):
+                        unknown_module_log_path = (
+                            case_dir / "circt-verilog.unknown-module.log"
+                        )
+                        shutil.copy2(verilog_log_path, unknown_module_log_path)
+                        write_xilinx_primitive_stub_file(xilinx_primitive_stub_path)
+                        verilog_extra_sources = [str(xilinx_primitive_stub_path)]
+                        if launch_event_rows is not None:
+                            launch_event_rows.append(
+                                (
+                                    "RETRY",
+                                    case.case_id,
+                                    case_path,
+                                    stage,
+                                    circt_verilog,
+                                    "unknown_module_xilinx_primitives",
+                                    "1",
+                                    "0.000",
+                                    str(verilog_result.returncode),
+                                    "",
+                                )
+                            )
+                        verilog_cmd = build_verilog_cmd(
+                            use_single_unit, verilog_extra_sources
+                        )
                         verilog_result = run_and_log(
                             verilog_cmd,
                             verilog_log_path,
