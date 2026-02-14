@@ -5,6 +5,7 @@
 // CHECK-DAG: --out-dir
 // CHECK-DAG: --example
 // CHECK-DAG: --example-manifest
+// CHECK-DAG: --jobs
 // CHECK-DAG: --circt-mut
 // CHECK-DAG: --yosys
 // CHECK-DAG: --generate-count

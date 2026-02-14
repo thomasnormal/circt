@@ -22,6 +22,7 @@ Options:
                            <TAB>[mutations_select]<TAB>[mutation_limit]
                            Optional fields accept '-' to inherit global values.
                            Relative design paths resolve under --examples-root
+  --jobs N                Max parallel examples to execute (default: 1)
   --circt-mut PATH         circt-mut binary or command (default: auto-detect)
   --yosys PATH             yosys binary (default: yosys)
   --generate-count N       Mutations to generate in non-smoke mode (default: 32)
@@ -145,6 +146,7 @@ EXAMPLES_ROOT="${HOME}/mcy/examples"
 OUT_DIR="${PWD}/mutation-mcy-examples-results"
 CIRCT_MUT=""
 YOSYS_BIN="${YOSYS:-yosys}"
+JOBS=1
 GENERATE_COUNT=32
 MUTATIONS_SEED=1
 MUTATIONS_MODES=""
@@ -1160,6 +1162,225 @@ ensure_unique_example_selection() {
   return 0
 }
 
+run_example_worker() {
+  local example_id="$1"
+  local result_file="$2"
+  local design="${EXAMPLE_TO_DESIGN[$example_id]}"
+  local top="${EXAMPLE_TO_TOP[$example_id]}"
+  local example_generate_count="$GENERATE_COUNT"
+  local example_mutations_seed="$MUTATIONS_SEED"
+  local example_mutations_modes="$MUTATIONS_MODES"
+  local example_mutations_mode_counts="$MUTATIONS_MODE_COUNTS"
+  local example_mutations_mode_weights="$MUTATIONS_MODE_WEIGHTS"
+  local example_mutations_profiles="$MUTATIONS_PROFILES"
+  local example_mutations_cfg="$MUTATIONS_CFG"
+  local example_mutations_select="$MUTATIONS_SELECT"
+  local example_mutation_limit="$MUTATION_LIMIT"
+  local design_content_hash=""
+  local policy_fingerprint_input=""
+  local policy_fingerprint=""
+  local example_out_dir=""
+  local helper_dir=""
+  local fake_test_script=""
+  local tests_manifest=""
+  local mutations_file=""
+  local fake_create_mutated=""
+  local run_log=""
+  local metrics_file=""
+  local rc=0
+  local detected="0"
+  local relevant="0"
+  local errors="0"
+  local coverage="-"
+  local coverage_for_gate="0"
+  local status="FAIL"
+  local gate_failure=""
+  local cmd=()
+
+  if [[ -n "${EXAMPLE_TO_GENERATE_COUNT[$example_id]+x}" ]]; then
+    example_generate_count="${EXAMPLE_TO_GENERATE_COUNT[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_SEED[$example_id]+x}" ]]; then
+    example_mutations_seed="${EXAMPLE_TO_MUTATIONS_SEED[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_MODES[$example_id]+x}" ]]; then
+    example_mutations_modes="${EXAMPLE_TO_MUTATIONS_MODES[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_MODE_COUNTS[$example_id]+x}" ]]; then
+    example_mutations_mode_counts="${EXAMPLE_TO_MUTATIONS_MODE_COUNTS[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_MODE_WEIGHTS[$example_id]+x}" ]]; then
+    example_mutations_mode_weights="${EXAMPLE_TO_MUTATIONS_MODE_WEIGHTS[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_PROFILES[$example_id]+x}" ]]; then
+    example_mutations_profiles="${EXAMPLE_TO_MUTATIONS_PROFILES[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_CFG[$example_id]+x}" ]]; then
+    example_mutations_cfg="${EXAMPLE_TO_MUTATIONS_CFG[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATIONS_SELECT[$example_id]+x}" ]]; then
+    example_mutations_select="${EXAMPLE_TO_MUTATIONS_SELECT[$example_id]}"
+  fi
+  if [[ -n "${EXAMPLE_TO_MUTATION_LIMIT[$example_id]+x}" ]]; then
+    example_mutation_limit="${EXAMPLE_TO_MUTATION_LIMIT[$example_id]}"
+  fi
+
+  if [[ -n "$example_mutations_mode_counts" && -n "$example_mutations_mode_weights" ]]; then
+    echo "Resolved mutation mode allocation conflict for ${example_id}: both mode-counts and mode-weights are set." >&2
+    return 2
+  fi
+
+  if [[ ! -f "$design" ]]; then
+    echo "Missing example design for ${example_id}: $design" >&2
+    return 2
+  fi
+
+  design_content_hash="$(hash_file_sha256 "$design")"
+  policy_fingerprint_input="${example_id}"$'\n'"${top}"$'\n'"${design_content_hash}"$'\n'"${example_generate_count}"$'\n'"${example_mutations_seed}"$'\n'"${example_mutations_modes}"$'\n'"${example_mutations_mode_counts}"$'\n'"${example_mutations_mode_weights}"$'\n'"${example_mutations_profiles}"$'\n'"${example_mutations_cfg}"$'\n'"${example_mutations_select}"$'\n'"${example_mutation_limit}"$'\n'"${SMOKE}"
+  policy_fingerprint="$(hash_string_sha256 "$policy_fingerprint_input")"
+
+  example_out_dir="${OUT_DIR}/${example_id}"
+  helper_dir="${WORK_ROOT}/${example_id}"
+  mkdir -p "$example_out_dir" "$helper_dir"
+
+  fake_test_script="${helper_dir}/fake_test.sh"
+  cat > "$fake_test_script" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "SURVIVED" > result.txt
+EOS
+  chmod +x "$fake_test_script"
+
+  tests_manifest="${helper_dir}/tests.tsv"
+  printf 'smoke\tbash %s\tresult.txt\t^DETECTED$\t^SURVIVED$\n' "$fake_test_script" > "$tests_manifest"
+
+  cmd=(
+    "$CIRCT_MUT_RESOLVED" cover
+    --design "$design"
+    --tests-manifest "$tests_manifest"
+    --work-dir "$example_out_dir"
+    --skip-baseline
+    --jobs 1
+    --mutation-limit "$example_mutation_limit"
+  )
+
+  if [[ "$SMOKE" -eq 1 ]]; then
+    mutations_file="${helper_dir}/mutations.txt"
+    printf '1 M_SMOKE_A\n2 M_SMOKE_B\n3 M_SMOKE_C\n' > "$mutations_file"
+    fake_create_mutated="${helper_dir}/fake_create_mutated.sh"
+    cat > "$fake_create_mutated" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+out=""
+design=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o|--output)
+      out="$2"
+      shift 2
+      ;;
+    -d|--design)
+      design="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [[ -z "$out" || -z "$design" ]]; then
+  echo "fake_create_mutated.sh missing -o/--output or -d/--design" >&2
+  exit 2
+fi
+cp "$design" "$out"
+EOS
+    chmod +x "$fake_create_mutated"
+    cmd+=(
+      --mutations-file "$mutations_file"
+      --create-mutated-script "$fake_create_mutated"
+    )
+  else
+    cmd+=(
+      --generate-mutations "$example_generate_count"
+      --mutations-top "$top"
+      --mutations-yosys "$YOSYS_RESOLVED"
+      --mutations-seed "$example_mutations_seed"
+    )
+    if [[ -n "$example_mutations_modes" ]]; then
+      cmd+=(--mutations-modes "$example_mutations_modes")
+    fi
+    if [[ -n "$example_mutations_mode_counts" ]]; then
+      cmd+=(--mutations-mode-counts "$example_mutations_mode_counts")
+    fi
+    if [[ -n "$example_mutations_mode_weights" ]]; then
+      cmd+=(--mutations-mode-weights "$example_mutations_mode_weights")
+    fi
+    if [[ -n "$example_mutations_profiles" ]]; then
+      cmd+=(--mutations-profiles "$example_mutations_profiles")
+    fi
+    if [[ -n "$example_mutations_cfg" ]]; then
+      cmd+=(--mutations-cfg "$example_mutations_cfg")
+    fi
+    if [[ -n "$example_mutations_select" ]]; then
+      cmd+=(--mutations-select "$example_mutations_select")
+    fi
+  fi
+
+  run_log="${example_out_dir}/run.log"
+  set +e
+  "${cmd[@]}" >"$run_log" 2>&1
+  rc=$?
+  set -e
+
+  metrics_file="${example_out_dir}/metrics.tsv"
+  if [[ "$rc" -eq 0 ]]; then
+    status="PASS"
+  fi
+  if [[ -f "$metrics_file" ]]; then
+    IFS=$'\t' read -r detected relevant errors <<< "$(metrics_triplet_or_zero "$metrics_file")"
+    detected="$(normalize_int_or_zero "$detected")"
+    relevant="$(normalize_int_or_zero "$relevant")"
+    errors="$(normalize_int_or_zero "$errors")"
+    if [[ "$relevant" -gt 0 ]]; then
+      coverage="$(awk -v d="$detected" -v r="$relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
+      coverage_for_gate="$coverage"
+    fi
+  fi
+
+  if [[ "$detected" -lt "$MIN_DETECTED" ]]; then
+    gate_failure="detected<${MIN_DETECTED}"
+  fi
+  if [[ "$relevant" -lt "$MIN_RELEVANT" ]]; then
+    if [[ -n "$gate_failure" ]]; then
+      gate_failure+=","
+    fi
+    gate_failure+="relevant<${MIN_RELEVANT}"
+  fi
+  if [[ -n "$MIN_COVERAGE_PERCENT" ]]; then
+    if float_lt "$coverage_for_gate" "$MIN_COVERAGE_PERCENT"; then
+      if [[ -n "$gate_failure" ]]; then
+        gate_failure+=","
+      fi
+      gate_failure+="coverage<${MIN_COVERAGE_PERCENT}"
+    fi
+  fi
+  if [[ -n "$MAX_ERRORS" ]] && [[ "$errors" -gt "$MAX_ERRORS" ]]; then
+    if [[ -n "$gate_failure" ]]; then
+      gate_failure+=","
+    fi
+    gate_failure+="errors>${MAX_ERRORS}"
+  fi
+  if [[ -n "$gate_failure" ]]; then
+    status="FAIL"
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$status" "$rc" "$detected" "$relevant" "$coverage" "$errors" "$policy_fingerprint" "$coverage_for_gate" "$gate_failure" \
+    > "$result_file"
+
+  return 0
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --examples-root)
@@ -1176,6 +1397,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --example-manifest)
       EXAMPLE_MANIFEST="$2"
+      shift 2
+      ;;
+    --jobs)
+      JOBS="$2"
       shift 2
       ;;
     --circt-mut)
@@ -1369,6 +1594,10 @@ fi
 
 if ! is_pos_int "$GENERATE_COUNT"; then
   echo "--generate-count must be a positive integer: $GENERATE_COUNT" >&2
+  exit 1
+fi
+if ! is_pos_int "$JOBS"; then
+  echo "--jobs must be a positive integer: $JOBS" >&2
   exit 1
 fi
 if ! is_nonneg_int "$MUTATIONS_SEED"; then
@@ -1633,204 +1862,77 @@ printf '%s\n' "$CURRENT_SUMMARY_SCHEMA_CONTRACT_FINGERPRINT" > "$SUMMARY_SCHEMA_
 total_detected=0
 total_relevant=0
 total_errors=0
+RESULT_ROOT="${OUT_DIR}/.results"
+mkdir -p "$RESULT_ROOT"
+worker_failures=0
+declare -a RUNNING_PIDS=()
+declare -A PID_TO_EXAMPLE=()
+
+if [[ "$JOBS" -le 1 ]]; then
+  for example_id in "${EXAMPLE_IDS[@]}"; do
+    result_file="${RESULT_ROOT}/${example_id}.tsv"
+    if ! run_example_worker "$example_id" "$result_file"; then
+      echo "Example worker failed (${example_id})" >&2
+      worker_failures=1
+    fi
+  done
+else
+  for example_id in "${EXAMPLE_IDS[@]}"; do
+    result_file="${RESULT_ROOT}/${example_id}.tsv"
+    run_example_worker "$example_id" "$result_file" &
+    pid=$!
+    RUNNING_PIDS+=("$pid")
+    PID_TO_EXAMPLE["$pid"]="$example_id"
+
+    while [[ "${#RUNNING_PIDS[@]}" -ge "$JOBS" ]]; do
+      pid="${RUNNING_PIDS[0]}"
+      set +e
+      wait "$pid"
+      wrc=$?
+      set -e
+      if [[ "$wrc" -ne 0 ]]; then
+        echo "Example worker failed (${PID_TO_EXAMPLE[$pid]}) with exit code $wrc" >&2
+        worker_failures=1
+      fi
+      RUNNING_PIDS=("${RUNNING_PIDS[@]:1}")
+      unset "PID_TO_EXAMPLE[$pid]"
+    done
+  done
+
+  while [[ "${#RUNNING_PIDS[@]}" -gt 0 ]]; do
+    pid="${RUNNING_PIDS[0]}"
+    set +e
+    wait "$pid"
+    wrc=$?
+    set -e
+    if [[ "$wrc" -ne 0 ]]; then
+      echo "Example worker failed (${PID_TO_EXAMPLE[$pid]}) with exit code $wrc" >&2
+      worker_failures=1
+    fi
+    RUNNING_PIDS=("${RUNNING_PIDS[@]:1}")
+    unset "PID_TO_EXAMPLE[$pid]"
+  done
+fi
 
 for example_id in "${EXAMPLE_IDS[@]}"; do
-  design="${EXAMPLE_TO_DESIGN[$example_id]}"
-  top="${EXAMPLE_TO_TOP[$example_id]}"
-  example_generate_count="$GENERATE_COUNT"
-  example_mutations_seed="$MUTATIONS_SEED"
-  example_mutations_modes="$MUTATIONS_MODES"
-  example_mutations_mode_counts="$MUTATIONS_MODE_COUNTS"
-  example_mutations_mode_weights="$MUTATIONS_MODE_WEIGHTS"
-  example_mutations_profiles="$MUTATIONS_PROFILES"
-  example_mutations_cfg="$MUTATIONS_CFG"
-  example_mutations_select="$MUTATIONS_SELECT"
-  example_mutation_limit="$MUTATION_LIMIT"
-
-  if [[ -n "${EXAMPLE_TO_GENERATE_COUNT[$example_id]+x}" ]]; then
-    example_generate_count="${EXAMPLE_TO_GENERATE_COUNT[$example_id]}"
-  fi
-  if [[ -n "${EXAMPLE_TO_MUTATIONS_SEED[$example_id]+x}" ]]; then
-    example_mutations_seed="${EXAMPLE_TO_MUTATIONS_SEED[$example_id]}"
-  fi
-  if [[ -n "${EXAMPLE_TO_MUTATIONS_MODES[$example_id]+x}" ]]; then
-    example_mutations_modes="${EXAMPLE_TO_MUTATIONS_MODES[$example_id]}"
-  fi
-  if [[ -n "${EXAMPLE_TO_MUTATIONS_MODE_COUNTS[$example_id]+x}" ]]; then
-    example_mutations_mode_counts="${EXAMPLE_TO_MUTATIONS_MODE_COUNTS[$example_id]}"
-  fi
-  if [[ -n "${EXAMPLE_TO_MUTATIONS_MODE_WEIGHTS[$example_id]+x}" ]]; then
-    example_mutations_mode_weights="${EXAMPLE_TO_MUTATIONS_MODE_WEIGHTS[$example_id]}"
-  fi
-  if [[ -n "${EXAMPLE_TO_MUTATIONS_PROFILES[$example_id]+x}" ]]; then
-    example_mutations_profiles="${EXAMPLE_TO_MUTATIONS_PROFILES[$example_id]}"
-  fi
-  if [[ -n "${EXAMPLE_TO_MUTATIONS_CFG[$example_id]+x}" ]]; then
-    example_mutations_cfg="${EXAMPLE_TO_MUTATIONS_CFG[$example_id]}"
-  fi
-  if [[ -n "${EXAMPLE_TO_MUTATIONS_SELECT[$example_id]+x}" ]]; then
-    example_mutations_select="${EXAMPLE_TO_MUTATIONS_SELECT[$example_id]}"
-  fi
-  if [[ -n "${EXAMPLE_TO_MUTATION_LIMIT[$example_id]+x}" ]]; then
-    example_mutation_limit="${EXAMPLE_TO_MUTATION_LIMIT[$example_id]}"
+  result_file="${RESULT_ROOT}/${example_id}.tsv"
+  if [[ ! -f "$result_file" ]]; then
+    echo "Missing example result for ${example_id}: $result_file" >&2
+    overall_rc=1
+    continue
   fi
 
-  if [[ -n "$example_mutations_mode_counts" && -n "$example_mutations_mode_weights" ]]; then
-    echo "Resolved mutation mode allocation conflict for ${example_id}: both mode-counts and mode-weights are set." >&2
-    exit 1
-  fi
-
-  if [[ ! -f "$design" ]]; then
-    echo "Missing example design for ${example_id}: $design" >&2
-    exit 1
-  fi
-
-  design_content_hash="$(hash_file_sha256 "$design")"
-  policy_fingerprint_input="${example_id}"$'\n'"${top}"$'\n'"${design_content_hash}"$'\n'"${example_generate_count}"$'\n'"${example_mutations_seed}"$'\n'"${example_mutations_modes}"$'\n'"${example_mutations_mode_counts}"$'\n'"${example_mutations_mode_weights}"$'\n'"${example_mutations_profiles}"$'\n'"${example_mutations_cfg}"$'\n'"${example_mutations_select}"$'\n'"${example_mutation_limit}"$'\n'"${SMOKE}"
-  policy_fingerprint="$(hash_string_sha256 "$policy_fingerprint_input")"
-
-  example_out_dir="${OUT_DIR}/${example_id}"
-  helper_dir="${WORK_ROOT}/${example_id}"
-  mkdir -p "$example_out_dir" "$helper_dir"
-
-  fake_test_script="${helper_dir}/fake_test.sh"
-  cat > "$fake_test_script" <<'EOS'
-#!/usr/bin/env bash
-set -euo pipefail
-echo "SURVIVED" > result.txt
-EOS
-  chmod +x "$fake_test_script"
-
-  tests_manifest="${helper_dir}/tests.tsv"
-  printf 'smoke\tbash %s\tresult.txt\t^DETECTED$\t^SURVIVED$\n' "$fake_test_script" > "$tests_manifest"
-
-  cmd=(
-    "$CIRCT_MUT_RESOLVED" cover
-    --design "$design"
-    --tests-manifest "$tests_manifest"
-    --work-dir "$example_out_dir"
-    --skip-baseline
-    --jobs 1
-    --mutation-limit "$example_mutation_limit"
-  )
-
-  if [[ "$SMOKE" -eq 1 ]]; then
-    mutations_file="${helper_dir}/mutations.txt"
-    printf '1 M_SMOKE_A\n2 M_SMOKE_B\n3 M_SMOKE_C\n' > "$mutations_file"
-    fake_create_mutated="${helper_dir}/fake_create_mutated.sh"
-    cat > "$fake_create_mutated" <<'EOS'
-#!/usr/bin/env bash
-set -euo pipefail
-out=""
-design=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -o|--output)
-      out="$2"
-      shift 2
-      ;;
-    -d|--design)
-      design="$2"
-      shift 2
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
-if [[ -z "$out" || -z "$design" ]]; then
-  echo "fake_create_mutated.sh missing -o/--output or -d/--design" >&2
-  exit 2
-fi
-cp "$design" "$out"
-EOS
-    chmod +x "$fake_create_mutated"
-    cmd+=(
-      --mutations-file "$mutations_file"
-      --create-mutated-script "$fake_create_mutated"
-    )
-  else
-    cmd+=(
-      --generate-mutations "$example_generate_count"
-      --mutations-top "$top"
-      --mutations-yosys "$YOSYS_RESOLVED"
-      --mutations-seed "$example_mutations_seed"
-    )
-    if [[ -n "$example_mutations_modes" ]]; then
-      cmd+=(--mutations-modes "$example_mutations_modes")
-    fi
-    if [[ -n "$example_mutations_mode_counts" ]]; then
-      cmd+=(--mutations-mode-counts "$example_mutations_mode_counts")
-    fi
-    if [[ -n "$example_mutations_mode_weights" ]]; then
-      cmd+=(--mutations-mode-weights "$example_mutations_mode_weights")
-    fi
-    if [[ -n "$example_mutations_profiles" ]]; then
-      cmd+=(--mutations-profiles "$example_mutations_profiles")
-    fi
-    if [[ -n "$example_mutations_cfg" ]]; then
-      cmd+=(--mutations-cfg "$example_mutations_cfg")
-    fi
-    if [[ -n "$example_mutations_select" ]]; then
-      cmd+=(--mutations-select "$example_mutations_select")
-    fi
-  fi
-
-  run_log="${example_out_dir}/run.log"
-  set +e
-  "${cmd[@]}" >"$run_log" 2>&1
-  rc=$?
-  set -e
-
-  metrics_file="${example_out_dir}/metrics.tsv"
-  detected="0"
-  relevant="0"
-  errors="0"
-  coverage="-"
-  coverage_for_gate="0"
-  status="FAIL"
-  if [[ "$rc" -eq 0 ]]; then
-    status="PASS"
-  fi
-  if [[ -f "$metrics_file" ]]; then
-    IFS=$'\t' read -r detected relevant errors <<< "$(metrics_triplet_or_zero "$metrics_file")"
-    detected="$(normalize_int_or_zero "$detected")"
-    relevant="$(normalize_int_or_zero "$relevant")"
-    errors="$(normalize_int_or_zero "$errors")"
-    if [[ "$relevant" -gt 0 ]]; then
-      coverage="$(awk -v d="$detected" -v r="$relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
-      coverage_for_gate="$coverage"
-    fi
-  fi
+  IFS=$'	' read -r status rc detected relevant coverage errors policy_fingerprint coverage_for_gate gate_failure < "$result_file"
+  rc="$(normalize_int_or_zero "$rc")"
+  detected="$(normalize_int_or_zero "$detected")"
+  relevant="$(normalize_int_or_zero "$relevant")"
+  errors="$(normalize_int_or_zero "$errors")"
+  coverage_for_gate="$(normalize_decimal_or_zero "$coverage_for_gate")"
 
   total_detected=$((total_detected + detected))
   total_relevant=$((total_relevant + relevant))
   total_errors=$((total_errors + errors))
 
-  gate_failure=""
-  if [[ "$detected" -lt "$MIN_DETECTED" ]]; then
-    gate_failure="detected<${MIN_DETECTED}"
-  fi
-  if [[ "$relevant" -lt "$MIN_RELEVANT" ]]; then
-    if [[ -n "$gate_failure" ]]; then
-      gate_failure+=","
-    fi
-    gate_failure+="relevant<${MIN_RELEVANT}"
-  fi
-  if [[ -n "$MIN_COVERAGE_PERCENT" ]]; then
-    if float_lt "$coverage_for_gate" "$MIN_COVERAGE_PERCENT"; then
-      if [[ -n "$gate_failure" ]]; then
-        gate_failure+=","
-      fi
-      gate_failure+="coverage<${MIN_COVERAGE_PERCENT}"
-    fi
-  fi
-  if [[ -n "$MAX_ERRORS" ]] && [[ "$errors" -gt "$MAX_ERRORS" ]]; then
-    if [[ -n "$gate_failure" ]]; then
-      gate_failure+=","
-    fi
-    gate_failure+="errors>${MAX_ERRORS}"
-  fi
   if [[ -n "$gate_failure" ]]; then
     status="FAIL"
     overall_rc=1
@@ -1842,6 +1944,10 @@ EOS
     overall_rc=1
   fi
 done
+
+if [[ "$worker_failures" -ne 0 ]]; then
+  overall_rc=1
+fi
 
 total_coverage_for_gate="0"
 if [[ "$total_relevant" -gt 0 ]]; then

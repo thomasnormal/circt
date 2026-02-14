@@ -1,0 +1,5 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --jobs 0 2>&1 | FileCheck %s --check-prefix=ZERO
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --jobs bad 2>&1 | FileCheck %s --check-prefix=BAD
+
+// ZERO: --jobs must be a positive integer: 0
+// BAD: --jobs must be a positive integer: bad
