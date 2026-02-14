@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1313 - February 14, 2026
+
+### Mutation Workflow: Strict Baseline Policy-Fingerprint Requirement
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with:
+   - `--require-policy-fingerprint-baseline`
+2. Added strict-option validation:
+   - `--require-policy-fingerprint-baseline` now requires `--fail-on-diff`.
+3. Extended drift policy for legacy baselines:
+   - when strict option is enabled and baseline rows lack
+     `policy_fingerprint`, drift now records a regression candidate:
+     - metric: `policy_fingerprint`
+     - detail: `baseline_missing_policy_fingerprint`
+4. Preserved existing default behavior without strict option:
+   - missing baseline policy fingerprints remain informational (`ok`) drift rows,
+     preserving backward compatibility.
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-require-policy-fingerprint-baseline-requires-fail-on-diff.test`
+   - `test/Tools/run-mutation-mcy-examples-require-policy-fingerprint-baseline-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-require-policy-fingerprint-baseline-allowlist.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (28/28)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-115352` PASS
+
 ## Iteration 1312 - February 14, 2026
 
 ### OpenTitan Formal Phase E: Execute Connectivity `CONDITION` Guard Semantics

@@ -1,0 +1,4 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --require-policy-fingerprint-baseline 2>&1 | FileCheck %s
+
+// CHECK: --require-policy-fingerprint-baseline requires --fail-on-diff
