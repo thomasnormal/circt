@@ -10,13 +10,19 @@
 // RUN:   --circt-mut %t/bin/circt-mut \
 // RUN:   --baseline-file %t/baseline.tsv \
 // RUN:   --update-baseline \
+// RUN:   --summary-schema-version-file %t/out/custom.schema-version \
 // RUN:   --out-dir %t/out
 
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
 // RUN: FileCheck %s --check-prefix=BASELINE < %t/baseline.tsv
+// RUN: FileCheck %s --check-prefix=SCHEMA < %t/out/custom.schema-version
+// RUN: FileCheck %s --check-prefix=BASELINE-SCHEMA < %t/baseline.tsv.schema-version
 
 // SUMMARY: example{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}detected{{[[:space:]]}}relevant{{[[:space:]]}}coverage_percent{{[[:space:]]}}errors
 // SUMMARY: bitcnt{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}2{{[[:space:]]}}4{{[[:space:]]}}50.00{{[[:space:]]}}0
 
 // BASELINE: example{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}detected{{[[:space:]]}}relevant{{[[:space:]]}}coverage_percent{{[[:space:]]}}errors
 // BASELINE: bitcnt{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}2{{[[:space:]]}}4{{[[:space:]]}}50.00{{[[:space:]]}}0
+
+// SCHEMA: v2
+// BASELINE-SCHEMA: v2

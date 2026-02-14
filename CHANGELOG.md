@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1330 - February 14, 2026
+
+### Mutation Workflow: Explicit Schema-Version Artifacts for Baselines
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with explicit schema-version artifact support:
+   - `--summary-schema-version-file FILE`
+   - `--baseline-schema-version-file FILE`
+2. Added artifact-aware schema resolution for drift checks:
+   - prefers schema-version sidecar artifacts when present
+   - falls back to summary header inference for backward compatibility
+3. `--update-baseline` now also updates baseline schema artifact (`<baseline>.schema-version` by default).
+4. Added validation for explicit baseline schema file under strict schema drift checks:
+   - clear error on missing/unreadable file.
+5. Added/updated regression coverage:
+   - `test/Tools/run-mutation-mcy-examples-require-baseline-schema-version-match-sidecar-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-baseline-schema-version-file-missing.test`
+   - updated `test/Tools/run-mutation-mcy-examples-baseline-update.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (50/50)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-124002` PASS
+
 ## Iteration 1329 - February 14, 2026
 
 ### OpenTitan Connectivity LEC: Per-Rule Status Drift Governance

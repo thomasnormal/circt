@@ -54,6 +54,13 @@ Options:
                            Require baseline summary schema version to match
                            current summary schema when evaluating
                            --fail-on-diff
+  --baseline-schema-version-file FILE
+                           Optional baseline schema-version artifact used for
+                           --require-baseline-schema-version-match (default:
+                           <baseline-file>.schema-version when present)
+  --summary-schema-version-file FILE
+                           Output schema-version artifact for current summary
+                           (default: <out-dir>/summary.schema-version)
   --strict-baseline-governance
                            Enable strict baseline governance bundle:
                            --require-policy-fingerprint-baseline +
@@ -87,6 +94,8 @@ Options:
 
 Outputs:
   <out-dir>/summary.tsv    Aggregated example status/coverage summary
+  <out-dir>/summary.schema-version
+                           Current summary schema-version artifact
   <out-dir>/drift.tsv      Drift report (when --fail-on-diff)
   <out-dir>/drift-allowlist-unused.txt
                            Unused allowlist entries (when allowlist is set)
@@ -116,6 +125,9 @@ MIN_DETECTED=0
 MIN_COVERAGE_PERCENT=""
 MAX_ERRORS=""
 BASELINE_FILE=""
+BASELINE_SCHEMA_VERSION_FILE=""
+BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
+SUMMARY_SCHEMA_VERSION_FILE=""
 UPDATE_BASELINE=0
 FAIL_ON_DIFF=0
 REQUIRE_POLICY_FINGERPRINT_BASELINE=0
@@ -578,10 +590,33 @@ summary_schema_version_from_header() {
   printf 'unknown\n'
 }
 
-summary_schema_version_for_file() {
-  local file="$1"
+summary_schema_version_from_metadata() {
+  local schema_version_raw="$1"
+  local schema_version=""
+  schema_version="$(trim_whitespace "$schema_version_raw")"
+  if [[ "$schema_version" =~ ^v[0-9]+$ ]]; then
+    printf '%s\n' "$schema_version"
+    return 0
+  fi
+  printf 'unknown\n'
+}
+
+summary_schema_version_for_artifacts() {
+  local summary_file="$1"
+  local schema_file="${2:-}"
+  local schema_line=""
   local header_line=""
-  if ! IFS= read -r header_line < "$file"; then
+
+  if [[ -n "$schema_file" && -f "$schema_file" ]]; then
+    if ! IFS= read -r schema_line < "$schema_file"; then
+      printf 'unknown\n'
+      return 0
+    fi
+    summary_schema_version_from_metadata "$schema_line"
+    return 0
+  fi
+
+  if ! IFS= read -r header_line < "$summary_file"; then
     printf 'unknown\n'
     return 0
   fi
@@ -726,6 +761,8 @@ evaluate_summary_drift() {
   local require_policy_fingerprint_baseline="${4:-0}"
   local require_baseline_example_parity="${5:-0}"
   local require_baseline_schema_version_match="${6:-0}"
+  local baseline_schema_version_file="${7:-}"
+  local summary_schema_version_file="${8:-}"
   local regressions=0
   local baseline_example=""
   local _status=""
@@ -749,8 +786,8 @@ evaluate_summary_drift() {
 
   local baseline_schema_version=""
   local summary_schema_version=""
-  summary_schema_version="$(summary_schema_version_for_file "$summary_file")"
-  baseline_schema_version="$(summary_schema_version_for_file "$baseline_file")"
+  summary_schema_version="$(summary_schema_version_for_artifacts "$summary_file" "$summary_schema_version_file")"
+  baseline_schema_version="$(summary_schema_version_for_artifacts "$baseline_file" "$baseline_schema_version_file")"
 
   if [[ "$require_baseline_schema_version_match" -eq 1 ]]; then
     if [[ "$baseline_schema_version" != "$summary_schema_version" ]]; then
@@ -1028,6 +1065,15 @@ while [[ $# -gt 0 ]]; do
       REQUIRE_BASELINE_SCHEMA_VERSION_MATCH=1
       shift
       ;;
+    --summary-schema-version-file)
+      SUMMARY_SCHEMA_VERSION_FILE="$2"
+      shift 2
+      ;;
+    --baseline-schema-version-file)
+      BASELINE_SCHEMA_VERSION_FILE="$2"
+      BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=1
+      shift 2
+      ;;
     --strict-baseline-governance)
       STRICT_BASELINE_GOVERNANCE=1
       shift
@@ -1123,6 +1169,23 @@ if [[ "$UPDATE_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -eq 1 ]]; then
   echo "Use either --update-baseline or --fail-on-diff, not both." >&2
   exit 1
 fi
+if [[ -z "$SUMMARY_SCHEMA_VERSION_FILE" ]]; then
+  SUMMARY_SCHEMA_VERSION_FILE="${OUT_DIR}/summary.schema-version"
+fi
+if [[ -z "$BASELINE_SCHEMA_VERSION_FILE" && -n "$BASELINE_FILE" ]]; then
+  BASELINE_SCHEMA_VERSION_FILE="${BASELINE_FILE}.schema-version"
+fi
+if [[ "$BASELINE_SCHEMA_VERSION_FILE_EXPLICIT" -eq 1 && "$FAIL_ON_DIFF" -eq 1 && "$REQUIRE_BASELINE_SCHEMA_VERSION_MATCH" -eq 1 ]]; then
+  if [[ ! -f "$BASELINE_SCHEMA_VERSION_FILE" ]]; then
+    echo "Baseline schema-version file not found: $BASELINE_SCHEMA_VERSION_FILE" >&2
+    exit 1
+  fi
+  if [[ ! -r "$BASELINE_SCHEMA_VERSION_FILE" ]]; then
+    echo "Baseline schema-version file not readable: $BASELINE_SCHEMA_VERSION_FILE" >&2
+    exit 1
+  fi
+fi
+
 if [[ "$STRICT_BASELINE_GOVERNANCE" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
   echo "--strict-baseline-governance requires --fail-on-diff" >&2
   exit 1
@@ -1245,6 +1308,8 @@ SUMMARY_FILE="${OUT_DIR}/summary.tsv"
 printf '%s\n' "$CURRENT_SUMMARY_HEADER" > "$SUMMARY_FILE"
 
 overall_rc=0
+mkdir -p "$(dirname "$SUMMARY_SCHEMA_VERSION_FILE")"
+printf '%s\n' "$CURRENT_SUMMARY_SCHEMA_VERSION" > "$SUMMARY_SCHEMA_VERSION_FILE"
 
 for example_id in "${EXAMPLE_IDS[@]}"; do
   design="${EXAMPLE_TO_DESIGN[$example_id]}"
@@ -1455,7 +1520,7 @@ fi
 
 if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
   DRIFT_FILE="${OUT_DIR}/drift.tsv"
-  if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE" "$REQUIRE_POLICY_FINGERPRINT_BASELINE" "$REQUIRE_BASELINE_EXAMPLE_PARITY" "$REQUIRE_BASELINE_SCHEMA_VERSION_MATCH"; then
+  if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE" "$REQUIRE_POLICY_FINGERPRINT_BASELINE" "$REQUIRE_BASELINE_EXAMPLE_PARITY" "$REQUIRE_BASELINE_SCHEMA_VERSION_MATCH" "$BASELINE_SCHEMA_VERSION_FILE" "$SUMMARY_SCHEMA_VERSION_FILE"; then
     overall_rc=1
     echo "Baseline drift failure: see $DRIFT_FILE" >&2
   fi
@@ -1472,6 +1537,10 @@ fi
 if [[ "$UPDATE_BASELINE" -eq 1 ]]; then
   mkdir -p "$(dirname "$BASELINE_FILE")"
   cp "$SUMMARY_FILE" "$BASELINE_FILE"
+  if [[ -n "$BASELINE_SCHEMA_VERSION_FILE" ]]; then
+    mkdir -p "$(dirname "$BASELINE_SCHEMA_VERSION_FILE")"
+    cp "$SUMMARY_SCHEMA_VERSION_FILE" "$BASELINE_SCHEMA_VERSION_FILE"
+  fi
   echo "Updated baseline: $BASELINE_FILE" >&2
 fi
 
