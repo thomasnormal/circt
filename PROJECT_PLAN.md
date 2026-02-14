@@ -407,6 +407,29 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - `test/Tools/run-opentitan-fpv-bmc-policy-workflow.test`
      - `test/Tools/run-opentitan-fpv-bmc-policy-profiles.test`
      - `test/Tools/run-formal-all-launch-reason-key-allowlists-require-gate.test`
+33. Launch retry taxonomy extended with stale-handle transient classification:
+   - added `stale_file_handle` retry reason classification across formal launchers:
+     - `utils/run_pairwise_circt_bmc.py`
+     - `utils/run_sv_tests_circt_bmc.sh`
+     - `utils/run_sv_tests_circt_lec.sh`
+     - `utils/run_verilator_verification_circt_bmc.sh`
+     - `utils/run_yosys_sva_circt_bmc.sh`
+   - `run_sv_tests_circt_lec.sh` retry trigger detection is now taxonomy-aligned:
+     - recognizes `Text file busy`/`ETXTBSY`, `Permission denied`,
+       `posix_spawn failed`, `resource temporarily unavailable`,
+       and `stale file handle`/`ESTALE` as retryable launch failures.
+   - pairwise runner now maps `errno.ESTALE` as retryable `stale_file_handle`.
+   - canonical OpenTitan canary per-reason budget policy now carries explicit
+     `exact:stale_file_handle` governance row:
+     - `utils/opentitan_fpv_policy/bmc_launch_reason_event_budget.tsv`
+   - added regressions:
+     - `test/Tools/run-pairwise-circt-bmc-launch-retry-stale-file-handle.test`
+     - `test/Tools/run-sv-tests-bmc-launch-retry-stale-file-handle.test`
+     - `test/Tools/run-sv-tests-lec-verilog-stale-file-handle-retry.test`
+     - `test/Tools/run-verilator-verification-circt-bmc-launch-retry-stale-file-handle.test`
+     - `test/Tools/run-yosys-sva-bmc-launch-retry-stale-file-handle.test`
+     - updated:
+       `test/Tools/run-formal-all-sv-tests-launch-reason-classification-summary.test`
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
@@ -796,7 +819,7 @@ verilator-verification, and yosys corpora).
 ### Remaining Formal Limitations (BMC/LEC/mutation focus)
 
 1. **FPV status derivation depth gap**: explicit assertion statuses (`PROVEN/FAILING/VACUOUS/UNKNOWN`) and cover-granular `covered/unreachable` evidence are now wired, but fully automatic vacuity/coverage derivation for targets that do not emit explicit status tags is still pending.
-2. **BMC/LEC operational robustness**: launcher retry/copy-fallback controls are telemetry-visible in OpenTitan FPV and non-FPV formal lanes (`bmc_launch_*`, `lec_launch_*`), strict-gate enforces launch-counter drift plus nonzero/max reason-event budgets and selector-based per-reason budget files (`exact|prefix|regex|*`) with allowlist-aware semantics, OpenTitan FPV policy-pack wrappers now carry check-only budget-file forwarding/defaults, and retry reason taxonomy includes `permission_denied` / `posix_spawn_failed` / `resource_temporarily_unavailable`; remaining gap is cohort-scale budget tuning and adding further platform-specific transient classes with deterministic governance.
+2. **BMC/LEC operational robustness**: launcher retry/copy-fallback controls are telemetry-visible in OpenTitan FPV and non-FPV formal lanes (`bmc_launch_*`, `lec_launch_*`), strict-gate enforces launch-counter drift plus nonzero/max reason-event budgets and selector-based per-reason budget files (`exact|prefix|regex|*`) with allowlist-aware semantics, OpenTitan FPV policy-pack wrappers now carry check-only budget-file forwarding/defaults, and retry reason taxonomy includes `permission_denied` / `posix_spawn_failed` / `resource_temporarily_unavailable` / `stale_file_handle`; remaining gap is cohort-scale budget tuning and adding further platform-specific transient classes with deterministic governance.
 3. **Frontend triage ergonomics**: sv-tests BMC now preserves frontend error logs via `KEEP_LOGS_DIR`, and launch retry is in place for transient launcher failures; host-side tool relink contention can still surface as launcher-level `Permission denied`/ETXTBSY noise until binaries stabilize.
 4. **Frontend scalability blocker on semantic closure buckets**: `sv-tests` UVM `16.11` (sequence-subroutine) and `16.13` (multiclock) currently hit frontend OOM in `circt-verilog` during import; this blocks clean semantic closure measurement for those buckets.
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.
