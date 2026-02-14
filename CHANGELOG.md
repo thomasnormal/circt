@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1392 - February 14, 2026
+
+### OpenTitan Formal: Unknown-Module Missing-Results Diagnostics (BMC + LEC)
+
+1. Hardened OpenTitan missing-results diagnostics in `utils/run_formal_all.sh`:
+   - added resilient unknown-module extraction for suite logs using quoted,
+     backtick-quoted, escaped, and bare-token forms.
+   - classification now promotes unresolved-module launcher failures to
+     `runner_command_unknown_module` for both OpenTitan BMC and LEC
+     missing-results paths.
+2. Added/updated OpenTitan diagnostic regressions:
+   - added
+     `test/Tools/run-formal-all-opentitan-fpv-bmc-missing-results-unknown-module.test`
+   - added
+     `test/Tools/run-formal-all-opentitan-lec-missing-results-unknown-module.test`
+   - updated
+     `test/Tools/run-formal-all-opentitan-lec-missing-results-reason.test`
+3. Diagnostic artifacts now carry unresolved-module evidence consistently:
+   - `opentitan-missing-results-diagnostics.tsv` includes
+     `unknown_modules` for triage.
+   - `opentitan-unresolved-modules.tsv` records per-module rows for both lanes.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-missing-results-unknown-module.test build-test/test/Tools/run-formal-all-opentitan-lec-missing-results-reason.test build-test/test/Tools/run-formal-all-opentitan-lec-missing-results-unknown-module.test` PASS (3/3)
+
 ## Iteration 1391 - February 14, 2026
 
 ### Mutation Workflow: Strict Native Real Harness Enforcement

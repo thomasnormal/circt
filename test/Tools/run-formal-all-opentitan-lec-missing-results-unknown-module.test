@@ -2,7 +2,7 @@
 // RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
 // RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
 // RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
-// RUN: printf '#!/usr/bin/env python3\nimport sys\nprint("missing_OUT")\nsys.exit(6)\n' > %t/utils/run_opentitan_circt_lec.py
+// RUN: printf '#!/usr/bin/env python3\nimport sys\nprint(\"../opentitan/hw/ip/foo.sv:1:1: error: unknown module \\\"prim_sec_anchor_buf\\\"\")\nprint(\"../opentitan/hw/ip/foo.sv:2:1: error: unknown module \\\"prim_sec_anchor_flop\\\"\")\nsys.exit(1)\n' > %t/utils/run_opentitan_circt_lec.py
 // RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_opentitan_circt_lec.py %t/fake-circt-verilog-opentitan
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/LEC$' --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --opentitan-lec-impl-filter ".*"
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
@@ -11,12 +11,14 @@
 // RUN: FileCheck %s --check-prefix=UNRESOLVED < %t/out/opentitan-unresolved-modules.tsv
 //
 // SUMMARY: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_results=1
-// SUMMARY: lec_circt_lec_error_reason_runner_command_missing_out_cases=1
+// SUMMARY: lec_circt_lec_error_reason_runner_command_unknown_module_cases=1
 // SUMMARY: lec_diag_circt_lec_error_cases=1
 // SUMMARY: lec_error_bucket_infra_runner_command_cases=1
 // SUMMARY: lec_runner_command_cases=1
-// SUMMARY: lec_runner_command_reason_runner_command_missing_out_cases=1
-// CASE: ERROR{{[[:space:]]+}}aes_sbox{{[[:space:]]+}}missing_results{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_LEC_ERROR{{[[:space:]]+}}runner_command_missing_out
+// SUMMARY: lec_runner_command_reason_runner_command_unknown_module_cases=1
+// CASE: ERROR{{[[:space:]]+}}aes_sbox{{[[:space:]]+}}missing_results{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_LEC_ERROR{{[[:space:]]+}}runner_command_unknown_module
 // DIAG: lane_id{{[[:space:]]+}}suite_name{{[[:space:]]+}}mode_name{{[[:space:]]+}}case_kind{{[[:space:]]+}}diag{{[[:space:]]+}}reason{{[[:space:]]+}}unknown_modules{{[[:space:]]+}}suite_log{{[[:space:]]+}}case_results
-// DIAG: opentitan/LEC{{[[:space:]]+}}opentitan-lec{{[[:space:]]+}}LEC{{[[:space:]]+}}aes_sbox{{[[:space:]]+}}CIRCT_LEC_ERROR{{[[:space:]]+}}runner_command_missing_out{{[[:space:]]+}}{{.*}}opentitan-lec.log{{[[:space:]]+}}{{.*}}opentitan-lec-results.txt
+// DIAG: opentitan/LEC{{[[:space:]]+}}opentitan-lec{{[[:space:]]+}}LEC{{[[:space:]]+}}aes_sbox{{[[:space:]]+}}CIRCT_LEC_ERROR{{[[:space:]]+}}runner_command_unknown_module{{[[:space:]]+}}prim_sec_anchor_buf,prim_sec_anchor_flop{{[[:space:]]+}}{{.*}}opentitan-lec.log{{[[:space:]]+}}{{.*}}opentitan-lec-results.txt
 // UNRESOLVED: lane_id{{[[:space:]]+}}suite_name{{[[:space:]]+}}mode_name{{[[:space:]]+}}diag{{[[:space:]]+}}reason{{[[:space:]]+}}module_name{{[[:space:]]+}}suite_log
+// UNRESOLVED: opentitan/LEC{{[[:space:]]+}}opentitan-lec{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_LEC_ERROR{{[[:space:]]+}}runner_command_unknown_module{{[[:space:]]+}}prim_sec_anchor_buf{{[[:space:]]+}}{{.*}}opentitan-lec.log
+// UNRESOLVED: opentitan/LEC{{[[:space:]]+}}opentitan-lec{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_LEC_ERROR{{[[:space:]]+}}runner_command_unknown_module{{[[:space:]]+}}prim_sec_anchor_flop{{[[:space:]]+}}{{.*}}opentitan-lec.log
