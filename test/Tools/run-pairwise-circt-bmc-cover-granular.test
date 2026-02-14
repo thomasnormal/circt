@@ -1,0 +1,18 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin %t/src
+// RUN: touch %t/src/a.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nout=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -o) out=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n: \"${out:?}\"\nprintf \"dummy\\n\" > \"$out\"\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nout=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -o) out=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n: \"${out:?}\"\ncat > \"$out\" <<'EOF'\nmodule {\n  hw.module @top() {\n    %c0 = hw.constant false\n    %c1 = hw.constant true\n    verif.assert %c1 : i1\n    verif.cover %c1 : i1\n    verif.cover %c0 : i1\n    verif.assert %c1 {bmc.final} : i1\n    hw.output\n  }\n}\nEOF\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nin=\"$1\"\nif [[ \"$in\" != *\".cover-\"* ]]; then\n  echo \"BMC_RESULT=UNSAT\"\n  exit 0\nfi\nif grep -q \"verif.cover %c1\" \"$in\"; then\n  echo \"BMC_RESULT=SAT\"\n  exit 0\nfi\necho \"BMC_RESULT=UNSAT\"\nexit 0\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc
+// RUN: printf 'cover_case\ttop\t%t/src/a.sv\t%t/src\t%t/work/cover\n' > %t/cases.tsv
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_BMC=%t/bin/circt-bmc BMC_RUN_SMTLIB=0 BMC_COVER_GRANULAR=1 OUT=%t/results.tsv BMC_COVER_RESULTS_OUT=%t/covers.tsv %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --workdir %t/work 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RES < %t/results.tsv
+// RUN: FileCheck %s --check-prefix=COVERS < %t/covers.tsv
+//
+// LOG: Running BMC on 1 pairwise case(s)...
+// LOG: pairwise BMC cover-granular summary: covers=2
+// LOG: pairwise BMC summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// RES: PASS{{[[:space:]]+}}cover_case{{[[:space:]]+}}{{.*}}work/cover{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
+// COVERS: COVERED{{[[:space:]]+}}cover_case{{[[:space:]]+}}{{.*}}work/cover{{[[:space:]]+}}c0000{{[[:space:]]+}}line_6{{[[:space:]]+}}SAT{{[[:space:]]+}}sat
+// COVERS: UNREACHABLE{{[[:space:]]+}}cover_case{{[[:space:]]+}}{{.*}}work/cover{{[[:space:]]+}}c0001{{[[:space:]]+}}line_7{{[[:space:]]+}}UNSAT{{[[:space:]]+}}unsat

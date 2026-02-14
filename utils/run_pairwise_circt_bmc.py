@@ -94,6 +94,13 @@ class AssertionSite:
     line_text: str
 
 
+@dataclass(frozen=True)
+class CoverSite:
+    ordinal: int
+    line_index: int
+    line_text: str
+
+
 class TextFileBusyRetryExhausted(RuntimeError):
     def __init__(self, tool: str, attempts: int):
         super().__init__(
@@ -165,6 +172,24 @@ def collect_candidate_assertion_sites(lines: list[str]) -> list[AssertionSite]:
     return sites
 
 
+def collect_candidate_cover_sites(lines: list[str]) -> list[CoverSite]:
+    sites: list[CoverSite] = []
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        if "verif.cover" not in stripped:
+            continue
+        sites.append(
+            CoverSite(
+                ordinal=len(sites),
+                line_index=idx,
+                line_text=stripped,
+            )
+        )
+    return sites
+
+
 def build_isolated_assertion_mlir(
     lines: list[str], sites: list[AssertionSite], keep_ordinal: int
 ) -> str:
@@ -175,6 +200,25 @@ def build_isolated_assertion_mlir(
         isolated[site.line_index] = isolated[site.line_index].replace(
             "verif.assert", "verif.assume", 1
         )
+    return "\n".join(isolated) + "\n"
+
+
+def build_isolated_cover_mlir(
+    lines: list[str],
+    assertion_sites: list[AssertionSite],
+    cover_sites: list[CoverSite],
+    keep_ordinal: int,
+) -> str:
+    isolated = list(lines)
+    for site in assertion_sites:
+        isolated[site.line_index] = isolated[site.line_index].replace(
+            "verif.assert", "verif.assume", 1
+        )
+    for site in cover_sites:
+        if site.ordinal == keep_ordinal:
+            continue
+        prefix = re.match(r"^\s*", isolated[site.line_index]).group(0)
+        isolated[site.line_index] = f"{prefix}// cover-granular-disabled"
     return "\n".join(isolated) + "\n"
 
 
@@ -582,6 +626,11 @@ def main() -> int:
         help="Optional TSV output path for per-assertion BMC rows.",
     )
     parser.add_argument(
+        "--cover-results-file",
+        default=os.environ.get("BMC_COVER_RESULTS_OUT", ""),
+        help="Optional TSV output path for per-cover BMC rows.",
+    )
+    parser.add_argument(
         "--assertion-granular",
         action="store_true",
         default=os.environ.get("BMC_ASSERTION_GRANULAR", "0") == "1",
@@ -596,6 +645,15 @@ def main() -> int:
         help=(
             "Maximum assertions per case for --assertion-granular "
             "(0 means unlimited)."
+        ),
+    )
+    parser.add_argument(
+        "--cover-granular",
+        action="store_true",
+        default=os.environ.get("BMC_COVER_GRANULAR", "0") == "1",
+        help=(
+            "Run BMC per cover by isolating each verif.cover in prepared MLIR "
+            "(default: env BMC_COVER_GRANULAR or off)."
         ),
     )
     args = parser.parse_args()
@@ -704,6 +762,7 @@ def main() -> int:
 
     rows: list[tuple[str, ...]] = []
     assertion_result_rows: list[tuple[str, ...]] = []
+    cover_result_rows: list[tuple[str, ...]] = []
     drop_remark_case_rows: list[tuple[str, str]] = []
     drop_remark_reason_rows: list[tuple[str, str, str]] = []
     timeout_reason_rows: list[tuple[str, str, str]] = []
@@ -889,9 +948,151 @@ def main() -> int:
                 bmc_input_mlir = (
                     prepped_mlir if bmc_prepare_core_with_circt_opt else out_mlir
                 )
-                if args.assertion_granular and not case_smoke_only:
+                mlir_lines: list[str] | None = None
+                if (args.assertion_granular or args.cover_granular) and not case_smoke_only:
                     mlir_lines = bmc_input_mlir.read_text(encoding="utf-8").splitlines()
-                    assertion_sites = collect_candidate_assertion_sites(mlir_lines)
+
+                if args.cover_granular and not case_smoke_only:
+                    cover_sites = collect_candidate_cover_sites(mlir_lines or [])
+                    if cover_sites:
+                        assertion_sites_for_cover = collect_candidate_assertion_sites(
+                            mlir_lines or []
+                        )
+                        for site in cover_sites:
+                            cover_id = f"c{site.ordinal:04d}"
+                            cover_label = f"line_{site.line_index + 1}"
+                            cover_mlir = case_dir / f"pairwise_bmc.cover-{site.ordinal}.mlir"
+                            cover_mlir.write_text(
+                                build_isolated_cover_mlir(
+                                    mlir_lines or [],
+                                    assertion_sites_for_cover,
+                                    cover_sites,
+                                    site.ordinal,
+                                ),
+                                encoding="utf-8",
+                            )
+                            cover_log = case_dir / f"circt-bmc.cover-{site.ordinal}.log"
+                            cover_out = case_dir / f"circt-bmc.cover-{site.ordinal}.out"
+                            cover_cmd = list(bmc_cmd)
+                            cover_cmd[1] = str(cover_mlir)
+                            stage = f"bmc.cover.{site.ordinal}"
+                            try:
+                                cover_run = run_and_log(
+                                    cover_cmd,
+                                    cover_log,
+                                    cover_out,
+                                    case_timeout_secs,
+                                    etxtbsy_retries,
+                                    etxtbsy_backoff_secs,
+                                )
+                                combined = (
+                                    cover_log.read_text() + "\n" + cover_out.read_text()
+                                )
+                                bmc_tag = parse_bmc_result(combined)
+                                if bmc_tag == "SAT":
+                                    cover_result_rows.append(
+                                        (
+                                            "COVERED",
+                                            case.case_id,
+                                            case_path,
+                                            cover_id,
+                                            cover_label,
+                                            "SAT",
+                                            "sat",
+                                        )
+                                    )
+                                elif bmc_tag == "UNSAT":
+                                    cover_result_rows.append(
+                                        (
+                                            "UNREACHABLE",
+                                            case.case_id,
+                                            case_path,
+                                            cover_id,
+                                            cover_label,
+                                            "UNSAT",
+                                            "unsat",
+                                        )
+                                    )
+                                elif bmc_tag == "UNKNOWN":
+                                    cover_result_rows.append(
+                                        (
+                                            "UNKNOWN",
+                                            case.case_id,
+                                            case_path,
+                                            cover_id,
+                                            cover_label,
+                                            "UNKNOWN",
+                                            "unknown",
+                                        )
+                                    )
+                                elif cover_run.returncode != 0:
+                                    reason = normalize_error_reason(combined)
+                                    cover_result_rows.append(
+                                        (
+                                            "ERROR",
+                                            case.case_id,
+                                            case_path,
+                                            cover_id,
+                                            cover_label,
+                                            "CIRCT_BMC_ERROR",
+                                            reason,
+                                        )
+                                    )
+                                else:
+                                    reason = normalize_error_reason(combined)
+                                    cover_result_rows.append(
+                                        (
+                                            "ERROR",
+                                            case.case_id,
+                                            case_path,
+                                            cover_id,
+                                            cover_label,
+                                            "CIRCT_BMC_ERROR",
+                                            reason,
+                                        )
+                                    )
+                            except subprocess.TimeoutExpired:
+                                cover_result_rows.append(
+                                    (
+                                        "TIMEOUT",
+                                        case.case_id,
+                                        case_path,
+                                        cover_id,
+                                        cover_label,
+                                        "BMC_TIMEOUT",
+                                        "solver_command_timeout",
+                                    )
+                                )
+                            except Exception as exc:
+                                append_exception_log(cover_log, stage, exc)
+                                if isinstance(exc, TextFileBusyRetryExhausted):
+                                    reason = (
+                                        "runner_command_exception_bmc_"
+                                        "runner_command_etxtbsy_retry_exhausted"
+                                    )
+                                else:
+                                    reason_body = normalize_error_reason(
+                                        f"{type(exc).__name__}: {exc}"
+                                    )
+                                    reason = (
+                                        "runner_command_exception"
+                                        if reason_body == "no_diag"
+                                        else f"runner_command_exception_bmc_{reason_body}"
+                                    )
+                                cover_result_rows.append(
+                                    (
+                                        "ERROR",
+                                        case.case_id,
+                                        case_path,
+                                        cover_id,
+                                        cover_label,
+                                        "CIRCT_BMC_ERROR",
+                                        reason,
+                                    )
+                                )
+
+                if args.assertion_granular and not case_smoke_only:
+                    assertion_sites = collect_candidate_assertion_sites(mlir_lines or [])
                     if (
                         assertion_granular_max > 0
                         and len(assertion_sites) > assertion_granular_max
@@ -1356,6 +1557,15 @@ def main() -> int:
             ):
                 handle.write("\t".join(row) + "\n")
 
+    if args.cover_results_file:
+        cover_results_path = Path(args.cover_results_file)
+        cover_results_path.parent.mkdir(parents=True, exist_ok=True)
+        with cover_results_path.open("w", encoding="utf-8") as handle:
+            for row in sorted(
+                cover_result_rows, key=lambda item: (item[1], item[3], item[0])
+            ):
+                handle.write("\t".join(row) + "\n")
+
     print(
         f"{suite_name} BMC dropped-syntax summary: "
         f"drop_remark_cases={len(set(drop_remark_case_rows))} "
@@ -1366,6 +1576,12 @@ def main() -> int:
         print(
             f"{suite_name} BMC assertion-granular summary: "
             f"assertions={len(assertion_result_rows)}",
+            flush=True,
+        )
+    if args.cover_granular:
+        print(
+            f"{suite_name} BMC cover-granular summary: "
+            f"covers={len(cover_result_rows)}",
             flush=True,
         )
     print(

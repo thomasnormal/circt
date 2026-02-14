@@ -277,11 +277,13 @@ def is_allowlisted(
 def write_fpv_summary(
     case_rows: list[tuple[str, ...]],
     assertion_rows: list[tuple[str, ...]],
+    cover_rows: list[tuple[str, ...]],
     out_path: Path,
 ) -> None:
     # status, case_id, case_path, assertion_id, assertion_label, diag, reason
-    # If no assertion rows are available, fall back to case-level accounting
-    # (one synthetic assertion per case).
+    # status, case_id, case_path, cover_id, cover_label, diag, reason
+    # If no assertion/cover rows are available, fall back to case-level
+    # accounting (one synthetic assertion per case).
     by_target: dict[str, dict[str, int]] = {}
 
     def init_counts(target: str) -> dict[str, int]:
@@ -301,8 +303,11 @@ def write_fpv_summary(
             },
         )
 
-    if assertion_rows:
-        for row in assertion_rows:
+    if assertion_rows or cover_rows:
+        property_rows: list[tuple[str, ...]] = []
+        property_rows.extend(assertion_rows)
+        property_rows.extend(cover_rows)
+        for row in property_rows:
             if len(row) < 2:
                 continue
             status = row[0].strip().upper()
@@ -316,6 +321,12 @@ def write_fpv_summary(
                 counts["proven"] += 1
             elif status == "FAILING":
                 counts["failing"] += 1
+            elif status == "VACUOUS":
+                counts["vacuous"] += 1
+            elif status == "COVERED":
+                counts["covered"] += 1
+            elif status == "UNREACHABLE":
+                counts["unreachable"] += 1
             elif status == "UNKNOWN":
                 counts["unknown"] += 1
             elif status == "TIMEOUT":
@@ -478,6 +489,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional TSV output path for per-assertion FPV BMC rows.",
     )
     parser.add_argument(
+        "--cover-results-file",
+        default=os.environ.get("BMC_COVER_RESULTS_OUT", ""),
+        help="Optional TSV output path for per-cover FPV BMC rows.",
+    )
+    parser.add_argument(
         "--assertion-granular",
         action="store_true",
         default=os.environ.get("BMC_ASSERTION_GRANULAR", "0") == "1",
@@ -492,6 +508,15 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Maximum assertions per case for --assertion-granular "
             "(0 means unlimited; default: env BMC_ASSERTION_GRANULAR_MAX or 0)."
+        ),
+    )
+    parser.add_argument(
+        "--cover-granular",
+        action="store_true",
+        default=os.environ.get("BMC_COVER_GRANULAR", "0") == "1",
+        help=(
+            "Run BMC per cover by delegating --cover-granular to the pairwise "
+            "runner (default: env BMC_COVER_GRANULAR or off)."
         ),
     )
     parser.add_argument(
@@ -669,6 +694,7 @@ def main() -> int:
 
     pairwise_result_files: list[Path] = []
     assertion_result_files: list[Path] = []
+    cover_result_files: list[Path] = []
     drop_case_files: list[Path] = []
     drop_reason_files: list[Path] = []
     timeout_reason_files: list[Path] = []
@@ -784,10 +810,25 @@ def main() -> int:
                         "--assertion-results-file",
                         str(group_assertion_results),
                     ]
+                if (
+                    args.cover_results_file
+                    or args.fpv_summary_file
+                    or args.cover_granular
+                ):
+                    group_cover_results = (
+                        workdir / f"pairwise-cover-results-{group_index}.tsv"
+                    )
+                    cover_result_files.append(group_cover_results)
+                    cmd += [
+                        "--cover-results-file",
+                        str(group_cover_results),
+                    ]
                 if args.assertion_granular:
                     cmd.append("--assertion-granular")
                     if assertion_granular_max > 0:
                         cmd += ["--assertion-granular-max", str(assertion_granular_max)]
+                if args.cover_granular:
+                    cmd.append("--cover-granular")
 
                 cmd_env = os.environ.copy()
                 policy_passes: list[str] = []
@@ -818,6 +859,7 @@ def main() -> int:
         merge_plain_files(drop_reason_files, args.drop_remark_reasons_file)
         merge_plain_files(timeout_reason_files, args.timeout_reasons_file)
         merge_plain_files(assertion_result_files, args.assertion_results_file)
+        merge_plain_files(cover_result_files, args.cover_results_file)
         merge_resolved_contract_files(resolved_contract_files, args.resolved_contracts_file)
 
         merged_rows = list(pre_rows)
@@ -852,10 +894,21 @@ def main() -> int:
                 if not line:
                     continue
                 merged_assertion_rows.append(tuple(line.split("\t")))
+        merged_cover_rows: list[tuple[str, ...]] = []
+        for cover_path in cover_result_files:
+            if not cover_path.exists():
+                continue
+            for line in cover_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                merged_cover_rows.append(tuple(line.split("\t")))
 
         if args.fpv_summary_file:
             fpv_summary_path = Path(args.fpv_summary_file)
-            write_fpv_summary(merged_rows, merged_assertion_rows, fpv_summary_path)
+            write_fpv_summary(
+                merged_rows, merged_assertion_rows, merged_cover_rows, fpv_summary_path
+            )
             print(f"fpv summary: {fpv_summary_path}", flush=True)
             if args.fpv_summary_baseline_file:
                 baseline_path = Path(args.fpv_summary_baseline_file).resolve()
