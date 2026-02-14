@@ -1346,6 +1346,11 @@ Options:
                          parity: ignore (default), assertion
                          (assertion objectives only), all
                          (assertion+cover objectives)
+  --opentitan-fpv-objective-parity-reason-policy POLICY
+                         Reason drift policy for FPV objective parity:
+                         ignore (default), projected
+                         (compare projected_case_* reasons only), all
+                         (compare all non-empty reason tokens)
   --opentitan-fpv-fusesoc-bin PATH
                          FuseSoC executable used for OpenTitan FPV compile
                          contract resolution (default: fusesoc)
@@ -3086,6 +3091,8 @@ FAIL_ON_OPENTITAN_FPV_OBJECTIVE_PARITY=0
 OPENTITAN_FPV_OBJECTIVE_PARITY_INCLUDE_MISSING=0
 OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY="ignore"
 OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY_EXPLICIT=0
+OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY="ignore"
+OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY_EXPLICIT=0
 UPDATE_OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE=0
 FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT=0
 UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE=0
@@ -3379,6 +3386,8 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_OBJECTIVE_PARITY_INCLUDE_MISSING=1; shift ;;
     --opentitan-fpv-objective-parity-missing-policy)
       OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY="$2"; OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY_EXPLICIT=1; shift 2 ;;
+    --opentitan-fpv-objective-parity-reason-policy)
+      OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY="$2"; OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY_EXPLICIT=1; shift 2 ;;
     --fail-on-opentitan-fpv-unknown-task)
       FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=1; shift ;;
     --opentitan-lec-impl-filter)
@@ -4829,6 +4838,10 @@ if [[ "$OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY_EXPLICIT" == "1" && "$WITH
   echo "--opentitan-fpv-objective-parity-missing-policy requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
+if [[ "$OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY_EXPLICIT" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-objective-parity-reason-policy requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
 if [[ -n "$OPENTITAN_FPV_LEC_COVER_RESULTS_FILE" && -z "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" ]]; then
   echo "--opentitan-fpv-lec-cover-results-file requires --opentitan-fpv-lec-assertion-results-file" >&2
   exit 1
@@ -4851,6 +4864,10 @@ if [[ "$OPENTITAN_FPV_OBJECTIVE_PARITY_INCLUDE_MISSING" == "1" && -z "$OPENTITAN
 fi
 if [[ "$OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY_EXPLICIT" == "1" && -z "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" ]]; then
   echo "--opentitan-fpv-objective-parity-missing-policy requires --opentitan-fpv-lec-assertion-results-file" >&2
+  exit 1
+fi
+if [[ "$OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY_EXPLICIT" == "1" && -z "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" ]]; then
+  echo "--opentitan-fpv-objective-parity-reason-policy requires --opentitan-fpv-lec-assertion-results-file" >&2
   exit 1
 fi
 if [[ "$UPDATE_OPENTITAN_FPV_TARGET_MANIFEST_BASELINE" == "1" && -z "$OPENTITAN_FPV_TARGET_MANIFEST_BASELINE_FILE" ]]; then
@@ -5001,6 +5018,12 @@ if [[ "$OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY" != "ignore" && \
       "$OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY" != "assertion" && \
       "$OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY" != "all" ]]; then
   echo "invalid --opentitan-fpv-objective-parity-missing-policy: $OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY (expected ignore|assertion|all)" >&2
+  exit 1
+fi
+if [[ "$OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY" != "ignore" && \
+      "$OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY" != "projected" && \
+      "$OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY" != "all" ]]; then
+  echo "invalid --opentitan-fpv-objective-parity-reason-policy: $OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY (expected ignore|projected|all)" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
@@ -6562,6 +6585,11 @@ if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITA
       "$OPENTITAN_FPV_OBJECTIVE_PARITY_INCLUDE_MISSING" != "1" && \
       "$OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY" == "ignore" ]]; then
   OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY="assertion"
+fi
+if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_LEC_ASSERTION_RESULTS_FILE" && \
+      "$OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY_EXPLICIT" != "1" && \
+      "$OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY" == "ignore" ]]; then
+  OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY="projected"
 fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && -n "$OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT=1
@@ -9300,6 +9328,7 @@ compute_lane_state_config_hash() {
     printf "opentitan_fpv_objective_parity_file=%s\n" "$OPENTITAN_FPV_OBJECTIVE_PARITY_FILE"
     printf "opentitan_fpv_objective_parity_allowlist_file=%s\n" "$OPENTITAN_FPV_OBJECTIVE_PARITY_ALLOWLIST_FILE"
     printf "opentitan_fpv_objective_parity_missing_policy=%s\n" "$OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY"
+    printf "opentitan_fpv_objective_parity_reason_policy=%s\n" "$OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY"
     printf "opentitan_fpv_fusesoc_bin=%s\n" "$OPENTITAN_FPV_FUSESOC_BIN"
     printf "opentitan_fpv_compile_contracts_workdir=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR"
     printf "opentitan_fpv_compile_contracts_keep_workdir=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR"
@@ -14876,6 +14905,9 @@ run_opentitan_fpv_objective_parity_lane() {
   if [[ "$OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY" != "ignore" ]]; then
     parity_args+=(--missing-objective-policy "$OPENTITAN_FPV_OBJECTIVE_PARITY_MISSING_POLICY")
   fi
+  if [[ "$OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY" != "ignore" ]]; then
+    parity_args+=(--reason-policy "$OPENTITAN_FPV_OBJECTIVE_PARITY_REASON_POLICY")
+  fi
   if [[ "$OPENTITAN_FPV_OBJECTIVE_PARITY_INCLUDE_MISSING" == "1" ]]; then
     parity_args+=(--include-missing-objectives)
   fi
@@ -14891,8 +14923,12 @@ run_opentitan_fpv_objective_parity_lane() {
   local parity_missing_rows=0
   local parity_assertion_status_rows=0
   local parity_cover_status_rows=0
+  local parity_assertion_reason_rows=0
+  local parity_cover_reason_rows=0
   local parity_assertion_non_allowlisted_rows=0
   local parity_cover_non_allowlisted_rows=0
+  local parity_assertion_reason_non_allowlisted_rows=0
+  local parity_cover_reason_non_allowlisted_rows=0
   local parity_projected_rows=0
   local parity_projected_non_allowlisted_rows=0
   local parity_projected_assertion_rows=0
@@ -14913,8 +14949,12 @@ cover_rows = 0
 missing_rows = 0
 assertion_status_rows = 0
 cover_status_rows = 0
+assertion_reason_rows = 0
+cover_reason_rows = 0
 assertion_non_allowlisted_rows = 0
 cover_non_allowlisted_rows = 0
+assertion_reason_non_allowlisted_rows = 0
+cover_reason_non_allowlisted_rows = 0
 projected_rows = 0
 projected_non_allowlisted_rows = 0
 projected_assertion_rows = 0
@@ -14951,6 +14991,14 @@ if path.is_file():
           assertion_status_rows += 1
         elif kind == "cover_status":
           cover_status_rows += 1
+        elif kind == "assertion_reason":
+          assertion_reason_rows += 1
+          if not is_allowlisted:
+            assertion_reason_non_allowlisted_rows += 1
+        elif kind == "cover_reason":
+          cover_reason_rows += 1
+          if not is_allowlisted:
+            cover_reason_non_allowlisted_rows += 1
         if is_projected:
           projected_rows += 1
           if not is_allowlisted:
@@ -14960,7 +15008,9 @@ if path.is_file():
 print(
     f"{total}\t{allowlisted}\t{assertion_rows}\t{cover_rows}\t{missing_rows}\t"
     f"{assertion_status_rows}\t{cover_status_rows}\t"
+    f"{assertion_reason_rows}\t{cover_reason_rows}\t"
     f"{assertion_non_allowlisted_rows}\t{cover_non_allowlisted_rows}\t"
+    f"{assertion_reason_non_allowlisted_rows}\t{cover_reason_non_allowlisted_rows}\t"
     f"{projected_rows}\t{projected_non_allowlisted_rows}\t"
     f"{projected_assertion_rows}\t{projected_cover_rows}"
 )
@@ -14970,7 +15020,9 @@ PY
       parity_total_rows parity_allowlisted_rows \
       parity_assertion_rows parity_cover_rows parity_missing_rows \
       parity_assertion_status_rows parity_cover_status_rows \
+      parity_assertion_reason_rows parity_cover_reason_rows \
       parity_assertion_non_allowlisted_rows parity_cover_non_allowlisted_rows \
+      parity_assertion_reason_non_allowlisted_rows parity_cover_reason_non_allowlisted_rows \
       parity_projected_rows parity_projected_non_allowlisted_rows \
       parity_projected_assertion_rows parity_projected_cover_rows <<< "$parity_counts"
   fi
@@ -14991,7 +15043,7 @@ PY
   else
     error=1
   fi
-  local summary="total=1 pass=${pass} fail=0 xfail=0 xpass=0 error=${error} skip=0 fpv_objective_parity_rows=${parity_total_rows} fpv_objective_parity_non_allowlisted_rows=${parity_non_allowlisted_rows} fpv_objective_parity_allowlisted_rows=${parity_allowlisted_rows} fpv_objective_parity_assertion_rows=${parity_assertion_rows} fpv_objective_parity_cover_rows=${parity_cover_rows} fpv_objective_parity_missing_rows=${parity_missing_rows} fpv_objective_parity_assertion_status_rows=${parity_assertion_status_rows} fpv_objective_parity_cover_status_rows=${parity_cover_status_rows} fpv_objective_parity_assertion_non_allowlisted_rows=${parity_assertion_non_allowlisted_rows} fpv_objective_parity_cover_non_allowlisted_rows=${parity_cover_non_allowlisted_rows} fpv_objective_parity_projected_rows=${parity_projected_rows} fpv_objective_parity_projected_non_allowlisted_rows=${parity_projected_non_allowlisted_rows} fpv_objective_parity_projected_assertion_rows=${parity_projected_assertion_rows} fpv_objective_parity_projected_cover_rows=${parity_projected_cover_rows}"
+  local summary="total=1 pass=${pass} fail=0 xfail=0 xpass=0 error=${error} skip=0 fpv_objective_parity_rows=${parity_total_rows} fpv_objective_parity_non_allowlisted_rows=${parity_non_allowlisted_rows} fpv_objective_parity_allowlisted_rows=${parity_allowlisted_rows} fpv_objective_parity_assertion_rows=${parity_assertion_rows} fpv_objective_parity_cover_rows=${parity_cover_rows} fpv_objective_parity_missing_rows=${parity_missing_rows} fpv_objective_parity_assertion_status_rows=${parity_assertion_status_rows} fpv_objective_parity_cover_status_rows=${parity_cover_status_rows} fpv_objective_parity_assertion_reason_rows=${parity_assertion_reason_rows} fpv_objective_parity_cover_reason_rows=${parity_cover_reason_rows} fpv_objective_parity_assertion_non_allowlisted_rows=${parity_assertion_non_allowlisted_rows} fpv_objective_parity_cover_non_allowlisted_rows=${parity_cover_non_allowlisted_rows} fpv_objective_parity_assertion_reason_non_allowlisted_rows=${parity_assertion_reason_non_allowlisted_rows} fpv_objective_parity_cover_reason_non_allowlisted_rows=${parity_cover_reason_non_allowlisted_rows} fpv_objective_parity_projected_rows=${parity_projected_rows} fpv_objective_parity_projected_non_allowlisted_rows=${parity_projected_non_allowlisted_rows} fpv_objective_parity_projected_assertion_rows=${parity_projected_assertion_rows} fpv_objective_parity_projected_cover_rows=${parity_projected_cover_rows}"
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
 }
 

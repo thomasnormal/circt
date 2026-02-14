@@ -1,0 +1,15 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'PROVEN\tfoo_fpv::foo_tb\t/tmp/foo.sv\ta0000\tline_10\tUNSAT\tprojected_case_eq\n' > %t/bmc-assertions.tsv
+// RUN: printf 'PROVEN\tfoo_fpv::foo_tb\t/tmp/foo.sv\ta0000\tline_10\tEQ\tprojected_case_unknown\n' > %t/lec-assertions.tsv
+// RUN: python3 %S/../../utils/check_opentitan_fpv_objective_parity.py --bmc-assertion-results %t/bmc-assertions.tsv --lec-assertion-results %t/lec-assertions.tsv --out-parity-tsv %t/parity-ignore.tsv 2>&1 | FileCheck %s --check-prefix=LOG-IGNORE
+// RUN: FileCheck %s --check-prefix=PARITY-IGNORE < %t/parity-ignore.tsv
+// RUN: not python3 %S/../../utils/check_opentitan_fpv_objective_parity.py --bmc-assertion-results %t/bmc-assertions.tsv --lec-assertion-results %t/lec-assertions.tsv --reason-policy projected --out-parity-tsv %t/parity-projected.tsv --fail-on-mismatch 2>&1 | FileCheck %s --check-prefix=LOG-PROJECTED
+// RUN: FileCheck %s --check-prefix=PARITY-PROJECTED < %t/parity-projected.tsv
+//
+// LOG-IGNORE: opentitan fpv objective parity check passed
+// PARITY-IGNORE: objective_id{{[[:space:]]+}}objective_class{{[[:space:]]+}}target_name{{[[:space:]]+}}case_id{{[[:space:]]+}}objective_key{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}bmc_case_path{{[[:space:]]+}}lec_case_path{{[[:space:]]+}}bmc_evidence{{[[:space:]]+}}lec_evidence{{[[:space:]]+}}bmc_reason{{[[:space:]]+}}lec_reason{{[[:space:]]+}}allowlisted
+// LOG-PROJECTED: opentitan fpv objective parity mismatches detected
+// LOG-PROJECTED: assertion::foo_fpv::foo_tb::a0000:assertion_reason
+// PARITY-PROJECTED: objective_id{{[[:space:]]+}}objective_class{{[[:space:]]+}}target_name{{[[:space:]]+}}case_id{{[[:space:]]+}}objective_key{{[[:space:]]+}}kind{{[[:space:]]+}}bmc{{[[:space:]]+}}lec{{[[:space:]]+}}bmc_case_path{{[[:space:]]+}}lec_case_path{{[[:space:]]+}}bmc_evidence{{[[:space:]]+}}lec_evidence{{[[:space:]]+}}bmc_reason{{[[:space:]]+}}lec_reason{{[[:space:]]+}}allowlisted
+// PARITY-PROJECTED: assertion::foo_fpv::foo_tb::a0000{{[[:space:]]+}}assertion{{[[:space:]]+}}foo_fpv{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}foo_fpv::foo_tb::a0000{{[[:space:]]+}}assertion_reason{{[[:space:]]+}}projected_case_eq{{[[:space:]]+}}projected_case_unknown{{[[:space:]]+}}/tmp/foo.sv{{[[:space:]]+}}/tmp/foo.sv{{[[:space:]]+}}UNSAT{{[[:space:]]+}}EQ{{[[:space:]]+}}projected_case_eq{{[[:space:]]+}}projected_case_unknown{{[[:space:]]+}}0

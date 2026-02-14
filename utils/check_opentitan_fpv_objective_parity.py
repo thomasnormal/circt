@@ -43,6 +43,7 @@ COVER_STATUS_MAP = {
 }
 
 MISSING_POLICY_VALUES = ("ignore", "assertion", "all")
+REASON_POLICY_VALUES = ("ignore", "projected", "all")
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,16 @@ def parse_args() -> argparse.Namespace:
             "Policy for objectives present in one lane and missing in the other: "
             "ignore (default), assertion (assertion objectives only), all "
             "(assertion+cover objectives)."
+        ),
+    )
+    parser.add_argument(
+        "--reason-policy",
+        choices=REASON_POLICY_VALUES,
+        default="ignore",
+        help=(
+            "Reason drift policy for shared objectives with matching status: "
+            "ignore (default), projected (only compare projected_case_* "
+            "reasons), all (compare all non-empty reason tokens)."
         ),
     )
     return parser.parse_args()
@@ -291,6 +302,33 @@ def missing_policy_for_args(args: argparse.Namespace) -> str:
     return policy
 
 
+def normalize_reason_token(reason: str) -> str:
+    return reason.strip().lower()
+
+
+def is_projected_reason(reason: str) -> bool:
+    return normalize_reason_token(reason).startswith("projected_case_")
+
+
+def should_compare_reason(reason_policy: str, bmc_reason: str, lec_reason: str) -> bool:
+    if reason_policy == "ignore":
+        return False
+    if reason_policy == "all":
+        return bool(normalize_reason_token(bmc_reason) or normalize_reason_token(lec_reason))
+    return is_projected_reason(bmc_reason) or is_projected_reason(lec_reason)
+
+
+def normalize_reason_for_policy(reason_policy: str, reason: str) -> str:
+    token = normalize_reason_token(reason)
+    if reason_policy == "ignore":
+        return ""
+    if reason_policy == "all":
+        return token
+    if token.startswith("projected_case_"):
+        return token
+    return ""
+
+
 def main() -> None:
     args = parse_args()
     bmc_assertion_path = Path(args.bmc_assertion_results).resolve()
@@ -298,6 +336,7 @@ def main() -> None:
     bmc_cover_path = Path(args.bmc_cover_results).resolve() if args.bmc_cover_results else None
     lec_cover_path = Path(args.lec_cover_results).resolve() if args.lec_cover_results else None
     missing_policy = missing_policy_for_args(args)
+    reason_policy = args.reason_policy
 
     if not bmc_assertion_path.is_file():
         fail(f"OpenTitan FPV BMC assertion-results file not found: {bmc_assertion_path}")
@@ -394,6 +433,11 @@ def main() -> None:
             return "cover_status"
         return "assertion_status"
 
+    def reason_mismatch_kind(entry: ObjectiveEntry) -> str:
+        if entry.objective_class == "cover":
+            return "cover_reason"
+        return "assertion_reason"
+
     bmc_ids = set(bmc.keys())
     lec_ids = set(lec.keys())
 
@@ -432,6 +476,23 @@ def main() -> None:
                 mismatch_kind(bmc_entry),
                 bmc_entry.status,
                 lec_entry.status,
+                lec_entry.case_path,
+                bmc_evidence=bmc_entry.evidence,
+                lec_evidence=lec_entry.evidence,
+                bmc_reason=bmc_entry.reason,
+                lec_reason=lec_entry.reason,
+            )
+            continue
+        if not should_compare_reason(reason_policy, bmc_entry.reason, lec_entry.reason):
+            continue
+        bmc_reason_cmp = normalize_reason_for_policy(reason_policy, bmc_entry.reason)
+        lec_reason_cmp = normalize_reason_for_policy(reason_policy, lec_entry.reason)
+        if bmc_reason_cmp != lec_reason_cmp:
+            add_row(
+                bmc_entry,
+                reason_mismatch_kind(bmc_entry),
+                bmc_reason_cmp,
+                lec_reason_cmp,
                 lec_entry.case_path,
                 bmc_evidence=bmc_entry.evidence,
                 lec_evidence=lec_entry.evidence,
