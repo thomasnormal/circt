@@ -152,6 +152,13 @@ def parse_bmc_result(text: str) -> str | None:
     return match.group(1)
 
 
+def parse_assertion_status(text: str) -> str | None:
+    match = re.search(r"BMC_ASSERTION_STATUS=(PROVEN|FAILING|VACUOUS|UNKNOWN)", text)
+    if not match:
+        return None
+    return match.group(1)
+
+
 def collect_candidate_assertion_sites(lines: list[str]) -> list[AssertionSite]:
     sites: list[AssertionSite] = []
     for idx, line in enumerate(lines):
@@ -1152,8 +1159,61 @@ def main() -> int:
                                 combined = (
                                     assertion_log.read_text() + "\n" + assertion_out.read_text()
                                 )
+                                assertion_tag = parse_assertion_status(combined)
                                 bmc_tag = parse_bmc_result(combined)
-                                if bmc_tag == "UNSAT":
+                                if assertion_tag == "VACUOUS":
+                                    assertion_result_rows.append(
+                                        (
+                                            "VACUOUS",
+                                            case.case_id,
+                                            case_path,
+                                            assertion_id,
+                                            assertion_label,
+                                            "UNSAT",
+                                            "vacuous",
+                                        )
+                                    )
+                                    assertion_statuses.append(("VACUOUS", "vacuous"))
+                                elif assertion_tag == "PROVEN":
+                                    assertion_result_rows.append(
+                                        (
+                                            "PROVEN",
+                                            case.case_id,
+                                            case_path,
+                                            assertion_id,
+                                            assertion_label,
+                                            "UNSAT",
+                                            "unsat",
+                                        )
+                                    )
+                                    assertion_statuses.append(("PROVEN", "unsat"))
+                                elif assertion_tag == "FAILING":
+                                    assertion_result_rows.append(
+                                        (
+                                            "FAILING",
+                                            case.case_id,
+                                            case_path,
+                                            assertion_id,
+                                            assertion_label,
+                                            "SAT",
+                                            "sat",
+                                        )
+                                    )
+                                    assertion_statuses.append(("FAILING", "sat"))
+                                elif assertion_tag == "UNKNOWN":
+                                    assertion_result_rows.append(
+                                        (
+                                            "UNKNOWN",
+                                            case.case_id,
+                                            case_path,
+                                            assertion_id,
+                                            assertion_label,
+                                            "UNKNOWN",
+                                            "unknown",
+                                        )
+                                    )
+                                    assertion_statuses.append(("UNKNOWN", "unknown"))
+                                elif bmc_tag == "UNSAT":
                                     assertion_result_rows.append(
                                         (
                                             "PROVEN",
