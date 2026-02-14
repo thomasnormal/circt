@@ -44,6 +44,9 @@ Options:
   --baseline-file FILE     Baseline summary TSV for drift checks/updates
   --update-baseline        Write current summary.tsv to --baseline-file
   --fail-on-diff           Fail on metric regression vs --baseline-file
+  --require-policy-fingerprint-baseline
+                           Require baseline rows to include policy_fingerprint
+                           when evaluating --fail-on-diff
   --drift-allowlist-file FILE
                            Optional allowlist for drift regressions (requires
                            --fail-on-diff). Non-empty, non-comment lines are
@@ -93,6 +96,7 @@ MAX_ERRORS=""
 BASELINE_FILE=""
 UPDATE_BASELINE=0
 FAIL_ON_DIFF=0
+REQUIRE_POLICY_FINGERPRINT_BASELINE=0
 DRIFT_ALLOWLIST_FILE=""
 FAIL_ON_UNUSED_DRIFT_ALLOWLIST=0
 DRIFT_ALLOWLIST_UNUSED_FILE=""
@@ -515,6 +519,7 @@ evaluate_summary_drift() {
   local baseline_file="$1"
   local summary_file="$2"
   local drift_file="$3"
+  local require_policy_fingerprint_baseline="${4:-0}"
   local regressions=0
 
   printf 'example\tmetric\tbaseline\tcurrent\toutcome\tdetail\n' > "$drift_file"
@@ -604,7 +609,13 @@ evaluate_summary_drift() {
         append_drift_row "$drift_file" "$example" "policy_fingerprint" "$_bpolicy" "$policy_fingerprint" "ok" ""
       fi
     else
-      append_drift_row "$drift_file" "$example" "policy_fingerprint" "-" "${policy_fingerprint:-missing}" "ok" "baseline_missing_policy_fingerprint"
+      if [[ "$require_policy_fingerprint_baseline" -eq 1 ]]; then
+        if ! append_drift_candidate "$drift_file" "$example" "policy_fingerprint" "-" "${policy_fingerprint:-missing}" "baseline_missing_policy_fingerprint"; then
+          regressions=$((regressions + 1))
+        fi
+      else
+        append_drift_row "$drift_file" "$example" "policy_fingerprint" "-" "${policy_fingerprint:-missing}" "ok" "baseline_missing_policy_fingerprint"
+      fi
     fi
   done < "$summary_file"
 
@@ -708,6 +719,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_DIFF=1
       shift
       ;;
+    --require-policy-fingerprint-baseline)
+      REQUIRE_POLICY_FINGERPRINT_BASELINE=1
+      shift
+      ;;
     --drift-allowlist-file)
       DRIFT_ALLOWLIST_FILE="$2"
       shift 2
@@ -782,6 +797,10 @@ if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
 fi
 if [[ "$UPDATE_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -eq 1 ]]; then
   echo "Use either --update-baseline or --fail-on-diff, not both." >&2
+  exit 1
+fi
+if [[ "$REQUIRE_POLICY_FINGERPRINT_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -ne 1 ]]; then
+  echo "--require-policy-fingerprint-baseline requires --fail-on-diff" >&2
   exit 1
 fi
 if [[ -n "$DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_DIFF" -ne 1 ]]; then
@@ -1090,7 +1109,7 @@ done
 
 if [[ "$FAIL_ON_DIFF" -eq 1 ]]; then
   DRIFT_FILE="${OUT_DIR}/drift.tsv"
-  if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE"; then
+  if ! evaluate_summary_drift "$BASELINE_FILE" "$SUMMARY_FILE" "$DRIFT_FILE" "$REQUIRE_POLICY_FINGERPRINT_BASELINE"; then
     overall_rc=1
     echo "Baseline drift failure: see $DRIFT_FILE" >&2
   fi

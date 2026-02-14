@@ -1,0 +1,21 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt %t/bin
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --work-dir) work_dir="$2"; shift 2 ;;\n    --work-dir=*) work_dir="${1#*=}"; shift ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t2\\nrelevant_mutants\\t4\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+// RUN: printf 'example\tstatus\texit_code\tdetected\trelevant\tcoverage_percent\terrors\nbitcnt\tPASS\t0\t2\t4\t50.00\t0\n' > %t/baseline.tsv
+
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --smoke \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --baseline-file %t/baseline.tsv \
+// RUN:   --fail-on-diff \
+// RUN:   --require-policy-fingerprint-baseline \
+// RUN:   --out-dir %t/out 2>&1 | FileCheck %s --check-prefix=ERR
+
+// RUN: FileCheck %s --check-prefix=DRIFT < %t/out/drift.tsv
+
+// ERR: Baseline drift failure: see
+
+// DRIFT: bitcnt{{[[:space:]]}}policy_fingerprint{{[[:space:]]}}-{{[[:space:]]}}{{[0-9a-f]+}}{{[[:space:]]}}regression{{[[:space:]]}}baseline_missing_policy_fingerprint
