@@ -42,6 +42,10 @@ Options:
   --yosys PATH             yosys binary (default: yosys)
   --mutations-backend MODE  Mutation generation backend in non-smoke mode:
                            yosys|native (default: yosys)
+  --native-tests-mode MODE   Test harness mode when using native backend:
+                           synthetic|real (default: synthetic)
+  --mutations-backend MODE  Mutation generation backend in non-smoke mode:
+                           yosys|native (default: yosys)
   --generate-count N       Mutations to generate in non-smoke mode (default: 32)
   --mutations-seed N       Seed used with --generate-mutations (default: 1)
   --mutations-modes CSV    Comma-separated mutate modes for auto-generation
@@ -323,6 +327,7 @@ OUT_DIR="${PWD}/mutation-mcy-examples-results"
 CIRCT_MUT=""
 YOSYS_BIN="${YOSYS:-yosys}"
 MUTATIONS_BACKEND="yosys"
+NATIVE_TESTS_MODE="synthetic"
 JOBS=1
 EXAMPLE_TIMEOUT_SEC=0
 EXAMPLE_RETRIES=0
@@ -2609,6 +2614,36 @@ EOS
   tests_manifest="${helper_dir}/tests.tsv"
   printf 'smoke\tbash %s\tresult.txt\t^DETECTED$\t^SURVIVED$\n' "$fake_test_script" > "$tests_manifest"
 
+  if [[ "$SMOKE" -ne 1 && "$MUTATIONS_BACKEND" == "native" && "$NATIVE_TESTS_MODE" == "real" ]]; then
+    case "$example_id" in
+      bitcnt)
+        real_test_script="${helper_dir}/real_bitcnt_test.sh"
+        cp "$(dirname "$design")/bitcnt_tb.v" "${helper_dir}/bitcnt_tb.v"
+        cat > "$real_test_script" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+mutant_path="${1:-../mutant.v}"
+helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+iverilog_bin="${IVERILOG:-iverilog}"
+vvp_bin="${VVP:-vvp}"
+"$iverilog_bin" -g2012 -o sim "${helper_dir}/bitcnt_tb.v" "$mutant_path"
+"$vvp_bin" -n sim > sim.out
+if grep -q 'ERROR' sim.out; then
+  echo DETECTED > result.txt
+else
+  echo SURVIVED > result.txt
+fi
+EOS
+        chmod +x "$real_test_script"
+        printf 'sim_real	bash %s ../mutant.v	result.txt	^DETECTED$	^SURVIVED$
+' "$real_test_script" > "$tests_manifest"
+        ;;
+      *)
+        echo "warning: native real tests not configured for ${example_id}; falling back to synthetic harness" >&2
+        ;;
+    esac
+  fi
+
   cmd=(
     "$CIRCT_MUT_RESOLVED" cover
     --design "$design"
@@ -2791,6 +2826,7 @@ EOS
       cmd+=(
         --mutations-file "$mutations_file"
         --create-mutated-script "$native_create_mutated"
+        --mutant-format v
       )
     fi
   fi
@@ -2976,6 +3012,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --mutations-backend)
       MUTATIONS_BACKEND="$2"
+      shift 2
+      ;;
+    --native-tests-mode)
+      NATIVE_TESTS_MODE="$2"
       shift 2
       ;;
     --generate-count)
@@ -3360,6 +3400,10 @@ if ! is_pos_int "$MUTATION_LIMIT"; then
 fi
 if [[ "$MUTATIONS_BACKEND" != "yosys" && "$MUTATIONS_BACKEND" != "native" ]]; then
   echo "--mutations-backend must be one of: yosys|native" >&2
+  exit 1
+fi
+if [[ "$NATIVE_TESTS_MODE" != "synthetic" && "$NATIVE_TESTS_MODE" != "real" ]]; then
+  echo "--native-tests-mode must be one of: synthetic|real" >&2
   exit 1
 fi
 if ! is_nonneg_int "$MIN_DETECTED"; then
