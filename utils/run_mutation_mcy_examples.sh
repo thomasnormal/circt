@@ -540,9 +540,30 @@ evaluate_summary_drift() {
   local _coverage=""
   local _errors=""
   local _policy=""
+  local baseline_row=""
   local -A summary_examples_seen=()
+  local -A baseline_rows=()
+  local -A baseline_duplicate_seen=()
+  local -a baseline_order=()
+  local -a baseline_duplicate_examples=()
 
   printf 'example\tmetric\tbaseline\tcurrent\toutcome\tdetail\n' > "$drift_file"
+
+  while IFS=$'\t' read -r baseline_example _status _exit _detected _relevant _coverage _errors _policy; do
+    [[ "$baseline_example" == "example" ]] && continue
+    if [[ -z "$baseline_example" ]]; then
+      continue
+    fi
+    if [[ -n "${baseline_rows[$baseline_example]+x}" ]]; then
+      if [[ -z "${baseline_duplicate_seen[$baseline_example]+x}" ]]; then
+        baseline_duplicate_seen["$baseline_example"]=1
+        baseline_duplicate_examples+=("$baseline_example")
+      fi
+      continue
+    fi
+    baseline_rows["$baseline_example"]="$baseline_example"$'\t'"${_status}"$'\t'"${_exit}"$'\t'"${_detected}"$'\t'"${_relevant}"$'\t'"${_coverage}"$'\t'"${_errors}"$'\t'"${_policy}"
+    baseline_order+=("$baseline_example")
+  done < "$baseline_file"
 
   while IFS=$'\t' read -r example status exit_code detected relevant coverage errors policy_fingerprint; do
     [[ "$example" == "example" ]] && continue
@@ -559,8 +580,7 @@ evaluate_summary_drift() {
     local coverage_num
     coverage_num="$(normalize_decimal_or_zero "$coverage")"
 
-    local baseline_row
-    baseline_row="$(lookup_baseline_row "$baseline_file" "$example")"
+    baseline_row="${baseline_rows[$example]-}"
     if [[ -z "$baseline_row" ]]; then
       if ! append_drift_candidate "$drift_file" "$example" "row" "present" "missing" "missing_baseline_row"; then
         regressions=$((regressions + 1))
@@ -642,18 +662,20 @@ evaluate_summary_drift() {
   done < "$summary_file"
 
   if [[ "$require_baseline_example_parity" -eq 1 ]]; then
-    while IFS=$'\t' read -r baseline_example _status _exit _detected _relevant _coverage _errors _policy; do
-      [[ "$baseline_example" == "example" ]] && continue
-      if [[ -z "$baseline_example" ]]; then
-        continue
-      fi
+    for baseline_example in "${baseline_order[@]}"; do
       if [[ -z "${summary_examples_seen[$baseline_example]+x}" ]]; then
         if ! append_drift_candidate "$drift_file" "$baseline_example" "row" "present" "missing" "missing_current_row"; then
           regressions=$((regressions + 1))
         fi
       fi
-    done < "$baseline_file"
+    done
   fi
+
+  for baseline_example in "${baseline_duplicate_examples[@]}"; do
+    if ! append_drift_candidate "$drift_file" "$baseline_example" "row" "single_row" "duplicate_rows" "duplicate_baseline_row"; then
+      regressions=$((regressions + 1))
+    fi
+  done
 
   if [[ "$regressions" -gt 0 ]]; then
     return 1
