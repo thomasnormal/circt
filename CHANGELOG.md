@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1362 - February 14, 2026
+
+### Mutation Workflow: Retry-Reason Schema Artifact Governance
+
+1. Completed retry-reason schema-governance plumbing in
+   `utils/run_mutation_mcy_examples.sh`:
+   - emits sidecars for current retry-reason summary artifacts:
+     - `<out-dir>/retry-reason-summary.schema-version`
+     - `<out-dir>/retry-reason-summary.schema-contract`
+   - infers fallback schema metadata from retry-reason TSV headers when
+     sidecars are absent.
+2. Extended retry-reason drift checks (`--fail-on-retry-reason-diff`) to
+   enforce baseline parity for:
+   - `retry_reason_schema_version`
+   - `retry_reason_schema_contract`
+   - emits explicit drift regressions on mismatch.
+3. Extended baseline update path (`--update-baseline`) to also persist
+   retry-reason schema sidecars alongside the retry-reason baseline TSV.
+4. Added/updated focused regressions:
+   - added:
+     - `test/Tools/run-mutation-mcy-examples-retry-reason-schema-version-mismatch-fail.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-baseline-update.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-mutation-mcy-examples-baseline-update.test build-test/test/Tools/run-mutation-mcy-examples-retry-reason-schema-version-mismatch-fail.test` PASS (2/2)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (90 selected)
+
+
 ## Iteration 1361 - February 14, 2026
 
 ### Mutation Workflow: Percent-Based Retry-Reason Drift Tolerances
