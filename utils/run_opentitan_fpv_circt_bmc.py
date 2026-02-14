@@ -449,6 +449,22 @@ def parse_args() -> argparse.Namespace:
         help="Optional regex filter over compile-contract target names",
     )
     parser.add_argument(
+        "--target-shard-count",
+        default=os.environ.get("BMC_TARGET_SHARD_COUNT", "1"),
+        help=(
+            "Optional number of deterministic target shards "
+            "(default: env BMC_TARGET_SHARD_COUNT or 1)."
+        ),
+    )
+    parser.add_argument(
+        "--target-shard-index",
+        default=os.environ.get("BMC_TARGET_SHARD_INDEX", "0"),
+        help=(
+            "Optional deterministic shard index in [0, target-shard-count) "
+            "(default: env BMC_TARGET_SHARD_INDEX or 0)."
+        ),
+    )
+    parser.add_argument(
         "--workdir",
         default="",
         help="Optional work directory (default: temp directory).",
@@ -575,6 +591,53 @@ def main() -> int:
     if not selected:
         print("No OpenTitan FPV compile-contract targets selected.", file=sys.stderr)
         return 1
+
+    target_shard_count = parse_nonnegative_int(
+        args.target_shard_count, "--target-shard-count"
+    )
+    if target_shard_count <= 0:
+        fail(
+            "invalid --target-shard-count: "
+            f"{args.target_shard_count} (expected >= 1)"
+        )
+    target_shard_index = parse_nonnegative_int(
+        args.target_shard_index, "--target-shard-index"
+    )
+    if target_shard_index >= target_shard_count:
+        fail(
+            "invalid --target-shard-index: "
+            f"{target_shard_index} (expected < {target_shard_count})"
+        )
+
+    all_target_names = sorted({row.target_name for row in selected})
+    shard_target_names = {
+        name
+        for idx, name in enumerate(all_target_names)
+        if idx % target_shard_count == target_shard_index
+    }
+    selected = [row for row in selected if row.target_name in shard_target_names]
+    print(
+        "opentitan FPV BMC shard selection: "
+        f"shard={target_shard_index}/{target_shard_count} "
+        f"selected_targets={len(shard_target_names)} total_targets={len(all_target_names)}",
+        file=sys.stderr,
+    )
+    if not selected:
+        if args.results_file:
+            out_path = Path(args.results_file)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text("", encoding="utf-8")
+            print(f"results: {out_path}", flush=True)
+        if args.fpv_summary_file:
+            fpv_summary_path = Path(args.fpv_summary_file)
+            write_fpv_summary([], [], [], fpv_summary_path)
+            print(f"fpv summary: {fpv_summary_path}", flush=True)
+        print(
+            "opentitan FPV BMC summary: total=0 pass=0 fail=0 xfail=0 xpass=0 "
+            "error=0 skip=0",
+            flush=True,
+        )
+        return 0
 
     mode_label = os.environ.get("BMC_MODE_LABEL", "FPV_BMC").strip() or "FPV_BMC"
     bound = parse_nonnegative_int(os.environ.get("BOUND", "1"), "BOUND")
