@@ -1231,6 +1231,10 @@ Options:
                          Optional task-profile policy preset TSV for
                          per-target required/forbidden assertion status classes
                          (columns: task_profile,required_statuses,forbidden_statuses)
+  --opentitan-fpv-bmc-use-canonical-task-profile-presets
+                         Use repo-managed OpenTitan FPV BMC task-profile
+                         policy presets from:
+                         utils/opentitan_fpv_policy/task_profile_status_presets.tsv
   --opentitan-fpv-bmc-assertion-status-policy-violations-file FILE
                          Optional output TSV path for assertion status policy
                          violations (default:
@@ -2976,6 +2980,7 @@ OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ALLOWLIST_FILE=""
 OPENTITAN_FPV_BMC_ASSERTION_RESULTS_DRIFT_ROW_ALLOWLIST_FILE=""
 OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_FILE=""
 OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE=""
+OPENTITAN_FPV_BMC_USE_CANONICAL_TASK_PROFILE_PRESETS=0
 OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_VIOLATIONS_FILE=""
 OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_FILE=""
 OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_GROUPED_VIOLATIONS_BASELINE_FILE=""
@@ -3226,6 +3231,8 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file)
       OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-use-canonical-task-profile-presets)
+      OPENTITAN_FPV_BMC_USE_CANONICAL_TASK_PROFILE_PRESETS=1; shift ;;
     --opentitan-fpv-bmc-assertion-status-policy-violations-file)
       OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_VIOLATIONS_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-file)
@@ -3879,6 +3886,14 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$OPENTITAN_FPV_BMC_USE_CANONICAL_TASK_PROFILE_PRESETS" == "1" ]]; then
+  if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE" ]]; then
+    echo "--opentitan-fpv-bmc-use-canonical-task-profile-presets cannot be combined with --opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file" >&2
+    exit 1
+  fi
+  OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE="$SCRIPT_DIR/opentitan_fpv_policy/task_profile_status_presets.tsv"
+fi
 
 YOSYS_DIR_RAW="$YOSYS_DIR"
 normalize_yosys_sva_dir "$YOSYS_DIR"
@@ -4563,6 +4578,10 @@ if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_FILE" && "$WITH_OPENTITAN_F
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_TASK_PROFILE_PRESETS_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
   echo "--opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ "$OPENTITAN_FPV_BMC_USE_CANONICAL_TASK_PROFILE_PRESETS" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-use-canonical-task-profile-presets requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_STATUS_POLICY_VIOLATIONS_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then

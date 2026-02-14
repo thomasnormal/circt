@@ -164,6 +164,7 @@
 // CHECK: --fail-on-opentitan-fpv-bmc-assertion-results-drift
 // CHECK: --opentitan-fpv-bmc-assertion-status-policy-file
 // CHECK: --opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-file
+// CHECK: --opentitan-fpv-bmc-use-canonical-task-profile-presets
 // CHECK: --opentitan-fpv-bmc-assertion-status-policy-violations-file
 // CHECK: --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-file
 // CHECK: --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file
