@@ -149,11 +149,25 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      not yet materialized and governed as committed artifacts.
    - next practical gap is scaling the new workflow from harness-only policy
      controls to routinely updated, target-cohort baseline packs.
-15. Next formal milestone (OpenTitan-aligned, backend-generic):
-   - materialize and govern cohort baselines for canonical FPV policy packs:
-     - add curated baseline profiles for representative `ip`, `prim`, and
-       `sec_cm` target sets using the new checked-in workflow;
-     - add drift triage docs/playbook for baseline refresh vs allowlist usage.
+15. Cohort baseline-pack orchestration completed:
+   - added checked-in profile-pack definitions:
+     `utils/opentitan_fpv_policy/profile_packs.tsv`
+     - `prim_all`, `ip_all`, `sec_cm_all`
+   - added profile-pack orchestration runner:
+     `utils/run_opentitan_fpv_bmc_policy_profiles.sh`
+     - executes `update` / `check` workflow per pack
+     - supports profile filtering and forwards lane args
+   - workflow wrapper now supports per-pack baseline names via
+     `--baseline-prefix`, enabling independent baseline artifacts per cohort.
+   - added checked-in drift triage playbook:
+     `utils/opentitan_fpv_policy/DRIFT_TRIAGE.md`.
+16. Next formal milestone (OpenTitan-aligned, backend-generic):
+   - materialize reviewed baseline snapshots for the three canonical profile
+     packs from real OpenTitan runs and add strict check cadence:
+     - commit initial reviewed baseline artifacts for `prim_all`, `ip_all`,
+       and `sec_cm_all`;
+     - wire recurring profile-pack `check` invocation into formal cadence
+       workflows for early drift detection.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 

@@ -1,0 +1,4 @@
+profile_name	fpv_cfg	baseline_prefix	select_cfgs	target_filter	allow_unfiltered	max_targets	description
+prim_all	hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson	opentitan-fpv-bmc-prim			1	0	OpenTitan prim FPV cohort
+ip_all	hw/top_earlgrey/formal/top_earlgrey_fpv_ip_cfgs.hjson	opentitan-fpv-bmc-ip			1	0	OpenTitan IP FPV cohort
+sec_cm_all	hw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson	opentitan-fpv-bmc-sec-cm			1	0	OpenTitan sec_cm FPV cohort

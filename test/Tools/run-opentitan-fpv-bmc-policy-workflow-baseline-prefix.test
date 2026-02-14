@@ -1,0 +1,19 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/utils/opentitan_fpv_policy
+// RUN: cp %S/../../utils/run_opentitan_fpv_bmc_policy_workflow.sh %t/utils/run_opentitan_fpv_bmc_policy_workflow.sh
+// RUN: cp %S/../../utils/opentitan_fpv_policy/task_profile_status_presets.tsv %t/utils/opentitan_fpv_policy/task_profile_status_presets.tsv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: \"${ARG_LOG:?}\"\n: > \"$ARG_LOG\"\nfor arg in \"$@\"; do\n  echo \"$arg\" >> \"$ARG_LOG\"\ndone\n' > %t/utils/fake-run-formal-all.sh
+// RUN: chmod +x %t/utils/run_opentitan_fpv_bmc_policy_workflow.sh %t/utils/fake-run-formal-all.sh
+// RUN: ARG_LOG=%t/update.args %t/utils/run_opentitan_fpv_bmc_policy_workflow.sh --run-formal-all %t/utils/fake-run-formal-all.sh --baseline-prefix opentitan-fpv-bmc-sec-cm update --out-dir %t/out-update --opentitan-fpv-cfg %t/cfg.hjson --select-cfgs foo_fpv
+// RUN: FileCheck %s --check-prefix=PREFIX < %t/update.args
+// RUN: not sh -c '%t/utils/run_opentitan_fpv_bmc_policy_workflow.sh --run-formal-all %t/utils/fake-run-formal-all.sh --baseline-prefix bad/name update --out-dir %t/out-update --opentitan-fpv-cfg %t/cfg.hjson --select-cfgs foo_fpv > %t/err.txt 2>&1'
+// RUN: FileCheck %s --check-prefix=ERR < %t/err.txt
+//
+// PREFIX: --opentitan-fpv-bmc-summary-baseline-file
+// PREFIX-NEXT: {{.*/}}utils/opentitan_fpv_policy/baselines/opentitan-fpv-bmc-sec-cm-fpv-summary-baseline.tsv
+// PREFIX: --opentitan-fpv-bmc-assertion-results-baseline-file
+// PREFIX-NEXT: {{.*/}}utils/opentitan_fpv_policy/baselines/opentitan-fpv-bmc-sec-cm-assertion-results-baseline.tsv
+// PREFIX: --opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline-file
+// PREFIX-NEXT: {{.*/}}utils/opentitan_fpv_policy/baselines/opentitan-fpv-bmc-sec-cm-assertion-status-policy-grouped-violations-baseline.tsv
+//
+// ERR: invalid --baseline-prefix: bad/name (expected [A-Za-z0-9._-]+)

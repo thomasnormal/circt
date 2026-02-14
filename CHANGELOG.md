@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1397 - February 14, 2026
+
+### OpenTitan FPV BMC: Cohort Profile-Pack Baseline Orchestration
+
+1. Extended `utils/run_opentitan_fpv_bmc_policy_workflow.sh` with per-pack
+   baseline naming support:
+   - new option: `--baseline-prefix`
+   - baseline artifacts now resolve to:
+     - `<prefix>-fpv-summary-baseline.tsv`
+     - `<prefix>-assertion-results-baseline.tsv`
+     - `<prefix>-assertion-status-policy-grouped-violations-baseline.tsv`
+2. Added checked-in OpenTitan FPV BMC profile-pack definitions:
+   - `utils/opentitan_fpv_policy/profile_packs.tsv`
+   - canonical cohorts:
+     - `prim_all`
+     - `ip_all`
+     - `sec_cm_all`
+3. Added profile-pack orchestration runner:
+   - `utils/run_opentitan_fpv_bmc_policy_profiles.sh`
+   - supports:
+     - `update` / `check` execution per pack
+     - profile filtering (`--profile`)
+     - workflow forwarding controls (`--workflow-baseline-dir`,
+       `--workflow-presets-file`, `--no-strict-gate`)
+     - pack-level target selection controls from TSV
+       (`select_cfgs`, `target_filter`, `allow_unfiltered`, `max_targets`).
+4. Added policy drift triage playbook:
+   - `utils/opentitan_fpv_policy/DRIFT_TRIAGE.md`
+5. Added/updated regressions:
+   - `test/Tools/run-opentitan-fpv-bmc-policy-workflow-baseline-prefix.test`
+   - `test/Tools/run-opentitan-fpv-bmc-policy-profiles.test`
+   - updated:
+     - `test/Tools/run-opentitan-fpv-bmc-policy-workflow.test`
+
 ## Iteration 1396 - February 14, 2026
 
 ### OpenTitan FPV BMC: Canonical Policy Bundles + Baseline Workflow
