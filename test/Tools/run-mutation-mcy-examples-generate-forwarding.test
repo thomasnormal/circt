@@ -11,6 +11,11 @@
 // RUN:   --circt-mut %t/bin/circt-mut \
 // RUN:   --yosys %t/bin/yosys \
 // RUN:   --generate-count 7 \
+// RUN:   --mutations-seed 9 \
+// RUN:   --mutations-modes arith,control \
+// RUN:   --mutations-profiles fault-basic \
+// RUN:   --mutations-cfg weight_cover=5 \
+// RUN:   --mutations-select w:* \
 // RUN:   --mutation-limit 3 \
 // RUN:   --out-dir %t/out
 
@@ -26,3 +31,13 @@
 // ARGS: picorv32
 // ARGS: --mutations-yosys
 // ARGS: yosys
+// ARGS: --mutations-seed
+// ARGS: 9
+// ARGS: --mutations-modes
+// ARGS: arith,control
+// ARGS: --mutations-profiles
+// ARGS: fault-basic
+// ARGS: --mutations-cfg
+// ARGS: weight_cover=5
+// ARGS: --mutations-select
+// ARGS: w:*

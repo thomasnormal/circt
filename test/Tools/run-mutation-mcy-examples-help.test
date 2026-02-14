@@ -7,6 +7,13 @@
 // CHECK-DAG: --circt-mut
 // CHECK-DAG: --yosys
 // CHECK-DAG: --generate-count
+// CHECK-DAG: --mutations-seed
+// CHECK-DAG: --mutations-modes
+// CHECK-DAG: --mutations-mode-counts
+// CHECK-DAG: --mutations-mode-weights
+// CHECK-DAG: --mutations-profiles
+// CHECK-DAG: --mutations-cfg
+// CHECK-DAG: --mutations-select
 // CHECK-DAG: --mutation-limit
 // CHECK-DAG: --min-detected
 // CHECK-DAG: --min-coverage-percent
