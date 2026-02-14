@@ -47,6 +47,8 @@ Options:
   --strict-gate          Fail on new fail/error/xpass and pass-rate regression vs baseline
                          Also enables non-empty filtered-lane enforcement
                          (`--require-nonempty-filtered-lanes`) for selected lanes.
+                         Also enables launch-telemetry counter drift checks for
+                         `bmc_launch_*` and `lec_launch_*` metrics.
                          Also enables OpenTitan strict LEC X-prop key-prefix
                          drift checks (`xprop_diag_`, `xprop_status_`,
                          `xprop_result_`, `xprop_counter_`,
@@ -6243,6 +6245,8 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_TIMEOUT_DIAG_KEYS=1
   FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES=1
   FAIL_ON_NEW_LEC_DIAG_MISSING_CASES=1
+  FAIL_ON_NEW_BMC_COUNTER_PREFIXES+=("bmc_launch_")
+  FAIL_ON_NEW_LEC_COUNTER_PREFIXES+=("lec_launch_")
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1

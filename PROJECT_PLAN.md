@@ -288,6 +288,9 @@ verilator-verification, and yosys corpora).
          `yosys/tests/sva/BMC`
        - `lec_launch_*` in `sv-tests/LEC`,
          `verilator-verification/LEC`, and `yosys/tests/sva/LEC`.
+   - strict-gate launch-counter policy coupling is now enabled by default:
+     - `--strict-gate` auto-enables `--fail-on-new-bmc-counter-prefix bmc_launch_`
+       and `--fail-on-new-lec-counter-prefix lec_launch_`.
 5. Phase E execution lane is landed:
    - new connectivity adapter utility:
      - `utils/select_opentitan_connectivity_cfg.py`
@@ -442,7 +445,7 @@ verilator-verification, and yosys corpora).
 ### Remaining Formal Limitations (BMC/LEC/mutation focus)
 
 1. **FPV status derivation depth gap**: explicit assertion statuses (`PROVEN/FAILING/VACUOUS/UNKNOWN`) and cover-granular `covered/unreachable` evidence are now wired, but fully automatic vacuity/coverage derivation for targets that do not emit explicit status tags is still pending.
-2. **BMC/LEC operational robustness**: launcher retry/copy-fallback controls are now telemetry-visible in OpenTitan FPV and non-FPV formal lanes (`bmc_launch_*`, `lec_launch_*`), but strict-gate policy coupling for launch-event budgets is still pending.
+2. **BMC/LEC operational robustness**: launcher retry/copy-fallback controls are now telemetry-visible in OpenTitan FPV and non-FPV formal lanes (`bmc_launch_*`, `lec_launch_*`), and strict-gate now enforces launch-counter regression via prefix gates; remaining work is absolute-budget/nonzero policies with per-reason allowlisting for sustained multi-agent contention.
 3. **Frontend triage ergonomics**: sv-tests BMC now preserves frontend error logs via `KEEP_LOGS_DIR`, and launch retry is in place for transient launcher failures; host-side tool relink contention can still surface as launcher-level `Permission denied`/ETXTBSY noise until binaries stabilize.
 4. **Frontend scalability blocker on semantic closure buckets**: `sv-tests` UVM `16.11` (sequence-subroutine) and `16.13` (multiclock) currently hit frontend OOM in `circt-verilog` during import; this blocks clean semantic closure measurement for those buckets.
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.
@@ -458,7 +461,7 @@ verilator-verification, and yosys corpora).
 
 ### Next Long-Term Features (best long-term path)
 
-1. Extend launch-resilience policy beyond ETXTBSY (e.g., selected transient I/O launch races) with explicit strict-gate counters and per-reason retry telemetry.
+1. Add absolute launch-event budget policies (nonzero/threshold) for BMC/LEC launch counters with per-reason allowlisting, then extend retry classification beyond ETXTBSY (selected transient I/O launch races).
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
 4. Implement FPV cross-lane objective parity (BMC vs LEC) on normalized
