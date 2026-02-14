@@ -746,6 +746,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--fpv-summary-drift-row-allowlist-file",
+        default=os.environ.get("BMC_FPV_SUMMARY_DRIFT_ROW_ALLOWLIST_FILE", ""),
+        help=(
+            "Optional FPV-summary drift-row allowlist file. Match token format: "
+            "'<target_name>::<kind>' where kind is one of "
+            "missing_in_current,new_in_current,total_assertions,proven,failing,"
+            "vacuous,covered,unreachable,unknown,error,timeout,skipped."
+        ),
+    )
+    parser.add_argument(
         "--fail-on-fpv-summary-drift",
         action="store_true",
         default=os.environ.get("BMC_FAIL_ON_FPV_SUMMARY_DRIFT", "0") == "1",
@@ -1378,6 +1388,13 @@ def main() -> int:
                     allow_exact, allow_prefix, allow_regex = load_allowlist(
                         Path(args.fpv_summary_drift_allowlist_file).resolve()
                     )
+                row_allow_exact: set[str] = set()
+                row_allow_prefix: list[str] = []
+                row_allow_regex: list[re.Pattern[str]] = []
+                if args.fpv_summary_drift_row_allowlist_file:
+                    row_allow_exact, row_allow_prefix, row_allow_regex = load_allowlist(
+                        Path(args.fpv_summary_drift_row_allowlist_file).resolve()
+                    )
 
                 drift_rows: list[tuple[str, str, str, str]] = []
                 baseline_targets = set(baseline.keys())
@@ -1386,9 +1403,25 @@ def main() -> int:
                 for target in sorted(baseline_targets - current_targets):
                     if is_allowlisted(target, allow_exact, allow_prefix, allow_regex):
                         continue
+                    drift_token = f"{target}::missing_in_current"
+                    if is_allowlisted(
+                        drift_token,
+                        row_allow_exact,
+                        row_allow_prefix,
+                        row_allow_regex,
+                    ):
+                        continue
                     drift_rows.append((target, "missing_in_current", "present", "absent"))
                 for target in sorted(current_targets - baseline_targets):
                     if is_allowlisted(target, allow_exact, allow_prefix, allow_regex):
+                        continue
+                    drift_token = f"{target}::new_in_current"
+                    if is_allowlisted(
+                        drift_token,
+                        row_allow_exact,
+                        row_allow_prefix,
+                        row_allow_regex,
+                    ):
                         continue
                     drift_rows.append((target, "new_in_current", "absent", "present"))
 
@@ -1410,6 +1443,14 @@ def main() -> int:
                         ("skipped", b.skipped, c.skipped),
                     ]:
                         if before != after:
+                            drift_token = f"{target}::{kind}"
+                            if is_allowlisted(
+                                drift_token,
+                                row_allow_exact,
+                                row_allow_prefix,
+                                row_allow_regex,
+                            ):
+                                continue
                             drift_rows.append((target, kind, before, after))
 
                 if args.fpv_summary_drift_file:

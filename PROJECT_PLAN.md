@@ -97,13 +97,19 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      suppressions using `<case_id>::<assertion_id>::<kind>` tokens.
    - strict-gate/fail-mode semantics are enforced for row-level allowlists to
      prevent silent drift suppression outside governed runs.
-7. Remaining limitation vs Jasper/VCF-style mature flows:
+7. FPV-summary row-level drift allowlisting completed for OpenTitan FPV BMC:
+   - added row-granularity allowlist controls for assertion-summary drift
+     suppressions using `<target_name>::<kind>` tokens.
+   - enables precise vacuous/unreachable drift rollouts without target-wide
+     drift suppression.
+8. Remaining limitation vs Jasper/VCF-style mature flows:
    - per-assertion semantic status parity remains partial (especially vacuity/
      unreachable classification and richer task-level diagnostics).
-8. Next formal milestone (OpenTitan-aligned, backend-generic):
+9. Next formal milestone (OpenTitan-aligned, backend-generic):
    - advance per-assertion reporting parity:
-     - strengthen assertion-status drift governance and vacuity/unreachable
-       classification coverage across OpenTitan FPV targets.
+     - add explicit status-policy gates for required/forbidden assertion
+       classes per target cohort (vacuous/unreachable/covered) with strict
+       baseline governance.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 

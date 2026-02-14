@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1380 - February 14, 2026
+
+### OpenTitan FPV BMC: FPV-Summary Row-Level Drift Allowlist Governance
+
+1. Extended `utils/run_opentitan_fpv_circt_bmc.py` with row-level FPV-summary
+   drift allowlisting:
+   - `--fpv-summary-drift-row-allowlist-file`
+   - supports exact/prefix/regex tokens of the form
+     `<target_name>::<kind>`
+   - supported kinds:
+     `missing_in_current`, `new_in_current`, `total_assertions`, `proven`,
+     `failing`, `vacuous`, `covered`, `unreachable`, `unknown`, `error`,
+     `timeout`, `skipped`
+2. Extended `utils/run_formal_all.sh` with first-class forwarding and strict
+   validation for FPV-summary row-level allowlist controls:
+   - `--opentitan-fpv-bmc-summary-drift-row-allowlist-file`
+   - requires `--with-opentitan-fpv-bmc`
+   - requires `--fail-on-opentitan-fpv-bmc-summary-drift` or `--strict-gate`
+3. Added focused regressions:
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-row-allowlist-requires-gate.test`
+   - updated:
+     - `test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-forwarding.test`
+     - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-row-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-results-drift-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-results-drift-row-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-strict-gate-opentitan-fpv-bmc-assertion-results-drift-defaults.test` PASS (7/7)
+
 ## Iteration 1379 - February 14, 2026
 
 ### OpenTitan FPV BMC: Per-Assertion Row-Level Drift Allowlist Governance
