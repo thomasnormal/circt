@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1333 - February 14, 2026
+
+### Mutation Workflow: Safe Baseline Update Guard (Failure Refusal by Default)
+
+1. Hardened `utils/run_mutation_mcy_examples.sh` baseline update safety:
+   - `--update-baseline` now refuses to overwrite baseline artifacts when run exits failing.
+   - explicit override added:
+     - `--allow-update-baseline-on-failure`
+2. Added argument contract enforcement:
+   - `--allow-update-baseline-on-failure` requires `--update-baseline`.
+3. Baseline refusal path preserves failing exit status and emits explicit guidance.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-allow-update-baseline-on-failure-requires-update-baseline.test`
+   - `test/Tools/run-mutation-mcy-examples-update-baseline-refuse-on-failure.test`
+   - `test/Tools/run-mutation-mcy-examples-update-baseline-allow-on-failure.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (57/57)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-125232` PASS
+
 ## Iteration 1332 - February 14, 2026
 
 ### Mutation Workflow: Schema-Contract Fingerprint Baseline Governance
