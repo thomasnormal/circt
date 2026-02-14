@@ -76,6 +76,14 @@ Options:
                            across selected examples is below P
                            (0-100, default: disabled)
   --baseline-file FILE     Baseline summary TSV for drift checks/updates
+  --suite-baseline-history-file FILE
+                           Additional suite baseline summary TSV used to
+                           derive percentile suite baselines for
+                           --fail-on-diff (repeatable)
+  --suite-history-percentile P
+                           Percentile [0,100] used when deriving suite
+                           baselines from baseline+history files
+                           (default: 50)
   --update-baseline        Write current summary.tsv to --baseline-file
   --allow-update-baseline-on-failure
                            Allow --update-baseline even when run exits failing
@@ -317,6 +325,7 @@ MAX_TOTAL_RELEVANT_DROP_PERCENT="0"
 MAX_TOTAL_COVERAGE_DROP_PERCENT="0"
 MAX_TOTAL_ERRORS_INCREASE=0
 BASELINE_FILE=""
+SUITE_HISTORY_PERCENTILE="50"
 RETRY_REASON_BASELINE_FILE=""
 RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE=""
 RETRY_REASON_BASELINE_SCHEMA_VERSION_FILE_EXPLICIT=0
@@ -359,6 +368,7 @@ KEEP_WORK=0
 MUTATION_GENERATION_FLAGS_SEEN=0
 EXAMPLE_MANIFEST=""
 EXAMPLE_IDS=()
+SUITE_BASELINE_HISTORY_FILES=()
 declare -A EXAMPLE_TO_DESIGN=()
 declare -A EXAMPLE_TO_TOP=()
 declare -A EXAMPLE_TO_GENERATE_COUNT=()
@@ -619,6 +629,60 @@ percentage_ceiling_count() {
     }
     printf "%d", iv;
   }'
+}
+
+percentile_int_from_file() {
+  local file="$1"
+  local percentile="$2"
+  sort -n "$file" | awk -v p="$percentile" '
+    { a[++n] = $1 }
+    END {
+      if (n == 0) {
+        printf "0";
+        exit;
+      }
+      idx = int((p / 100.0) * (n - 1)) + 1;
+      if (idx < 1) idx = 1;
+      if (idx > n) idx = n;
+      printf "%d", int(a[idx] + 0.5);
+    }
+  '
+}
+
+percentile_decimal_from_file() {
+  local file="$1"
+  local percentile="$2"
+  sort -n "$file" | awk -v p="$percentile" '
+    { a[++n] = $1 }
+    END {
+      if (n == 0) {
+        printf "0.00";
+        exit;
+      }
+      idx = int((p / 100.0) * (n - 1)) + 1;
+      if (idx < 1) idx = 1;
+      if (idx > n) idx = n;
+      printf "%.2f", (a[idx] + 0.0);
+    }
+  '
+}
+
+compute_suite_totals_from_summary() {
+  local summary_file="$1"
+  awk -F '\t' '
+    NR == 1 { next }
+    {
+      example = $1;
+      if (example == "" || seen[example]++) next;
+      detected += ($4 + 0);
+      relevant += ($5 + 0);
+      errors += ($7 + 0);
+    }
+    END {
+      coverage = (relevant > 0) ? (100.0 * detected / relevant) : 0.0;
+      printf "%d\t%d\t%.2f\t%d\n", detected, relevant, coverage, errors;
+    }
+  ' "$summary_file"
 }
 
 resolve_tool() {
@@ -1859,6 +1923,39 @@ evaluate_summary_drift() {
     summary_total_coverage="$(awk -v d="$summary_total_detected" -v r="$summary_total_relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
   fi
 
+  if [[ ${#SUITE_BASELINE_HISTORY_FILES[@]} -gt 0 ]]; then
+    local history_detected_file history_relevant_file history_coverage_file history_errors_file
+    local history_file history_detected history_relevant history_coverage history_errors
+    history_detected_file="$(mktemp "${OUT_DIR}/suite-history-detected.XXXXXX")"
+    history_relevant_file="$(mktemp "${OUT_DIR}/suite-history-relevant.XXXXXX")"
+    history_coverage_file="$(mktemp "${OUT_DIR}/suite-history-coverage.XXXXXX")"
+    history_errors_file="$(mktemp "${OUT_DIR}/suite-history-errors.XXXXXX")"
+    printf '%s
+' "$baseline_total_detected" > "$history_detected_file"
+    printf '%s
+' "$baseline_total_relevant" > "$history_relevant_file"
+    printf '%s
+' "$baseline_total_coverage" > "$history_coverage_file"
+    printf '%s
+' "$baseline_total_errors" > "$history_errors_file"
+    for history_file in "${SUITE_BASELINE_HISTORY_FILES[@]}"; do
+      IFS=$'	' read -r history_detected history_relevant history_coverage history_errors <<< "$(compute_suite_totals_from_summary "$history_file")"
+      printf '%s
+' "$history_detected" >> "$history_detected_file"
+      printf '%s
+' "$history_relevant" >> "$history_relevant_file"
+      printf '%s
+' "$history_coverage" >> "$history_coverage_file"
+      printf '%s
+' "$history_errors" >> "$history_errors_file"
+    done
+    baseline_total_detected="$(percentile_int_from_file "$history_detected_file" "$SUITE_HISTORY_PERCENTILE")"
+    baseline_total_relevant="$(percentile_int_from_file "$history_relevant_file" "$SUITE_HISTORY_PERCENTILE")"
+    baseline_total_coverage="$(percentile_decimal_from_file "$history_coverage_file" "$SUITE_HISTORY_PERCENTILE")"
+    baseline_total_errors="$(percentile_int_from_file "$history_errors_file" "$SUITE_HISTORY_PERCENTILE")"
+    rm -f "$history_detected_file" "$history_relevant_file" "$history_coverage_file" "$history_errors_file"
+  fi
+
   local suite_detected_drop_percent_allowance=0
   local suite_relevant_drop_percent_allowance=0
   suite_detected_drop_percent_allowance="$(percentage_ceiling_count "$baseline_total_detected" "$max_total_detected_drop_percent")"
@@ -2582,6 +2679,14 @@ while [[ $# -gt 0 ]]; do
       BASELINE_FILE="$2"
       shift 2
       ;;
+    --suite-baseline-history-file)
+      SUITE_BASELINE_HISTORY_FILES+=("$2")
+      shift 2
+      ;;
+    --suite-history-percentile)
+      SUITE_HISTORY_PERCENTILE="$2"
+      shift 2
+      ;;
     --update-baseline)
       UPDATE_BASELINE=1
       shift
@@ -2974,6 +3079,28 @@ if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
     exit 1
   fi
 fi
+if [[ ${#SUITE_BASELINE_HISTORY_FILES[@]} -gt 0 && "$FAIL_ON_DIFF" -ne 1 ]]; then
+  echo "--suite-baseline-history-file requires --fail-on-diff" >&2
+  exit 1
+fi
+if ! is_nonneg_decimal "$SUITE_HISTORY_PERCENTILE"; then
+  echo "--suite-history-percentile must be numeric in range [0,100]: $SUITE_HISTORY_PERCENTILE" >&2
+  exit 1
+fi
+if ! awk -v v="$SUITE_HISTORY_PERCENTILE" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+  echo "--suite-history-percentile must be numeric in range [0,100]: $SUITE_HISTORY_PERCENTILE" >&2
+  exit 1
+fi
+for history_file in "${SUITE_BASELINE_HISTORY_FILES[@]}"; do
+  if [[ ! -f "$history_file" ]]; then
+    echo "Suite baseline history file not found: $history_file" >&2
+    exit 1
+  fi
+  if [[ ! -r "$history_file" ]]; then
+    echo "Suite baseline history file not readable: $history_file" >&2
+    exit 1
+  fi
+done
 if [[ "$UPDATE_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -eq 1 ]]; then
   echo "Use either --update-baseline or --fail-on-diff, not both." >&2
   exit 1
