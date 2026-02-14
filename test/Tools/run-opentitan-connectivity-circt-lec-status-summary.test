@@ -1,0 +1,18 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin %t/src
+// RUN: cp %S/../../utils/run_opentitan_connectivity_circt_lec.py %t/run_opentitan_connectivity_circt_lec.py
+// RUN: printf 'target_name\tflow\tsub_flow\tfusesoc_core\trel_path\tbbox_cmd\tconn_csv_count\tconn_csvs\tcfg_file\nchip_earlgrey_asic\tformal\tconn\tlowrisc:systems:chip_earlgrey_asic:0.1\thw/top_earlgrey/formal\t\t1\t[]\t%t/chip_conn_cfg.hjson\n' > %t/target.tsv
+// RUN: printf 'rule_id\trule_type\tcsv_file\tcsv_row\trule_name\tsrc_block\tsrc_signal\tdest_block\tdest_signal\nchip.csv:RULE_CLK\tCONNECTION\t%t/chip.csv\t10\tRULE_CLK\ttop_earlgrey.u_src\tclk_o\ttop_earlgrey.u_dst\tclk_i\n' > %t/rules.tsv
+// RUN: printf 'module top_earlgrey;\n  logic clk_o, clk_i;\n  assign clk_i = clk_o;\n  u_src_t u_src();\n  u_dst_t u_dst();\nendmodule\nmodule u_src_t; logic clk_o; endmodule\nmodule u_dst_t; logic clk_i; endmodule\n' > %t/src/top.sv
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib, sys\ntarget = sys.argv[sys.argv.index("--target") + 1]\ntool = sys.argv[sys.argv.index("--tool") + 1]\nout_dir = pathlib.Path.cwd() / "build" / "fake" / f"{target}-{tool}"\nout_dir.mkdir(parents=True, exist_ok=True)\n(out_dir / "fake.eda.yml").write_text("""toplevel: top_earlgrey\\nfiles:\\n- name: %t/src/top.sv\\n  file_type: systemVerilogSource\\n""")\n' > %t/bin/fusesoc
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib, sys\nargs = sys.argv[1:]\nout = pathlib.Path(args[args.index("-o") + 1])\nout.write_text("module {}\\n", encoding="utf-8")\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib, sys\nargs = sys.argv[1:]\nout = pathlib.Path(args[args.index("-o") + 1])\ninp = pathlib.Path(args[0])\nout.write_text(inp.read_text(encoding="utf-8"), encoding="utf-8")\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env python3\nprint("LEC_RESULT=EQ")\nprint("LEC_DIAG=EQ")\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/run_opentitan_connectivity_circt_lec.py %t/bin/fusesoc %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-lec
+// RUN: env LEC_RUN_SMTLIB=0 CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec LEC_CONNECTIVITY_STATUS_SUMMARY_OUT=%t/status.tsv python3 %t/run_opentitan_connectivity_circt_lec.py --target-manifest %t/target.tsv --rules-manifest %t/rules.tsv --opentitan-root %t --workdir %t/work --rule-filter 'RULE_CLK' --fusesoc-bin %t/bin/fusesoc --results-file %t/results.tsv
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+// RUN: FileCheck %s --check-prefix=STATUS < %t/status.tsv
+//
+// RESULTS: PASS{{[[:space:]]+}}connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}{{.*}}CONNECTIVITY_LEC{{[[:space:]]+}}EQ
+// STATUS: rule_id{{[[:space:]]+}}case_total{{[[:space:]]+}}case_pass{{[[:space:]]+}}case_fail{{[[:space:]]+}}case_xfail{{[[:space:]]+}}case_xpass{{[[:space:]]+}}case_error{{[[:space:]]+}}case_skip
+// STATUS: chip.csv:RULE_CLK{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0

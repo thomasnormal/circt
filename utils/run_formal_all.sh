@@ -987,6 +987,23 @@ Options:
                          Deterministic OpenTitan connectivity rule shard index
                          in `[0, shard-count)` passed to connectivity LEC
                          runner (default: 0)
+  --opentitan-connectivity-lec-status-baseline-file FILE
+                         Optional baseline per-rule connectivity LEC status TSV
+                         for drift checks
+  --opentitan-connectivity-lec-status-drift-file FILE
+                         Optional output path for connectivity LEC status
+                         drift TSV (default:
+                         OUT_DIR/opentitan-connectivity-lec-status-drift.tsv
+                         when baseline is set)
+  --opentitan-connectivity-lec-status-drift-allowlist-file FILE
+                         Optional allowlist file for connectivity LEC status
+                         drift checks (rule-id exact/prefix/regex)
+  --update-opentitan-connectivity-lec-status-baseline
+                         Update --opentitan-connectivity-lec-status-baseline-file
+                         with the current connectivity LEC status artifact
+  --fail-on-opentitan-connectivity-lec-status-drift
+                         Fail when connectivity LEC status drift checker
+                         reports non-allowlisted drift
   --opentitan-fpv-target-filter REGEX
                          Regex filter for OpenTitan FPV target names in
                          `opentitan/FPV_BMC` execution (in addition to
@@ -2711,6 +2728,9 @@ OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_FILE=""
 OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_ALLOWLIST_FILE=""
 OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_COUNT="1"
 OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_INDEX="0"
+OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE=""
+OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE=""
+OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE=""
 OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT="1"
 OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX="0"
 OPENTITAN_FPV_BMC_CASE_SHARD_COUNT="1"
@@ -2737,6 +2757,8 @@ UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE=0
 FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=0
 UPDATE_OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE=0
 FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT=0
+UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE=0
+FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT=0
 FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=0
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
@@ -2855,6 +2877,16 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_COUNT="$2"; shift 2 ;;
     --opentitan-connectivity-lec-rule-shard-index)
       OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_INDEX="$2"; shift 2 ;;
+    --opentitan-connectivity-lec-status-baseline-file)
+      OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE="$2"; shift 2 ;;
+    --opentitan-connectivity-lec-status-drift-file)
+      OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE="$2"; shift 2 ;;
+    --opentitan-connectivity-lec-status-drift-allowlist-file)
+      OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --update-opentitan-connectivity-lec-status-baseline)
+      UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE=1; shift ;;
+    --fail-on-opentitan-connectivity-lec-status-drift)
+      FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT=1; shift ;;
     --opentitan-fpv-target-filter)
       OPENTITAN_FPV_TARGET_FILTER="$2"; shift 2 ;;
     --opentitan-fpv-bmc-target-shard-count)
@@ -3525,6 +3557,9 @@ fi
 if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && -n "$OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE_FILE" && -z "$OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_FILE" ]]; then
   OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_FILE="$OUT_DIR/opentitan-connectivity-bmc-status-drift.tsv"
 fi
+if [[ "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" && -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" && -z "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE" ]]; then
+  OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE="$OUT_DIR/opentitan-connectivity-lec-status-drift.tsv"
+fi
 if ! [[ "$BASELINE_WINDOW" =~ ^[0-9]+$ ]] || [[ "$BASELINE_WINDOW" == "0" ]]; then
   echo "invalid --baseline-window: expected positive integer" >&2
   exit 1
@@ -3905,6 +3940,46 @@ if [[ -n "$OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE_FILE" && "$UPDATE_OPENTITA
 fi
 if [[ -n "$OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_ALLOWLIST_FILE" ]]; then
   echo "OpenTitan connectivity BMC status drift allowlist file not readable: $OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" != "1" ]]; then
+  echo "--opentitan-connectivity-lec-status-baseline-file requires --with-opentitan-connectivity-lec" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" != "1" ]]; then
+  echo "--opentitan-connectivity-lec-status-drift-file requires --with-opentitan-connectivity-lec" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" != "1" ]]; then
+  echo "--opentitan-connectivity-lec-status-drift-allowlist-file requires --with-opentitan-connectivity-lec" >&2
+  exit 1
+fi
+if [[ "$UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" != "1" ]]; then
+  echo "--update-opentitan-connectivity-lec-status-baseline requires --with-opentitan-connectivity-lec" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" != "1" ]]; then
+  echo "--fail-on-opentitan-connectivity-lec-status-drift requires --with-opentitan-connectivity-lec" >&2
+  exit 1
+fi
+if [[ "$UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE" == "1" && -z "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" ]]; then
+  echo "--update-opentitan-connectivity-lec-status-baseline requires --opentitan-connectivity-lec-status-baseline-file" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT" == "1" && -z "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" ]]; then
+  echo "--fail-on-opentitan-connectivity-lec-status-drift requires --opentitan-connectivity-lec-status-baseline-file" >&2
+  exit 1
+fi
+if [[ "$UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE" == "1" && "$FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT" == "1" ]]; then
+  echo "--update-opentitan-connectivity-lec-status-baseline cannot be combined with --fail-on-opentitan-connectivity-lec-status-drift" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" && "$UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE" != "1" && ! -f "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" ]]; then
+  echo "missing --opentitan-connectivity-lec-status-baseline-file: $OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE" ]]; then
+  echo "OpenTitan connectivity LEC status drift allowlist file not readable: $OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
@@ -5550,6 +5625,9 @@ fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && -n "$OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT=1
 fi
+if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" && -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" ]]; then
+  FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT=1
+fi
 if [[ "$STRICT_GATE" == "1" && -n "$OPENTITAN_FPV_CFG_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=1
 fi
@@ -5563,6 +5641,10 @@ if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITA
 fi
 if [[ -n "$OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--opentitan-connectivity-bmc-status-drift-allowlist-file requires --fail-on-opentitan-connectivity-bmc-status-drift or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--opentitan-connectivity-lec-status-drift-allowlist-file requires --fail-on-opentitan-connectivity-lec-status-drift or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -8051,6 +8133,9 @@ compute_lane_state_config_hash() {
     printf "opentitan_connectivity_bmc_status_drift_allowlist_file=%s\n" "$OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_ALLOWLIST_FILE"
     printf "opentitan_connectivity_lec_rule_shard_count=%s\n" "$OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_COUNT"
     printf "opentitan_connectivity_lec_rule_shard_index=%s\n" "$OPENTITAN_CONNECTIVITY_LEC_RULE_SHARD_INDEX"
+    printf "opentitan_connectivity_lec_status_baseline_file=%s\n" "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE"
+    printf "opentitan_connectivity_lec_status_drift_file=%s\n" "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE"
+    printf "opentitan_connectivity_lec_status_drift_allowlist_file=%s\n" "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE"
     printf "opentitan_fpv_target_filter=%s\n" "$OPENTITAN_FPV_TARGET_FILTER"
     printf "opentitan_fpv_bmc_target_shard_count=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT"
     printf "opentitan_fpv_bmc_target_shard_index=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
@@ -8077,6 +8162,8 @@ compute_lane_state_config_hash() {
     printf "fail_on_opentitan_fpv_bmc_summary_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT"
     printf "update_opentitan_connectivity_bmc_status_baseline=%s\n" "$UPDATE_OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE"
     printf "fail_on_opentitan_connectivity_bmc_status_drift=%s\n" "$FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT"
+    printf "update_opentitan_connectivity_lec_status_baseline=%s\n" "$UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE"
+    printf "fail_on_opentitan_connectivity_lec_status_drift=%s\n" "$FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT"
     printf "fail_on_opentitan_fpv_unknown_task=%s\n" "$FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK"
     for opentitan_select_cfg in "${OPENTITAN_SELECT_CFGS[@]}"; do
       printf "opentitan_select_cfgs[]=%s\n" "$opentitan_select_cfg"
@@ -12346,6 +12433,8 @@ run_opentitan_connectivity_lec_lane() {
   local drop_remark_cases_file="$6"
   local drop_remark_reasons_file="$7"
   local resolved_contracts_file="$8"
+  local status_summary_file="$9"
+  local status_drift_file="${10}"
 
   if ! lane_enabled "$lane_id"; then
     return
@@ -12358,6 +12447,10 @@ run_opentitan_connectivity_lec_lane() {
   : > "$drop_remark_cases_file"
   : > "$drop_remark_reasons_file"
   : > "$resolved_contracts_file"
+  : > "$status_summary_file"
+  if [[ -n "$status_drift_file" ]]; then
+    : > "$status_drift_file"
+  fi
   rm -rf "$workdir"
 
   local opentitan_connectivity_args=(
@@ -12376,6 +12469,7 @@ run_opentitan_connectivity_lec_lane() {
     LEC_DROP_REMARK_CASES_OUT="$drop_remark_cases_file"
     LEC_DROP_REMARK_REASONS_OUT="$drop_remark_reasons_file"
     LEC_RESOLVED_CONTRACTS_OUT="$resolved_contracts_file"
+    LEC_CONNECTIVITY_STATUS_SUMMARY_OUT="$status_summary_file"
     CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN"
     CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
     CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN_OPENTITAN"
@@ -12384,9 +12478,38 @@ run_opentitan_connectivity_lec_lane() {
     LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
     LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY"
     Z3_BIN="$Z3_BIN")
+  local connectivity_lec_status_baseline_for_run=""
+  if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" && "$UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE" != "1" ]]; then
+    connectivity_lec_status_baseline_for_run="$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE"
+  fi
+  if [[ -n "$connectivity_lec_status_baseline_for_run" ]]; then
+    opentitan_connectivity_env+=("LEC_CONNECTIVITY_STATUS_BASELINE_FILE=$connectivity_lec_status_baseline_for_run")
+    if [[ -n "$status_drift_file" ]]; then
+      opentitan_connectivity_env+=("LEC_CONNECTIVITY_STATUS_DRIFT_OUT=$status_drift_file")
+    fi
+    if [[ -n "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE" ]]; then
+      opentitan_connectivity_env+=("LEC_CONNECTIVITY_STATUS_DRIFT_ALLOWLIST_FILE=$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_ALLOWLIST_FILE")
+    fi
+    if [[ "$FAIL_ON_OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT" == "1" ]]; then
+      opentitan_connectivity_env+=("LEC_FAIL_ON_CONNECTIVITY_STATUS_DRIFT=1")
+    fi
+  fi
   if [[ ${#FORMAL_LEC_TIMEOUT_ENV[@]} -gt 0 ]]; then
     opentitan_connectivity_env+=("${FORMAL_LEC_TIMEOUT_ENV[@]}")
   fi
+
+  maybe_update_opentitan_connectivity_lec_status_baseline() {
+    if [[ "$UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE" != "1" ]]; then
+      return
+    fi
+    mkdir -p "$(dirname "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE")"
+    if [[ -s "$status_summary_file" ]]; then
+      cp "$status_summary_file" "$OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE"
+      echo "updated OpenTitan connectivity LEC status baseline: $OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE_FILE" >&2
+      return
+    fi
+    echo "warning: OpenTitan connectivity LEC status baseline update skipped; status summary file is empty: $status_summary_file" >&2
+  }
 
   run_suite "$suite_name" \
     env "${opentitan_connectivity_env[@]}" \
@@ -12403,6 +12526,7 @@ run_opentitan_connectivity_lec_lane() {
       if [[ -n "$lec_case_summary" ]]; then
         no_cases_summary="${no_cases_summary} ${lec_case_summary}"
       fi
+      maybe_update_opentitan_connectivity_lec_status_baseline
       record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 0 1 "$no_cases_summary"
       return
     fi
@@ -12415,6 +12539,7 @@ run_opentitan_connectivity_lec_lane() {
     if [[ -n "$lec_case_summary" ]]; then
       missing_summary="${missing_summary} ${lec_case_summary}"
     fi
+    maybe_update_opentitan_connectivity_lec_status_baseline
     record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$missing_summary"
     return
   fi
@@ -12479,6 +12604,7 @@ PY
   if [[ -n "$lec_contract_summary" ]]; then
     summary="${summary} ${lec_contract_summary}"
   fi
+  maybe_update_opentitan_connectivity_lec_status_baseline
   append_filtered_min_total_violation total summary
   maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
@@ -12717,7 +12843,9 @@ if [[ "$WITH_OPENTITAN_CONNECTIVITY_LEC" == "1" ]]; then
     "$OUT_DIR/opentitan-connectivity-lec-work" \
     "$OUT_DIR/opentitan-connectivity-lec-drop-remark-cases.tsv" \
     "$OUT_DIR/opentitan-connectivity-lec-drop-remark-reasons.tsv" \
-    "$OUT_DIR/opentitan-connectivity-lec-resolved-contracts.tsv"
+    "$OUT_DIR/opentitan-connectivity-lec-resolved-contracts.tsv" \
+    "$OUT_DIR/opentitan-connectivity-lec-status-summary.tsv" \
+    "$OPENTITAN_CONNECTIVITY_LEC_STATUS_DRIFT_FILE"
 fi
 
 # OpenTitan BMC (optional)

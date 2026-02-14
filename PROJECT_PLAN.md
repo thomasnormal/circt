@@ -310,6 +310,18 @@ verilator-verification, and yosys corpora).
      - `--opentitan-connectivity-rule-filter`
      - `--opentitan-connectivity-lec-rule-shard-count`
      - `--opentitan-connectivity-lec-rule-shard-index`
+   - connectivity LEC status drift governance is now wired:
+     - per-rule status summary artifact:
+       - `opentitan-connectivity-lec-status-summary.tsv`
+     - baseline/drift/allowlist/fail/update controls through
+       `run_formal_all.sh`:
+       - `--opentitan-connectivity-lec-status-baseline-file`
+       - `--opentitan-connectivity-lec-status-drift-file`
+       - `--opentitan-connectivity-lec-status-drift-allowlist-file`
+       - `--update-opentitan-connectivity-lec-status-baseline`
+       - `--fail-on-opentitan-connectivity-lec-status-drift`
+     - strict-gate auto-enables connectivity LEC status drift failure when a
+       baseline is configured.
    - new connectivity runner:
      - `utils/run_opentitan_connectivity_circt_bmc.py`
      - `utils/run_opentitan_connectivity_circt_lec.py`
@@ -360,17 +372,16 @@ verilator-verification, and yosys corpora).
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.
 6. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
 7. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
-8. **Connectivity cross-lane status parity gap**: connectivity BMC now has
-   per-rule status evidence + baseline drift governance
-   (`pass/fail/covered/unreachable`), but equivalent status governance is not
-   yet generalized across connectivity LEC and unified cross-lane parity views.
+8. **Connectivity cross-lane parity gap**: connectivity BMC and connectivity LEC
+   now both have per-rule status evidence + baseline drift governance, but a
+   unified cross-lane parity view (rule-keyed BMC vs LEC equivalence contracts)
+   is still pending.
 
 ### Next Long-Term Features (best long-term path)
 
 1. Extend launch-resilience policy beyond ETXTBSY (e.g., selected transient I/O launch races) with explicit strict-gate counters and per-reason retry telemetry.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
-4. Extend Phase E connectivity status governance from BMC-only to full
-   cross-lane parity:
-   add connectivity LEC status-model artifacts and unify BMC/LEC rule-ID keyed
-   drift policies for (`pass/fail/covered/unreachable`) equivalence tracking.
+4. Build unified connectivity cross-lane parity governance:
+   keep lane-local BMC/LEC status baselines, and add explicit rule-ID keyed
+   BMC-vs-LEC parity drift contracts (including allowlist and strict-gate modes).
