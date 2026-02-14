@@ -1,0 +1,16 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt %t/bin
+// RUN: printf 'module bitcnt(input logic a, input logic b, output logic y); assign y = (a == b); endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nmutations_file=""\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --mutations-file) mutations_file="$2"; shift 2 ;;&\n    --mutations-file=*) mutations_file="${1#*=}"; shift ;;&\n    --work-dir) work_dir="$2"; shift 2 ;;&\n    --work-dir=*) work_dir="${1#*=}"; shift ;;&\n    *) shift ;;&\n  esac\ndone\nif [[ -z "$mutations_file" || -z "$work_dir" ]]; then\n  echo "missing native mutation args" >&2\n  exit 8\nfi\nif ! grep -q "NATIVE_EQ_TO_NEQ" "$mutations_file"; then\n  echo "expected EQ_TO_NEQ in filtered native ops" >&2\n  cat "$mutations_file" >&2\n  exit 7\nfi\nif grep -q "NATIVE_UNARY_NOT_DROP" "$mutations_file"; then\n  echo "unexpected UNARY_NOT_DROP for design without unary !" >&2\n  cat "$mutations_file" >&2\n  exit 6\nfi\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t2\\nrelevant_mutants\\t3\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+
+// RUN: %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --mutations-backend native \
+// RUN:   --generate-count 2 \
+// RUN:   --out-dir %t/out
+
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+
+// SUMMARY: bitcnt{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}2{{[[:space:]]}}3{{[[:space:]]}}66.67{{[[:space:]]}}0

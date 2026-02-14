@@ -2821,7 +2821,7 @@ EOS
       mutations_file="${helper_dir}/native.mutations.txt"
       native_create_mutated="${helper_dir}/native_create_mutated.py"
       : > "$mutations_file"
-      native_ops=(
+      native_ops_all=(
         EQ_TO_NEQ
         NEQ_TO_EQ
         LT_TO_LE
@@ -2835,6 +2835,50 @@ EOS
         CONST0_TO_1
         CONST1_TO_0
       )
+      native_ops=("${native_ops_all[@]}")
+      native_ops_applicable=()
+      if command -v python3 >/dev/null 2>&1; then
+        mapfile -t native_ops_applicable < <(python3 - "$design" <<'EOS'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding='utf-8')
+ops = [
+    ('EQ_TO_NEQ', r'=='),
+    ('NEQ_TO_EQ', r'!='),
+    ('LT_TO_LE', r'(?<![<>=!])<(?![<>=])'),
+    ('GT_TO_GE', r'(?<![<>=!])>(?![<>=])'),
+    ('LE_TO_LT', r'<='),
+    ('GE_TO_GT', r'>='),
+    ('AND_TO_OR', r'&&'),
+    ('OR_TO_AND', r'\|\|'),
+    ('XOR_TO_OR', r'\^'),
+    ('UNARY_NOT_DROP', r'!\s*(?=[A-Za-z_(])'),
+    ('CONST0_TO_1', r"1'b0|1'd0"),
+    ('CONST1_TO_0', r"1'b1|1'd1"),
+]
+for op, pattern in ops:
+    if re.search(pattern, text):
+        print(op)
+EOS
+)
+      fi
+      if [[ ${#native_ops_applicable[@]} -gt 0 ]]; then
+        native_ops=("${native_ops_applicable[@]}")
+        for native_op_name in "${native_ops_all[@]}"; do
+          native_op_present=0
+          for native_op_applicable in "${native_ops_applicable[@]}"; do
+            if [[ "$native_op_applicable" == "$native_op_name" ]]; then
+              native_op_present=1
+              break
+            fi
+          done
+          if [[ "$native_op_present" -eq 0 ]]; then
+            native_ops+=("$native_op_name")
+          fi
+        done
+      fi
       native_ops_count=${#native_ops[@]}
       for ((mid=1; mid<=example_generate_count; ++mid)); do
         op_idx=$(((mid - 1) % native_ops_count))

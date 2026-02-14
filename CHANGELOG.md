@@ -1,5 +1,72 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1393 - February 14, 2026
+
+### Mutation Workflow: Native Operator Applicability Prioritization
+
+1. Improved native mutation planning in
+   `utils/run_mutation_mcy_examples.sh`:
+   - native operator selection now detects design-applicable operators first
+     (regex scan over the design).
+   - final native operator order is now:
+     1) applicable operators, then
+     2) remaining operators for diversity.
+   - this preserves exploration breadth while reducing front-of-queue no-op risk.
+2. Added focused regression for applicability-prioritized ordering:
+   - `test/Tools/run-mutation-mcy-examples-native-mutation-op-filter-pass.test`
+   - uses `--generate-count 2` to verify first emitted native ops are filtered
+     by design applicability.
+3. Updated native mutation plan safety regression to avoid over-constraining
+   specific op presence:
+   - `test/Tools/run-mutation-mcy-examples-native-mutation-plan-safe-ops-pass.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (141 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --mutations-backend native --native-tests-mode real --native-real-tests-strict --out-dir /tmp/mcy_examples_real_native_mode_real_strict_1771085001` PASS
+  - `bitcnt`: `detected=6 relevant=8 coverage=75.00 errors=0`
+  - `picorv32_primes`: `detected=8 relevant=8 coverage=100.00 errors=0`
+
+## Iteration 1393 - February 14, 2026
+
+### OpenTitan FPV BMC: Grouped Status-Policy Drift Governance
+
+1. Extended `utils/run_opentitan_fpv_circt_bmc.py` with first-class grouped
+   assertion-status-policy drift controls:
+   - `--assertion-status-policy-grouped-violations-baseline-file`
+   - `--assertion-status-policy-grouped-violations-drift-file`
+   - `--assertion-status-policy-grouped-violations-drift-allowlist-file`
+   - `--assertion-status-policy-grouped-violations-drift-row-allowlist-file`
+   - `--fail-on-assertion-status-policy-grouped-violations-drift`
+2. Added grouped drift semantics over
+   `(task_profile, violation_kind, status)` cohorts:
+   - drift kinds: `missing_group_row`, `new_group_row`, `target_count`,
+     `targets`, `policy_sources`.
+   - row allowlist token format:
+     `<task_profile>::<violation_kind>::<status>::<kind>`.
+3. Wired full governance surface through `utils/run_formal_all.sh`:
+   - added OpenTitan FPV BMC CLI/options/env forwarding for grouped baseline,
+     drift output, allowlists, and fail mode.
+   - added baseline update path:
+     `--update-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline`.
+   - strict-gate now auto-enables grouped status-policy drift fail mode when a
+     grouped baseline is configured.
+   - added strict validation/error contracts for grouped drift allowlists.
+4. Added focused regressions:
+   - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-fail.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-allowlist-requires-gate.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-requires-gate.test`
+   - updated:
+     `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-task-profile-presets-fail.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-task-profile-presets-forwarding.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-fail.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-requires-gate.test` PASS (7/7)
+
 ## Iteration 1392 - February 14, 2026
 
 ### Mutation Workflow: Manifest-Driven Native Real Harness Overrides
