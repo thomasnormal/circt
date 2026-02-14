@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1381 - February 14, 2026
+
+### Mutation Workflow: Missing-History Example Governance
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with explicit policy control
+   for missing per-example rows in history-window baselines:
+   - `--example-history-missing-policy MODE`
+   - supported modes: `ignore|warn|fail` (default: `ignore`)
+2. Implemented deterministic missing-row handling for
+   `--example-baseline-history-file` percentile anchoring:
+   - `ignore`: skip missing history rows and keep baseline-only anchor
+   - `warn`: same as ignore plus one warning per `<history,example>`
+   - `fail`: hard-fail drift evaluation on first missing row
+3. Reduced duplicate diagnostics by caching history row presence per
+   `<history_file, example>` key during drift evaluation.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-example-history-missing-policy-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-example-history-missing-policy-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-example-history-missing-policy-warn-pass.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (120 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_1771082540` PASS
+
 ## Iteration 1380 - February 14, 2026
 
 ### OpenTitan FPV BMC: FPV-Summary Row-Level Drift Allowlist Governance

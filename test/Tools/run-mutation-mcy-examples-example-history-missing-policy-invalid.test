@@ -1,0 +1,3 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --example-history-missing-policy bad 2>&1 | FileCheck %s
+
+// CHECK: --example-history-missing-policy must be one of: ignore|warn|fail
