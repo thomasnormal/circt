@@ -242,6 +242,9 @@ verilator-verification, and yosys corpora).
      `sec_cm`) in a single planning run.
    - duplicate target names across cfg bundles are now fail-closed when payload
      metadata diverges, preventing ambiguous target resolution.
+   - unfiltered FPV execution is now available as an explicit operator choice
+     (`--opentitan-fpv-allow-unfiltered`) with target-budget governance
+     (`--opentitan-fpv-max-targets`).
    - `utils/select_opentitan_formal_cfgs.py` resolves cfg import graphs and
      emits stable selected-target artifacts.
 2. Phase B is complete:

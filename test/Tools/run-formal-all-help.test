@@ -135,6 +135,8 @@
 // CHECK: --opentitan-connectivity-objective-parity-include-missing
 // CHECK: --opentitan-connectivity-objective-parity-missing-policy
 // CHECK: --opentitan-fpv-target-filter
+// CHECK: --opentitan-fpv-allow-unfiltered
+// CHECK: --opentitan-fpv-max-targets
 // CHECK: --opentitan-fpv-bmc-target-shard-count
 // CHECK: --opentitan-fpv-bmc-target-shard-index
 // CHECK: --select-cfgs

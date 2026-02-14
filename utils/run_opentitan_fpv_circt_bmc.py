@@ -449,6 +449,15 @@ def parse_args() -> argparse.Namespace:
         help="Optional regex filter over compile-contract target names",
     )
     parser.add_argument(
+        "--max-targets",
+        default=os.environ.get("BMC_MAX_TARGETS", "0"),
+        help=(
+            "Optional maximum number of selected FPV targets after --target-filter "
+            "and before target sharding (0 means unlimited; default: "
+            "env BMC_MAX_TARGETS or 0)."
+        ),
+    )
+    parser.add_argument(
         "--target-shard-count",
         default=os.environ.get("BMC_TARGET_SHARD_COUNT", "1"),
         help=(
@@ -644,6 +653,15 @@ def main() -> int:
     if not selected:
         print("No OpenTitan FPV compile-contract targets selected.", file=sys.stderr)
         return 1
+    max_targets = parse_nonnegative_int(args.max_targets, "--max-targets")
+    if max_targets > 0:
+        selected_target_count = len({row.target_name for row in selected})
+        if selected_target_count > max_targets:
+            fail(
+                "selected OpenTitan FPV targets exceed --max-targets: "
+                f"selected={selected_target_count} max={max_targets}; "
+                "refine --target-filter/--target-shard-* or increase --max-targets"
+            )
 
     target_shard_count = parse_nonnegative_int(
         args.target_shard_count, "--target-shard-count"

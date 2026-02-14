@@ -1,0 +1,9 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/src
+// RUN: cp %S/../../utils/run_opentitan_fpv_circt_bmc.py %t/utils/run_opentitan_fpv_circt_bmc.py
+// RUN: chmod +x %t/utils/run_opentitan_fpv_circt_bmc.py
+// RUN: touch %t/src/foo.sv
+// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\tfusesoc_core\ttask\tflow\tsub_flow\trel_path\ttoplevel\tsetup_status\tfile_count\tinclude_dir_count\tdefine_count\tfiles_fingerprint\tinclude_dirs_fingerprint\tdefines_fingerprint\tcontract_fingerprint\tstopat_count\tstopats_fingerprint\tstopats\ttask_profile\ttask_known\tstopat_mode\tblackbox_policy\ttask_policy_fingerprint\tfiles\tinclude_dirs\tdefines\teda_yml_path\tsetup_log_path\tworkdir\na_fpv\tlowrisc:fpv:a_fpv\tFpvDefault\tformal\tfpv\thw/top_earlgrey/formal/ip/a\ta_tb\tok\t1\t0\t0\tf\ti\td\tc\t0\ts\t\tfpv_default\t1\tnone\tnone\tp\t%t/src/foo.sv\t\t\t/tmp/a.eda.yml\t/tmp/a.log\t/tmp/a.work\nb_fpv\tlowrisc:fpv:b_fpv\tFpvDefault\tformal\tfpv\thw/top_earlgrey/formal/ip/b\tb_tb\tok\t1\t0\t0\tf\ti\td\tc\t0\ts\t\tfpv_default\t1\tnone\tnone\tp\t%t/src/foo.sv\t\t\t/tmp/b.eda.yml\t/tmp/b.log\t/tmp/b.work\n' > %t/contracts.tsv
+// RUN: not sh -c 'OUT=%t/results.tsv %t/utils/run_opentitan_fpv_circt_bmc.py --compile-contracts %t/contracts.tsv --max-targets 1' 2>&1 | FileCheck %s
+//
+// CHECK: selected OpenTitan FPV targets exceed --max-targets: selected=2 max=1
