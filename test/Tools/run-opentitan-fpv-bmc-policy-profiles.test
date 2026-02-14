@@ -1,0 +1,46 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/ot/hw/top_earlgrey/formal %t/logs
+// RUN: cp %S/../../utils/run_opentitan_fpv_bmc_policy_profiles.sh %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: \"${LOG_DIR:?}\"\ncount_file=\"$LOG_DIR/count.txt\"\nif [[ -f \"$count_file\" ]]; then\n  n=$(cat \"$count_file\")\nelse\n  n=0\nfi\nn=$((n + 1))\necho \"$n\" > \"$count_file\"\narg_file=\"$LOG_DIR/call-${n}.args\"\n: > \"$arg_file\"\nfor arg in \"$@\"; do\n  echo \"$arg\" >> \"$arg_file\"\ndone\n' > %t/utils/fake-workflow.sh
+// RUN: printf '{\"name\":\"prim\"}\n' > %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson
+// RUN: printf '{\"name\":\"sec_cm\"}\n' > %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson
+// RUN: printf 'profile_name\tfpv_cfg\tbaseline_prefix\tselect_cfgs\ttarget_filter\tallow_unfiltered\tmax_targets\tdescription\nprim_all\thw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson\topentitan-fpv-bmc-prim\tfoo_fpv,bar_fpv\t\t0\t24\tprim cohort\nsec_cm_all\thw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson\topentitan-fpv-bmc-sec-cm\t\t^sec_cm_.*\t1\t0\tsec_cm cohort\n' > %t/profiles.tsv
+// RUN: chmod +x %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh %t/utils/fake-workflow.sh
+// RUN: LOG_DIR=%t/logs %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh --run-workflow %t/utils/fake-workflow.sh --profiles-file %t/profiles.tsv --opentitan-root %t/ot --out-dir %t/out --profile prim_all --profile sec_cm_all --no-strict-gate check --circt-verilog %t/bin/circt-verilog
+// RUN: FileCheck %s --check-prefix=CALL1 < %t/logs/call-1.args
+// RUN: FileCheck %s --check-prefix=CALL2 < %t/logs/call-2.args
+// RUN: not sh -c 'LOG_DIR=%t/logs %t/utils/run_opentitan_fpv_bmc_policy_profiles.sh --run-workflow %t/utils/fake-workflow.sh --profiles-file %t/profiles.tsv --opentitan-root %t/ot --profile missing_profile check > %t/err.txt 2>&1'
+// RUN: FileCheck %s --check-prefix=ERR < %t/err.txt
+//
+// CALL1: --no-strict-gate
+// CALL1: --baseline-prefix
+// CALL1-NEXT: opentitan-fpv-bmc-prim
+// CALL1: check
+// CALL1: --opentitan
+// CALL1-NEXT: {{.*/ot}}
+// CALL1: --out-dir
+// CALL1-NEXT: {{.*/out/prim_all}}
+// CALL1: --include-lane-regex
+// CALL1-NEXT: ^opentitan/FPV_BMC$
+// CALL1: --opentitan-fpv-cfg
+// CALL1-NEXT: {{.*/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson}}
+// CALL1: --opentitan-fpv-max-targets
+// CALL1-NEXT: 24
+// CALL1: --select-cfgs
+// CALL1-NEXT: foo_fpv
+// CALL1: --select-cfgs
+// CALL1-NEXT: bar_fpv
+// CALL1: --circt-verilog
+// CALL1-NEXT: {{.*/bin/circt-verilog}}
+//
+// CALL2: --no-strict-gate
+// CALL2: --baseline-prefix
+// CALL2-NEXT: opentitan-fpv-bmc-sec-cm
+// CALL2: check
+// CALL2: --opentitan-fpv-cfg
+// CALL2-NEXT: {{.*/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson}}
+// CALL2: --opentitan-fpv-allow-unfiltered
+// CALL2: --opentitan-fpv-target-filter
+// CALL2-NEXT: ^sec_cm_.*
+//
+// ERR: requested profile not found in {{.*}}/profiles.tsv: missing_profile

@@ -20,6 +20,8 @@ Options:
                           (default: utils/run_formal_all.sh)
   --baseline-dir DIR      Baseline directory for policy artifacts
                           (default: utils/opentitan_fpv_policy/baselines)
+  --baseline-prefix NAME  Baseline filename prefix
+                          (default: opentitan-fpv-bmc)
   --presets-file FILE     Task-profile presets TSV path
                           (default: utils/opentitan_fpv_policy/task_profile_status_presets.tsv)
   --no-strict-gate        check mode: do not add --strict-gate automatically
@@ -34,6 +36,7 @@ USAGE
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_FORMAL_ALL="${SCRIPT_DIR}/run_formal_all.sh"
 BASELINE_DIR="${SCRIPT_DIR}/opentitan_fpv_policy/baselines"
+BASELINE_PREFIX="opentitan-fpv-bmc"
 PRESETS_FILE="${SCRIPT_DIR}/opentitan_fpv_policy/task_profile_status_presets.tsv"
 USE_STRICT_GATE_IN_CHECK=1
 MODE=""
@@ -44,6 +47,8 @@ while [[ $# -gt 0 ]]; do
       RUN_FORMAL_ALL="$2"; shift 2 ;;
     --baseline-dir)
       BASELINE_DIR="$2"; shift 2 ;;
+    --baseline-prefix)
+      BASELINE_PREFIX="$2"; shift 2 ;;
     --presets-file)
       PRESETS_FILE="$2"; shift 2 ;;
     --no-strict-gate)
@@ -72,6 +77,10 @@ if [[ ! -r "$PRESETS_FILE" ]]; then
   echo "task-profile presets file not readable: $PRESETS_FILE" >&2
   exit 1
 fi
+if [[ -z "$BASELINE_PREFIX" || ! "$BASELINE_PREFIX" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "invalid --baseline-prefix: $BASELINE_PREFIX (expected [A-Za-z0-9._-]+)" >&2
+  exit 1
+fi
 
 readonly MANAGED_FLAGS=(
   --with-opentitan-fpv-bmc
@@ -97,9 +106,9 @@ for arg in "$@"; do
 done
 
 mkdir -p "$BASELINE_DIR"
-SUMMARY_BASELINE="${BASELINE_DIR}/opentitan-fpv-bmc-fpv-summary-baseline.tsv"
-ASSERTION_BASELINE="${BASELINE_DIR}/opentitan-fpv-bmc-assertion-results-baseline.tsv"
-GROUPED_POLICY_BASELINE="${BASELINE_DIR}/opentitan-fpv-bmc-assertion-status-policy-grouped-violations-baseline.tsv"
+SUMMARY_BASELINE="${BASELINE_DIR}/${BASELINE_PREFIX}-fpv-summary-baseline.tsv"
+ASSERTION_BASELINE="${BASELINE_DIR}/${BASELINE_PREFIX}-assertion-results-baseline.tsv"
+GROUPED_POLICY_BASELINE="${BASELINE_DIR}/${BASELINE_PREFIX}-assertion-status-policy-grouped-violations-baseline.tsv"
 
 workflow_args=(
   --with-opentitan-fpv-bmc
