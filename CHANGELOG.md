@@ -23,12 +23,13 @@
 5. Added focused regressions:
    - `test/Tools/run-mutation-mcy-examples-policy-fingerprint-emitted.test`
    - `test/Tools/run-mutation-mcy-examples-policy-fingerprint-drift-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-policy-fingerprint-backward-compatible-baseline.test`
 
 ### Validation
 
 - `bash -n utils/run_mutation_mcy_examples.sh` PASS
-- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (24/24)
-- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-114945` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (25/25)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-115013` PASS
 
 ## Iteration 1310 - February 14, 2026
 
