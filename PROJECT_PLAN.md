@@ -345,6 +345,18 @@ verilator-verification, and yosys corpora).
        - `--fail-on-opentitan-connectivity-contract-parity`
      - strict-gate auto-enables contract-parity failure when both
        connectivity lanes are active.
+   - connectivity cross-lane cover-counter parity governance is now wired:
+     - new checker utility:
+       - `utils/check_opentitan_connectivity_cover_parity.py`
+     - parity lane in `run_formal_all.sh`:
+       - `opentitan/CONNECTIVITY_COVER_PARITY`
+     - parity controls through `run_formal_all.sh`:
+       - `--opentitan-connectivity-cover-parity-file`
+       - `--opentitan-connectivity-cover-parity-allowlist-file`
+       - `--fail-on-opentitan-connectivity-cover-parity`
+     - checker compares only shared cover counters across lanes (no synthetic
+       placeholders); strict-gate auto-enables cover-parity failure when both
+       connectivity lanes are active.
    - new connectivity runner:
      - `utils/run_opentitan_connectivity_circt_bmc.py`
      - `utils/run_opentitan_connectivity_circt_lec.py`
@@ -396,15 +408,16 @@ verilator-verification, and yosys corpora).
 6. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
 7. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
 8. **Connectivity parity depth gap**: connectivity cross-lane parity now covers
-   per-rule case counters and resolved-contract fingerprints, but cover-counter
-   parity and deeper objective-level parity diagnostics are still pending.
+   per-rule case counters, resolved-contract fingerprints, and shared
+   cover-counters, but deeper objective-level parity diagnostics are still
+   pending.
 
 ### Next Long-Term Features (best long-term path)
 
 1. Extend launch-resilience policy beyond ETXTBSY (e.g., selected transient I/O launch races) with explicit strict-gate counters and per-reason retry telemetry.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
-4. Extend connectivity parity from case/contract parity to richer governance:
-   add optional per-rule cover-counter parity and objective-level parity
-   diagnostics, with the same allowlist + strict-gate contracts as current
+4. Extend connectivity parity from case/contract/cover parity to richer
+   governance: add objective-level parity diagnostics and per-objective drift
+   explainability, with the same allowlist + strict-gate contracts as current
    parity lanes.

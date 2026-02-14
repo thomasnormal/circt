@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1337 - February 14, 2026
+
+### OpenTitan Connectivity: Cross-Lane Cover-Counter Parity Governance
+
+1. Added a new parity checker utility:
+   - `utils/check_opentitan_connectivity_cover_parity.py`
+   - compares rule-level BMC vs LEC cover counters from connectivity status
+     summaries.
+   - compares only cover fields shared by both summaries (no synthetic
+     placeholder counters).
+   - supports mismatch allowlists via:
+     - `exact:`
+     - `prefix:`
+     - `regex:`
+   - emits deterministic parity artifact rows:
+     - `rule_id`, `kind`, `bmc`, `lec`, `allowlisted`
+2. Extended `utils/run_formal_all.sh` with cover-parity lane wiring:
+   - lane:
+     - `opentitan/CONNECTIVITY_COVER_PARITY`
+   - new CLI controls:
+     - `--opentitan-connectivity-cover-parity-file`
+     - `--opentitan-connectivity-cover-parity-allowlist-file`
+     - `--fail-on-opentitan-connectivity-cover-parity`
+   - strict-gate behavior:
+     - auto-enables cover-parity fail-on when both connectivity lanes are active.
+   - lane-filter dependency enforcement:
+     - cover-parity lane now requires source lanes in filter
+       (`CONNECTIVITY_BMC` + `CONNECTIVITY_LEC`).
+3. Added focused regressions:
+   - checker-level:
+     - `test/Tools/check-opentitan-connectivity-cover-parity-none.test`
+     - `test/Tools/check-opentitan-connectivity-cover-parity-fail.test`
+     - `test/Tools/check-opentitan-connectivity-cover-parity-allowlist.test`
+   - formal-driver-level:
+     - `test/Tools/run-formal-all-opentitan-connectivity-cover-parity-forwarding.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-cover-parity-fail.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-cover-parity-lane-deps.test`
+     - `test/Tools/run-formal-all-opentitan-connectivity-cover-parity-allowlist-requires-gate.test`
+   - updated:
+     - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/check_opentitan_connectivity_cover_parity.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(check-opentitan-connectivity-cover-parity|run-formal-all-opentitan-connectivity-cover-parity|run-formal-all-help)'` PASS (8 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(run-formal-all-opentitan|check-opentitan-connectivity)'` PASS (83 selected)
+
 ## Iteration 1336 - February 14, 2026
 
 ### Mutation Workflow: Relevant-Mutant Gate for CI Reliability
