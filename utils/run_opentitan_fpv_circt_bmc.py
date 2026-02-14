@@ -46,6 +46,21 @@ class ContractRow:
     defines: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class FPVSummaryRow:
+    target_name: str
+    total_assertions: str
+    proven: str
+    failing: str
+    vacuous: str
+    covered: str
+    unreachable: str
+    unknown: str
+    error: str
+    timeout: str
+    skipped: str
+
+
 def fail(msg: str) -> None:
     print(msg, file=sys.stderr)
     raise SystemExit(1)
@@ -209,6 +224,56 @@ def summarize(rows: list[tuple[str, ...]]) -> tuple[int, int, int, int, int, int
     return total, passed, failed, xfailed, xpassed, errored, skipped
 
 
+def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
+    exact: set[str] = set()
+    prefixes: list[str] = []
+    regex_rules: list[re.Pattern[str]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line_no, raw in enumerate(handle, start=1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            mode = "exact"
+            payload = line
+            if ":" in line:
+                mode, payload = line.split(":", 1)
+                mode = mode.strip()
+                payload = payload.strip()
+            if not payload:
+                fail(f"invalid allowlist row {line_no}: empty pattern")
+            if mode == "exact":
+                exact.add(payload)
+            elif mode == "prefix":
+                prefixes.append(payload)
+            elif mode == "regex":
+                try:
+                    regex_rules.append(re.compile(payload))
+                except re.error as exc:
+                    fail(
+                        f"invalid allowlist row {line_no}: bad regex '{payload}': {exc}"
+                    )
+            else:
+                fail(
+                    f"invalid allowlist row {line_no}: unsupported mode '{mode}' "
+                    "(expected exact|prefix|regex)"
+                )
+    return exact, prefixes, regex_rules
+
+
+def is_allowlisted(
+    token: str, exact: set[str], prefixes: list[str], regex_rules: list[re.Pattern[str]]
+) -> bool:
+    if token in exact:
+        return True
+    for prefix in prefixes:
+        if token.startswith(prefix):
+            return True
+    for pattern in regex_rules:
+        if pattern.search(token):
+            return True
+    return False
+
+
 def write_fpv_summary(
     case_rows: list[tuple[str, ...]],
     assertion_rows: list[tuple[str, ...]],
@@ -299,6 +364,65 @@ def write_fpv_summary(
             )
 
 
+def read_fpv_summary(path: Path) -> dict[str, FPVSummaryRow]:
+    if not path.is_file():
+        fail(f"fpv summary file not found: {path}")
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames is None:
+            fail(f"fpv summary file missing header row: {path}")
+        required = {
+            "target_name",
+            "total_assertions",
+            "proven",
+            "failing",
+            "vacuous",
+            "covered",
+            "unreachable",
+            "unknown",
+            "error",
+            "timeout",
+            "skipped",
+        }
+        missing = sorted(required.difference(reader.fieldnames))
+        if missing:
+            fail(
+                f"fpv summary file missing required columns {missing}: {path} "
+                f"(found: {reader.fieldnames})"
+            )
+
+        out: dict[str, FPVSummaryRow] = {}
+        for idx, row in enumerate(reader, start=2):
+            target_name = (row.get("target_name") or "").strip()
+            if not target_name:
+                continue
+            if target_name in out:
+                fail(f"duplicate target_name '{target_name}' in {path} row {idx}")
+            out[target_name] = FPVSummaryRow(
+                target_name=target_name,
+                total_assertions=(row.get("total_assertions") or "").strip(),
+                proven=(row.get("proven") or "").strip(),
+                failing=(row.get("failing") or "").strip(),
+                vacuous=(row.get("vacuous") or "").strip(),
+                covered=(row.get("covered") or "").strip(),
+                unreachable=(row.get("unreachable") or "").strip(),
+                unknown=(row.get("unknown") or "").strip(),
+                error=(row.get("error") or "").strip(),
+                timeout=(row.get("timeout") or "").strip(),
+                skipped=(row.get("skipped") or "").strip(),
+            )
+    return out
+
+
+def write_fpv_summary_drift(path: Path, rows: list[tuple[str, str, str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(["target_name", "kind", "baseline", "current"])
+        for row in rows:
+            writer.writerow(row)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run OpenTitan FPV targets using compile contracts."
@@ -357,6 +481,31 @@ def parse_args() -> argparse.Namespace:
         "--fpv-summary-file",
         default=os.environ.get("BMC_FPV_SUMMARY_OUT", ""),
         help="Optional TSV output path for FPV-style assertion summary rows.",
+    )
+    parser.add_argument(
+        "--fpv-summary-baseline-file",
+        default=os.environ.get("BMC_FPV_SUMMARY_BASELINE_FILE", ""),
+        help="Optional baseline FPV summary TSV file for drift checking.",
+    )
+    parser.add_argument(
+        "--fpv-summary-drift-file",
+        default=os.environ.get("BMC_FPV_SUMMARY_DRIFT_OUT", ""),
+        help="Optional output TSV path for FPV summary drift rows.",
+    )
+    parser.add_argument(
+        "--fpv-summary-drift-allowlist-file",
+        default=os.environ.get("BMC_FPV_SUMMARY_DRIFT_ALLOWLIST_FILE", ""),
+        help=(
+            "Optional target-name allowlist file for FPV summary drift "
+            "suppression. Each non-comment line is exact:<name>, "
+            "prefix:<prefix>, regex:<pattern>, or bare exact."
+        ),
+    )
+    parser.add_argument(
+        "--fail-on-fpv-summary-drift",
+        action="store_true",
+        default=os.environ.get("BMC_FAIL_ON_FPV_SUMMARY_DRIFT", "0") == "1",
+        help="Fail when FPV summary drift is detected vs baseline.",
     )
     return parser.parse_args()
 
@@ -680,6 +829,82 @@ def main() -> int:
             fpv_summary_path = Path(args.fpv_summary_file)
             write_fpv_summary(merged_rows, merged_assertion_rows, fpv_summary_path)
             print(f"fpv summary: {fpv_summary_path}", flush=True)
+            if args.fpv_summary_baseline_file:
+                baseline_path = Path(args.fpv_summary_baseline_file).resolve()
+                current_path = fpv_summary_path.resolve()
+                baseline = read_fpv_summary(baseline_path)
+                current = read_fpv_summary(current_path)
+
+                allow_exact: set[str] = set()
+                allow_prefix: list[str] = []
+                allow_regex: list[re.Pattern[str]] = []
+                if args.fpv_summary_drift_allowlist_file:
+                    allow_exact, allow_prefix, allow_regex = load_allowlist(
+                        Path(args.fpv_summary_drift_allowlist_file).resolve()
+                    )
+
+                drift_rows: list[tuple[str, str, str, str]] = []
+                baseline_targets = set(baseline.keys())
+                current_targets = set(current.keys())
+
+                for target in sorted(baseline_targets - current_targets):
+                    if is_allowlisted(target, allow_exact, allow_prefix, allow_regex):
+                        continue
+                    drift_rows.append((target, "missing_in_current", "present", "absent"))
+                for target in sorted(current_targets - baseline_targets):
+                    if is_allowlisted(target, allow_exact, allow_prefix, allow_regex):
+                        continue
+                    drift_rows.append((target, "new_in_current", "absent", "present"))
+
+                for target in sorted(baseline_targets.intersection(current_targets)):
+                    if is_allowlisted(target, allow_exact, allow_prefix, allow_regex):
+                        continue
+                    b = baseline[target]
+                    c = current[target]
+                    for kind, before, after in [
+                        ("total_assertions", b.total_assertions, c.total_assertions),
+                        ("proven", b.proven, c.proven),
+                        ("failing", b.failing, c.failing),
+                        ("vacuous", b.vacuous, c.vacuous),
+                        ("covered", b.covered, c.covered),
+                        ("unreachable", b.unreachable, c.unreachable),
+                        ("unknown", b.unknown, c.unknown),
+                        ("error", b.error, c.error),
+                        ("timeout", b.timeout, c.timeout),
+                        ("skipped", b.skipped, c.skipped),
+                    ]:
+                        if before != after:
+                            drift_rows.append((target, kind, before, after))
+
+                if args.fpv_summary_drift_file:
+                    drift_path = Path(args.fpv_summary_drift_file).resolve()
+                    write_fpv_summary_drift(drift_path, drift_rows)
+                    print(f"fpv summary drift: {drift_path}", flush=True)
+
+                if drift_rows:
+                    sample = ", ".join(
+                        f"{target}:{kind}" for target, kind, _, _ in drift_rows[:6]
+                    )
+                    if len(drift_rows) > 6:
+                        sample += ", ..."
+                    message = (
+                        "opentitan fpv summary drift detected: "
+                        f"rows={len(drift_rows)} sample=[{sample}] "
+                        f"baseline={baseline_path} current={current_path}"
+                    )
+                    if args.fail_on_fpv_summary_drift:
+                        print(message, file=sys.stderr)
+                        return 1
+                    print(f"warning: {message}", file=sys.stderr)
+                else:
+                    print(
+                        (
+                            "opentitan fpv summary drift check passed: "
+                            f"targets={len(current)} baseline={baseline_path} "
+                            f"current={current_path}"
+                        ),
+                        file=sys.stderr,
+                    )
 
         total, passed, failed, xfailed, xpassed, errored, skipped = summarize(
             merged_rows
