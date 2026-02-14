@@ -1,0 +1,19 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal/conn_csvs
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: cp %S/../../utils/select_opentitan_connectivity_cfg.py %t/utils/select_opentitan_connectivity_cfg.py
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: "${OUT:?}"\nrule_filter=\"\"\nrule_shard_count=\"\"\nrule_shard_index=\"\"\ntarget_manifest=\"\"\nrules_manifest=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    --rule-filter) rule_filter=\"$2\"; shift 2 ;;\n    --rule-shard-count) rule_shard_count=\"$2\"; shift 2 ;;\n    --rule-shard-index) rule_shard_index=\"$2\"; shift 2 ;;\n    --target-manifest) target_manifest=\"$2\"; shift 2 ;;\n    --rules-manifest) rules_manifest=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n[[ \"$rule_filter\" == \"^RULE_\" ]] || { echo \"bad_rule_filter=$rule_filter\" >&2; exit 11; }\n[[ \"$rule_shard_count\" == \"4\" ]] || { echo \"bad_rule_shard_count=$rule_shard_count\" >&2; exit 12; }\n[[ \"$rule_shard_index\" == \"2\" ]] || { echo \"bad_rule_shard_index=$rule_shard_index\" >&2; exit 13; }\n[[ -s \"$target_manifest\" ]] || { echo \"missing_target_manifest=$target_manifest\" >&2; exit 14; }\n[[ -s \"$rules_manifest\" ]] || { echo \"missing_rules_manifest=$rules_manifest\" >&2; exit 15; }\n[[ \"${CIRCT_VERILOG:-}\" == \"%t/bin/circt-verilog\" ]] || { echo \"bad_circt_verilog=${CIRCT_VERILOG:-}\" >&2; exit 16; }\n[[ \"${CIRCT_OPT:-}\" == \"%t/bin/circt-opt\" ]] || { echo \"bad_circt_opt=${CIRCT_OPT:-}\" >&2; exit 17; }\n[[ \"${CIRCT_LEC:-}\" == \"%t/bin/circt-lec\" ]] || { echo \"bad_circt_lec=${CIRCT_LEC:-}\" >&2; exit 18; }\nprintf \"PASS\\tconnectivity::chip.csv:RULE_CLK\\t%t/out/opentitan-connectivity-lec-work\\topentitan\\tCONNECTIVITY_LEC\\tEQ\\n\" > \"$OUT\"\n' > %t/utils/run_opentitan_connectivity_circt_lec.py
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '{\n  "name": "chip_earlgrey_asic",\n  "fusesoc_core": "lowrisc:systems:chip_earlgrey_asic:0.1",\n  "conn_csvs_dir": "{proj_root}/hw/top_earlgrey/formal/conn_csvs",\n  "conn_csvs": ["{conn_csvs_dir}/chip.csv"]\n}\n' > %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson
+// RUN: printf ',NAME,SRC BLOCK,SRC SIGNAL,DEST BLOCK,DEST SIGNAL\nCONNECTION, RULE_CLK, top_earlgrey.u_src, clk_o, top_earlgrey.u_dst, clk_i\n' > %t/ot/hw/top_earlgrey/formal/conn_csvs/chip.csv
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/select_opentitan_connectivity_cfg.py %t/utils/run_opentitan_connectivity_circt_lec.py %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^opentitan/CONNECTIVITY_LEC$' --with-opentitan-connectivity-lec --opentitan %t/ot --circt-verilog %t/bin/circt-verilog --opentitan-connectivity-cfg %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson --opentitan-connectivity-rule-filter '^RULE_' --opentitan-connectivity-lec-rule-shard-count 4 --opentitan-connectivity-lec-rule-shard-index 2
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=CASE < %t/out/opentitan-connectivity-lec-results.txt
+//
+// SUMMARY: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
+// SUMMARY: opentitan{{[[:space:]]+}}CONNECTIVITY_LEC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
+// CASE: PASS{{[[:space:]]+}}connectivity::chip.csv:RULE_CLK{{[[:space:]]+}}{{.*}}opentitan{{[[:space:]]+}}CONNECTIVITY_LEC{{[[:space:]]+}}EQ
