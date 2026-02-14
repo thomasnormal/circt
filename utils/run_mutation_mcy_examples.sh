@@ -40,6 +40,8 @@ Options:
                            Fixed delay before retry attempts (default: 0)
   --circt-mut PATH         circt-mut binary or command (default: auto-detect)
   --yosys PATH             yosys binary (default: yosys)
+  --mutations-backend MODE  Mutation generation backend in non-smoke mode:
+                           yosys|native (default: yosys)
   --generate-count N       Mutations to generate in non-smoke mode (default: 32)
   --mutations-seed N       Seed used with --generate-mutations (default: 1)
   --mutations-modes CSV    Comma-separated mutate modes for auto-generation
@@ -320,6 +322,7 @@ EXAMPLES_ROOT="${HOME}/mcy/examples"
 OUT_DIR="${PWD}/mutation-mcy-examples-results"
 CIRCT_MUT=""
 YOSYS_BIN="${YOSYS:-yosys}"
+MUTATIONS_BACKEND="yosys"
 JOBS=1
 EXAMPLE_TIMEOUT_SEC=0
 EXAMPLE_RETRIES=0
@@ -2652,29 +2655,143 @@ EOS
       --create-mutated-script "$fake_create_mutated"
     )
   else
-    cmd+=(
-      --generate-mutations "$example_generate_count"
-      --mutations-top "$top"
-      --mutations-yosys "$YOSYS_RESOLVED"
-      --mutations-seed "$example_mutations_seed"
-    )
-    if [[ -n "$example_mutations_modes" ]]; then
-      cmd+=(--mutations-modes "$example_mutations_modes")
-    fi
-    if [[ -n "$example_mutations_mode_counts" ]]; then
-      cmd+=(--mutations-mode-counts "$example_mutations_mode_counts")
-    fi
-    if [[ -n "$example_mutations_mode_weights" ]]; then
-      cmd+=(--mutations-mode-weights "$example_mutations_mode_weights")
-    fi
-    if [[ -n "$example_mutations_profiles" ]]; then
-      cmd+=(--mutations-profiles "$example_mutations_profiles")
-    fi
-    if [[ -n "$example_mutations_cfg" ]]; then
-      cmd+=(--mutations-cfg "$example_mutations_cfg")
-    fi
-    if [[ -n "$example_mutations_select" ]]; then
-      cmd+=(--mutations-select "$example_mutations_select")
+    if [[ "$MUTATIONS_BACKEND" == "yosys" ]]; then
+      cmd+=(
+        --generate-mutations "$example_generate_count"
+        --mutations-top "$top"
+        --mutations-yosys "$YOSYS_RESOLVED"
+        --mutations-seed "$example_mutations_seed"
+      )
+      if [[ -n "$example_mutations_modes" ]]; then
+        cmd+=(--mutations-modes "$example_mutations_modes")
+      fi
+      if [[ -n "$example_mutations_mode_counts" ]]; then
+        cmd+=(--mutations-mode-counts "$example_mutations_mode_counts")
+      fi
+      if [[ -n "$example_mutations_mode_weights" ]]; then
+        cmd+=(--mutations-mode-weights "$example_mutations_mode_weights")
+      fi
+      if [[ -n "$example_mutations_profiles" ]]; then
+        cmd+=(--mutations-profiles "$example_mutations_profiles")
+      fi
+      if [[ -n "$example_mutations_cfg" ]]; then
+        cmd+=(--mutations-cfg "$example_mutations_cfg")
+      fi
+      if [[ -n "$example_mutations_select" ]]; then
+        cmd+=(--mutations-select "$example_mutations_select")
+      fi
+    else
+      mutations_file="${helper_dir}/native.mutations.txt"
+      native_create_mutated="${helper_dir}/native_create_mutated.py"
+      : > "$mutations_file"
+      native_ops=(
+        EQ_TO_NEQ
+        NEQ_TO_EQ
+        LT_TO_LE
+        GT_TO_GE
+        AND_TO_OR
+        OR_TO_AND
+        XOR_TO_OR
+        PLUS_TO_MINUS
+        MINUS_TO_PLUS
+        CONST0_TO_1
+        CONST1_TO_0
+      )
+      native_ops_count=${#native_ops[@]}
+      for ((mid=1; mid<=example_generate_count; ++mid)); do
+        op_idx=$(((mid - 1) % native_ops_count))
+        printf '%d NATIVE_%s
+' "$mid" "${native_ops[$op_idx]}" >> "$mutations_file"
+      done
+      cat > "$native_create_mutated" <<'EOS'
+#!/usr/bin/env python3
+import argparse
+import re
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument('-i', '--input', required=True)
+parser.add_argument('-o', '--output', required=True)
+parser.add_argument('-d', '--design', required=True)
+args = parser.parse_args()
+
+input_line = Path(args.input).read_text(encoding='utf-8').strip()
+parts = input_line.split(maxsplit=1)
+label = parts[1] if len(parts) > 1 else ''
+text = Path(args.design).read_text(encoding='utf-8')
+
+op = label
+if op.startswith('NATIVE_'):
+    op = op[len('NATIVE_'):]
+
+changed = False
+
+def replace_once(pattern, repl):
+    global changed
+    new_text, count = re.subn(pattern, repl, text, count=1)
+    return new_text, count
+
+if op == 'EQ_TO_NEQ':
+    text, count = replace_once(r'==', '!=')
+    changed = count > 0
+elif op == 'NEQ_TO_EQ':
+    text, count = replace_once(r'!=', '==')
+    changed = count > 0
+elif op == 'LT_TO_LE':
+    text, count = replace_once(r'(?<![<>=!])<(?![<>=])', '<=')
+    changed = count > 0
+elif op == 'GT_TO_GE':
+    text, count = replace_once(r'(?<![<>=!])>(?![<>=])', '>=')
+    changed = count > 0
+elif op == 'AND_TO_OR':
+    text, count = replace_once(r'&&', '||')
+    if count == 0:
+      text, count = replace_once(r'&', '|')
+    changed = count > 0
+elif op == 'OR_TO_AND':
+    text, count = replace_once(r'\|\|', '&&')
+    if count == 0:
+      text, count = replace_once(r'\|', '&')
+    changed = count > 0
+elif op == 'XOR_TO_OR':
+    text, count = replace_once(r'\^', '|')
+    changed = count > 0
+elif op == 'PLUS_TO_MINUS':
+    text, count = replace_once(r'\+', '-')
+    changed = count > 0
+elif op == 'MINUS_TO_PLUS':
+    text, count = replace_once(r'-', '+')
+    changed = count > 0
+elif op == 'CONST0_TO_1':
+    text, count = replace_once(r"1'b0", "1'b1")
+    if count == 0:
+      text, count = replace_once(r'\b0\b', '1')
+    changed = count > 0
+elif op == 'CONST1_TO_0':
+    text, count = replace_once(r"1'b1", "1'b0")
+    if count == 0:
+      text, count = replace_once(r'\b1\b', '0')
+    changed = count > 0
+
+if not changed:
+    m = re.search(r'assign\s+([^=]+?)\s*=\s*(.+?);', text, re.S)
+    if m:
+        lhs = m.group(1).strip()
+        rhs = m.group(2).strip()
+        repl = f'assign {lhs} = ~({rhs});'
+        text = text[:m.start()] + repl + text[m.end():]
+        changed = True
+
+if not changed:
+    text += f"\n// native_mutation_noop_fallback {label}\n"
+
+Path(args.output).write_text(text, encoding='utf-8')
+EOS
+      chmod +x "$native_create_mutated"
+      cmd+=(
+        --mutations-file "$mutations_file"
+        --create-mutated-script "$native_create_mutated"
+      )
     fi
   fi
 
@@ -2855,6 +2972,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --yosys)
       YOSYS_BIN="$2"
+      shift 2
+      ;;
+    --mutations-backend)
+      MUTATIONS_BACKEND="$2"
       shift 2
       ;;
     --generate-count)
@@ -3235,6 +3356,10 @@ if [[ -n "$MUTATIONS_MODE_COUNTS" && -n "$MUTATIONS_MODE_WEIGHTS" ]]; then
 fi
 if ! is_pos_int "$MUTATION_LIMIT"; then
   echo "--mutation-limit must be a positive integer: $MUTATION_LIMIT" >&2
+  exit 1
+fi
+if [[ "$MUTATIONS_BACKEND" != "yosys" && "$MUTATIONS_BACKEND" != "native" ]]; then
+  echo "--mutations-backend must be one of: yosys|native" >&2
   exit 1
 fi
 if ! is_nonneg_int "$MIN_DETECTED"; then
@@ -3734,9 +3859,13 @@ else
 fi
 
 if [[ "$SMOKE" -ne 1 ]]; then
-  if ! YOSYS_RESOLVED="$(resolve_tool "$YOSYS_BIN")"; then
-    echo "yosys not found or not executable: $YOSYS_BIN (use --smoke or --yosys PATH)" >&2
-    exit 1
+  if [[ "$MUTATIONS_BACKEND" == "yosys" ]]; then
+    if ! YOSYS_RESOLVED="$(resolve_tool "$YOSYS_BIN")"; then
+      echo "yosys not found or not executable: $YOSYS_BIN (use --smoke, --yosys PATH, or --mutations-backend native)" >&2
+      exit 1
+    fi
+  else
+    YOSYS_RESOLVED=""
   fi
 else
   YOSYS_RESOLVED=""

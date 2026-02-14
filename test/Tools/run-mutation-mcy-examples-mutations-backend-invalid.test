@@ -1,0 +1,3 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --mutations-backend bad 2>&1 | FileCheck %s
+
+// CHECK: --mutations-backend must be one of: yosys|native
