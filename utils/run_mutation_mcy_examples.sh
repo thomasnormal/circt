@@ -478,17 +478,41 @@ append_summary_row() {
     >> "$summary_file"
 }
 
-
-metric_value_or_zero() {
+metrics_triplet_or_zero() {
   local file="$1"
-  local key="$2"
-  local value
-  value="$(awk -F '\t' -v k="$key" '$1==k { print $2; found=1; exit } END { if (!found) print 0 }' "$file" 2>/dev/null || true)"
-  if [[ -z "$value" ]]; then
-    printf '0\n'
-  else
-    printf '%s\n' "$value"
-  fi
+  local key=""
+  local value=""
+  local detected="0"
+  local relevant="0"
+  local errors="0"
+  local seen_detected=0
+  local seen_relevant=0
+  local seen_errors=0
+
+  while IFS=$'\t' read -r key value _rest; do
+    case "$key" in
+      detected_mutants)
+        if [[ "$seen_detected" -eq 0 ]]; then
+          detected="${value:-0}"
+          seen_detected=1
+        fi
+        ;;
+      relevant_mutants)
+        if [[ "$seen_relevant" -eq 0 ]]; then
+          relevant="${value:-0}"
+          seen_relevant=1
+        fi
+        ;;
+      errors)
+        if [[ "$seen_errors" -eq 0 ]]; then
+          errors="${value:-0}"
+          seen_errors=1
+        fi
+        ;;
+    esac
+  done < "$file"
+
+  printf '%s\t%s\t%s\n' "$detected" "$relevant" "$errors"
 }
 
 append_drift_row() {
@@ -1154,9 +1178,7 @@ EOS
     status="PASS"
   fi
   if [[ -f "$metrics_file" ]]; then
-    detected="$(metric_value_or_zero "$metrics_file" "detected_mutants")"
-    relevant="$(metric_value_or_zero "$metrics_file" "relevant_mutants")"
-    errors="$(metric_value_or_zero "$metrics_file" "errors")"
+    IFS=$'\t' read -r detected relevant errors <<< "$(metrics_triplet_or_zero "$metrics_file")"
     detected="$(normalize_int_or_zero "$detected")"
     relevant="$(normalize_int_or_zero "$relevant")"
     errors="$(normalize_int_or_zero "$errors")"

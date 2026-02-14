@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1319 - February 14, 2026
+
+### Mutation Workflow: Single-Pass Metrics Parsing
+
+1. Replaced repeated per-key `metrics.tsv` scans with a single-pass parser in `utils/run_mutation_mcy_examples.sh`:
+   - added `metrics_triplet_or_zero()`
+   - parses `detected_mutants`, `relevant_mutants`, `errors` in one read pass.
+2. Preserved compatibility semantics:
+   - defaults to `0` for missing keys
+   - first occurrence wins for duplicate metric rows (matching prior awk behavior).
+3. Added focused regression:
+   - `test/Tools/run-mutation-mcy-examples-metrics-first-value-wins.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (38/38)
+- `./utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --smoke --out-dir /tmp/mcy-smoke-20260214-121406` PASS
+
 ## Iteration 1318 - February 14, 2026
 
 ### OpenTitan Connectivity: Native LEC Lane Execution
