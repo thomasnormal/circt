@@ -1,5 +1,6 @@
 add_circt_dialect_library(CIRCTHWTransforms
   HWAggregateToComb.cpp
+  HWExternalizeModules.cpp
   HWConvertBitcasts.cpp
   HWBypassInnerSymbols.cpp
   HWParameterizeConstantPorts.cpp

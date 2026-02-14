@@ -162,5 +162,23 @@ def HWConvertBitcasts : Pass<"hw-convert-bitcasts", "mlir::ModuleOp"> {
   let dependentDialects = ["comb::CombDialect"];
 }
 
+def HWExternalizeModules : Pass<"hw-externalize-modules", "mlir::ModuleOp"> {
+  let summary = "Convert selected hw.module ops to hw.module.extern";
+  let description = [{
+    This pass rewrites matching `hw.module` operations into
+    `hw.module.extern` declarations while preserving their symbols and port
+    interfaces.
+
+    This is useful for formal flows that need black-box abstractions for
+    selected modules without modifying source RTL.
+  }];
+  let options = [
+    ListOption<"moduleNames", "module-names", "std::string",
+               "Module symbols to externalize">,
+    Option<"allowMissing", "allow-missing", "bool", "false",
+           "Do not fail if requested module symbols are absent">
+  ];
+}
+
 
 #endif // CIRCT_DIALECT_HW_PASSES_TD

@@ -17,6 +17,7 @@ import argparse
 import csv
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -33,7 +34,11 @@ class ContractRow:
     target_name: str
     rel_path: str
     task_profile: str
+    task_known: bool
     setup_status: str
+    stopat_mode: str
+    stopat_count: int
+    blackbox_modules: tuple[str, ...]
     toplevels: tuple[str, ...]
     files: tuple[str, ...]
     include_dirs: tuple[str, ...]
@@ -63,6 +68,36 @@ def parse_nonnegative_int(raw: str, name: str) -> int:
     return value
 
 
+def parse_bool(raw: str, name: str) -> bool:
+    token = raw.strip().lower()
+    if token in {"1", "true", "yes"}:
+        return True
+    if token in {"0", "false", "no"}:
+        return False
+    fail(f"invalid {name}: {raw}")
+
+
+def parse_blackbox_modules(raw: str) -> tuple[str, ...]:
+    text = raw.strip()
+    if not text or text.lower() == "none":
+        return ()
+    modules: list[str] = []
+    seen: set[str] = set()
+    for token in text.split(","):
+        module = token.strip()
+        if not module:
+            continue
+        if not re.fullmatch(r"[^,\s]+", module):
+            fail(f"invalid blackbox policy token: {module}")
+        if module in seen:
+            continue
+        seen.add(module)
+        modules.append(module)
+    if not modules:
+        return ()
+    return tuple(modules)
+
+
 def read_compile_contracts(path: Path) -> list[ContractRow]:
     if not path.is_file():
         fail(f"compile-contracts file not found: {path}")
@@ -81,7 +116,12 @@ def read_compile_contracts(path: Path) -> list[ContractRow]:
         fail(f"compile-contracts file missing header row: {path}")
     required = {
         "target_name",
+        "task_profile",
+        "task_known",
         "setup_status",
+        "stopat_mode",
+        "stopat_count",
+        "blackbox_policy",
         "toplevel",
         "files",
         "include_dirs",
@@ -106,7 +146,15 @@ def read_compile_contracts(path: Path) -> list[ContractRow]:
                 target_name=target_name,
                 rel_path=(row.get("rel_path") or "").strip(),
                 task_profile=(row.get("task_profile") or "").strip(),
+                task_known=parse_bool((row.get("task_known") or "").strip(), "task_known"),
                 setup_status=setup_status,
+                stopat_mode=(row.get("stopat_mode") or "").strip().lower(),
+                stopat_count=parse_nonnegative_int(
+                    (row.get("stopat_count") or "0").strip(), "stopat_count"
+                ),
+                blackbox_modules=parse_blackbox_modules(
+                    (row.get("blackbox_policy") or "").strip()
+                ),
                 toplevels=parse_toplevels((row.get("toplevel") or "").strip()),
                 files=parse_semicolon_list((row.get("files") or "").strip()),
                 include_dirs=parse_semicolon_list(
@@ -235,10 +283,8 @@ def main() -> int:
         workdir = Path(tempfile.mkdtemp(prefix="opentitan-fpv-bmc-"))
         keep_workdir = args.keep_workdir
 
-    pairwise_results = workdir / "pairwise-results.tsv"
-    cases_file = workdir / "pairwise-cases.tsv"
     pre_rows: list[tuple[str, ...]] = []
-    case_lines: list[str] = []
+    grouped_case_lines: dict[tuple[str, ...], list[str]] = {}
 
     def add_contract_error(row: ContractRow, reason: str) -> None:
         case_id = row.target_name
@@ -259,6 +305,15 @@ def main() -> int:
         if row.setup_status == "error":
             add_contract_error(row, "compile_contract_setup_error")
             continue
+        if not row.task_known:
+            add_contract_error(row, "compile_contract_unknown_task")
+            continue
+        if row.stopat_mode not in {"none", "task_defined"}:
+            add_contract_error(row, "compile_contract_invalid_stopat_mode")
+            continue
+        if row.stopat_mode == "task_defined" and row.stopat_count > 0:
+            add_contract_error(row, "unsupported_stopat_injection")
+            continue
         if not row.toplevels:
             add_contract_error(row, "compile_contract_missing_toplevel")
             continue
@@ -270,10 +325,16 @@ def main() -> int:
             case_path = (
                 f"{row.rel_path}/{top}" if row.rel_path else f"{row.target_name}/{top}"
             )
-            contract_source = (
-                f"fpv_target:{row.target_name};task_profile:{row.task_profile or 'unknown'}"
+            blackbox_policy = (
+                ",".join(row.blackbox_modules) if row.blackbox_modules else "none"
             )
-            case_lines.append(
+            contract_source = (
+                f"fpv_target:{row.target_name};"
+                f"task_profile:{row.task_profile or 'unknown'};"
+                f"stopat_mode:{row.stopat_mode or 'none'};"
+                f"blackbox_policy:{blackbox_policy}"
+            )
+            grouped_case_lines.setdefault(row.blackbox_modules, []).append(
                 "\t".join(
                     [
                         case_id,
@@ -295,44 +356,139 @@ def main() -> int:
             )
 
     pairwise_runner = Path(__file__).resolve().with_name("run_pairwise_circt_bmc.py")
-    if case_lines and not pairwise_runner.is_file():
+    if grouped_case_lines and not pairwise_runner.is_file():
         fail(f"missing pairwise runner: {pairwise_runner}")
+
+    pairwise_result_files: list[Path] = []
+    drop_case_files: list[Path] = []
+    drop_reason_files: list[Path] = []
+    timeout_reason_files: list[Path] = []
+    resolved_contract_files: list[Path] = []
+
+    def merge_plain_files(sources: list[Path], dest: str) -> None:
+        if not dest:
+            return
+        out_path = Path(dest)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w", encoding="utf-8") as out_handle:
+            for src in sources:
+                if not src.exists():
+                    continue
+                content = src.read_text(encoding="utf-8")
+                if not content:
+                    continue
+                out_handle.write(content)
+                if not content.endswith("\n"):
+                    out_handle.write("\n")
+
+    def merge_resolved_contract_files(sources: list[Path], dest: str) -> None:
+        if not dest:
+            return
+        out_path = Path(dest)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_seen = False
+        with out_path.open("w", encoding="utf-8") as out_handle:
+            for src in sources:
+                if not src.exists():
+                    continue
+                for line in src.read_text(encoding="utf-8").splitlines():
+                    if not line:
+                        continue
+                    if line.startswith("#resolved_contract_schema_version="):
+                        if marker_seen:
+                            continue
+                        marker_seen = True
+                    out_handle.write(line + "\n")
 
     pairwise_rc = 0
     try:
-        if case_lines:
-            cases_file.write_text("\n".join(case_lines) + "\n", encoding="utf-8")
-            cmd = [
-                sys.executable,
-                str(pairwise_runner),
-                "--cases-file",
-                str(cases_file),
-                "--suite-name",
-                "opentitan",
-                "--mode-label",
-                mode_label,
-                "--bound",
-                str(bound),
-                "--ignore-asserts-until",
-                str(ignore_asserts_until),
-                "--workdir",
-                str(workdir / "pairwise-work"),
-                "--keep-workdir",
-                "--results-file",
-                str(pairwise_results),
-            ]
-            if args.drop_remark_cases_file:
-                cmd += ["--drop-remark-cases-file", args.drop_remark_cases_file]
-            if args.drop_remark_reasons_file:
-                cmd += ["--drop-remark-reasons-file", args.drop_remark_reasons_file]
-            if args.timeout_reasons_file:
-                cmd += ["--timeout-reasons-file", args.timeout_reasons_file]
-            if args.resolved_contracts_file:
-                cmd += ["--resolved-contracts-file", args.resolved_contracts_file]
-            pairwise_rc = subprocess.run(cmd, check=False).returncode
+        if grouped_case_lines:
+            base_prepare_core_passes = os.environ.get(
+                "BMC_PREPARE_CORE_PASSES",
+                "--lower-lec-llvm --reconcile-unrealized-casts",
+            ).strip()
+            for group_index, blackbox_modules in enumerate(sorted(grouped_case_lines)):
+                group_cases = grouped_case_lines[blackbox_modules]
+                group_cases_path = workdir / f"pairwise-cases-{group_index}.tsv"
+                group_results_path = workdir / f"pairwise-results-{group_index}.tsv"
+                group_workdir = workdir / f"pairwise-work-{group_index}"
+                group_cases_path.write_text(
+                    "\n".join(group_cases) + "\n", encoding="utf-8"
+                )
+                pairwise_result_files.append(group_results_path)
+
+                cmd = [
+                    sys.executable,
+                    str(pairwise_runner),
+                    "--cases-file",
+                    str(group_cases_path),
+                    "--suite-name",
+                    "opentitan",
+                    "--mode-label",
+                    mode_label,
+                    "--bound",
+                    str(bound),
+                    "--ignore-asserts-until",
+                    str(ignore_asserts_until),
+                    "--workdir",
+                    str(group_workdir),
+                    "--keep-workdir",
+                    "--results-file",
+                    str(group_results_path),
+                ]
+
+                if args.drop_remark_cases_file:
+                    group_drop_cases = (
+                        workdir / f"pairwise-drop-remark-cases-{group_index}.tsv"
+                    )
+                    drop_case_files.append(group_drop_cases)
+                    cmd += ["--drop-remark-cases-file", str(group_drop_cases)]
+                if args.drop_remark_reasons_file:
+                    group_drop_reasons = (
+                        workdir / f"pairwise-drop-remark-reasons-{group_index}.tsv"
+                    )
+                    drop_reason_files.append(group_drop_reasons)
+                    cmd += ["--drop-remark-reasons-file", str(group_drop_reasons)]
+                if args.timeout_reasons_file:
+                    group_timeout_reasons = (
+                        workdir / f"pairwise-timeout-reasons-{group_index}.tsv"
+                    )
+                    timeout_reason_files.append(group_timeout_reasons)
+                    cmd += ["--timeout-reasons-file", str(group_timeout_reasons)]
+                if args.resolved_contracts_file:
+                    group_resolved_contracts = (
+                        workdir / f"pairwise-resolved-contracts-{group_index}.tsv"
+                    )
+                    resolved_contract_files.append(group_resolved_contracts)
+                    cmd += ["--resolved-contracts-file", str(group_resolved_contracts)]
+
+                cmd_env = os.environ.copy()
+                if blackbox_modules:
+                    module_list = ",".join(blackbox_modules)
+                    externalize_pass = (
+                        f"--hw-externalize-modules=module-names={module_list}"
+                    )
+                    cmd_env["BMC_PREPARE_CORE_PASSES"] = (
+                        f"{externalize_pass} {base_prepare_core_passes}".strip()
+                    )
+                    print(
+                        "opentitan FPV BMC: applying blackbox policy via "
+                        f"BMC_PREPARE_CORE_PASSES={shlex.quote(cmd_env['BMC_PREPARE_CORE_PASSES'])}",
+                        flush=True,
+                    )
+                pairwise_rc = max(
+                    pairwise_rc, subprocess.run(cmd, check=False, env=cmd_env).returncode
+                )
+
+        merge_plain_files(drop_case_files, args.drop_remark_cases_file)
+        merge_plain_files(drop_reason_files, args.drop_remark_reasons_file)
+        merge_plain_files(timeout_reason_files, args.timeout_reasons_file)
+        merge_resolved_contract_files(resolved_contract_files, args.resolved_contracts_file)
 
         merged_rows = list(pre_rows)
-        if pairwise_results.exists():
+        for pairwise_results in pairwise_result_files:
+            if not pairwise_results.exists():
+                continue
             for line in pairwise_results.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
                 if not line:
