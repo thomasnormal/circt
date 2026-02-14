@@ -9880,6 +9880,64 @@ PY
   echo "${base_summary} ${timeout_stage_summary} ${frontend_error_summary}"
 }
 
+summarize_bmc_cover_file() {
+  local cover_file="$1"
+  if [[ ! -s "$cover_file" ]]; then
+    echo ""
+    return 0
+  fi
+  BMC_COVER_FILE="$cover_file" python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["BMC_COVER_FILE"])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+rows = 0
+covered = 0
+unreachable = 0
+timeout = 0
+unknown = 0
+skipped = 0
+error = 0
+
+for line in path.read_text(encoding="utf-8").splitlines():
+    if not line:
+        continue
+    parts = line.split("\t")
+    status = parts[0].strip().upper() if parts else ""
+    rows += 1
+    if status == "COVERED":
+        covered += 1
+    elif status == "UNREACHABLE":
+        unreachable += 1
+    elif status == "TIMEOUT":
+        timeout += 1
+    elif status == "UNKNOWN":
+        unknown += 1
+    elif status == "SKIP":
+        skipped += 1
+    else:
+        error += 1
+
+if rows <= 0:
+    print("")
+    raise SystemExit(0)
+
+print(
+    f"bmc_cover_total={rows} "
+    f"bmc_cover_covered={covered} "
+    f"bmc_cover_unreachable={unreachable} "
+    f"bmc_cover_timeout={timeout} "
+    f"bmc_cover_unknown={unknown} "
+    f"bmc_cover_skip={skipped} "
+    f"bmc_cover_error={error}"
+)
+PY
+}
+
 summarize_bmc_semantic_bucket_file() {
   local case_file="$1"
   local bucket_cases_out="${2:-}"
@@ -12012,6 +12070,7 @@ run_opentitan_connectivity_bmc_lane() {
   local workdir="$5"
   local timeout_reasons_file="$6"
   local resolved_contracts_file="$7"
+  local cover_results_file="$8"
 
   if ! lane_enabled "$lane_id"; then
     return
@@ -12023,6 +12082,7 @@ run_opentitan_connectivity_bmc_lane() {
   : > "$case_results"
   : > "$timeout_reasons_file"
   : > "$resolved_contracts_file"
+  : > "$cover_results_file"
   rm -rf "$workdir"
 
   local opentitan_connectivity_args=(
@@ -12041,6 +12101,7 @@ run_opentitan_connectivity_bmc_lane() {
   local opentitan_connectivity_env=(OUT="$case_results"
     BMC_TIMEOUT_REASON_CASES_OUT="$timeout_reasons_file"
     BMC_RESOLVED_CONTRACTS_OUT="$resolved_contracts_file"
+    BMC_COVER_RESULTS_OUT="$cover_results_file"
     CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN"
     CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
     CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN_OPENTITAN"
@@ -12139,6 +12200,11 @@ PY
   bmc_contract_summary="$(summarize_bmc_resolved_contracts_file "$resolved_contracts_file")"
   if [[ -n "$bmc_contract_summary" ]]; then
     summary="${summary} ${bmc_contract_summary}"
+  fi
+  local bmc_cover_summary
+  bmc_cover_summary="$(summarize_bmc_cover_file "$cover_results_file")"
+  if [[ -n "$bmc_cover_summary" ]]; then
+    summary="${summary} ${bmc_cover_summary}"
   fi
   append_filtered_min_total_violation total summary
   maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
@@ -12509,7 +12575,8 @@ if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" ]]; then
     "$OUT_DIR/opentitan-connectivity-bmc-results.txt" \
     "$OUT_DIR/opentitan-connectivity-bmc-work" \
     "$OUT_DIR/opentitan-connectivity-bmc-timeout-reasons.tsv" \
-    "$OUT_DIR/opentitan-connectivity-bmc-resolved-contracts.tsv"
+    "$OUT_DIR/opentitan-connectivity-bmc-resolved-contracts.tsv" \
+    "$OUT_DIR/opentitan-connectivity-bmc-cover-results.tsv"
 fi
 
 # OpenTitan connectivity LEC lane (optional)
