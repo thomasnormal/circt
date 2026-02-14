@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1310 - February 14, 2026
+
+### OpenTitan Formal Phase E: Connectivity BMC Execution Lane
+
+1. Added executable OpenTitan connectivity BMC runner:
+   - `utils/run_opentitan_connectivity_circt_bmc.py`
+   - consumes normalized connectivity manifests from
+     `select_opentitan_connectivity_cfg.py`
+   - resolves FuseSoC formal EDA inputs per target
+   - synthesizes bind-check SVA modules for `CONNECTION` rules
+   - delegates execution to generic `run_pairwise_circt_bmc.py`.
+2. Added deterministic connectivity-rule execution controls:
+   - `--rule-filter`
+   - `--rule-shard-count`
+   - `--rule-shard-index`
+3. Wired new connectivity execution lane through `utils/run_formal_all.sh`:
+   - `--with-opentitan-connectivity-bmc` (`opentitan/CONNECTIVITY_BMC`)
+   - `--opentitan-connectivity-rule-filter`
+   - `--opentitan-connectivity-bmc-rule-shard-count`
+   - `--opentitan-connectivity-bmc-rule-shard-index`
+   - strict validation / preflight / lane-state hash integration.
+4. Added focused regressions:
+   - `test/Tools/run-opentitan-connectivity-circt-bmc-basic.test`
+   - `test/Tools/run-opentitan-connectivity-circt-bmc-invalid-shard-index.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-bmc.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-bmc-requires-filter.test`
+   - `test/Tools/run-formal-all-opentitan-connectivity-bmc-rule-shard-index-validation.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/run_opentitan_connectivity_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-opentitan-connectivity-circt-bmc-basic.test build-test/test/Tools/run-opentitan-connectivity-circt-bmc-invalid-shard-index.test build-test/test/Tools/run-formal-all-opentitan-connectivity-bmc.test build-test/test/Tools/run-formal-all-opentitan-connectivity-bmc-requires-filter.test build-test/test/Tools/run-formal-all-opentitan-connectivity-bmc-rule-shard-index-validation.test` PASS (5/5)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-formal-all-opentitan-.*\\.test|run-opentitan-.*\\.test'` PASS (95/95)
+
 ## Iteration 1309 - February 14, 2026
 
 ### Mutation Workflow: Manifest-Scoped Generation Policy Overrides

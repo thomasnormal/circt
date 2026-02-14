@@ -1,0 +1,12 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/build/bin %t/ot/hw/top_earlgrey/formal
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/build/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/build/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/utils/run_opentitan_connectivity_circt_bmc.py
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib, sys\nargs = sys.argv[1:]\nfor i, arg in enumerate(args):\n  if arg == "--target-manifest" and i + 1 < len(args):\n    pathlib.Path(args[i + 1]).write_text("[]\\n", encoding="utf-8")\n  if arg == "--rules-manifest" and i + 1 < len(args):\n    pathlib.Path(args[i + 1]).write_text("[]\\n", encoding="utf-8")\nprint("Connectivity parse summary: targets=0 selected=0 rules=0 (connection=0 condition=0)")\n' > %t/utils/select_opentitan_connectivity_cfg.py
+// RUN: printf '{\n  "name": "chip_earlgrey_asic",\n  "fusesoc_core": "lowrisc:systems:chip_earlgrey_asic:0.1",\n  "conn_csvs": []\n}\n' > %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/build/bin/circt-verilog %t/build/bin/circt-bmc %t/utils/run_opentitan_connectivity_circt_bmc.py %t/utils/select_opentitan_connectivity_cfg.py
+// RUN: not bash -lc 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^opentitan/CONNECTIVITY_BMC$" --with-opentitan-connectivity-bmc --opentitan %t/ot --opentitan-connectivity-cfg %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson' 2>&1 | FileCheck %s
+//
+// CHECK: opentitan/CONNECTIVITY_BMC requires explicit filter: set --opentitan-connectivity-rule-filter
