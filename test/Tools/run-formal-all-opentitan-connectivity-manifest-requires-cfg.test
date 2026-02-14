@@ -1,0 +1,7 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh
+// RUN: not bash -lc 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^$" --opentitan-connectivity-target-manifest %t/manifest.tsv' 2>&1 | FileCheck %s
+//
+// CHECK: --opentitan-connectivity-target-manifest requires --opentitan-connectivity-cfg
