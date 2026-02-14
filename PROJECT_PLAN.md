@@ -249,6 +249,25 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      baseline-driven reason-drift artifact governance layer (baseline/update/
      allowlist drift reports) for FPV objective parity rows analogous to FPV
      BMC summary/assertion baseline flows.
+20e. Objective-parity baseline drift governance completed:
+   - added new checker:
+     - `utils/check_opentitan_fpv_objective_parity_drift.py`
+   - `run_formal_all.sh` now supports baseline lifecycle and drift controls
+     for FPV objective parity:
+     - `--opentitan-fpv-objective-parity-baseline-file`
+     - `--update-opentitan-fpv-objective-parity-baseline`
+     - `--opentitan-fpv-objective-parity-drift-file`
+     - `--opentitan-fpv-objective-parity-drift-allowlist-file`
+     - `--opentitan-fpv-objective-parity-drift-row-allowlist-file`
+     - `--fail-on-opentitan-fpv-objective-parity-drift`
+   - lane summaries now include objective-parity drift counters (total,
+     allowlisted/non-allowlisted, and drift-kind breakdown).
+20f. Remaining high-priority limitation (OpenTitan FPV objective parity depth):
+   - objective parity drift governance is now baseline-driven, but there is no
+     committed broad-target baseline pack yet for FPV objective parity
+     (multi-target `prim/ip/sec_cm` cohort snapshots).
+   - next step is to materialize reviewed cohort baselines and run strict-gated
+     cadence checks so objective-level drift is governed at OpenTitan scale.
 21. Frontend macro-compat retry hardening completed for FPV BMC ingestion:
    - added external preprocessor retry controls in
      `run_pairwise_circt_bmc.py`:
