@@ -237,6 +237,11 @@ verilator-verification, and yosys corpora).
 1. Phase A is complete:
    - `run_formal_all.sh` supports `--opentitan-fpv-cfg` + `--select-cfgs`
      selection semantics with deterministic target manifests.
+   - `--opentitan-fpv-cfg` is now repeatable, enabling deterministic
+     multi-bundle target selection across FPV category cfgs (`ip`, `prim`,
+     `sec_cm`) in a single planning run.
+   - duplicate target names across cfg bundles are now fail-closed when payload
+     metadata diverges, preventing ambiguous target resolution.
    - `utils/select_opentitan_formal_cfgs.py` resolves cfg import graphs and
      emits stable selected-target artifacts.
 2. Phase B is complete:

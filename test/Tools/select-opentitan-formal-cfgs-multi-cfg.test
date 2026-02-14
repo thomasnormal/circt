@@ -1,0 +1,10 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '{\n  "name": "top_earlgrey_fpv_prim_cfgs",\n  "flow": "formal",\n  "sub_flow": "fpv",\n  "use_cfgs": [\n    {\n      "name": "foo_prim_fpv",\n      "dut": "foo_prim_tb",\n      "fusesoc_core": "lowrisc:dv:foo_prim_fpv",\n      "task": "FpvDefault",\n      "rel_path": "hw/top_earlgrey/formal/prim/foo_prim"\n    }\n  ]\n}\n' > %t/top_earlgrey_fpv_prim_cfgs.hjson
+// RUN: printf '{\n  "name": "top_earlgrey_sec_cm_fpv_cfgs",\n  "flow": "formal",\n  "sub_flow": "fpv",\n  "use_cfgs": [\n    {\n      "name": "foo_sec_cm",\n      "dut": "foo_sec_cm_tb",\n      "fusesoc_core": "lowrisc:dv:foo_sec_cm",\n      "task": "FpvSecCm",\n      "stopats": [\"*u_state_regs.state_o\"],\n      "rel_path": "hw/top_earlgrey/formal/sec_cm/foo_sec_cm"\n    }\n  ]\n}\n' > %t/top_earlgrey_sec_cm_fpv_cfgs.hjson
+// RUN: python3 %S/../../utils/select_opentitan_formal_cfgs.py --cfg-file %t/top_earlgrey_fpv_prim_cfgs.hjson --cfg-file %t/top_earlgrey_sec_cm_fpv_cfgs.hjson --proj-root %t --select-cfgs 'foo_sec_cm,foo_prim_fpv' --out-manifest %t/manifest.tsv
+// RUN: FileCheck %s < %t/manifest.tsv
+//
+// CHECK: target_name{{[[:space:]]+}}dut{{[[:space:]]+}}fusesoc_core{{[[:space:]]+}}task{{[[:space:]]+}}stopats{{[[:space:]]+}}flow{{[[:space:]]+}}sub_flow{{[[:space:]]+}}rel_path{{[[:space:]]+}}source_kind{{[[:space:]]+}}source_cfg_file{{[[:space:]]+}}root_cfg_file
+// CHECK-NEXT: foo_sec_cm{{[[:space:]]+}}foo_sec_cm_tb{{[[:space:]]+}}lowrisc:dv:foo_sec_cm{{[[:space:]]+}}FpvSecCm{{[[:space:]]+}}{{.*u_state_regs.state_o.*}}{{[[:space:]]+}}formal{{[[:space:]]+}}fpv{{[[:space:]]+}}hw/top_earlgrey/formal/sec_cm/foo_sec_cm{{[[:space:]]+}}inline{{[[:space:]]+}}{{.*}}top_earlgrey_sec_cm_fpv_cfgs.hjson{{[[:space:]]+}}{{.*}}top_earlgrey_sec_cm_fpv_cfgs.hjson
+// CHECK-NEXT: foo_prim_fpv{{[[:space:]]+}}foo_prim_tb{{[[:space:]]+}}lowrisc:dv:foo_prim_fpv{{[[:space:]]+}}FpvDefault{{[[:space:]]+}}{{\[\]}}{{[[:space:]]+}}formal{{[[:space:]]+}}fpv{{[[:space:]]+}}hw/top_earlgrey/formal/prim/foo_prim{{[[:space:]]+}}inline{{[[:space:]]+}}{{.*}}top_earlgrey_fpv_prim_cfgs.hjson{{[[:space:]]+}}{{.*}}top_earlgrey_fpv_prim_cfgs.hjson

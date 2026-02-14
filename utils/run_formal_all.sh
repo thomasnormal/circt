@@ -940,7 +940,7 @@ Options:
                          Optional per-implementation OpenTitan BMC policy TSV
   --opentitan-fpv-cfg FILE
                          Optional OpenTitan FPV cfg HJSON for target-manifest
-                         selection planning
+                         selection planning (repeatable)
   --opentitan-connectivity-cfg FILE
                          Optional OpenTitan connectivity cfg HJSON
                          (e.g. chip_conn_cfg.hjson) for connectivity-manifest
@@ -1100,7 +1100,7 @@ Options:
                          `run_opentitan_fpv_circt_bmc.py` (default: 0)
   --select-cfgs LIST
                          Optional target names selected from
-                         `--opentitan-fpv-cfg` (repeatable; comma/space
+                         `--opentitan-fpv-cfg` cfg files (repeatable; comma/space
                          separated, dvsim-style)
   --opentitan-fpv-target-manifest FILE
                          Optional output path for selected OpenTitan FPV target
@@ -2783,7 +2783,7 @@ OPENTITAN_BMC_IMPL_FILTER=""
 OPENTITAN_BMC_BOUND="1"
 OPENTITAN_BMC_INCLUDE_MASKED=0
 OPENTITAN_BMC_CASE_POLICY_FILE=""
-OPENTITAN_FPV_CFG_FILE=""
+declare -a OPENTITAN_FPV_CFG_FILES=()
 OPENTITAN_FPV_TARGET_FILTER=""
 OPENTITAN_CONNECTIVITY_CFG_FILE=""
 OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE=""
@@ -2936,7 +2936,7 @@ while [[ $# -gt 0 ]]; do
     --opentitan-bmc-case-policy-file)
       OPENTITAN_BMC_CASE_POLICY_FILE="$2"; shift 2 ;;
     --opentitan-fpv-cfg)
-      OPENTITAN_FPV_CFG_FILE="$2"; shift 2 ;;
+      OPENTITAN_FPV_CFG_FILES+=("$2"); shift 2 ;;
     --opentitan-connectivity-cfg)
       OPENTITAN_CONNECTIVITY_CFG_FILE="$2"; shift 2 ;;
     --opentitan-connectivity-target-manifest)
@@ -3656,13 +3656,13 @@ YOSYS_DIR="$YOSYS_DIR_NORMALIZED"
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="$PWD/formal-results-${DATE_STR//-/}"
 fi
-if [[ -n "$OPENTITAN_FPV_CFG_FILE" && -z "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" ]]; then
+if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 && -z "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" ]]; then
   OPENTITAN_FPV_TARGET_MANIFEST_FILE="$OUT_DIR/opentitan-fpv-target-manifest.tsv"
 fi
-if [[ -n "$OPENTITAN_FPV_CFG_FILE" && -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE" ]]; then
+if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 && -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE" ]]; then
   OPENTITAN_FPV_COMPILE_CONTRACTS_FILE="$OUT_DIR/opentitan-fpv-compile-contracts.tsv"
 fi
-if [[ -n "$OPENTITAN_FPV_CFG_FILE" && -z "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE" ]]; then
+if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 && -z "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE" ]]; then
   OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE="$OUT_DIR/opentitan-fpv-compile-contract-drift.tsv"
 fi
 if [[ -n "$OPENTITAN_CONNECTIVITY_CFG_FILE" && -z "$OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE" ]]; then
@@ -4001,15 +4001,17 @@ if [[ -n "$OPENTITAN_BMC_CASE_POLICY_FILE" && ! -f "$OPENTITAN_BMC_CASE_POLICY_F
   echo "missing --opentitan-bmc-case-policy-file: $OPENTITAN_BMC_CASE_POLICY_FILE" >&2
   exit 1
 fi
-if [[ -n "$OPENTITAN_FPV_CFG_FILE" && ! -f "$OPENTITAN_FPV_CFG_FILE" ]]; then
-  echo "missing --opentitan-fpv-cfg file: $OPENTITAN_FPV_CFG_FILE" >&2
-  exit 1
-fi
+for OPENTITAN_FPV_CFG_FILE in "${OPENTITAN_FPV_CFG_FILES[@]}"; do
+  if [[ ! -f "$OPENTITAN_FPV_CFG_FILE" ]]; then
+    echo "missing --opentitan-fpv-cfg file: $OPENTITAN_FPV_CFG_FILE" >&2
+    exit 1
+  fi
+done
 if [[ -n "$OPENTITAN_CONNECTIVITY_CFG_FILE" && ! -f "$OPENTITAN_CONNECTIVITY_CFG_FILE" ]]; then
   echo "missing --opentitan-connectivity-cfg file: $OPENTITAN_CONNECTIVITY_CFG_FILE" >&2
   exit 1
 fi
-if [[ "${#OPENTITAN_SELECT_CFGS[@]}" -gt 0 && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ "${#OPENTITAN_SELECT_CFGS[@]}" -gt 0 && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--select-cfgs requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
@@ -4191,51 +4193,51 @@ if [[ "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY" != "ignore" && \
   echo "invalid --opentitan-connectivity-objective-parity-missing-policy: $OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY (expected ignore|case|all)" >&2
   exit 1
 fi
-if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--opentitan-fpv-target-filter requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
-if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ -n "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--opentitan-fpv-target-manifest requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
-if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--opentitan-fpv-compile-contracts requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
-if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--opentitan-fpv-compile-contracts-baseline-file requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
-if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--opentitan-fpv-compile-contract-drift-file requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
-if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--opentitan-fpv-compile-contract-drift-allowlist-file requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
-if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--opentitan-fpv-compile-contracts-workdir requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
-if [[ "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--opentitan-fpv-compile-contracts-keep-workdir requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
-if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--update-opentitan-fpv-compile-contracts-baseline requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
-if [[ "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--fail-on-opentitan-fpv-compile-contract-drift requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
-if [[ "$FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ "$FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--fail-on-opentitan-fpv-unknown-task requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
-if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" == "0" ]]; then
   echo "--with-opentitan-fpv-bmc requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
@@ -5841,7 +5843,7 @@ if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY_ALLOWLIST_FILE" && ! -r "
   echo "BMC/LEC contract-fingerprint case-ID parity allowlist file not readable: $BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY_ALLOWLIST_FILE" >&2
   exit 1
 fi
-if [[ "$STRICT_GATE" == "1" && -n "$OPENTITAN_FPV_CFG_FILE" && -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
+if [[ "$STRICT_GATE" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 && -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=1
 fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" ]]; then
@@ -5874,7 +5876,7 @@ if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && "$WI
       "$OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY" == "ignore" ]]; then
   OPENTITAN_CONNECTIVITY_OBJECTIVE_PARITY_MISSING_POLICY="case"
 fi
-if [[ "$STRICT_GATE" == "1" && -n "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ "$STRICT_GATE" == "1" && "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 ]]; then
   FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=1
 fi
 if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -8160,13 +8162,15 @@ fi
 
 mkdir -p "$OUT_DIR"
 
-if [[ -n "$OPENTITAN_FPV_CFG_FILE" ]]; then
+if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 ]]; then
   opentitan_select_cfg_args=()
+  for opentitan_fpv_cfg in "${OPENTITAN_FPV_CFG_FILES[@]}"; do
+    opentitan_select_cfg_args+=(--cfg-file "$opentitan_fpv_cfg")
+  done
   for opentitan_select_cfg in "${OPENTITAN_SELECT_CFGS[@]}"; do
     opentitan_select_cfg_args+=(--select-cfgs "$opentitan_select_cfg")
   done
   python3 "$SCRIPT_DIR/select_opentitan_formal_cfgs.py" \
-    --cfg-file "$OPENTITAN_FPV_CFG_FILE" \
     --proj-root "$OPENTITAN_DIR" \
     --out-manifest "$OPENTITAN_FPV_TARGET_MANIFEST_FILE" \
     "${opentitan_select_cfg_args[@]}"
@@ -8387,7 +8391,15 @@ compute_lane_state_config_hash() {
     printf "opentitan_bmc_bound=%s\n" "$OPENTITAN_BMC_BOUND"
     printf "opentitan_bmc_include_masked=%s\n" "$OPENTITAN_BMC_INCLUDE_MASKED"
     printf "opentitan_bmc_case_policy_file=%s\n" "$OPENTITAN_BMC_CASE_POLICY_FILE"
-    printf "opentitan_fpv_cfg_file=%s\n" "$OPENTITAN_FPV_CFG_FILE"
+    opentitan_fpv_cfg_first=""
+    if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 ]]; then
+      opentitan_fpv_cfg_first="${OPENTITAN_FPV_CFG_FILES[0]}"
+    fi
+    printf "opentitan_fpv_cfg_file=%s\n" "$opentitan_fpv_cfg_first"
+    printf "opentitan_fpv_cfg_file_count=%s\n" "${#OPENTITAN_FPV_CFG_FILES[@]}"
+    for opentitan_fpv_cfg in "${OPENTITAN_FPV_CFG_FILES[@]}"; do
+      printf "opentitan_fpv_cfg_files[]=%s\n" "$opentitan_fpv_cfg"
+    done
     printf "opentitan_connectivity_cfg_file=%s\n" "$OPENTITAN_CONNECTIVITY_CFG_FILE"
     printf "opentitan_connectivity_target_manifest_file=%s\n" "$OPENTITAN_CONNECTIVITY_TARGET_MANIFEST_FILE"
     printf "opentitan_connectivity_rules_manifest_file=%s\n" "$OPENTITAN_CONNECTIVITY_RULES_MANIFEST_FILE"

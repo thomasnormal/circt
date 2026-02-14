@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Resolve OpenTitan formal cfg targets with dvsim-like --select-cfgs semantics.
 
-This utility expands a top-level formal cfg HJSON file and emits a deterministic
-target manifest. It supports:
+This utility expands one or more top-level formal cfg HJSON files and emits a
+deterministic target manifest. It supports:
   - recursive `import_cfgs` loading
   - `use_cfgs` expansion (inline dict entries and string references by name)
   - ordered `--select-cfgs` filtering with unknown-target diagnostics
@@ -206,6 +206,35 @@ def expand_root_targets(
     return deduped
 
 
+def target_payload(row: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in row.items():
+        if key.startswith("_"):
+            continue
+        out[key] = value
+    return out
+
+
+def merge_expanded_targets(groups: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen_payloads: dict[str, dict[str, Any]] = {}
+    for rows in groups:
+        for row in rows:
+            name = row["name"]
+            payload = target_payload(row)
+            existing = seen_payloads.get(name)
+            if existing is None:
+                seen_payloads[name] = payload
+                merged.append(row)
+                continue
+            if existing != payload:
+                fail(
+                    "duplicate target name with conflicting payload across cfg files: "
+                    f"name='{name}'"
+                )
+    return merged
+
+
 def parse_select_cfg_tokens(raw_values: list[str]) -> list[str]:
     tokens: list[str] = []
     for raw in raw_values:
@@ -286,8 +315,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--cfg-file",
+        action="append",
         required=True,
-        help="OpenTitan formal cfg HJSON file (e.g. top_earlgrey_fpv_*.hjson)",
+        help=(
+            "OpenTitan formal cfg HJSON file "
+            "(repeatable; e.g. top_earlgrey_fpv_*.hjson)"
+        ),
     )
     parser.add_argument(
         "--select-cfgs",
@@ -310,25 +343,32 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cfg_path = Path(args.cfg_file).resolve()
+    cfg_paths = [Path(item).resolve() for item in args.cfg_file]
     out_path = Path(args.out_manifest).resolve()
     if args.proj_root:
         proj_root = Path(args.proj_root).resolve()
     else:
-        proj_root = infer_proj_root(cfg_path)
+        proj_root = infer_proj_root(cfg_paths[0])
 
     loaded: dict[Path, dict[str, Any]] = {}
-    load_cfg_recursive(cfg_path, proj_root, loaded, set())
-    root_cfg = loaded[cfg_path]
+    for cfg_path in cfg_paths:
+        load_cfg_recursive(cfg_path, proj_root, loaded, set())
     registry = build_named_registry(loaded)
-    expanded_targets = expand_root_targets(root_cfg, cfg_path, registry)
+    expanded_targets = merge_expanded_targets(
+        [
+            expand_root_targets(loaded[cfg_path], cfg_path, registry)
+            for cfg_path in cfg_paths
+        ]
+    )
     selected_names = parse_select_cfg_tokens(args.select_cfgs)
     selected_targets = select_targets(expanded_targets, selected_names)
     write_manifest(out_path, selected_targets)
 
+    cfg_files_rendered = ",".join(str(path) for path in cfg_paths)
     print(
-        f"opentitan cfg manifest: cfg={cfg_path} targets={len(selected_targets)} "
-        f"out={out_path}",
+        "opentitan cfg manifest: "
+        f"cfg_count={len(cfg_paths)} cfg_files={cfg_files_rendered} "
+        f"targets={len(selected_targets)} out={out_path}",
         file=sys.stderr,
     )
 
