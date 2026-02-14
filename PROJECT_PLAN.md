@@ -554,6 +554,21 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      - updated
        `test/Tools/run-formal-all-opentitan-fpv-objective-parity-requires-lec-assertions.test`
        to validate auto-production wiring.
+39. OpenTitan FPV LEC assertion semantics hardening completed:
+   - `utils/run_opentitan_fpv_circt_lec.py` no longer copies assertion status
+     classes from BMC objective rows.
+   - assertion rows now use assertion-native case-projected mapping:
+     - `PASS -> PROVEN`
+     - `FAIL -> FAILING`
+     - `UNKNOWN|TIMEOUT|SKIP|ERROR -> same status`
+   - cover evidence emission is now explicit opt-in
+     (`--emit-cover-evidence` / `LEC_FPV_EMIT_COVER_EVIDENCE=1`) to avoid
+     implicit pseudo-reachability signals from case-level LEC runs.
+   - added focused regressions:
+     - `test/Tools/run-opentitan-fpv-circt-lec-basic.test`
+       (assertion-native mapping + cover opt-in behavior)
+     - `test/Tools/run-opentitan-fpv-circt-lec-failing-status.test`
+       (NEQ -> `FAILING` assertion mapping).
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
@@ -950,11 +965,10 @@ verilator-verification, and yosys corpora).
 6. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
 7. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
 8. **FPV LEC semantic depth gap**: OpenTitan FPV objective-level parity now has
-   native CIRCT LEC evidence auto-production (no external LEC artifact
-   handoff required), but current LEC objective statuses are case-projected
-   operational evidence. Remaining maturity work is assertion-native LEC
-   objective semantics (and cover-reachability semantics) that are independent
-   from BMC objective status classes.
+   native CIRCT LEC evidence auto-production and assertion-native status
+   classes (no BMC status reuse), but evidence is still case-projected rather
+   than per-assertion LEC proof extraction. Cover semantics remain opt-in and
+   non-reachability-native.
 9. **OpenTitan macro frontend residual gap**: for representative IP targets
    (e.g. `pinmux_fpv`), retries now progress through
    `single_unit_preprocessor_failure` + Xilinx stub + unified include fallback,
@@ -968,6 +982,7 @@ verilator-verification, and yosys corpora).
 1. Validate and tune selector-based launch reason-event budget files (and allowlists) on larger OpenTitan and non-OpenTitan cohorts, then extend retry classification with additional platform-specific transient launch classes and policy-pack defaults.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
-4. Deepen native OpenTitan FPV LEC evidence semantics from case-projected
-   operational checks to assertion-native objective proofs/counterexamples and
-   cover-reachability classes, while preserving strict-gate parity governance.
+4. Deepen native OpenTitan FPV LEC evidence from case-projected objective
+   statuses to per-assertion proof/counterexample extraction, then add
+   cover-reachability-native objective classes with strict-gate parity
+   governance.
