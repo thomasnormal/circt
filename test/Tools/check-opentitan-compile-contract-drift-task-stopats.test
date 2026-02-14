@@ -1,14 +1,20 @@
 // RUN: rm -rf %t
 // RUN: mkdir -p %t
-// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\ttask\ttask_profile\ttask_known\tsetup_status\tcontract_fingerprint\tfile_count\tinclude_dir_count\tdefine_count\tstopats_fingerprint\nfoo_fpv\tFpvDefault\tfpv_default\t1\tok\tdeadbeefdeadbeef\t10\t2\t1\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' > %t/base.tsv
-// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\ttask\ttask_profile\ttask_known\tsetup_status\tcontract_fingerprint\tfile_count\tinclude_dir_count\tdefine_count\tstopats_fingerprint\nfoo_fpv\tFpvSecCm\tfpv_sec_cm\t1\tok\tdeadbeefdeadbeef\t10\t2\t1\tbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' > %t/current.tsv
+// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\ttask\ttask_profile\ttask_known\tstopat_mode\tblackbox_policy\ttask_policy_fingerprint\tsetup_status\tcontract_fingerprint\tfile_count\tinclude_dir_count\tdefine_count\tstopats_fingerprint\nfoo_fpv\tFpvDefault\tfpv_default\t1\tnone\tnone\t1111111111111111\tok\tdeadbeefdeadbeef\t10\t2\t1\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' > %t/base.tsv
+// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\ttask\ttask_profile\ttask_known\tstopat_mode\tblackbox_policy\ttask_policy_fingerprint\tsetup_status\tcontract_fingerprint\tfile_count\tinclude_dir_count\tdefine_count\tstopats_fingerprint\nfoo_fpv\tFpvSecCm\tfpv_sec_cm\t1\ttask_defined\tprim_count,prim_double_lfsr\t2222222222222222\tok\tdeadbeefdeadbeef\t10\t2\t1\tbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' > %t/current.tsv
 // RUN: not python3 %S/../../utils/check_opentitan_compile_contract_drift.py --baseline %t/base.tsv --current %t/current.tsv --out-drift-tsv %t/drift.tsv 2>&1 | FileCheck %s --check-prefix=LOG
 // RUN: FileCheck %s --check-prefix=DRIFT < %t/drift.tsv
 //
 // LOG: drift detected
 // LOG: foo_fpv:task
 // LOG: foo_fpv:task_profile
+// LOG: foo_fpv:stopat_mode
+// LOG: foo_fpv:blackbox_policy
+// LOG: foo_fpv:task_policy_fingerprint
 // LOG: foo_fpv:stopats_fingerprint
 // DRIFT: foo_fpv{{[[:space:]]+}}task{{[[:space:]]+}}FpvDefault{{[[:space:]]+}}FpvSecCm
 // DRIFT: foo_fpv{{[[:space:]]+}}task_profile{{[[:space:]]+}}fpv_default{{[[:space:]]+}}fpv_sec_cm
+// DRIFT: foo_fpv{{[[:space:]]+}}stopat_mode{{[[:space:]]+}}none{{[[:space:]]+}}task_defined
+// DRIFT: foo_fpv{{[[:space:]]+}}blackbox_policy{{[[:space:]]+}}none{{[[:space:]]+}}prim_count,prim_double_lfsr
+// DRIFT: foo_fpv{{[[:space:]]+}}task_policy_fingerprint{{[[:space:]]+}}1111111111111111{{[[:space:]]+}}2222222222222222
 // DRIFT: foo_fpv{{[[:space:]]+}}stopats_fingerprint{{[[:space:]]+}}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{{[[:space:]]+}}bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

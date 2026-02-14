@@ -1,0 +1,21 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: cp %S/../../utils/select_opentitan_formal_cfgs.py %t/utils/select_opentitan_formal_cfgs.py
+// RUN: cp %S/../../utils/check_opentitan_compile_contract_drift.py %t/utils/check_opentitan_compile_contract_drift.py
+// RUN: printf '#!/usr/bin/env python3\nimport os,pathlib,sys\nout=\"\"\nargs=sys.argv[1:]\nfor i,a in enumerate(args):\n  if a==\"--out-contracts\" and i+1 < len(args):\n    out=args[i+1]\nif not out:\n  raise SystemExit(10)\nmode=os.environ.get(\"OT_FPV_FAKE_POLICY_MODE\",\"base\")\nif mode==\"drift\":\n  blackbox=\"prim_count\"\n  policy_fp=\"bbbbbbbbbbbbbbbb\"\nelse:\n  blackbox=\"prim_count,prim_double_lfsr\"\n  policy_fp=\"aaaaaaaaaaaaaaaa\"\noutp=pathlib.Path(out)\noutp.parent.mkdir(parents=True, exist_ok=True)\noutp.write_text(\"\"\"#opentitan_compile_contract_schema_version=1\ntarget_name\tfusesoc_core\ttask\tflow\tsub_flow\trel_path\ttoplevel\tsetup_status\tfile_count\tinclude_dir_count\tdefine_count\tfiles_fingerprint\tinclude_dirs_fingerprint\tdefines_fingerprint\tcontract_fingerprint\tstopat_count\tstopats_fingerprint\tstopats\ttask_profile\ttask_known\tstopat_mode\tblackbox_policy\ttask_policy_fingerprint\tfiles\tinclude_dirs\tdefines\teda_yml_path\tsetup_log_path\tworkdir\nfoo_sec_cm\tlowrisc:fpv:foo_sec_cm\tFpvSecCm\tformal\tfpv\thw/top_earlgrey/formal/sec_cm/foo\tfoo_tb\tok\t10\t2\t1\t111\t222\t333\tdeadbeefdeadbeef\t1\t999\t*u_state_regs.state_o\tfpv_sec_cm\t1\ttask_defined\t\"\"\" + blackbox + \"\\t\" + policy_fp + \"\\t/tmp/a.sv\\t/tmp\\t\\t/tmp/eda.yml\\t/tmp/setup.log\\t/tmp/work\\n\", encoding=\"utf-8\")\n' > %t/utils/resolve_opentitan_formal_compile_contracts.py
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '{\n  "name": "top_earlgrey_fpv_sec_cm_cfgs",\n  "flow": "formal",\n  "sub_flow": "fpv",\n  "use_cfgs": [\n    {\n      "name": "foo_sec_cm",\n      "dut": "foo_tb",\n      "fusesoc_core": "lowrisc:fpv:foo_sec_cm",\n      "task": "FpvSecCm",\n      "stopats": ["*u_state_regs.state_o"],\n      "rel_path": "hw/top_earlgrey/formal/sec_cm/foo"\n    }\n  ]\n}\n' > %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/select_opentitan_formal_cfgs.py %t/utils/check_opentitan_compile_contract_drift.py %t/utils/resolve_opentitan_formal_compile_contracts.py %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec
+// RUN: cd %t && OT_FPV_FAKE_POLICY_MODE=base utils/run_formal_all.sh --out-dir %t/out-base --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --circt-verilog %t/bin/circt-verilog --include-lane-regex '^$' --opentitan %t/ot --opentitan-fpv-cfg %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson --select-cfgs "foo_sec_cm" --opentitan-fpv-compile-contracts-baseline-file %t/contracts-baseline.tsv --update-opentitan-fpv-compile-contracts-baseline
+// RUN: not sh -c 'cd %t && OT_FPV_FAKE_POLICY_MODE=drift utils/run_formal_all.sh --out-dir %t/out-drift --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --circt-verilog %t/bin/circt-verilog --include-lane-regex "^$" --opentitan %t/ot --opentitan-fpv-cfg %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson --select-cfgs "foo_sec_cm" --opentitan-fpv-compile-contracts-baseline-file %t/contracts-baseline.tsv --fail-on-opentitan-fpv-compile-contract-drift' 2>&1 | FileCheck %s --check-prefix=DRIFT
+// RUN: FileCheck %s --check-prefix=DRIFTTSV < %t/out-drift/opentitan-fpv-compile-contract-drift.tsv
+//
+// DRIFT: opentitan compile contract drift detected
+// DRIFT: foo_sec_cm:blackbox_policy
+// DRIFT: foo_sec_cm:task_policy_fingerprint
+// DRIFTTSV: foo_sec_cm{{[[:space:]]+}}blackbox_policy{{[[:space:]]+}}prim_count,prim_double_lfsr{{[[:space:]]+}}prim_count
+// DRIFTTSV: foo_sec_cm{{[[:space:]]+}}task_policy_fingerprint{{[[:space:]]+}}aaaaaaaaaaaaaaaa{{[[:space:]]+}}bbbbbbbbbbbbbbbb
