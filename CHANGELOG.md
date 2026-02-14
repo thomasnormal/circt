@@ -1,5 +1,57 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1347 - February 14, 2026
+
+### OpenTitan FPV BMC: Evidence-Parity Governance for Semantic Rollups
+
+1. Added a new checker utility:
+   - `utils/check_opentitan_fpv_bmc_evidence_parity.py`
+   - recomputes per-target FPV rollups from raw evidence artifacts:
+     - case results
+     - assertion results
+     - optional cover results
+   - compares recomputed counters against FPV summary counters:
+     - `total_assertions`, `proven`, `failing`, `vacuous`, `covered`,
+       `unreachable`, `unknown`, `error`, `timeout`, `skipped`
+   - emits deterministic mismatch rows with objective class tagging:
+     - `target`, `aggregate`, `assertion`, `cover`, `mixed`
+   - supports allowlist controls (`exact/prefix/regex`) and fail-on-mismatch.
+2. Extended `utils/run_formal_all.sh` with FPV evidence-parity lane wiring:
+   - lane:
+     - `opentitan/FPV_BMC_EVIDENCE_PARITY`
+   - new CLI controls:
+     - `--opentitan-fpv-bmc-evidence-parity-file`
+     - `--opentitan-fpv-bmc-evidence-parity-allowlist-file`
+     - `--fail-on-opentitan-fpv-bmc-evidence-parity`
+   - strict-gate behavior:
+     - auto-enables fail-on evidence parity when `--with-opentitan-fpv-bmc`.
+   - lane-filter dependency enforcement:
+     - evidence-parity lane requires source lane in filter
+       (`opentitan/FPV_BMC`).
+3. FPV BMC runner wiring now forwards cover-results artifact path from
+   `run_formal_all.sh`:
+   - `BMC_COVER_RESULTS_OUT="$OUT_DIR/opentitan-fpv-bmc-cover-results.tsv"`
+   enabling evidence parity to consume cover rows when produced.
+4. Added focused regressions:
+   - checker-level:
+     - `test/Tools/check-opentitan-fpv-bmc-evidence-parity-none.test`
+     - `test/Tools/check-opentitan-fpv-bmc-evidence-parity-fail.test`
+     - `test/Tools/check-opentitan-fpv-bmc-evidence-parity-allowlist.test`
+   - formal-driver-level:
+     - `test/Tools/run-formal-all-opentitan-fpv-bmc-evidence-parity-forwarding.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-bmc-evidence-parity-fail.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-bmc-evidence-parity-lane-deps.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-bmc-evidence-parity-allowlist-requires-gate.test`
+   - updated:
+     - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `python3 -m py_compile utils/check_opentitan_fpv_bmc_evidence_parity.py` PASS
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(check-opentitan-fpv-bmc-evidence-parity|run-formal-all-opentitan-fpv-bmc-evidence-parity|run-formal-all-opentitan-fpv-bmc|run-formal-all-help)'` PASS (22 selected)
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter '(run-formal-all-opentitan|check-opentitan)'` PASS (107 selected)
+
 ## Iteration 1346 - February 14, 2026
 
 ### Mutation Workflow: Per-Example Timeout Hardening

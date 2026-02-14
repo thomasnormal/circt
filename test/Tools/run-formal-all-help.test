@@ -148,6 +148,9 @@
 // CHECK: --opentitan-fpv-bmc-summary-drift-allowlist-file
 // CHECK: --update-opentitan-fpv-bmc-summary-baseline
 // CHECK: --fail-on-opentitan-fpv-bmc-summary-drift
+// CHECK: --opentitan-fpv-bmc-evidence-parity-file
+// CHECK: --opentitan-fpv-bmc-evidence-parity-allowlist-file
+// CHECK: --fail-on-opentitan-fpv-bmc-evidence-parity
 // CHECK: --opentitan-fpv-fusesoc-bin
 // CHECK: --opentitan-fpv-compile-contracts-workdir
 // CHECK: --opentitan-fpv-compile-contracts-keep-workdir

@@ -426,16 +426,16 @@ verilator-verification, and yosys corpora).
 8. **Connectivity parity depth gap**: connectivity cross-lane parity now covers
    per-rule case counters, resolved-contract fingerprints, shared
    cover-counters, and objective-level status drift with structured metadata
-   and explicit missing-objective policies; remaining gap is deeper
-   objective-semantics parity beyond connectivity status rows (propagating
-   vacuous/covered/unreachable evidence from FPV assertion/cover artifacts into
-   shared strict-gate governance across OpenTitan FPV and connectivity lanes).
+   and explicit missing-objective policies; OpenTitan FPV BMC now also has
+   evidence-vs-summary objective parity governance in the same strict-gate
+   plane; remaining gap is cross-lane FPV objective parity (BMC vs LEC) over
+   vacuous/covered/unreachable classes once FPV LEC evidence artifacts land.
 
 ### Next Long-Term Features (best long-term path)
 
 1. Extend launch-resilience policy beyond ETXTBSY (e.g., selected transient I/O launch races) with explicit strict-gate counters and per-reason retry telemetry.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
-4. Extend objective-level semantic governance from connectivity to FPV lanes:
-   ingest assertion/cover evidence artifacts and enforce cross-lane drift
-   policies on vacuous/covered/unreachable objective classes.
+4. Implement FPV cross-lane objective parity (BMC vs LEC) on normalized
+   assertion/cover evidence classes (`vacuous`, `covered`, `unreachable`) and
+   enforce strict-gate drift policies with allowlist support.

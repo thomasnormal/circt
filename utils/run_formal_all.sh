@@ -1137,6 +1137,16 @@ Options:
   --fail-on-opentitan-fpv-bmc-summary-drift
                          Fail when OpenTitan FPV assertion-summary drift checker
                          reports non-allowlisted drift
+  --opentitan-fpv-bmc-evidence-parity-file FILE
+                         Optional output path for OpenTitan FPV BMC evidence
+                         parity TSV (summary rollup vs raw evidence; default:
+                         OUT_DIR/opentitan-fpv-bmc-evidence-parity.tsv)
+  --opentitan-fpv-bmc-evidence-parity-allowlist-file FILE
+                         Optional allowlist file for OpenTitan FPV BMC evidence
+                         parity checks (target/kind exact/prefix/regex)
+  --fail-on-opentitan-fpv-bmc-evidence-parity
+                         Fail when OpenTitan FPV BMC evidence parity checker
+                         reports non-allowlisted drift
   --opentitan-fpv-fusesoc-bin PATH
                          FuseSoC executable used for OpenTitan FPV compile
                          contract resolution (default: fusesoc)
@@ -2814,6 +2824,8 @@ OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE=""
 OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE=""
 OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE=""
 OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE=""
+OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE=""
+OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE=""
 OPENTITAN_FPV_FUSESOC_BIN="fusesoc"
 OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR=""
 OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR=0
@@ -2821,6 +2833,7 @@ UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE=0
 FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=0
 UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE=0
 FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=0
+FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY=0
 UPDATE_OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE=0
 FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT=0
 UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE=0
@@ -3024,6 +3037,10 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE="$2"; shift 2 ;;
     --opentitan-fpv-bmc-summary-drift-allowlist-file)
       OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-evidence-parity-file)
+      OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-evidence-parity-allowlist-file)
+      OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE="$2"; shift 2 ;;
     --opentitan-fpv-fusesoc-bin)
       OPENTITAN_FPV_FUSESOC_BIN="$2"; shift 2 ;;
     --opentitan-fpv-compile-contracts-workdir)
@@ -3038,6 +3055,8 @@ while [[ $# -gt 0 ]]; do
       UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE=1; shift ;;
     --fail-on-opentitan-fpv-bmc-summary-drift)
       FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=1; shift ;;
+    --fail-on-opentitan-fpv-bmc-evidence-parity)
+      FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY=1; shift ;;
     --fail-on-opentitan-fpv-unknown-task)
       FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=1; shift ;;
     --opentitan-lec-impl-filter)
@@ -3655,6 +3674,9 @@ fi
 if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && -z "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE" ]]; then
   OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE="$OUT_DIR/opentitan-fpv-bmc-fpv-summary-drift.tsv"
 fi
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -z "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE" ]]; then
+  OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE="$OUT_DIR/opentitan-fpv-bmc-evidence-parity.tsv"
+fi
 if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && -n "$OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE_FILE" && -z "$OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_FILE" ]]; then
   OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_FILE="$OUT_DIR/opentitan-connectivity-bmc-status-drift.tsv"
 fi
@@ -4229,12 +4251,24 @@ if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && "$WITH_OPENTITAN_F
   echo "--opentitan-fpv-bmc-summary-drift-allowlist-file requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
+if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-evidence-parity-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-evidence-parity-allowlist-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
 if [[ "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
   echo "--update-opentitan-fpv-bmc-summary-baseline requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
   echo "--fail-on-opentitan-fpv-bmc-summary-drift requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--fail-on-opentitan-fpv-bmc-evidence-parity requires --with-opentitan-fpv-bmc" >&2
   exit 1
 fi
 if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" && -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
@@ -4271,6 +4305,10 @@ if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTI
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" ]]; then
   echo "OpenTitan FPV BMC summary drift allowlist file not readable: $OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" ]]; then
+  echo "OpenTitan FPV BMC evidence parity allowlist file not readable: $OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
@@ -5809,6 +5847,9 @@ fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=1
 fi
+if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" ]]; then
+  FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY=1
+fi
 if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" && -n "$OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT=1
 fi
@@ -5842,6 +5883,10 @@ if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPE
 fi
 if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--opentitan-fpv-bmc-summary-drift-allowlist-file requires --fail-on-opentitan-fpv-bmc-summary-drift or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-evidence-parity-allowlist-file requires --fail-on-opentitan-fpv-bmc-evidence-parity or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -8383,6 +8428,8 @@ compute_lane_state_config_hash() {
     printf "opentitan_fpv_bmc_summary_baseline_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE"
     printf "opentitan_fpv_bmc_summary_drift_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE"
     printf "opentitan_fpv_bmc_summary_drift_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE"
+    printf "opentitan_fpv_bmc_evidence_parity_file=%s\n" "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE"
+    printf "opentitan_fpv_bmc_evidence_parity_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE"
     printf "opentitan_fpv_fusesoc_bin=%s\n" "$OPENTITAN_FPV_FUSESOC_BIN"
     printf "opentitan_fpv_compile_contracts_workdir=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR"
     printf "opentitan_fpv_compile_contracts_keep_workdir=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR"
@@ -8390,6 +8437,7 @@ compute_lane_state_config_hash() {
     printf "fail_on_opentitan_fpv_compile_contract_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT"
     printf "update_opentitan_fpv_bmc_summary_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE"
     printf "fail_on_opentitan_fpv_bmc_summary_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT"
+    printf "fail_on_opentitan_fpv_bmc_evidence_parity=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY"
     printf "update_opentitan_connectivity_bmc_status_baseline=%s\n" "$UPDATE_OPENTITAN_CONNECTIVITY_BMC_STATUS_BASELINE"
     printf "fail_on_opentitan_connectivity_bmc_status_drift=%s\n" "$FAIL_ON_OPENTITAN_CONNECTIVITY_BMC_STATUS_DRIFT"
     printf "update_opentitan_connectivity_lec_status_baseline=%s\n" "$UPDATE_OPENTITAN_CONNECTIVITY_LEC_STATUS_BASELINE"
@@ -9333,6 +9381,12 @@ if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]] && lane_enabled "opentitan/FPV_BMC"; t
     exit 1
   fi
 fi
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]] && lane_enabled "opentitan/FPV_BMC_EVIDENCE_PARITY"; then
+  if ! lane_enabled "opentitan/FPV_BMC"; then
+    echo "opentitan/FPV_BMC_EVIDENCE_PARITY requires source lane in filter: include opentitan/FPV_BMC" >&2
+    exit 1
+  fi
+fi
 if [[ "$WITH_OPENTITAN_CONNECTIVITY_BMC" == "1" ]] && lane_enabled "opentitan/CONNECTIVITY_BMC"; then
   if [[ -z "$OPENTITAN_CONNECTIVITY_RULE_FILTER" ]]; then
     echo "opentitan/CONNECTIVITY_BMC requires explicit filter: set --opentitan-connectivity-rule-filter" >&2
@@ -9436,6 +9490,7 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   need_yosys_lec_runner=0
   need_opentitan_bmc_runner=0
   need_opentitan_fpv_bmc_runner=0
+  need_opentitan_fpv_bmc_evidence_parity_checker=0
   need_opentitan_connectivity_parser=0
   need_opentitan_connectivity_bmc_runner=0
   need_opentitan_connectivity_lec_runner=0
@@ -9497,6 +9552,9 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]] && lane_enabled "opentitan/FPV_BMC"; then
     need_opentitan_bmc_lanes=1
     need_opentitan_fpv_bmc_runner=1
+  fi
+  if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]] && lane_enabled "opentitan/FPV_BMC_EVIDENCE_PARITY"; then
+    need_opentitan_fpv_bmc_evidence_parity_checker=1
   fi
   if [[ "$WITH_OPENTITAN_CONNECTIVITY_PARSE" == "1" ]] && lane_enabled "opentitan/CONNECTIVITY_PARSE"; then
     need_opentitan_connectivity_parser=1
@@ -9626,6 +9684,9 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   fi
   if [[ "$need_opentitan_fpv_bmc_runner" == "1" ]]; then
     require_executable_tool "OpenTitan FPV BMC runner" "utils/run_opentitan_fpv_circt_bmc.py"
+  fi
+  if [[ "$need_opentitan_fpv_bmc_evidence_parity_checker" == "1" ]]; then
+    require_executable_tool "OpenTitan FPV BMC evidence parity checker" "utils/check_opentitan_fpv_bmc_evidence_parity.py"
   fi
   if [[ "$need_opentitan_connectivity_parser" == "1" ]]; then
     require_executable_tool "OpenTitan connectivity parser" "utils/select_opentitan_connectivity_cfg.py"
@@ -13338,6 +13399,153 @@ PY
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
 }
 
+run_opentitan_fpv_bmc_evidence_parity_lane() {
+  local lane_id="$1"
+  local mode_name="$2"
+  local suite_name="$3"
+  local case_results_file="$4"
+  local assertion_results_file="$5"
+  local cover_results_file="$6"
+  local fpv_summary_file="$7"
+  local parity_file="$8"
+
+  if ! lane_enabled "$lane_id"; then
+    return
+  fi
+  if lane_resume_from_state "$lane_id"; then
+    return
+  fi
+
+  if [[ -n "$parity_file" ]]; then
+    : > "$parity_file"
+  fi
+
+  if [[ ! -s "$case_results_file" || ! -s "$fpv_summary_file" || ! -f "$assertion_results_file" ]]; then
+    local summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_fpv_evidence_artifacts=1"
+    if [[ ! -s "$case_results_file" ]]; then
+      summary="${summary} missing_case_results=1"
+    fi
+    if [[ ! -f "$assertion_results_file" ]]; then
+      summary="${summary} missing_assertion_results=1"
+    fi
+    if [[ ! -s "$fpv_summary_file" ]]; then
+      summary="${summary} missing_fpv_summary=1"
+    fi
+    record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$summary"
+    return
+  fi
+
+  local parity_args=(
+    --case-results "$case_results_file"
+    --assertion-results "$assertion_results_file"
+    --fpv-summary "$fpv_summary_file"
+  )
+  if [[ -n "$cover_results_file" && -f "$cover_results_file" ]]; then
+    parity_args+=(--cover-results "$cover_results_file")
+  fi
+  if [[ -n "$parity_file" ]]; then
+    parity_args+=(--out-parity-tsv "$parity_file")
+  fi
+  if [[ -n "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE" ]]; then
+    parity_args+=(--allowlist-file "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_ALLOWLIST_FILE")
+  fi
+  if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_EVIDENCE_PARITY" == "1" ]]; then
+    parity_args+=(--fail-on-mismatch)
+  fi
+
+  local parity_ec=0
+  run_suite "$suite_name" \
+    python3 "$SCRIPT_DIR/check_opentitan_fpv_bmc_evidence_parity.py" "${parity_args[@]}" || parity_ec=$?
+
+  local parity_total_rows=0
+  local parity_allowlisted_rows=0
+  local parity_target_rows=0
+  local parity_assertion_rows=0
+  local parity_cover_rows=0
+  local parity_mixed_rows=0
+  local parity_aggregate_rows=0
+  local parity_vacuous_rows=0
+  local parity_covered_rows=0
+  local parity_unreachable_rows=0
+  if [[ -n "$parity_file" && -f "$parity_file" ]]; then
+    local parity_counts
+    parity_counts="$(
+      OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE="$parity_file" python3 - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+path = Path(os.environ["OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE"])
+total = 0
+allowlisted = 0
+target_rows = 0
+assertion_rows = 0
+cover_rows = 0
+mixed_rows = 0
+aggregate_rows = 0
+vacuous_rows = 0
+covered_rows = 0
+unreachable_rows = 0
+if path.is_file():
+  with path.open(encoding="utf-8", newline="") as handle:
+    reader = csv.DictReader(handle, delimiter="\t")
+    if reader.fieldnames:
+      for row in reader:
+        total += 1
+        objective_class = (row.get("objective_class") or "").strip()
+        kind = (row.get("kind") or "").strip()
+        if objective_class == "target":
+          target_rows += 1
+        elif objective_class == "assertion":
+          assertion_rows += 1
+        elif objective_class == "cover":
+          cover_rows += 1
+        elif objective_class == "aggregate":
+          aggregate_rows += 1
+        else:
+          mixed_rows += 1
+        if kind == "vacuous":
+          vacuous_rows += 1
+        elif kind == "covered":
+          covered_rows += 1
+        elif kind == "unreachable":
+          unreachable_rows += 1
+        if (row.get("allowlisted") or "").strip() == "1":
+          allowlisted += 1
+print(
+    f"{total}\t{allowlisted}\t{target_rows}\t{assertion_rows}\t"
+    f"{cover_rows}\t{mixed_rows}\t{aggregate_rows}\t{vacuous_rows}\t"
+    f"{covered_rows}\t{unreachable_rows}"
+)
+PY
+    )"
+    IFS=$'\t' read -r \
+      parity_total_rows parity_allowlisted_rows \
+      parity_target_rows parity_assertion_rows parity_cover_rows \
+      parity_mixed_rows parity_aggregate_rows \
+      parity_vacuous_rows parity_covered_rows parity_unreachable_rows <<< "$parity_counts"
+  fi
+  local parity_non_allowlisted_rows=$((parity_total_rows - parity_allowlisted_rows))
+  if (( parity_non_allowlisted_rows < 0 )); then
+    parity_non_allowlisted_rows=0
+  fi
+
+  local total=1
+  local pass=0
+  local fail=0
+  local xfail=0
+  local xpass=0
+  local error=0
+  local skip=0
+  if [[ "$parity_ec" == "0" ]]; then
+    pass=1
+  else
+    error=1
+  fi
+  local summary="total=1 pass=${pass} fail=0 xfail=0 xpass=0 error=${error} skip=0 fpv_evidence_parity_rows=${parity_total_rows} fpv_evidence_parity_non_allowlisted_rows=${parity_non_allowlisted_rows} fpv_evidence_parity_allowlisted_rows=${parity_allowlisted_rows} fpv_evidence_parity_target_rows=${parity_target_rows} fpv_evidence_parity_assertion_rows=${parity_assertion_rows} fpv_evidence_parity_cover_rows=${parity_cover_rows} fpv_evidence_parity_mixed_rows=${parity_mixed_rows} fpv_evidence_parity_aggregate_rows=${parity_aggregate_rows} fpv_evidence_parity_vacuous_rows=${parity_vacuous_rows} fpv_evidence_parity_covered_rows=${parity_covered_rows} fpv_evidence_parity_unreachable_rows=${parity_unreachable_rows}"
+  record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
+}
+
 run_opentitan_fpv_bmc_lane() {
   local lane_id="$1"
   local mode_name="$2"
@@ -13350,7 +13558,8 @@ run_opentitan_fpv_bmc_lane() {
   local resolved_contracts_file="$9"
   local lane_assume_known_inputs="${10}"
   local assertion_results_file="${11}"
-  local fpv_summary_file="${12}"
+  local cover_results_file="${12}"
+  local fpv_summary_file="${13}"
 
   if ! lane_enabled "$lane_id"; then
     return
@@ -13365,6 +13574,7 @@ run_opentitan_fpv_bmc_lane() {
   : > "$timeout_reasons_file"
   : > "$resolved_contracts_file"
   : > "$assertion_results_file"
+  : > "$cover_results_file"
   : > "$fpv_summary_file"
   if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE" ]]; then
     : > "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE"
@@ -13396,6 +13606,7 @@ run_opentitan_fpv_bmc_lane() {
     BMC_TIMEOUT_REASON_CASES_OUT="$timeout_reasons_file"
     BMC_RESOLVED_CONTRACTS_OUT="$resolved_contracts_file"
     BMC_ASSERTION_RESULTS_OUT="$assertion_results_file"
+    BMC_COVER_RESULTS_OUT="$cover_results_file"
     BMC_FPV_SUMMARY_OUT="$fpv_summary_file"
     CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN"
     CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
@@ -13652,7 +13863,21 @@ if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]]; then
     "$OUT_DIR/opentitan-fpv-bmc-resolved-contracts.tsv" \
     "$BMC_ASSUME_KNOWN_INPUTS" \
     "$OUT_DIR/opentitan-fpv-bmc-assertion-results.tsv" \
+    "$OUT_DIR/opentitan-fpv-bmc-cover-results.tsv" \
     "$OUT_DIR/opentitan-fpv-bmc-fpv-summary.tsv"
+fi
+
+# OpenTitan FPV BMC evidence parity lane (optional)
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]]; then
+  run_opentitan_fpv_bmc_evidence_parity_lane \
+    "opentitan/FPV_BMC_EVIDENCE_PARITY" \
+    "FPV_BMC_EVIDENCE_PARITY" \
+    "opentitan-fpv-bmc-evidence-parity" \
+    "$OUT_DIR/opentitan-fpv-bmc-results.txt" \
+    "$OUT_DIR/opentitan-fpv-bmc-assertion-results.tsv" \
+    "$OUT_DIR/opentitan-fpv-bmc-cover-results.tsv" \
+    "$OUT_DIR/opentitan-fpv-bmc-fpv-summary.tsv" \
+    "$OPENTITAN_FPV_BMC_EVIDENCE_PARITY_FILE"
 fi
 
 # OpenTitan strict BMC audit lane (optional)
