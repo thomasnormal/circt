@@ -1,0 +1,6 @@
+// RUN: touch %t.allow
+// RUN: not %S/../../utils/run_formal_all.sh --bmc-launch-reason-key-allowlist-file %t.allow 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: not %S/../../utils/run_formal_all.sh --lec-launch-reason-key-allowlist-file %t.allow 2>&1 | FileCheck %s --check-prefix=LEC
+//
+// BMC: --bmc-launch-reason-key-allowlist-file requires --fail-on-new-bmc-launch-reason-keys or --strict-gate
+// LEC: --lec-launch-reason-key-allowlist-file requires --fail-on-new-lec-launch-reason-keys or --strict-gate
