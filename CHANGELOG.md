@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1368 - February 14, 2026
+
+### Mutation Workflow: Strict Retry-Reason Baseline Parity Governance
+
+1. Fixed strict retry-reason governance wiring in
+   `utils/run_mutation_mcy_examples.sh`:
+   - restored strict-bundle activation for
+     `--strict-retry-reason-baseline-governance`
+   - strict mode now correctly enables:
+     - `--require-retry-reason-baseline-schema-artifacts`
+     - `--require-retry-reason-schema-artifact-validity`
+     - `--require-retry-reason-baseline-parity`
+2. Extended retry-reason drift parity coverage and tests for baseline/current
+   row mismatches:
+   - `missing_current_row`
+   - `unexpected_current_row`
+3. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-require-retry-reason-baseline-parity-requires-retry-reason-diff.test`
+   - `test/Tools/run-mutation-mcy-examples-retry-reason-baseline-parity-unexpected-current-row-fail.test`
+   - `test/Tools/run-mutation-mcy-examples-strict-retry-reason-baseline-governance-parity-fail.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-mutation-mcy-examples-help.test build-test/test/Tools/run-mutation-mcy-examples-require-retry-reason-baseline-parity-requires-retry-reason-diff.test build-test/test/Tools/run-mutation-mcy-examples-retry-reason-baseline-parity-unexpected-current-row-fail.test build-test/test/Tools/run-mutation-mcy-examples-strict-retry-reason-baseline-governance-parity-fail.test` PASS (4/4)
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (101 selected)
+
+
 ## Iteration 1367 - February 14, 2026
 
 ### Formal Strict Gate: Launch-Event Absolute Policies + Reason-Key Allowlisting
