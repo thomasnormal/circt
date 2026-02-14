@@ -33,6 +33,8 @@
 // CHECK-DAG: --baseline-file
 // CHECK-DAG: --suite-baseline-history-file
 // CHECK-DAG: --suite-history-percentile
+// CHECK-DAG: --example-baseline-history-file
+// CHECK-DAG: --example-history-percentile
 // CHECK-DAG: --retry-reason-baseline-file
 // CHECK-DAG: --retry-reason-baseline-schema-version-file
 // CHECK-DAG: --retry-reason-baseline-schema-contract-file
