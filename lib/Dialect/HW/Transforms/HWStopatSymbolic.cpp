@@ -65,7 +65,7 @@ static std::optional<StopatSelector> parseStopatSelector(StringRef raw,
   SmallVector<StringRef> parts;
   token.split(parts, '.', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
   if (parts.size() < 2) {
-    error = "unsupported selector form (expected 'inst.port' or '*inst.port')";
+    error = "unsupported selector form (expected 'inst[.inst...].port' or '*inst[.inst...].port')";
     return std::nullopt;
   }
 

@@ -1,0 +1,11 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/src %t/work
+// RUN: cp %S/../../utils/run_opentitan_fpv_circt_bmc.py %t/utils/run_opentitan_fpv_circt_bmc.py
+// RUN: chmod +x %t/utils/run_opentitan_fpv_circt_bmc.py
+// RUN: touch %t/src/foo.sv
+// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\tfusesoc_core\ttask\tflow\tsub_flow\trel_path\ttoplevel\tsetup_status\tfile_count\tinclude_dir_count\tdefine_count\tfiles_fingerprint\tinclude_dirs_fingerprint\tdefines_fingerprint\tcontract_fingerprint\tstopat_count\tstopats_fingerprint\tstopats\ttask_profile\ttask_known\tstopat_mode\tblackbox_policy\ttask_policy_fingerprint\tfiles\tinclude_dirs\tdefines\teda_yml_path\tsetup_log_path\tworkdir\nfoo_sec_cm\tlowrisc:fpv:foo_sec_cm\tFpvSecCm\tformal\tfpv\thw/top_earlgrey/formal/sec_cm/foo\tfoo_tb\tok\t1\t0\t0\tf\ti\td\tc\t1\ts\t*u_state_regs\tfpv_sec_cm\t1\ttask_defined\tprim_count,prim_double_lfsr\tp\t%t/src/foo.sv\t\t\t/tmp/foo.eda.yml\t/tmp/foo.log\t/tmp/foo.work\n' > %t/contracts.tsv
+// RUN: not sh -c 'OUT=%t/results.tsv %t/utils/run_opentitan_fpv_circt_bmc.py --compile-contracts %t/contracts.tsv --workdir %t/work' 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=ROWS < %t/results.tsv
+//
+// LOG: opentitan FPV BMC summary: total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0
+// ROWS: ERROR{{[[:space:]]+}}foo_sec_cm{{[[:space:]]+}}hw/top_earlgrey/formal/sec_cm/foo{{[[:space:]]+}}opentitan{{[[:space:]]+}}FPV_BMC{{[[:space:]]+}}CIRCT_BMC_ERROR{{[[:space:]]+}}unsupported_stopat_selector
