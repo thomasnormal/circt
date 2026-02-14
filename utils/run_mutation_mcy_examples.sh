@@ -19,7 +19,7 @@ Options:
                            <TAB>[mutations_mode_counts]
                            <TAB>[mutations_mode_weights]
                            <TAB>[mutations_profiles]<TAB>[mutations_cfg]
-                           <TAB>[mutations_select]<TAB>[mutation_limit]
+                           <TAB>[mutations_select]<TAB>[mutation_limit]<TAB>[example_timeout_sec]
                            Optional fields accept '-' to inherit global values.
                            Relative design paths resolve under --examples-root
   --jobs N                Max parallel examples to execute (default: 1)
@@ -205,6 +205,7 @@ declare -A EXAMPLE_TO_MUTATIONS_PROFILES=()
 declare -A EXAMPLE_TO_MUTATIONS_CFG=()
 declare -A EXAMPLE_TO_MUTATIONS_SELECT=()
 declare -A EXAMPLE_TO_MUTATION_LIMIT=()
+declare -A EXAMPLE_TO_TIMEOUT_SEC=()
 declare -a AVAILABLE_EXAMPLES=()
 declare -a DRIFT_ALLOW_PATTERNS=()
 declare -A DRIFT_ALLOW_PATTERN_USED=()
@@ -407,6 +408,7 @@ reset_example_mappings() {
   EXAMPLE_TO_MUTATIONS_CFG=()
   EXAMPLE_TO_MUTATIONS_SELECT=()
   EXAMPLE_TO_MUTATION_LIMIT=()
+  EXAMPLE_TO_TIMEOUT_SEC=()
   AVAILABLE_EXAMPLES=()
 }
 
@@ -428,6 +430,16 @@ has_manifest_generation_overrides() {
   return 1
 }
 
+has_manifest_timeout_overrides_enabled() {
+  local example_id=""
+  for example_id in "${!EXAMPLE_TO_TIMEOUT_SEC[@]}"; do
+    if [[ "${EXAMPLE_TO_TIMEOUT_SEC[$example_id]}" -gt 0 ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 load_example_manifest() {
   local file="$1"
   local raw_line=""
@@ -445,6 +457,7 @@ load_example_manifest() {
   local mutations_cfg_override=""
   local mutations_select_override=""
   local mutation_limit_override=""
+  local example_timeout_override=""
   local extra=""
   local resolved_design=""
 
@@ -463,7 +476,7 @@ load_example_manifest() {
       generate_count_override mutations_seed_override mutations_modes_override \
       mutations_mode_counts_override mutations_mode_weights_override \
       mutations_profiles_override mutations_cfg_override mutations_select_override \
-      mutation_limit_override extra <<< "$line"
+      mutation_limit_override example_timeout_override extra <<< "$line"
 
     example_id="$(trim_whitespace "$example_id")"
     design="$(trim_whitespace "$design")"
@@ -477,10 +490,11 @@ load_example_manifest() {
     mutations_cfg_override="$(normalize_manifest_optional "${mutations_cfg_override:-}")"
     mutations_select_override="$(normalize_manifest_optional "${mutations_select_override:-}")"
     mutation_limit_override="$(normalize_manifest_optional "${mutation_limit_override:-}")"
+    example_timeout_override="$(normalize_manifest_optional "${example_timeout_override:-}")"
     extra="$(trim_whitespace "${extra:-}")"
 
     if [[ -z "$example_id" || -z "$design" || -z "$top" || -n "$extra" ]]; then
-      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 9 optional override columns)." >&2
+      echo "Invalid example manifest row ${line_no} in ${file} (expected: example<TAB>design<TAB>top with up to 10 optional override columns)." >&2
       return 1
     fi
 
@@ -494,6 +508,10 @@ load_example_manifest() {
     fi
     if [[ -n "$mutation_limit_override" && ! "$mutation_limit_override" =~ ^[1-9][0-9]*$ ]]; then
       echo "Invalid mutation_limit override in manifest row ${line_no}: ${mutation_limit_override}" >&2
+      return 1
+    fi
+    if [[ -n "$example_timeout_override" && ! "$example_timeout_override" =~ ^[0-9]+$ ]]; then
+      echo "Invalid example_timeout_sec override in manifest row ${line_no}: ${example_timeout_override}" >&2
       return 1
     fi
     if [[ -n "$mutations_mode_counts_override" && -n "$mutations_mode_weights_override" ]]; then
@@ -538,6 +556,9 @@ load_example_manifest() {
     fi
     if [[ -n "$mutation_limit_override" ]]; then
       EXAMPLE_TO_MUTATION_LIMIT["$example_id"]="$mutation_limit_override"
+    fi
+    if [[ -n "$example_timeout_override" ]]; then
+      EXAMPLE_TO_TIMEOUT_SEC["$example_id"]="$example_timeout_override"
     fi
   done < "$file"
 
@@ -1180,6 +1201,7 @@ run_example_worker() {
   local example_mutations_cfg="$MUTATIONS_CFG"
   local example_mutations_select="$MUTATIONS_SELECT"
   local example_mutation_limit="$MUTATION_LIMIT"
+  local example_timeout_sec="$EXAMPLE_TIMEOUT_SEC"
   local design_content_hash=""
   local policy_fingerprint_input=""
   local policy_fingerprint=""
@@ -1228,6 +1250,9 @@ run_example_worker() {
   if [[ -n "${EXAMPLE_TO_MUTATION_LIMIT[$example_id]+x}" ]]; then
     example_mutation_limit="${EXAMPLE_TO_MUTATION_LIMIT[$example_id]}"
   fi
+  if [[ -n "${EXAMPLE_TO_TIMEOUT_SEC[$example_id]+x}" ]]; then
+    example_timeout_sec="${EXAMPLE_TO_TIMEOUT_SEC[$example_id]}"
+  fi
 
   if [[ -n "$example_mutations_mode_counts" && -n "$example_mutations_mode_weights" ]]; then
     echo "Resolved mutation mode allocation conflict for ${example_id}: both mode-counts and mode-weights are set." >&2
@@ -1240,7 +1265,7 @@ run_example_worker() {
   fi
 
   design_content_hash="$(hash_file_sha256 "$design")"
-  policy_fingerprint_input="${example_id}"$'\n'"${top}"$'\n'"${design_content_hash}"$'\n'"${example_generate_count}"$'\n'"${example_mutations_seed}"$'\n'"${example_mutations_modes}"$'\n'"${example_mutations_mode_counts}"$'\n'"${example_mutations_mode_weights}"$'\n'"${example_mutations_profiles}"$'\n'"${example_mutations_cfg}"$'\n'"${example_mutations_select}"$'\n'"${example_mutation_limit}"$'\n'"${SMOKE}"
+  policy_fingerprint_input="${example_id}"$'\n'"${top}"$'\n'"${design_content_hash}"$'\n'"${example_generate_count}"$'\n'"${example_mutations_seed}"$'\n'"${example_mutations_modes}"$'\n'"${example_mutations_mode_counts}"$'\n'"${example_mutations_mode_weights}"$'\n'"${example_mutations_profiles}"$'\n'"${example_mutations_cfg}"$'\n'"${example_mutations_select}"$'\n'"${example_mutation_limit}"$'\n'"${example_timeout_sec}"$'\n'"${SMOKE}"
   policy_fingerprint="$(hash_string_sha256 "$policy_fingerprint_input")"
 
   example_out_dir="${OUT_DIR}/${example_id}"
@@ -1332,16 +1357,16 @@ EOS
 
   run_log="${example_out_dir}/run.log"
   set +e
-  if [[ "$EXAMPLE_TIMEOUT_SEC" -gt 0 ]]; then
-    "$TIMEOUT_RESOLVED" "$EXAMPLE_TIMEOUT_SEC" "${cmd[@]}" >"$run_log" 2>&1
+  if [[ "$example_timeout_sec" -gt 0 ]]; then
+    "$TIMEOUT_RESOLVED" "$example_timeout_sec" "${cmd[@]}" >"$run_log" 2>&1
   else
     "${cmd[@]}" >"$run_log" 2>&1
   fi
   rc=$?
   set -e
 
-  if [[ "$EXAMPLE_TIMEOUT_SEC" -gt 0 && "$rc" -eq 124 ]]; then
-    echo "Example timeout (${example_id}): exceeded ${EXAMPLE_TIMEOUT_SEC}s" >&2
+  if [[ "$example_timeout_sec" -gt 0 && "$rc" -eq 124 ]]; then
+    echo "Example timeout (${example_id}): exceeded ${example_timeout_sec}s" >&2
   fi
 
   metrics_file="${example_out_dir}/metrics.tsv"
@@ -1893,7 +1918,7 @@ if ! CIRCT_MUT_RESOLVED="$(resolve_tool "$CIRCT_MUT")"; then
   exit 1
 fi
 
-if [[ "$EXAMPLE_TIMEOUT_SEC" -gt 0 ]]; then
+if [[ "$EXAMPLE_TIMEOUT_SEC" -gt 0 ]] || has_manifest_timeout_overrides_enabled; then
   if ! TIMEOUT_RESOLVED="$(resolve_tool "$TIMEOUT_BIN")"; then
     echo "timeout utility not found or not executable: $TIMEOUT_BIN (set TIMEOUT or disable --example-timeout-sec)" >&2
     exit 1

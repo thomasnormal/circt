@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1348 - February 14, 2026
+
+### Mutation Workflow: Manifest-Level Timeout Overrides
+
+1. Extended `utils/run_mutation_mcy_examples.sh` example-manifest schema with
+   optional per-example timeout override column:
+   - `example_timeout_sec`
+   - effective field order now ends with:
+     - `mutation_limit`
+     - `example_timeout_sec`
+2. Added per-example timeout selection in `run_example_worker`:
+   - effective timeout now resolves as manifest override (when present) over
+     global `--example-timeout-sec`.
+3. Hardened timeout-tool activation policy:
+   - timeout utility is now resolved when either global timeout is enabled or
+     at least one manifest row requests `example_timeout_sec > 0`.
+4. Included effective timeout in policy fingerprint derivation to keep
+   baseline governance deterministic under timeout-policy changes.
+5. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-invalid-timeout-override.test`
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-timeout-override-smoke.test`
+   - updated parity baseline fixtures:
+     - `test/Tools/run-mutation-mcy-examples-require-baseline-example-parity-allowlist.test`
+     - `test/Tools/run-mutation-mcy-examples-require-baseline-example-parity-fail.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (73/73)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --example-manifest /tmp/mcy_manifest_timeout.tsv --smoke --jobs 2 --out-dir /tmp/mcy_manifest_timeout_run` PASS
+
+
 ## Iteration 1347 - February 14, 2026
 
 ### OpenTitan FPV BMC: Evidence-Parity Governance for Semantic Rollups
