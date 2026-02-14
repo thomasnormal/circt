@@ -8,3 +8,7 @@
 // CHECK: --opentitan-fpv-bmc-target-shard-index
 // CHECK: --opentitan-fpv-bmc-case-shard-count
 // CHECK: --opentitan-fpv-bmc-case-shard-index
+// CHECK: --opentitan-fpv-bmc-assertion-shard-count
+// CHECK: --opentitan-fpv-bmc-assertion-shard-index
+// CHECK: --opentitan-fpv-bmc-cover-shard-count
+// CHECK: --opentitan-fpv-bmc-cover-shard-index

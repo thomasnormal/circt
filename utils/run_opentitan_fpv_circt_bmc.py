@@ -482,6 +482,42 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--assertion-shard-count",
+        default=os.environ.get("BMC_ASSERTION_SHARD_COUNT", "1"),
+        help=(
+            "Optional number of deterministic assertion shards forwarded to "
+            "run_pairwise_circt_bmc.py "
+            "(default: env BMC_ASSERTION_SHARD_COUNT or 1)."
+        ),
+    )
+    parser.add_argument(
+        "--assertion-shard-index",
+        default=os.environ.get("BMC_ASSERTION_SHARD_INDEX", "0"),
+        help=(
+            "Optional deterministic assertion shard index in "
+            "[0, assertion-shard-count) forwarded to run_pairwise_circt_bmc.py "
+            "(default: env BMC_ASSERTION_SHARD_INDEX or 0)."
+        ),
+    )
+    parser.add_argument(
+        "--cover-shard-count",
+        default=os.environ.get("BMC_COVER_SHARD_COUNT", "1"),
+        help=(
+            "Optional number of deterministic cover shards forwarded to "
+            "run_pairwise_circt_bmc.py "
+            "(default: env BMC_COVER_SHARD_COUNT or 1)."
+        ),
+    )
+    parser.add_argument(
+        "--cover-shard-index",
+        default=os.environ.get("BMC_COVER_SHARD_INDEX", "0"),
+        help=(
+            "Optional deterministic cover shard index in [0, cover-shard-count) "
+            "forwarded to run_pairwise_circt_bmc.py "
+            "(default: env BMC_COVER_SHARD_INDEX or 0)."
+        ),
+    )
+    parser.add_argument(
         "--workdir",
         default="",
         help="Optional work directory (default: temp directory).",
@@ -640,6 +676,38 @@ def main() -> int:
         fail(
             "invalid --case-shard-index: "
             f"{case_shard_index} (expected < {case_shard_count})"
+        )
+    assertion_shard_count = parse_nonnegative_int(
+        args.assertion_shard_count, "--assertion-shard-count"
+    )
+    if assertion_shard_count <= 0:
+        fail(
+            "invalid --assertion-shard-count: "
+            f"{args.assertion_shard_count} (expected >= 1)"
+        )
+    assertion_shard_index = parse_nonnegative_int(
+        args.assertion_shard_index, "--assertion-shard-index"
+    )
+    if assertion_shard_index >= assertion_shard_count:
+        fail(
+            "invalid --assertion-shard-index: "
+            f"{assertion_shard_index} (expected < {assertion_shard_count})"
+        )
+    cover_shard_count = parse_nonnegative_int(
+        args.cover_shard_count, "--cover-shard-count"
+    )
+    if cover_shard_count <= 0:
+        fail(
+            "invalid --cover-shard-count: "
+            f"{args.cover_shard_count} (expected >= 1)"
+        )
+    cover_shard_index = parse_nonnegative_int(
+        args.cover_shard_index, "--cover-shard-index"
+    )
+    if cover_shard_index >= cover_shard_count:
+        fail(
+            "invalid --cover-shard-index: "
+            f"{cover_shard_index} (expected < {cover_shard_count})"
         )
 
     all_target_names = sorted({row.target_name for row in selected})
@@ -866,6 +934,14 @@ def main() -> int:
                     str(case_shard_count),
                     "--case-shard-index",
                     str(case_shard_index),
+                    "--assertion-shard-count",
+                    str(assertion_shard_count),
+                    "--assertion-shard-index",
+                    str(assertion_shard_index),
+                    "--cover-shard-count",
+                    str(cover_shard_count),
+                    "--cover-shard-index",
+                    str(cover_shard_index),
                     "--workdir",
                     str(group_workdir),
                     "--keep-workdir",

@@ -952,6 +952,22 @@ Options:
                          Deterministic OpenTitan FPV per-target case shard
                          index in `[0, shard-count)` passed to
                          `run_opentitan_fpv_circt_bmc.py` (default: 0)
+  --opentitan-fpv-bmc-assertion-shard-count N
+                         Deterministic number of OpenTitan FPV per-case
+                         assertion shards passed to
+                         `run_opentitan_fpv_circt_bmc.py` (default: 1)
+  --opentitan-fpv-bmc-assertion-shard-index N
+                         Deterministic OpenTitan FPV per-case assertion shard
+                         index in `[0, shard-count)` passed to
+                         `run_opentitan_fpv_circt_bmc.py` (default: 0)
+  --opentitan-fpv-bmc-cover-shard-count N
+                         Deterministic number of OpenTitan FPV per-case cover
+                         shards passed to `run_opentitan_fpv_circt_bmc.py`
+                         (default: 1)
+  --opentitan-fpv-bmc-cover-shard-index N
+                         Deterministic OpenTitan FPV per-case cover shard
+                         index in `[0, shard-count)` passed to
+                         `run_opentitan_fpv_circt_bmc.py` (default: 0)
   --select-cfgs LIST
                          Optional target names selected from
                          `--opentitan-fpv-cfg` (repeatable; comma/space
@@ -2630,6 +2646,10 @@ OPENTITAN_FPV_BMC_TARGET_SHARD_COUNT="1"
 OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX="0"
 OPENTITAN_FPV_BMC_CASE_SHARD_COUNT="1"
 OPENTITAN_FPV_BMC_CASE_SHARD_INDEX="0"
+OPENTITAN_FPV_BMC_ASSERTION_SHARD_COUNT="1"
+OPENTITAN_FPV_BMC_ASSERTION_SHARD_INDEX="0"
+OPENTITAN_FPV_BMC_COVER_SHARD_COUNT="1"
+OPENTITAN_FPV_BMC_COVER_SHARD_INDEX="0"
 declare -a OPENTITAN_SELECT_CFGS=()
 OPENTITAN_FPV_TARGET_MANIFEST_FILE=""
 OPENTITAN_FPV_COMPILE_CONTRACTS_FILE=""
@@ -2742,6 +2762,14 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_BMC_CASE_SHARD_COUNT="$2"; shift 2 ;;
     --opentitan-fpv-bmc-case-shard-index)
       OPENTITAN_FPV_BMC_CASE_SHARD_INDEX="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-assertion-shard-count)
+      OPENTITAN_FPV_BMC_ASSERTION_SHARD_COUNT="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-assertion-shard-index)
+      OPENTITAN_FPV_BMC_ASSERTION_SHARD_INDEX="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-cover-shard-count)
+      OPENTITAN_FPV_BMC_COVER_SHARD_COUNT="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-cover-shard-index)
+      OPENTITAN_FPV_BMC_COVER_SHARD_INDEX="$2"; shift 2 ;;
     --select-cfgs)
       OPENTITAN_SELECT_CFGS+=("$2"); shift 2 ;;
     --opentitan-fpv-target-manifest)
@@ -3611,6 +3639,38 @@ if (( OPENTITAN_FPV_BMC_CASE_SHARD_COUNT < 1 )); then
 fi
 if (( OPENTITAN_FPV_BMC_CASE_SHARD_INDEX >= OPENTITAN_FPV_BMC_CASE_SHARD_COUNT )); then
   echo "invalid --opentitan-fpv-bmc-case-shard-index: expected value < --opentitan-fpv-bmc-case-shard-count" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_SHARD_COUNT" && ! "$OPENTITAN_FPV_BMC_ASSERTION_SHARD_COUNT" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-fpv-bmc-assertion-shard-count: expected integer >= 1" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_ASSERTION_SHARD_INDEX" && ! "$OPENTITAN_FPV_BMC_ASSERTION_SHARD_INDEX" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-fpv-bmc-assertion-shard-index: expected non-negative integer" >&2
+  exit 1
+fi
+if (( OPENTITAN_FPV_BMC_ASSERTION_SHARD_COUNT < 1 )); then
+  echo "invalid --opentitan-fpv-bmc-assertion-shard-count: expected integer >= 1" >&2
+  exit 1
+fi
+if (( OPENTITAN_FPV_BMC_ASSERTION_SHARD_INDEX >= OPENTITAN_FPV_BMC_ASSERTION_SHARD_COUNT )); then
+  echo "invalid --opentitan-fpv-bmc-assertion-shard-index: expected value < --opentitan-fpv-bmc-assertion-shard-count" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_COVER_SHARD_COUNT" && ! "$OPENTITAN_FPV_BMC_COVER_SHARD_COUNT" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-fpv-bmc-cover-shard-count: expected integer >= 1" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_COVER_SHARD_INDEX" && ! "$OPENTITAN_FPV_BMC_COVER_SHARD_INDEX" =~ ^[0-9]+$ ]]; then
+  echo "invalid --opentitan-fpv-bmc-cover-shard-index: expected non-negative integer" >&2
+  exit 1
+fi
+if (( OPENTITAN_FPV_BMC_COVER_SHARD_COUNT < 1 )); then
+  echo "invalid --opentitan-fpv-bmc-cover-shard-count: expected integer >= 1" >&2
+  exit 1
+fi
+if (( OPENTITAN_FPV_BMC_COVER_SHARD_INDEX >= OPENTITAN_FPV_BMC_COVER_SHARD_COUNT )); then
+  echo "invalid --opentitan-fpv-bmc-cover-shard-index: expected value < --opentitan-fpv-bmc-cover-shard-count" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_BMC_CASE_POLICY_FILE" && ! -f "$OPENTITAN_BMC_CASE_POLICY_FILE" ]]; then
@@ -7743,6 +7803,10 @@ compute_lane_state_config_hash() {
     printf "opentitan_fpv_bmc_target_shard_index=%s\n" "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
     printf "opentitan_fpv_bmc_case_shard_count=%s\n" "$OPENTITAN_FPV_BMC_CASE_SHARD_COUNT"
     printf "opentitan_fpv_bmc_case_shard_index=%s\n" "$OPENTITAN_FPV_BMC_CASE_SHARD_INDEX"
+    printf "opentitan_fpv_bmc_assertion_shard_count=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_SHARD_COUNT"
+    printf "opentitan_fpv_bmc_assertion_shard_index=%s\n" "$OPENTITAN_FPV_BMC_ASSERTION_SHARD_INDEX"
+    printf "opentitan_fpv_bmc_cover_shard_count=%s\n" "$OPENTITAN_FPV_BMC_COVER_SHARD_COUNT"
+    printf "opentitan_fpv_bmc_cover_shard_index=%s\n" "$OPENTITAN_FPV_BMC_COVER_SHARD_INDEX"
     printf "opentitan_fpv_target_manifest_file=%s\n" "$OPENTITAN_FPV_TARGET_MANIFEST_FILE"
     printf "opentitan_fpv_compile_contracts_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_FILE"
     printf "opentitan_fpv_compile_contracts_baseline_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE"
@@ -11644,6 +11708,10 @@ run_opentitan_fpv_bmc_lane() {
     --target-shard-index "$OPENTITAN_FPV_BMC_TARGET_SHARD_INDEX"
     --case-shard-count "$OPENTITAN_FPV_BMC_CASE_SHARD_COUNT"
     --case-shard-index "$OPENTITAN_FPV_BMC_CASE_SHARD_INDEX"
+    --assertion-shard-count "$OPENTITAN_FPV_BMC_ASSERTION_SHARD_COUNT"
+    --assertion-shard-index "$OPENTITAN_FPV_BMC_ASSERTION_SHARD_INDEX"
+    --cover-shard-count "$OPENTITAN_FPV_BMC_COVER_SHARD_COUNT"
+    --cover-shard-index "$OPENTITAN_FPV_BMC_COVER_SHARD_INDEX"
   )
   if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
     opentitan_fpv_bmc_args+=(--target-filter "$OPENTITAN_FPV_TARGET_FILTER")

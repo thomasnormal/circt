@@ -1,0 +1,7 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^$" --opentitan-fpv-bmc-cover-shard-count 2 --opentitan-fpv-bmc-cover-shard-index 2' 2>&1 | FileCheck %s
+//
+// CHECK: invalid --opentitan-fpv-bmc-cover-shard-index: expected value < --opentitan-fpv-bmc-cover-shard-count
