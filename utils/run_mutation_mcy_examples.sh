@@ -2969,8 +2969,12 @@ EOS
         done
       fi
       native_ops_count=${#native_ops[@]}
+      native_seed_offset=0
+      if [[ "$native_ops_count" -gt 0 ]]; then
+        native_seed_offset=$((example_mutations_seed % native_ops_count))
+      fi
       for ((mid=1; mid<=example_generate_count; ++mid)); do
-        op_idx=$(((mid - 1) % native_ops_count))
+        op_idx=$(((native_seed_offset + mid - 1) % native_ops_count))
         printf '%d NATIVE_%s
 ' "$mid" "${native_ops[$op_idx]}" >> "$mutations_file"
       done

@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1395 - February 14, 2026
+
+### Mutation Workflow: Seed-Driven Native Operator Ordering
+
+1. Extended native mutation generation in
+   `utils/run_mutation_mcy_examples.sh` to honor `--mutations-seed` in native
+   backend ordering:
+   - native op sequence now uses a seed-derived rotation offset over the
+     selected/prioritized operator list.
+   - this prevents deterministic over-focus on identical leading operators
+     across runs while preserving reproducibility.
+2. Added regression coverage for seed-sensitive native ordering:
+   - `test/Tools/run-mutation-mcy-examples-native-mutation-seed-order-pass.test`
+3. Updated applicability-order regression to pin seed explicitly:
+   - `test/Tools/run-mutation-mcy-examples-native-mutation-op-filter-pass.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (144 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --mutations-backend native --native-tests-mode real --native-real-tests-strict --out-dir /tmp/mcy_examples_real_native_mode_real_strict_1771085347` PASS
+  - `bitcnt`: `detected=7 relevant=8 coverage=87.50 errors=0`
+  - `picorv32_primes`: `detected=8 relevant=8 coverage=100.00 errors=0`
+
 ## Iteration 1394 - February 14, 2026
 
 ### Mutation Workflow: Configurable Native Operator Allowlist

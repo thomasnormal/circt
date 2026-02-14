@@ -9,6 +9,7 @@
 // RUN:   --circt-mut %t/bin/circt-mut \
 // RUN:   --mutations-backend native \
 // RUN:   --generate-count 2 \
+// RUN:   --mutations-seed 0 \
 // RUN:   --out-dir %t/out
 
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
