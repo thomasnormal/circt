@@ -925,6 +925,10 @@ Options:
   --fail-on-opentitan-fpv-compile-contract-drift
                          Fail when OpenTitan FPV compile-contract drift checker
                          reports non-allowlisted drift
+  --fail-on-opentitan-fpv-unknown-task
+                         Fail OpenTitan FPV planning when selected targets use
+                         task names not recognized by the CIRCT FPV task-policy
+                         adapter
   --opentitan-lec-impl-filter REGEX
                          Regex filter for OpenTitan LEC implementations
   --opentitan-lec-include-masked
@@ -2544,6 +2548,7 @@ OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR=""
 OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR=0
 UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE=0
 FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=0
+FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=0
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
 OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES=0
@@ -2649,6 +2654,8 @@ while [[ $# -gt 0 ]]; do
       UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE=1; shift ;;
     --fail-on-opentitan-fpv-compile-contract-drift)
       FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=1; shift ;;
+    --fail-on-opentitan-fpv-unknown-task)
+      FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=1; shift ;;
     --opentitan-lec-impl-filter)
       OPENTITAN_LEC_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-lec-include-masked)
@@ -3475,6 +3482,10 @@ if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" && -z "$OPENTITA
 fi
 if [[ "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
   echo "--fail-on-opentitan-fpv-compile-contract-drift requires --opentitan-fpv-cfg" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  echo "--fail-on-opentitan-fpv-unknown-task requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
 if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" && -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
@@ -5013,6 +5024,9 @@ if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY_ALLOWLIST_FILE" && ! -r "
 fi
 if [[ "$STRICT_GATE" == "1" && -n "$OPENTITAN_FPV_CFG_FILE" && -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=1
+fi
+if [[ "$STRICT_GATE" == "1" && -n "$OPENTITAN_FPV_CFG_FILE" ]]; then
+  FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=1
 fi
 if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--opentitan-fpv-compile-contract-drift-allowlist-file requires --fail-on-opentitan-fpv-compile-contract-drift or --strict-gate" >&2
@@ -7271,6 +7285,9 @@ if [[ -n "$OPENTITAN_FPV_CFG_FILE" ]]; then
   if [[ "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR" == "1" ]]; then
     opentitan_contract_resolver_args+=(--keep-workdir)
   fi
+  if [[ "$FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK" == "1" ]]; then
+    opentitan_contract_resolver_args+=(--fail-on-unknown-task)
+  fi
   python3 "$SCRIPT_DIR/resolve_opentitan_formal_compile_contracts.py" \
     "${opentitan_contract_resolver_args[@]}"
 
@@ -7471,6 +7488,7 @@ compute_lane_state_config_hash() {
     printf "opentitan_fpv_compile_contracts_keep_workdir=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR"
     printf "update_opentitan_fpv_compile_contracts_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE"
     printf "fail_on_opentitan_fpv_compile_contract_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT"
+    printf "fail_on_opentitan_fpv_unknown_task=%s\n" "$FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK"
     for opentitan_select_cfg in "${OPENTITAN_SELECT_CFGS[@]}"; do
       printf "opentitan_select_cfgs[]=%s\n" "$opentitan_select_cfg"
     done
