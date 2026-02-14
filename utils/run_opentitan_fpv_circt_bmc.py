@@ -105,12 +105,13 @@ def normalize_stopat_selector(raw: str) -> str:
         raise ValueError("empty stopat selector")
     if token.startswith("*"):
         token = token[1:].strip()
-    parts = [part.strip() for part in token.split(".") if part.strip()]
-    if len(parts) != 2:
+    parts = [part.strip() for part in token.split(".")]
+    if len(parts) < 2 or any(not part for part in parts):
         raise ValueError(
-            f"unsupported stopat selector '{raw}': expected 'inst.port' or '*inst.port'"
+            "unsupported stopat selector "
+            f"'{raw}': expected 'inst[.inst...].port' or '*inst[.inst...].port'"
         )
-    return f"{parts[0]}.{parts[1]}"
+    return ".".join(parts)
 
 
 def read_compile_contracts(path: Path) -> list[ContractRow]:
