@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1299 - February 14, 2026
+
+### OpenTitan FPV Phase D: Assertion-Granular Forwarding and Summary Accuracy
+
+1. Extended `utils/run_opentitan_fpv_circt_bmc.py` with assertion-granular controls:
+   - `--assertion-granular` / `BMC_ASSERTION_GRANULAR`
+   - `--assertion-granular-max` / `BMC_ASSERTION_GRANULAR_MAX`
+2. Forwarded assertion-granular execution settings to grouped pairwise invocations (`run_pairwise_circt_bmc.py`), including max-assertion budgeting.
+3. Improved FPV summary accounting:
+   - per-group assertion-results artifacts are now collected whenever assertion-granular mode or FPV summary output is enabled.
+   - FPV summary generation now consumes merged per-assertion rows even when no external `--assertion-results-file` is requested.
+4. Added focused regressions:
+   - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-granular-forwarding.test`
+   - `test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-assertion-granular.test`
+
+### Validation
+
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-opentitan-fpv-circt-bmc-basic.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-task-policy.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-none.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-fail.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-stopat-selector-validation.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-assertion-granular-forwarding.test build-test/test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-assertion-granular.test` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-opentitan-fpv-circt-bmc-.*\\.test|run-formal-all-opentitan-fpv-bmc.*\\.test'` PASS (17/17)
+
+## Iteration 1298 - February 14, 2026
+
+### Mutation Governance: Baseline Drift + Allowlist for Mutation↔LEC Fingerprint Parity
+
+1. Extended `utils/run_formal_all.sh` with:
+   - `--fail-on-new-mutation-lec-contract-fingerprint-parity`
+   - `--mutation-lec-contract-fingerprint-parity-allowlist-file FILE`
+2. Added strict-gate default activation for the new drift gate.
+3. Added validation for allowlist readability and gate/strict-gate requirements.
+4. Implemented parity filtering + baseline-drift analysis in strict-gate Python logic with rule id:
+   - `strict_gate.mutation.parity.contract_fingerprint_values.new_missing_in_lec`
+5. Added focused regressions:
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity-new.test`
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity-allowlist.test`
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity-new-allowlist.test`
+   - `test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity-allowlist-requires-gate.test`
+   - `test/Tools/run-formal-all-strict-gate-mutation-lec-contract-fingerprint-parity-defaults.test`
+   - updated `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity-new.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity-allowlist.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity-new-allowlist.test build-test/test/Tools/run-formal-all-mutation-lec-contract-fingerprint-parity-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-strict-gate-mutation-lec-contract-fingerprint-parity-defaults.test` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-mutation-bmc-contract-fingerprint-parity.test build-test/test/Tools/run-formal-all-mutation-bmc-contract-fingerprint-parity-new.test build-test/test/Tools/run-formal-all-mutation-bmc-contract-fingerprint-parity-allowlist.test build-test/test/Tools/run-formal-all-mutation-bmc-contract-fingerprint-parity-new-allowlist.test build-test/test/Tools/run-formal-all-strict-gate-mutation-bmc-contract-fingerprint-parity-defaults.test` PASS
+
+
 ## Iteration 1297 - February 14, 2026
 
 ### OpenTitan FPV Phase D: Lane-Level Summary Drift Governance in `run_formal_all`
