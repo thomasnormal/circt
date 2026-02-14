@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1388 - February 14, 2026
+
+### Mutation Workflow: Native Real-Test Harness Mode
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with native test-harness mode
+   selection:
+   - `--native-tests-mode MODE`
+   - supported: `synthetic|real` (default: `synthetic`)
+2. Added `real` native harness for `bitcnt` under
+   `--mutations-backend native`:
+   - uses generated real manifest entry and invokes iverilog/vvp
+   - classifies `DETECTED` on testbench `ERROR`, otherwise `SURVIVED`
+3. Added safe fallback behavior for unsupported examples in real mode:
+   - emits warning and falls back to synthetic harness (currently applies to
+     `picorv32_primes`)
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-native-tests-mode-invalid.test`
+   - `test/Tools/run-mutation-mcy-examples-native-real-bitcnt-manifest-pass.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (134 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --mutations-backend native --native-tests-mode real --out-dir /tmp/mcy_examples_real_native_mode_real_1771083717` PASS
+
 ## Iteration 1387 - February 14, 2026
 
 ### Mutation Workflow: Native Non-Smoke Backend (No Yosys)
