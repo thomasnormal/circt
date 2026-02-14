@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'alpha\talpha/alpha.v\ttop_alpha\n' > %t/manifest.tsv
+
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --example-manifest %t/manifest.tsv \
+// RUN:   --example unknown 2>&1 | FileCheck %s
+
+// CHECK: Unknown --example value: unknown

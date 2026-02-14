@@ -1,0 +1,7 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'alpha\talpha/alpha.v\n' > %t/manifest.tsv
+
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --example-manifest %t/manifest.tsv 2>&1 | FileCheck %s
+
+// CHECK: Invalid example manifest row 1

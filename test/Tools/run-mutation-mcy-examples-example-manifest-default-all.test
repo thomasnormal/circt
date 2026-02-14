@@ -1,0 +1,30 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/alpha %t/examples/beta %t/bin
+// RUN: printf 'module top_alpha(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/alpha/alpha.v
+// RUN: printf 'module top_beta(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/beta/beta.v
+// RUN: printf 'alpha\talpha/alpha.v\ttop_alpha\nbeta\tbeta/beta.v\ttop_beta\n' > %t/manifest.tsv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf "%%%%s\\n" "$@" >> "$CAPTURE"\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --work-dir) work_dir="$2"; shift 2 ;;\n    --work-dir=*) work_dir="${1#*=}"; shift ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t1\\nrelevant_mutants\\t2\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/bin/yosys
+// RUN: chmod +x %t/bin/yosys
+
+// RUN: env CAPTURE=%t/capture.log %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example-manifest %t/manifest.tsv \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --yosys %t/bin/yosys \
+// RUN:   --generate-count 5 \
+// RUN:   --out-dir %t/out
+
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=CAPTURE < %t/capture.log
+
+// SUMMARY: example{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}detected{{[[:space:]]}}relevant{{[[:space:]]}}coverage_percent{{[[:space:]]}}errors
+// SUMMARY: alpha{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}50.00{{[[:space:]]}}0
+// SUMMARY: beta{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}50.00{{[[:space:]]}}0
+
+// CAPTURE-DAG: --design
+// CAPTURE-DAG: {{.*/examples/alpha/alpha\.v}}
+// CAPTURE-DAG: {{.*/examples/beta/beta\.v}}
+// CAPTURE-DAG: --mutations-top
+// CAPTURE-DAG: top_alpha
+// CAPTURE-DAG: top_beta
