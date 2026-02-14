@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1297 - February 14, 2026
+
+### OpenTitan FPV Phase D: Lane-Level Summary Drift Governance in `run_formal_all`
+
+1. Extended `utils/run_formal_all.sh` with OpenTitan FPV summary-drift controls:
+   - `--opentitan-fpv-bmc-summary-baseline-file`
+   - `--opentitan-fpv-bmc-summary-drift-file`
+   - `--opentitan-fpv-bmc-summary-drift-allowlist-file`
+   - `--update-opentitan-fpv-bmc-summary-baseline`
+   - `--fail-on-opentitan-fpv-bmc-summary-drift`
+2. Added validation and strict-gate policy wiring:
+   - option dependency checks (`--with-opentitan-fpv-bmc`, baseline presence).
+   - allowlist gating requires explicit drift failure mode or strict-gate.
+   - strict-gate now auto-enables FPV summary drift failure when a summary
+     baseline is configured for the OpenTitan FPV BMC lane.
+3. Wired lane-level env forwarding into `run_opentitan_fpv_circt_bmc.py`:
+   - `BMC_FPV_SUMMARY_BASELINE_FILE`
+   - `BMC_FPV_SUMMARY_DRIFT_OUT`
+   - `BMC_FPV_SUMMARY_DRIFT_ALLOWLIST_FILE`
+   - `BMC_FAIL_ON_FPV_SUMMARY_DRIFT`
+   with update mode intentionally suppressing baseline drift checks and
+   refreshing the baseline from the produced summary artifact.
+4. Added focused regressions:
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-forwarding.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-allowlist-requires-gate.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-baseline-update.test`
+   - updated `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-task-policy-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-drift-allowlist-requires-gate.test build-test/test/Tools/run-formal-all-opentitan-fpv-bmc-fpv-summary-baseline-update.test` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools --filter 'run-opentitan-fpv-circt-bmc-.*\\.test|run-formal-all-opentitan-fpv-bmc.*\\.test'` PASS (15/15)
+
 ## Iteration 1296 - February 14, 2026
 
 ### Mutation Workflow: MCY Example Harness for Ongoing Regression

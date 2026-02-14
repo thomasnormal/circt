@@ -1,0 +1,15 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/bin %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '{\n  "name": "top_earlgrey_fpv_prim_cfgs",\n  "flow": "formal",\n  "sub_flow": "fpv",\n  "use_cfgs": [\n    {\n      "name": "foo_fpv",\n      "dut": "foo_tb",\n      "fusesoc_core": "lowrisc:fpv:foo_fpv",\n      "task": "FpvDefault",\n      "rel_path": "hw/top_earlgrey/formal/ip/foo"\n    }\n  ]\n}\n' > %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson
+// RUN: printf 'target_name\ttotal_assertions\tproven\tfailing\tvacuous\tcovered\tunreachable\tunknown\terror\ttimeout\tskipped\nfoo_fpv\t1\t1\t0\t0\t0\t0\t0\t0\t0\t0\n' > %t/fpv-baseline.tsv
+// RUN: printf 'exact:foo_fpv\n' > %t/fpv-allowlist.txt
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-bmc %t/bin/circt-lec
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-fpv-bmc --opentitan %t/ot --circt-verilog %t/bin/circt-verilog --include-lane-regex "^opentitan/FPV_BMC$" --opentitan-fpv-cfg %t/ot/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson --select-cfgs foo_fpv --opentitan-fpv-bmc-summary-baseline-file %t/fpv-baseline.tsv --opentitan-fpv-bmc-summary-drift-allowlist-file %t/fpv-allowlist.txt > %t/err.txt 2>&1'
+// RUN: FileCheck %s --check-prefix=ERR < %t/err.txt
+//
+// ERR: --opentitan-fpv-bmc-summary-drift-allowlist-file requires --fail-on-opentitan-fpv-bmc-summary-drift or --strict-gate

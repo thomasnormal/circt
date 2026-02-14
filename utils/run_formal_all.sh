@@ -253,9 +253,40 @@ Options:
   --fail-on-new-mutation-provenance-tuple-ids
                          Fail when new mutation provenance tuple IDs
                          (`mutation_provenance_tuple_ids`) appear vs baseline
+  --fail-on-mutation-bmc-contract-fingerprint-parity
+                         Fail when mutation contract fingerprint values are
+                         not present in current BMC contract fingerprints
+  --fail-on-new-mutation-bmc-contract-fingerprint-parity
+                         Fail when new mutation contract fingerprint values are
+                         not present in current BMC contract fingerprints
+                         vs baseline
+  --mutation-bmc-contract-fingerprint-parity-allowlist-file FILE
+                         Optional allowlist file for mutation/BMC contract-
+                         fingerprint parity strict-gate filtering.
+                         Applies to fingerprint tokens (`fingerprint`) for
+                         --fail-on-mutation-bmc-contract-fingerprint-parity
+                         and --fail-on-new-mutation-bmc-contract-fingerprint-parity.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
   --fail-on-mutation-lec-contract-fingerprint-parity
                          Fail when mutation contract fingerprint values are
                          not present in current LEC contract fingerprints
+  --fail-on-new-mutation-lec-contract-fingerprint-parity
+                         Fail when new mutation contract fingerprint values are
+                         not present in current LEC contract fingerprints
+                         vs baseline
+  --mutation-lec-contract-fingerprint-parity-allowlist-file FILE
+                         Optional allowlist file for mutation/LEC contract-
+                         fingerprint parity strict-gate filtering.
+                         Applies to fingerprint tokens (`fingerprint`) for
+                         --fail-on-mutation-lec-contract-fingerprint-parity
+                         and --fail-on-new-mutation-lec-contract-fingerprint-parity.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
   --fail-on-mutation-lec-contract-fingerprint-lane-parity
                          Fail when mutation lane contract fingerprints are
                          not present in matching LEC lanes
@@ -291,6 +322,16 @@ Options:
                            exact:<mutation_lane><TAB><lec_lane>  (or bare token)
                            prefix:<mutation_prefix><TAB><lec_prefix>
                            regex:<pattern><TAB><replacement>
+  --mutation-lec-contract-fingerprint-lane-parity-allowlist-file FILE
+                         Optional allowlist file for mutation/LEC lane
+                         parity strict-gate filtering. Applies to lane
+                         IDs (`lane`), lane fingerprint tuples
+                         (`lane::fingerprint`), lane-map identity-fallback
+                         lanes, and lane-map unmapped lanes.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
   --mutation-contract-fingerprint-case-id-allowlist-file FILE
                          Optional allowlist file for mutation contract-
                          fingerprint case-ID strict-gate filtering.
@@ -917,6 +958,23 @@ Options:
   --opentitan-fpv-compile-contract-drift-allowlist-file FILE
                          Optional allowlist file for OpenTitan FPV compile
                          contract drift checks (target-level exact/prefix/regex)
+  --opentitan-fpv-bmc-summary-baseline-file FILE
+                         Optional baseline OpenTitan FPV assertion-summary TSV
+                         for drift checks
+  --opentitan-fpv-bmc-summary-drift-file FILE
+                         Optional output path for OpenTitan FPV assertion-summary
+                         drift TSV (default:
+                         OUT_DIR/opentitan-fpv-bmc-fpv-summary-drift.tsv
+                         when baseline is set)
+  --opentitan-fpv-bmc-summary-drift-allowlist-file FILE
+                         Optional allowlist file for OpenTitan FPV assertion-summary
+                         drift checks (target-level exact/prefix/regex)
+  --update-opentitan-fpv-bmc-summary-baseline
+                         Update --opentitan-fpv-bmc-summary-baseline-file with
+                         the current OpenTitan FPV summary artifact
+  --fail-on-opentitan-fpv-bmc-summary-drift
+                         Fail when OpenTitan FPV assertion-summary drift checker
+                         reports non-allowlisted drift
   --opentitan-fpv-fusesoc-bin PATH
                          FuseSoC executable used for OpenTitan FPV compile
                          contract resolution (default: fusesoc)
@@ -2304,14 +2362,20 @@ FAIL_ON_NEW_MUTATION_CONTRACT_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=0
 FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=0
 FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS=0
+FAIL_ON_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY=0
+FAIL_ON_NEW_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY=0
+MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE=""
 FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY=0
+FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY=0
 FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=0
 FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=0
 FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED=0
 FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED=0
 FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK=0
 FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK=0
+MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE=""
 MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE=""
+MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY_ALLOWLIST_FILE=""
 MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
 MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE=""
 MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE=""
@@ -2552,11 +2616,16 @@ OPENTITAN_FPV_COMPILE_CONTRACTS_FILE=""
 OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE=""
 OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE=""
 OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE=""
+OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE=""
+OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE=""
+OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE=""
 OPENTITAN_FPV_FUSESOC_BIN="fusesoc"
 OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR=""
 OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR=0
 UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE=0
 FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=0
+UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE=0
+FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=0
 FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=0
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
@@ -2657,6 +2726,12 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE="$2"; shift 2 ;;
     --opentitan-fpv-compile-contract-drift-allowlist-file)
       OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-summary-baseline-file)
+      OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-summary-drift-file)
+      OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE="$2"; shift 2 ;;
+    --opentitan-fpv-bmc-summary-drift-allowlist-file)
+      OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE="$2"; shift 2 ;;
     --opentitan-fpv-fusesoc-bin)
       OPENTITAN_FPV_FUSESOC_BIN="$2"; shift 2 ;;
     --opentitan-fpv-compile-contracts-workdir)
@@ -2667,6 +2742,10 @@ while [[ $# -gt 0 ]]; do
       UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE=1; shift ;;
     --fail-on-opentitan-fpv-compile-contract-drift)
       FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=1; shift ;;
+    --update-opentitan-fpv-bmc-summary-baseline)
+      UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE=1; shift ;;
+    --fail-on-opentitan-fpv-bmc-summary-drift)
+      FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=1; shift ;;
     --fail-on-opentitan-fpv-unknown-task)
       FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=1; shift ;;
     --opentitan-lec-impl-filter)
@@ -2847,8 +2926,18 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=1; shift ;;
     --fail-on-new-mutation-provenance-tuple-ids)
       FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=1; shift ;;
+    --fail-on-mutation-bmc-contract-fingerprint-parity)
+      FAIL_ON_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY=1; shift ;;
+    --fail-on-new-mutation-bmc-contract-fingerprint-parity)
+      FAIL_ON_NEW_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY=1; shift ;;
+    --mutation-bmc-contract-fingerprint-parity-allowlist-file)
+      MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE="$2"; shift 2 ;;
     --fail-on-mutation-lec-contract-fingerprint-parity)
       FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY=1; shift ;;
+    --fail-on-new-mutation-lec-contract-fingerprint-parity)
+      FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY=1; shift ;;
+    --mutation-lec-contract-fingerprint-parity-allowlist-file)
+      MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE="$2"; shift 2 ;;
     --fail-on-mutation-lec-contract-fingerprint-lane-parity)
       FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=1; shift ;;
     --fail-on-new-mutation-lec-contract-fingerprint-lane-parity)
@@ -2863,6 +2952,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK=1; FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=1; shift ;;
     --mutation-lec-contract-fingerprint-lane-map-file)
       MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE="$2"; shift 2 ;;
+    --mutation-lec-contract-fingerprint-lane-parity-allowlist-file)
+      MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY_ALLOWLIST_FILE="$2"; shift 2 ;;
     --mutation-contract-fingerprint-case-id-allowlist-file)
       MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$2"; shift 2 ;;
     --mutation-source-fingerprint-case-id-allowlist-file)
@@ -3263,6 +3354,9 @@ fi
 if [[ -n "$OPENTITAN_FPV_CFG_FILE" && -z "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE" ]]; then
   OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE="$OUT_DIR/opentitan-fpv-compile-contract-drift.tsv"
 fi
+if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && -z "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE" ]]; then
+  OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE="$OUT_DIR/opentitan-fpv-bmc-fpv-summary-drift.tsv"
+fi
 if ! [[ "$BASELINE_WINDOW" =~ ^[0-9]+$ ]] || [[ "$BASELINE_WINDOW" == "0" ]]; then
   echo "invalid --baseline-window: expected positive integer" >&2
   exit 1
@@ -3519,6 +3613,26 @@ if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" && -z "$OPENTITAN_FPV_CFG_FILE" ]]; then
   echo "--with-opentitan-fpv-bmc requires --opentitan-fpv-cfg" >&2
   exit 1
 fi
+if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-summary-baseline-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-summary-drift-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-summary-drift-allowlist-file requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--update-opentitan-fpv-bmc-summary-baseline requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" == "1" && "$WITH_OPENTITAN_FPV_BMC" != "1" ]]; then
+  echo "--fail-on-opentitan-fpv-bmc-summary-drift requires --with-opentitan-fpv-bmc" >&2
+  exit 1
+fi
 if [[ "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE" == "1" && -z "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
   echo "--update-opentitan-fpv-compile-contracts-baseline requires --opentitan-fpv-compile-contracts-baseline-file" >&2
   exit 1
@@ -3531,8 +3645,28 @@ if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" && "$UPDATE_OPENTITAN_
   echo "missing --opentitan-fpv-compile-contracts-baseline-file: $OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" >&2
   exit 1
 fi
+if [[ "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" == "1" && -z "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" ]]; then
+  echo "--update-opentitan-fpv-bmc-summary-baseline requires --opentitan-fpv-bmc-summary-baseline-file" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" == "1" && -z "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" ]]; then
+  echo "--fail-on-opentitan-fpv-bmc-summary-drift requires --opentitan-fpv-bmc-summary-baseline-file" >&2
+  exit 1
+fi
+if [[ "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" == "1" && "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" == "1" ]]; then
+  echo "--update-opentitan-fpv-bmc-summary-baseline cannot be combined with --fail-on-opentitan-fpv-bmc-summary-drift" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" != "1" && ! -f "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" ]]; then
+  echo "missing --opentitan-fpv-bmc-summary-baseline-file: $OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" >&2
+  exit 1
+fi
 if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" ]]; then
   echo "OpenTitan FPV compile-contract drift allowlist file not readable: $OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && ! -r "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" ]]; then
+  echo "OpenTitan FPV BMC summary drift allowlist file not readable: $OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ -n "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
@@ -5041,8 +5175,20 @@ if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && ! -r "$MUTATION_GATE_
   echo "mutation gate-status case-ID allowlist file not readable: $MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" >&2
   exit 1
 fi
+if [[ -n "$MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" && ! -r "$MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" ]]; then
+  echo "mutation/BMC contract-fingerprint parity allowlist file not readable: $MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" && ! -r "$MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" ]]; then
+  echo "mutation/LEC contract-fingerprint parity allowlist file not readable: $MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" >&2
+  exit 1
+fi
 if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" && ! -r "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" ]]; then
   echo "mutation/LEC lane-map file not readable: $MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" >&2
+  exit 1
+fi
+if [[ -n "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY_ALLOWLIST_FILE" && ! -r "$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY_ALLOWLIST_FILE" ]]; then
+  echo "mutation/LEC lane parity allowlist file not readable: $MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" && ! -r "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" ]]; then
@@ -5056,11 +5202,18 @@ fi
 if [[ "$STRICT_GATE" == "1" && -n "$OPENTITAN_FPV_CFG_FILE" && -n "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT=1
 fi
+if [[ "$STRICT_GATE" == "1" && "$WITH_OPENTITAN_FPV_BMC" == "1" && -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" ]]; then
+  FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT=1
+fi
 if [[ "$STRICT_GATE" == "1" && -n "$OPENTITAN_FPV_CFG_FILE" ]]; then
   FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK=1
 fi
 if [[ -n "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--opentitan-fpv-compile-contract-drift-allowlist-file requires --fail-on-opentitan-fpv-compile-contract-drift or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" && "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--opentitan-fpv-bmc-summary-drift-allowlist-file requires --fail-on-opentitan-fpv-bmc-summary-drift or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$BMC_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_BMC_CONTRACT_FINGERPRINT_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -5085,6 +5238,18 @@ if [[ -n "$MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATIO
 fi
 if [[ -n "$MUTATION_GATE_STATUS_CASE_ID_ALLOWLIST_FILE" && "$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" != "1" && "$STRICT_GATE" != "1" ]]; then
   echo "--mutation-gate-status-case-id-allowlist-file requires --fail-on-new-mutation-gate-status-case-ids or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "" && "" != "1" && "" != "1" && "" != "1" ]]; then
+  echo "--mutation-bmc-contract-fingerprint-parity-allowlist-file requires --fail-on-mutation-bmc-contract-fingerprint-parity, --fail-on-new-mutation-bmc-contract-fingerprint-parity, or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "" && "" != "1" && "" != "1" && "" != "1" ]]; then
+  echo "--mutation-lec-contract-fingerprint-parity-allowlist-file requires --fail-on-mutation-lec-contract-fingerprint-parity, --fail-on-new-mutation-lec-contract-fingerprint-parity, or --strict-gate" >&2
+  exit 1
+fi
+if [[ -n "" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" != "1" && "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" != "1" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" != "1" && "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" != "1" && "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" != "1" && "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" != "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--mutation-lec-contract-fingerprint-lane-parity-allowlist-file requires --fail-on-mutation-lec-contract-fingerprint-lane-parity, --fail-on-new-mutation-lec-contract-fingerprint-lane-parity, --fail-on-mutation-lec-contract-fingerprint-lane-map-unmapped, --fail-on-new-mutation-lec-contract-fingerprint-lane-map-unmapped, --fail-on-mutation-lec-contract-fingerprint-lane-map-identity-fallback, --fail-on-new-mutation-lec-contract-fingerprint-lane-map-identity-fallback, or --strict-gate" >&2
   exit 1
 fi
 if [[ -n "$BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_FILE" && "$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" != "1" && "$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_PARITY" != "1" && "$FAIL_ON_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" != "1" && "$FAIL_ON_NEW_BMC_LEC_CONTRACT_FINGERPRINT_CASE_ID_MAP_UNMAPPED" != "1" && "$STRICT_GATE" != "1" ]]; then
@@ -5330,6 +5495,8 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS=1
   FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS=1
   FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS=1
+  FAIL_ON_NEW_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY=1
+  FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY=1
   FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=1
@@ -7517,11 +7684,16 @@ compute_lane_state_config_hash() {
     printf "opentitan_fpv_compile_contracts_baseline_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE_FILE"
     printf "opentitan_fpv_compile_contract_drift_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_FILE"
     printf "opentitan_fpv_compile_contract_drift_allowlist_file=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT_ALLOWLIST_FILE"
+    printf "opentitan_fpv_bmc_summary_baseline_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE"
+    printf "opentitan_fpv_bmc_summary_drift_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE"
+    printf "opentitan_fpv_bmc_summary_drift_allowlist_file=%s\n" "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE"
     printf "opentitan_fpv_fusesoc_bin=%s\n" "$OPENTITAN_FPV_FUSESOC_BIN"
     printf "opentitan_fpv_compile_contracts_workdir=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_WORKDIR"
     printf "opentitan_fpv_compile_contracts_keep_workdir=%s\n" "$OPENTITAN_FPV_COMPILE_CONTRACTS_KEEP_WORKDIR"
     printf "update_opentitan_fpv_compile_contracts_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_COMPILE_CONTRACTS_BASELINE"
     printf "fail_on_opentitan_fpv_compile_contract_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_COMPILE_CONTRACT_DRIFT"
+    printf "update_opentitan_fpv_bmc_summary_baseline=%s\n" "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE"
+    printf "fail_on_opentitan_fpv_bmc_summary_drift=%s\n" "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT"
     printf "fail_on_opentitan_fpv_unknown_task=%s\n" "$FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK"
     for opentitan_select_cfg in "${OPENTITAN_SELECT_CFGS[@]}"; do
       printf "opentitan_select_cfgs[]=%s\n" "$opentitan_select_cfg"
@@ -8518,6 +8690,7 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   need_yosys_bmc_runner=0
   need_yosys_lec_runner=0
   need_opentitan_bmc_runner=0
+  need_opentitan_fpv_bmc_runner=0
   need_opentitan_lec_runner=0
   need_opentitan_e2e_runner=0
   need_avip_runner=0
@@ -11379,6 +11552,8 @@ run_opentitan_fpv_bmc_lane() {
   local timeout_reasons_file="$8"
   local resolved_contracts_file="$9"
   local lane_assume_known_inputs="${10}"
+  local assertion_results_file="${11}"
+  local fpv_summary_file="${12}"
 
   if ! lane_enabled "$lane_id"; then
     return
@@ -11392,6 +11567,11 @@ run_opentitan_fpv_bmc_lane() {
   : > "$drop_remark_reasons_file"
   : > "$timeout_reasons_file"
   : > "$resolved_contracts_file"
+  : > "$assertion_results_file"
+  : > "$fpv_summary_file"
+  if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE" ]]; then
+    : > "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE"
+  fi
   rm -rf "$workdir"
 
   local opentitan_fpv_bmc_args=(
@@ -11400,12 +11580,18 @@ run_opentitan_fpv_bmc_lane() {
   if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
     opentitan_fpv_bmc_args+=(--target-filter "$OPENTITAN_FPV_TARGET_FILTER")
   fi
+  local fpv_summary_baseline_for_run=""
+  if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" && "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" != "1" ]]; then
+    fpv_summary_baseline_for_run="$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE"
+  fi
 
   local opentitan_fpv_bmc_env=(OUT="$case_results"
     BMC_DROP_REMARK_CASES_OUT="$drop_remark_cases_file"
     BMC_DROP_REMARK_REASONS_OUT="$drop_remark_reasons_file"
     BMC_TIMEOUT_REASON_CASES_OUT="$timeout_reasons_file"
     BMC_RESOLVED_CONTRACTS_OUT="$resolved_contracts_file"
+    BMC_ASSERTION_RESULTS_OUT="$assertion_results_file"
+    BMC_FPV_SUMMARY_OUT="$fpv_summary_file"
     CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN"
     CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
     CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN_OPENTITAN"
@@ -11416,9 +11602,34 @@ run_opentitan_fpv_bmc_lane() {
     BMC_ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
     BMC_ASSUME_KNOWN_INPUTS="$lane_assume_known_inputs"
     Z3_BIN="$Z3_BIN")
+  if [[ -n "$fpv_summary_baseline_for_run" ]]; then
+    opentitan_fpv_bmc_env+=("BMC_FPV_SUMMARY_BASELINE_FILE=$fpv_summary_baseline_for_run")
+    if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE" ]]; then
+      opentitan_fpv_bmc_env+=("BMC_FPV_SUMMARY_DRIFT_OUT=$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE")
+    fi
+    if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE" ]]; then
+      opentitan_fpv_bmc_env+=("BMC_FPV_SUMMARY_DRIFT_ALLOWLIST_FILE=$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_ALLOWLIST_FILE")
+    fi
+    if [[ "$FAIL_ON_OPENTITAN_FPV_BMC_SUMMARY_DRIFT" == "1" ]]; then
+      opentitan_fpv_bmc_env+=("BMC_FAIL_ON_FPV_SUMMARY_DRIFT=1")
+    fi
+  fi
   if [[ ${#FORMAL_BMC_TIMEOUT_ENV[@]} -gt 0 ]]; then
     opentitan_fpv_bmc_env+=("${FORMAL_BMC_TIMEOUT_ENV[@]}")
   fi
+
+  maybe_update_opentitan_fpv_bmc_summary_baseline() {
+    if [[ "$UPDATE_OPENTITAN_FPV_BMC_SUMMARY_BASELINE" != "1" ]]; then
+      return
+    fi
+    mkdir -p "$(dirname "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE")"
+    if [[ -s "$fpv_summary_file" ]]; then
+      cp "$fpv_summary_file" "$OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE"
+      echo "updated OpenTitan FPV BMC summary baseline: $OPENTITAN_FPV_BMC_SUMMARY_BASELINE_FILE" >&2
+      return
+    fi
+    echo "warning: OpenTitan FPV BMC summary baseline update skipped; summary file is empty: $fpv_summary_file" >&2
+  }
 
   run_suite "$suite_name" \
     env "${opentitan_fpv_bmc_env[@]}" \
@@ -11435,6 +11646,7 @@ run_opentitan_fpv_bmc_lane() {
       if [[ -n "$bmc_case_summary" ]]; then
         no_impl_summary="${no_impl_summary} ${bmc_case_summary}"
       fi
+      maybe_update_opentitan_fpv_bmc_summary_baseline
       record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 0 1 "$no_impl_summary"
       return
     fi
@@ -11447,6 +11659,7 @@ run_opentitan_fpv_bmc_lane() {
     if [[ -n "$bmc_case_summary" ]]; then
       missing_summary="${missing_summary} ${bmc_case_summary}"
     fi
+    maybe_update_opentitan_fpv_bmc_summary_baseline
     record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$missing_summary"
     return
   fi
@@ -11511,6 +11724,7 @@ PY
   if [[ -n "$bmc_contract_summary" ]]; then
     summary="${summary} ${bmc_contract_summary}"
   fi
+  maybe_update_opentitan_fpv_bmc_summary_baseline
   append_filtered_min_total_violation total summary
   maybe_enforce_nonempty_filtered_lane "$lane_id" total error summary
   record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
@@ -11544,7 +11758,9 @@ if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]]; then
     "$OUT_DIR/opentitan-fpv-bmc-drop-remark-reasons.tsv" \
     "$OUT_DIR/opentitan-fpv-bmc-timeout-reasons.tsv" \
     "$OUT_DIR/opentitan-fpv-bmc-resolved-contracts.tsv" \
-    "$BMC_ASSUME_KNOWN_INPUTS"
+    "$BMC_ASSUME_KNOWN_INPUTS" \
+    "$OUT_DIR/opentitan-fpv-bmc-assertion-results.tsv" \
+    "$OUT_DIR/opentitan-fpv-bmc-fpv-summary.tsv"
 fi
 
 # OpenTitan strict BMC audit lane (optional)
@@ -15403,6 +15619,9 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_MUTATION_SOURCE_FINGERPRINT_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" == "1" || \
       "$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" == "1" || \
+      "$FAIL_ON_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY" == "1" || \
+      "$FAIL_ON_NEW_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY" == "1" || \
+      "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" == "1" || \
       "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" == "1" || \
       "$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" == "1" || \
       "$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" == "1" || \
@@ -15505,15 +15724,21 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS="$FAIL_ON_NEW_MUTATION_PROVENANCE_TUPLE_IDS" \
   REQUIRE_MUTATION_PROVENANCE_SCHEMA_MARKER="$REQUIRE_MUTATION_PROVENANCE_SCHEMA_MARKER" \
   FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS="$FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS" \
+  FAIL_ON_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY" \
+  FAIL_ON_NEW_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_NEW_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY" \
+  FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" \
   FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY="$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY" \
+  MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE="$MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" \
   FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED="$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_UNMAPPED" \
   FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK="$FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" \
   FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK="$FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_IDENTITY_FALLBACK" \
   STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY="$STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY" \
   MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE="$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE" \
+  MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY_ALLOWLIST_FILE="$MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY_ALLOWLIST_FILE" \
+  MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE="$MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE" \
   MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_CONTRACT_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
   MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE="$MUTATION_SOURCE_FINGERPRINT_CASE_ID_ALLOWLIST_FILE" \
   MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE="$MUTATION_PROVENANCE_TUPLE_ID_ALLOWLIST_FILE" \
@@ -15611,6 +15836,15 @@ mutation_gate_status_case_id_allowlist_file = os.environ.get(
 ).strip()
 mutation_lec_contract_fingerprint_lane_map_file = os.environ.get(
     "MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_MAP_FILE", ""
+).strip()
+mutation_lec_contract_fingerprint_lane_parity_allowlist_file = os.environ.get(
+    "MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY_ALLOWLIST_FILE", ""
+).strip()
+mutation_bmc_contract_fingerprint_parity_allowlist_file = os.environ.get(
+    "MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE", ""
+).strip()
+mutation_lec_contract_fingerprint_parity_allowlist_file = os.environ.get(
+    "MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY_ALLOWLIST_FILE", ""
 ).strip()
 strict_gate_mutation_lane_parity_priority = (
     os.environ.get("STRICT_GATE_MUTATION_LANE_PARITY_PRIORITY", "0") == "1"
@@ -15872,6 +16106,12 @@ mutation_provenance_tuple_id_allow_regex = []
 mutation_gate_status_case_id_allow_exact = set()
 mutation_gate_status_case_id_allow_prefix = []
 mutation_gate_status_case_id_allow_regex = []
+mutation_lec_contract_fingerprint_lane_parity_allow_exact = set()
+mutation_lec_contract_fingerprint_lane_parity_allow_prefix = []
+mutation_lec_contract_fingerprint_lane_parity_allow_regex = []
+mutation_bmc_contract_fingerprint_parity_allow_exact = set()
+mutation_bmc_contract_fingerprint_parity_allow_prefix = []
+mutation_bmc_contract_fingerprint_parity_allow_regex = []
 
 def load_strict_gate_rule_id_allowlist():
     global strict_gate_rule_id_allow_exact
@@ -16214,6 +16454,111 @@ def is_allowed_bmc_lec_contract_fingerprint_case_id_parity_token(token: str) -> 
         bmc_lec_contract_fingerprint_case_id_parity_allow_prefix,
         bmc_lec_contract_fingerprint_case_id_parity_allow_regex,
     )
+
+
+def load_mutation_lec_contract_fingerprint_lane_parity_allowlist():
+    global mutation_lec_contract_fingerprint_lane_parity_allow_exact
+    global mutation_lec_contract_fingerprint_lane_parity_allow_prefix
+    global mutation_lec_contract_fingerprint_lane_parity_allow_regex
+    (
+        mutation_lec_contract_fingerprint_lane_parity_allow_exact,
+        mutation_lec_contract_fingerprint_lane_parity_allow_prefix,
+        mutation_lec_contract_fingerprint_lane_parity_allow_regex,
+    ) = load_pattern_allowlist(
+        mutation_lec_contract_fingerprint_lane_parity_allowlist_file,
+        "mutation/LEC lane parity allowlist",
+    )
+
+
+def is_allowed_mutation_lec_contract_fingerprint_lane_parity_token(token: str) -> bool:
+    return token_matches_allowlist(
+        token,
+        mutation_lec_contract_fingerprint_lane_parity_allow_exact,
+        mutation_lec_contract_fingerprint_lane_parity_allow_prefix,
+        mutation_lec_contract_fingerprint_lane_parity_allow_regex,
+    )
+
+
+def filter_mutation_lec_contract_fingerprint_lane_parity_tokens(tokens):
+    token_list = list(tokens)
+    if not mutation_lec_contract_fingerprint_lane_parity_allowlist_file:
+        return token_list, 0
+    filtered_tokens = [
+        token
+        for token in token_list
+        if not is_allowed_mutation_lec_contract_fingerprint_lane_parity_token(token)
+    ]
+    return filtered_tokens, len(token_list) - len(filtered_tokens)
+
+
+def load_mutation_bmc_contract_fingerprint_parity_allowlist():
+    global mutation_bmc_contract_fingerprint_parity_allow_exact
+    global mutation_bmc_contract_fingerprint_parity_allow_prefix
+    global mutation_bmc_contract_fingerprint_parity_allow_regex
+    (
+        mutation_bmc_contract_fingerprint_parity_allow_exact,
+        mutation_bmc_contract_fingerprint_parity_allow_prefix,
+        mutation_bmc_contract_fingerprint_parity_allow_regex,
+    ) = load_pattern_allowlist(
+        mutation_bmc_contract_fingerprint_parity_allowlist_file,
+        "mutation/BMC contract-fingerprint parity allowlist",
+    )
+
+
+def is_allowed_mutation_bmc_contract_fingerprint_parity_token(token: str) -> bool:
+    return token_matches_allowlist(
+        token,
+        mutation_bmc_contract_fingerprint_parity_allow_exact,
+        mutation_bmc_contract_fingerprint_parity_allow_prefix,
+        mutation_bmc_contract_fingerprint_parity_allow_regex,
+    )
+
+
+def filter_mutation_bmc_contract_fingerprint_parity_tokens(tokens):
+    token_list = list(tokens)
+    if not mutation_bmc_contract_fingerprint_parity_allowlist_file:
+        return token_list, 0
+    filtered_tokens = [
+        token
+        for token in token_list
+        if not is_allowed_mutation_bmc_contract_fingerprint_parity_token(token)
+    ]
+    return filtered_tokens, len(token_list) - len(filtered_tokens)
+
+
+def load_mutation_lec_contract_fingerprint_parity_allowlist():
+    global mutation_lec_contract_fingerprint_parity_allow_exact
+    global mutation_lec_contract_fingerprint_parity_allow_prefix
+    global mutation_lec_contract_fingerprint_parity_allow_regex
+    (
+        mutation_lec_contract_fingerprint_parity_allow_exact,
+        mutation_lec_contract_fingerprint_parity_allow_prefix,
+        mutation_lec_contract_fingerprint_parity_allow_regex,
+    ) = load_pattern_allowlist(
+        mutation_lec_contract_fingerprint_parity_allowlist_file,
+        "mutation/LEC contract-fingerprint parity allowlist",
+    )
+
+
+def is_allowed_mutation_lec_contract_fingerprint_parity_token(token: str) -> bool:
+    return token_matches_allowlist(
+        token,
+        mutation_lec_contract_fingerprint_parity_allow_exact,
+        mutation_lec_contract_fingerprint_parity_allow_prefix,
+        mutation_lec_contract_fingerprint_parity_allow_regex,
+    )
+
+
+def filter_mutation_lec_contract_fingerprint_parity_tokens(tokens):
+    token_list = list(tokens)
+    if not mutation_lec_contract_fingerprint_parity_allowlist_file:
+        return token_list, 0
+    filtered_tokens = [
+        token
+        for token in token_list
+        if not is_allowed_mutation_lec_contract_fingerprint_parity_token(token)
+    ]
+    return filtered_tokens, len(token_list) - len(filtered_tokens)
 
 
 def load_mutation_contract_fingerprint_case_id_allowlist():
@@ -17842,8 +18187,17 @@ fail_on_new_mutation_provenance_tuple_ids = (
 fail_on_new_mutation_gate_status_case_ids = (
     os.environ.get("FAIL_ON_NEW_MUTATION_GATE_STATUS_CASE_IDS", "0") == "1"
 )
+fail_on_mutation_bmc_contract_fingerprint_parity = (
+    os.environ.get("FAIL_ON_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY", "0") == "1"
+)
+fail_on_new_mutation_bmc_contract_fingerprint_parity = (
+    os.environ.get("FAIL_ON_NEW_MUTATION_BMC_CONTRACT_FINGERPRINT_PARITY", "0") == "1"
+)
 fail_on_mutation_lec_contract_fingerprint_parity = (
     os.environ.get("FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY", "0") == "1"
+)
+fail_on_new_mutation_lec_contract_fingerprint_parity = (
+    os.environ.get("FAIL_ON_NEW_MUTATION_LEC_CONTRACT_FINGERPRINT_PARITY", "0") == "1"
 )
 fail_on_mutation_lec_contract_fingerprint_lane_parity = (
     os.environ.get("FAIL_ON_MUTATION_LEC_CONTRACT_FINGERPRINT_LANE_PARITY", "0") == "1"
@@ -18083,6 +18437,9 @@ load_strict_gate_rule_id_allowlist()
     bmc_lec_contract_fingerprint_case_id_map_regex_rules,
 ) = load_bmc_lec_contract_fingerprint_case_id_map()
 load_bmc_lec_contract_fingerprint_case_id_parity_allowlist()
+load_mutation_lec_contract_fingerprint_lane_parity_allowlist()
+load_mutation_bmc_contract_fingerprint_parity_allowlist()
+load_mutation_lec_contract_fingerprint_parity_allowlist()
 load_bmc_contract_fingerprint_case_id_allowlist()
 load_lec_contract_fingerprint_case_id_allowlist()
 load_mutation_contract_fingerprint_case_id_allowlist()
@@ -20571,7 +20928,192 @@ if (
                     )
 
 
-if fail_on_mutation_lec_contract_fingerprint_parity:
+if (
+    fail_on_mutation_bmc_contract_fingerprint_parity
+    or fail_on_new_mutation_bmc_contract_fingerprint_parity
+):
+    mutation_key = ("mutation-matrix", "PROVENANCE")
+    mutation_contract_case_ids = current_mutation_contract_fingerprint_case_ids.get(
+        mutation_key, set()
+    )
+    if mutation_contract_case_ids and current_bmc_contract_fingerprint_case_ids:
+        mutation_fingerprints = {
+            extract_fingerprint_token(token) for token in mutation_contract_case_ids
+        }
+        mutation_fingerprints.discard("")
+        bmc_fingerprints = set()
+        for case_id_set in current_bmc_contract_fingerprint_case_ids.values():
+            bmc_fingerprints.update(
+                extract_fingerprint_token(token) for token in case_id_set
+            )
+        bmc_fingerprints.discard("")
+        if mutation_fingerprints and bmc_fingerprints:
+            raw_current_missing_fingerprints = sorted(mutation_fingerprints - bmc_fingerprints)
+            (
+                current_missing_fingerprints,
+                allowlisted_current_missing_fingerprints,
+            ) = filter_mutation_bmc_contract_fingerprint_parity_tokens(
+                raw_current_missing_fingerprints
+            )
+
+            if (
+                fail_on_mutation_bmc_contract_fingerprint_parity
+                and current_missing_fingerprints
+            ):
+                sample = ", ".join(current_missing_fingerprints[:3])
+                if len(current_missing_fingerprints) > 3:
+                    sample += ", ..."
+                allowlisted_suffix = (
+                    f" allowlisted={allowlisted_current_missing_fingerprints}"
+                    if allowlisted_current_missing_fingerprints > 0
+                    else ""
+                )
+                gate_errors.add(
+                    mutation_key[0],
+                    mutation_key[1],
+                    (
+                        "mutation contract fingerprint parity mismatch "
+                        f"(mutation={len(mutation_fingerprints)} bmc={len(bmc_fingerprints)}"
+                        f"{allowlisted_suffix}): {sample}"
+                    ),
+                    rule_id="strict_gate.mutation.parity.contract_fingerprint_values.missing_in_bmc",
+                )
+
+            if (
+                fail_on_new_mutation_bmc_contract_fingerprint_parity
+                and current_missing_fingerprints
+            ):
+                mutation_history_rows = list(history.get(mutation_key, []))
+                if mutation_history_rows:
+                    mutation_history_rows.sort(key=lambda r: r.get("date", ""))
+                    if baseline_window_days > 0:
+                        parsed_dates = []
+                        for row in mutation_history_rows:
+                            try:
+                                parsed_dates.append(dt.date.fromisoformat(row.get("date", "")))
+                            except Exception:
+                                parsed_dates.append(None)
+                        valid_dates = [d for d in parsed_dates if d is not None]
+                        if valid_dates:
+                            latest_date = max(valid_dates)
+                            cutoff = latest_date - dt.timedelta(days=baseline_window_days)
+                            filtered_rows = []
+                            for row, row_date in zip(mutation_history_rows, parsed_dates):
+                                if row_date is None:
+                                    continue
+                                if cutoff <= row_date <= latest_date:
+                                    filtered_rows.append(row)
+                            mutation_history_rows = filtered_rows
+                    if len(mutation_history_rows) >= baseline_window:
+                        compare_rows = mutation_history_rows[-baseline_window:]
+                        baseline_mutation_raw = [
+                            row.get("mutation_contract_fingerprint_case_ids")
+                            for row in compare_rows
+                        ]
+                        if any(raw is not None for raw in baseline_mutation_raw):
+                            baseline_mutation_fingerprints = set()
+                            for raw in baseline_mutation_raw:
+                                if raw is None or raw == "":
+                                    continue
+                                for token in raw.split(";"):
+                                    token = token.strip()
+                                    if not token:
+                                        continue
+                                    fingerprint = extract_fingerprint_token(token)
+                                    if fingerprint:
+                                        baseline_mutation_fingerprints.add(fingerprint)
+
+                            baseline_bmc_fingerprints = set()
+                            for (_, baseline_mode), baseline_rows in history.items():
+                                if not baseline_mode.startswith("BMC"):
+                                    continue
+                                baseline_rows = list(baseline_rows)
+                                baseline_rows.sort(key=lambda r: r.get("date", ""))
+                                if baseline_window_days > 0:
+                                    baseline_parsed_dates = []
+                                    for row in baseline_rows:
+                                        try:
+                                            baseline_parsed_dates.append(
+                                                dt.date.fromisoformat(row.get("date", ""))
+                                            )
+                                        except Exception:
+                                            baseline_parsed_dates.append(None)
+                                    baseline_valid_dates = [
+                                        d for d in baseline_parsed_dates if d is not None
+                                    ]
+                                    if baseline_valid_dates:
+                                        baseline_latest_date = max(baseline_valid_dates)
+                                        baseline_cutoff = baseline_latest_date - dt.timedelta(
+                                            days=baseline_window_days
+                                        )
+                                        baseline_filtered_rows = []
+                                        for row, row_date in zip(
+                                            baseline_rows, baseline_parsed_dates
+                                        ):
+                                            if row_date is None:
+                                                continue
+                                            if (
+                                                baseline_cutoff
+                                                <= row_date
+                                                <= baseline_latest_date
+                                            ):
+                                                baseline_filtered_rows.append(row)
+                                        baseline_rows = baseline_filtered_rows
+                                if len(baseline_rows) < baseline_window:
+                                    continue
+                                baseline_compare_rows = baseline_rows[-baseline_window:]
+                                for row in baseline_compare_rows:
+                                    raw = row.get("bmc_contract_fingerprint_case_ids")
+                                    if raw is None or raw == "":
+                                        continue
+                                    for token in raw.split(";"):
+                                        token = token.strip()
+                                        if not token:
+                                            continue
+                                        fingerprint = extract_fingerprint_token(token)
+                                        if fingerprint:
+                                            baseline_bmc_fingerprints.add(fingerprint)
+
+                            baseline_missing_fingerprints = (
+                                baseline_mutation_fingerprints - baseline_bmc_fingerprints
+                            )
+                            raw_new_missing_fingerprints = sorted(
+                                set(raw_current_missing_fingerprints)
+                                - baseline_missing_fingerprints
+                            )
+                            (
+                                new_missing_fingerprints,
+                                allowlisted_new_missing_fingerprints,
+                            ) = filter_mutation_bmc_contract_fingerprint_parity_tokens(
+                                raw_new_missing_fingerprints
+                            )
+                            if new_missing_fingerprints:
+                                sample = ", ".join(new_missing_fingerprints[:3])
+                                if len(new_missing_fingerprints) > 3:
+                                    sample += ", ..."
+                                allowlisted_suffix = (
+                                    f", allowlisted={allowlisted_new_missing_fingerprints}"
+                                    if allowlisted_new_missing_fingerprints > 0
+                                    else ""
+                                )
+                                gate_errors.add(
+                                    mutation_key[0],
+                                    mutation_key[1],
+                                    (
+                                        "new mutation/BMC contract fingerprint parity mismatch observed "
+                                        f"(baseline={len(baseline_missing_fingerprints)} "
+                                        f"current={len(current_missing_fingerprints)}"
+                                        f"{allowlisted_suffix}, "
+                                        f"window={baseline_window}): {sample}"
+                                    ),
+                                    rule_id="strict_gate.mutation.parity.contract_fingerprint_values.new_missing_in_bmc",
+                                )
+
+
+if (
+    fail_on_mutation_lec_contract_fingerprint_parity
+    or fail_on_new_mutation_lec_contract_fingerprint_parity
+):
     mutation_key = ("mutation-matrix", "PROVENANCE")
     mutation_contract_case_ids = current_mutation_contract_fingerprint_case_ids.get(
         mutation_key, set()
@@ -20588,20 +21130,166 @@ if fail_on_mutation_lec_contract_fingerprint_parity:
             )
         lec_fingerprints.discard("")
         if mutation_fingerprints and lec_fingerprints:
-            missing_fingerprints = sorted(mutation_fingerprints - lec_fingerprints)
-            if missing_fingerprints:
-                sample = ", ".join(missing_fingerprints[:3])
-                if len(missing_fingerprints) > 3:
+            raw_current_missing_fingerprints = sorted(mutation_fingerprints - lec_fingerprints)
+            (
+                current_missing_fingerprints,
+                allowlisted_current_missing_fingerprints,
+            ) = filter_mutation_lec_contract_fingerprint_parity_tokens(
+                raw_current_missing_fingerprints
+            )
+
+            if (
+                fail_on_mutation_lec_contract_fingerprint_parity
+                and current_missing_fingerprints
+            ):
+                sample = ", ".join(current_missing_fingerprints[:3])
+                if len(current_missing_fingerprints) > 3:
                     sample += ", ..."
+                allowlisted_suffix = (
+                    f" allowlisted={allowlisted_current_missing_fingerprints}"
+                    if allowlisted_current_missing_fingerprints > 0
+                    else ""
+                )
                 gate_errors.add(
                     mutation_key[0],
                     mutation_key[1],
                     (
                         "mutation contract fingerprint parity mismatch "
-                        f"(mutation={len(mutation_fingerprints)} lec={len(lec_fingerprints)}): {sample}"
+                        f"(mutation={len(mutation_fingerprints)} lec={len(lec_fingerprints)}"
+                        f"{allowlisted_suffix}): {sample}"
                     ),
                     rule_id="strict_gate.mutation.parity.contract_fingerprint_values.missing_in_lec",
                 )
+
+            if (
+                fail_on_new_mutation_lec_contract_fingerprint_parity
+                and current_missing_fingerprints
+            ):
+                mutation_history_rows = list(history.get(mutation_key, []))
+                if mutation_history_rows:
+                    mutation_history_rows.sort(key=lambda r: r.get("date", ""))
+                    if baseline_window_days > 0:
+                        parsed_dates = []
+                        for row in mutation_history_rows:
+                            try:
+                                parsed_dates.append(dt.date.fromisoformat(row.get("date", "")))
+                            except Exception:
+                                parsed_dates.append(None)
+                        valid_dates = [d for d in parsed_dates if d is not None]
+                        if valid_dates:
+                            latest_date = max(valid_dates)
+                            cutoff = latest_date - dt.timedelta(days=baseline_window_days)
+                            filtered_rows = []
+                            for row, row_date in zip(mutation_history_rows, parsed_dates):
+                                if row_date is None:
+                                    continue
+                                if cutoff <= row_date <= latest_date:
+                                    filtered_rows.append(row)
+                            mutation_history_rows = filtered_rows
+                    if len(mutation_history_rows) >= baseline_window:
+                        compare_rows = mutation_history_rows[-baseline_window:]
+                        baseline_mutation_raw = [
+                            row.get("mutation_contract_fingerprint_case_ids")
+                            for row in compare_rows
+                        ]
+                        if any(raw is not None for raw in baseline_mutation_raw):
+                            baseline_mutation_fingerprints = set()
+                            for raw in baseline_mutation_raw:
+                                if raw is None or raw == "":
+                                    continue
+                                for token in raw.split(";"):
+                                    token = token.strip()
+                                    if not token:
+                                        continue
+                                    fingerprint = extract_fingerprint_token(token)
+                                    if fingerprint:
+                                        baseline_mutation_fingerprints.add(fingerprint)
+
+                            baseline_lec_fingerprints = set()
+                            for (_, baseline_mode), baseline_rows in history.items():
+                                if not baseline_mode.startswith("LEC"):
+                                    continue
+                                baseline_rows = list(baseline_rows)
+                                baseline_rows.sort(key=lambda r: r.get("date", ""))
+                                if baseline_window_days > 0:
+                                    baseline_parsed_dates = []
+                                    for row in baseline_rows:
+                                        try:
+                                            baseline_parsed_dates.append(
+                                                dt.date.fromisoformat(row.get("date", ""))
+                                            )
+                                        except Exception:
+                                            baseline_parsed_dates.append(None)
+                                    baseline_valid_dates = [
+                                        d for d in baseline_parsed_dates if d is not None
+                                    ]
+                                    if baseline_valid_dates:
+                                        baseline_latest_date = max(baseline_valid_dates)
+                                        baseline_cutoff = baseline_latest_date - dt.timedelta(
+                                            days=baseline_window_days
+                                        )
+                                        baseline_filtered_rows = []
+                                        for row, row_date in zip(
+                                            baseline_rows, baseline_parsed_dates
+                                        ):
+                                            if row_date is None:
+                                                continue
+                                            if (
+                                                baseline_cutoff
+                                                <= row_date
+                                                <= baseline_latest_date
+                                            ):
+                                                baseline_filtered_rows.append(row)
+                                        baseline_rows = baseline_filtered_rows
+                                if len(baseline_rows) < baseline_window:
+                                    continue
+                                baseline_compare_rows = baseline_rows[-baseline_window:]
+                                for row in baseline_compare_rows:
+                                    raw = row.get("lec_contract_fingerprint_case_ids")
+                                    if raw is None or raw == "":
+                                        continue
+                                    for token in raw.split(";"):
+                                        token = token.strip()
+                                        if not token:
+                                            continue
+                                        fingerprint = extract_fingerprint_token(token)
+                                        if fingerprint:
+                                            baseline_lec_fingerprints.add(fingerprint)
+
+                            baseline_missing_fingerprints = (
+                                baseline_mutation_fingerprints - baseline_lec_fingerprints
+                            )
+                            raw_new_missing_fingerprints = sorted(
+                                set(raw_current_missing_fingerprints)
+                                - baseline_missing_fingerprints
+                            )
+                            (
+                                new_missing_fingerprints,
+                                allowlisted_new_missing_fingerprints,
+                            ) = filter_mutation_lec_contract_fingerprint_parity_tokens(
+                                raw_new_missing_fingerprints
+                            )
+                            if new_missing_fingerprints:
+                                sample = ", ".join(new_missing_fingerprints[:3])
+                                if len(new_missing_fingerprints) > 3:
+                                    sample += ", ..."
+                                allowlisted_suffix = (
+                                    f", allowlisted={allowlisted_new_missing_fingerprints}"
+                                    if allowlisted_new_missing_fingerprints > 0
+                                    else ""
+                                )
+                                gate_errors.add(
+                                    mutation_key[0],
+                                    mutation_key[1],
+                                    (
+                                        "new mutation/LEC contract fingerprint parity mismatch observed "
+                                        f"(baseline={len(baseline_missing_fingerprints)} "
+                                        f"current={len(current_missing_fingerprints)}"
+                                        f"{allowlisted_suffix}, "
+                                        f"window={baseline_window}): {sample}"
+                                    ),
+                                    rule_id="strict_gate.mutation.parity.contract_fingerprint_values.new_missing_in_lec",
+                                )
 
 
 if (
@@ -20648,10 +21336,16 @@ if (
                 lec_lane_fingerprints.setdefault(lane, set()).add(fingerprint)
 
         if mutation_lane_fingerprints and lec_lane_fingerprints:
-            current_missing_lane_ids = sorted(
+            raw_current_missing_lane_ids = sorted(
                 lane
                 for lane in mutation_lane_fingerprints.keys()
                 if lane not in lec_lane_fingerprints
+            )
+            (
+                current_missing_lane_ids,
+                allowlisted_current_missing_lane_ids,
+            ) = filter_mutation_lec_contract_fingerprint_lane_parity_tokens(
+                raw_current_missing_lane_ids
             )
 
             if (
@@ -20661,33 +21355,52 @@ if (
                 sample = ", ".join(current_missing_lane_ids[:3])
                 if len(current_missing_lane_ids) > 3:
                     sample += ", ..."
+                allowlisted_suffix = (
+                    f" allowlisted={allowlisted_current_missing_lane_ids}"
+                    if allowlisted_current_missing_lane_ids > 0
+                    else ""
+                )
                 gate_errors.add(
                     mutation_key[0],
                     mutation_key[1],
                     (
                         "mutation contract fingerprint lane parity mismatch "
                         f"(mutation_lanes={len(mutation_lane_fingerprints)} "
-                        f"lec_lanes={len(lec_lane_fingerprints)}): "
+                        f"lec_lanes={len(lec_lane_fingerprints)}"
+                        f"{allowlisted_suffix}): "
                         f"missing lanes: {sample}"
                     ),
                     rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_ids.missing_in_lec",
                 )
 
+            raw_identity_fallback_lanes = sorted(identity_mapped_lanes)
+            (
+                identity_fallback_lanes,
+                allowlisted_identity_fallback_lanes,
+            ) = filter_mutation_lec_contract_fingerprint_lane_parity_tokens(
+                raw_identity_fallback_lanes
+            )
+
             if (
                 fail_on_mutation_lec_contract_fingerprint_lane_map_identity_fallback
                 and mutation_lec_contract_fingerprint_lane_map_file
-                and identity_mapped_lanes
+                and identity_fallback_lanes
             ):
-                identity_fallback_lanes = sorted(identity_mapped_lanes)
                 sample = ", ".join(identity_fallback_lanes[:3])
                 if len(identity_fallback_lanes) > 3:
                     sample += ", ..."
+                allowlisted_suffix = (
+                    f" allowlisted={allowlisted_identity_fallback_lanes}"
+                    if allowlisted_identity_fallback_lanes > 0
+                    else ""
+                )
                 gate_errors.add(
                     mutation_key[0],
                     mutation_key[1],
                     (
                         "mutation lane-map identity fallback observed "
-                        f"(identity={len(identity_fallback_lanes)}): {sample}"
+                        f"(identity={len(identity_fallback_lanes)}"
+                        f"{allowlisted_suffix}): {sample}"
                     ),
                     rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_map_identity_fallback.present",
                 )
@@ -20758,29 +21471,47 @@ if (
                                     if map_source == "identity":
                                         baseline_identity_lanes.add(lane)
 
-                            new_identity_lanes = sorted(
+                            raw_new_identity_lanes = sorted(
                                 identity_mapped_lanes - baseline_identity_lanes
+                            )
+                            (
+                                new_identity_lanes,
+                                allowlisted_new_identity_lanes,
+                            ) = filter_mutation_lec_contract_fingerprint_lane_parity_tokens(
+                                raw_new_identity_lanes
                             )
                             if new_identity_lanes:
                                 sample = ", ".join(new_identity_lanes[:3])
                                 if len(new_identity_lanes) > 3:
                                     sample += ", ..."
+                                allowlisted_suffix = (
+                                    f", allowlisted={allowlisted_new_identity_lanes}"
+                                    if allowlisted_new_identity_lanes > 0
+                                    else ""
+                                )
                                 gate_errors.add(
                                     mutation_key[0],
                                     mutation_key[1],
                                     (
                                         "new mutation lane-map identity fallback observed "
                                         f"(baseline={len(baseline_identity_lanes)} "
-                                        f"current={len(identity_mapped_lanes)}, "
+                                        f"current={len(identity_fallback_lanes)}"
+                                        f"{allowlisted_suffix}, "
                                         f"window={baseline_window}): {sample}"
                                     ),
                                     rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_map_identity_fallback_lanes.new",
                                 )
 
-            current_unmapped_missing_mutation_lanes = sorted(
+            raw_current_unmapped_missing_mutation_lanes = sorted(
                 mutation_lane
                 for mutation_lane, mapped_lane in identity_mapped_missing_candidates
                 if mapped_lane not in lec_lane_fingerprints
+            )
+            (
+                current_unmapped_missing_mutation_lanes,
+                allowlisted_current_unmapped_missing_mutation_lanes,
+            ) = filter_mutation_lec_contract_fingerprint_lane_parity_tokens(
+                raw_current_unmapped_missing_mutation_lanes
             )
 
             if (
@@ -20791,12 +21522,18 @@ if (
                 sample = ", ".join(current_unmapped_missing_mutation_lanes[:3])
                 if len(current_unmapped_missing_mutation_lanes) > 3:
                     sample += ", ..."
+                allowlisted_suffix = (
+                    f" allowlisted={allowlisted_current_unmapped_missing_mutation_lanes}"
+                    if allowlisted_current_unmapped_missing_mutation_lanes > 0
+                    else ""
+                )
                 gate_errors.add(
                     mutation_key[0],
                     mutation_key[1],
                     (
                         "mutation lane-map unmapped lanes missing in LEC "
-                        f"(unmapped={len(current_unmapped_missing_mutation_lanes)}): {sample}"
+                        f"(unmapped={len(current_unmapped_missing_mutation_lanes)}"
+                        f"{allowlisted_suffix}): {sample}"
                     ),
                     rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_map_unmapped.missing_in_lec",
                 )
@@ -20924,33 +21661,51 @@ if (
                                     ):
                                         baseline_unmapped_missing_mutation_lanes.add(lane)
 
-                            new_unmapped_missing_mutation_lanes = sorted(
-                                set(current_unmapped_missing_mutation_lanes)
+                            raw_new_unmapped_missing_mutation_lanes = sorted(
+                                set(raw_current_unmapped_missing_mutation_lanes)
                                 - baseline_unmapped_missing_mutation_lanes
+                            )
+                            (
+                                new_unmapped_missing_mutation_lanes,
+                                allowlisted_new_unmapped_missing_mutation_lanes,
+                            ) = filter_mutation_lec_contract_fingerprint_lane_parity_tokens(
+                                raw_new_unmapped_missing_mutation_lanes
                             )
                             if new_unmapped_missing_mutation_lanes:
                                 sample = ", ".join(new_unmapped_missing_mutation_lanes[:3])
                                 if len(new_unmapped_missing_mutation_lanes) > 3:
                                     sample += ", ..."
+                                allowlisted_suffix = (
+                                    f", allowlisted={allowlisted_new_unmapped_missing_mutation_lanes}"
+                                    if allowlisted_new_unmapped_missing_mutation_lanes > 0
+                                    else ""
+                                )
                                 gate_errors.add(
                                     mutation_key[0],
                                     mutation_key[1],
                                     (
                                         "new mutation lane-map unmapped lanes missing in LEC observed "
                                         f"(baseline={len(baseline_unmapped_missing_mutation_lanes)} "
-                                        f"current={len(current_unmapped_missing_mutation_lanes)}, "
+                                        f"current={len(current_unmapped_missing_mutation_lanes)}"
+                                        f"{allowlisted_suffix}, "
                                         f"window={baseline_window}): {sample}"
                                     ),
                                     rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_map_unmapped_lanes.new",
                                 )
 
-            current_missing_lane_pairs = []
+            raw_current_missing_lane_pairs = []
             for lane, mutation_fingerprints in mutation_lane_fingerprints.items():
                 lec_fingerprints = lec_lane_fingerprints.get(lane)
                 if lec_fingerprints is None:
                     continue
                 for fingerprint in sorted(mutation_fingerprints - lec_fingerprints):
-                    current_missing_lane_pairs.append(f"{lane}::{fingerprint}")
+                    raw_current_missing_lane_pairs.append(f"{lane}::{fingerprint}")
+            (
+                current_missing_lane_pairs,
+                allowlisted_current_missing_lane_pairs,
+            ) = filter_mutation_lec_contract_fingerprint_lane_parity_tokens(
+                raw_current_missing_lane_pairs
+            )
 
             if (
                 fail_on_mutation_lec_contract_fingerprint_lane_parity
@@ -20959,13 +21714,19 @@ if (
                 sample = ", ".join(current_missing_lane_pairs[:3])
                 if len(current_missing_lane_pairs) > 3:
                     sample += ", ..."
+                allowlisted_suffix = (
+                    f" allowlisted={allowlisted_current_missing_lane_pairs}"
+                    if allowlisted_current_missing_lane_pairs > 0
+                    else ""
+                )
                 gate_errors.add(
                     mutation_key[0],
                     mutation_key[1],
                     (
                         "mutation contract fingerprint lane parity mismatch "
                         f"(mutation_lanes={len(mutation_lane_fingerprints)} "
-                        f"lec_lanes={len(lec_lane_fingerprints)}): "
+                        f"lec_lanes={len(lec_lane_fingerprints)}"
+                        f"{allowlisted_suffix}): "
                         f"missing lane fingerprints: {sample}"
                     ),
                     rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_pairs.missing_in_lec",
@@ -21095,20 +21856,33 @@ if (
                                 for lane in baseline_mutation_lane_fingerprints.keys()
                                 if lane not in baseline_lec_lane_fingerprints
                             )
-                            new_missing_lane_ids = sorted(
-                                set(current_missing_lane_ids) - set(baseline_missing_lane_ids)
+                            raw_new_missing_lane_ids = sorted(
+                                set(raw_current_missing_lane_ids)
+                                - set(baseline_missing_lane_ids)
+                            )
+                            (
+                                new_missing_lane_ids,
+                                allowlisted_new_missing_lane_ids,
+                            ) = filter_mutation_lec_contract_fingerprint_lane_parity_tokens(
+                                raw_new_missing_lane_ids
                             )
                             if new_missing_lane_ids:
                                 sample = ", ".join(new_missing_lane_ids[:3])
                                 if len(new_missing_lane_ids) > 3:
                                     sample += ", ..."
+                                allowlisted_suffix = (
+                                    f", allowlisted={allowlisted_new_missing_lane_ids}"
+                                    if allowlisted_new_missing_lane_ids > 0
+                                    else ""
+                                )
                                 gate_errors.add(
                                     mutation_key[0],
                                     mutation_key[1],
                                     (
                                         "new mutation contract fingerprint lane parity mismatch lanes observed "
                                         f"(baseline={len(baseline_missing_lane_ids)} "
-                                        f"current={len(current_missing_lane_ids)}, "
+                                        f"current={len(current_missing_lane_ids)}"
+                                        f"{allowlisted_suffix}, "
                                         f"window={baseline_window}): {sample}"
                                     ),
                                     rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_ids.new",
@@ -21122,20 +21896,33 @@ if (
                                 for fingerprint in sorted(mutation_fingerprints - lec_fingerprints):
                                     baseline_missing_lane_pairs.add(f"{lane}::{fingerprint}")
 
-                            new_missing_lane_pairs = sorted(
-                                set(current_missing_lane_pairs) - baseline_missing_lane_pairs
+                            raw_new_missing_lane_pairs = sorted(
+                                set(raw_current_missing_lane_pairs)
+                                - baseline_missing_lane_pairs
+                            )
+                            (
+                                new_missing_lane_pairs,
+                                allowlisted_new_missing_lane_pairs,
+                            ) = filter_mutation_lec_contract_fingerprint_lane_parity_tokens(
+                                raw_new_missing_lane_pairs
                             )
                             if new_missing_lane_pairs:
                                 sample = ", ".join(new_missing_lane_pairs[:3])
                                 if len(new_missing_lane_pairs) > 3:
                                     sample += ", ..."
+                                allowlisted_suffix = (
+                                    f", allowlisted={allowlisted_new_missing_lane_pairs}"
+                                    if allowlisted_new_missing_lane_pairs > 0
+                                    else ""
+                                )
                                 gate_errors.add(
                                     mutation_key[0],
                                     mutation_key[1],
                                     (
                                         "new mutation contract fingerprint lane parity mismatch lane fingerprints observed "
                                         f"(baseline={len(baseline_missing_lane_pairs)} "
-                                        f"current={len(current_missing_lane_pairs)}, "
+                                        f"current={len(current_missing_lane_pairs)}"
+                                        f"{allowlisted_suffix}, "
                                         f"window={baseline_window}): {sample}"
                                     ),
                                     rule_id="strict_gate.mutation.parity.contract_fingerprint_lane_pairs.new",

@@ -46,6 +46,9 @@
 // CHECK: --fail-on-new-mutation-contract-fingerprint-case-ids
 // CHECK: --fail-on-new-mutation-source-fingerprint-case-ids
 // CHECK: --fail-on-new-mutation-provenance-tuple-ids
+// CHECK: --fail-on-mutation-bmc-contract-fingerprint-parity
+// CHECK: --fail-on-new-mutation-bmc-contract-fingerprint-parity
+// CHECK: --mutation-bmc-contract-fingerprint-parity-allowlist-file
 // CHECK: --fail-on-mutation-lec-contract-fingerprint-parity
 // CHECK: --fail-on-mutation-lec-contract-fingerprint-lane-parity
 // CHECK: --fail-on-new-mutation-lec-contract-fingerprint-lane-parity
@@ -112,6 +115,11 @@
 // CHECK: --opentitan-fpv-compile-contracts-baseline-file
 // CHECK: --opentitan-fpv-compile-contract-drift-file
 // CHECK: --opentitan-fpv-compile-contract-drift-allowlist-file
+// CHECK: --opentitan-fpv-bmc-summary-baseline-file
+// CHECK: --opentitan-fpv-bmc-summary-drift-file
+// CHECK: --opentitan-fpv-bmc-summary-drift-allowlist-file
+// CHECK: --update-opentitan-fpv-bmc-summary-baseline
+// CHECK: --fail-on-opentitan-fpv-bmc-summary-drift
 // CHECK: --opentitan-fpv-fusesoc-bin
 // CHECK: --opentitan-fpv-compile-contracts-workdir
 // CHECK: --opentitan-fpv-compile-contracts-keep-workdir
