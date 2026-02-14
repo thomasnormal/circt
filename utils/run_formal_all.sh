@@ -12149,6 +12149,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
     verilator_bmc_timeout_reasons_file="$OUT_DIR/verilator-bmc-timeout-reasons.tsv"
     verilator_bmc_frontend_error_reasons_file="$OUT_DIR/verilator-bmc-frontend-error-reasons.tsv"
     verilator_bmc_contracts_file="$OUT_DIR/verilator-bmc-resolved-contracts.tsv"
+    verilator_bmc_launch_events_file="$OUT_DIR/verilator-bmc-launch-events.tsv"
     : > "$verilator_bmc_provenance_file"
     : > "$verilator_bmc_check_attribution_file"
     : > "$verilator_bmc_drop_remark_cases_file"
@@ -12156,6 +12157,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
     : > "$verilator_bmc_timeout_reasons_file"
     : > "$verilator_bmc_frontend_error_reasons_file"
     : > "$verilator_bmc_contracts_file"
+    : > "$verilator_bmc_launch_events_file"
     run_suite verilator-bmc \
       env "${FORMAL_BMC_TIMEOUT_ENV[@]}" \
       OUT="$OUT_DIR/verilator-bmc-results.txt" \
@@ -12170,6 +12172,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       BMC_TIMEOUT_REASON_CASES_OUT="$verilator_bmc_timeout_reasons_file" \
       BMC_FRONTEND_ERROR_REASON_CASES_OUT="$verilator_bmc_frontend_error_reasons_file" \
       BMC_RESOLVED_CONTRACTS_OUT="$verilator_bmc_contracts_file" \
+      BMC_LAUNCH_EVENTS_OUT="$verilator_bmc_launch_events_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$VERILATOR_BMC_SEMANTIC_TAG_MAP_FILE" \
       XFAILS="$VERILATOR_BMC_XFAILS" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
@@ -12211,6 +12214,12 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       bmc_check_summary="$(summarize_bmc_check_attribution_file "$verilator_bmc_check_attribution_file")"
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
+      fi
+      if [[ -s "$verilator_bmc_launch_events_file" ]]; then
+        bmc_launch_summary="$(summarize_bmc_launch_events_file "$verilator_bmc_launch_events_file")"
+        if [[ -n "$bmc_launch_summary" ]]; then
+          summary="${summary} ${bmc_launch_summary}"
+        fi
       fi
       append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "verilator-verification/BMC" total error summary
@@ -12293,6 +12302,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     yosys_bmc_timeout_reasons_file="$OUT_DIR/yosys-bmc-timeout-reasons.tsv"
     yosys_bmc_frontend_error_reasons_file="$OUT_DIR/yosys-bmc-frontend-error-reasons.tsv"
     yosys_bmc_contracts_file="$OUT_DIR/yosys-bmc-resolved-contracts.tsv"
+    yosys_bmc_launch_events_file="$OUT_DIR/yosys-bmc-launch-events.tsv"
     : > "$yosys_bmc_provenance_file"
     : > "$yosys_bmc_check_attribution_file"
     : > "$yosys_bmc_drop_remark_cases_file"
@@ -12300,6 +12310,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     : > "$yosys_bmc_timeout_reasons_file"
     : > "$yosys_bmc_frontend_error_reasons_file"
     : > "$yosys_bmc_contracts_file"
+    : > "$yosys_bmc_launch_events_file"
     # NOTE: Do not pass BMC_ASSUME_KNOWN_INPUTS here; the yosys script defaults
     # it to 1 because yosys SVA tests are 2-state and need --assume-known-inputs
     # to avoid spurious X-driven counterexamples.  Only forward an explicit
@@ -12318,6 +12329,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       BMC_TIMEOUT_REASON_CASES_OUT="$yosys_bmc_timeout_reasons_file"
       BMC_FRONTEND_ERROR_REASON_CASES_OUT="$yosys_bmc_frontend_error_reasons_file"
       BMC_RESOLVED_CONTRACTS_OUT="$yosys_bmc_contracts_file"
+      BMC_LAUNCH_EVENTS_OUT="$yosys_bmc_launch_events_file"
       BMC_SEMANTIC_TAG_MAP_FILE="$YOSYS_BMC_SEMANTIC_TAG_MAP_FILE"
       TEST_FILTER="$YOSYS_BMC_TEST_FILTER"
       Z3_BIN="$Z3_BIN")
@@ -12375,6 +12387,12 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       bmc_check_summary="$(summarize_bmc_check_attribution_file "$yosys_bmc_check_attribution_file")"
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
+      fi
+      if [[ -s "$yosys_bmc_launch_events_file" ]]; then
+        bmc_launch_summary="$(summarize_bmc_launch_events_file "$yosys_bmc_launch_events_file")"
+        if [[ -n "$bmc_launch_summary" ]]; then
+          summary="${summary} ${bmc_launch_summary}"
+        fi
       fi
       append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "yosys/tests/sva/BMC" total error summary
