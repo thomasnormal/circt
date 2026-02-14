@@ -1,10 +1,10 @@
 // RUN: rm -rf %t
 // RUN: mkdir -p %t/common
 // RUN: printf '{\n  "flow": "formal",\n  "sub_flow": "fpv",\n  "name": "top_earlgrey_ip_fpv",\n  "import_cfgs": ["{proj_root}/common/common_cfg.hjson"],\n  "use_cfgs": [\n    {\n      "name": "foo_fpv",\n      "dut": "foo_tb",\n      "fusesoc_core": "lowrisc:dv:foo_fpv",\n      "task": "FpvDefault",\n      "rel_path": "hw/top_earlgrey/formal/ip/foo"\n    },\n    "bar_fpv"\n  ]\n}\n' > %t/top.hjson
-// RUN: printf '{\n  "name": "bar_fpv",\n  "dut": "bar_tb",\n  "fusesoc_core": "lowrisc:dv:bar_fpv",\n  "task": "FpvSecCm",\n  "rel_path": "hw/top_earlgrey/formal/ip/bar"\n}\n' > %t/common/common_cfg.hjson
+// RUN: printf '{\n  "name": "bar_fpv",\n  "dut": "bar_tb",\n  "fusesoc_core": "lowrisc:dv:bar_fpv",\n  "task": "FpvSecCm",\n  "stopats": ["*u_state_regs.state_o"],\n  "rel_path": "hw/top_earlgrey/formal/ip/bar"\n}\n' > %t/common/common_cfg.hjson
 // RUN: python3 %S/../../utils/select_opentitan_formal_cfgs.py --cfg-file %t/top.hjson --proj-root %t --select-cfgs 'bar_fpv,foo_fpv' --out-manifest %t/manifest.tsv
 // RUN: FileCheck %s < %t/manifest.tsv
 //
-// CHECK: target_name{{[[:space:]]+}}dut{{[[:space:]]+}}fusesoc_core{{[[:space:]]+}}task{{[[:space:]]+}}flow{{[[:space:]]+}}sub_flow{{[[:space:]]+}}rel_path{{[[:space:]]+}}source_kind{{[[:space:]]+}}source_cfg_file{{[[:space:]]+}}root_cfg_file
-// CHECK: bar_fpv{{[[:space:]]+}}bar_tb{{[[:space:]]+}}lowrisc:dv:bar_fpv{{[[:space:]]+}}FpvSecCm{{[[:space:]]+}}formal{{[[:space:]]+}}fpv{{[[:space:]]+}}hw/top_earlgrey/formal/ip/bar{{[[:space:]]+}}reference{{[[:space:]]+}}{{.*}}common/common_cfg.hjson{{[[:space:]]+}}{{.*}}top.hjson
-// CHECK: foo_fpv{{[[:space:]]+}}foo_tb{{[[:space:]]+}}lowrisc:dv:foo_fpv{{[[:space:]]+}}FpvDefault{{[[:space:]]+}}formal{{[[:space:]]+}}fpv{{[[:space:]]+}}hw/top_earlgrey/formal/ip/foo{{[[:space:]]+}}inline{{[[:space:]]+}}{{.*}}top.hjson{{[[:space:]]+}}{{.*}}top.hjson
+// CHECK: target_name{{[[:space:]]+}}dut{{[[:space:]]+}}fusesoc_core{{[[:space:]]+}}task{{[[:space:]]+}}stopats{{[[:space:]]+}}flow{{[[:space:]]+}}sub_flow{{[[:space:]]+}}rel_path{{[[:space:]]+}}source_kind{{[[:space:]]+}}source_cfg_file{{[[:space:]]+}}root_cfg_file
+// CHECK: bar_fpv{{[[:space:]]+}}bar_tb{{[[:space:]]+}}lowrisc:dv:bar_fpv{{[[:space:]]+}}FpvSecCm{{[[:space:]]+}}{{.*u_state_regs.state_o.*}}{{[[:space:]]+}}formal{{[[:space:]]+}}fpv{{[[:space:]]+}}hw/top_earlgrey/formal/ip/bar{{[[:space:]]+}}reference{{[[:space:]]+}}{{.*}}common/common_cfg.hjson{{[[:space:]]+}}{{.*}}top.hjson
+// CHECK: foo_fpv{{[[:space:]]+}}foo_tb{{[[:space:]]+}}lowrisc:dv:foo_fpv{{[[:space:]]+}}FpvDefault{{[[:space:]]+}}{{\[\]}}{{[[:space:]]+}}formal{{[[:space:]]+}}fpv{{[[:space:]]+}}hw/top_earlgrey/formal/ip/foo{{[[:space:]]+}}inline{{[[:space:]]+}}{{.*}}top.hjson{{[[:space:]]+}}{{.*}}top.hjson
