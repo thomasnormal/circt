@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1288 - February 14, 2026
+
+### OpenTitan FPV Unknown-Task Strict Gating in `run_formal_all.sh`
+
+1. Added orchestrator flag:
+   - `--fail-on-opentitan-fpv-unknown-task`
+2. Wired unknown-task fail-through to the compile-contract resolver (`--fail-on-unknown-task`).
+3. Added strict-gate default behavior:
+   - when `--strict-gate` and `--opentitan-fpv-cfg` are active, unknown FPV task names are fatal by default.
+4. Added focused regressions:
+   - `test/Tools/run-formal-all-opentitan-fpv-unknown-task-requires-cfg.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-unknown-task-fail.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-unknown-task-strict-gate.test`
+   - updated `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Focused lit (`run_formal_all` OpenTitan FPV slice + new unknown-task tests): **9/9 PASS**
+
 ## Iteration 1287 - February 14, 2026
 
 ### OpenTitan FPV Task-Policy Governance (Resolver Layer)
