@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1304 - February 14, 2026
+
+### Mutation Workflow: MCY Drift Allowlist Governance
+
+1. Extended `utils/run_mutation_mcy_examples.sh` with:
+   - `--drift-allowlist-file FILE`
+2. Added allowlist semantics for baseline-drift checks (`--fail-on-diff`):
+   - each non-comment line is a glob pattern over tokens:
+     - `example::metric`
+     - `example::metric::detail`
+   - matching regressions are reported as `allowed` in `drift.tsv` instead of
+     failing the run.
+3. Added explicit validation:
+   - `--drift-allowlist-file` requires `--fail-on-diff`
+   - allowlist file must exist and be readable.
+4. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-baseline-drift-allowlist.test`
+   - `test/Tools/run-mutation-mcy-examples-drift-allowlist-requires-diff.test`
+   - updated `test/Tools/run-mutation-mcy-examples-help.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-mutation-mcy-examples-help.test build-test/test/Tools/run-mutation-mcy-examples-smoke.test build-test/test/Tools/run-mutation-mcy-examples-yosys-missing.test build-test/test/Tools/run-mutation-mcy-examples-generate-forwarding.test build-test/test/Tools/run-mutation-mcy-examples-gate-thresholds.test build-test/test/Tools/run-mutation-mcy-examples-baseline-update.test build-test/test/Tools/run-mutation-mcy-examples-baseline-drift-fail.test build-test/test/Tools/run-mutation-mcy-examples-baseline-flags-conflict.test build-test/test/Tools/run-mutation-mcy-examples-baseline-drift-allowlist.test build-test/test/Tools/run-mutation-mcy-examples-drift-allowlist-requires-diff.test` PASS
+- `utils/run_mutation_mcy_examples.sh --examples-root /home/thomas-ahle/mcy/examples --example bitcnt --smoke --circt-mut /home/thomas-ahle/circt/build-test/bin/circt-mut --baseline-file <tmp>/baseline.tsv --fail-on-diff --drift-allowlist-file <tmp>/allowlist.txt` PASS (`drift.tsv` shows `allowed` outcomes)
+
 ## Iteration 1303 - February 14, 2026
 
 ### Mutation Workflow: MCY Baseline Drift Governance
