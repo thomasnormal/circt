@@ -478,6 +478,23 @@ def parse_args() -> argparse.Namespace:
         help="Optional TSV output path for per-assertion FPV BMC rows.",
     )
     parser.add_argument(
+        "--assertion-granular",
+        action="store_true",
+        default=os.environ.get("BMC_ASSERTION_GRANULAR", "0") == "1",
+        help=(
+            "Run BMC per assertion by delegating --assertion-granular to the "
+            "pairwise runner (default: env BMC_ASSERTION_GRANULAR or off)."
+        ),
+    )
+    parser.add_argument(
+        "--assertion-granular-max",
+        default=os.environ.get("BMC_ASSERTION_GRANULAR_MAX", "0"),
+        help=(
+            "Maximum assertions per case for --assertion-granular "
+            "(0 means unlimited; default: env BMC_ASSERTION_GRANULAR_MAX or 0)."
+        ),
+    )
+    parser.add_argument(
         "--fpv-summary-file",
         default=os.environ.get("BMC_FPV_SUMMARY_OUT", ""),
         help="Optional TSV output path for FPV-style assertion summary rows.",
@@ -540,6 +557,9 @@ def main() -> int:
         bound = 1
     ignore_asserts_until = parse_nonnegative_int(
         os.environ.get("IGNORE_ASSERTS_UNTIL", "0"), "IGNORE_ASSERTS_UNTIL"
+    )
+    assertion_granular_max = parse_nonnegative_int(
+        args.assertion_granular_max, "--assertion-granular-max"
     )
 
     if args.workdir:
@@ -751,7 +771,11 @@ def main() -> int:
                     )
                     resolved_contract_files.append(group_resolved_contracts)
                     cmd += ["--resolved-contracts-file", str(group_resolved_contracts)]
-                if args.assertion_results_file:
+                if (
+                    args.assertion_results_file
+                    or args.fpv_summary_file
+                    or args.assertion_granular
+                ):
                     group_assertion_results = (
                         workdir / f"pairwise-assertion-results-{group_index}.tsv"
                     )
@@ -760,6 +784,10 @@ def main() -> int:
                         "--assertion-results-file",
                         str(group_assertion_results),
                     ]
+                if args.assertion_granular:
+                    cmd.append("--assertion-granular")
+                    if assertion_granular_max > 0:
+                        cmd += ["--assertion-granular-max", str(assertion_granular_max)]
 
                 cmd_env = os.environ.copy()
                 policy_passes: list[str] = []
@@ -816,14 +844,14 @@ def main() -> int:
             print(f"results: {out_path}", flush=True)
 
         merged_assertion_rows: list[tuple[str, ...]] = []
-        if args.assertion_results_file:
-            assertion_path = Path(args.assertion_results_file)
-            if assertion_path.exists():
-                for line in assertion_path.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    merged_assertion_rows.append(tuple(line.split("\t")))
+        for assertion_path in assertion_result_files:
+            if not assertion_path.exists():
+                continue
+            for line in assertion_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                merged_assertion_rows.append(tuple(line.split("\t")))
 
         if args.fpv_summary_file:
             fpv_summary_path = Path(args.fpv_summary_file)
