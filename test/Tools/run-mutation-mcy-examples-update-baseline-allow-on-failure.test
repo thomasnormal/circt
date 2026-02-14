@@ -1,0 +1,23 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt %t/bin
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 3\n' > %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --smoke \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --baseline-file %t/baseline.tsv \
+// RUN:   --update-baseline \
+// RUN:   --allow-update-baseline-on-failure \
+// RUN:   --out-dir %t/out 2>&1 | FileCheck %s --check-prefix=ERR
+
+// RUN: FileCheck %s --check-prefix=BASELINE < %t/baseline.tsv
+// RUN: FileCheck %s --check-prefix=SCHEMA < %t/baseline.tsv.schema-version
+// RUN: FileCheck %s --check-prefix=CONTRACT < %t/baseline.tsv.schema-contract
+
+// ERR: Updated baseline: {{.*}}baseline.tsv
+// BASELINE: bitcnt{{[[:space:]]}}FAIL{{[[:space:]]}}3{{[[:space:]]}}0{{[[:space:]]}}0{{[[:space:]]}}-{{[[:space:]]}}0{{[[:space:]]}}{{[0-9a-f]+}}
+// SCHEMA: v2
+// CONTRACT: {{[0-9a-f]+}}

@@ -43,6 +43,9 @@ Options:
                            (default: disabled)
   --baseline-file FILE     Baseline summary TSV for drift checks/updates
   --update-baseline        Write current summary.tsv to --baseline-file
+  --allow-update-baseline-on-failure
+                           Allow --update-baseline even when run exits failing
+                           (default: refuse baseline update on failure)
   --fail-on-diff           Fail on metric regression vs --baseline-file
   --require-policy-fingerprint-baseline
                            Require baseline rows to include policy_fingerprint
@@ -146,6 +149,7 @@ BASELINE_SCHEMA_CONTRACT_FILE=""
 BASELINE_SCHEMA_CONTRACT_FILE_EXPLICIT=0
 SUMMARY_SCHEMA_CONTRACT_FILE=""
 UPDATE_BASELINE=0
+ALLOW_UPDATE_BASELINE_ON_FAILURE=0
 FAIL_ON_DIFF=0
 REQUIRE_POLICY_FINGERPRINT_BASELINE=0
 REQUIRE_BASELINE_EXAMPLE_PARITY=0
@@ -1135,6 +1139,10 @@ while [[ $# -gt 0 ]]; do
       UPDATE_BASELINE=1
       shift
       ;;
+    --allow-update-baseline-on-failure)
+      ALLOW_UPDATE_BASELINE_ON_FAILURE=1
+      shift
+      ;;
     --fail-on-diff)
       FAIL_ON_DIFF=1
       shift
@@ -1267,6 +1275,10 @@ if [[ "$UPDATE_BASELINE" -eq 1 || "$FAIL_ON_DIFF" -eq 1 ]]; then
 fi
 if [[ "$UPDATE_BASELINE" -eq 1 && "$FAIL_ON_DIFF" -eq 1 ]]; then
   echo "Use either --update-baseline or --fail-on-diff, not both." >&2
+  exit 1
+fi
+if [[ "$ALLOW_UPDATE_BASELINE_ON_FAILURE" -eq 1 && "$UPDATE_BASELINE" -ne 1 ]]; then
+  echo "--allow-update-baseline-on-failure requires --update-baseline" >&2
   exit 1
 fi
 if [[ -z "$SUMMARY_SCHEMA_VERSION_FILE" ]]; then
@@ -1659,17 +1671,21 @@ if [[ -n "$DRIFT_ALLOWLIST_FILE" && -n "$DRIFT_ALLOWLIST_UNUSED_FILE" ]]; then
 fi
 
 if [[ "$UPDATE_BASELINE" -eq 1 ]]; then
-  mkdir -p "$(dirname "$BASELINE_FILE")"
-  cp "$SUMMARY_FILE" "$BASELINE_FILE"
-  if [[ -n "$BASELINE_SCHEMA_VERSION_FILE" ]]; then
-    mkdir -p "$(dirname "$BASELINE_SCHEMA_VERSION_FILE")"
-    cp "$SUMMARY_SCHEMA_VERSION_FILE" "$BASELINE_SCHEMA_VERSION_FILE"
+  if [[ "$overall_rc" -ne 0 && "$ALLOW_UPDATE_BASELINE_ON_FAILURE" -ne 1 ]]; then
+    echo "Refusing to update baseline: run failed with exit code $overall_rc (use --allow-update-baseline-on-failure to override)." >&2
+  else
+    mkdir -p "$(dirname "$BASELINE_FILE")"
+    cp "$SUMMARY_FILE" "$BASELINE_FILE"
+    if [[ -n "$BASELINE_SCHEMA_VERSION_FILE" ]]; then
+      mkdir -p "$(dirname "$BASELINE_SCHEMA_VERSION_FILE")"
+      cp "$SUMMARY_SCHEMA_VERSION_FILE" "$BASELINE_SCHEMA_VERSION_FILE"
+    fi
+    if [[ -n "$BASELINE_SCHEMA_CONTRACT_FILE" ]]; then
+      mkdir -p "$(dirname "$BASELINE_SCHEMA_CONTRACT_FILE")"
+      cp "$SUMMARY_SCHEMA_CONTRACT_FILE" "$BASELINE_SCHEMA_CONTRACT_FILE"
+    fi
+    echo "Updated baseline: $BASELINE_FILE" >&2
   fi
-  if [[ -n "$BASELINE_SCHEMA_CONTRACT_FILE" ]]; then
-    mkdir -p "$(dirname "$BASELINE_SCHEMA_CONTRACT_FILE")"
-    cp "$SUMMARY_SCHEMA_CONTRACT_FILE" "$BASELINE_SCHEMA_CONTRACT_FILE"
-  fi
-  echo "Updated baseline: $BASELINE_FILE" >&2
 fi
 
 cat "$SUMMARY_FILE"
