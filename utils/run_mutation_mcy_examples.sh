@@ -914,6 +914,10 @@ load_example_manifest() {
       echo "Invalid max_coverage_drop_percent override in manifest row ${line_no}: ${max_coverage_drop_percent_override}" >&2
       return 1
     fi
+    if [[ -n "$max_coverage_drop_percent_override" ]] && ! awk -v v="$max_coverage_drop_percent_override" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+      echo "Invalid max_coverage_drop_percent override in manifest row ${line_no}: ${max_coverage_drop_percent_override}" >&2
+      return 1
+    fi
     if [[ -n "$max_errors_increase_override" && ! "$max_errors_increase_override" =~ ^[0-9]+$ ]]; then
       echo "Invalid max_errors_increase override in manifest row ${line_no}: ${max_errors_increase_override}" >&2
       return 1
@@ -2664,7 +2668,11 @@ if ! is_nonneg_int "$MAX_RELEVANT_DROP"; then
   exit 1
 fi
 if ! is_nonneg_decimal "$MAX_COVERAGE_DROP_PERCENT"; then
-  echo "--max-coverage-drop-percent must be a non-negative decimal: $MAX_COVERAGE_DROP_PERCENT" >&2
+  echo "--max-coverage-drop-percent must be numeric in range [0,100]: $MAX_COVERAGE_DROP_PERCENT" >&2
+  exit 1
+fi
+if ! awk -v v="$MAX_COVERAGE_DROP_PERCENT" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+  echo "--max-coverage-drop-percent must be numeric in range [0,100]: $MAX_COVERAGE_DROP_PERCENT" >&2
   exit 1
 fi
 if ! is_nonneg_int "$MAX_ERRORS_INCREASE"; then
@@ -2680,7 +2688,11 @@ if ! is_nonneg_int "$MAX_TOTAL_RELEVANT_DROP"; then
   exit 1
 fi
 if ! is_nonneg_decimal "$MAX_TOTAL_COVERAGE_DROP_PERCENT"; then
-  echo "--max-total-coverage-drop-percent must be a non-negative decimal: $MAX_TOTAL_COVERAGE_DROP_PERCENT" >&2
+  echo "--max-total-coverage-drop-percent must be numeric in range [0,100]: $MAX_TOTAL_COVERAGE_DROP_PERCENT" >&2
+  exit 1
+fi
+if ! awk -v v="$MAX_TOTAL_COVERAGE_DROP_PERCENT" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+  echo "--max-total-coverage-drop-percent must be numeric in range [0,100]: $MAX_TOTAL_COVERAGE_DROP_PERCENT" >&2
   exit 1
 fi
 if ! is_nonneg_int "$MAX_TOTAL_ERRORS_INCREASE"; then

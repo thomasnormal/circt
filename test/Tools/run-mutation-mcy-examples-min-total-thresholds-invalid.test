@@ -21,10 +21,12 @@
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-detected-drop bad 2>&1 | FileCheck %s --check-prefix=MAX-DETECTED-DROP
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-relevant-drop bad 2>&1 | FileCheck %s --check-prefix=MAX-RELEVANT-DROP
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-coverage-drop-percent bad 2>&1 | FileCheck %s --check-prefix=MAX-COVERAGE-DROP
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-coverage-drop-percent 101 2>&1 | FileCheck %s --check-prefix=MAX-COVERAGE-DROP
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-errors-increase bad 2>&1 | FileCheck %s --check-prefix=MAX-ERRORS-INCREASE
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-detected-drop bad 2>&1 | FileCheck %s --check-prefix=MAX-TOTAL-DETECTED-DROP
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-relevant-drop bad 2>&1 | FileCheck %s --check-prefix=MAX-TOTAL-RELEVANT-DROP
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-coverage-drop-percent bad 2>&1 | FileCheck %s --check-prefix=MAX-TOTAL-COVERAGE-DROP
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-coverage-drop-percent 101 2>&1 | FileCheck %s --check-prefix=MAX-TOTAL-COVERAGE-DROP
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh --max-total-errors-increase bad 2>&1 | FileCheck %s --check-prefix=MAX-TOTAL-ERRORS-INCREASE
 
 // DETECTED: --min-total-detected must be a non-negative integer: bad
@@ -48,9 +50,9 @@
 // RETRY-DRIFT-SUITE-PCT: --retry-reason-drift-suite-percent-tolerance must be a non-negative decimal: bad
 // MAX-DETECTED-DROP: --max-detected-drop must be a non-negative integer: bad
 // MAX-RELEVANT-DROP: --max-relevant-drop must be a non-negative integer: bad
-// MAX-COVERAGE-DROP: --max-coverage-drop-percent must be a non-negative decimal: bad
+// MAX-COVERAGE-DROP: --max-coverage-drop-percent must be numeric in range [0,100]
 // MAX-ERRORS-INCREASE: --max-errors-increase must be a non-negative integer: bad
 // MAX-TOTAL-DETECTED-DROP: --max-total-detected-drop must be a non-negative integer: bad
 // MAX-TOTAL-RELEVANT-DROP: --max-total-relevant-drop must be a non-negative integer: bad
-// MAX-TOTAL-COVERAGE-DROP: --max-total-coverage-drop-percent must be a non-negative decimal: bad
+// MAX-TOTAL-COVERAGE-DROP: --max-total-coverage-drop-percent must be numeric in range [0,100]
 // MAX-TOTAL-ERRORS-INCREASE: --max-total-errors-increase must be a non-negative integer: bad

@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1372 - February 14, 2026
+
+### Mutation Workflow: Coverage-Drop Budget Range Hardening
+
+1. Hardened mutation baseline drift budget validation in
+   `utils/run_mutation_mcy_examples.sh`:
+   - `--max-coverage-drop-percent` now requires numeric range `[0,100]`
+   - `--max-total-coverage-drop-percent` now requires numeric range `[0,100]`
+2. Hardened example-manifest override validation for
+   `max_coverage_drop_percent` to require `[0,100]`.
+3. Added focused regressions:
+   - `test/Tools/run-mutation-mcy-examples-example-manifest-invalid-max-coverage-drop-percent-override.test`
+   - updated:
+     - `test/Tools/run-mutation-mcy-examples-min-total-thresholds-invalid.test`
+
+### Validation
+
+- `bash -n utils/run_mutation_mcy_examples.sh` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test --filter run-mutation-mcy-examples` PASS (105 selected)
+- `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --smoke --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_smoke_iter1372` PASS
+
+
 ## Iteration 1371 - February 14, 2026
 
 ### Mutation Workflow: Per-Example Manifest Drift-Budget Overrides
