@@ -12,5 +12,5 @@
 // RUN: FileCheck %s --check-prefix=ASSERT < %t/lec-assertions.tsv
 // RUN: FileCheck %s --check-prefix=CASE < %t/lec-results.tsv
 //
-// ASSERT: FAILING{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}a0000{{[[:space:]]+}}line_10{{[[:space:]]+}}NEQ{{[[:space:]]+}}neq
+// ASSERT: FAILING{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}a0000{{[[:space:]]+}}line_10{{[[:space:]]+}}NEQ{{[[:space:]]+}}projected_case_neq
 // CASE: FAIL{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}opentitan{{[[:space:]]+}}FPV_LEC{{[[:space:]]+}}LEC_RESULT_NEQ{{[[:space:]]+}}neq

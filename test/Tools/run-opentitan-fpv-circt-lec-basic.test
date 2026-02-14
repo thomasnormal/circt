@@ -16,6 +16,6 @@
 // RUN: FileCheck %s --check-prefix=COVER < %t/lec-cover-with-mode.tsv
 // RUN: FileCheck %s --check-prefix=CASE < %t/lec-results.tsv
 //
-// ASSERT: PROVEN{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}a0000{{[[:space:]]+}}line_10{{[[:space:]]+}}EQ{{[[:space:]]+}}eq
-// COVER: UNKNOWN{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}c0000{{[[:space:]]+}}line_20{{[[:space:]]+}}EQ{{[[:space:]]+}}eq
+// ASSERT: PROVEN{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}a0000{{[[:space:]]+}}line_10{{[[:space:]]+}}EQ{{[[:space:]]+}}projected_case_eq
+// COVER: UNKNOWN{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}c0000{{[[:space:]]+}}line_20{{[[:space:]]+}}EQ{{[[:space:]]+}}projected_case_eq
 // CASE: PASS{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}{{.*}}{{[[:space:]]+}}opentitan{{[[:space:]]+}}FPV_LEC{{[[:space:]]+}}LEC_RESULT_EQ{{[[:space:]]+}}eq

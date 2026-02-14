@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1420 - February 14, 2026
+
+### OpenTitan FPV Objective Parity: Projected-Reason Provenance + Counters
+
+1. Extended `utils/check_opentitan_fpv_objective_parity.py` parity TSV schema
+   to preserve lane evidence metadata:
+   - added columns:
+     - `bmc_evidence`
+     - `lec_evidence`
+     - `bmc_reason`
+     - `lec_reason`
+   - mismatch/missing rows now carry through per-lane reason tokens (including
+     projected-case markers emitted by native FPV LEC evidence flow).
+2. Extended `utils/run_formal_all.sh` FPV objective-parity lane summary
+   accounting with projected-evidence counters:
+   - `fpv_objective_parity_projected_rows`
+   - `fpv_objective_parity_projected_non_allowlisted_rows`
+   - `fpv_objective_parity_projected_assertion_rows`
+   - `fpv_objective_parity_projected_cover_rows`
+3. Updated FPV LEC evidence tests to assert projected reason tagging:
+   - `test/Tools/run-opentitan-fpv-circt-lec-basic.test`
+   - `test/Tools/run-opentitan-fpv-circt-lec-failing-status.test`
+4. Updated FPV objective parity regressions for schema/counter coverage:
+   - `test/Tools/check-opentitan-fpv-objective-parity-fail.test`
+   - `test/Tools/run-formal-all-opentitan-fpv-objective-parity-forwarding.test`
+5. Validation:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/check-opentitan-fpv-objective-parity-fail.test build-test/test/Tools/run-opentitan-fpv-circt-lec-basic.test build-test/test/Tools/run-opentitan-fpv-circt-lec-failing-status.test build-test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-forwarding.test build-test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-requires-lec-assertions.test` PASS
+
 ## Iteration 1419 - February 14, 2026
 
 ### OpenTitan FPV LEC: Assertion-Native Status Mapping + Cover Opt-In

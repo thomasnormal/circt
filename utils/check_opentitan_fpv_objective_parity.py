@@ -54,6 +54,8 @@ class ObjectiveEntry:
     objective_key: str
     status: str
     case_path: str
+    evidence: str
+    reason: str
 
 
 def fail(msg: str) -> None:
@@ -212,6 +214,8 @@ def read_objective_rows(
         case_id = parts[1].strip()
         case_path = parts[2].strip()
         objective_leaf = parts[3].strip()
+        evidence = parts[5].strip() if len(parts) > 5 else ""
+        reason = parts[6].strip() if len(parts) > 6 else ""
         if not case_id or not objective_leaf:
             continue
         objective_key = f"{case_id}::{objective_leaf}"
@@ -226,13 +230,33 @@ def read_objective_rows(
             objective_key=objective_key,
             status=status,
             case_path=case_path,
+            evidence=evidence,
+            reason=reason,
         )
     return out
 
 
 def emit_parity_tsv(
     path: Path,
-    rows: list[tuple[str, str, str, str, str, str, str, str, str, str, str]],
+    rows: list[
+        tuple[
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+        ]
+    ],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -249,6 +273,10 @@ def emit_parity_tsv(
                 "lec",
                 "bmc_case_path",
                 "lec_case_path",
+                "bmc_evidence",
+                "lec_evidence",
+                "bmc_reason",
+                "lec_reason",
                 "allowlisted",
             ]
         )
@@ -291,13 +319,37 @@ def main() -> None:
     if lec_cover_path is not None:
         lec.update(read_objective_rows(lec_cover_path, "FPV LEC", "cover"))
 
-    parity_rows: list[tuple[str, str, str, str, str, str, str, str, str, str, str]] = []
-    non_allowlisted_rows: list[
-        tuple[str, str, str, str, str, str, str, str, str, str, str]
+    parity_rows: list[
+        tuple[
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+        ]
     ] = []
+    non_allowlisted_rows = []
 
     def add_row(
-        entry: ObjectiveEntry, kind: str, bmc_value: str, lec_value: str, lec_path: str
+        entry: ObjectiveEntry,
+        kind: str,
+        bmc_value: str,
+        lec_value: str,
+        lec_path: str,
+        bmc_evidence: str = "",
+        lec_evidence: str = "",
+        bmc_reason: str = "",
+        lec_reason: str = "",
     ) -> None:
         tokens = (
             f"{entry.objective_id}::{kind}",
@@ -320,6 +372,10 @@ def main() -> None:
             lec_value,
             entry.case_path,
             lec_path,
+            bmc_evidence,
+            lec_evidence,
+            bmc_reason,
+            lec_reason,
             "1" if allowlisted else "0",
         )
         parity_rows.append(row)
@@ -344,12 +400,28 @@ def main() -> None:
     for objective_id in sorted(bmc_ids - lec_ids):
         entry = bmc[objective_id]
         if include_missing_entry(entry):
-            add_row(entry, "missing_in_lec", "present", "absent", "")
+            add_row(
+                entry,
+                "missing_in_lec",
+                "present",
+                "absent",
+                "",
+                bmc_evidence=entry.evidence,
+                bmc_reason=entry.reason,
+            )
 
     for objective_id in sorted(lec_ids - bmc_ids):
         entry = lec[objective_id]
         if include_missing_entry(entry):
-            add_row(entry, "missing_in_bmc", "absent", "present", entry.case_path)
+            add_row(
+                entry,
+                "missing_in_bmc",
+                "absent",
+                "present",
+                entry.case_path,
+                lec_evidence=entry.evidence,
+                lec_reason=entry.reason,
+            )
 
     for objective_id in sorted(bmc_ids & lec_ids):
         bmc_entry = bmc[objective_id]
@@ -361,6 +433,10 @@ def main() -> None:
                 bmc_entry.status,
                 lec_entry.status,
                 lec_entry.case_path,
+                bmc_evidence=bmc_entry.evidence,
+                lec_evidence=lec_entry.evidence,
+                bmc_reason=bmc_entry.reason,
+                lec_reason=lec_entry.reason,
             )
 
     if args.out_parity_tsv:
