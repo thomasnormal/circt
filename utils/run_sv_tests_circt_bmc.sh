@@ -44,6 +44,36 @@ compute_retry_backoff_secs() {
   awk -v attempt="$attempt" -v base="$BMC_LAUNCH_RETRY_BACKOFF_SECS" \
     'BEGIN { printf "%.3f", attempt * base }'
 }
+
+classify_retryable_launch_failure_reason() {
+  local log_file="$1"
+  local exit_code="$2"
+  if [[ -s "$log_file" ]] && grep -Eiq "Text file busy|ETXTBSY" "$log_file"; then
+    echo "etxtbsy"
+    return 0
+  fi
+  echo "retryable_exit_code_${exit_code}"
+}
+
+append_bmc_launch_event() {
+  local event_kind="$1"
+  local case_id="$2"
+  local case_path="$3"
+  local stage="$4"
+  local tool="$5"
+  local reason="$6"
+  local attempt="$7"
+  local delay_secs="$8"
+  local exit_code="$9"
+  local fallback_tool="${10}"
+  if [[ -z "$BMC_LAUNCH_EVENTS_OUT" ]]; then
+    return
+  fi
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    "$event_kind" "$case_id" "$case_path" "$stage" "$tool" \
+    "$reason" "$attempt" "$delay_secs" "$exit_code" "$fallback_tool" \
+    >> "$BMC_LAUNCH_EVENTS_OUT"
+}
 IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
 ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-0}"
@@ -82,6 +112,7 @@ CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 BMC_LAUNCH_RETRY_ATTEMPTS="${BMC_LAUNCH_RETRY_ATTEMPTS:-4}"
 BMC_LAUNCH_RETRY_BACKOFF_SECS="${BMC_LAUNCH_RETRY_BACKOFF_SECS:-0.2}"
 BMC_LAUNCH_COPY_FALLBACK="${BMC_LAUNCH_COPY_FALLBACK:-1}"
+BMC_LAUNCH_EVENTS_OUT="${BMC_LAUNCH_EVENTS_OUT:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECT_FILE="${EXPECT_FILE:-$SCRIPT_DIR/sv-tests-bmc-expect.txt}"
 UVM_TAG_REGEX="${UVM_TAG_REGEX:-(^| )uvm( |$)}"
@@ -225,6 +256,10 @@ trap cleanup EXIT
 
 results_tmp="$tmpdir/results.txt"
 touch "$results_tmp"
+if [[ -n "$BMC_LAUNCH_EVENTS_OUT" ]]; then
+  mkdir -p "$(dirname "$BMC_LAUNCH_EVENTS_OUT")"
+  : > "$BMC_LAUNCH_EVENTS_OUT"
+fi
 if [[ -n "$BMC_TIMEOUT_REASON_CASES_OUT" ]]; then
   mkdir -p "$(dirname "$BMC_TIMEOUT_REASON_CASES_OUT")"
   : > "$BMC_TIMEOUT_REASON_CASES_OUT"
@@ -640,6 +675,7 @@ top_module=${top_module}
     frontend_memory_retry_used=0
     frontend_memory_limit_kb="$CIRCT_MEMORY_LIMIT_KB"
     frontend_error_reason=""
+    launch_reason=""
     while true; do
       if run_limited_with_memory_kb "$frontend_memory_limit_kb" "${cmd[@]}" > "$mlir" 2>> "$verilog_log"; then
         verilog_status=0
@@ -652,8 +688,12 @@ top_module=${top_module}
       if [[ "$verilog_status" -eq 126 ]] && \
           is_retryable_launch_failure_log "$verilog_log" && \
           [[ "$launch_attempt" -lt "$BMC_LAUNCH_RETRY_ATTEMPTS" ]]; then
+        launch_reason="$(classify_retryable_launch_failure_reason "$verilog_log" "$verilog_status")"
         launch_attempt=$((launch_attempt + 1))
         retry_delay_secs="$(compute_retry_backoff_secs "$launch_attempt")"
+        append_bmc_launch_event \
+          "RETRY" "$base" "$sv" "frontend" "${cmd[0]}" "$launch_reason" \
+          "$launch_attempt" "$retry_delay_secs" "$verilog_status" ""
         {
           printf '[run_sv_tests_circt_bmc] frontend launch retry attempt=%s delay_secs=%s\n' \
             "$launch_attempt" "$retry_delay_secs"
@@ -664,10 +704,15 @@ top_module=${top_module}
       if [[ "$verilog_status" -eq 126 && "$BMC_LAUNCH_COPY_FALLBACK" == "1" && \
             "$launch_copy_fallback_used" -eq 0 ]] && \
           is_retryable_launch_failure_log "$verilog_log"; then
+        launch_reason="$(classify_retryable_launch_failure_reason "$verilog_log" "$verilog_status")"
+        original_verilog_tool="${cmd[0]}"
         fallback_verilog="$tmpdir/${base}.circt-verilog-launch-fallback"
         if cp -f "$CIRCT_VERILOG" "$fallback_verilog" 2>> "$verilog_log"; then
           chmod +x "$fallback_verilog" 2>> "$verilog_log" || true
           cmd[0]="$fallback_verilog"
+          append_bmc_launch_event \
+            "FALLBACK" "$base" "$sv" "frontend" "$original_verilog_tool" \
+            "${launch_reason}_retry_exhausted" "" "" "$verilog_status" "$fallback_verilog"
           launch_copy_fallback_used=1
           launch_attempt=0
           {

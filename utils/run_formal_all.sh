@@ -10946,6 +10946,85 @@ summarize_bmc_resolved_contracts_file() {
   summarize_resolved_contracts_file "$1" "bmc"
 }
 
+summarize_launch_events_file_with_prefix() {
+  local launch_events_file="$1"
+  local metrics_prefix="$2"
+  if [[ ! -s "$launch_events_file" ]]; then
+    echo "${metrics_prefix}_event_rows=0 ${metrics_prefix}_retry_events=0 ${metrics_prefix}_retry_cases=0 ${metrics_prefix}_retryable_exit_events=0 ${metrics_prefix}_etxtbsy_events=0 ${metrics_prefix}_fallback_events=0 ${metrics_prefix}_fallback_cases=0"
+    return 0
+  fi
+  BMC_LAUNCH_EVENTS_FILE="$launch_events_file" BMC_LAUNCH_METRICS_PREFIX="$metrics_prefix" python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["BMC_LAUNCH_EVENTS_FILE"])
+prefix = os.environ.get("BMC_LAUNCH_METRICS_PREFIX", "bmc_launch")
+if not path.exists():
+    print(
+        f"{prefix}_event_rows=0 {prefix}_retry_events=0 "
+        f"{prefix}_retry_cases=0 {prefix}_retryable_exit_events=0 "
+        f"{prefix}_etxtbsy_events=0 {prefix}_fallback_events=0 "
+        f"{prefix}_fallback_cases=0"
+    )
+    raise SystemExit(0)
+
+total = 0
+retry_events = 0
+fallback_events = 0
+retryable_exit_events = 0
+etxtbsy_events = 0
+retry_cases = set()
+fallback_cases = set()
+
+with path.open(encoding="utf-8") as handle:
+  for raw in handle:
+    line = raw.rstrip("\n")
+    if not line:
+      continue
+    parts = line.split("\t")
+    if len(parts) < 2:
+      continue
+    total += 1
+    event_kind = (parts[0] if len(parts) > 0 else "").strip().upper()
+    case_id = (parts[1] if len(parts) > 1 else "").strip()
+    reason = (parts[5] if len(parts) > 5 else "").strip().lower()
+    if event_kind == "RETRY":
+      retry_events += 1
+      if case_id:
+        retry_cases.add(case_id)
+      if reason.startswith("retryable_exit_code_"):
+        retryable_exit_events += 1
+      if reason == "etxtbsy":
+        etxtbsy_events += 1
+    elif event_kind == "FALLBACK":
+      fallback_events += 1
+      if case_id:
+        fallback_cases.add(case_id)
+
+print(
+    " ".join(
+        [
+            f"{prefix}_event_rows={total}",
+            f"{prefix}_retry_events={retry_events}",
+            f"{prefix}_retry_cases={len(retry_cases)}",
+            f"{prefix}_retryable_exit_events={retryable_exit_events}",
+            f"{prefix}_etxtbsy_events={etxtbsy_events}",
+            f"{prefix}_fallback_events={fallback_events}",
+            f"{prefix}_fallback_cases={len(fallback_cases)}",
+        ]
+    )
+)
+PY
+}
+
+summarize_bmc_launch_events_file() {
+  summarize_launch_events_file_with_prefix "$1" "bmc_launch"
+}
+
+summarize_lec_launch_events_file() {
+  summarize_launch_events_file_with_prefix "$1" "lec_launch"
+}
+
 summarize_lec_resolved_contracts_file() {
   summarize_resolved_contracts_file "$1" "lec"
 }
@@ -11780,6 +11859,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     sv_bmc_timeout_reasons_file="$OUT_DIR/sv-tests-bmc-timeout-reasons.tsv"
     sv_bmc_frontend_error_reasons_file="$OUT_DIR/sv-tests-bmc-frontend-error-reasons.tsv"
     sv_bmc_contracts_file="$OUT_DIR/sv-tests-bmc-resolved-contracts.tsv"
+    sv_bmc_launch_events_file="$OUT_DIR/sv-tests-bmc-launch-events.tsv"
     : > "$sv_bmc_provenance_file"
     : > "$sv_bmc_check_attribution_file"
     : > "$sv_bmc_drop_remark_cases_file"
@@ -11787,6 +11867,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     : > "$sv_bmc_timeout_reasons_file"
     : > "$sv_bmc_frontend_error_reasons_file"
     : > "$sv_bmc_contracts_file"
+    : > "$sv_bmc_launch_events_file"
     # sv-tests semantic closure currently relies on SMT-LIB execution to avoid
     # known JIT/Z3-LLVM backend divergence on local-var/disable-iff cases.
     run_suite sv-tests-bmc \
@@ -11803,6 +11884,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       BMC_TIMEOUT_REASON_CASES_OUT="$sv_bmc_timeout_reasons_file" \
       BMC_FRONTEND_ERROR_REASON_CASES_OUT="$sv_bmc_frontend_error_reasons_file" \
       BMC_RESOLVED_CONTRACTS_OUT="$sv_bmc_contracts_file" \
+      BMC_LAUNCH_EVENTS_OUT="$sv_bmc_launch_events_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
@@ -11844,6 +11926,12 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       bmc_check_summary="$(summarize_bmc_check_attribution_file "$sv_bmc_check_attribution_file")"
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
+      fi
+      if [[ -s "$sv_bmc_launch_events_file" ]]; then
+        bmc_launch_summary="$(summarize_bmc_launch_events_file "$sv_bmc_launch_events_file")"
+        if [[ -n "$bmc_launch_summary" ]]; then
+          summary="${summary} ${bmc_launch_summary}"
+        fi
       fi
       if [[ "$SV_TESTS_BMC_BACKEND_PARITY" == "1" ]]; then
         run_suite sv-tests-bmc-backend-parity-jit \
@@ -11896,6 +11984,7 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
     sv_bmc_uvm_semantics_timeout_reasons_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-timeout-reasons.tsv"
     sv_bmc_uvm_semantics_frontend_error_reasons_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-frontend-error-reasons.tsv"
     sv_bmc_uvm_semantics_contracts_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-resolved-contracts.tsv"
+    sv_bmc_uvm_semantics_launch_events_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-launch-events.tsv"
     : > "$sv_bmc_uvm_semantics_provenance_file"
     : > "$sv_bmc_uvm_semantics_check_attribution_file"
     : > "$sv_bmc_uvm_semantics_drop_remark_cases_file"
@@ -11903,6 +11992,7 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
     : > "$sv_bmc_uvm_semantics_timeout_reasons_file"
     : > "$sv_bmc_uvm_semantics_frontend_error_reasons_file"
     : > "$sv_bmc_uvm_semantics_contracts_file"
+    : > "$sv_bmc_uvm_semantics_launch_events_file"
     # Keep the semantic-closure lane aligned with sv-tests/BMC backend policy.
     run_suite sv-tests-bmc-uvm-semantics \
       env "${FORMAL_BMC_TIMEOUT_ENV[@]}" \
@@ -11918,6 +12008,7 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       BMC_TIMEOUT_REASON_CASES_OUT="$sv_bmc_uvm_semantics_timeout_reasons_file" \
       BMC_FRONTEND_ERROR_REASON_CASES_OUT="$sv_bmc_uvm_semantics_frontend_error_reasons_file" \
       BMC_RESOLVED_CONTRACTS_OUT="$sv_bmc_uvm_semantics_contracts_file" \
+      BMC_LAUNCH_EVENTS_OUT="$sv_bmc_uvm_semantics_launch_events_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK=1 \
@@ -11961,6 +12052,12 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
       fi
+      if [[ -s "$sv_bmc_uvm_semantics_launch_events_file" ]]; then
+        bmc_launch_summary="$(summarize_bmc_launch_events_file "$sv_bmc_uvm_semantics_launch_events_file")"
+        if [[ -n "$bmc_launch_summary" ]]; then
+          summary="${summary} ${bmc_launch_summary}"
+        fi
+      fi
       append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "sv-tests-uvm/BMC_SEMANTICS" total error summary
       record_result_with_summary "sv-tests-uvm" "BMC_SEMANTICS" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
@@ -11980,9 +12077,11 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
     sv_lec_drop_remark_cases_file="$OUT_DIR/sv-tests-lec-drop-remark-cases.tsv"
     sv_lec_drop_remark_reasons_file="$OUT_DIR/sv-tests-lec-drop-remark-reasons.tsv"
     sv_lec_contracts_file="$OUT_DIR/sv-tests-lec-resolved-contracts.tsv"
+    sv_lec_launch_events_file="$OUT_DIR/sv-tests-lec-launch-events.tsv"
     : > "$sv_lec_drop_remark_cases_file"
     : > "$sv_lec_drop_remark_reasons_file"
     : > "$sv_lec_contracts_file"
+    : > "$sv_lec_launch_events_file"
     run_suite sv-tests-lec \
       env "${FORMAL_LEC_TIMEOUT_ENV[@]}" \
       OUT="$OUT_DIR/sv-tests-lec-results.txt" \
@@ -11993,6 +12092,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
       LEC_DROP_REMARK_CASES_OUT="$sv_lec_drop_remark_cases_file" \
       LEC_DROP_REMARK_REASONS_OUT="$sv_lec_drop_remark_reasons_file" \
       LEC_RESOLVED_CONTRACTS_OUT="$sv_lec_contracts_file" \
+      LEC_LAUNCH_EVENTS_OUT="$sv_lec_launch_events_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
       TAG_REGEX="$SV_TESTS_LEC_TAG_REGEX" \
@@ -12019,6 +12119,12 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
       lec_contract_summary="$(summarize_lec_resolved_contracts_file "$sv_lec_contracts_file")"
       if [[ -n "$lec_contract_summary" ]]; then
         summary="${summary} ${lec_contract_summary}"
+      fi
+      if [[ -s "$sv_lec_launch_events_file" ]]; then
+        lec_launch_summary="$(summarize_lec_launch_events_file "$sv_lec_launch_events_file")"
+        if [[ -n "$lec_launch_summary" ]]; then
+          summary="${summary} ${lec_launch_summary}"
+        fi
       fi
       append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "sv-tests/LEC" total error summary
@@ -12121,9 +12227,11 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
     verilator_lec_drop_remark_cases_file="$OUT_DIR/verilator-lec-drop-remark-cases.tsv"
     verilator_lec_drop_remark_reasons_file="$OUT_DIR/verilator-lec-drop-remark-reasons.tsv"
     verilator_lec_contracts_file="$OUT_DIR/verilator-lec-resolved-contracts.tsv"
+    verilator_lec_launch_events_file="$OUT_DIR/verilator-lec-launch-events.tsv"
     : > "$verilator_lec_drop_remark_cases_file"
     : > "$verilator_lec_drop_remark_reasons_file"
     : > "$verilator_lec_contracts_file"
+    : > "$verilator_lec_launch_events_file"
     run_suite verilator-lec \
       env "${FORMAL_LEC_TIMEOUT_ENV[@]}" \
       OUT="$OUT_DIR/verilator-lec-results.txt" \
@@ -12134,6 +12242,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
       LEC_DROP_REMARK_CASES_OUT="$verilator_lec_drop_remark_cases_file" \
       LEC_DROP_REMARK_REASONS_OUT="$verilator_lec_drop_remark_reasons_file" \
       LEC_RESOLVED_CONTRACTS_OUT="$verilator_lec_contracts_file" \
+      LEC_LAUNCH_EVENTS_OUT="$verilator_lec_launch_events_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
       TEST_FILTER="$VERILATOR_LEC_TEST_FILTER" \
@@ -12158,6 +12267,12 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
       lec_contract_summary="$(summarize_lec_resolved_contracts_file "$verilator_lec_contracts_file")"
       if [[ -n "$lec_contract_summary" ]]; then
         summary="${summary} ${lec_contract_summary}"
+      fi
+      if [[ -s "$verilator_lec_launch_events_file" ]]; then
+        lec_launch_summary="$(summarize_lec_launch_events_file "$verilator_lec_launch_events_file")"
+        if [[ -n "$lec_launch_summary" ]]; then
+          summary="${summary} ${lec_launch_summary}"
+        fi
       fi
       append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "verilator-verification/LEC" total error summary
@@ -12276,9 +12391,11 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
     yosys_lec_drop_remark_cases_file="$OUT_DIR/yosys-lec-drop-remark-cases.tsv"
     yosys_lec_drop_remark_reasons_file="$OUT_DIR/yosys-lec-drop-remark-reasons.tsv"
     yosys_lec_contracts_file="$OUT_DIR/yosys-lec-resolved-contracts.tsv"
+    yosys_lec_launch_events_file="$OUT_DIR/yosys-lec-launch-events.tsv"
     : > "$yosys_lec_drop_remark_cases_file"
     : > "$yosys_lec_drop_remark_reasons_file"
     : > "$yosys_lec_contracts_file"
+    : > "$yosys_lec_launch_events_file"
     run_suite yosys-lec \
       env "${FORMAL_LEC_TIMEOUT_ENV[@]}" \
       OUT="$OUT_DIR/yosys-lec-results.txt" \
@@ -12289,6 +12406,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
       LEC_DROP_REMARK_CASES_OUT="$yosys_lec_drop_remark_cases_file" \
       LEC_DROP_REMARK_REASONS_OUT="$yosys_lec_drop_remark_reasons_file" \
       LEC_RESOLVED_CONTRACTS_OUT="$yosys_lec_contracts_file" \
+      LEC_LAUNCH_EVENTS_OUT="$yosys_lec_launch_events_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
       TEST_FILTER="$YOSYS_LEC_TEST_FILTER" \
@@ -12313,6 +12431,12 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
       lec_contract_summary="$(summarize_lec_resolved_contracts_file "$yosys_lec_contracts_file")"
       if [[ -n "$lec_contract_summary" ]]; then
         summary="${summary} ${lec_contract_summary}"
+      fi
+      if [[ -s "$yosys_lec_launch_events_file" ]]; then
+        lec_launch_summary="$(summarize_lec_launch_events_file "$yosys_lec_launch_events_file")"
+        if [[ -n "$lec_launch_summary" ]]; then
+          summary="${summary} ${lec_launch_summary}"
+        fi
       fi
       append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "yosys/tests/sva/LEC" total error summary
@@ -13603,6 +13727,7 @@ run_opentitan_fpv_bmc_lane() {
   local assertion_results_file="${11}"
   local cover_results_file="${12}"
   local fpv_summary_file="${13}"
+  local launch_events_file="${14}"
 
   if ! lane_enabled "$lane_id"; then
     return
@@ -13619,6 +13744,7 @@ run_opentitan_fpv_bmc_lane() {
   : > "$assertion_results_file"
   : > "$cover_results_file"
   : > "$fpv_summary_file"
+  : > "$launch_events_file"
   if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE" ]]; then
     : > "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE"
   fi
@@ -13652,6 +13778,7 @@ run_opentitan_fpv_bmc_lane() {
     BMC_ASSERTION_RESULTS_OUT="$assertion_results_file"
     BMC_COVER_RESULTS_OUT="$cover_results_file"
     BMC_FPV_SUMMARY_OUT="$fpv_summary_file"
+    BMC_LAUNCH_EVENTS_OUT="$launch_events_file"
     CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN"
     CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN_OPENTITAN"
     CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN_OPENTITAN"
@@ -13706,6 +13833,11 @@ run_opentitan_fpv_bmc_lane() {
       if [[ -n "$bmc_case_summary" ]]; then
         no_impl_summary="${no_impl_summary} ${bmc_case_summary}"
       fi
+      local bmc_launch_summary
+      bmc_launch_summary="$(summarize_bmc_launch_events_file "$launch_events_file")"
+      if [[ -n "$bmc_launch_summary" ]]; then
+        no_impl_summary="${no_impl_summary} ${bmc_launch_summary}"
+      fi
       maybe_update_opentitan_fpv_bmc_summary_baseline
       record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 0 1 "$no_impl_summary"
       return
@@ -13718,6 +13850,11 @@ run_opentitan_fpv_bmc_lane() {
     bmc_case_summary="$(summarize_bmc_case_file "$case_results" "$timeout_reasons_file" "")"
     if [[ -n "$bmc_case_summary" ]]; then
       missing_summary="${missing_summary} ${bmc_case_summary}"
+    fi
+    local bmc_launch_summary
+    bmc_launch_summary="$(summarize_bmc_launch_events_file "$launch_events_file")"
+    if [[ -n "$bmc_launch_summary" ]]; then
+      missing_summary="${missing_summary} ${bmc_launch_summary}"
     fi
     maybe_update_opentitan_fpv_bmc_summary_baseline
     record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$missing_summary"
@@ -13783,6 +13920,11 @@ PY
   bmc_contract_summary="$(summarize_bmc_resolved_contracts_file "$resolved_contracts_file")"
   if [[ -n "$bmc_contract_summary" ]]; then
     summary="${summary} ${bmc_contract_summary}"
+  fi
+  local bmc_launch_summary
+  bmc_launch_summary="$(summarize_bmc_launch_events_file "$launch_events_file")"
+  if [[ -n "$bmc_launch_summary" ]]; then
+    summary="${summary} ${bmc_launch_summary}"
   fi
   maybe_update_opentitan_fpv_bmc_summary_baseline
   append_filtered_min_total_violation total summary
@@ -13908,7 +14050,8 @@ if [[ "$WITH_OPENTITAN_FPV_BMC" == "1" ]]; then
     "$BMC_ASSUME_KNOWN_INPUTS" \
     "$OUT_DIR/opentitan-fpv-bmc-assertion-results.tsv" \
     "$OUT_DIR/opentitan-fpv-bmc-cover-results.tsv" \
-    "$OUT_DIR/opentitan-fpv-bmc-fpv-summary.tsv"
+    "$OUT_DIR/opentitan-fpv-bmc-fpv-summary.tsv" \
+    "$OUT_DIR/opentitan-fpv-bmc-launch-events.tsv"
 fi
 
 # OpenTitan FPV BMC evidence parity lane (optional)

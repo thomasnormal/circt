@@ -5,12 +5,15 @@
 // RUN: chmod +x %t/bin/circt-verilog
 // RUN: printf '#!/bin/sh\nexit 0\n' > %t/bin/circt-bmc
 // RUN: chmod +x %t/bin/circt-bmc
-// RUN: env KEEP_LOGS_DIR=%t/keep CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc TEST_FILTER=launch_fallback_case BMC_LAUNCH_RETRY_ATTEMPTS=1 BMC_LAUNCH_RETRY_BACKOFF_SECS=0 BMC_LAUNCH_COPY_FALLBACK=1 OUT=%t/results.tsv %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests > %t/run.log
+// RUN: env KEEP_LOGS_DIR=%t/keep CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc TEST_FILTER=launch_fallback_case BMC_LAUNCH_RETRY_ATTEMPTS=1 BMC_LAUNCH_RETRY_BACKOFF_SECS=0 BMC_LAUNCH_COPY_FALLBACK=1 BMC_LAUNCH_EVENTS_OUT=%t/launch.tsv OUT=%t/results.tsv %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests > %t/run.log
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/run.log
 // RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
 // RUN: FileCheck %s --check-prefix=RETRYLOG < %t/keep/launch_fallback_case.circt-verilog.log
+// RUN: FileCheck %s --check-prefix=LAUNCH < %t/launch.tsv
 //
 // SUMMARY: sv-tests SVA summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
 // RESULTS: PASS{{[[:space:]]+}}launch_fallback_case{{[[:space:]]+}}{{.*}}launch_fallback_case.sv
 // RETRYLOG: frontend launch retry attempt=1
 // RETRYLOG: frontend launch fallback copy=
+// LAUNCH: RETRY{{[[:space:]]+}}launch_fallback_case{{[[:space:]]+}}{{.*}}launch_fallback_case.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}circt-verilog{{[[:space:]]+}}retryable_exit_code_126{{[[:space:]]+}}1{{[[:space:]]+}}0.000{{[[:space:]]+}}126
+// LAUNCH: FALLBACK{{[[:space:]]+}}launch_fallback_case{{[[:space:]]+}}{{.*}}launch_fallback_case.sv{{[[:space:]]+}}frontend{{[[:space:]]+}}{{.*}}circt-verilog{{[[:space:]]+}}retryable_exit_code_126_retry_exhausted{{[[:space:]]+}}126{{[[:space:]]+}}{{.*}}circt-verilog-launch-fallback
