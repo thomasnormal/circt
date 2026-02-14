@@ -82,14 +82,18 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
      `opentitan-fpv-target-manifest.tsv` drift.
    - strict-gate now auto-enforces target-manifest drift when a target-manifest
      baseline is configured.
-4. Remaining limitation vs Jasper/VCF-style mature flows:
+4. Compile-contract task-policy governance completed:
+   - compile-contract drift now covers task-policy metadata drift keys:
+     `stopat_mode`, `blackbox_policy`, `task_policy_fingerprint`.
+   - strict compile-contract drift gates now catch sec_cm task-policy mapping
+     drift even when filelist-level contract fingerprints are unchanged.
+5. Remaining limitation vs Jasper/VCF-style mature flows:
    - per-assertion semantic status parity remains partial (especially vacuity/
      unreachable classification and richer task-level diagnostics).
-5. Next formal milestone (OpenTitan-aligned, backend-generic):
-   - strengthen compile-contract parity and FPV task-policy coverage:
-     - tighten stopat/blackbox task-profile propagation checks (`FpvSecCm`).
-     - add strict drift governance for task-policy metadata alongside compile
-       contracts and target manifests.
+6. Next formal milestone (OpenTitan-aligned, backend-generic):
+   - advance per-assertion reporting parity:
+     - strengthen assertion-status drift governance and vacuity/unreachable
+       classification coverage across OpenTitan FPV targets.
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 

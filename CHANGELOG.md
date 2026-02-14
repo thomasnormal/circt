@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1373 - February 14, 2026
+
+### OpenTitan FPV: Task-Policy Drift Governance in Compile-Contract Baselines
+
+1. Extended `utils/check_opentitan_compile_contract_drift.py` to enforce and
+   compare task-policy metadata fields in baseline/current contract snapshots:
+   - `stopat_mode`
+   - `blackbox_policy`
+   - `task_policy_fingerprint`
+2. Tightened compile-contract schema requirements in drift checks:
+   - task-policy columns are now required for baseline/current parity checks,
+     preventing silent downgrade to filelist-only drift validation.
+3. Added focused regression for task-policy-only drift at runner integration
+   level:
+   - `test/Tools/run-formal-all-opentitan-fpv-compile-contract-task-policy-drift.test`
+   - verifies strict drift failure when sec_cm task policy changes while
+     `contract_fingerprint` remains stable.
+4. Updated checker-level drift fixtures to the stricter schema:
+   - `test/Tools/check-opentitan-compile-contract-drift-none.test`
+   - `test/Tools/check-opentitan-compile-contract-drift-fingerprint.test`
+   - `test/Tools/check-opentitan-compile-contract-drift-allowlist.test`
+   - `test/Tools/check-opentitan-compile-contract-drift-task-stopats.test`
+
+### Validation
+
+- `python3 -m py_compile utils/check_opentitan_compile_contract_drift.py` PASS
+- `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/check-opentitan-compile-contract-drift-none.test build-test/test/Tools/check-opentitan-compile-contract-drift-fingerprint.test build-test/test/Tools/check-opentitan-compile-contract-drift-allowlist.test build-test/test/Tools/check-opentitan-compile-contract-drift-task-stopats.test build-test/test/Tools/run-formal-all-opentitan-fpv-compile-contract-drift.test build-test/test/Tools/run-formal-all-opentitan-fpv-compile-contract-drift-allowlist.test build-test/test/Tools/run-formal-all-opentitan-fpv-compile-contract-task-policy-drift.test` PASS (7/7)
+
 ## Iteration 1372 - February 14, 2026
 
 ### Mutation Workflow: Coverage-Drop Budget Range Hardening

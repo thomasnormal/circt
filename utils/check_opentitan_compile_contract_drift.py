@@ -26,6 +26,9 @@ class ContractRow:
     task: str
     task_profile: str
     task_known: str
+    stopat_mode: str
+    blackbox_policy: str
+    task_policy_fingerprint: str
     setup_status: str
     contract_fingerprint: str
     file_count: str
@@ -128,6 +131,12 @@ def read_contract_rows(path: Path) -> dict[str, ContractRow]:
         fail(f"contracts file missing header row: {path}")
     required = {
         "target_name",
+        "task",
+        "task_profile",
+        "task_known",
+        "stopat_mode",
+        "blackbox_policy",
+        "task_policy_fingerprint",
         "setup_status",
         "contract_fingerprint",
         "file_count",
@@ -153,6 +162,9 @@ def read_contract_rows(path: Path) -> dict[str, ContractRow]:
             task=(row.get("task") or "").strip(),
             task_profile=(row.get("task_profile") or "").strip(),
             task_known=(row.get("task_known") or "").strip(),
+            stopat_mode=(row.get("stopat_mode") or "").strip(),
+            blackbox_policy=(row.get("blackbox_policy") or "").strip(),
+            task_policy_fingerprint=(row.get("task_policy_fingerprint") or "").strip(),
             setup_status=(row.get("setup_status") or "").strip(),
             contract_fingerprint=(row.get("contract_fingerprint") or "").strip(),
             file_count=(row.get("file_count") or "").strip(),
@@ -213,6 +225,21 @@ def main() -> None:
             drift_rows.append((target, "task_profile", b.task_profile, c.task_profile))
         if b.task_known != c.task_known:
             drift_rows.append((target, "task_known", b.task_known, c.task_known))
+        if b.stopat_mode != c.stopat_mode:
+            drift_rows.append((target, "stopat_mode", b.stopat_mode, c.stopat_mode))
+        if b.blackbox_policy != c.blackbox_policy:
+            drift_rows.append(
+                (target, "blackbox_policy", b.blackbox_policy, c.blackbox_policy)
+            )
+        if b.task_policy_fingerprint != c.task_policy_fingerprint:
+            drift_rows.append(
+                (
+                    target,
+                    "task_policy_fingerprint",
+                    b.task_policy_fingerprint,
+                    c.task_policy_fingerprint,
+                )
+            )
         if b.setup_status != c.setup_status:
             drift_rows.append((target, "setup_status", b.setup_status, c.setup_status))
         if b.contract_fingerprint != c.contract_fingerprint:
