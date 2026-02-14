@@ -40,6 +40,7 @@
 // CHECK: --fail-on-bmc-lec-contract-fingerprint-case-id-parity
 // CHECK: --fail-on-new-bmc-lec-contract-fingerprint-case-id-parity
 // CHECK: --bmc-lec-contract-fingerprint-case-id-map-file FILE
+// CHECK: --bmc-lec-contract-fingerprint-case-id-parity-allowlist-file FILE
 // CHECK: --fail-on-bmc-lec-contract-fingerprint-case-id-map-unmapped
 // CHECK: --fail-on-new-bmc-lec-contract-fingerprint-case-id-map-unmapped
 // CHECK: --fail-on-new-mutation-contract-fingerprint-case-ids

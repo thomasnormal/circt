@@ -1,4 +1,31 @@
 # CIRCT UVM Parity Changelog
+
+## Iteration 1281 - February 14, 2026
+
+### Formal Strict-Gate: BMC/LEC Case-ID Parity and Unmapped Allowlist Controls
+
+1. Extended `utils/run_formal_all.sh` with cross-lane allowlist support for
+   BMC↔LEC case-ID governance checks:
+   - `--bmc-lec-contract-fingerprint-case-id-parity-allowlist-file FILE`
+2. Applied allowlist filtering to strict gates:
+   - `--fail-on-bmc-lec-contract-fingerprint-case-id-parity`
+   - `--fail-on-new-bmc-lec-contract-fingerprint-case-id-parity`
+   - `--fail-on-bmc-lec-contract-fingerprint-case-id-map-unmapped`
+   - `--fail-on-new-bmc-lec-contract-fingerprint-case-id-map-unmapped`
+3. Added explicit `allowlisted=<N>` diagnostics in parity/map-unmapped strict
+   gate outputs so governance decisions remain auditable.
+4. Added focused regressions:
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-parity-allowlist.test`
+   - `test/Tools/run-formal-all-bmc-lec-contract-fingerprint-case-id-map-unmapped-allowlist.test`
+   - Updated help/require-gate tests for new CLI and dependency checks.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh` PASS
+- Focused lit slice (help + allowlist + parity/map-unmapped): **11/11 PASS**
+- Broader strict-gate/contract-fingerprint lit slice: **163/163 PASS**
+- External formal smoke slice (`sv-tests`, `verilator-verification`, `yosys/tests/sva`, `opentitan`): PASS for BMC/LEC runs executed in this iteration
+
 ## Iteration 1280 - February 14, 2026
 
 ### APB AVIP Full Transaction: Bidirectional VIF Signal Propagation
