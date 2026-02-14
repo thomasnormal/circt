@@ -1,5 +1,5 @@
 // RUN: rm -rf %t && mkdir -p %t
-// RUN: printf 'alpha\talpha/alpha.v\ttop_alpha\t7\n' > %t/manifest.tsv
+// RUN: { printf 'alpha\talpha/alpha.v\ttop_alpha'; for _ in $(seq 1 24); do printf '\t-'; done; printf '\thooks/real_alpha.sh\t-\t--mode strict\n'; } > %t/manifest.tsv
 
 // RUN: not %S/../../utils/run_mutation_mcy_examples.sh \
 // RUN:   --smoke \

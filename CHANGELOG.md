@@ -67278,3 +67278,14 @@ See CHANGELOG.md on recent progress.
       `run-mutation-mcy-examples-native-real-harness-args-invalid.test`.
     - Revalidated full `run-mutation-mcy-examples` lit slice after
       introducing native real harness args support.
+36. Smoke-policy governance for native real harness overrides
+    (February 14, 2026):
+    - `run_mutation_mcy_examples.sh` now treats native real harness override
+      controls as non-smoke policy inputs:
+      - CLI: `--native-real-harness-args`
+      - manifest columns: `native_real_harness_script`,
+        `native_real_harness_args`
+    - Smoke mode now fails fast when those controls (or other mutation policy
+      overrides) are configured, preventing no-op policy drift in smoke lanes.
+    - Added dedicated regression tests for CLI and manifest native real override
+      smoke rejection.

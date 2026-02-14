@@ -1175,6 +1175,8 @@ has_manifest_generation_overrides() {
   [[ ${#EXAMPLE_TO_MUTATIONS_CFG[@]} -gt 0 ]] && return 0
   [[ ${#EXAMPLE_TO_MUTATIONS_SELECT[@]} -gt 0 ]] && return 0
   [[ ${#EXAMPLE_TO_NATIVE_MUTATION_OPS[@]} -gt 0 ]] && return 0
+  [[ ${#EXAMPLE_TO_NATIVE_REAL_HARNESS[@]} -gt 0 ]] && return 0
+  [[ ${#EXAMPLE_TO_NATIVE_REAL_HARNESS_ARGS[@]} -gt 0 ]] && return 0
   return 1
 }
 
@@ -3317,6 +3319,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --native-real-harness-args)
       NATIVE_REAL_HARNESS_ARGS="$2"
+      MUTATION_GENERATION_FLAGS_SEEN=1
       shift 2
       ;;
     --generate-count)
@@ -4171,7 +4174,7 @@ fi
 
 if [[ "$SMOKE" -eq 1 ]]; then
   if [[ "$MUTATION_GENERATION_FLAGS_SEEN" -eq 1 ]] || has_manifest_generation_overrides; then
-    echo "Mutation generation options (--mutations-*) require non-smoke mode." >&2
+    echo "Mutation generation options (--mutations-*) and native real harness overrides (--native-real-harness-args, manifest native_real_harness_script/native_real_harness_args) require non-smoke mode." >&2
     exit 1
   fi
 fi
