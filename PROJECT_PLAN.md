@@ -502,6 +502,41 @@ migrated to `CHANGELOG.md` under `Historical Migration - February 14, 2026`.
        `test/Tools/run-opentitan-fpv-bmc-policy-profiles.test`
        to validate workflow defaults + per-profile overrides for both BMC and
        LEC launch reason allowlists, max rows, budget files, and fail flags.
+37. OpenTitan FPV cross-lane objective parity lane bootstrap completed:
+   - added generic FPV objective parity checker:
+     - `utils/check_opentitan_fpv_objective_parity.py`
+     - compares normalized BMC-vs-LEC objective statuses for assertion/cover
+       evidence with explicit missing-objective policy:
+       `ignore|assertion|all`.
+   - `run_formal_all.sh` now supports FPV objective parity controls:
+     - `--opentitan-fpv-lec-assertion-results-file`
+     - `--opentitan-fpv-lec-cover-results-file`
+     - `--opentitan-fpv-objective-parity-file`
+     - `--opentitan-fpv-objective-parity-allowlist-file`
+     - `--fail-on-opentitan-fpv-objective-parity`
+     - `--opentitan-fpv-objective-parity-include-missing`
+     - `--opentitan-fpv-objective-parity-missing-policy`
+   - added parity lane:
+     - `opentitan/FPV_OBJECTIVE_PARITY`
+     - emits summary counters:
+       - `fpv_objective_parity_rows`
+       - `fpv_objective_parity_non_allowlisted_rows`
+       - `fpv_objective_parity_allowlisted_rows`
+       - `fpv_objective_parity_assertion_rows`
+       - `fpv_objective_parity_cover_rows`
+       - `fpv_objective_parity_missing_rows`
+       - `fpv_objective_parity_assertion_status_rows`
+       - `fpv_objective_parity_cover_status_rows`
+       - class-specific non-allowlisted counters.
+   - strict-gate integration:
+     - auto-enables `--fail-on-opentitan-fpv-objective-parity` when FPV BMC is
+       enabled and LEC assertion evidence is configured.
+     - defaults missing-objective policy to `assertion` under strict-gate
+       unless explicitly overridden.
+   - regression coverage:
+     - `test/Tools/check-opentitan-fpv-objective-parity-fail.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-objective-parity-forwarding.test`
+     - `test/Tools/run-formal-all-opentitan-fpv-objective-parity-requires-lec-assertions.test`
 
 ### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
 
@@ -897,13 +932,12 @@ verilator-verification, and yosys corpora).
 5. **Assertion/cover-granular scalability gap**: deterministic objective sharding is now available, but adaptive batch sizing, runtime-budget aware shard planning, and strict-gate policy guardrails for large targets are still pending.
 6. **LEC provenance parity**: BMC resolved-contract fingerprinting is stronger than LEC/mutation lanes; strict-gate cross-lane provenance equivalence remains incomplete.
 7. **Mutation cross-lane governance**: mutation strict gates are lane-scoped, but deeper policy coupling to BMC/LEC semantic buckets and resolved contracts is still pending.
-8. **Connectivity parity depth gap**: connectivity cross-lane parity now covers
-   per-rule case counters, resolved-contract fingerprints, shared
-   cover-counters, and objective-level status drift with structured metadata
-   and explicit missing-objective policies; OpenTitan FPV BMC now also has
-   evidence-vs-summary objective parity governance in the same strict-gate
-   plane; remaining gap is cross-lane FPV objective parity (BMC vs LEC) over
-   vacuous/covered/unreachable classes once FPV LEC evidence artifacts land.
+8. **FPV cross-lane parity completion gap**: OpenTitan FPV objective-level
+   BMC-vs-LEC parity governance is now wired in `run_formal_all.sh` with
+   allowlist/strict-gate/missing-policy controls, but production closure still
+   needs a first-class CIRCT FPV LEC evidence producer (assertion+cover
+   artifacts) so the parity lane can run without externally supplied LEC
+   evidence files.
 9. **OpenTitan macro frontend residual gap**: for representative IP targets
    (e.g. `pinmux_fpv`), retries now progress through
    `single_unit_preprocessor_failure` + Xilinx stub + unified include fallback,
@@ -917,6 +951,7 @@ verilator-verification, and yosys corpora).
 1. Validate and tune selector-based launch reason-event budget files (and allowlists) on larger OpenTitan and non-OpenTitan cohorts, then extend retry classification with additional platform-specific transient launch classes and policy-pack defaults.
 2. Extend resolved-contract artifact/fingerprint semantics to LEC and mutation runners, then enforce strict-gate drift checks on shared `(case_id, fingerprint)` tuples.
 3. Add dedicated OpenTitan+sv-tests semantic-closure dashboards in strict-gate summaries (multiclock/sequence-subroutine/disable-iff/local-var buckets) to drive maturity from semantic evidence, not pass-rate alone.
-4. Implement FPV cross-lane objective parity (BMC vs LEC) on normalized
-   assertion/cover evidence classes (`vacuous`, `covered`, `unreachable`) and
-   enforce strict-gate drift policies with allowlist support.
+4. Land native OpenTitan FPV LEC evidence production (assertion/cover artifacts)
+   and connect it directly to `opentitan/FPV_OBJECTIVE_PARITY`, removing the
+   current external-file handoff requirement while keeping objective parity
+   strict-gate governed.
