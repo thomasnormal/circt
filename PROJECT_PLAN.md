@@ -63,6 +63,180 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Formal Workstream (circt-mut) — February 12, 2026
 
+### OpenTitan DVSIM-Equivalent Formal Plan (CIRCT Backend) — February 14, 2026
+
+#### Goal
+
+Enable a CIRCT-native command flow that is operationally equivalent to:
+
+- `util/dvsim/dvsim.py hw/top_earlgrey/formal/top_earlgrey_fpv_*.hjson --select-cfgs ...`
+- `util/dvsim/dvsim.py hw/top_earlgrey/formal/chip_conn_cfg*.hjson`
+
+while keeping the backend generic (reusable across OpenTitan, sv-tests,
+verilator-verification, and yosys corpora).
+
+#### Architecture Commitments (long-term)
+
+1. Build a generic formal orchestration core with pluggable project adapters.
+2. Treat OpenTitan as the first full adapter, not a hard-coded one-off path.
+3. Keep artifacts schema-versioned and strict-gate-governed from day one.
+4. Preserve deterministic run identity (inputs, options, contracts, toolchain).
+
+#### 1) Native OpenTitan HJSON ingestion with `--select-cfgs` semantics
+
+1. Deliverables:
+   - new adapter module for OpenTitan formal cfg ingestion
+     (target cfg HJSON + imported cfgs).
+   - canonical target-selection semantics matching dvsim behavior:
+     - `--select-cfgs` exact target names
+     - category cfg expansion (`ip`, `prim`, `sec_cm`)
+     - deterministic selection order and dedup.
+   - emitted normalized manifest:
+     - `formal-target-manifest.tsv/json` (target, dut, flow kind, task, rel_path,
+       fusesoc core, cfg source).
+2. Implementation steps:
+   - parse HJSON graph and `import_cfgs` with cycle checks.
+   - normalize cfg entries into a common lane model consumed by formal runners.
+   - add CLI entry-point compatible subset:
+     - `run_formal_all.sh --opentitan-fpv-cfg <hjson> --select-cfgs <list>`.
+3. Tests:
+   - lit parser fixtures for malformed/ambiguous cfgs.
+   - parity fixtures against known OpenTitan cfg subsets.
+   - strict-gate checks for selection drift (`target list` and `target metadata`).
+4. Exit criteria:
+   - selecting any target from `top_earlgrey_fpv_ip_cfgs.hjson`,
+     `top_earlgrey_fpv_prim_cfgs.hjson`, and `top_earlgrey_fpv_sec_cm_cfgs.hjson`
+     yields deterministic target manifests with stable IDs.
+
+#### 2) Full FuseSoC/dvsim-style filelist + defines/include resolution
+
+1. Deliverables:
+   - formal input resolution layer that produces canonical compile contracts:
+     - ordered fileset
+     - include dirs
+     - defines
+     - top module, package roots, generated files.
+   - per-target resolved compile artifact:
+     - `resolved-compile-contract.tsv/json`.
+2. Implementation steps:
+   - implement adapter-backed resolution path for OpenTitan FPV targets
+     (FuseSoC core + cfg imports + overrides).
+   - preserve exact ordering semantics and generated-file handling.
+   - include contract fingerprint in strict-gate baseline rows.
+3. Tests:
+   - fixture-based parity tests comparing resolved contracts against reference
+     manifests for representative `ip`, `prim`, and `sec_cm` targets.
+   - regression tests for include/define precedence and duplicate suppression.
+4. Exit criteria:
+   - resolved compile contracts are stable and reproducible per target, and
+     strict-gate detects any unintended contract drift.
+
+#### 3) FPV task support parity (`task`, `stopat`, `blackbox`, sec_cm flow)
+
+1. Deliverables:
+   - task profile model in formal lane contracts:
+     - default FPV
+     - `FpvSecCm`
+     - connectivity-specific profile hooks.
+   - stopat/blackbox transformation support for sec_cm workflows.
+2. Implementation steps:
+   - implement task-profile interpreter from cfg metadata.
+   - add stopat injection pipeline:
+     - stopat net selection and symbolic fault-driving wrapper generation.
+   - add blackbox policy support:
+     - designated modules replaced with abstract stubs during formal elaboration.
+   - version and export effective task policy per case in resolved contracts.
+3. Tests:
+   - synthetic sec_cm fixtures asserting stopat/blackbox policy activation.
+   - OpenTitan sec_cm smoke targets with policy provenance assertions.
+   - strict-gate checks for task-policy drift.
+4. Exit criteria:
+   - sec_cm targets run through CIRCT with explicit policy provenance
+     (`task`, `stopats`, `blackboxes`) and deterministic outcomes.
+
+#### 4) FPV-compatible per-assertion reporting
+
+1. Deliverables:
+   - per-assertion result artifact:
+     - `assertion-results.tsv/json` with stable assertion IDs and source locs.
+   - summary counters aligned with FPV expectations:
+     - proven, failing, vacuous, covered, unreachable, timeout, unknown.
+2. Implementation steps:
+   - attribute assertion/check IDs through lowering and BMC pipelines.
+   - execute per-property classification runs as needed:
+     - bounded check
+     - induction check (where configured)
+     - cover reachability checks for vacuity/coverage classification.
+   - add report adapters producing FPV-like summary views.
+3. Tests:
+   - targeted assertion micro-benches for each status class.
+   - OpenTitan module subset with known assertion outcomes.
+   - strict-gate rules on assertion-status deltas by assertion ID.
+4. Exit criteria:
+   - target-level reports are assertion-granular and machine-comparable across
+     runs; strict-gate flags assertion-level regressions, not only lane totals.
+
+#### 5) Connectivity formal integration (`chip_conn_cfg*.hjson` + CSV)
+
+1. Deliverables:
+   - connectivity adapter that ingests chip conn cfg HJSON and CSV rules.
+   - generated connectivity check suite and per-connection result artifacts.
+2. Implementation steps:
+   - parse connectivity CSV schema into normalized connection contracts.
+   - synthesize formal checks (assert/cover assumptions) from connection rules.
+   - route through shared orchestration pipeline with lane/task metadata.
+3. Tests:
+   - synthetic CSV fixture tests for parser + check generation.
+   - OpenTitan chip connectivity subset validation with deterministic summaries.
+   - strict-gate drift checks for connection-level IDs/results.
+4. Exit criteria:
+   - `chip_conn_cfg*.hjson` flows execute with connection-level pass/fail reports
+     and strict-gate compatibility.
+
+#### 6) Scalability model for large formal target sets
+
+1. Deliverables:
+   - shardable execution planner across targets and assertion groups.
+   - run-local immutable toolchain pinning and input contract pinning.
+   - content-addressed cache layers for frontend/elaboration artifacts.
+2. Implementation steps:
+   - add scheduler model:
+     - shard by target, then by assertion batches for heavy jobs.
+   - add robust process isolation:
+     - run-local tool copies, per-shard workdirs, bounded retries.
+   - add artifact durability:
+     - normalized pathing, schema-versioned reports, resumable checkpoints.
+3. Tests:
+   - stress fixtures for parallel lane execution and shard replay.
+   - deterministic artifact hash checks under concurrent execution.
+   - throughput regressions and timeout-budget trend checks in strict-gate.
+4. Exit criteria:
+   - multi-target OpenTitan FPV batches run reproducibly with bounded variance,
+     stable artifacts, and actionable strict-gate output.
+
+#### Execution Phases and Milestones
+
+1. Phase A (ingestion + selection):
+   - complete item 1, deliver `--select-cfgs` parity and target manifests.
+2. Phase B (compile contract parity):
+   - complete item 2, deliver resolved compile contracts with fingerprints.
+3. Phase C (task parity, sec_cm):
+   - complete item 3, deliver stopat/blackbox policy execution + provenance.
+4. Phase D (assertion-granular FPV reports):
+   - complete item 4, deliver per-assertion status and drift gating.
+5. Phase E (connectivity):
+   - complete item 5, deliver chip connection cfg+CSV execution path.
+6. Phase F (scale hardening):
+   - complete item 6, deliver sharding, artifact stability, and runtime SLAs.
+
+#### Success Definition (program-level)
+
+1. CIRCT can run selected OpenTitan FPV targets from official formal cfg HJSON
+   with dvsim-equivalent target selection semantics.
+2. Reports are assertion-granular and strict-gate-enforced.
+3. Connectivity cfg+CSV flows run in the same governance plane.
+4. The implementation remains adapter-based and reusable outside OpenTitan.
+
 ### Formal Closure Snapshot Update (February 13, 2026, sv-tests BMC frontend resilience)
 
 1. Hardened `run_sv_tests_circt_bmc.sh` with two general frontend recovery
