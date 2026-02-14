@@ -1,0 +1,9 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/ot/hw/top_earlgrey/formal
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '{\n  "name": "chip_earlgrey_asic",\n  "fusesoc_core": "lowrisc:systems:chip_earlgrey_asic:0.1",\n  "conn_csvs": []\n}\n' > %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson
+// RUN: printf 'exact:chip.csv:RULE_CLK::cover_total\n' > %t/cover-parity-allowlist.txt
+// RUN: chmod +x %t/utils/run_formal_all.sh
+// RUN: not bash -lc 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-connectivity-bmc --with-opentitan-connectivity-lec --opentitan %t/ot --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/CONNECTIVITY_(BMC|LEC|COVER_PARITY)$" --opentitan-connectivity-cfg %t/ot/hw/top_earlgrey/formal/chip_conn_cfg.hjson --opentitan-connectivity-rule-filter ".*" --opentitan-connectivity-cover-parity-allowlist-file %t/cover-parity-allowlist.txt' 2>&1 | FileCheck %s
+//
+// CHECK: --opentitan-connectivity-cover-parity-allowlist-file requires --fail-on-opentitan-connectivity-cover-parity or --strict-gate
