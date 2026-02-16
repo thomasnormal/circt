@@ -780,6 +780,7 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   pm.addPass(emit::createStripEmitPass());
   pm.addPass(sim::createStripSim());
   pm.addPass(verif::createLowerTestsPass());
+<<<<<<< HEAD
   if (pruneUnreachableSymbols) {
     // Prune unreachable symbols early so unsupported ops in dead modules do
     // not block subsequent lowering.
@@ -866,6 +867,7 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   pm.addPass(createExternalizeRegisters(externalizeOptions));
   if (pruneBMCRegisters)
     pm.addPass(createPruneBMCRegisters());
+  pm.addNestedPass<hw::HWModuleOp>(verif::createCombineAssertLikePass());
   LowerToBMCOptions lowerToBMCOptions;
   lowerToBMCOptions.bound = boundOverride;
   lowerToBMCOptions.ignoreAssertionsUntil = ignoreAssertionsUntil;
