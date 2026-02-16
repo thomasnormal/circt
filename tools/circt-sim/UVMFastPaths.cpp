@@ -98,6 +98,20 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     return true;
   }
 
+  // Optional fast-path for low-severity report traffic. This bypasses
+  // high-volume info/warning report formatting and dispatch logic while
+  // preserving default behavior unless explicitly enabled.
+  if ((fastPathUvmReportInfo &&
+       calleeName.contains("uvm_report_object::uvm_report_info")) ||
+      (fastPathUvmReportWarning &&
+       calleeName.contains("uvm_report_object::uvm_report_warning"))) {
+    zeroCallIndirectResults();
+    LLVM_DEBUG(llvm::dbgs()
+               << "  call_indirect: report traffic fast-path (suppressed): "
+               << calleeName << "\n");
+    return true;
+  }
+
   // Fast-path report-object wrappers that otherwise call m_rh_init() and
   // dispatch into report-handler getters on every report.
   if (calleeName.contains("uvm_report_object::get_report_verbosity_level") &&
@@ -182,6 +196,23 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
 
 bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     ProcessId procId, mlir::func::CallOp callOp, llvm::StringRef calleeName) {
+  // Optional fast-path for low-severity report traffic. This bypasses
+  // high-volume info/warning report formatting and dispatch logic while
+  // preserving default behavior unless explicitly enabled.
+  if ((fastPathUvmReportInfo &&
+       calleeName.contains("uvm_report_object::uvm_report_info")) ||
+      (fastPathUvmReportWarning &&
+       calleeName.contains("uvm_report_object::uvm_report_warning"))) {
+    for (Value result : callOp.getResults()) {
+      unsigned width = std::max(1u, getTypeWidth(result.getType()));
+      setValue(procId, result, InterpretedValue(llvm::APInt::getZero(width)));
+    }
+    LLVM_DEBUG(llvm::dbgs()
+               << "  func.call: report traffic fast-path (suppressed): "
+               << calleeName << "\n");
+    return true;
+  }
+
   // Intercept report-object wrappers that repeatedly call m_rh_init() and
   // then delegate to report-handler getters.
   if (calleeName.contains("uvm_report_object::get_report_verbosity_level") &&
