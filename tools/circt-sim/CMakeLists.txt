@@ -36,6 +36,7 @@ set(libs
 add_circt_tool(circt-sim
   circt-sim.cpp
   LLHDProcessInterpreter.cpp
+  UVMFastPaths.cpp
   DEPENDS ${libs}
 )
 target_link_libraries(circt-sim

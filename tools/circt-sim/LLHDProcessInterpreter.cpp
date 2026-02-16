@@ -7481,62 +7481,8 @@ arith_dispatch:
       return success();
     }
 
-    auto zeroCallIndirectResults = [&]() {
-      for (Value result : callIndirectOp.getResults()) {
-        unsigned width = std::max(1u, getTypeWidth(result.getType()));
-        setValue(procId, result, InterpretedValue(APInt::getZero(width)));
-      }
-    };
-
-    // Intercept printer name adjustment. This is report-string formatting and
-    // does not affect simulation behavior; preserve intent by returning the
-    // input name unchanged.
-    if (calleeName.contains("uvm_printer::adjust_name") &&
-        callIndirectOp.getNumResults() >= 1 &&
-        callIndirectOp.getArgOperands().size() >= 2) {
-      Value result0 = callIndirectOp.getResult(0);
-      unsigned resultWidth = std::max(1u, getTypeWidth(result0.getType()));
-      InterpretedValue nameVal =
-          getValue(procId, callIndirectOp.getArgOperands()[1]);
-      if (nameVal.isX()) {
-        setValue(procId, result0, InterpretedValue::makeX(resultWidth));
-      } else if (nameVal.getWidth() != resultWidth) {
-        setValue(procId, result0,
-                 InterpretedValue(nameVal.getAPInt().zextOrTrunc(resultWidth)));
-      } else {
-        setValue(procId, result0, nameVal);
-      }
-      for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
-        Value result = callIndirectOp.getResult(i);
-        unsigned width = std::max(1u, getTypeWidth(result.getType()));
-        setValue(procId, result, InterpretedValue(APInt::getZero(width)));
-      }
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  call_indirect: adjust_name fast-path (passthrough): "
-                 << calleeName << "\n");
+    if (handleUvmCallIndirectFastPath(procId, callIndirectOp, calleeName))
       return success();
-    }
-
-    // Intercept expensive UVM printer formatting calls. These build report
-    // strings only and are safe to no-op for simulation behavior.
-    if (calleeName.contains("uvm_printer::print_field_int") ||
-        calleeName.contains("uvm_printer::print_field") ||
-        calleeName.contains("uvm_printer::print_generic_element") ||
-        calleeName.contains("uvm_printer::print_generic") ||
-        calleeName.contains("uvm_printer::print_time") ||
-        calleeName.contains("uvm_printer::print_string") ||
-        calleeName.contains("uvm_printer::print_real") ||
-        calleeName.contains("uvm_printer::print_array_header") ||
-        calleeName.contains("uvm_printer::print_array_footer") ||
-        calleeName.contains("uvm_printer::print_array_range") ||
-        calleeName.contains("uvm_printer::print_object_header") ||
-        calleeName.contains("uvm_printer::print_object")) {
-      zeroCallIndirectResults();
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  call_indirect: printer format fast-path (no-op): "
-                 << calleeName << "\n");
-      return success();
-    }
 
     // Intercept end_of_elaboration_phase for any class whose EOE function
     // body calls uvm_driver::end_of_elaboration_phase (which checks
@@ -14026,77 +13972,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
-  // Intercept uvm_report_handler::set_severity_file which fails due to
-  // uninitialized associative array field[11] in the interpreter's memory model.
-  // This function maps severity levels to file handles — not needed for sim.
-  if (calleeName.contains("uvm_report_handler") &&
-      calleeName.contains("::set_severity_file")) {
-    LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
-                            << " intercepted (no-op)\n");
+  if (handleUvmFuncCallFastPath(procId, callOp, calleeName))
     return success();
-  }
-
-  // Intercept uvm_report_handler::get_verbosity_level to avoid failures when
-  // associative array fields (severity_id_verbosities, id_verbosities) are not
-  // fully initialized or when terminationRequested causes early function exit.
-  // In the default case (no per-id/per-severity overrides), this returns
-  // m_max_verbosity_level which is UVM_MEDIUM (200).
-  if (calleeName.contains("uvm_report_handler") &&
-      calleeName.contains("::get_verbosity_level") &&
-      callOp.getNumResults() == 1) {
-    // Read m_max_verbosity_level from the handler object (field 1, offset after
-    // uvm_object base). Default is UVM_MEDIUM = 200.
-    int32_t verbosity = 200; // UVM_MEDIUM default
-    InterpretedValue handlerVal = getValue(procId, callOp.getOperand(0));
-    if (!handlerVal.isX()) {
-      uint64_t handlerAddr = handlerVal.getUInt64();
-      uint64_t off = 0;
-      MemoryBlock *blk = findMemoryBlockByAddress(handlerAddr, procId, &off);
-      if (blk && blk->initialized) {
-        // uvm_object base size: uvm_void(i32=4, ptr=8) + string(ptr=8, i64=8) + i32=4 = 32
-        // field 1 (m_max_verbosity_level) is at offset 32 from handler base
-        size_t fieldOff = off + 32;
-        if (fieldOff + 4 <= blk->data.size()) {
-          verbosity = 0;
-          for (int i = 0; i < 4; ++i)
-            verbosity |= static_cast<int32_t>(blk->data[fieldOff + i]) << (i * 8);
-        }
-      }
-    }
-    setValue(procId, callOp.getResult(0),
-            InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(verbosity))));
-    LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
-                            << " intercepted → " << verbosity << "\n");
-    return success();
-  }
-
-  // Intercept uvm_report_handler::get_action to return default severity actions.
-  // In the default case, returns severity_actions[severity] from the built-in
-  // defaults set during initialize().
-  if (calleeName.contains("uvm_report_handler") &&
-      calleeName.contains("::get_action") &&
-      callOp.getNumResults() == 1 && callOp.getNumOperands() >= 2) {
-    // severity is arg[1], an i2 value: UVM_INFO=0, UVM_WARNING=1, UVM_ERROR=2, UVM_FATAL=3
-    InterpretedValue sevVal = getValue(procId, callOp.getOperand(1));
-    uint64_t sev = sevVal.isX() ? 0 : sevVal.getUInt64();
-    // Default actions set by initialize():
-    //   UVM_INFO=DISPLAY(1), UVM_WARNING=DISPLAY(1),
-    //   UVM_ERROR=DISPLAY|COUNT(9), UVM_FATAL=DISPLAY|EXIT(33)
-    int32_t action;
-    switch (sev) {
-    case 0: action = 1; break;   // UVM_INFO → UVM_DISPLAY
-    case 1: action = 1; break;   // UVM_WARNING → UVM_DISPLAY
-    case 2: action = 9; break;   // UVM_ERROR → UVM_DISPLAY | UVM_COUNT
-    case 3: action = 33; break;  // UVM_FATAL → UVM_DISPLAY | UVM_EXIT
-    default: action = 1; break;
-    }
-    setValue(procId, callOp.getResult(0),
-            InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(action))));
-    LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
-                            << " intercepted (sev=" << sev << ") → " << action
-                            << "\n");
-    return success();
-  }
 
   // Intercept uvm_sequence_item::get_root_sequence to prevent infinite loops
   // when the parent_sequence chain has cycles (due to incomplete constructor

@@ -87,6 +87,50 @@ UVM control semantics.
 
 ---
 
+## 2026-02-16 Session: Report Getter Fast Paths + Interpreter File Split
+
+### Goal
+Push the next JIT-style optimization wave after printer fast-pathing, while
+starting to reduce `LLHDProcessInterpreter.cpp` growth.
+
+### Fixes Applied
+1. Added report getter fast-paths:
+   - `uvm_report_object::get_report_action`
+   - `uvm_report_object::get_report_verbosity_level`
+   - `uvm_report_handler::get_action` (call_indirect path)
+   - `uvm_report_handler::get_verbosity_level` (call_indirect path)
+2. Added new targeted regression:
+   - `test/Tools/circt-sim/uvm-report-getters-fast-path.mlir`
+3. Structural refactor to prevent file bloat:
+   - extracted UVM fast-path code into new file:
+     - `tools/circt-sim/UVMFastPaths.cpp`
+   - `LLHDProcessInterpreter.cpp` now delegates through:
+     - `handleUvmCallIndirectFastPath(...)`
+     - `handleUvmFuncCallFastPath(...)`
+   - added to `tools/circt-sim/CMakeLists.txt`.
+
+### Validation
+1. Build:
+   - `CCACHE_TEMPDIR=/tmp/ccache-tmp CCACHE_DIR=/tmp/ccache ninja -C build-test circt-sim` PASS
+2. Targeted lit tests:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/uvm-printer-fast-path-call-indirect.mlir build-test/test/Tools/circt-sim/uvm-report-getters-fast-path.mlir build-test/test/Tools/circt-sim/vtable-indirect-call.mlir build-test/test/Tools/circt-sim/vtable-fallback-dispatch.mlir` PASS
+3. I2S profile evidence:
+   - Compare
+     - `/tmp/avip-debug/i2s-profile-120-fastpath4.log`
+     - `/tmp/avip-debug/i2s-profile-120-fastpath5.log`
+   - `uvm_report_object::m_rh_init`: `25229 -> 974`
+   - `uvm_report_handler::get_action`: `12462 -> 0` (top30)
+   - `uvm_report_handler::get_verbosity_level`: `12620 -> 0` (top30)
+   - Active runner moved to `uvm_report_object::uvm_report_info`.
+
+### Current Limitation
+The dominant cost has shifted into higher-level report generation flow
+(`uvm_report_info` / `uvm_report_message` getters). Next likely high-impact
+step is an env-gated fast path for INFO/WARNING message processing to cut
+compose/print overhead without changing ERROR/FATAL behavior.
+
+---
+
 ## 2026-02-15 Session 1: Performance + Cross-Sibling Fix
 
 ### Starting Coverage Status (clean codebase, no fixes)
