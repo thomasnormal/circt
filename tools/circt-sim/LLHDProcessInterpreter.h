@@ -655,6 +655,9 @@ private:
   /// Execute module-level drives for a process after it yields.
   void executeModuleDrives(ProcessId procId);
 
+  /// Re-evaluate module drives that depend on the given signal.
+  void executeModuleDrivesForSignal(SignalId sigId);
+
   /// Execute instance output updates that depend on a process result.
   void executeInstanceOutputUpdates(ProcessId procId);
 
@@ -819,6 +822,12 @@ private:
                                      mlir::func::CallIndirectOp callIndirectOp,
                                      llvm::StringRef calleeName);
 
+  /// Shared helper for wait_for_self_and_siblings_to_drop fast-path handling.
+  /// Returns true when the call has been handled (including suspended polls).
+  bool handleUvmWaitForSelfAndSiblingsToDrop(ProcessId procId,
+                                             uint64_t phaseAddr,
+                                             mlir::Operation *callOp);
+
   /// Interpret a function body.
   /// @param procId The process ID executing this function.
   /// @param funcOp The function to execute.
@@ -949,6 +958,10 @@ private:
   /// Get the size in bytes for an LLVM type (sum of field sizes, no alignment
   /// padding, matching MooreToCore's sizeof computation).
   unsigned getLLVMTypeSize(mlir::Type type);
+
+  /// Get the size in bytes for an LLVM type, matching GEP offset computation
+  /// (byte-addressable, no sub-byte packing).
+  unsigned getLLVMTypeSizeForGEP(mlir::Type type);
 
   /// Get the natural alignment in bytes for an LLVM type.
   unsigned getLLVMTypeAlignment(mlir::Type type);
@@ -1150,6 +1163,12 @@ private:
   };
   llvm::SmallVector<ModuleDrive, 4> moduleDrives;
 
+  /// Map from signal ID to indices in moduleDrives that depend on that signal
+  /// (via llhd.prb in the combinational chain). Used to re-evaluate module
+  /// drives when dependent signals change.
+  llvm::DenseMap<SignalId, llvm::SmallVector<size_t, 2>>
+      signalDependentModuleDrives;
+
   /// Static module-level drives (not connected to process results).
   struct StaticModuleDrive {
     llhd::DriveOp driveOp;
@@ -1239,14 +1258,52 @@ private:
   /// call_indirect target is invoked. Keyed by callee name for easy reporting.
   /// Enabled when CIRCT_SIM_PROFILE_FUNCS env var is set.
   llvm::StringMap<uint64_t> funcCallProfile;
+
+  /// UVM fast-path profiling counters keyed by fast-path action name.
+  /// Enabled together with CIRCT_SIM_PROFILE_FUNCS.
+  llvm::StringMap<uint64_t> uvmFastPathProfile;
+
+  /// Per-action hit counters used by hotness-triggered JIT promotion hooks.
+  llvm::StringMap<uint64_t> uvmFastPathHitCount;
+
+  /// Set of fast-path action names that crossed the JIT hotness threshold and
+  /// were selected as promotion candidates.
+  llvm::DenseSet<llvm::StringRef> uvmJitPromotedFastPaths;
+
+  /// Backing storage for promoted fast-path keys. DenseSet<StringRef> keys
+  /// reference entries in this map to keep stable storage.
+  llvm::StringMap<char> uvmJitPromotedStorage;
+
+  /// Optional hotness-gated JIT promotion hooks for UVM fast paths.
+  /// Controlled by env vars:
+  ///   CIRCT_SIM_UVM_JIT_HOT_THRESHOLD
+  ///   CIRCT_SIM_UVM_JIT_PROMOTION_BUDGET
+  ///   CIRCT_SIM_UVM_JIT_TRACE_PROMOTIONS
+  uint64_t uvmJitHotThreshold = 0;
+  int64_t uvmJitPromotionBudget = 0;
+  bool uvmJitTracePromotions = false;
+
   bool profilingEnabled = false;
 
   /// Optional fast paths for high-volume UVM report traffic.
   /// These are opt-in via env vars to avoid changing default behavior.
   /// CIRCT_SIM_FASTPATH_UVM_REPORT_INFO=1
   /// CIRCT_SIM_FASTPATH_UVM_REPORT_WARNING=1
+  /// CIRCT_SIM_FASTPATH_UVM_GET_REPORT_OBJECT=1
   bool fastPathUvmReportInfo = false;
   bool fastPathUvmReportWarning = false;
+  bool fastPathUvmGetReportObject = false;
+
+  /// Cached env flag for sequencer tracing (CIRCT_SIM_TRACE_SEQ).
+  /// Read once at construction to avoid std::getenv on every call_indirect.
+  bool traceSeqEnabled = false;
+
+  /// Cached env flag for analysis port tracing (CIRCT_SIM_TRACE_ANALYSIS).
+  /// Read once at construction to avoid std::getenv on every port operation.
+  bool traceAnalysisEnabled = false;
+
+  /// Track a UVM fast-path hit and evaluate hotness-gated promotion hooks.
+  void noteUvmFastPathActionHit(llvm::StringRef actionKey);
 
   /// Cache for external functions that are NOT intercepted: when we've already
   /// determined that an external function has no matching __moore_* handler,
@@ -1351,6 +1408,11 @@ private:
   /// Maps port address to the last item dequeued by get/get_next_item.
   /// Used by item_done to know which item the driver is completing.
   llvm::DenseMap<uint64_t, uint64_t> lastDequeuedItem;
+
+  /// Cache of resolved sequencer queue address per pull-port object.
+  /// This avoids repeating expensive port->export->component resolution on
+  /// every get/get_next_item call.
+  llvm::DenseMap<uint64_t, uint64_t> portToSequencerQueue;
 
   /// Tracks valid associative array base addresses returned by __moore_assoc_create.
   /// Used to distinguish properly-initialized arrays from uninitialized class members.

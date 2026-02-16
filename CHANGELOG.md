@@ -68316,3 +68316,45 @@ See CHANGELOG.md on recent progress.
       workspace roots using equivalent in-tree harness paths.
     - Added regression coverage:
       `run-mutation-mcy-examples-native-real-harness-policy-fingerprint-examples-root-parity-pass.test`.
+46. `circt-sim` pull-port reconnect routing and cache invalidation hardening
+    (February 16, 2026):
+    - Updated sequencer pull-port routing to prefer the most recent
+      `uvm_port_base::connect` provider for `get/get_next_item/try_next_item`
+      lookups, preventing stale old-provider selection after reconnect.
+    - Added regression coverage:
+      `test/Tools/circt-sim/seq-pull-port-reconnect-cache-invalidation.mlir`.
+47. Shared UVM fast-path dispatch for
+    `wait_for_self_and_siblings_to_drop` (direct + indirect)
+    (February 16, 2026):
+    - Moved `wait_for_self_and_siblings_to_drop` interception into the shared
+      UVM fast-path layer (`UVMFastPaths.cpp`) and enabled it for both
+      `func.call` and `func.call_indirect`.
+    - This reduces interpreter overhead on hot UVM phase wait paths and keeps
+      behavior consistent across dispatch forms.
+    - Added regression coverage:
+      `test/Tools/circt-sim/uvm-wait-for-self-siblings-fast-path.mlir`.
+48. UVM fast-path registry (symbol + call form) for hot exact-call dispatch
+    (February 16, 2026):
+    - Added an exact-match fast-path dispatcher in `UVMFastPaths.cpp` keyed by:
+      - call form (`func.call` vs `func.call_indirect`)
+      - fully-qualified callee symbol
+    - Routed high-frequency UVM fast-path decisions through the registry first
+      (phase wait, report getters/action, report traffic suppression, printer
+      no-op/adjust-name paths), while keeping existing substring fallbacks for
+      compatibility.
+    - Added lightweight UVM fast-path action profiling counters
+      (`uvmFastPathProfile`) emitted with existing
+      `CIRCT_SIM_PROFILE_FUNCS` diagnostics.
+    - This is the first step toward a table-driven fast-path/JIT dispatch layer
+      and reduces reliance on long linear `contains()` chains in hot call paths.
+49. Hotness-gated UVM fast-path JIT promotion hooks
+    (February 16, 2026):
+    - Added per-action hit counting and promotion-candidate selection for UVM
+      fast-path actions with env controls:
+      - `CIRCT_SIM_UVM_JIT_HOT_THRESHOLD`
+      - `CIRCT_SIM_UVM_JIT_PROMOTION_BUDGET`
+      - `CIRCT_SIM_UVM_JIT_TRACE_PROMOTIONS`
+    - Added promotion candidate tracking/reporting in process diagnostics and
+      integrated hit accounting with registry fast-path actions.
+    - Added regression coverage:
+      `test/Tools/circt-sim/uvm-fastpath-jit-promotion-hook.mlir`.
