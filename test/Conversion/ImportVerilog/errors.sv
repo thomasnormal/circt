@@ -228,3 +228,10 @@ module TimeTypeConversion2;
   // expected-error @below {{contains a time type}}
   assign a = b;
 endmodule
+
+// -----
+function Foo;
+  logic [1:0] a;
+  // expected-error @below {{unsupported system call `$fwrite`}}
+  $fwrite(32'h0, "%x", a);
+endfunction
