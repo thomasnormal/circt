@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1424 - February 16, 2026
+
+### circt-sim: Targeted UVM Printer call_indirect Fast Paths
+
+1. Extended UVM printer fast-path interception in
+   `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+   - added `uvm_printer::adjust_name` passthrough fast-path.
+   - expanded no-op formatting fast-paths for:
+     - `print_field`, `print_field_int`
+     - `print_generic`, `print_generic_element`
+     - `print_time`, `print_string`, `print_real`
+     - `print_array_header`, `print_array_footer`, `print_array_range`
+     - `print_object_header`, `print_object`
+2. Added a focused regression:
+   - `test/Tools/circt-sim/uvm-printer-fast-path-call-indirect.mlir`
+   - validates:
+     - `adjust_name` returns the incoming argument (callee body bypassed)
+     - `print_field_int` is suppressed by fast-path
+3. Validation:
+   - `CCACHE_TEMPDIR=/tmp/ccache-tmp CCACHE_DIR=/tmp/ccache ninja -C build-test circt-sim` PASS
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/uvm-printer-fast-path-call-indirect.mlir build-test/test/Tools/circt-sim/vtable-indirect-call.mlir build-test/test/Tools/circt-sim/vtable-fallback-dispatch.mlir` PASS
+   - profiled I2S spot-check (`CIRCT_SIM_PROFILE_FUNCS=1`) shows hotspot moved
+     from `uvm_printer::adjust_name` to report-server processing.
+
 ## Iteration 1423 - February 14, 2026
 
 ### OpenTitan FPV Objective Parity: Policy-Wrapper/Profile-Pack Governance
