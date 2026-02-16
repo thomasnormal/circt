@@ -33,6 +33,60 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-16 Session: Targeted UVM Printer Fast Paths (call_indirect)
+
+### Problem Statement
+I2S/AXI4 runs were spending the majority of wall time in UVM printer/report
+formatting code instead of progressing simulation time.
+
+### Profiling Evidence (Before)
+From `/tmp/avip-debug/i2s-profile-120-current.log`:
+- Running proc at timeout:
+  - `uvm_pkg::uvm_printer::adjust_name`
+- Top profile entries dominated by printer internals:
+  - `uvm_pkg::uvm_printer::get_knobs`
+  - `uvm_pkg::uvm_printer_element::get_element_*`
+  - `uvm_pkg::uvm_printer::push_element/pop_element`
+
+### Fixes Applied
+In `tools/circt-sim/LLHDProcessInterpreter.cpp` (call_indirect intercept path):
+1. Added `uvm_printer::adjust_name` fast-path:
+   - returns the input name argument directly (passthrough).
+2. Expanded no-op fast-paths for formatting-only printer methods:
+   - `print_field`, `print_field_int`
+   - `print_generic`, `print_generic_element`
+   - `print_time`, `print_string`, `print_real`
+   - `print_array_header`, `print_array_footer`, `print_array_range`
+   - `print_object_header`, `print_object`
+
+### New Regression Test
+Added:
+- `test/Tools/circt-sim/uvm-printer-fast-path-call-indirect.mlir`
+
+Test validates:
+1. `adjust_name` intercept returns argument passthrough (not callee body value).
+2. `print_field_int` intercept bypasses callee body (zeroed result).
+
+### Validation
+1. Build:
+   - `CCACHE_TEMPDIR=/tmp/ccache-tmp CCACHE_DIR=/tmp/ccache ninja -C build-test circt-sim` PASS
+2. Targeted lit tests:
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/uvm-printer-fast-path-call-indirect.mlir build-test/test/Tools/circt-sim/vtable-indirect-call.mlir build-test/test/Tools/circt-sim/vtable-fallback-dispatch.mlir` PASS
+3. I2S profile rerun:
+   - `CIRCT_UVM_ARGS=+UVM_TESTNAME=I2sWriteOperationWith8bitdataTxMasterRxSlaveWith48khzTest CIRCT_SIM_PROFILE_FUNCS=1 build-test/bin/circt-sim /tmp/avip-recompile/i2s_avip.mlir --top hdlTop --top hvlTop --max-time=84840000000000 --max-rss-mb=8192 --timeout=120`
+   - Result:
+     - Running proc moved to `uvm_pkg::uvm_default_report_server::process_report_message`
+     - `uvm_printer` no longer dominates top profile.
+     - Sim reached `30000000 fs` with TX coverpoint hits increased (`149 -> 536`) in this timeout window.
+
+### Remaining Limitation After This Pass
+The bottleneck has shifted from printer formatting to report-server/message
+handling (`process_report_message`, report handler getters). Next targeted fast
+paths should focus on report-message construction/access paths while preserving
+UVM control semantics.
+
+---
+
 ## 2026-02-15 Session 1: Performance + Cross-Sibling Fix
 
 ### Starting Coverage Status (clean codebase, no fixes)

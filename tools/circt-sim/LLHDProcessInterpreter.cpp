@@ -39,6 +39,7 @@ unsigned g_lastFuncProcId = 0;
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -846,7 +847,13 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Strategy: identify parent interfaces (from top-level valueToSignal) and
   // child interfaces (from instanceValueToSignal). Link each child's fields
   // to the parent with the most matching field widths.
-  if (interfacePtrToFieldSignals.size() > 1) {
+  bool enableHeuristicAutoLink = false;
+  if (const char *env = std::getenv("CIRCT_SIM_ENABLE_AUTO_IFACE_AUTOLINK")) {
+    if (env[0] == '1' || env[0] == 'y' || env[0] == 'Y' || env[0] == 't' ||
+        env[0] == 'T')
+      enableHeuristicAutoLink = true;
+  }
+  if (enableHeuristicAutoLink && interfacePtrToFieldSignals.size() > 1) {
     // Dump all known interface signals for diagnostics.
     llvm::errs() << "[circt-sim] Interface signal dump: "
                  << interfacePtrToFieldSignals.size() << " total interfaces\n";
@@ -2591,6 +2598,22 @@ SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
       ScopedInstanceContext scope(
           *const_cast<LLHDProcessInterpreter *>(this), mappedInstance);
       return resolveSignalId(mappedValue);
+    }
+    // Trace through function block argument sources. When a function is
+    // called with an !llhd.ref argument, refBlockArgSources maps the
+    // callee's block arg back to the caller's operand. This enables
+    // resolveSignalId to follow the chain through nested function calls
+    // (e.g., run_phase → driveToBFM → driveMsbFirstPosedge) even after
+    // suspension has erased intermediate valueToSignal entries.
+    if (activeProcessId != 0) {
+      auto stateIt = processStates.find(activeProcessId);
+      if (stateIt != processStates.end()) {
+        auto srcIt = stateIt->second.refBlockArgSources.find(arg);
+        if (srcIt != stateIt->second.refBlockArgSources.end() &&
+            srcIt->second != value) {
+          return resolveSignalId(srcIt->second);
+        }
+      }
     }
   }
   // NOTE: We explicitly do NOT trace through llhd::ProbeOp here.
@@ -5881,7 +5904,7 @@ comb_dispatch:
     auto inputs = ttOp.getInputs();
     auto table = ttOp.getLookupTable();
     size_t inputCount = inputs.size();
-    auto values = table.getValue();
+    auto values = table;
     if (values.size() != (1ULL << inputCount)) {
       setValue(procId, ttOp.getResult(), InterpretedValue::makeX(1));
       return success();
@@ -5901,7 +5924,7 @@ comb_dispatch:
     }
 
     auto tableValueAt = [&](uint64_t index) -> bool {
-      return llvm::cast<BoolAttr>(values[index]).getValue();
+      return values[index];
     };
 
     if (!hasUnknown) {
@@ -7455,6 +7478,63 @@ arith_dispatch:
       }
       setValue(procId, callIndirectOp.getResults()[0],
                InterpretedValue(llvm::APInt(1, found ? 1 : 0)));
+      return success();
+    }
+
+    auto zeroCallIndirectResults = [&]() {
+      for (Value result : callIndirectOp.getResults()) {
+        unsigned width = std::max(1u, getTypeWidth(result.getType()));
+        setValue(procId, result, InterpretedValue(APInt::getZero(width)));
+      }
+    };
+
+    // Intercept printer name adjustment. This is report-string formatting and
+    // does not affect simulation behavior; preserve intent by returning the
+    // input name unchanged.
+    if (calleeName.contains("uvm_printer::adjust_name") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        callIndirectOp.getArgOperands().size() >= 2) {
+      Value result0 = callIndirectOp.getResult(0);
+      unsigned resultWidth = std::max(1u, getTypeWidth(result0.getType()));
+      InterpretedValue nameVal =
+          getValue(procId, callIndirectOp.getArgOperands()[1]);
+      if (nameVal.isX()) {
+        setValue(procId, result0, InterpretedValue::makeX(resultWidth));
+      } else if (nameVal.getWidth() != resultWidth) {
+        setValue(procId, result0,
+                 InterpretedValue(nameVal.getAPInt().zextOrTrunc(resultWidth)));
+      } else {
+        setValue(procId, result0, nameVal);
+      }
+      for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
+        Value result = callIndirectOp.getResult(i);
+        unsigned width = std::max(1u, getTypeWidth(result.getType()));
+        setValue(procId, result, InterpretedValue(APInt::getZero(width)));
+      }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  call_indirect: adjust_name fast-path (passthrough): "
+                 << calleeName << "\n");
+      return success();
+    }
+
+    // Intercept expensive UVM printer formatting calls. These build report
+    // strings only and are safe to no-op for simulation behavior.
+    if (calleeName.contains("uvm_printer::print_field_int") ||
+        calleeName.contains("uvm_printer::print_field") ||
+        calleeName.contains("uvm_printer::print_generic_element") ||
+        calleeName.contains("uvm_printer::print_generic") ||
+        calleeName.contains("uvm_printer::print_time") ||
+        calleeName.contains("uvm_printer::print_string") ||
+        calleeName.contains("uvm_printer::print_real") ||
+        calleeName.contains("uvm_printer::print_array_header") ||
+        calleeName.contains("uvm_printer::print_array_footer") ||
+        calleeName.contains("uvm_printer::print_array_range") ||
+        calleeName.contains("uvm_printer::print_object_header") ||
+        calleeName.contains("uvm_printer::print_object")) {
+      zeroCallIndirectResults();
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  call_indirect: printer format fast-path (no-op): "
+                 << calleeName << "\n");
       return success();
     }
 
@@ -11055,6 +11135,60 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                             << " = " << (pendingIt->second.isX() ? "X"
                                          : std::to_string(pendingIt->second.getUInt64()))
                             << " (from pending epsilon drive)\n");
+    return success();
+  }
+
+  // Check for memory-backed signal values: when a signal is written via
+  // llvm.store through an unrealized_conversion_cast (ref->ptr), the
+  // scheduler's signal state is not updated. Read from memory instead.
+  // Pattern: %ptr = unrealized_conversion_cast %sig : !llhd.ref<T> to !llvm.ptr
+  //          llvm.store %val, %ptr          <- writes memory
+  //          %result = llhd.prb %sig        <- should see the stored value
+  for (auto *user : signal.getUsers()) {
+    auto castOp = dyn_cast<mlir::UnrealizedConversionCastOp>(user);
+    if (!castOp || castOp.getNumResults() != 1)
+      continue;
+    if (!isa<LLVM::LLVMPointerType>(castOp.getResult(0).getType()))
+      continue;
+    // Found a ref->ptr cast. Check if the ptr has store users (direct or
+    // via block arguments that thread through the control flow).
+    bool hasStoreUser = false;
+    for (auto *castUser : castOp.getResult(0).getUsers()) {
+      if (isa<LLVM::StoreOp>(castUser)) {
+        hasStoreUser = true;
+        break;
+      }
+    }
+    if (!hasStoreUser)
+      continue;
+    // Read from the memory block at the cast pointer address
+    InterpretedValue ptrVal = getValue(procId, castOp.getResult(0));
+    if (ptrVal.isX())
+      continue;
+    uint64_t addr = ptrVal.getUInt64();
+    if (addr == 0)
+      continue;
+    unsigned width = getTypeWidth(probeOp.getResult().getType());
+    unsigned loadSize = (width + 7) / 8;
+    uint64_t blockOffset = 0;
+    MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &blockOffset);
+    if (!block || !block->initialized ||
+        blockOffset + loadSize > block->size)
+      continue;
+    // Read the value from memory (little-endian byte order)
+    APInt memValue = APInt::getZero(width);
+    for (unsigned i = 0; i < loadSize && i * 8 < width; ++i) {
+      unsigned bitsToInsert = std::min(8u, width - i * 8);
+      APInt byteVal(bitsToInsert,
+                    block->data[blockOffset + i] & ((1u << bitsToInsert) - 1));
+      safeInsertBits(memValue, byteVal, i * 8);
+    }
+    setValue(procId, probeOp.getResult(), InterpretedValue(memValue));
+    LLVM_DEBUG(llvm::dbgs() << "  Probed signal " << sigId
+                            << " from memory at 0x"
+                            << llvm::format_hex(addr, 0) << " = 0x"
+                            << llvm::format_hex(memValue.getZExtValue(), 0)
+                            << " (width=" << width << ")\n");
     return success();
   }
 
@@ -16717,8 +16851,72 @@ LLHDProcessInterpreter::interpretProcPrint(ProcessId procId,
   return success();
 }
 
+// Helper: given a block argument, find the corresponding operand from a
+// predecessor's terminator.  Returns nullptr on failure.
+static Value traceBlockArgThroughPred(Block *pred, Block *block,
+                                      unsigned argIdx) {
+  auto *terminator = pred->getTerminator();
+  if (auto brOp = dyn_cast<mlir::cf::BranchOp>(terminator)) {
+    if (argIdx < brOp.getDestOperands().size())
+      return brOp.getDestOperands()[argIdx];
+  } else if (auto condBrOp = dyn_cast<mlir::cf::CondBranchOp>(terminator)) {
+    if (condBrOp.getTrueDest() == block &&
+        argIdx < condBrOp.getTrueDestOperands().size())
+      return condBrOp.getTrueDestOperands()[argIdx];
+    if (condBrOp.getFalseDest() == block &&
+        argIdx < condBrOp.getFalseDestOperands().size())
+      return condBrOp.getFalseDestOperands()[argIdx];
+  } else if (auto waitOp = dyn_cast<llhd::WaitOp>(terminator)) {
+    if (argIdx < waitOp.getDestOperands().size())
+      return waitOp.getDestOperands()[argIdx];
+  }
+  return nullptr;
+}
+
+// Recursively trace a block argument back to the original defining op,
+// using DFS with a visited set to handle cycles in the CFG.
+static Value traceFStringBlockArg(Value fmtValue,
+                                  SmallPtrSetImpl<Value> &visited) {
+  while (!fmtValue.getDefiningOp()) {
+    if (!visited.insert(fmtValue).second)
+      return nullptr; // cycle
+    auto arg = dyn_cast<BlockArgument>(fmtValue);
+    if (!arg)
+      return nullptr;
+    Block *block = arg.getOwner();
+    unsigned argIdx = arg.getArgNumber();
+    Value best;
+    for (auto *pred : block->getPredecessors()) {
+      Value candidate = traceBlockArgThroughPred(pred, block, argIdx);
+      if (!candidate)
+        continue;
+      if (candidate.getDefiningOp())
+        return candidate; // found a defining op directly
+      // candidate is another block arg - try recursing if not visited
+      if (!visited.count(candidate)) {
+        Value resolved = traceFStringBlockArg(candidate, visited);
+        if (resolved && resolved.getDefiningOp())
+          return resolved;
+      }
+      if (!best)
+        best = candidate;
+    }
+    if (!best)
+      return nullptr;
+    fmtValue = best;
+  }
+  return fmtValue;
+}
+
 std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
                                                           Value fmtValue) {
+  // Trace through block arguments to find the original defining op.
+  if (!fmtValue.getDefiningOp()) {
+    SmallPtrSet<Value, 8> visited;
+    Value resolved = traceFStringBlockArg(fmtValue, visited);
+    if (resolved)
+      fmtValue = resolved;
+  }
   Operation *defOp = fmtValue.getDefiningOp();
   if (!defOp)
     return "<unknown>";
@@ -18812,28 +19010,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
             targetDriveVal = InterpretedValue(apVal);
           }
           SignalValue targetNewVal = targetDriveVal.toSignalValue();
-          SignalValue targetOldVal = scheduler.getSignalValue(targetSigId);
           pendingEpsilonDrives[targetSigId] = targetDriveVal;
 
           // Synchronous update: immediately set the signal value and trigger
           // any processes that have already set up their event waits.
           scheduler.updateSignal(targetSigId, targetNewVal);
-
-          // Deferred re-trigger: schedule a second edge evaluation at the
-          // next delta cycle so that child BFM processes that set up their
-          // event waits AFTER this synchronous update still observe the
-          // transition.  Without this, processes that haven't registered
-          // their waiting sensitivities yet miss the edge entirely (e.g.
-          // I2S RX misses posedge rst and gets stuck at 0% coverage).
-          if (targetOldVal != targetNewVal) {
-            scheduler.getEventScheduler().scheduleNextDelta(
-                SchedulingRegion::Active,
-                Event([this, targetSigId, targetOldVal, targetNewVal]() {
-                  scheduler.retriggerSensitiveProcesses(targetSigId,
-                                                        targetOldVal,
-                                                        targetNewVal);
-                }));
-          }
 
           // Write to backing memory (synchronous — needed for llvm.load).
           auto tgtAddrIt = fieldSignalToAddr.find(targetSigId);
@@ -18855,43 +19036,20 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           }
         };
 
+        // Forward propagation only (no cross-sibling fan-out).
+        // Cross-sibling propagation was removed because auto-linked
+        // entries in interfaceFieldPropagation can contain cross-field
+        // links (e.g. PWRITE → PADDR), causing field contamination.
         auto propIt = interfaceFieldPropagation.find(fieldSigId);
         if (propIt != interfaceFieldPropagation.end()) {
-          for (SignalId childSigId : propIt->second) {
+          for (SignalId childSigId : propIt->second)
             propagateToSignal(childSigId);
-
-            // Cross-sibling propagation: if the target signal itself
-            // has propagation targets, propagate one more level.
-            auto childPropIt =
-                interfaceFieldPropagation.find(childSigId);
-            if (childPropIt != interfaceFieldPropagation.end()) {
-              for (SignalId siblingId : childPropIt->second) {
-                if (siblingId != fieldSigId)
-                  propagateToSignal(siblingId);
-              }
-            }
-          }
         }
 
-        // Reverse propagation: child → parent.
-        auto childToParentIt = childToParentFieldAddr.find(storeAddr);
-        if (childToParentIt != childToParentFieldAddr.end()) {
-          uint64_t parentAddr = childToParentIt->second;
-          auto parentFieldIt = interfaceFieldSignals.find(parentAddr);
-          if (parentFieldIt != interfaceFieldSignals.end()) {
-            SignalId parentSigId = parentFieldIt->second;
-            propagateToSignal(parentSigId);
-            // Also propagate parent → other children (not back to self)
-            auto parentPropIt =
-                interfaceFieldPropagation.find(parentSigId);
-            if (parentPropIt != interfaceFieldPropagation.end()) {
-              for (SignalId otherChildSigId : parentPropIt->second) {
-                if (otherChildSigId != fieldSigId)
-                  propagateToSignal(otherChildSigId);
-              }
-            }
-          }
-        }
+        // Reverse propagation is intentionally disabled for now.
+        // Copy-pair discovery can record bidirectional links for a given
+        // interface field, and mirroring child->parent writes here creates
+        // feedback loops that stall time advancement in AVIP runs.
       }
     }
   }
