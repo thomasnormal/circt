@@ -1214,6 +1214,12 @@ private:
   };
   llvm::StringMap<CachedFuncLookup> funcLookupCache;
 
+  /// Function call profiling: counts how many times each func.call and
+  /// call_indirect target is invoked. Keyed by callee name for easy reporting.
+  /// Enabled when CIRCT_SIM_PROFILE_FUNCS env var is set.
+  llvm::StringMap<uint64_t> funcCallProfile;
+  bool profilingEnabled = false;
+
   /// Cache for external functions that are NOT intercepted: when we've already
   /// determined that an external function has no matching __moore_* handler,
   /// cache that fact to skip the 128-entry string comparison chain on
@@ -1251,6 +1257,9 @@ private:
   /// Used to bridge interface memory writes → LLHD signal events so that
   /// processes reading interface fields via GEP+load get proper sensitivity.
   llvm::DenseMap<uint64_t, SignalId> interfaceFieldSignals;
+
+  /// Reverse map: signal ID → memory address for interface field signals.
+  llvm::DenseMap<SignalId, uint64_t> fieldSignalToAddr;
 
   /// Maps interface pointer signal ID → list of shadow field signal IDs.
   /// Used during sensitivity derivation: when a process probes an interface
@@ -1437,6 +1446,17 @@ private:
   /// Reverse map from simulated addresses to global variable names.
   /// Used for looking up string content by virtual address (e.g., in fmt.dyn_string).
   llvm::DenseMap<uint64_t, std::string> addressToGlobal;
+
+  /// Native UVM factory type registry. Maps type name → wrapper address.
+  /// Populated by the fast-path factory.register interceptor (which calls
+  /// get_type_name once instead of 7 times). Used by find_wrapper_by_name.
+  llvm::StringMap<uint64_t> nativeFactoryTypeNames;
+
+  /// Native random seed table for uvm_create_random_seed fast-path.
+  /// Maps inst_id → (type_id → (seed, count)).
+  std::unordered_map<std::string,
+                     std::unordered_map<std::string, std::pair<uint32_t, uint32_t>>>
+      nativeRandomSeedTable;
 
   /// Next available address for global memory allocation.
   uint64_t nextGlobalAddress = 0x10000000;

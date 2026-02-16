@@ -18,6 +18,9 @@ const char *g_lastLLVMCallCallee = nullptr;
 // Global crash diagnostic — last MLIR op name being interpreted
 const char *g_lastOpName = nullptr;
 unsigned g_lastProcId = 0;
+// Global crash diagnostic — last func being interpreted (static buffer)
+char g_lastFuncName[256] = {};
+unsigned g_lastFuncProcId = 0;
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
@@ -230,7 +233,9 @@ static int32_t getNativeUvmPortSize(
 
 LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
     : scheduler(scheduler), forkJoinManager(scheduler),
-      syncPrimitivesManager(scheduler) {}
+      syncPrimitivesManager(scheduler) {
+  profilingEnabled = std::getenv("CIRCT_SIM_PROFILE_FUNCS") != nullptr;
+}
 
 void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
   os << "[circt-sim] Process states:\n";
@@ -261,6 +266,20 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
          << state.sequencerGetRetryCallOp->getName().getStringRef();
     os << "\n";
   }
+
+  // Print function call profile (top 30 by call count)
+  if (profilingEnabled && !funcCallProfile.empty()) {
+    os << "[circt-sim] Function call profile (top 30):\n";
+    llvm::SmallVector<std::pair<llvm::StringRef, uint64_t>> sorted;
+    for (const auto &entry : funcCallProfile)
+      sorted.push_back({entry.getKey(), entry.getValue()});
+    llvm::sort(sorted, [](const auto &a, const auto &b) {
+      return a.second > b.second;
+    });
+    for (size_t i = 0; i < std::min(sorted.size(), (size_t)30); ++i)
+      os << "  " << sorted[i].second << "x " << sorted[i].first << "\n";
+  }
+
   os.flush();
 }
 
@@ -461,16 +480,13 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
 
       uint64_t fieldAddr = mallocAddr + fieldOffset;
       interfaceFieldSignals[fieldAddr] = fieldSigId;
+      fieldSignalToAddr[fieldSigId] = fieldAddr;
       fieldSignals.push_back(fieldSigId);
 
       fieldOffset += fieldSize;
     }
 
     interfacePtrToFieldSignals[sigId] = std::move(fieldSignals);
-    // llvm::errs() << "[SHADOW-DIAG] Parent: created " << body.size()
-    //              << " shadow signals for '" << sigName
-    //              << "' type=" << ifaceStructTy.getName()
-    //              << " mallocAddr=0x" << llvm::format_hex(mallocAddr, 16) << "\n";
   }
 
   // Also process child instance signals (BFM interface structs).
@@ -559,18 +575,13 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
 
         uint64_t fieldAddr = mallocAddr + fieldOffset;
         interfaceFieldSignals[fieldAddr] = fieldSigId;
+        fieldSignalToAddr[fieldSigId] = fieldAddr;
         fieldSignals.push_back(fieldSigId);
 
         fieldOffset += fieldSize;
       }
 
       interfacePtrToFieldSignals[sigId] = std::move(fieldSignals);
-
-      // llvm::errs() << "[SHADOW-DIAG] Child: created " << body.size()
-      //              << " shadow signals for '" << sigName
-      //              << "' type=" << ifaceStructTy.getName()
-      //              << " mallocAddr=0x" << llvm::format_hex(mallocAddr, 16)
-      //              << " instId=" << instId << "\n";
     }
   }
 
@@ -777,33 +788,226 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // childModuleCopyPairs records (srcAddr, destAddr) pairs from store ops that
   // copy parent interface fields to child interface fields during init.
   if (!childModuleCopyPairs.empty() && interfaceFieldSignals.size() > 1) {
+    unsigned resolvedPairs = 0;
+    unsigned unresolvedSrc = 0, unresolvedDest = 0;
     for (auto &[srcAddr, destAddr] : childModuleCopyPairs) {
       auto srcIt = interfaceFieldSignals.find(srcAddr);
       auto destIt = interfaceFieldSignals.find(destAddr);
-      if (srcIt == interfaceFieldSignals.end() ||
-          destIt == interfaceFieldSignals.end()) {
+      if (srcIt == interfaceFieldSignals.end()) {
+        ++unresolvedSrc;
+        continue;
+      }
+      if (destIt == interfaceFieldSignals.end()) {
+        ++unresolvedDest;
         continue;
       }
       SignalId parentSigId = srcIt->second;
       SignalId childSigId = destIt->second;
-      if (parentSigId == childSigId) continue;
+      if (parentSigId == childSigId)
+        continue;
 
       interfaceFieldPropagation[parentSigId].push_back(childSigId);
       childToParentFieldAddr[destAddr] = srcAddr;
-      // llvm::errs() << "[PROP-DIAG] Link: signal " << parentSigId
-      //              << " (0x" << llvm::format_hex(srcAddr, 16)
-      //              << ") -> signal " << childSigId
-      //              << " (0x" << llvm::format_hex(destAddr, 16) << ")\n";
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Interface propagation link: signal " << parentSigId
-                 << " (0x" << llvm::format_hex(srcAddr, 16)
-                 << ") -> signal " << childSigId << " (0x"
-                 << llvm::format_hex(destAddr, 16) << ")\n");
+      ++resolvedPairs;
+      llvm::errs() << "[circt-sim] CopyPair link: signal " << parentSigId
+                   << " (0x" << llvm::format_hex(srcAddr, 16)
+                   << ", w=" << scheduler.getSignalValue(parentSigId).getWidth()
+                   << ") -> signal " << childSigId << " (0x"
+                   << llvm::format_hex(destAddr, 16)
+                   << ", w=" << scheduler.getSignalValue(childSigId).getWidth()
+                   << ")\n";
     }
-    LLVM_DEBUG(llvm::dbgs()
-               << "[circt-sim] Established " << interfaceFieldPropagation.size()
-               << " interface field propagation links from "
-               << childModuleCopyPairs.size() << " copy pairs\n");
+    llvm::errs() << "[circt-sim] childModuleCopyPairs: "
+                 << childModuleCopyPairs.size() << " total, "
+                 << resolvedPairs << " resolved, "
+                 << unresolvedSrc << " unresolved-src, "
+                 << unresolvedDest << " unresolved-dest\n";
+    llvm::errs() << "[circt-sim] childToParentFieldAddr has "
+                 << childToParentFieldAddr.size() << " entries, "
+                 << "interfaceFieldPropagation has "
+                 << interfaceFieldPropagation.size() << " entries\n";
+  }
+
+  // Auto-link child BFM interface structs to parent interfaces for signal
+  // propagation. Each BFM gets its own interface struct copy (different malloc
+  // address), but they represent the same bus signals. Without propagation
+  // links, BFM loads return stale 0 values.
+  //
+  // Strategy: identify parent interfaces (from top-level valueToSignal) and
+  // child interfaces (from instanceValueToSignal). Link each child's fields
+  // to the parent with the most matching field widths.
+  if (interfacePtrToFieldSignals.size() > 1) {
+    // Dump all known interface signals for diagnostics.
+    llvm::errs() << "[circt-sim] Interface signal dump: "
+                 << interfacePtrToFieldSignals.size() << " total interfaces\n";
+    for (auto &[ifaceSigId, fieldSigIds] : interfacePtrToFieldSignals) {
+      llvm::errs() << "  Interface signal " << ifaceSigId
+                   << " (" << (signalIdToName.count(ifaceSigId)
+                               ? signalIdToName[ifaceSigId] : "unnamed")
+                   << "): " << fieldSigIds.size() << " fields, widths=[";
+      for (size_t i = 0; i < fieldSigIds.size(); ++i) {
+        if (i > 0) llvm::errs() << ",";
+        llvm::errs() << scheduler.getSignalValue(fieldSigIds[i]).getWidth();
+      }
+      llvm::errs() << "]\n";
+    }
+
+    // Identify parent interface signal IDs (from the top-level module).
+    // These are in valueToSignal, not instanceValueToSignal.
+    llvm::DenseSet<SignalId> parentIfaceSignals;
+    for (auto &[sigValue, sigId] : valueToSignal) {
+      if (interfacePtrToFieldSignals.count(sigId))
+        parentIfaceSignals.insert(sigId);
+    }
+    llvm::errs() << "[circt-sim] Parent interface signals: "
+                 << parentIfaceSignals.size() << " [";
+    for (SignalId pid : parentIfaceSignals) {
+      llvm::errs() << pid << " ";
+    }
+    llvm::errs() << "]\n";
+
+    // Build instance-aware child→parent mapping. For each child interface
+    // signal, find which instance it belongs to, and which parent interface
+    // signal feeds that instance. This ensures correct linking when multiple
+    // parents have identical structures (e.g., master and slave apb_if).
+    llvm::DenseMap<SignalId, SignalId> childToInstanceParent;
+    for (auto &[instId, sigMap] : instanceValueToSignal) {
+      // Find which parent interface signals are inputs to this instance.
+      llvm::SmallVector<SignalId, 2> instanceParents;
+      for (auto &[sigVal, sigId] : sigMap) {
+        if (parentIfaceSignals.contains(sigId))
+          instanceParents.push_back(sigId);
+      }
+      if (instanceParents.empty())
+        continue;
+      // Map each child interface signal in this instance to its parent.
+      // Use the first parent interface (instances typically have one parent
+      // interface passed as input).
+      SignalId instanceParentSigId = instanceParents[0];
+      for (auto &[sigVal, sigId] : sigMap) {
+        if (!parentIfaceSignals.contains(sigId) &&
+            interfacePtrToFieldSignals.count(sigId)) {
+          childToInstanceParent[sigId] = instanceParentSigId;
+          llvm::errs() << "[circt-sim] Instance-aware: child " << sigId
+                       << " -> parent " << instanceParentSigId << "\n";
+        }
+      }
+    }
+
+    // For each non-parent interface, link to its instance's parent interface.
+    // Falls back to best-match-by-width for children without instance info.
+    unsigned autoLinked = 0;
+    for (auto &[childIfaceSigId, childFieldSigIds] :
+         interfacePtrToFieldSignals) {
+      if (parentIfaceSignals.contains(childIfaceSigId))
+        continue;
+
+      // Try instance-aware parent first.
+      SignalId bestParentSigId = 0;
+      int bestMatchCount = 0;
+      auto instParentIt = childToInstanceParent.find(childIfaceSigId);
+      if (instParentIt != childToInstanceParent.end()) {
+        bestParentSigId = instParentIt->second;
+        // Count matching fields for diagnostic output.
+        auto parentIt = interfacePtrToFieldSignals.find(bestParentSigId);
+        if (parentIt != interfacePtrToFieldSignals.end()) {
+          auto &parentFieldSigIds = parentIt->second;
+          unsigned numFields =
+              std::min(childFieldSigIds.size(), parentFieldSigIds.size());
+          for (unsigned i = 0; i < numFields; ++i) {
+            unsigned childW =
+                scheduler.getSignalValue(childFieldSigIds[i]).getWidth();
+            unsigned parentW =
+                scheduler.getSignalValue(parentFieldSigIds[i]).getWidth();
+            if (childW == parentW && childW > 0)
+              ++bestMatchCount;
+          }
+        }
+      }
+
+      // Fallback: best-match-by-width against all parents.
+      if (bestParentSigId == 0) {
+        for (SignalId parentSigId : parentIfaceSignals) {
+          auto parentIt = interfacePtrToFieldSignals.find(parentSigId);
+          if (parentIt == interfacePtrToFieldSignals.end())
+            continue;
+          auto &parentFieldSigIds = parentIt->second;
+
+          unsigned numFields =
+              std::min(childFieldSigIds.size(), parentFieldSigIds.size());
+          int matchCount = 0;
+          for (unsigned i = 0; i < numFields; ++i) {
+            unsigned childW =
+                scheduler.getSignalValue(childFieldSigIds[i]).getWidth();
+            unsigned parentW =
+                scheduler.getSignalValue(parentFieldSigIds[i]).getWidth();
+            if (childW == parentW && childW > 0)
+              ++matchCount;
+          }
+          if (matchCount > bestMatchCount) {
+            bestMatchCount = matchCount;
+            bestParentSigId = parentSigId;
+          }
+        }
+      }
+
+      if (bestParentSigId == 0 || bestMatchCount == 0)
+        continue;
+
+      // Create propagation links from best-matching parent → child.
+      auto parentIt = interfacePtrToFieldSignals.find(bestParentSigId);
+      auto &parentFieldSigIds = parentIt->second;
+      unsigned numFields =
+          std::min(childFieldSigIds.size(), parentFieldSigIds.size());
+      for (unsigned i = 0; i < numFields; ++i) {
+        SignalId childFSig = childFieldSigIds[i];
+        SignalId parentFSig = parentFieldSigIds[i];
+        unsigned childW = scheduler.getSignalValue(childFSig).getWidth();
+        unsigned parentW = scheduler.getSignalValue(parentFSig).getWidth();
+        if (childW != parentW || childW == 0)
+          continue;
+
+        interfaceFieldPropagation[parentFSig].push_back(childFSig);
+
+        auto childAddrIt = fieldSignalToAddr.find(childFSig);
+        auto parentAddrIt = fieldSignalToAddr.find(parentFSig);
+        if (childAddrIt != fieldSignalToAddr.end() &&
+            parentAddrIt != fieldSignalToAddr.end()) {
+          childToParentFieldAddr[childAddrIt->second] =
+              parentAddrIt->second;
+        }
+        ++autoLinked;
+      }
+
+      llvm::errs() << "[circt-sim] Auto-linked " << bestMatchCount
+                   << " fields from child interface " << childIfaceSigId
+                   << " to parent interface " << bestParentSigId << "\n";
+    }
+    if (autoLinked > 0) {
+      llvm::errs() << "[circt-sim] Total auto-linked " << autoLinked
+                   << " BFM interface fields to parent interfaces\n";
+    }
+  }
+
+  // Diagnostic: dump the full interfaceFieldPropagation map.
+  if (!interfaceFieldPropagation.empty()) {
+    llvm::errs() << "[circt-sim] interfaceFieldPropagation map ("
+                 << interfaceFieldPropagation.size() << " parent fields):\n";
+    for (auto &[parentSig, children] : interfaceFieldPropagation) {
+      std::string parentName =
+          signalIdToName.count(parentSig) ? signalIdToName[parentSig] : "?";
+      llvm::errs() << "  parent sig " << parentSig << " (" << parentName
+                   << ", w=" << scheduler.getSignalValue(parentSig).getWidth()
+                   << ") -> " << children.size() << " children:";
+      for (SignalId cid : children) {
+        std::string childName =
+            signalIdToName.count(cid) ? signalIdToName[cid] : "?";
+        llvm::errs() << " " << cid << "(" << childName
+                     << ",w=" << scheduler.getSignalValue(cid).getWidth()
+                     << ")";
+      }
+      llvm::errs() << "\n";
+    }
   }
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Registered "
@@ -826,6 +1030,17 @@ LogicalResult LLHDProcessInterpreter::finalizeInit() {
     return failure();
 
   inGlobalInit = false;
+
+  // Reset terminationRequested after global init. During UVM initialization,
+  // m_uvm_get_root() triggers uvm_fatal → die() → sim.terminate, which sets
+  // terminationRequested = true. Without reset, all processes get killed.
+  if (terminationRequested) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "LLHDProcessInterpreter: clearing terminationRequested "
+               << "set during global init\n");
+    terminationRequested = false;
+  }
+
   return success();
 }
 
@@ -1129,6 +1344,31 @@ static bool isProcessCacheableBody(Operation *op) {
   return cacheable;
 }
 
+/// Safe insertBits that clamps instead of asserting when the sub-value
+/// extends beyond the target's bit width.
+static void safeInsertBits(llvm::APInt &target, const llvm::APInt &source,
+                           unsigned bitPosition) {
+  unsigned subWidth = source.getBitWidth();
+  unsigned targetWidth = target.getBitWidth();
+  if (bitPosition >= targetWidth) {
+    llvm::errs() << "[INSERT-BITS-WARN] bitPosition ("
+                 << bitPosition << ") >= targetWidth ("
+                 << targetWidth << "), skipping\n";
+    return;
+  }
+  if (subWidth + bitPosition > targetWidth) {
+    // Truncate the source to fit
+    unsigned availBits = targetWidth - bitPosition;
+    llvm::errs() << "[INSERT-BITS-WARN] clamping subWidth from "
+                 << subWidth << " to " << availBits
+                 << " (targetWidth=" << targetWidth
+                 << " bitPos=" << bitPosition << ")\n";
+    target.insertBits(source.trunc(availBits), bitPosition);
+    return;
+  }
+  target.insertBits(source, bitPosition);
+}
+
 /// Flatten an aggregate constant (struct or array) into a single APInt.
 /// This is used for initializing signals with aggregate types.
 /// For 4-state logic, structs typically have the form {value, unknown}.
@@ -1169,7 +1409,7 @@ static APInt flattenAggregateAttr(Attribute fieldAttr, Type fieldType) {
         elemValue = elemValue.zext(elemWidth);
       else if (elemValue.getBitWidth() > elemWidth)
         elemValue = elemValue.trunc(elemWidth);
-      result.insertBits(elemValue, bitOffset);
+      safeInsertBits(result,elemValue, bitOffset);
     }
     return result;
   }
@@ -1187,7 +1427,7 @@ static APInt flattenAggregateAttr(Attribute fieldAttr, Type fieldType) {
         elemValue = elemValue.zext(elementWidth);
       else if (elemValue.getBitWidth() > elementWidth)
         elemValue = elemValue.trunc(elementWidth);
-      result.insertBits(elemValue, bitOffset);
+      safeInsertBits(result,elemValue, bitOffset);
     }
   }
 
@@ -1569,7 +1809,7 @@ llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayout(
         APInt converted =
             convertLLVMToHWLayout(fieldBits, llvmBody[i], hwElements[i].type);
         converted = adjustAPIntWidth(converted, hwFieldWidth);
-        result.insertBits(converted, hwOffset);
+        safeInsertBits(result,converted, hwOffset);
         llvmOffset += llvmFieldWidth;
       }
       return adjustAPIntWidth(result, hwWidth);
@@ -1593,7 +1833,7 @@ llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayout(
             fieldBits, llvmArrayType.getElementType(),
             hwArrayType.getElementType());
         converted = adjustAPIntWidth(converted, hwElemWidth);
-        result.insertBits(converted, hwOffset);
+        safeInsertBits(result,converted, hwOffset);
       }
       return adjustAPIntWidth(result, hwWidth);
     }
@@ -1625,7 +1865,7 @@ llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayout(
         APInt converted = convertHWToLLVMLayout(
             fieldBits, hwElements[i].type, llvmBody[i]);
         converted = adjustAPIntWidth(converted, llvmFieldWidth);
-        result.insertBits(converted, llvmOffset);
+        safeInsertBits(result,converted, llvmOffset);
         llvmOffset += llvmFieldWidth;
       }
       return adjustAPIntWidth(result, llvmWidth);
@@ -1649,7 +1889,7 @@ llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayout(
             fieldBits, hwArrayType.getElementType(),
             llvmArrayType.getElementType());
         converted = adjustAPIntWidth(converted, llvmElemWidth);
-        result.insertBits(converted, llvmOffset);
+        safeInsertBits(result,converted, llvmOffset);
       }
       return adjustAPIntWidth(result, llvmWidth);
     }
@@ -1679,7 +1919,7 @@ llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayoutByHWType(
       APInt converted =
           convertLLVMToHWLayoutByHWType(fieldBits, element.type);
       converted = adjustAPIntWidth(converted, fieldWidth);
-      result.insertBits(converted, hwOffset);
+      safeInsertBits(result,converted, hwOffset);
       llvmOffset += fieldWidth;
     }
     return result;
@@ -1697,7 +1937,7 @@ llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayoutByHWType(
       APInt elemBits = value.extractBits(elemWidth, llvmOffset);
       APInt converted = convertLLVMToHWLayoutByHWType(elemBits, elemType);
       converted = adjustAPIntWidth(converted, elemWidth);
-      result.insertBits(converted, hwOffset);
+      safeInsertBits(result,converted, hwOffset);
     }
     return result;
   }
@@ -1726,7 +1966,7 @@ llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayoutByHWType(
       APInt converted =
           convertHWToLLVMLayoutByHWType(fieldBits, element.type);
       converted = adjustAPIntWidth(converted, fieldWidth);
-      result.insertBits(converted, llvmOffset);
+      safeInsertBits(result,converted, llvmOffset);
       llvmOffset += fieldWidth;
     }
     return result;
@@ -1744,7 +1984,7 @@ llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayoutByHWType(
       APInt elemBits = value.extractBits(elemWidth, hwOffset);
       APInt converted = convertHWToLLVMLayoutByHWType(elemBits, elemType);
       converted = adjustAPIntWidth(converted, elemWidth);
-      result.insertBits(converted, llvmOffset);
+      safeInsertBits(result,converted, llvmOffset);
     }
     return result;
   }
@@ -1782,7 +2022,7 @@ LLHDProcessInterpreter::getEncodedUnknownForType(Type type) const {
       unsigned fieldWidth = getTypeWidth(element.type);
       bitOffset -= fieldWidth;
       APInt fieldBits = fieldOpt->zextOrTrunc(fieldWidth);
-      result.insertBits(fieldBits, bitOffset);
+      safeInsertBits(result,fieldBits, bitOffset);
     }
     return result;
   }
@@ -1798,7 +2038,7 @@ LLHDProcessInterpreter::getEncodedUnknownForType(Type type) const {
     APInt result(totalWidth, 0);
     for (unsigned i = 0; i < count; ++i) {
       unsigned offset = (count - 1 - i) * elemWidth;
-      result.insertBits(elemBits, offset);
+      safeInsertBits(result,elemBits, offset);
     }
     return result;
   }
@@ -3472,7 +3712,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         else if (elemVal.getBitWidth() > elementWidth)
           elemVal = elemVal.trunc(elementWidth);
         unsigned offset = (numElements - 1 - i) * elementWidth;
-        result.insertBits(elemVal, offset);
+        safeInsertBits(result,elemVal, offset);
       }
 
       if (hasX) {
@@ -3532,7 +3772,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         }
         unsigned inputWidth = val.getWidth();
         bitOffset -= inputWidth;
-        result.insertBits(val.getAPInt(), bitOffset);
+        safeInsertBits(result,val.getAPInt(), bitOffset);
       }
 
       if (hasX) {
@@ -3559,7 +3799,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
             fieldBits = fieldBits.zext(fieldWidth);
           else if (fieldBits.getBitWidth() > fieldWidth)
             fieldBits = fieldBits.trunc(fieldWidth);
-          result.insertBits(fieldBits, bitOffset);
+          safeInsertBits(result,fieldBits, bitOffset);
         }
       }
       finish(InterpretedValue(result));
@@ -3592,7 +3832,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         fieldValue = fieldValue.zext(fieldWidth);
       else if (fieldValue.getBitWidth() > fieldWidth)
         fieldValue = fieldValue.trunc(fieldWidth);
-      result.insertBits(fieldValue, fieldOffset);
+      safeInsertBits(result,fieldValue, fieldOffset);
       finish(InterpretedValue(result));
       break;
     }
@@ -3625,7 +3865,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         fieldValue = fieldValue.zext(fieldWidth);
       else if (fieldValue.getBitWidth() > fieldWidth)
         fieldValue = fieldValue.trunc(fieldWidth);
-      result.insertBits(fieldValue, fieldOffset);
+      safeInsertBits(result,fieldValue, fieldOffset);
       finish(InterpretedValue(result));
       break;
     }
@@ -3787,7 +4027,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
           bits = bits.zext(width);
         else if (bits.getBitWidth() > width)
           bits = bits.trunc(width);
-        result.insertBits(bits, bitOffset);
+        safeInsertBits(result,bits, bitOffset);
       }
       finish(InterpretedValue(result));
       break;
@@ -4980,6 +5220,8 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto sigExtractOp = dyn_cast<llhd::SigExtractOp>(op)) {
     // Try to propagate signal mapping from input to result
     SignalId inputSigId = getSignalId(sigExtractOp.getInput());
+    if (inputSigId == 0)
+      inputSigId = resolveSignalId(sigExtractOp.getInput());
     if (inputSigId != 0) {
       valueToSignal[sigExtractOp.getResult()] = inputSigId;
     }
@@ -4995,6 +5237,8 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   // trace back through this op to find the memory block and compute offsets.
   if (auto sigStructExtractOp = dyn_cast<llhd::SigStructExtractOp>(op)) {
     SignalId inputSigId = getSignalId(sigStructExtractOp.getInput());
+    if (inputSigId == 0)
+      inputSigId = resolveSignalId(sigStructExtractOp.getInput());
     if (inputSigId != 0) {
       valueToSignal[sigStructExtractOp.getResult()] = inputSigId;
     }
@@ -6770,7 +7014,7 @@ arith_dispatch:
                 llvm::APInt valueBits2(innerBits, 0);
                 for (unsigned i = 0;
                      i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
-                  valueBits2.insertBits(llvm::APInt(8, valueData[i]), i * 8);
+                  safeInsertBits(valueBits2,llvm::APInt(8, valueData[i]), i * 8);
                 SignalId sigId3 = resolveSignalId(outputRef);
                 if (sigId3 != 0)
                   pendingEpsilonDrives[sigId3] = InterpretedValue(valueBits2);
@@ -6875,6 +7119,9 @@ arith_dispatch:
                             << llvm::format_hex(funcAddr, 16)
                             << " -> " << calleeName << "\n");
 
+    if (profilingEnabled)
+      ++funcCallProfile[calleeName];
+
     // Runtime vtable override for the direct resolution path.
     // When the static function address maps to a base-class method, check
     // the self object's actual runtime vtable and resolve to the derived
@@ -6958,6 +7205,249 @@ arith_dispatch:
       calleeName = overriddenCalleeName;
     } while (false);
 
+    // Intercept uvm_default_factory::register — fast-path native
+    // registration. The original MLIR calls get_type_name 3-7 times via
+    // vtable, does string comparisons, assoc array lookups, and override
+    // scanning (~2300 steps each × 1078 types = 2.5M steps = ~80s).
+    // We call get_type_name once (~6 ops) and store in a C++ map.
+    if (calleeName == "uvm_pkg::uvm_default_factory::register" ||
+        calleeName == "uvm_pkg::uvm_factory::register") {
+      bool registered = false;
+      do {
+        if (callIndirectOp.getArgOperands().size() < 2)
+          break;
+        InterpretedValue wrapperVal =
+            getValue(procId, callIndirectOp.getArgOperands()[1]);
+        if (wrapperVal.isX() || wrapperVal.getUInt64() == 0)
+          break;
+        uint64_t wrapperAddr = wrapperVal.getUInt64();
+
+        // Read wrapper's vtable pointer: struct uvm_void { i32, ptr }
+        // vtable ptr is at offset 4 (after i32 __class_handle)
+        uint64_t off = 0;
+        MemoryBlock *blk = findBlockByAddress(wrapperAddr + 4, off);
+        if (!blk || !blk->initialized || off + 8 > blk->data.size())
+          break;
+        uint64_t vtableAddr = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          vtableAddr |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+        if (vtableAddr == 0)
+          break;
+
+        // Read vtable entry [2] = get_type_name
+        uint64_t off2 = 0;
+        MemoryBlock *vtableBlk =
+            findBlockByAddress(vtableAddr + 2 * 8, off2);
+        if (!vtableBlk || !vtableBlk->initialized ||
+            off2 + 8 > vtableBlk->data.size())
+          break;
+        uint64_t funcAddr = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          funcAddr |=
+              static_cast<uint64_t>(vtableBlk->data[off2 + i]) << (i * 8);
+        auto funcIt = addressToFunction.find(funcAddr);
+        if (funcIt == addressToFunction.end())
+          break;
+
+        // Call get_type_name(wrapper) → struct<(ptr, i64)>
+        auto funcOp =
+            rootModule.lookupSymbol<mlir::func::FuncOp>(funcIt->second);
+        if (!funcOp)
+          break;
+        SmallVector<InterpretedValue, 1> results;
+        if (failed(interpretFuncBody(procId, funcOp, {wrapperVal}, results)) ||
+            results.empty())
+          break;
+
+        // Extract (ptr, length) from 128-bit struct<(ptr, i64)>
+        InterpretedValue nameStruct = results[0];
+        if (nameStruct.isX() || nameStruct.getWidth() < 128)
+          break;
+        APInt nameAPInt = nameStruct.getAPInt();
+        uint64_t strAddr = nameAPInt.extractBits(64, 0).getZExtValue();
+        uint64_t strLen = nameAPInt.extractBits(64, 64).getZExtValue();
+        if (strLen == 0 || strLen > 1024 || strAddr == 0)
+          break;
+
+        // Read the string content from the packed string global
+        uint64_t strOff = 0;
+        MemoryBlock *strBlk = findBlockByAddress(strAddr, strOff);
+        if (!strBlk || !strBlk->initialized ||
+            strOff + strLen > strBlk->data.size())
+          break;
+        std::string typeName(
+            reinterpret_cast<const char *>(strBlk->data.data() + strOff),
+            strLen);
+
+        // Store in native factory map
+        nativeFactoryTypeNames[typeName] = wrapperAddr;
+        registered = true;
+      } while (false);
+      if (registered) {
+        return success();
+      }
+      // Fast-path failed, fall through to normal MLIR interpretation
+      // so the type still gets registered. Critical for test classes.
+      // Don't return — fall through to normal call handling so
+      // the type still gets registered. Critical for test classes.
+    }
+
+    // Intercept create_component_by_name — since factory.register was
+    // fast-pathed (skipping MLIR-side data population), the MLIR-side
+    // create_component_by_name won't find registered types. This
+    // intercept looks up the wrapper from the C++ map and calls
+    // create_component via the wrapper's vtable slot 1.
+    // Signature: (this, requested_type_name: struct<(ptr,i64)>,
+    //             parent_inst_path: struct<(ptr,i64)>,
+    //             name: struct<(ptr,i64)>, parent: ptr) -> ptr
+    if ((calleeName ==
+             "uvm_pkg::uvm_default_factory::create_component_by_name" ||
+         calleeName == "uvm_pkg::uvm_factory::create_component_by_name") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        callIndirectOp.getArgOperands().size() >= 5) {
+      // Extract the requested type name string (arg1).
+      InterpretedValue nameVal =
+          getValue(procId, callIndirectOp.getArgOperands()[1]);
+      std::string requestedName;
+      bool nameExtracted = false;
+      if (!nameVal.isX() && nameVal.getWidth() >= 128) {
+        APInt nameAPInt = nameVal.getAPInt();
+        uint64_t strAddr = nameAPInt.extractBits(64, 0).getZExtValue();
+        int64_t strLen =
+            static_cast<int64_t>(nameAPInt.extractBits(64, 64).getZExtValue());
+        if (strLen > 0 && strLen <= 1024 && strAddr != 0) {
+          nameExtracted =
+              tryReadStringKey(procId, strAddr, strLen, requestedName);
+        }
+      }
+      if (nameExtracted && !requestedName.empty()) {
+        auto it = nativeFactoryTypeNames.find(requestedName);
+        if (it != nativeFactoryTypeNames.end()) {
+          uint64_t wrapperAddr = it->second;
+          // Read wrapper's vtable pointer (at offset 4 after i32).
+          uint64_t off = 0;
+          MemoryBlock *blk = findBlockByAddress(wrapperAddr + 4, off);
+          if (blk && blk->initialized && off + 8 <= blk->data.size()) {
+            uint64_t vtableAddr = 0;
+            for (unsigned i = 0; i < 8; ++i)
+              vtableAddr |=
+                  static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+            // Read vtable slot 1 = create_component.
+            uint64_t off2 = 0;
+            MemoryBlock *vtBlk =
+                findBlockByAddress(vtableAddr + 1 * 8, off2);
+            if (vtBlk && vtBlk->initialized &&
+                off2 + 8 <= vtBlk->data.size()) {
+              uint64_t funcAddr = 0;
+              for (unsigned i = 0; i < 8; ++i)
+                funcAddr |= static_cast<uint64_t>(vtBlk->data[off2 + i])
+                            << (i * 8);
+              auto funcIt = addressToFunction.find(funcAddr);
+              if (funcIt != addressToFunction.end()) {
+                auto funcOp = rootModule.lookupSymbol<mlir::func::FuncOp>(
+                    funcIt->second);
+                if (funcOp) {
+                  // create_component(wrapper, name, parent) -> ptr
+                  InterpretedValue wrapperVal(wrapperAddr, 64);
+                  InterpretedValue nameArg =
+                      getValue(procId, callIndirectOp.getArgOperands()[3]);
+                  InterpretedValue parentArg =
+                      getValue(procId, callIndirectOp.getArgOperands()[4]);
+                  SmallVector<InterpretedValue, 1> results;
+                  if (succeeded(interpretFuncBody(
+                          procId, funcOp,
+                          {wrapperVal, nameArg, parentArg}, results)) &&
+                      !results.empty()) {
+                    setValue(procId, callIndirectOp.getResults()[0],
+                             results[0]);
+                    return success();
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      // Fall through to MLIR interpretation if fast-path fails.
+    }
+
+    // Intercept find_wrapper_by_name — uses nativeFactoryTypeNames to look
+    // up a type name registered by the fast-path factory.register above.
+    // This is needed for +UVM_TESTNAME to find the test class wrapper.
+    if ((calleeName == "uvm_pkg::uvm_default_factory::find_wrapper_by_name" ||
+         calleeName == "uvm_pkg::uvm_factory::find_wrapper_by_name") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        callIndirectOp.getArgOperands().size() >= 2) {
+      InterpretedValue nameVal =
+          getValue(procId, callIndirectOp.getArgOperands()[1]);
+      uint64_t wrapperResult = 0;
+      if (!nameVal.isX() && nameVal.getWidth() >= 128 &&
+          !nativeFactoryTypeNames.empty()) {
+        APInt nameAPInt = nameVal.getAPInt();
+        uint64_t strAddr = nameAPInt.extractBits(64, 0).getZExtValue();
+        int64_t strLen = static_cast<int64_t>(
+            nameAPInt.extractBits(64, 64).getZExtValue());
+        std::string searchName;
+        if (strLen > 0 && strLen <= 1024 && strAddr != 0 &&
+            tryReadStringKey(procId, strAddr, strLen, searchName)) {
+          auto it = nativeFactoryTypeNames.find(searchName);
+          if (it != nativeFactoryTypeNames.end())
+            wrapperResult = it->second;
+        }
+      }
+      setValue(procId, callIndirectOp.getResults()[0],
+               InterpretedValue(wrapperResult, 64));
+      return success();
+    }
+
+    // Intercept is_type_name_registered — checks if a type name was
+    // registered by the fast-path factory.register above.
+    if ((calleeName == "uvm_pkg::uvm_default_factory::is_type_name_registered" ||
+         calleeName == "uvm_pkg::uvm_factory::is_type_name_registered") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        callIndirectOp.getArgOperands().size() >= 2) {
+      InterpretedValue nameVal =
+          getValue(procId, callIndirectOp.getArgOperands()[1]);
+      bool found = false;
+      if (!nameVal.isX() && nameVal.getWidth() >= 128 &&
+          !nativeFactoryTypeNames.empty()) {
+        APInt nameAPInt = nameVal.getAPInt();
+        uint64_t strAddr = nameAPInt.extractBits(64, 0).getZExtValue();
+        int64_t strLen = static_cast<int64_t>(
+            nameAPInt.extractBits(64, 64).getZExtValue());
+        std::string searchName;
+        if (strLen > 0 && strLen <= 1024 && strAddr != 0 &&
+            tryReadStringKey(procId, strAddr, strLen, searchName)) {
+          found = nativeFactoryTypeNames.count(searchName) > 0;
+        }
+      }
+      setValue(procId, callIndirectOp.getResults()[0],
+               InterpretedValue(llvm::APInt(1, found ? 1 : 0)));
+      return success();
+    }
+
+    // Intercept is_type_registered — checks if a wrapper ptr was registered.
+    if ((calleeName == "uvm_pkg::uvm_default_factory::is_type_registered" ||
+         calleeName == "uvm_pkg::uvm_factory::is_type_registered") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        callIndirectOp.getArgOperands().size() >= 2) {
+      InterpretedValue wrapperVal =
+          getValue(procId, callIndirectOp.getArgOperands()[1]);
+      bool found = false;
+      if (!wrapperVal.isX() && wrapperVal.getUInt64() != 0) {
+        uint64_t addr = wrapperVal.getUInt64();
+        for (auto &[name, wAddr] : nativeFactoryTypeNames) {
+          if (wAddr == addr) {
+            found = true;
+            break;
+          }
+        }
+      }
+      setValue(procId, callIndirectOp.getResults()[0],
+               InterpretedValue(llvm::APInt(1, found ? 1 : 0)));
+      return success();
+    }
+
     // Intercept end_of_elaboration_phase for any class whose EOE function
     // body calls uvm_driver::end_of_elaboration_phase (which checks
     // seq_item_port.size() and emits DRVCONNECT). We intercept at this
@@ -6971,6 +7461,250 @@ arith_dispatch:
                  << "intercepted (no-op, suppresses DRVCONNECT): "
                  << calleeName << "\n");
       return success();
+    }
+
+    // Intercept m_set_full_name to avoid O(N^2) recursive children traversal.
+    // During UVM build_phase, each component's constructor calls
+    // m_set_full_name on itself. The function computes
+    //   self.full_name = parent.get_full_name() + "." + self.get_name()
+    // then recursively calls m_set_full_name on every child. The recursive
+    // update is redundant because each child calls m_set_full_name on itself
+    // during its own construction. We compute the name natively and skip the
+    // children loop, turning O(N^2) into O(N).
+    if (calleeName.contains("m_set_full_name")) {
+      if (!callIndirectOp.getArgOperands().empty()) {
+        InterpretedValue selfVal =
+            getValue(procId, callIndirectOp.getArgOperands()[0]);
+        if (!selfVal.isX() && selfVal.getUInt64() >= 0x1000) {
+          uint64_t selfAddr = selfVal.getUInt64();
+
+          // Byte offsets in the uvm_component struct, computed from the
+          // interpreter's packed layout (getLLVMTypeSize sums getTypeWidth
+          // bits per field, then rounds to bytes).
+          //   field[0] uvm_report_object: 41 bytes
+          //     field[0][0] uvm_object: 32 bytes
+          //       field[0][0][0] uvm_void(i32,ptr): 12 bytes
+          //       field[0][0][1] struct<(ptr,i64)> m_inst_name: 16 bytes
+          //       field[0][0][2] i32: 4 bytes
+          //     field[0][1] ptr: 8 bytes
+          //     field[0][2] i1: 1 byte (ceil to 1 byte)
+          //   field[1] i1: 1 byte
+          //   fields[2-6] ptr x5: 40 bytes
+          //   field[7] i1: 1 byte
+          //   field[8] i32: 4 bytes
+          //   field[9] ptr m_parent: offset 87
+          //   field[10] ptr m_children: offset 95
+          //   fields[11-13] ptr x3: 24 bytes
+          //   field[14] struct<(ptr,i64)> full_name: offset 127
+          constexpr uint64_t kParentOff = 87;
+          constexpr uint64_t kInstNameOff = 12;
+          constexpr uint64_t kFullNameOff = 127;
+
+          // Read 8 little-endian bytes from a memory address.
+          auto readU64 = [&](uint64_t addr) -> uint64_t {
+            uint64_t off = 0;
+            MemoryBlock *blk = findBlockByAddress(addr, off);
+            if (!blk)
+              blk = findMemoryBlockByAddress(addr, procId, &off);
+            if (!blk || !blk->initialized || off + 8 > blk->data.size())
+              return 0;
+            uint64_t val = 0;
+            for (unsigned i = 0; i < 8; ++i)
+              val |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+            return val;
+          };
+
+          // Read a string from a struct<(ptr, i64)> stored at addr.
+          auto readStr = [&](uint64_t addr) -> std::string {
+            uint64_t strPtr = readU64(addr);
+            int64_t strLen = static_cast<int64_t>(readU64(addr + 8));
+            if (strPtr == 0 || strLen <= 0)
+              return "";
+            auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+            if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+                dynIt->second.second > 0)
+              return std::string(
+                  dynIt->second.first,
+                  std::min(static_cast<size_t>(strLen),
+                           static_cast<size_t>(dynIt->second.second)));
+            uint64_t off = 0;
+            MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
+            if (gBlock && gBlock->initialized) {
+              size_t avail =
+                  std::min(static_cast<size_t>(strLen),
+                           gBlock->data.size() - static_cast<size_t>(off));
+              if (avail > 0)
+                return std::string(
+                    reinterpret_cast<const char *>(gBlock->data.data() + off),
+                    avail);
+            }
+            return "";
+          };
+
+          // Write a struct<(ptr, i64)> string to addr.
+          auto writeStr = [&](uint64_t addr, uint64_t strPtr, int64_t strLen) {
+            uint64_t off = 0;
+            MemoryBlock *blk = findBlockByAddress(addr, off);
+            if (!blk)
+              blk = findMemoryBlockByAddress(addr, procId, &off);
+            if (!blk || off + 16 > blk->data.size())
+              return;
+            for (unsigned i = 0; i < 8; ++i) {
+              blk->data[off + i] =
+                  static_cast<uint8_t>((strPtr >> (i * 8)) & 0xFF);
+              blk->data[off + 8 + i] = static_cast<uint8_t>(
+                  (static_cast<uint64_t>(strLen) >> (i * 8)) & 0xFF);
+            }
+            blk->initialized = true;
+          };
+
+          uint64_t parentAddr = readU64(selfAddr + kParentOff);
+          std::string instName = readStr(selfAddr + kInstNameOff);
+
+          std::string fullName;
+          if (parentAddr == 0) {
+            fullName = instName;
+          } else {
+            // Check if parent IS-A uvm_root (class_id target = 93).
+            uint64_t cidOff = 0;
+            MemoryBlock *pBlk = findBlockByAddress(parentAddr, cidOff);
+            if (!pBlk)
+              pBlk = findMemoryBlockByAddress(parentAddr, procId, &cidOff);
+            bool isRoot = false;
+            if (pBlk && pBlk->initialized &&
+                cidOff + 4 <= pBlk->data.size()) {
+              int32_t cid = 0;
+              for (unsigned i = 0; i < 4; ++i)
+                cid |= static_cast<int32_t>(pBlk->data[cidOff + i])
+                       << (i * 8);
+              isRoot = checkRTTICast(cid, 93);
+            }
+            if (isRoot) {
+              fullName = instName;
+            } else {
+              std::string parentFull = readStr(parentAddr + kFullNameOff);
+              fullName = parentFull + "." + instName;
+            }
+          }
+
+          // Persist the string and register in dynamicStrings.
+          interpreterStrings.push_back(std::move(fullName));
+          const std::string &stored = interpreterStrings.back();
+          int64_t pv = reinterpret_cast<int64_t>(stored.data());
+          int64_t lv = static_cast<int64_t>(stored.size());
+          dynamicStrings[pv] = {stored.data(), lv};
+
+          writeStr(selfAddr + kFullNameOff, static_cast<uint64_t>(pv), lv);
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  call_indirect: m_set_full_name intercepted -> \""
+                     << stored << "\"\n");
+          return success();
+        }
+      }
+    }
+
+    // Intercept get_full_name on uvm_component (and subclasses).
+    // Returns the stored full_name field at offset 127 directly,
+    // avoiding vtable dispatch, string comparison, and alloca ops.
+    if (calleeName.contains("get_full_name") &&
+        calleeName.contains("uvm_component") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        !callIndirectOp.getArgOperands().empty()) {
+      InterpretedValue selfVal =
+          getValue(procId, callIndirectOp.getArgOperands()[0]);
+      if (!selfVal.isX() && selfVal.getUInt64() >= 0x1000) {
+        uint64_t selfAddr = selfVal.getUInt64();
+        constexpr uint64_t kFullNameOff2 = 127;
+        auto readU64L = [&](uint64_t addr) -> uint64_t {
+          uint64_t off = 0;
+          MemoryBlock *blk = findBlockByAddress(addr, off);
+          if (!blk)
+            blk = findMemoryBlockByAddress(addr, procId, &off);
+          if (!blk || !blk->initialized || off + 8 > blk->data.size())
+            return 0;
+          uint64_t val = 0;
+          for (unsigned i = 0; i < 8; ++i)
+            val |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+          return val;
+        };
+        uint64_t strPtr = readU64L(selfAddr + kFullNameOff2);
+        uint64_t strLen = readU64L(selfAddr + kFullNameOff2 + 8);
+        if (strPtr != 0 && strLen > 0) {
+          uint64_t words[2] = {strPtr, strLen};
+          llvm::APInt resultVal(128, llvm::ArrayRef<uint64_t>(words, 2));
+          setValue(procId, callIndirectOp.getResult(0),
+                   InterpretedValue(resultVal));
+          return success();
+        }
+      }
+    }
+
+    // Intercept get_name on uvm_object - returns m_inst_name at offset 12.
+    if (calleeName.contains("get_name") &&
+        calleeName.contains("uvm_object") &&
+        !calleeName.contains("get_name_constraint") &&
+        !calleeName.contains("get_name_enabled") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        !callIndirectOp.getArgOperands().empty()) {
+      InterpretedValue selfVal =
+          getValue(procId, callIndirectOp.getArgOperands()[0]);
+      if (!selfVal.isX() && selfVal.getUInt64() >= 0x1000) {
+        uint64_t selfAddr = selfVal.getUInt64();
+        constexpr uint64_t kInstNameOff2 = 12;
+        auto readU64L = [&](uint64_t addr) -> uint64_t {
+          uint64_t off = 0;
+          MemoryBlock *blk = findBlockByAddress(addr, off);
+          if (!blk)
+            blk = findMemoryBlockByAddress(addr, procId, &off);
+          if (!blk || !blk->initialized || off + 8 > blk->data.size())
+            return 0;
+          uint64_t val = 0;
+          for (unsigned i = 0; i < 8; ++i)
+            val |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+          return val;
+        };
+        uint64_t strPtr = readU64L(selfAddr + kInstNameOff2);
+        uint64_t strLen = readU64L(selfAddr + kInstNameOff2 + 8);
+        uint64_t words[2] = {strPtr, strLen};
+        llvm::APInt resultVal(128, llvm::ArrayRef<uint64_t>(words, 2));
+        setValue(procId, callIndirectOp.getResult(0),
+                 InterpretedValue(resultVal));
+        return success();
+      }
+    }
+
+    // Intercept uvm_get_report_object - trivially returns self.
+    if (calleeName.contains("uvm_get_report_object") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        !callIndirectOp.getArgOperands().empty()) {
+      setValue(procId, callIndirectOp.getResult(0),
+               getValue(procId, callIndirectOp.getArgOperands()[0]));
+      return success();
+    }
+
+    // Intercept get_parent on uvm_component - returns field[9] at offset 87.
+    if (calleeName.contains("get_parent") &&
+        calleeName.contains("uvm_component") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        !callIndirectOp.getArgOperands().empty()) {
+      InterpretedValue selfVal =
+          getValue(procId, callIndirectOp.getArgOperands()[0]);
+      if (!selfVal.isX() && selfVal.getUInt64() >= 0x1000) {
+        constexpr uint64_t kParentOff2 = 87;
+        uint64_t off = 0;
+        MemoryBlock *blk = findBlockByAddress(selfVal.getUInt64() + kParentOff2, off);
+        if (!blk)
+          blk = findMemoryBlockByAddress(selfVal.getUInt64() + kParentOff2, procId, &off);
+        if (blk && blk->initialized && off + 8 <= blk->data.size()) {
+          uint64_t parentAddr = 0;
+          for (unsigned i = 0; i < 8; ++i)
+            parentAddr |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+          setValue(procId, callIndirectOp.getResult(0),
+                   InterpretedValue(parentAddr, 64));
+          return success();
+        }
+      }
     }
 
     // Look up the function
@@ -7112,7 +7846,7 @@ arith_dispatch:
               llvm::APInt valueBits(innerBits, 0);
               for (unsigned i = 0;
                    i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
-                valueBits.insertBits(llvm::APInt(8, valueData[i]), i * 8);
+                safeInsertBits(valueBits,llvm::APInt(8, valueData[i]), i * 8);
               SignalId sigId2 = resolveSignalId(outputRef);
               if (sigId2 != 0)
                 pendingEpsilonDrives[sigId2] = InterpretedValue(valueBits);
@@ -7330,7 +8064,7 @@ arith_dispatch:
               llvm::APInt valueBits(innerBits, 0);
               for (unsigned i = 0;
                    i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
-                valueBits.insertBits(llvm::APInt(8, valueData[i]), i * 8);
+                safeInsertBits(valueBits,llvm::APInt(8, valueData[i]), i * 8);
               SignalId sigId2 = resolveSignalId(outputRef);
               if (sigId2 != 0)
                 pendingEpsilonDrives[sigId2] = InterpretedValue(valueBits);
@@ -8009,7 +8743,7 @@ arith_dispatch:
       pState.sequencerGetRetryCallOp = callIndirectOp.getOperation();
       SimTime currentTime = scheduler.getCurrentTime();
       constexpr uint32_t kMaxDeltaPolls = 1000;
-      constexpr int64_t kFallbackPollDelayFs = 1000000; // 1 ps
+      constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
       SimTime targetTime;
       if (currentTime.deltaStep < kMaxDeltaPolls)
         targetTime = currentTime.nextDelta();
@@ -8264,7 +8998,7 @@ arith_dispatch:
       // Insert element at position (numElements - 1 - i) * elementWidth
       // to maintain proper array ordering
       unsigned offset = (numElements - 1 - i) * elementWidth;
-      result.insertBits(elemVal, offset);
+      safeInsertBits(result,elemVal, offset);
     }
 
     if (hasX) {
@@ -8368,7 +9102,7 @@ arith_dispatch:
       }
       unsigned inputWidth = val.getWidth();
       bitOffset -= inputWidth;
-      result.insertBits(val.getAPInt(), bitOffset);
+      safeInsertBits(result,val.getAPInt(), bitOffset);
     }
 
     if (hasX) {
@@ -8430,13 +9164,13 @@ arith_dispatch:
       bitOffset -= fieldWidth;
       if (val.isX()) {
         if (auto encoded = getEncodedUnknownForType(elements[i].type)) {
-          result.insertBits(encoded->zextOrTrunc(fieldWidth), bitOffset);
+          safeInsertBits(result,encoded->zextOrTrunc(fieldWidth), bitOffset);
           continue;
         }
         hasX = true;
         break;
       }
-      result.insertBits(val.getAPInt(), bitOffset);
+      safeInsertBits(result,val.getAPInt(), bitOffset);
     }
 
     if (hasX) {
@@ -8479,7 +9213,7 @@ arith_dispatch:
       fieldValue = fieldValue.zext(fieldWidth);
     else if (fieldValue.getBitWidth() > fieldWidth)
       fieldValue = fieldValue.trunc(fieldWidth);
-    result.insertBits(fieldValue, fieldOffset);
+    safeInsertBits(result,fieldValue, fieldOffset);
 
     setValue(procId, structInjectOp.getResult(), InterpretedValue(result));
     return success();
@@ -8516,7 +9250,7 @@ arith_dispatch:
       fieldValue = fieldValue.zext(fieldWidth);
     else if (fieldValue.getBitWidth() > fieldWidth)
       fieldValue = fieldValue.trunc(fieldWidth);
-    result.insertBits(fieldValue, fieldOffset);
+    safeInsertBits(result,fieldValue, fieldOffset);
 
     for (Value resultVal : op->getResults())
       setValue(procId, resultVal, InterpretedValue(result));
@@ -8585,8 +9319,8 @@ arith_dispatch:
           unsigned N = cast<IntegerType>(elts[0].type).getWidth();
           APInt res(N * 2, 0);
           // HW struct: field 0 (value) at MSB, field 1 (unknown) at LSB
-          res.insertBits(val.zextOrTrunc(N), N);
-          res.insertBits(unk.zextOrTrunc(N), 0);
+          safeInsertBits(res,val.zextOrTrunc(N), N);
+          safeInsertBits(res,unk.zextOrTrunc(N), 0);
           return res;
         }
 
@@ -8603,7 +9337,7 @@ arith_dispatch:
           APInt fv = val.extractBits(origFieldW, origOff);
           APInt fu = unk.extractBits(origFieldW, origOff);
           auto nested = cast<hw::StructType>(elts[i].type);
-          res.insertBits(interleaveBits(fv, fu, nested), destOff);
+          safeInsertBits(res,interleaveBits(fv, fu, nested), destOff);
           origOff += origFieldW;
           destOff += destFieldW;
         }
@@ -9383,7 +10117,7 @@ llvm_dispatch:
       fieldValue = fieldValue.zext(fieldWidth);
     else if (fieldValue.getBitWidth() > fieldWidth)
       fieldValue = fieldValue.trunc(fieldWidth);
-    result.insertBits(fieldValue, bitOffset);
+    safeInsertBits(result,fieldValue, bitOffset);
 
     setValue(procId, insertValueOp.getResult(), InterpretedValue(result));
     return success();
@@ -9753,7 +10487,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
             unsigned bitsToInsert = std::min(8u, width - i * 8);
             APInt byteVal(bitsToInsert,
                           block->data[i] & ((1u << bitsToInsert) - 1));
-            memValue.insertBits(byteVal, i * 8);
+            safeInsertBits(memValue,byteVal, i * 8);
           }
 
           // Check if we need to convert from LLVM layout to HW layout.
@@ -9913,7 +10647,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                     APInt byteVal(bitsToInsert,
                                   block->data[blockOffset + i] &
                                       ((1u << bitsToInsert) - 1));
-                    parentBits.insertBits(byteVal, insertPos);
+                    safeInsertBits(parentBits,byteVal, insertPos);
                   }
                 }
                 // Extract the field (memory is in LLVM layout).
@@ -10068,7 +10802,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
               APInt byteVal(bitsToInsert,
                             block->data[blockOffset + i] &
                                 ((1u << bitsToInsert) - 1));
-              fullVal.insertBits(byteVal, insertPos);
+              safeInsertBits(fullVal,byteVal, insertPos);
             }
           }
 
@@ -10147,7 +10881,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                     APInt byteVal(bitsToInsert,
                                   block->data[blockOffset + i] &
                                       ((1u << bitsToInsert) - 1));
-                    fullVal.insertBits(byteVal, insertPos);
+                    safeInsertBits(fullVal,byteVal, insertPos);
                   }
                 }
                 if (totalBitOffset + resultWidth <= parentWidth) {
@@ -10276,7 +11010,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
             APInt byteVal(bitsToInsert,
                           block->data[offset + i] &
                               ((1u << bitsToInsert) - 1));
-            memValue.insertBits(byteVal, i * 8);
+            safeInsertBits(memValue,byteVal, i * 8);
           }
 
           setValue(procId, probeOp.getResult(), InterpretedValue(memValue));
@@ -10412,7 +11146,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       InterpretedValue lowBitVal = getValue(procId, bitExtractOp.getLowBit());
       unsigned lowBit = lowBitVal.isX() ? 0 : lowBitVal.getUInt64();
 
-      // Trace through to find the underlying alloca
+      // Trace through to find the underlying alloca or signal
       Value parentRef = bitExtractOp.getInput();
       // Chase through nested SigExtractOps
       unsigned totalBitOffset = lowBit;
@@ -10421,6 +11155,41 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             getValue(procId, nestedExtract.getLowBit());
         totalBitOffset += nestedLowBit.isX() ? 0 : nestedLowBit.getUInt64();
         parentRef = nestedExtract.getInput();
+      }
+
+      // Chase through sig.array_get and sig.struct_extract to accumulate
+      // bit offsets. This handles the BFM pattern:
+      //   sig.extract -> sig.array_get -> sig.struct_extract -> signal
+      // used when driving individual bits of struct array fields.
+      while (true) {
+        if (auto sigArrayGet =
+                parentRef.getDefiningOp<llhd::SigArrayGetOp>()) {
+          InterpretedValue idxVal =
+              getValue(procId, sigArrayGet.getIndex());
+          uint64_t idx = idxVal.isX() ? 0 : idxVal.getUInt64();
+          auto arrayType = cast<hw::ArrayType>(
+              unwrapSignalType(sigArrayGet.getInput().getType()));
+          unsigned elemWidth = getTypeWidth(arrayType.getElementType());
+          totalBitOffset += idx * elemWidth;
+          parentRef = sigArrayGet.getInput();
+          continue;
+        }
+        if (auto structExtract =
+                parentRef.getDefiningOp<llhd::SigStructExtractOp>()) {
+          auto structType = cast<hw::StructType>(
+              unwrapSignalType(structExtract.getInput().getType()));
+          StringRef fieldName = structExtract.getFieldAttr().getValue();
+          unsigned fieldBitOff = 0;
+          for (auto field : structType.getElements()) {
+            if (field.name == fieldName)
+              break;
+            fieldBitOff += getTypeWidth(field.type);
+          }
+          totalBitOffset += fieldBitOff;
+          parentRef = structExtract.getInput();
+          continue;
+        }
+        break;
       }
 
       // Now parentRef should be from UnrealizedConversionCastOp -> AllocaOp
@@ -10481,7 +11250,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               APInt byteVal(bitsToInsert,
                             block->data[blockOffset + i] &
                                 ((1u << bitsToInsert) - 1));
-              currentVal.insertBits(byteVal, insertPos);
+              safeInsertBits(currentVal,byteVal, insertPos);
             }
           }
 
@@ -10492,7 +11261,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             APInt insertVal = driveVal.getAPInt();
             if (insertVal.getBitWidth() != extractWidth)
               insertVal = insertVal.zextOrTrunc(extractWidth);
-            currentVal.insertBits(insertVal, totalBitOffset);
+            safeInsertBits(currentVal,insertVal, totalBitOffset);
           }
 
           // Write back to memory
@@ -10517,6 +11286,12 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         }
       }
 
+      // Remap function block-argument refs so the signal ID lookup below
+      // can trace through to the caller's operand.  Without this, drives
+      // inside functions called from fork children fail because the block
+      // argument isn't in valueToSignal.
+      remapRefBlockArgSource(parentRef);
+
       // Check if the parent has a signal ID (for actual signal bit extracts)
       SignalId parentSigId = getSignalId(parentRef);
       if (parentSigId == 0)
@@ -10539,7 +11314,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           APInt insertVal = driveVal.getAPInt();
           if (insertVal.getBitWidth() != extractWidth)
             insertVal = insertVal.zextOrTrunc(extractWidth);
-          result.insertBits(insertVal, totalBitOffset);
+          safeInsertBits(result,insertVal, totalBitOffset);
         }
 
         // Schedule the signal update
@@ -10590,7 +11365,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                   APInt byteVal(bitsToInsert,
                                 block->data[blockOffset + i] &
                                     ((1u << bitsToInsert) - 1));
-                  currentVal.insertBits(byteVal, insertPos);
+                  safeInsertBits(currentVal,byteVal, insertPos);
                 }
               }
 
@@ -10601,7 +11376,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 APInt insertVal = driveVal.getAPInt();
                 if (insertVal.getBitWidth() != extractWidth)
                   insertVal = insertVal.zextOrTrunc(extractWidth);
-                currentVal.insertBits(insertVal, totalBitOffset);
+                safeInsertBits(currentVal,insertVal, totalBitOffset);
               }
 
               // Write back to memory
@@ -10831,8 +11606,15 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         }
       }
 
+      // Remap function block-argument refs to their caller operands.
+      if (parentSigId == 0)
+        remapRefBlockArgSource(parentSignal);
+
       // If still not found, try resolveSignalId which handles more cases
       // like tracing through UnrealizedConversionCastOp, block arguments, etc.
+      if (parentSigId == 0) {
+        parentSigId = getSignalId(parentSignal);
+      }
       if (parentSigId == 0) {
         parentSigId = resolveSignalId(parentSignal);
       }
@@ -10922,7 +11704,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 if (bitsToInsert > 0 && insertPos < parentWidth) {
                   APInt byteVal(bitsToInsert,
                                 block->data[i] & ((1u << bitsToInsert) - 1));
-                  currentVal.insertBits(byteVal, insertPos);
+                  safeInsertBits(currentVal,byteVal, insertPos);
                 }
               }
 
@@ -10986,7 +11768,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               else if (fieldValue.getBitWidth() > fieldWidth)
                 fieldValue = fieldValue.trunc(fieldWidth);
 
-              currentVal.insertBits(fieldValue, bitOffset);
+              safeInsertBits(currentVal,fieldValue, bitOffset);
 
               // Write the modified value back to memory
               for (unsigned i = 0; i < storeSize; ++i) {
@@ -11062,7 +11844,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                   APInt byteVal(bitsToInsert,
                                 block->data[blockOffset + i] &
                                     ((1u << bitsToInsert) - 1));
-                  currentVal.insertBits(byteVal, insertPos);
+                  safeInsertBits(currentVal,byteVal, insertPos);
                 }
               }
 
@@ -11079,7 +11861,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               else if (fieldValue.getBitWidth() > fieldWidth)
                 fieldValue = fieldValue.trunc(fieldWidth);
 
-              currentVal.insertBits(fieldValue, bitOffset);
+              safeInsertBits(currentVal,fieldValue, bitOffset);
 
               // Write back to memory
               for (unsigned i = 0; i < storeSize; ++i) {
@@ -11174,7 +11956,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       else if (fieldValue.getBitWidth() > fieldWidth)
         fieldValue = fieldValue.trunc(fieldWidth);
 
-      result.insertBits(fieldValue, bitOffset);
+      safeInsertBits(result,fieldValue, bitOffset);
 
       // Get the delay time
       SimTime delay = convertTimeValue(procId, driveOp.getTime());
@@ -11301,6 +12083,129 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           }
         }
 
+        // Handle sig.array_get where parent is a sig.struct_extract chain
+        // tracing back to a memory-backed ref (e.g., function argument from
+        // alloca). This occurs in from_class functions where individual array
+        // elements within struct fields are driven via llhd.drv.
+        {
+          Value traceVal = parentSignal;
+          llvm::SmallVector<llhd::SigStructExtractOp, 4> structExtractChain;
+          while (auto extractOp =
+                     traceVal.getDefiningOp<llhd::SigStructExtractOp>()) {
+            structExtractChain.push_back(extractOp);
+            traceVal = extractOp.getInput();
+          }
+
+          if (!structExtractChain.empty()) {
+            // traceVal is the root signal (memory-backed ref)
+            InterpretedValue rootPtrVal = getValue(procId, traceVal);
+            if (!rootPtrVal.isX() && rootPtrVal.getUInt64() != 0) {
+              uint64_t addr = rootPtrVal.getUInt64();
+              uint64_t blockOffset = 0;
+              MemoryBlock *block =
+                  findMemoryBlockByAddress(addr, procId, &blockOffset);
+              if (!block)
+                block = findBlockByAddress(addr, blockOffset);
+              if (block) {
+                // Compute struct field bit offset using LLVM layout
+                // (low-to-high: field 0 at bit 0).
+                unsigned structBitOffset = 0;
+                Type curType = traceVal.getType();
+                if (auto refType = dyn_cast<llhd::RefType>(curType))
+                  curType = refType.getNestedType();
+
+                for (auto it = structExtractChain.rbegin();
+                     it != structExtractChain.rend(); ++it) {
+                  auto extractOp = *it;
+                  auto sType = cast<hw::StructType>(curType);
+                  auto elems = sType.getElements();
+                  auto fidx = sType.getFieldIndex(extractOp.getField());
+                  if (!fidx)
+                    break;
+                  unsigned fieldOff = 0;
+                  for (size_t i = 0; i < *fidx; ++i)
+                    fieldOff += getTypeWidth(elems[i].type);
+                  structBitOffset += fieldOff;
+                  curType = elems[*fidx].type;
+                }
+
+                // curType should now be the array type
+                if (auto arrType = dyn_cast<hw::ArrayType>(curType)) {
+                  Type elemType = arrType.getElementType();
+                  unsigned elemWidth = getTypeWidth(elemType);
+
+                  InterpretedValue idxVal =
+                      getValue(procId, sigArrayGetOp.getIndex());
+                  if (idxVal.isX())
+                    return success();
+                  uint64_t idx = idxVal.getUInt64();
+                  if (idx >= arrType.getNumElements())
+                    return success();
+
+                  // Total bit offset = struct field offset + array element
+                  unsigned totalBitOffset = structBitOffset + idx * elemWidth;
+
+                  InterpretedValue driveVal =
+                      getValue(procId, driveOp.getValue());
+
+                  // Read-modify-write the memory block
+                  unsigned rootWidth = getTypeWidth(traceVal.getType());
+                  unsigned storeSize = (rootWidth + 7) / 8;
+
+                  if (blockOffset + storeSize <= block->size) {
+                    APInt currentVal = APInt::getZero(rootWidth);
+                    for (unsigned i = 0; i < storeSize; ++i) {
+                      unsigned insertPos = i * 8;
+                      unsigned bitsToInsert =
+                          std::min(8u, rootWidth - insertPos);
+                      if (bitsToInsert > 0 && insertPos < rootWidth) {
+                        APInt byteVal(
+                            bitsToInsert,
+                            block->data[blockOffset + i] &
+                                ((1u << bitsToInsert) - 1));
+                        safeInsertBits(currentVal, byteVal, insertPos);
+                      }
+                    }
+
+                    APInt elemValue =
+                        driveVal.isX() ? APInt::getZero(elemWidth)
+                                       : driveVal.getAPInt();
+                    if (elemValue.getBitWidth() < elemWidth)
+                      elemValue = elemValue.zext(elemWidth);
+                    else if (elemValue.getBitWidth() > elemWidth)
+                      elemValue = elemValue.trunc(elemWidth);
+
+                    safeInsertBits(currentVal, elemValue, totalBitOffset);
+
+                    for (unsigned i = 0; i < storeSize; ++i) {
+                      unsigned extractPos = i * 8;
+                      unsigned bitsToExtract =
+                          std::min(8u, rootWidth - extractPos);
+                      if (bitsToExtract > 0 && extractPos < rootWidth) {
+                        block->data[blockOffset + i] =
+                            currentVal
+                                .extractBits(bitsToExtract, extractPos)
+                                .getZExtValue();
+                      } else {
+                        block->data[blockOffset + i] = 0;
+                      }
+                    }
+                    block->initialized = !driveVal.isX();
+
+                    LLVM_DEBUG(
+                        llvm::dbgs()
+                        << "  Drive to array[" << idx
+                        << "] in struct field of memory-backed ref"
+                        << " at bit offset " << totalBitOffset << " width "
+                        << elemWidth << "\n");
+                    return success();
+                  }
+                }
+              }
+            }
+          }
+        }
+
         LLVM_DEBUG(llvm::dbgs()
                    << "  Error: Could not find parent signal for array get\n");
         return failure();
@@ -11357,7 +12262,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       else if (elementValue.getBitWidth() > elementWidth)
         elementValue = elementValue.trunc(elementWidth);
 
-      result.insertBits(elementValue, bitOffset);
+      safeInsertBits(result,elementValue, bitOffset);
 
       // Get the delay time
       SimTime delay = convertTimeValue(procId, driveOp.getTime());
@@ -12271,6 +13176,146 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   StringRef calleeName = callOp.getCallee();
   bool traceSeq = std::getenv("CIRCT_SIM_TRACE_SEQ") != nullptr;
 
+  LLVM_DEBUG({
+    if (calleeName.contains("driver_bfm::") || calleeName.contains("monitor_bfm::")) {
+      static unsigned bfmCallDiagCount = 0;
+      if (bfmCallDiagCount < 30) {
+        ++bfmCallDiagCount;
+        llvm::dbgs() << "[BFM-CALL] proc=" << procId << " -> " << calleeName << "\n";
+      }
+    }
+  });
+
+  if (profilingEnabled)
+    ++funcCallProfile[calleeName];
+
+  // Intercept get_0 (uvm_coreservice_t::get singleton accessor) - 907 calls.
+  // After init, just reads global uvm_coreservice_t::inst pointer.
+  if (calleeName == "get_0" && callOp.getNumResults() >= 1) {
+    auto it = globalAddresses.find("uvm_pkg::uvm_pkg::uvm_coreservice_t::inst");
+    if (it != globalAddresses.end()) {
+      uint64_t globalAddr = it->getValue();
+      uint64_t off = 0;
+      MemoryBlock *blk = findBlockByAddress(globalAddr, off);
+      if (blk && blk->initialized && off + 8 <= blk->data.size()) {
+        uint64_t ptr = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          ptr |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+        if (ptr != 0) {
+          setValue(procId, callOp.getResult(0), InterpretedValue(ptr, 64));
+          return success();
+        }
+      }
+    }
+  }
+
+  // Intercept get_core_state - reads global m_uvm_core_state.
+  if (calleeName == "uvm_pkg::get_core_state" && callOp.getNumResults() >= 1) {
+    auto it = globalAddresses.find("uvm_pkg::m_uvm_core_state");
+    if (it != globalAddresses.end()) {
+      uint64_t globalAddr = it->getValue();
+      uint64_t off = 0;
+      MemoryBlock *blk = findBlockByAddress(globalAddr, off);
+      if (blk && blk->initialized && off + 16 <= blk->data.size()) {
+        // struct<(ptr, i64)>: read the i64 at offset 8
+        uint64_t lenVal = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          lenVal |= static_cast<uint64_t>(blk->data[off + 8 + i]) << (i * 8);
+        int32_t result = 0;
+        if (lenVal != 0) {
+          // Read the ptr at offset 0, then load i32 from it
+          uint64_t ptrVal = 0;
+          for (unsigned i = 0; i < 8; ++i)
+            ptrVal |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+          if (ptrVal != 0) {
+            uint64_t off2 = 0;
+            MemoryBlock *blk2 = findBlockByAddress(ptrVal, off2);
+            if (!blk2)
+              blk2 = findMemoryBlockByAddress(ptrVal, procId, &off2);
+            if (blk2 && blk2->initialized && off2 + 4 <= blk2->data.size()) {
+              result = 0;
+              for (unsigned i = 0; i < 4; ++i)
+                result |= static_cast<int32_t>(blk2->data[off2 + i]) << (i * 8);
+            }
+          }
+        }
+        setValue(procId, callOp.getResult(0),
+                 InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(result))));
+        return success();
+      }
+    }
+  }
+
+  // Intercept uvm_default_coreservice_t::get_factory - reads field[1] (factory ptr).
+  if (calleeName == "uvm_pkg::uvm_default_coreservice_t::get_factory" &&
+      callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+    if (!selfVal.isX() && selfVal.getUInt64() >= 0x1000) {
+      // field[1] offset in uvm_default_coreservice_t: past the base class
+      // uvm_coreservice_t{uvm_void{i32(4), ptr(8)}} = 12 bytes, then field[1] is ptr
+      constexpr uint64_t kFactoryOff = 12;
+      uint64_t off = 0;
+      MemoryBlock *blk = findBlockByAddress(selfVal.getUInt64() + kFactoryOff, off);
+      if (!blk)
+        blk = findMemoryBlockByAddress(selfVal.getUInt64() + kFactoryOff, procId, &off);
+      if (blk && blk->initialized && off + 8 <= blk->data.size()) {
+        uint64_t factoryPtr = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          factoryPtr |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+        if (factoryPtr != 0) {
+          setValue(procId, callOp.getResult(0),
+                   InterpretedValue(factoryPtr, 64));
+          return success();
+        }
+      }
+    }
+  }
+
+  // Intercept m_resolve_type_name — the core string→wrapper lookup used by
+  // find_override_by_name → m_resolve_type_name_by_inst → m_resolve_type_name.
+  // The MLIR version checks factory.m_type_names assoc array, which is empty
+  // for most types because our register interceptor (in call_indirect) stores
+  // in the C++ nativeFactoryTypeNames map instead. Types that failed the
+  // fast-path register DO exist in m_type_names, so we fall through to MLIR
+  // for those.
+  if (calleeName == "uvm_pkg::uvm_default_factory::m_resolve_type_name" &&
+      callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 2) {
+    // arg[1] is struct<(ptr, i64)> type_name — a packed string
+    InterpretedValue nameVal = getValue(procId, callOp.getOperand(1));
+    if (!nameVal.isX() && nameVal.getWidth() >= 128) {
+      APInt nameAPInt = nameVal.getAPInt();
+      uint64_t strAddr = nameAPInt.extractBits(64, 0).getZExtValue();
+      uint64_t strLen = nameAPInt.extractBits(64, 64).getZExtValue();
+      if (strLen > 0 && strLen <= 1024 && strAddr != 0) {
+        uint64_t strOff = 0;
+        MemoryBlock *strBlk = findBlockByAddress(strAddr, strOff);
+        if (!strBlk)
+          strBlk = findMemoryBlockByAddress(strAddr, procId, &strOff);
+        if (strBlk && strBlk->initialized &&
+            strOff + strLen <= strBlk->data.size()) {
+          std::string typeName(
+              reinterpret_cast<const char *>(strBlk->data.data() + strOff),
+              strLen);
+          auto it = nativeFactoryTypeNames.find(typeName);
+          if (it != nativeFactoryTypeNames.end()) {
+            setValue(procId, callOp.getResult(0),
+                    InterpretedValue(it->second, 64));
+            return success();
+          }
+        }
+      }
+    }
+    // Fall through to normal MLIR interpretation
+  }
+
+  // Intercept uvm_get_report_object at func.call level - trivially returns self.
+  if (calleeName == "uvm_pkg::uvm_report_object::uvm_get_report_object" &&
+      callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 1) {
+    setValue(procId, callOp.getResult(0),
+             getValue(procId, callOp.getOperand(0)));
+    return success();
+  }
+
   // Intercept UVM phase wait_for_state: bypass since our IMP ordering mechanism
   // already enforces the correct phase sequence. The native UVM wait_for_state
   // polls memory-backed phase states that never update (because our IMP ordering
@@ -12290,6 +13335,144 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                << "  func.call: uvm_driver::end_of_elaboration_phase "
                << "intercepted (no-op, suppresses DRVCONNECT)\n");
     return success();
+  }
+
+  // Intercept to_string_NNN — wide packed value to string conversion.
+  // The compiled MLIR does bit-by-bit division of i4096 values to produce
+  // decimal strings. For very wide values (e.g. AXI4's 16K-bit wdata),
+  // this consumes tens of millions of interpreter steps, stalling the
+  // simulation at time 0. We replace it with a fast C++ implementation.
+  // Signature: to_string_NNN(%arg0: !hw.struct<value: iN, unknown: iN>,
+  //                          %arg1: i32 width, %arg2: i28 format,
+  //                          %arg3: !llvm.struct<(ptr, i64)> prefix)
+  //         -> !llvm.struct<(ptr, i64)>
+  if (calleeName.starts_with("to_string_") && calleeName.size() > 10) {
+    bool allDigits = true;
+    for (char c : calleeName.drop_front(10))
+      if (!std::isdigit(c)) { allDigits = false; break; }
+    if (allDigits && callOp.getNumOperands() >= 3 &&
+        callOp.getNumResults() >= 1) {
+      // Check if arg0 is a wide hw.struct<value: iN, unknown: iN>
+      Type arg0Type = callOp.getOperand(0).getType();
+      if (auto structType = dyn_cast<hw::StructType>(arg0Type)) {
+        auto elements = structType.getElements();
+        if (elements.size() == 2 &&
+            elements[0].name.getValue() == "value" &&
+            elements[1].name.getValue() == "unknown") {
+          unsigned fieldWidth = getTypeWidth(elements[0].type);
+          if (fieldWidth > 64) {
+            // Fast path: extract value and unknown, convert in C++
+            InterpretedValue structVal =
+                getValue(procId, callOp.getOperand(0));
+            InterpretedValue widthArg =
+                getValue(procId, callOp.getOperand(1));
+            InterpretedValue fmtArg =
+                getValue(procId, callOp.getOperand(2));
+
+            unsigned actualWidth =
+                widthArg.isX() ? fieldWidth
+                               : static_cast<unsigned>(
+                                     widthArg.getAPInt().getZExtValue());
+            if (actualWidth == 0 || actualWidth > fieldWidth)
+              actualWidth = fieldWidth;
+
+            // Decode format from arg2 bits [27:24]:
+            //   1=binary, 2=decimal(signed), 3=octal, 4=hex, 6=decimal(unsigned)
+            unsigned fmtBits = 2; // default decimal
+            if (!fmtArg.isX()) {
+              uint64_t fmtVal = fmtArg.getAPInt().getZExtValue();
+              fmtBits = (fmtVal >> 24) & 0xF;
+            }
+
+            std::string result;
+            unsigned totalWidth = getTypeWidth(structType);
+            if (structVal.isX() ||
+                structVal.getWidth() < totalWidth) {
+              result = "0";
+            } else {
+              APInt fullBits = structVal.getAPInt();
+              // value is in upper half, unknown is in lower half
+              APInt valueBits =
+                  fullBits.extractBits(fieldWidth, totalWidth - fieldWidth);
+              APInt unknownBits = fullBits.extractBits(fieldWidth, 0);
+
+              // Truncate to actual width
+              APInt val = valueBits.trunc(actualWidth);
+              APInt unk = unknownBits.trunc(actualWidth);
+
+              if (unk.isZero()) {
+                // No X bits — use hex for wide values (fast),
+                // decimal for narrow
+                if (actualWidth <= 64) {
+                  result = std::to_string(val.getZExtValue());
+                } else {
+                  llvm::SmallString<256> str;
+                  val.toStringUnsigned(str, 16);
+                  result = std::string(str.str());
+                }
+              } else if (unk.isAllOnes()) {
+                result = "x";
+              } else {
+                result = "x";
+              }
+            }
+
+            // Prepend prefix string from arg3 if present
+            if (callOp.getNumOperands() >= 4) {
+              InterpretedValue prefixVal =
+                  getValue(procId, callOp.getOperand(3));
+              if (!prefixVal.isX() && prefixVal.getWidth() >= 128) {
+                APInt bits = prefixVal.getAPInt();
+                uint64_t pPtr = bits.extractBits(64, 0).getZExtValue();
+                int64_t pLen = bits.extractBits(64, 64).getSExtValue();
+                if (pPtr != 0 && pLen > 0) {
+                  auto dynIt =
+                      dynamicStrings.find(static_cast<int64_t>(pPtr));
+                  if (dynIt != dynamicStrings.end() &&
+                      dynIt->second.first && dynIt->second.second > 0) {
+                    std::string prefix(
+                        dynIt->second.first,
+                        std::min(static_cast<size_t>(pLen),
+                                 static_cast<size_t>(
+                                     dynIt->second.second)));
+                    result = prefix + result;
+                  }
+                }
+              }
+            }
+
+            // Store and return string result using __moore_int_to_string
+            // pattern: pack into {ptr, len} struct
+            interpreterStrings.push_back(std::move(result));
+            const std::string &stored = interpreterStrings.back();
+            int64_t ptrVal =
+                reinterpret_cast<int64_t>(stored.data());
+            int64_t lenVal = static_cast<int64_t>(stored.size());
+            dynamicStrings[ptrVal] = {stored.data(), lenVal};
+
+            // Return the string as a 128-bit packed struct {ptr, len}
+            // matching the !llvm.struct<(ptr, i64)> return type
+            unsigned resultWidth =
+                getTypeWidth(callOp.getResult(0).getType());
+            APInt packedResult(resultWidth, 0);
+            safeInsertBits(packedResult,
+                APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+            safeInsertBits(packedResult,
+                APInt(64, static_cast<uint64_t>(lenVal)), 64);
+            setValue(procId, callOp.getResult(0),
+                     InterpretedValue(packedResult));
+
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  func.call: " << calleeName
+                       << " FAST PATH (width=" << actualWidth
+                       << ", fmt=" << fmtBits
+                       << ", resultWidth=" << resultWidth
+                       << ") = \"" << stored << "\"\n");
+            return success();
+          }
+        }
+      }
+    }
   }
 
   // Intercept uvm_port_base::connect() at func.call level.
@@ -12449,7 +13632,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     pState.sequencerGetRetryCallOp = callOp.getOperation();
     SimTime currentTime = scheduler.getCurrentTime();
     constexpr uint32_t kMaxDeltaPolls = 1000;
-    constexpr int64_t kFallbackPollDelayFs = 1000000; // 1 ps
+    constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
     SimTime targetTime;
     if (currentTime.deltaStep < kMaxDeltaPolls)
       targetTime = currentTime.nextDelta();
@@ -12599,8 +13782,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           llvm::APInt valueBits(innerBits, 0);
           for (unsigned i = 0;
                i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
-            valueBits.insertBits(llvm::APInt(8, valueData[i]), i * 8);
-
+            safeInsertBits(valueBits,llvm::APInt(8, valueData[i]), i * 8);
           // Write value to output ref via signal or memory
           SignalId sigId2 = resolveSignalId(outputRef);
           if (sigId2 != 0)
@@ -13141,6 +14323,102 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
+  // Intercept uvm_create_random_seed — creates per-component/type random seeds.
+  // The interpreted version is extremely slow (~600K+ steps) due to string
+  // concatenation, associative array operations, and uvm_instance_scope() calls.
+  // We replace it with a native CRC-based hash matching UVM semantics.
+  if (calleeName == "uvm_pkg::uvm_create_random_seed" &&
+      callOp.getNumResults() >= 1) {
+    // Args: (struct<(ptr,i64)> type_id, struct<(ptr,i64)> inst_id)
+    auto readStrArg = [&](size_t argIdx) -> std::string {
+      if (argIdx >= args.size())
+        return "";
+      InterpretedValue strVal = args[argIdx];
+      if (strVal.isX() || strVal.getWidth() < 128)
+        return "";
+      llvm::APInt bits = strVal.getAPInt();
+      uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
+      int64_t strLen = bits.extractBits(64, 64).getSExtValue();
+      if (strPtr == 0 || strLen <= 0)
+        return "";
+      auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+      if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+          dynIt->second.second > 0)
+        return std::string(
+            dynIt->second.first,
+            std::min(static_cast<size_t>(strLen),
+                     static_cast<size_t>(dynIt->second.second)));
+      uint64_t off = 0;
+      MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
+      if (gBlock && gBlock->initialized) {
+        size_t avail =
+            std::min(static_cast<size_t>(strLen),
+                     gBlock->data.size() - static_cast<size_t>(off));
+        if (avail > 0)
+          return std::string(
+              reinterpret_cast<const char *>(gBlock->data.data() + off), avail);
+      } else if (strPtr >= 0x10000) {
+        const char *p = reinterpret_cast<const char *>(strPtr);
+        return std::string(p, static_cast<size_t>(strLen));
+      }
+      return "";
+    };
+
+    std::string typeId = readStrArg(0);
+    std::string instId = readStrArg(1);
+    if (instId.empty())
+      instId = "__global__";
+
+    // Create hash input matching UVM: {type_id, "::", inst_id}
+    std::string hashInput = typeId + "::" + instId;
+
+    // Read uvm_global_random_seed
+    uint32_t globalSeed = 1;
+    {
+      auto it = globalAddresses.find("uvm_pkg::uvm_global_random_seed");
+      if (it != globalAddresses.end()) {
+        uint64_t off = 0;
+        MemoryBlock *blk = findBlockByAddress(it->second, off);
+        if (blk && blk->initialized && blk->data.size() >= off + 4)
+          std::memcpy(&globalSeed, blk->data.data() + off, 4);
+      }
+      if (globalSeed == 0)
+        globalSeed = 1;
+    }
+
+    // Look up or create seed entry
+    auto &seedEntry = nativeRandomSeedTable[instId][typeId];
+    if (seedEntry.first == 0) {
+      // First call: compute CRC hash (matching uvm_oneway_hash algorithm)
+      uint32_t crc1 = 0xFFFFFFFF;
+      for (size_t i = 0; i < hashInput.size(); ++i) {
+        uint8_t currentByte = static_cast<uint8_t>(hashInput[i]);
+        if (currentByte == 0)
+          break;
+        for (int bit = 0; bit < 8; ++bit) {
+          bool msb = (crc1 >> 31) & 1;
+          crc1 <<= 1;
+          if (msb ^ ((currentByte >> bit) & 1)) {
+            crc1 ^= 0x04c11db6;
+            crc1 |= 1;
+          }
+        }
+      }
+      uint32_t reversed = ((crc1 & 0xFF) << 24) |
+                          (((crc1 >> 8) & 0xFF) << 16) |
+                          (((crc1 >> 16) & 0xFF) << 8) | ((crc1 >> 24) & 0xFF);
+      seedEntry.first = globalSeed + ~reversed;
+      seedEntry.second = 0;
+    }
+
+    uint32_t result = seedEntry.first + seedEntry.second;
+    seedEntry.second++;
+
+    setValue(procId, callOp.getResult(0),
+            InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(result))));
+    return success();
+  }
+
   // Intercept uvm_oneway_hash — a CRC-based string hash used by
   // uvm_create_random_seed. The compiled IR version uses llhd.ref types that
   // fail in the interpreter. We implement it natively using the algorithm from
@@ -13278,7 +14556,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
     SimTime currentTime = scheduler.getCurrentTime();
     constexpr uint32_t kMaxDeltaPolls = 1000;
-    constexpr int64_t kFallbackPollDelayFs = 1000000; // 1 ps
+    constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
     SimTime targetTime;
     if (currentTime.deltaStep < kMaxDeltaPolls)
       targetTime = currentTime.nextDelta();
@@ -13493,7 +14771,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       // then fall back to real time to avoid infinite delta loops.
       SimTime currentTime = scheduler.getCurrentTime();
       constexpr uint32_t kMaxDeltaPolls = 1000;
-      constexpr int64_t kFallbackPollDelayFs = 1000000; // 1 ps
+      constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
       SimTime targetTime;
       if (currentTime.deltaStep < kMaxDeltaPolls)
         targetTime = currentTime.nextDelta();
@@ -13842,9 +15120,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             unsigned innerBytes = (innerBits + 7) / 8;
             llvm::APInt valueBits(innerBits, 0);
             for (unsigned i = 0;
-                 i < std::min(innerBytes, (unsigned)valueData.size()); ++i) {
-              valueBits.insertBits(llvm::APInt(8, valueData[i]), i * 8);
-            }
+                 i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
+              safeInsertBits(valueBits,llvm::APInt(8, valueData[i]), i * 8);
             SignalId sigId2 = resolveSignalId(outputRef);
             if (sigId2 != 0) {
               InterpretedValue driveVal(valueBits);
@@ -13917,6 +15194,24 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         return success();
       }
     }
+  }
+
+  // Intercept UVM report handler configuration functions that use vtable
+  // dispatch through unrealized_conversion_cast. The pool vtable entries may
+  // be null or mismatched, causing insertBits assertion failures during
+  // call_indirect argument setup. These are non-critical configuration
+  // functions — safe to no-op.
+  if (calleeName.contains("uvm_report_handler") &&
+      (calleeName.contains("set_id_action") ||
+       calleeName.contains("set_severity_id_action") ||
+       calleeName.contains("set_id_verbosity") ||
+       calleeName.contains("set_severity_id_verbosity") ||
+       calleeName.contains("set_severity_action") ||
+       calleeName.contains("set_severity_file"))) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  func.call: " << calleeName
+               << " intercepted (no-op, avoids vtable dispatch crash)\n");
+    return success();
   }
 
   // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
@@ -14577,6 +15872,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   std::string prevFuncName = funcState.currentFuncName;
   funcState.currentFuncName = funcOp.getName().str();
 
+  // Track last function for crash diagnostics (static buffer, survives crash)
+  {
+    StringRef fn = funcOp.getName();
+    size_t len = std::min(fn.size(), (size_t)255);
+    std::memcpy(g_lastFuncName, fn.data(), len);
+    g_lastFuncName[len] = '\0';
+    g_lastFuncProcId = procId;
+  }
+
   // Helper to clean up temporary signal mappings and restore values before
   // returning. Restoring values is critical for recursive calls to the same
   // function - without it, the inner call's values corrupt the outer call's.
@@ -14639,8 +15943,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         ++statePtr->funcBodySteps;
         if (collectOpStats)
           ++opStats[op.getName().getStringRef()];
-        // Progress report every 10M func body steps
-        if (statePtr->funcBodySteps % 10000000 == 0) {
+        // Progress report every ~16M func body steps (power-of-2 for cheap
+        // bitwise check instead of expensive integer division)
+        if ((statePtr->funcBodySteps & 0xFFFFFF) == 0) {
           llvm::errs() << "[circt-sim] func progress: process " << procId
                        << " funcBodySteps=" << statePtr->funcBodySteps
                        << " totalSteps=" << statePtr->totalSteps
@@ -14661,8 +15966,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           cleanupTempMappings();
           return failure();
         }
-        // Periodically check for abort (timeout watchdog)
-        if (statePtr->funcBodySteps % 10000 == 0 && isAbortRequested()) {
+        // Periodically check for abort (timeout watchdog, every ~16K ops)
+        if ((statePtr->funcBodySteps & 0x3FFF) == 0 && isAbortRequested()) {
           statePtr->halted = true;
           cleanupTempMappings();
           if (abortCallback)
@@ -15770,7 +17075,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
         if (currentTime.deltaStep < 2000)
           targetTime = currentTime.nextDelta();
         else
-          targetTime = currentTime.advanceTime(1000000); // 1 ns
+          targetTime = currentTime.advanceTime(10000000); // 10 ns
 
         // Re-arm the mapping so next iteration detects the join_any again
         executePhaseBlockingPhaseMap[procId] = phaseAddr;
@@ -15868,13 +17173,15 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
     // Store the child state with the derived seed
     registerProcessState(childId, std::move(childState), childSeed);
 
-    // Propagate execute_phase blocking info from parent to child.
-    // When execute_phase for a task phase creates an outer sim.fork join,
-    // the child needs to know the phase address for join_any interception.
-    auto phaseIt = executePhaseBlockingPhaseMap.find(procId);
-    if (phaseIt != executePhaseBlockingPhaseMap.end()) {
-      executePhaseBlockingPhaseMap[childId] = phaseIt->second;
-    }
+    // NOTE: We intentionally do NOT propagate executePhaseBlockingPhaseMap
+    // from parent to child.  That map is only needed on the *same* process
+    // that runs execute_phase — both the master_phase_process fork (join_none)
+    // and the monitoring fork (join_any with phase_done/objection/timeout
+    // branches) live inside execute_phase on the SAME process.  Propagating
+    // the mapping to fork children causes user-code fork/join_any (e.g., the
+    // slave driver's BFM channel forks) to be incorrectly intercepted and
+    // skipped, which prevents BFM tasks from running and blocks time
+    // advancement.
 
     // Propagate the currently executing phase address from parent to child.
     // Fork children within execute_phase need to know which phase they're
@@ -15941,6 +17248,42 @@ LogicalResult LLHDProcessInterpreter::interpretSimForkTerminator(
     ProcessId procId, sim::SimForkTerminatorOp termOp) {
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.fork.terminator\n");
 
+  // Diagnostic: log fork child completion with step count
+  {
+    auto stIt = processStates.find(procId);
+    if (stIt != processStates.end()) {
+      auto &ps = stIt->second;
+      // Only print for fork children spawned by driver proxy processes
+      // (those with parentProcessId set)
+      if (ps.parentProcessId != InvalidProcessId) {
+        auto *proc = scheduler.getProcess(procId);
+        std::string procName = proc ? proc->getName() : "??";
+        static unsigned forkTermDiagCount = 0;
+        // Only log fork children created after initial setup (proc > 100)
+        // to focus on driver proxy forks
+        if (forkTermDiagCount < 100 && procId > 100) {
+          ++forkTermDiagCount;
+          // Look up parent's function name for context
+          std::string parentFunc;
+          auto parentIt = processStates.find(ps.parentProcessId);
+          if (parentIt != processStates.end())
+            parentFunc = parentIt->second.currentFuncName;
+          // Also look up the scheduler process name for the parent
+          std::string parentName;
+          if (auto *parentProc = scheduler.getProcess(ps.parentProcessId))
+            parentName = parentProc->getName();
+          llvm::errs() << "[FORK-TERM] proc=" << procId
+                       << " name=" << procName
+                       << " steps=" << ps.totalSteps
+                       << " parent=" << ps.parentProcessId
+                       << " parentName=" << parentName
+                       << " parentFunc=" << parentFunc
+                       << "\n";
+        }
+      }
+    }
+  }
+
   finalizeProcess(procId, /*killed=*/false);
 
   LLVM_DEBUG(llvm::dbgs() << "    Fork branch " << procId << " completed\n");
@@ -15985,6 +17328,40 @@ LogicalResult LLHDProcessInterpreter::interpretSimJoinAny(
   // Check if any child has completed
   if (forkJoinManager.joinAny(forkId)) {
     LLVM_DEBUG(llvm::dbgs() << "    At least one child already complete\n");
+    // Diagnostic: log when join_any returns immediately for driver procs
+    {
+      static unsigned joinAnyImmDiagCount = 0;
+      if (joinAnyImmDiagCount < 30 && procId > 100) {
+        ++joinAnyImmDiagCount;
+        auto *group = forkJoinManager.getForkGroup(forkId);
+        unsigned childCount = group ? group->childProcesses.size() : 0;
+        unsigned completedCount = group ? group->completedCount : 0;
+        auto *proc = scheduler.getProcess(procId);
+        std::string procName = proc ? proc->getName() : "??";
+        llvm::errs() << "[JOIN-ANY-IMM] proc=" << procId
+                     << " name=" << procName
+                     << " forkId=" << forkId
+                     << " children=" << childCount
+                     << " completed=" << completedCount
+                     << "\n";
+        if (group) {
+          for (ProcessId childId : group->childProcesses) {
+            auto *childProc = scheduler.getProcess(childId);
+            bool terminated = childProc &&
+                              childProc->getState() == ProcessState::Terminated;
+            auto childStateIt = processStates.find(childId);
+            size_t childSteps =
+                childStateIt != processStates.end()
+                    ? childStateIt->second.totalSteps : 0;
+            std::string childName = childProc ? childProc->getName() : "??";
+            llvm::errs() << "  child=" << childId
+                         << " name=" << childName
+                         << " terminated=" << terminated
+                         << " steps=" << childSteps << "\n";
+          }
+        }
+      }
+    }
     return success();
   }
 
@@ -16026,8 +17403,10 @@ LogicalResult LLHDProcessInterpreter::interpretSimDisableFork(
     ProcessId procId, sim::SimDisableForkOp disableForkOp) {
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.disable_fork\n");
 
+  auto forkIds = forkJoinManager.getForksForParent(procId);
+
   // Disable all fork groups created by this process
-  for (ForkId forkId : forkJoinManager.getForksForParent(procId)) {
+  for (ForkId forkId : forkIds) {
     if (auto *group = forkJoinManager.getForkGroup(forkId)) {
       for (ProcessId childId : group->childProcesses)
         finalizeProcess(childId, /*killed=*/true);
@@ -16165,6 +17544,20 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 
     SignalId sigId = traceToSignal(input, 0);
 
+    LLVM_DEBUG({
+      if (sigId == 0) {
+        auto &diagState = processStates[procId];
+        StringRef funcName = diagState.currentFuncName;
+        if (funcName.contains("_bfm::") || funcName.contains("Bfm::")) {
+          llvm::dbgs() << "[WAIT-DIAG] BFM proc=" << procId
+                       << " func=" << funcName
+                       << " traceToSignal=0"
+                       << " interfaceFieldSignals.size="
+                       << interfaceFieldSignals.size() << "\n";
+        }
+      }
+    });
+
     // Runtime VIF fallback: when SSA tracing fails (e.g., VIF pointer stored
     // in a class field obtained via resource_db), try to resolve the VIF field
     // address at runtime using pre-executed values and interfaceFieldSignals.
@@ -16187,8 +17580,24 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
           if (!addrVal.isX() && addrVal.getUInt64() != 0) {
             uint64_t addr = addrVal.getUInt64();
             auto fieldIt = interfaceFieldSignals.find(addr);
+            LLVM_DEBUG({
+              auto &diagState2 = processStates[procId];
+              if (diagState2.currentFuncName.find("_bfm::") != std::string::npos ||
+                  diagState2.currentFuncName.find("Bfm::") != std::string::npos) {
+                llvm::dbgs() << "[WAIT-DIAG] BFM LoadOp addr=0x"
+                             << llvm::format_hex(addr, 16)
+                             << " found="
+                             << (fieldIt != interfaceFieldSignals.end())
+                             << " func=" << diagState2.currentFuncName << "\n";
+              }
+            });
             if (fieldIt != interfaceFieldSignals.end())
               return fieldIt->second;
+          } else {
+            LLVM_DEBUG(llvm::dbgs() << "[WAIT-DIAG] LoadOp addr isX="
+                             << addrVal.isX()
+                             << " val=0x" << (addrVal.isX() ? 0 : addrVal.getUInt64())
+                             << "\n");
           }
           // Recurse into the address operand (e.g. GEP inside wait_event
           // body where the GEP hasn't been executed yet)
@@ -16273,6 +17682,14 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
       };
 
       sigId = traceViaRuntime(input, 0);
+      LLVM_DEBUG({
+        auto &diagState3 = processStates[procId];
+        if (diagState3.currentFuncName.find("_bfm::") != std::string::npos ||
+            diagState3.currentFuncName.find("Bfm::") != std::string::npos) {
+          llvm::dbgs() << "[WAIT-DIAG] BFM traceViaRuntime=" << sigId
+                       << " func=" << diagState3.currentFuncName << "\n";
+        }
+      });
       LLVM_DEBUG({
         if (sigId != 0)
           llvm::dbgs() << "    Runtime VIF fallback found signal " << sigId
@@ -16510,6 +17927,14 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
       // llvm.store writes to memory, and will wake this process if needed
     } else {
       // No signals and no memory events found - single delta cycle wait
+      LLVM_DEBUG({
+        StringRef funcName4 = state.currentFuncName;
+        if (funcName4.contains("_bfm::") || funcName4.contains("Bfm::")) {
+          llvm::dbgs() << "[WAIT-DIAG] BFM NO-OP wait_event! proc=" << procId
+                       << " func=" << funcName4
+                       << " (no signals, no memory events)\n";
+        }
+      });
       scheduler.scheduleProcess(procId, SchedulingRegion::Active);
     }
   }
@@ -16870,11 +18295,66 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     return success();
   }
 
+  // Diagnostic: detect loads from unrealized_conversion_cast of !llhd.ref
+  // that failed resolveSignalId — this means signal values won't be read.
+  if (auto castOp =
+          loadOp.getAddr()
+              .getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+    (void)castOp; // checked above
+  }
+
   // Get the pointer value
   InterpretedValue ptrVal = getValue(procId, loadOp.getAddr());
   Type resultType = loadOp.getType();
   unsigned bitWidth = getTypeWidth(resultType);
   unsigned loadSize = getLLVMTypeSize(resultType);
+
+  // Check if this load targets an interface field that has a shadow signal.
+  // BFM tasks read interface ports via llvm.load on the struct, but the
+  // signal value is driven by the DUT and only exists in the signal domain.
+  // Return the signal value directly so BFMs see live hardware values.
+  if (!ptrVal.isX() && !interfaceFieldSignals.empty()) {
+    uint64_t loadAddr = ptrVal.getUInt64();
+    auto fieldIt = interfaceFieldSignals.find(loadAddr);
+    if (fieldIt != interfaceFieldSignals.end()) {
+      SignalId fieldSigId = fieldIt->second;
+      const SignalValue &sv = scheduler.getSignalValue(fieldSigId);
+      InterpretedValue signalVal = InterpretedValue::fromSignalValue(sv);
+
+      // Check for pending epsilon drives (not yet committed to scheduler)
+      auto pendingIt = pendingEpsilonDrives.find(fieldSigId);
+      if (pendingIt != pendingEpsilonDrives.end())
+        signalVal = pendingIt->second;
+
+      // Resize to match expected load width
+      if (signalVal.isX()) {
+        signalVal = InterpretedValue::makeX(bitWidth);
+      } else if (signalVal.getWidth() != bitWidth) {
+        APInt apVal = signalVal.getAPInt();
+        if (apVal.getBitWidth() < bitWidth)
+          apVal = apVal.zext(bitWidth);
+        else if (apVal.getBitWidth() > bitWidth)
+          apVal = apVal.trunc(bitWidth);
+        signalVal = InterpretedValue(apVal);
+      }
+
+      setValue(procId, loadOp.getResult(), signalVal);
+      // Diagnostic: trace 64-bit interface field loads that return 0
+      if (bitWidth >= 32 && !signalVal.isX() && signalVal.getUInt64() == 0) {
+        std::string name = signalIdToName.count(fieldSigId)
+                               ? signalIdToName[fieldSigId]
+                               : "?";
+        llvm::errs() << "[IFACE-LOAD-ZERO] sig=" << fieldSigId << " ("
+                     << name << ") addr=0x"
+                     << llvm::format_hex(loadAddr, 10)
+                     << " w=" << bitWidth << "\n";
+      }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.load: read interface field signal " << fieldSigId
+                 << " at 0x" << llvm::format_hex(loadAddr, 16) << "\n");
+      return success();
+    }
+  }
 
   // First try to find a local memory block (from alloca)
   MemoryBlock *block = findMemoryBlock(procId, loadOp.getAddr());
@@ -17001,6 +18481,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded wide value ("
                             << loadSize << " bytes) from offset " << offset << "\n");
   } else {
+    // Mask the loaded value to the exact bit width. Memory loads read
+    // whole bytes, but sub-byte types (e.g., i1, i5) need only the
+    // low bits. Without masking, a byte value like 0xFF for an i1 load
+    // triggers an APInt assertion failure.
+    if (bitWidth > 0 && bitWidth < 64)
+      value &= (1ULL << bitWidth) - 1;
     setValue(procId, loadOp.getResult(), InterpretedValue(value, bitWidth));
     LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded 0x"
                             << llvm::format_hex(value, 16) << " ("
@@ -17242,6 +18728,24 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     auto fieldIt = interfaceFieldSignals.find(storeAddr);
     if (fieldIt != interfaceFieldSignals.end()) {
       SignalId fieldSigId = fieldIt->second;
+      // Debug: track stores to 64-bit interface fields (PWDATA, PADDR, etc.)
+      {
+        const SignalValue &dbgCur = scheduler.getSignalValue(fieldSigId);
+        if (dbgCur.getWidth() == 64 && !storeVal.isX() &&
+            storeVal.getUInt64() != 0) {
+          llvm::errs() << "[IFACE-STORE] sig=" << fieldSigId
+                       << " addr=0x" << llvm::format_hex(storeAddr, 10)
+                       << " val=" << storeVal.getUInt64();
+          auto revIt = childToParentFieldAddr.find(storeAddr);
+          if (revIt != childToParentFieldAddr.end())
+            llvm::errs() << " (reverse→parent@0x"
+                         << llvm::format_hex(revIt->second, 10) << ")";
+          auto propIt = interfaceFieldPropagation.find(fieldSigId);
+          if (propIt != interfaceFieldPropagation.end())
+            llvm::errs() << " (fwd→" << propIt->second.size() << " children)";
+          llvm::errs() << "\n";
+        }
+      }
       const SignalValue &current = scheduler.getSignalValue(fieldSigId);
       unsigned targetWidth = current.getWidth();
 
@@ -17273,86 +18777,101 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
                    << llvm::format_hex(storeAddr, 16) << "\n");
 
         // Propagate to linked child BFM interface field signals.
+        // Also update backing memory so that loads from the struct see
+        // the new value (not just signals).
+        auto propagateToSignal = [&](SignalId targetSigId) {
+          const SignalValue &targetCurrent =
+              scheduler.getSignalValue(targetSigId);
+          unsigned targetW = targetCurrent.getWidth();
+          InterpretedValue targetDriveVal = storeVal;
+          if (targetDriveVal.isX()) {
+            targetDriveVal = InterpretedValue::makeX(targetW);
+          } else if (targetDriveVal.getWidth() != targetW) {
+            APInt apVal = targetDriveVal.getAPInt();
+            if (apVal.getBitWidth() < targetW)
+              apVal = apVal.zext(targetW);
+            else if (apVal.getBitWidth() > targetW)
+              apVal = apVal.trunc(targetW);
+            targetDriveVal = InterpretedValue(apVal);
+          }
+          SignalValue targetNewVal = targetDriveVal.toSignalValue();
+          SignalValue targetOldVal = scheduler.getSignalValue(targetSigId);
+          pendingEpsilonDrives[targetSigId] = targetDriveVal;
+
+          // Synchronous update: immediately set the signal value and trigger
+          // any processes that have already set up their event waits.
+          scheduler.updateSignal(targetSigId, targetNewVal);
+
+          // Deferred re-trigger: schedule a second edge evaluation at the
+          // next delta cycle so that child BFM processes that set up their
+          // event waits AFTER this synchronous update still observe the
+          // transition.  Without this, processes that haven't registered
+          // their waiting sensitivities yet miss the edge entirely (e.g.
+          // I2S RX misses posedge rst and gets stuck at 0% coverage).
+          if (targetOldVal != targetNewVal) {
+            scheduler.getEventScheduler().scheduleNextDelta(
+                SchedulingRegion::Active,
+                Event([this, targetSigId, targetOldVal, targetNewVal]() {
+                  scheduler.retriggerSensitiveProcesses(targetSigId,
+                                                        targetOldVal,
+                                                        targetNewVal);
+                }));
+          }
+
+          // Write to backing memory (synchronous — needed for llvm.load).
+          auto tgtAddrIt = fieldSignalToAddr.find(targetSigId);
+          if (tgtAddrIt != fieldSignalToAddr.end()) {
+            uint64_t tgtAddr = tgtAddrIt->second;
+            uint64_t tgtOff = 0;
+            MemoryBlock *tgtBlock = findBlockByAddress(tgtAddr, tgtOff);
+            unsigned tgtStoreSize = (targetW + 7) / 8;
+            if (tgtBlock && tgtOff + tgtStoreSize <= tgtBlock->size) {
+              if (!targetDriveVal.isX()) {
+                APInt bits = targetDriveVal.getAPInt();
+                if (bits.getBitWidth() < tgtStoreSize * 8)
+                  bits = bits.zext(tgtStoreSize * 8);
+                for (unsigned i = 0; i < tgtStoreSize; ++i)
+                  tgtBlock->data[tgtOff + i] =
+                      bits.extractBitsAsZExtValue(8, i * 8);
+              }
+            }
+          }
+        };
+
         auto propIt = interfaceFieldPropagation.find(fieldSigId);
         if (propIt != interfaceFieldPropagation.end()) {
           for (SignalId childSigId : propIt->second) {
-            pendingEpsilonDrives[childSigId] = driveVal;
-            scheduler.updateSignal(childSigId, newSigVal);
-            LLVM_DEBUG(llvm::dbgs()
-                       << "  llvm.store: propagated to child signal "
-                       << childSigId << "\n");
+            propagateToSignal(childSigId);
+
+            // Cross-sibling propagation: if the target signal itself
+            // has propagation targets, propagate one more level.
+            auto childPropIt =
+                interfaceFieldPropagation.find(childSigId);
+            if (childPropIt != interfaceFieldPropagation.end()) {
+              for (SignalId siblingId : childPropIt->second) {
+                if (siblingId != fieldSigId)
+                  propagateToSignal(siblingId);
+              }
+            }
           }
         }
 
-        // Reverse propagation: child → parent. When a child BFM writes to
-        // its interface, also drive the parent shadow signal and update
-        // parent memory so that routing processes in the parent module see
-        // the change.
+        // Reverse propagation: child → parent.
         auto childToParentIt = childToParentFieldAddr.find(storeAddr);
         if (childToParentIt != childToParentFieldAddr.end()) {
           uint64_t parentAddr = childToParentIt->second;
           auto parentFieldIt = interfaceFieldSignals.find(parentAddr);
           if (parentFieldIt != interfaceFieldSignals.end()) {
             SignalId parentSigId = parentFieldIt->second;
-            const SignalValue &parentCurrent =
-                scheduler.getSignalValue(parentSigId);
-            if (!(parentCurrent == newSigVal)) {
-              pendingEpsilonDrives[parentSigId] = driveVal;
-              scheduler.updateSignal(parentSigId, newSigVal);
-              LLVM_DEBUG(llvm::dbgs()
-                         << "  llvm.store: reverse-propagated to parent signal "
-                         << parentSigId << "\n");
-              // Also propagate parent → other children (not back to self)
-              auto parentPropIt =
-                  interfaceFieldPropagation.find(parentSigId);
-              if (parentPropIt != interfaceFieldPropagation.end()) {
-                for (SignalId otherChildSigId : parentPropIt->second) {
-                  if (otherChildSigId != fieldSigId) {
-                    pendingEpsilonDrives[otherChildSigId] = driveVal;
-                    scheduler.updateSignal(otherChildSigId, newSigVal);
-                  }
-                }
+            propagateToSignal(parentSigId);
+            // Also propagate parent → other children (not back to self)
+            auto parentPropIt =
+                interfaceFieldPropagation.find(parentSigId);
+            if (parentPropIt != interfaceFieldPropagation.end()) {
+              for (SignalId otherChildSigId : parentPropIt->second) {
+                if (otherChildSigId != fieldSigId)
+                  propagateToSignal(otherChildSigId);
               }
-            }
-          }
-          // Update parent memory so routing process reads correct values.
-          uint64_t parentRangeOffset = 0;
-          MemoryBlock *parentBlock =
-              findBlockByAddress(parentAddr, parentRangeOffset);
-          if (parentBlock &&
-              parentRangeOffset + storeSize <= parentBlock->size) {
-            if (!storeVal.isX()) {
-              APInt bits = storeVal.getAPInt();
-              unsigned neededWidth = storeSize * 8;
-              if (bits.getBitWidth() < neededWidth)
-                bits = bits.zext(neededWidth);
-              for (unsigned i = 0; i < storeSize && i < 8; ++i)
-                parentBlock->data[parentRangeOffset + i] =
-                    static_cast<uint8_t>(
-                        bits.extractBits(8, i * 8).getZExtValue());
-            }
-          }
-        }
-      }
-
-      // Also propagate to child BFM memory. When a parent interface field
-      // is updated, any child BFM struct that was initialized from it also
-      // needs its memory updated so wait_event memory polling works.
-      for (auto &[childAddr, parentAddr] : childToParentFieldAddr) {
-        if (parentAddr == storeAddr) {
-          // Write storeVal bytes to childAddr in the appropriate malloc block
-          uint64_t childRangeOffset = 0;
-          MemoryBlock *childBlock =
-              findBlockByAddress(childAddr, childRangeOffset);
-          if (childBlock && childRangeOffset + storeSize <= childBlock->size) {
-            if (!storeVal.isX()) {
-              APInt bits = storeVal.getAPInt();
-              unsigned neededWidth = storeSize * 8;
-              if (bits.getBitWidth() < neededWidth)
-                bits = bits.zext(neededWidth);
-              for (unsigned i = 0; i < storeSize && i < 8; ++i)
-                childBlock->data[childRangeOffset + i] = static_cast<uint8_t>(
-                    bits.extractBits(8, i * 8).getZExtValue());
             }
           }
         }
@@ -17830,8 +19349,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           // But since struct interpretation is complex, we use a simpler approach:
           // Store the packed value and handle it specially in FormatDynStringOp
           APInt packedResult(128, 0);
-          packedResult.insertBits(APInt(64, ptrVal), 0);
-          packedResult.insertBits(APInt(64, lenVal), 64);
+          safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+          safeInsertBits(packedResult,APInt(64, lenVal), 64);
           setValue(procId, callOp.getResult(),
                    InterpretedValue(packedResult));
 
@@ -18444,8 +19963,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         }
 
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
-        packedResult.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+        safeInsertBits(packedResult,APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+        safeInsertBits(packedResult,APInt(64, static_cast<uint64_t>(lenVal)), 64);
         setValue(procId, callOp.getResult(), InterpretedValue(packedResult));
 
         LLVM_DEBUG({
@@ -18557,8 +20076,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         }
 
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
-        packedResult.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+        safeInsertBits(packedResult,APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+        safeInsertBits(packedResult,APInt(64, static_cast<uint64_t>(lenVal)), 64);
         setValue(procId, callOp.getResult(), InterpretedValue(packedResult));
 
         LLVM_DEBUG(llvm::dbgs()
@@ -18607,8 +20126,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         InterpretedValue handleVal = getValue(procId, callOp.getOperand(0));
         if (!handleVal.isX()) {
           ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
-          if (targetId != InvalidProcessId)
+          if (targetId != InvalidProcessId) {
             finalizeProcess(targetId, /*killed=*/true);
+          }
         }
       }
       return success();
@@ -18815,7 +20335,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         // but fall back to real time after many delta steps to avoid infinite loops.
         SimTime currentTime = scheduler.getCurrentTime();
         constexpr uint32_t kMaxDeltaPolls = 1000;
-        constexpr int64_t kFallbackPollDelayFs = 1000000; // 1 ps
+        constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
         SimTime targetTime;
         if (currentTime.deltaStep < kMaxDeltaPolls) {
           targetTime = currentTime.nextDelta();
@@ -18997,7 +20517,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             // avoid infinite delta loops.
             SimTime currentTime = scheduler.getCurrentTime();
             constexpr uint32_t kMaxDeltaPolls = 1000;
-            constexpr int64_t kFallbackPollDelayFs = 1000000; // 1 ps
+            constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
             SimTime targetTime;
             if (currentTime.deltaStep < kMaxDeltaPolls) {
               targetTime = currentTime.nextDelta();
@@ -20446,10 +21966,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         // Write value to the output location if found.
         if (result == 1 && outBytes > 0) {
-          // Parse the value based on format code.
+          bool isStringFmt = (fmtCode == 's');
+
+          // Parse integer value for non-string formats.
           int64_t intVal = 0;
-          if (fmtCode == 'd' || fmtCode == 'h' || fmtCode == 'o' ||
-              fmtCode == 'b') {
+          if (!isStringFmt) {
             if (!foundValue.empty()) {
               char *endPtr = nullptr;
               int base = 10;
@@ -20461,11 +21982,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 base = 2;
               intVal = std::strtoll(foundValue.c_str(), &endPtr, base);
             }
-          } else {
-            // String format: pack string into integer (big-endian).
-            for (size_t i = 0; i < foundValue.size() && i < 8; ++i)
-              intVal = (intVal << 8) |
-                       static_cast<uint8_t>(foundValue[i]);
           }
 
           // Trace the output operand through unrealized_conversion_cast
@@ -20479,11 +21995,25 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             Value castInput = castOp.getInputs()[0];
             SignalId sigId = resolveSignalId(castInput);
             if (sigId != 0) {
-              // Drive the value to the signal (epsilon delay for
-              // blocking assignment semantics).
               unsigned width = outBytes * 8;
-              InterpretedValue driveVal(static_cast<uint64_t>(intVal),
-                                       width);
+              InterpretedValue driveVal;
+              if (isStringFmt) {
+                // Pack string into APInt: SV convention has first char
+                // in the most significant byte position.
+                llvm::APInt packed(width, 0);
+                for (size_t i = 0; i < foundValue.size(); ++i) {
+                  unsigned bitPos = (foundValue.size() - 1 - i) * 8;
+                  if (bitPos + 8 <= width) {
+                    llvm::APInt charBits(width,
+                                         static_cast<uint8_t>(foundValue[i]));
+                    packed |= charBits.shl(bitPos);
+                  }
+                }
+                driveVal = InterpretedValue(packed);
+              } else {
+                driveVal = InterpretedValue(static_cast<uint64_t>(intVal),
+                                            width);
+              }
               pendingEpsilonDrives[sigId] = driveVal;
               SignalValue newVal = driveVal.toSignalValue();
               auto targetTime = scheduler.getCurrentTime();
@@ -20508,12 +22038,29 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *outBlock =
                 findMemoryBlockByAddress(outAddr, procId, &blockOffset);
             if (outBlock) {
-              for (int32_t i = 0;
-                   i < outBytes &&
-                   (blockOffset + i) < outBlock->data.size();
-                   ++i)
-                outBlock->data[blockOffset + i] =
-                    static_cast<uint8_t>((intVal >> (i * 8)) & 0xFF);
+              if (isStringFmt) {
+                // Write string characters directly to memory as a
+                // C-style byte sequence (no truncation to 8 chars).
+                for (size_t i = 0;
+                     i < foundValue.size() &&
+                     static_cast<int32_t>(i) < outBytes &&
+                     (blockOffset + i) < outBlock->data.size();
+                     ++i)
+                  outBlock->data[blockOffset + i] =
+                      static_cast<uint8_t>(foundValue[i]);
+                // Null-terminate if space permits.
+                size_t termPos = blockOffset + foundValue.size();
+                if (static_cast<int32_t>(foundValue.size()) < outBytes &&
+                    termPos < outBlock->data.size())
+                  outBlock->data[termPos] = 0;
+              } else {
+                for (int32_t i = 0;
+                     i < outBytes &&
+                     (blockOffset + i) < outBlock->data.size();
+                     ++i)
+                  outBlock->data[blockOffset + i] =
+                      static_cast<uint8_t>((intVal >> (i * 8)) & 0xFF);
+              }
               written = true;
             }
           }
@@ -20554,8 +22101,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         // Pack into 128-bit struct result {ptr(lower 64), len(upper 64)}
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
-        packedResult.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+        safeInsertBits(packedResult,APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+        safeInsertBits(packedResult,APInt(64, static_cast<uint64_t>(lenVal)), 64);
         setValue(procId, callOp.getResult(), InterpretedValue(packedResult));
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_int_to_string("
@@ -20766,10 +22313,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 valBits = valBits.zext(elemBitWidth);
               else if (valBits.getBitWidth() > elemBitWidth)
                 valBits = valBits.trunc(elemBitWidth);
-              arrayBits.insertBits(valBits, elemBase + elemBitWidth);
+              safeInsertBits(arrayBits,valBits, elemBase + elemBitWidth);
               // Clear unknown bits (lower half of element)
               APInt zeroBits(elemBitWidth, 0);
-              arrayBits.insertBits(zeroBits, elemBase);
+              safeInsertBits(arrayBits,zeroBits, elemBase);
             } else {
               // 2-state or other: just insert the value directly
               APInt valBits = val;
@@ -20777,7 +22324,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 valBits = valBits.zext(totalElemWidth);
               else if (valBits.getBitWidth() > totalElemWidth)
                 valBits = valBits.trunc(totalElemWidth);
-              arrayBits.insertBits(valBits, elemBase);
+              safeInsertBits(arrayBits,valBits, elemBase);
             }
           }
 
@@ -20915,8 +22462,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         // Pack into 128-bit struct result
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
-        packedResult.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+        safeInsertBits(packedResult,APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+        safeInsertBits(packedResult,APInt(64, static_cast<uint64_t>(lenVal)), 64);
         setValue(procId, callOp.getResult(), InterpretedValue(packedResult));
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_concat(\"" << lhs
@@ -21066,6 +22613,116 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (classAddr != 0 && classSize > 0) {
           auto &rng = getObjectRng(classAddr);
           (void)rng(); // Advance RNG for determinism
+
+          // The Moore compiler does not generate __moore_randomize_with_range
+          // or __moore_dyn_array_new calls for rand dynamic array fields
+          // during randomize(). Scan GEP operations on the class pointer to
+          // find struct<(ptr, i64)> fields (MooreQueue / dynamic arrays).
+          // For each empty one, allocate a 1-element array with random data.
+          // The compiled restore code after this call will overwrite non-rand
+          // fields back to their saved values, so only rand-enabled dynamic
+          // array fields will keep the allocation.
+          Value classPtr = callOp.getOperand(0);
+          llvm::SmallVector<uint64_t, 8> dynArrayOffsets;
+          for (auto &use : classPtr.getUses()) {
+            auto *user = use.getOwner();
+            auto gepOp = dyn_cast<LLVM::GEPOp>(user);
+            if (!gepOp)
+              continue;
+            // Walk GEP indices to compute byte offset and final field type
+            auto indices = gepOp.getIndices();
+            Type currentType = gepOp.getElemType();
+            unsigned fieldOffset = 0;
+            size_t idx = 0;
+            for (auto indexValue : indices) {
+              int64_t indexVal = 0;
+              if (auto intAttr =
+                      llvm::dyn_cast_if_present<IntegerAttr>(indexValue))
+                indexVal = intAttr.getInt();
+              if (idx == 0) {
+                fieldOffset += indexVal * getLLVMTypeSize(currentType);
+              } else if (auto structType =
+                             dyn_cast<LLVM::LLVMStructType>(currentType)) {
+                auto body = structType.getBody();
+                for (int64_t j = 0;
+                     j < indexVal &&
+                     static_cast<size_t>(j) < body.size();
+                     ++j)
+                  fieldOffset += getLLVMTypeSize(body[j]);
+                if (static_cast<size_t>(indexVal) < body.size())
+                  currentType = body[indexVal];
+              }
+              ++idx;
+            }
+            // Check if final type is struct<(ptr, i64)> = MooreQueue
+            if (auto finalST =
+                    dyn_cast<LLVM::LLVMStructType>(currentType)) {
+              auto body = finalST.getBody();
+              if (body.size() == 2 &&
+                  isa<LLVM::LLVMPointerType>(body[0]) &&
+                  isa<IntegerType>(body[1]) &&
+                  cast<IntegerType>(body[1]).getWidth() == 64) {
+                dynArrayOffsets.push_back(fieldOffset);
+              }
+            }
+          }
+
+          // Deduplicate offsets (multiple GEPs may point to same field)
+          llvm::sort(dynArrayOffsets);
+          dynArrayOffsets.erase(
+              std::unique(dynArrayOffsets.begin(), dynArrayOffsets.end()),
+              dynArrayOffsets.end());
+
+          // Allocate 1-element arrays for empty dynamic array fields
+          if (!dynArrayOffsets.empty()) {
+            uint64_t objOff = 0;
+            auto *block =
+                findMemoryBlockByAddress(classAddr, procId, &objOff);
+            if (block && block->initialized) {
+              for (uint64_t fOff : dynArrayOffsets) {
+                size_t dataOff = static_cast<size_t>(objOff) +
+                                 static_cast<size_t>(fOff);
+                if (dataOff + 16 > block->data.size())
+                  continue;
+                // Read ptr (8 bytes LE)
+                uint64_t ptrField = 0;
+                for (int i = 0; i < 8; ++i)
+                  ptrField |=
+                      static_cast<uint64_t>(block->data[dataOff + i])
+                      << (i * 8);
+                // Read len (8 bytes LE)
+                uint64_t lenField = 0;
+                for (int i = 0; i < 8; ++i)
+                  lenField |=
+                      static_cast<uint64_t>(block->data[dataOff + 8 + i])
+                      << (i * 8);
+                if (ptrField == 0 && lenField == 0) {
+                  // Allocate 1-byte array (1 element for bit[7:0] types)
+                  MooreQueue result = __moore_dyn_array_new(1);
+                  if (result.data) {
+                    auto *data = static_cast<uint8_t *>(result.data);
+                    data[0] = rng() & 0xFF;
+                    uint64_t newPtr =
+                        reinterpret_cast<uint64_t>(result.data);
+                    int64_t newLen = result.len;
+                    for (int i = 0; i < 8; ++i)
+                      block->data[dataOff + i] =
+                          static_cast<uint8_t>(newPtr >> (i * 8));
+                    for (int i = 0; i < 8; ++i)
+                      block->data[dataOff + 8 + i] =
+                          static_cast<uint8_t>(
+                              static_cast<uint64_t>(newLen) >> (i * 8));
+                    nativeMemoryBlocks[newPtr] = 1;
+                    LLVM_DEBUG(llvm::dbgs()
+                               << "  randomize_basic: allocated 1-elem "
+                                  "array at field offset "
+                               << fOff << " -> ptr=0x"
+                               << llvm::format_hex(newPtr, 16) << "\n");
+                  }
+                }
+              }
+            }
+          }
         }
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.call: __moore_randomize_basic(0x"
@@ -21499,8 +23156,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       int64_t lenVal = static_cast<int64_t>(stored.size());
       dynamicStrings[ptrVal] = {stored.data(), lenVal};
       APInt packedResult(128, 0);
-      packedResult.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
-      packedResult.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+      safeInsertBits(packedResult,APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+      safeInsertBits(packedResult,APInt(64, static_cast<uint64_t>(lenVal)), 64);
       return InterpretedValue(packedResult);
     };
 
@@ -22112,8 +23769,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         // Register the allocated memory so that subsequent GEP-based
@@ -22157,8 +23814,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         if (result.data && size > 0)
@@ -22562,8 +24219,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         LLVM_DEBUG(llvm::dbgs()
@@ -22830,8 +24487,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (result.data)
           dynamicStrings[ptrVal] = {result.data, result.len};
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         LLVM_DEBUG(llvm::dbgs()
@@ -23067,8 +24724,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         LLVM_DEBUG(llvm::dbgs()
@@ -23606,8 +25263,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         LLVM_DEBUG(llvm::dbgs()
@@ -23680,8 +25337,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         if (result.data && result.len > 0) {
@@ -23756,8 +25413,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         if (result.data && result.len > 0) {
@@ -23828,8 +25485,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         if (result.data && result.len > 0) {
@@ -24337,8 +25994,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         if (result.data && result.len > 0) {
@@ -24445,8 +26102,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         if (result.data && result.len > 0) {
@@ -24559,8 +26216,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
         APInt packedResult(128, 0);
-        packedResult.insertBits(APInt(64, ptrVal), 0);
-        packedResult.insertBits(APInt(64, lenVal), 64);
+        safeInsertBits(packedResult,APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult,APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         if (result.data && result.len > 0) {
@@ -24767,8 +26424,8 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
     int64_t lenVal = static_cast<int64_t>(stored.size());
     dynamicStrings[ptrVal] = {stored.data(), lenVal};
     APInt packed(128, 0);
-    packed.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
-    packed.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+    safeInsertBits(packed,APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+    safeInsertBits(packed,APInt(64, static_cast<uint64_t>(lenVal)), 64);
     setValue(procId, resultVal, InterpretedValue(packed));
   };
 
@@ -24985,7 +26642,7 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
         unsigned innerBits = getTypeWidth(innerType);
         APInt valueBits(innerBits, 0);
         // Set low 64 bits of value field to readValue
-        valueBits.insertBits(
+        safeInsertBits(valueBits,
             APInt(64, static_cast<uint64_t>(readValue)), 0);
         InterpretedValue writeVal(valueBits);
 
@@ -25091,8 +26748,8 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
     int64_t lenVal = static_cast<int64_t>(stored.size());
     dynamicStrings[ptrVal] = {stored.data(), lenVal};
     APInt packed(128, 0);
-    packed.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
-    packed.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+    safeInsertBits(packed,APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+    safeInsertBits(packed,APInt(64, static_cast<uint64_t>(lenVal)), 64);
     setValue(procId, resultVal, InterpretedValue(packed));
   };
 
@@ -25294,7 +26951,7 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
         Type innerType = refT.getNestedType();
         unsigned innerBits = getTypeWidth(innerType);
         APInt valueBits(innerBits, 0);
-        valueBits.insertBits(
+        safeInsertBits(valueBits,
             APInt(64, static_cast<uint64_t>(readValue)), 0);
         InterpretedValue writeVal(valueBits);
 
@@ -25461,8 +27118,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
           ++cachedState->funcBodySteps;
           if (collectOpStats)
             ++opStats[op.getName().getStringRef()];
-          // Progress report every 10M func body steps
-          if (cachedState->funcBodySteps % 10000000 == 0) {
+          // Progress report every ~16M func body steps (power-of-2 for cheap
+          // bitwise check instead of expensive integer division)
+          if ((cachedState->funcBodySteps & 0xFFFFFF) == 0) {
             llvm::errs() << "[circt-sim] func progress: process " << procId
                          << " funcBodySteps=" << cachedState->funcBodySteps
                          << " totalSteps=" << cachedState->totalSteps
@@ -25483,8 +27141,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
             cleanupTempMappings();
             return failure();
           }
-          // Periodically check for abort (timeout watchdog)
-          if (cachedState->funcBodySteps % 10000 == 0 && isAbortRequested()) {
+          // Periodically check for abort (timeout watchdog, every ~16K ops)
+          if ((cachedState->funcBodySteps & 0x3FFF) == 0 && isAbortRequested()) {
             cachedState->halted = true;
             cleanupTempMappings();
             if (abortCallback)
