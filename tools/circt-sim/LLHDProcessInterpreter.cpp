@@ -824,8 +824,17 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
       }
       SignalId parentSigId = srcIt->second;
       SignalId childSigId = destIt->second;
-      if (parentSigId == childSigId)
+      if (parentSigId == childSigId) {
+        // Propagate childToParentFieldAddr entries for self-link pairs
+        // so grandchild addresses inherit parent mappings.
+        auto srcRevIt = childToParentFieldAddr.find(srcAddr);
+        if (srcRevIt != childToParentFieldAddr.end())
+          childToParentFieldAddr[destAddr] = srcRevIt->second;
+        auto destRevIt = childToParentFieldAddr.find(destAddr);
+        if (destRevIt != childToParentFieldAddr.end())
+          childToParentFieldAddr[srcAddr] = destRevIt->second;
         continue;
+      }
 
       interfaceFieldPropagation[parentSigId].push_back(childSigId);
       childToParentFieldAddr[destAddr] = srcAddr;
@@ -5116,6 +5125,46 @@ void LLHDProcessInterpreter::notifyProcessAwaiters(ProcessId procId) {
     resumeProcess(waiterId);
 
   processAwaiters.erase(it);
+}
+
+void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
+    SignalId signal, const SignalValue &value) {
+  auto propIt = interfaceFieldPropagation.find(signal);
+  if (propIt == interfaceFieldPropagation.end())
+    return;
+
+  InterpretedValue parentVal = InterpretedValue::fromSignalValue(value);
+  for (SignalId childSigId : propIt->second) {
+    const SignalValue &childCurrent = scheduler.getSignalValue(childSigId);
+    unsigned childW = childCurrent.getWidth();
+    InterpretedValue childDriveVal = parentVal;
+    if (childDriveVal.isX()) {
+      childDriveVal = InterpretedValue::makeX(childW);
+    } else if (childDriveVal.getWidth() != childW) {
+      APInt apVal = childDriveVal.getAPInt();
+      if (apVal.getBitWidth() < childW)
+        apVal = apVal.zext(childW);
+      else if (apVal.getBitWidth() > childW)
+        apVal = apVal.trunc(childW);
+      childDriveVal = InterpretedValue(apVal);
+    }
+    scheduler.updateSignal(childSigId, childDriveVal.toSignalValue());
+
+    auto childAddrIt = fieldSignalToAddr.find(childSigId);
+    if (childAddrIt != fieldSignalToAddr.end()) {
+      uint64_t childAddr = childAddrIt->second;
+      uint64_t off = 0;
+      MemoryBlock *block = findBlockByAddress(childAddr, off);
+      unsigned storeSize = (childW + 7) / 8;
+      if (block && off + storeSize <= block->size && !childDriveVal.isX()) {
+        APInt bits = childDriveVal.getAPInt();
+        if (bits.getBitWidth() < storeSize * 8)
+          bits = bits.zext(storeSize * 8);
+        for (unsigned i = 0; i < storeSize; ++i)
+          block->data[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
+      }
+    }
+  }
 }
 
 void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
@@ -10202,15 +10251,30 @@ llvm_dispatch:
           auto sigIt = valueToSignal.find(input);
           if (sigIt != valueToSignal.end()) {
             SignalId sigId = sigIt->second;
+            // Only use backing memory for signals that are NOT driven via
+            // llhd.drv (those should use scheduler state instead).
+            bool hasDriveUser = false;
+            for (auto *sigUser : input.getUsers()) {
+              if (isa<llhd::DriveOp>(sigUser) ||
+                  isa<llhd::SigStructExtractOp>(sigUser)) {
+                hasDriveUser = true;
+                break;
+              }
+            }
+            if (hasDriveUser) {
+              // Fall through to the general value propagation
+            } else {
             // Check if we already allocated a backing block
             auto backingIt = signalBackingMemory.find(sigId);
             if (backingIt != signalBackingMemory.end()) {
-              setValue(procId, output,
-                       InterpretedValue(backingIt->second, 64));
-              LLVM_DEBUG(llvm::dbgs()
-                         << "  ref->ptr cast: reusing backing memory at 0x"
-                         << llvm::format_hex(backingIt->second, 0)
-                         << " for signal " << sigId << "\n");
+              // Reuse: look up the existing block and return its address
+              auto &st = processStates[backingIt->second.first];
+              auto blkIt = st.memoryBlocks.find(backingIt->second.second);
+              if (blkIt != st.memoryBlocks.end()) {
+                uint64_t addr = reinterpret_cast<uint64_t>(
+                    blkIt->second.data.data());
+                setValue(procId, output, InterpretedValue(addr, 64));
+              }
             } else {
               // Allocate a new memory block for this signal
               Type innerType =
@@ -10230,17 +10294,16 @@ llvm_dispatch:
                   block.data[i] = v.extractBitsAsZExtValue(
                       std::min(8u, width - i * 8), i * 8);
               }
-              uint64_t addr =
-                  reinterpret_cast<uint64_t>(block.data.data());
-              signalBackingMemory[sigId] = addr;
-              setValue(procId, output,
-                       InterpretedValue(addr, 64));
-              LLVM_DEBUG(llvm::dbgs()
-                         << "  ref->ptr cast: allocated backing memory at 0x"
-                         << llvm::format_hex(addr, 0) << " for signal "
-                         << sigId << " (size=" << byteSize << ")\n");
+              signalBackingMemory[sigId] = {procId, output};
+              uint64_t addr = reinterpret_cast<uint64_t>(
+                  block.data.data());
+              setValue(procId, output, InterpretedValue(addr, 64));
+              llvm::errs() << "[BACKING-ALLOC] sigId=" << sigId
+                           << " addr=0x" << llvm::format_hex(addr, 0)
+                           << " size=" << byteSize << "\n";
             }
             continue;
+            } // end of else (no drive users)
           }
         }
 
@@ -10424,6 +10487,8 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
 
   // Get the signal ID for the probed signal
   SignalId sigId = resolveSignalId(signal);
+  llvm::errs() << "[PROBE-ENTRY] sigId=" << sigId
+               << " signal=" << signal << "\n";
   if (sigId == 0) {
     // Check if this is a global variable access via UnrealizedConversionCastOp
     // This happens when static class properties are accessed - they're stored
@@ -11136,6 +11201,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
 
   // First check for pending epsilon drives - this enables blocking assignment
   // semantics where a probe sees the value driven earlier in the same process.
+  llvm::errs() << "[PROBE-POST-SIGID0] sigId=" << sigId << "\n";
   auto pendingIt = pendingEpsilonDrives.find(sigId);
   if (pendingIt != pendingEpsilonDrives.end()) {
     setValue(procId, probeOp.getResult(), pendingIt->second);
@@ -11152,6 +11218,46 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
   // Pattern: %ptr = unrealized_conversion_cast %sig : !llhd.ref<T> to !llvm.ptr
   //          llvm.store %val, %ptr          <- writes memory
   //          %result = llhd.prb %sig        <- should see the stored value
+  {
+    auto backingIt = signalBackingMemory.find(sigId);
+    llvm::errs() << "[PROBE-CHECK] sigId=" << sigId
+                 << " hasBacking=" << (backingIt != signalBackingMemory.end())
+                 << "\n";
+    if (backingIt != signalBackingMemory.end()) {
+      ProcessId backingProcId = backingIt->second.first;
+      Value backingKey = backingIt->second.second;
+      auto &st = processStates[backingProcId];
+      auto blkIt = st.memoryBlocks.find(backingKey);
+      llvm::errs() << "[PROBE-BACKING] found block="
+                   << (blkIt != st.memoryBlocks.end()) << "\n";
+      if (blkIt != st.memoryBlocks.end()) {
+        MemoryBlock &block = blkIt->second;
+        unsigned width = getTypeWidth(probeOp.getResult().getType());
+        unsigned loadSize = (width + 7) / 8;
+        llvm::errs() << "[PROBE-BACKING] initialized=" << block.initialized
+                     << " loadSize=" << loadSize << " blockSize=" << block.size
+                     << " data=";
+        for (unsigned i = 0; i < block.size; ++i)
+          llvm::errs() << llvm::format_hex(block.data[i], 4) << " ";
+        llvm::errs() << "\n";
+        if (block.initialized && loadSize <= block.size) {
+          APInt memValue = APInt::getZero(width);
+          for (unsigned i = 0; i < loadSize && i * 8 < width; ++i) {
+            unsigned bitsToInsert = std::min(8u, width - i * 8);
+            APInt byteVal(
+                bitsToInsert,
+                block.data[i] & ((1u << bitsToInsert) - 1));
+            safeInsertBits(memValue, byteVal, i * 8);
+          }
+          llvm::errs() << "[PROBE-BACKING] result=0x"
+                       << llvm::format_hex(memValue.getZExtValue(), 0) << "\n";
+          setValue(procId, probeOp.getResult(),
+                   InterpretedValue(memValue));
+          return success();
+        }
+      }
+    }
+  }
   for (auto *user : signal.getUsers()) {
     auto castOp = dyn_cast<mlir::UnrealizedConversionCastOp>(user);
     if (!castOp || castOp.getNumResults() != 1)
@@ -12141,6 +12247,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       // s.a=1; s.b=2; $display(s) should see {1,2} not {0,0}.
       if (delay.realTime == 0 && delay.deltaStep <= 1) {
         pendingEpsilonDrives[parentSigId] = InterpretedValue(result);
+        scheduler.updateSignal(parentSigId, newVal);
       }
 
       return success();
@@ -18562,6 +18669,102 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
       if (pendingIt != pendingEpsilonDrives.end())
         signalVal = pendingIt->second;
 
+      // If this signal is a struct pointer with known field signals,
+      // reconstruct the struct value from individual field signal values.
+      auto ptrFieldsIt = interfacePtrToFieldSignals.find(fieldSigId);
+
+      // If the signal is X and NOT in interfacePtrToFieldSignals, it's likely
+      // a sub-struct field of a parent interface. Try to reconstruct its value
+      // from child field signals via the interfaceFieldPropagation chain.
+      if (signalVal.isX() &&
+          ptrFieldsIt == interfacePtrToFieldSignals.end()) {
+        for (auto &[parentIfaceSigId, parentFieldSigIds] :
+             interfacePtrToFieldSignals) {
+          int fieldIdx = -1;
+          for (size_t i = 0; i < parentFieldSigIds.size(); ++i) {
+            if (parentFieldSigIds[i] == fieldSigId) {
+              fieldIdx = static_cast<int>(i);
+              break;
+            }
+          }
+          if (fieldIdx < 0)
+            continue;
+
+          // Reconstruct by reading child field signal values.
+          APInt result = APInt::getZero(bitWidth);
+          unsigned bitOffset = 0;
+          bool anyNonX = false;
+          for (size_t fi = static_cast<size_t>(fieldIdx) + 1;
+               fi < parentFieldSigIds.size() && bitOffset < bitWidth; ++fi) {
+            SignalId parentFieldSig = parentFieldSigIds[fi];
+            auto propIt2 = interfaceFieldPropagation.find(parentFieldSig);
+            const SignalValue *childSV = nullptr;
+            if (propIt2 != interfaceFieldPropagation.end()) {
+              for (SignalId childSig : propIt2->second) {
+                const SignalValue &csv = scheduler.getSignalValue(childSig);
+                if (!csv.isUnknown()) {
+                  childSV = &csv;
+                  break;
+                }
+              }
+            }
+            if (!childSV) {
+              const SignalValue &psv =
+                  scheduler.getSignalValue(parentFieldSig);
+              if (!psv.isUnknown())
+                childSV = &psv;
+            }
+            if (childSV) {
+              unsigned fw = childSV->getWidth();
+              APInt fieldBits = childSV->getAPInt();
+              if (fieldBits.getBitWidth() > fw)
+                fieldBits = fieldBits.trunc(fw);
+              for (unsigned b = 0;
+                   b < fw && bitOffset + b < bitWidth; ++b) {
+                if (fieldBits[b])
+                  result.setBit(bitOffset + b);
+              }
+              bitOffset += fw;
+              anyNonX = true;
+            } else {
+              unsigned fw = scheduler.getSignalValue(parentFieldSig).getWidth();
+              bitOffset += fw;
+            }
+          }
+          if (anyNonX) {
+            signalVal = InterpretedValue(result);
+            setValue(procId, loadOp.getResult(), signalVal);
+            return success();
+          }
+          break;  // Only check first matching parent
+        }
+        goto normal_memory_load;
+      }
+      if (ptrFieldsIt != interfacePtrToFieldSignals.end() &&
+          !ptrFieldsIt->second.empty()) {
+        APInt result = APInt::getZero(bitWidth);
+        unsigned bitOffset = 0;
+        for (SignalId fid : ptrFieldsIt->second) {
+          const SignalValue &fsv = scheduler.getSignalValue(fid);
+          unsigned fw = fsv.getWidth();
+          if (!fsv.isUnknown() && bitOffset + fw <= bitWidth) {
+            APInt fieldBits = fsv.getAPInt();
+            if (fieldBits.getBitWidth() < fw)
+              fieldBits = fieldBits.zext(fw);
+            else if (fieldBits.getBitWidth() > fw)
+              fieldBits = fieldBits.trunc(fw);
+            for (unsigned b = 0; b < fw && bitOffset + b < bitWidth; ++b) {
+              if (fieldBits[b])
+                result.setBit(bitOffset + b);
+            }
+          }
+          bitOffset += fw;
+        }
+        signalVal = InterpretedValue(result);
+        setValue(procId, loadOp.getResult(), signalVal);
+        return success();
+      }
+
       // Resize to match expected load width
       if (signalVal.isX()) {
         signalVal = InterpretedValue::makeX(bitWidth);
@@ -18575,16 +18778,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
       }
 
       setValue(procId, loadOp.getResult(), signalVal);
-      // Diagnostic: trace 64-bit interface field loads that return 0
-      if (bitWidth >= 32 && !signalVal.isX() && signalVal.getUInt64() == 0) {
-        std::string name = signalIdToName.count(fieldSigId)
-                               ? signalIdToName[fieldSigId]
-                               : "?";
-        llvm::errs() << "[IFACE-LOAD-ZERO] sig=" << fieldSigId << " ("
-                     << name << ") addr=0x"
-                     << llvm::format_hex(loadAddr, 10)
-                     << " w=" << bitWidth << "\n";
-      }
       LLVM_DEBUG(llvm::dbgs()
                  << "  llvm.load: read interface field signal " << fieldSigId
                  << " at 0x" << llvm::format_hex(loadAddr, 16) << "\n");
@@ -18592,6 +18785,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     }
   }
 
+normal_memory_load:
   // First try to find a local memory block (from alloca)
   MemoryBlock *block = findMemoryBlock(procId, loadOp.getAddr());
   uint64_t offset = 0;

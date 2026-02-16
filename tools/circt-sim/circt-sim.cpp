@@ -524,6 +524,9 @@ LogicalResult SimulationContext::initialize(
   scheduler.setSignalChangeCallback(
       [this](SignalId signal, const SignalValue &value) {
         recordValueChange(signal, value);
+        // Forward-propagate parent interface signal changes to child BFM copies.
+        if (llhdInterpreter)
+          llhdInterpreter->forwardPropagateOnSignalChange(signal, value);
       });
 
   // Collect all top modules to simulate
