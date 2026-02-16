@@ -4824,6 +4824,7 @@ struct ClassDeclVisitor {
       if (!funcTy) {
         LLVM_DEBUG(llvm::dbgs()
                    << "        FAILED: Could not get function signature\n");
+        mlir::emitError(loc) << "Invalid function signature for " << fn.name;
         return failure();
       }
       moore::ClassMethodDeclOp::create(builder, loc, fn.name, funcTy, nullptr);
@@ -5182,6 +5183,15 @@ Context::convertClassDeclaration(const slang::ast::ClassType &classdecl) {
   auto prevTimeScale = timeScale;
   timeScale = classdecl.getTimeScale().value_or(slang::TimeScale());
   auto timeScaleGuard = llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
+
+  // Ensure base classes are elaborated before child classes.
+  if (classdecl.getBaseClass()) {
+    if (const auto *baseClassDecl =
+            classdecl.getBaseClass()->as_if<slang::ast::ClassType>()) {
+      if (failed(convertClassDeclaration(*baseClassDecl)))
+        return failure();
+    }
+  }
 
   // Get or create the class declaration.
   auto *lowering = declareClass(classdecl);
