@@ -49,8 +49,8 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
+#include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SMT/IR/SMTDialect.h"
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
@@ -780,7 +780,6 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   pm.addPass(emit::createStripEmitPass());
   pm.addPass(sim::createStripSim());
   pm.addPass(verif::createLowerTestsPass());
-<<<<<<< HEAD
   if (pruneUnreachableSymbols) {
     // Prune unreachable symbols early so unsupported ops in dead modules do
     // not block subsequent lowering.
