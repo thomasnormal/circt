@@ -8979,6 +8979,16 @@ struct FourStateSubNegOneOpConversion : public OpConversionPattern<SubOp> {
   }
 };
 
+struct NegRealOpConversion : public OpConversionPattern<NegRealOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(NegRealOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<arith::NegFOp>(op, adaptor.getInput());
+    return success();
+  }
+};
+
 template <typename SourceOp, typename TargetOp>
 struct BinaryOpConversion : public OpConversionPattern<SourceOp> {
   using OpConversionPattern<SourceOp>::OpConversionPattern;
@@ -27063,6 +27073,9 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FourStateAndOpConversion,  // 4-state aware AND
     FourStateOrOpConversion,   // 4-state aware OR
     FourStateXorOpConversion,  // 4-state aware XOR
+
+    // Patterns for unary real operations.
+    NegRealOpConversion,
 
     // Patterns for binary real operations.
     BinaryRealOpConversion<AddRealOp, arith::AddFOp>,
