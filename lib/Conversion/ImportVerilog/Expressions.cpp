@@ -4962,7 +4962,7 @@ struct RvalueExprVisitor : public ExprVisitor {
 
     auto args = expr.arguments();
 
-    FailureOr<Value> result;
+    FailureOr<Value> result = Value{};
     Value value;
     Value value2;
 
