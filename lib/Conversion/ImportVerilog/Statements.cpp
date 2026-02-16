@@ -2237,6 +2237,22 @@ struct StmtVisitor {
                                    insertionBlock->getParentOp())
                              : nullptr;
 
+    // Check for a `disable iff` expression:
+    // The DisableIff construct can only occur at the top level of an assertion
+    // and cannot be nested within properties.
+    // Hence we only need to detect if the top level assertion expression
+    // has type DisableIff, negate the `disable` expression, then pass it to
+    // the `enable` parameter of AssertOp/AssumeOp.
+    Value disableIffEnable;
+    const slang::ast::AssertionExpr *innerPropertySpec = &stmt.propertySpec;
+    if (auto *disableIff =
+            stmt.propertySpec.as_if<slang::ast::DisableIffAssertionExpr>()) {
+      auto disableCond = context.convertRvalueExpression(disableIff->condition);
+      auto enableCond = moore::NotOp::create(builder, loc, disableCond);
+      disableIffEnable = context.convertToI1(enableCond);
+      innerPropertySpec = &disableIff->expr;
+    }
+
     if (stmt.ifTrue && !stmt.ifTrue->as_if<slang::ast::EmptyStatement>()) {
       mlir::emitWarning(loc)
           << "ignoring concurrent assertion action blocks during import";
@@ -2245,14 +2261,14 @@ struct StmtVisitor {
     if (context.currentAssertionClock && enclosingProc) {
       OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointAfter(enclosingProc);
-      auto property = context.convertAssertionExpression(stmt.propertySpec, loc);
+      auto property = context.convertAssertionExpression(*innerPropertySpec, loc);
       if (!property)
         return failure();
       auto *assertionClock = getCanonicalAssertionClockSignalEvent(
           *context.currentAssertionClock);
       if (!assertionClock)
         assertionClock = context.currentAssertionClock;
-      Value enable;
+      Value enable = disableIffEnable;
       if (context.currentAssertionGuard) {
         IRMapping mapping;
         llvm::DenseSet<Operation *> active;
@@ -2293,7 +2309,7 @@ struct StmtVisitor {
       }
     }
 
-    auto property = context.convertAssertionExpression(stmt.propertySpec, loc);
+    auto property = context.convertAssertionExpression(*innerPropertySpec, loc);
     if (!property)
       return failure();
 
@@ -2365,16 +2381,20 @@ struct StmtVisitor {
 
     switch (stmt.assertionKind) {
     case slang::ast::AssertionKind::Assert:
-      verif::AssertOp::create(builder, loc, property, Value(), StringAttr{});
+      verif::AssertOp::create(builder, loc, property, disableIffEnable,
+                              StringAttr{});
       return success();
     case slang::ast::AssertionKind::Assume:
-      verif::AssumeOp::create(builder, loc, property, Value(), StringAttr{});
+      verif::AssumeOp::create(builder, loc, property, disableIffEnable,
+                              StringAttr{});
       return success();
     case slang::ast::AssertionKind::CoverProperty:
-      verif::CoverOp::create(builder, loc, property, Value(), StringAttr{});
+      verif::CoverOp::create(builder, loc, property, disableIffEnable,
+                              StringAttr{});
       return success();
     case slang::ast::AssertionKind::Expect:
-      verif::AssertOp::create(builder, loc, property, Value(), StringAttr{});
+      verif::AssertOp::create(builder, loc, property, disableIffEnable,
+                              StringAttr{});
       return success();
     default:
       break;
