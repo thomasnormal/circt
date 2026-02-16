@@ -16,7 +16,6 @@ add_circt_library(CIRCTSupport
   JSON.cpp
   LoweringOptions.cpp
   Naming.cpp
-  NPNClass.cpp
   ParsingUtils.cpp
   Passes.cpp
   Path.cpp
@@ -28,6 +27,7 @@ add_circt_library(CIRCTSupport
   SymCache.cpp
   SMTModel.cpp
   TestReporting.cpp
+  TruthTable.cpp
   WallClockTimeout.cpp
   ValueMapper.cpp
   "${VERSION_CPP}"
