@@ -574,6 +574,16 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
         // Don't initialize - leave as unknown for reconciliation pass.
 
         uint64_t fieldAddr = mallocAddr + fieldOffset;
+        // Diagnostic: detect overwrite of interfaceFieldSignals entries
+        auto prevIt = interfaceFieldSignals.find(fieldAddr);
+        if (prevIt != interfaceFieldSignals.end() &&
+            prevIt->second != fieldSigId) {
+          llvm::errs() << "[IFACE-OVERWRITE] addr=0x"
+                       << llvm::format_hex(fieldAddr, 10)
+                       << " old sig=" << prevIt->second
+                       << " new sig=" << fieldSigId << " ("
+                       << fieldSigName << ")\n";
+        }
         interfaceFieldSignals[fieldAddr] = fieldSigId;
         fieldSignalToAddr[fieldSigId] = fieldAddr;
         fieldSignals.push_back(fieldSigId);
@@ -15843,6 +15853,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       // passed through function calls (e.g., uvm_config_db::set stores values
       // into associative arrays via ref arguments).
       if (isa<llhd::RefType>(arg.getType()) && idx < callOperands.size()) {
+        // Record the caller's operand so remapRefBlockArgSource can trace
+        // function entry block arguments back to the caller's Value.
+        // This is essential for memory-backed ref drives inside functions
+        // (e.g., from_class struct field writes via sig.struct_extract).
+        auto &state = processStates[procId];
+        state.refBlockArgSources[arg] = callOperands[idx];
+
         if (SignalId sigId = resolveSignalId(callOperands[idx])) {
           valueToSignal[arg] = sigId;
           tempSignalMappings.push_back(arg);
