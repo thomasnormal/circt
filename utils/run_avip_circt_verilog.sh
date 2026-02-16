@@ -364,8 +364,9 @@ cmd += extra_args
 cmd += files
 
 out_path.parent.mkdir(parents=True, exist_ok=True)
-with out_path.open("w") as log:
-    result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, text=True)
+warnings_path = out_path.with_suffix(".warnings.log")
+with out_path.open("w") as log, warnings_path.open("w") as wlog:
+    result = subprocess.run(cmd, stdout=log, stderr=wlog, text=True)
 
 print(result.returncode)
 print(str(out_path))

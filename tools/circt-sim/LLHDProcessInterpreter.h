@@ -529,6 +529,10 @@ public:
   /// Get the signal name for a signal ID.
   llvm::StringRef getSignalName(SignalId id) const;
 
+  /// Forward-propagate a parent interface signal change to all child copies.
+  void forwardPropagateOnSignalChange(SignalId signal,
+                                       const SignalValue &value);
+
   /// Get the number of registered signals.
   size_t getNumSignals() const { return valueToSignal.size(); }
 
@@ -1099,10 +1103,11 @@ private:
   /// Key is SignalId, value is the pending value.
   llvm::DenseMap<SignalId, InterpretedValue> pendingEpsilonDrives;
 
-  /// Map from signal IDs to backing memory addresses.  Allocated when an
-  /// unrealized_conversion_cast converts !llhd.ref<T> to !llvm.ptr so that
-  /// llvm.store writes become visible to later llhd.prb reads.
-  llvm::DenseMap<SignalId, uint64_t> signalBackingMemory;
+  /// Map from signal IDs to {procId, Value key} for backing memory blocks.
+  /// Allocated when unrealized_conversion_cast converts !llhd.ref<T> to
+  /// !llvm.ptr so that llvm.store writes become visible to later llhd.prb reads.
+  llvm::DenseMap<SignalId, std::pair<ProcessId, mlir::Value>>
+      signalBackingMemory;
 
   /// Map from process IDs to execution states.
   /// NOTE: This uses std::map rather than DenseMap to guarantee reference
