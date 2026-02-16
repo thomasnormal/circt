@@ -850,7 +850,11 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   pm.addPass(mlir::createCSEPass());
   pm.addPass(createBottomUpSimpleCanonicalizerPass());
   if (flattenModules) {
-    pm.addPass(hw::createFlattenModules());
+    hw::FlattenModulesOptions flattenOptions;
+    // We can inline public hw.modules since we're only operating over one
+    // builtin.module
+    flattenOptions.inlinePublic = true;
+    pm.addPass(hw::createFlattenModules(flattenOptions));
     pm.addPass(mlir::createCSEPass());
     pm.addPass(createBottomUpSimpleCanonicalizerPass());
   }
