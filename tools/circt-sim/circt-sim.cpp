@@ -99,6 +99,8 @@ using namespace mlir;
 using namespace circt;
 using namespace circt::sim;
 
+#define DEBUG_TYPE "circt-sim"
+
 //===----------------------------------------------------------------------===//
 // Command Line Arguments
 //===----------------------------------------------------------------------===//
@@ -1058,6 +1060,9 @@ LogicalResult SimulationContext::run() {
     // Check simulation time limit
     const auto &currentTime = scheduler.getCurrentTime();
     if (maxTime > 0 && currentTime.realTime >= maxTime) {
+      llvm::errs() << "[circt-sim] Main loop exit: maxTime reached ("
+                   << currentTime.realTime << " >= " << maxTime
+                   << " fs), iter=" << loopIterations << "\n";
       break;
     }
 
@@ -1069,22 +1074,38 @@ LogicalResult SimulationContext::run() {
       deltasExecuted = scheduler.executeCurrentTime();
     }
 
+    LLVM_DEBUG({
+      static uint64_t lastDiagTime = UINT64_MAX;
+      bool timeChanged = (currentTime.realTime != lastDiagTime);
+      if (timeChanged || loopIterations <= 5 ||
+          (loopIterations % 500000 == 0)) {
+        llvm::dbgs() << "[MAINLOOP] iter=" << loopIterations
+                     << " time=" << currentTime.realTime
+                     << " deltas=" << deltasExecuted
+                     << " ready=" << scheduler.hasReadyProcesses()
+                     << "\n";
+        lastDiagTime = currentTime.realTime;
+      }
+    });
+
     // Check if simulation was terminated during execution (e.g., $finish called).
     // This must be checked immediately after executeCurrentTime() to ensure
     // termination is honored before any further processing.
-    if (!control.shouldContinue())
+    if (!control.shouldContinue()) {
+      llvm::errs() << "[circt-sim] Main loop exit: shouldContinue()=false at time "
+                   << currentTime.realTime << " fs, iter=" << loopIterations
+                   << ", deltas=" << deltasExecuted << "\n";
       break;
+    }
 
     // Check $finish grace period (wall-clock). This handles the case where
     // UVM runs entirely at simulation time 0 in delta cycles - advanceTime()
     // is never called, so the post-advanceTime check wouldn't fire.
     if (llhdInterpreter && llhdInterpreter->checkFinishGracePeriod()) {
-      if (verbosity >= 1) {
-        llvm::errs()
-            << "[circt-sim] $finish grace period expired at time "
-            << scheduler.getCurrentTime().realTime
-            << " fs - forcing termination\n";
-      }
+      llvm::errs()
+          << "[circt-sim] Main loop exit: $finish grace period expired at time "
+          << scheduler.getCurrentTime().realTime
+          << " fs, iter=" << loopIterations << "\n";
       control.finish(0);
       break;
     }
@@ -1149,6 +1170,17 @@ LogicalResult SimulationContext::run() {
     }
 
     if (!hasReadyProcesses) {
+      LLVM_DEBUG({
+        static uint64_t lastAdvDiagTime = UINT64_MAX;
+        if (currentTime.realTime != lastAdvDiagTime ||
+            loopIterations <= 5) {
+          llvm::dbgs() << "[MAINLOOP] advanceTime at time="
+                       << currentTime.realTime
+                       << " iter=" << loopIterations << "\n";
+          lastAdvDiagTime = currentTime.realTime;
+        }
+      });
+
       // Check if simulation should stop before advancing time.
       // This ensures we report the correct termination time when $finish
       // is called (rather than advancing to the next scheduled event first).
@@ -1156,20 +1188,35 @@ LogicalResult SimulationContext::run() {
         break;
 
       // No more events at current time, advance to next event
+      uint64_t preAdvTime = currentTime.realTime;
       if (!scheduler.advanceTime()) {
-        // Print diagnostic information about why simulation can't advance
-        if (verbosity >= 2) {
-          llvm::outs() << "[circt-sim] advanceTime() returned false at time "
-                       << currentTime.realTime << " fs\n";
-          const auto &stats = scheduler.getStatistics();
-          llvm::outs() << "[circt-sim] Processes registered: "
-                       << stats.processesRegistered << "\n";
-          llvm::outs() << "[circt-sim] Delta cycles executed: "
-                       << stats.deltaCyclesExecuted << "\n";
-        }
+        LLVM_DEBUG(llvm::dbgs() << "[MAINLOOP] advanceTime returned FALSE at time="
+                     << currentTime.realTime << " iter=" << loopIterations
+                     << "\n");
+        // Always print why the sim stopped — this is critical diagnostic info.
+        llvm::errs() << "[circt-sim] advanceTime() returned false at time "
+                     << currentTime.realTime << " fs, iter=" << loopIterations
+                     << " — no more scheduled events\n";
+        const auto &stats = scheduler.getStatistics();
+        llvm::errs() << "[circt-sim] Processes registered: "
+                     << stats.processesRegistered
+                     << ", executed: " << stats.processesExecuted
+                     << ", delta cycles: " << stats.deltaCyclesExecuted << "\n";
+        // Dump process states to show what's alive/dead/waiting
+        if (llhdInterpreter)
+          llhdInterpreter->dumpProcessStates(llvm::errs());
         // No more events
         break;
       }
+
+      LLVM_DEBUG({
+        auto newTime = scheduler.getCurrentTime().realTime;
+        if (newTime != preAdvTime) {
+          llvm::dbgs() << "[MAINLOOP] advanceTime: " << preAdvTime
+                       << " -> " << newTime
+                       << " iter=" << loopIterations << "\n";
+        }
+      });
 
       // Check if the $finish grace period has expired. When UVM calls
       // $finish(success) with active forked children (phase hopper), we
@@ -1618,6 +1665,11 @@ int main(int argc, char **argv) {
     extern const char *g_lastLLVMCallCallee;
     extern const char *g_lastOpName;
     extern unsigned g_lastProcId;
+    extern char g_lastFuncName[256];
+    extern unsigned g_lastFuncProcId;
+    if (g_lastFuncName[0])
+      fprintf(stderr, "[CRASH-DIAG] Last func body: %s proc=%u\n",
+              g_lastFuncName, g_lastFuncProcId);
     if (g_lastLLVMCallCallee)
       fprintf(stderr, "[CRASH-DIAG] Last LLVM callee: %s\n",
               g_lastLLVMCallCallee);
