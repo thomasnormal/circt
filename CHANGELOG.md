@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1425 - February 16, 2026
+
+### circt-sim: Report Getter Fast Paths + UVM Fast-Path File Split
+
+1. Added targeted UVM report getter fast-paths:
+   - `uvm_report_object::get_report_action`
+   - `uvm_report_object::get_report_verbosity_level`
+   - `uvm_report_handler::get_action` (call_indirect parity path)
+   - `uvm_report_handler::get_verbosity_level` (call_indirect parity path)
+2. Added focused regression:
+   - `test/Tools/circt-sim/uvm-report-getters-fast-path.mlir`
+3. Refactored UVM fast-path implementation out of the monolithic interpreter:
+   - new file: `tools/circt-sim/UVMFastPaths.cpp`
+   - `LLHDProcessInterpreter.cpp` now delegates printer/report fast paths to:
+     - `handleUvmCallIndirectFastPath(...)`
+     - `handleUvmFuncCallFastPath(...)`
+   - wired in `tools/circt-sim/CMakeLists.txt`.
+4. Validation:
+   - `CCACHE_TEMPDIR=/tmp/ccache-tmp CCACHE_DIR=/tmp/ccache ninja -C build-test circt-sim` PASS
+   - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/uvm-printer-fast-path-call-indirect.mlir build-test/test/Tools/circt-sim/uvm-report-getters-fast-path.mlir build-test/test/Tools/circt-sim/vtable-indirect-call.mlir build-test/test/Tools/circt-sim/vtable-fallback-dispatch.mlir` PASS
+   - I2S profile (`CIRCT_SIM_PROFILE_FUNCS=1`) shows `m_rh_init` reduced
+     significantly (`25229 -> 974`) and report-handler getter bodies removed
+     from top profile after wrapper fast-pathing.
+
 ## Iteration 1424 - February 16, 2026
 
 ### circt-sim: Targeted UVM Printer call_indirect Fast Paths

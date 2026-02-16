@@ -804,6 +804,17 @@ private:
   mlir::LogicalResult interpretFuncCall(ProcessId procId,
                                          mlir::func::CallOp callOp);
 
+  /// Handle UVM-focused fast-paths for func.call sites.
+  /// Returns true when handled and results (if any) are already set.
+  bool handleUvmFuncCallFastPath(ProcessId procId, mlir::func::CallOp callOp,
+                                 llvm::StringRef calleeName);
+
+  /// Handle UVM-focused fast-paths for func.call_indirect sites.
+  /// Returns true when handled and results (if any) are already set.
+  bool handleUvmCallIndirectFastPath(ProcessId procId,
+                                     mlir::func::CallIndirectOp callIndirectOp,
+                                     llvm::StringRef calleeName);
+
   /// Interpret a function body.
   /// @param procId The process ID executing this function.
   /// @param funcOp The function to execute.
