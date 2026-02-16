@@ -235,7 +235,17 @@ static int32_t getNativeUvmPortSize(
 LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
     : scheduler(scheduler), forkJoinManager(scheduler),
       syncPrimitivesManager(scheduler) {
+  auto envFlagEnabled = [](const char *name) {
+    if (const char *env = std::getenv(name)) {
+      char c = env[0];
+      return c == '1' || c == 'y' || c == 'Y' || c == 't' || c == 'T';
+    }
+    return false;
+  };
   profilingEnabled = std::getenv("CIRCT_SIM_PROFILE_FUNCS") != nullptr;
+  fastPathUvmReportInfo = envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_INFO");
+  fastPathUvmReportWarning =
+      envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_WARNING");
 }
 
 void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
@@ -10182,6 +10192,58 @@ llvm_dispatch:
           continue;
         }
 
+        // For !llhd.ref<T> -> !llvm.ptr casts, allocate a backing memory
+        // block for the signal so that llvm.store writes are visible to
+        // llhd.prb reads.  This pattern arises in --ir-hw mode where output
+        // function arguments write to signals via memory.
+        if (isa<llhd::RefType>(inputType) &&
+            isa<LLVM::LLVMPointerType>(outputType)) {
+          // Look up the signal for this ref
+          auto sigIt = valueToSignal.find(input);
+          if (sigIt != valueToSignal.end()) {
+            SignalId sigId = sigIt->second;
+            // Check if we already allocated a backing block
+            auto backingIt = signalBackingMemory.find(sigId);
+            if (backingIt != signalBackingMemory.end()) {
+              setValue(procId, output,
+                       InterpretedValue(backingIt->second, 64));
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  ref->ptr cast: reusing backing memory at 0x"
+                         << llvm::format_hex(backingIt->second, 0)
+                         << " for signal " << sigId << "\n");
+            } else {
+              // Allocate a new memory block for this signal
+              Type innerType =
+                  cast<llhd::RefType>(inputType).getNestedType();
+              unsigned width = getTypeWidth(innerType);
+              unsigned byteSize = std::max(1u, (width + 7) / 8);
+              auto &block = processStates[procId].memoryBlocks[output];
+              block.size = byteSize;
+              block.data.resize(byteSize, 0);
+              block.initialized = true;
+              // Initialize with current signal value
+              const SignalValue &sigVal =
+                  scheduler.getSignalValue(sigId);
+              if (!sigVal.isUnknown()) {
+                APInt v = sigVal.getAPInt();
+                for (unsigned i = 0; i < byteSize && i * 8 < width; ++i)
+                  block.data[i] = v.extractBitsAsZExtValue(
+                      std::min(8u, width - i * 8), i * 8);
+              }
+              uint64_t addr =
+                  reinterpret_cast<uint64_t>(block.data.data());
+              signalBackingMemory[sigId] = addr;
+              setValue(procId, output,
+                       InterpretedValue(addr, 64));
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  ref->ptr cast: allocated backing memory at 0x"
+                         << llvm::format_hex(addr, 0) << " for signal "
+                         << sigId << " (size=" << byteSize << ")\n");
+            }
+            continue;
+          }
+        }
+
         InterpretedValue val = getValue(procId, input);
 
         // Handle layout conversion between LLVM struct and HW struct types
@@ -13913,6 +13975,81 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
+  // Intercept config_db set_ wrappers at the func.call level.
+  // set_ wrappers return void and have !llvm.ptr arg3 (unlike get_ wrappers
+  // which return i1 and have !llhd.ref arg3). Without this intercept,
+  // set_ wrappers execute their full MLIR body which involves factory
+  // singleton initialization that can fail (vtable X) for some specializations,
+  // causing config_db entries to never be stored. This breaks I2S (and
+  // potentially other AVIPs) because the env/agent configs are never stored,
+  // so build_phase can't retrieve them and components are never created.
+  if (callOp.getNumResults() == 0 &&
+      callOp.getNumOperands() == 4 &&
+      isa<LLVM::LLVMPointerType>(callOp.getOperand(0).getType()) &&
+      isa<LLVM::LLVMPointerType>(callOp.getOperand(3).getType())) {
+    StringRef callee = callOp.getCallee();
+    bool isConfigDbSetWrapper = false;
+    if (callee.starts_with("set_") && callee.size() > 4) {
+      bool allDigits = true;
+      for (char c : callee.drop_front(4))
+        if (!std::isdigit(c)) { allDigits = false; break; }
+      isConfigDbSetWrapper = allDigits;
+    }
+    if (isConfigDbSetWrapper) {
+      // Read inst_name and field_name from struct<(ptr,i64)> args
+      auto readStr = [&](unsigned argIdx) -> std::string {
+        InterpretedValue val = getValue(procId, callOp.getOperand(argIdx));
+        if (val.isX() || val.getWidth() < 128)
+          return "";
+        llvm::APInt bits = val.getAPInt();
+        uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
+        int64_t strLen = bits.extractBits(64, 64).getSExtValue();
+        if (strPtr == 0 || strLen <= 0)
+          return "";
+        auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+        if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+            dynIt->second.second > 0) {
+          return std::string(
+              dynIt->second.first,
+              std::min(static_cast<size_t>(strLen),
+                       static_cast<size_t>(dynIt->second.second)));
+        }
+        uint64_t strOff = 0;
+        MemoryBlock *strBlock = findBlockByAddress(strPtr, strOff);
+        if (!strBlock || !strBlock->initialized)
+          return "";
+        std::string result;
+        for (int64_t i = 0; i < strLen && strOff + i < strBlock->data.size();
+             ++i)
+          result += static_cast<char>(strBlock->data[strOff + i]);
+        return result;
+      };
+
+      std::string instName = readStr(1);
+      std::string fieldName = readStr(2);
+      std::string key = instName + "." + fieldName;
+
+      // Store the value pointer as raw bytes in configDbEntries.
+      // arg3 is !llvm.ptr — the pointer IS the config value (object handle).
+      InterpretedValue valueArg = getValue(procId, callOp.getOperand(3));
+      unsigned valueBits = valueArg.getWidth();
+      unsigned valueBytes = (valueBits + 7) / 8;
+      std::vector<uint8_t> valueData(valueBytes, 0);
+      if (!valueArg.isX()) {
+        llvm::APInt valBits = valueArg.getAPInt();
+        for (unsigned i = 0; i < valueBytes; ++i)
+          valueData[i] = static_cast<uint8_t>(
+              valBits.extractBits(8, i * 8).getZExtValue());
+      }
+      configDbEntries[key] = std::move(valueData);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  func.call @" << callee
+                 << ": config_db set intercepted, key=\"" << key
+                 << "\" valueBytes=" << valueBytes << "\n");
+      return success();
+    }
+  }
+
   // Track UVM root construction for re-entrancy handling
   // When m_uvm_get_root is called, we need to mark root construction as started
   // so that re-entrant calls (via uvm_component::new -> get_root) can skip
@@ -16824,7 +16961,14 @@ std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
     // IEEE 1800-2017 %h requires lowercase a-f.
     val.getAPInt().toString(hexStr, /*Radix=*/16, /*Signed=*/false,
                             /*formatAsCLiteral=*/false, /*UpperCase=*/isUpper);
-    return std::string(hexStr.str());
+    std::string result(hexStr.str());
+    // Apply zero-padding for specifierWidth (e.g., %08x).
+    if (auto widthAttr = hexOp.getSpecifierWidth()) {
+      unsigned width = widthAttr.value();
+      if (result.size() < width)
+        result.insert(0, width - result.size(), '0');
+    }
+    return result;
   }
 
   // Handle sim.fmt.dec - decimal integer format

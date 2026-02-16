@@ -33,6 +33,71 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-16 Session 7: Cross-Field Fix + config_db set_ Wrapper
+
+### v12 Baseline Results (After Cross-Field Contamination Fix)
+
+| AVIP | Sim Time | Errors | Coverage M% | Coverage S% | vs v11 |
+|------|----------|--------|-------------|-------------|--------|
+| JTAG | 229.5 μs | 0 | 100% | 100% | Same |
+| AXI4 | 3.56 μs | 0 | 100% | 100% | Same |
+| APB | 12.77 μs | 7 | 87.89% | 100% | **Improved** (was 10 errors) |
+| AHB | 2.23 μs | 3 | 90% | 100% | Same |
+| SPI | 3.73 μs | 1 | 100% | 100% | Same |
+| I3C | 2.63 μs | 1 | 100% | 100% | Same |
+| I2S | 30 ps | 0 | 0% | 100% | Same |
+
+### Cross-Field Contamination Fix (APB 10→7 Errors)
+**Root cause**: `interfaceFieldPropagation` map contained cross-field links from
+auto-linking (positional field-index matching). When a store to PWRITE triggered
+forward propagation, it reached PADDR signals through cross-sibling and reverse
+fan-out paths, overwriting PADDR with PWRITE's value.
+
+**Propagation chain traced**:
+- sig=55 (BFM1 PADDR, addr=0x1000dc) → sig=13 (DUT PADDR) → sig=40 (BFM2 PADDR) ✓
+- sig=57 (BFM1 PWRITE, addr=0x1000e5) → sig=16 (DUT PWRITE) → cross-sibling →
+  sig=40 (BFM2 PADDR!) ✗ ← cross-field contamination
+
+**Fix**: Removed cross-sibling propagation and reverse fan-out:
+1. Forward propagation: kept (same-field, via interfaceFieldPropagation)
+2. Cross-sibling: removed inner loop that propagated through child's own targets
+3. Reverse fan-out: removed loop that propagated parent→other children
+4. Reverse child→parent: kept (one level up only)
+
+Also fixed TruthTable API (`table.getValue()` → `table` for `ArrayRef<bool>`)
+and added `retriggerSensitiveProcesses` public method to ProcessScheduler.
+
+### config_db set_ Wrapper Interception (I2S RX 0% Fix)
+**Root cause** (from I2S investigation agent): config_db `set_NNNN` wrappers
+have signature `void set_NNNN(!llvm.ptr, struct<(ptr,i64)>, struct<(ptr,i64)>,
+!llvm.ptr)` — void return with `!llvm.ptr` arg3. The existing func.call-level
+config_db interceptor required `getNumResults()==1` and `isa<llhd::RefType>(arg3)`,
+so `set_` wrappers never matched. Instead, they executed their full MLIR body
+which involves factory singleton initialization via `get_imp_NNNN()` that fails
+for some I2S specializations (vtable X in the X-fallback path), causing the
+data to never be stored in configDbEntries.
+
+**Cascade effect**:
+1. `set_8059` (env config) → falls through to MLIR body → singleton fails → not stored
+2. `set_6995` (agent config) → same failure
+3. `get_5525` in I2sEnv::build_phase → returns false (key not found)
+4. I2sTransmitterAgent never created → I2sTransmitterDriverProxy never created
+5. run_phase never dispatched → RX 0%
+
+**Fix**: Added separate `set_` wrapper interceptor at func.call level matching
+`getNumResults()==0` and `isa<LLVMPointerType>(arg3Type)`. Reads inst_name and
+field_name from struct args, stores the value pointer bytes directly in
+configDbEntries, bypassing the factory singleton entirely.
+
+### Team Work Summary
+- **upstream-reviewer**: Cherry-picked 137/192 upstream commits. Shut down.
+- **precompile-uvm**: Achieved 100% sv-tests (1028/1028). Shut down.
+- **cvdp-worker**: CVDP Phase 1 done (103/103 compile), VPI Phase 2 in progress.
+- **coverage-investigator**: APB errors 7→4 in worktree (struct field offset fix).
+- **spi-investigator**: Found SPI MOSI root cause (cleanupTempMappings on suspension).
+
+---
+
 ## 2026-02-16 Session: Targeted UVM Printer Fast Paths (call_indirect)
 
 ### Problem Statement

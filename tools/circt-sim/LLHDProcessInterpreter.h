@@ -1099,6 +1099,11 @@ private:
   /// Key is SignalId, value is the pending value.
   llvm::DenseMap<SignalId, InterpretedValue> pendingEpsilonDrives;
 
+  /// Map from signal IDs to backing memory addresses.  Allocated when an
+  /// unrealized_conversion_cast converts !llhd.ref<T> to !llvm.ptr so that
+  /// llvm.store writes become visible to later llhd.prb reads.
+  llvm::DenseMap<SignalId, uint64_t> signalBackingMemory;
+
   /// Map from process IDs to execution states.
   /// NOTE: This uses std::map rather than DenseMap to guarantee reference
   /// stability.  evaluateCombinationalOp inserts and erases temporary entries
@@ -1230,6 +1235,13 @@ private:
   /// Enabled when CIRCT_SIM_PROFILE_FUNCS env var is set.
   llvm::StringMap<uint64_t> funcCallProfile;
   bool profilingEnabled = false;
+
+  /// Optional fast paths for high-volume UVM report traffic.
+  /// These are opt-in via env vars to avoid changing default behavior.
+  /// CIRCT_SIM_FASTPATH_UVM_REPORT_INFO=1
+  /// CIRCT_SIM_FASTPATH_UVM_REPORT_WARNING=1
+  bool fastPathUvmReportInfo = false;
+  bool fastPathUvmReportWarning = false;
 
   /// Cache for external functions that are NOT intercepted: when we've already
   /// determined that an external function has no matching __moore_* handler,
