@@ -243,9 +243,12 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
     return false;
   };
   profilingEnabled = std::getenv("CIRCT_SIM_PROFILE_FUNCS") != nullptr;
+  traceSeqEnabled = std::getenv("CIRCT_SIM_TRACE_SEQ") != nullptr;
   fastPathUvmReportInfo = envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_INFO");
   fastPathUvmReportWarning =
       envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_WARNING");
+  fastPathUvmGetReportObject =
+      envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_GET_REPORT_OBJECT");
 }
 
 void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
@@ -457,7 +460,7 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
         auto it = interfaceFieldSignals.find(fieldAddr);
         if (it != interfaceFieldSignals.end())
           fieldSignals.push_back(it->second);
-        fieldOffset += getLLVMTypeSize(body[i]);
+        fieldOffset += getLLVMTypeSizeForGEP(body[i]);
       }
       if (!fieldSignals.empty())
         interfacePtrToFieldSignals[sigId] = std::move(fieldSignals);
@@ -474,7 +477,7 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
 
     for (unsigned i = 0; i < body.size(); ++i) {
       Type fieldType = body[i];
-      unsigned fieldSize = getLLVMTypeSize(fieldType);
+      unsigned fieldSize = getLLVMTypeSizeForGEP(fieldType);
       unsigned fieldBitWidth = getTypeWidth(fieldType);
 
       std::string fieldSigName =
@@ -572,7 +575,7 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
 
       for (unsigned i = 0; i < body.size(); ++i) {
         Type fieldType = body[i];
-        unsigned fieldSize = getLLVMTypeSize(fieldType);
+        unsigned fieldSize = getLLVMTypeSizeForGEP(fieldType);
         unsigned fieldBitWidth = getTypeWidth(fieldType);
 
         std::string fieldSigName =
@@ -5179,6 +5182,16 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     it->second.halted = true;
     if (killed)
       it->second.killed = true;
+    // Free heavyweight data structures to prevent unbounded memory growth.
+    // The entry itself is kept (with halted=true) so callers that check
+    // the halted flag still work correctly.
+    it->second.valueMap.clear();
+    it->second.memoryBlocks.clear();
+    it->second.funcResultCache.clear();
+    it->second.recursionVisited.clear();
+    it->second.waitSensitivityCache.clear();
+    it->second.callStack.clear();
+    it->second.refBlockArgSources.clear();
   }
 
   if (forkJoinManager.getForkGroupForChild(procId))
@@ -6598,7 +6611,7 @@ arith_dispatch:
     // The callee is the first operand (function pointer)
     Value calleeValue = callIndirectOp.getCallee();
     InterpretedValue funcPtrVal = getValue(procId, calleeValue);
-    bool traceSeq = std::getenv("CIRCT_SIM_TRACE_SEQ") != nullptr;
+    bool traceSeq = traceSeqEnabled;
 
     // Throttle vtable dispatch warnings to prevent flooding stderr during
     // UVM initialization. Both X function pointers and unmapped addresses
@@ -6807,8 +6820,10 @@ arith_dispatch:
           if (selfAddr2 != 0 && providerAddr2 != 0) {
             auto &conns = analysisPortConnections[selfAddr2];
             if (std::find(conns.begin(), conns.end(), providerAddr2) ==
-                conns.end())
+                conns.end()) {
               conns.push_back(providerAddr2);
+              portToSequencerQueue.erase(selfAddr2);
+            }
           }
           // [SEQ-CONN] X-fallback connect diagnostic removed
           resolved = true;
@@ -7001,8 +7016,10 @@ arith_dispatch:
           if (selfAddr3 != 0 && providerAddr3 != 0) {
             auto &conns = analysisPortConnections[selfAddr3];
             if (std::find(conns.begin(), conns.end(), providerAddr3) ==
-                conns.end())
+                conns.end()) {
               conns.push_back(providerAddr3);
+              portToSequencerQueue.erase(selfAddr3);
+            }
           }
           // [SEQ-CONN] static-fallback connect diagnostic removed
           staticResolved = true;
@@ -8244,8 +8261,10 @@ arith_dispatch:
       uint64_t providerAddr = args[1].isX() ? 0 : args[1].getUInt64();
       if (selfAddr != 0 && providerAddr != 0) {
         auto &conns = analysisPortConnections[selfAddr];
-        if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end())
+        if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end()) {
           conns.push_back(providerAddr);
+          portToSequencerQueue.erase(selfAddr);
+        }
       }
       // [SEQ-CONN] call_indirect connect diagnostic removed
       // Return immediately — don't fall through to UVM code which would
@@ -8526,19 +8545,35 @@ arith_dispatch:
         args.size() >= 2) {
       uint64_t portAddr = args[0].isX() ? 0 : args[0].getUInt64();
       bool isTryNextItem = calleeName.ends_with("::try_next_item");
-      // Find connected sequencer via connection map.
+      // Resolve sequencer queue once and reuse for subsequent calls on this
+      // port. This avoids repeated get_comp/vtable resolution in tight loops.
       uint64_t seqrAddr = 0;
-      auto connIt = analysisPortConnections.find(portAddr);
-      if (connIt != analysisPortConnections.end() &&
-          !connIt->second.empty()) {
-        // The export address may have further connections, follow chain.
-        uint64_t exportAddr = connIt->second[0];
-        // The export is on the sequencer object. We need the sequencer
-        // address. Check if the export appears as a sequencer FIFO key.
-        // If not, check all FIFOs for items.
-        seqrAddr = exportAddr;
+      uint64_t seqrQueueAddr = 0;
+      bool usedCachedSeqrQueue = false;
+      if (portAddr != 0) {
+        auto cachedSeqrIt = portToSequencerQueue.find(portAddr);
+        if (cachedSeqrIt != portToSequencerQueue.end()) {
+          seqrQueueAddr = cachedSeqrIt->second;
+          seqrAddr = seqrQueueAddr;
+          usedCachedSeqrQueue = true;
+        }
       }
-      uint64_t seqrQueueAddr = seqrAddr;
+      if (!usedCachedSeqrQueue) {
+        // Find connected sequencer via connection map.
+        auto connIt = analysisPortConnections.find(portAddr);
+        if (connIt != analysisPortConnections.end() &&
+            !connIt->second.empty()) {
+          // The export address may have further connections, follow chain.
+          // Prefer the most recent connect() target for pull ports.
+          // UVM reconnect flows can update the provider at runtime.
+          uint64_t exportAddr = connIt->second.back();
+          // The export is on the sequencer object. We need the sequencer
+          // address. Check if the export appears as a sequencer FIFO key.
+          // If not, check all FIFOs for items.
+          seqrAddr = exportAddr;
+        }
+        seqrQueueAddr = seqrAddr;
+      }
       auto promoteToSequencerQueue = [&](uint64_t candidateAddr) -> uint64_t {
         if (candidateAddr == 0 || sequencerItemFifo.contains(candidateAddr))
           return candidateAddr;
@@ -8561,7 +8596,7 @@ arith_dispatch:
         }
         return candidateAddr;
       };
-      if (seqrQueueAddr != 0 &&
+      if (!usedCachedSeqrQueue && seqrQueueAddr != 0 &&
           !sequencerItemFifo.contains(seqrQueueAddr)) {
         // Connection maps often point to a seq_item_export object, not the
         // owning sequencer. Resolve the owner component first.
@@ -8669,6 +8704,8 @@ arith_dispatch:
         if (bestKey != 0)
           seqrQueueAddr = bestKey;
       }
+      if (portAddr != 0 && seqrQueueAddr != 0)
+        portToSequencerQueue[portAddr] = seqrQueueAddr;
       // Try to find an item in any FIFO (prioritize matched sequencer).
       uint64_t itemAddr = 0;
       bool found = false;
@@ -10298,9 +10335,6 @@ llvm_dispatch:
               uint64_t addr = reinterpret_cast<uint64_t>(
                   block.data.data());
               setValue(procId, output, InterpretedValue(addr, 64));
-              llvm::errs() << "[BACKING-ALLOC] sigId=" << sigId
-                           << " addr=0x" << llvm::format_hex(addr, 0)
-                           << " size=" << byteSize << "\n";
             }
             continue;
             } // end of else (no drive users)
@@ -10487,8 +10521,6 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
 
   // Get the signal ID for the probed signal
   SignalId sigId = resolveSignalId(signal);
-  llvm::errs() << "[PROBE-ENTRY] sigId=" << sigId
-               << " signal=" << signal << "\n";
   if (sigId == 0) {
     // Check if this is a global variable access via UnrealizedConversionCastOp
     // This happens when static class properties are accessed - they're stored
@@ -10589,20 +10621,38 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
             return success();
           }
 
-          // Read the value from memory
-          uint64_t value = 0;
-          for (unsigned i = 0; i < loadSize; ++i) {
-            value |= (static_cast<uint64_t>(block->data[offset + i]) << (i * 8));
+          // Read the value from memory using APInt (supports >64-bit structs)
+          APInt memValue = APInt::getZero(width);
+          for (unsigned i = 0; i < loadSize && i * 8 < width; ++i) {
+            unsigned bitsToInsert = std::min(8u, width - i * 8);
+            APInt byteVal(bitsToInsert,
+                          block->data[offset + i] & ((1u << bitsToInsert) - 1));
+            safeInsertBits(memValue, byteVal, i * 8);
           }
-          // Mask to the exact bit width
-          if (width < 64)
-            value &= (1ULL << width) - 1;
 
-          setValue(procId, probeOp.getResult(), InterpretedValue(value, width));
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  Probe of GEP pointer 0x"
-                     << llvm::format_hex(ptrVal.getUInt64(), 0)
-                     << " = " << value << " (width=" << width << ")\n");
+          // Check if we need to convert from LLVM layout to HW layout.
+          // LLVM struct fields are at low-to-high bits, while HW struct
+          // fields are at high-to-low bits.
+          Type resultType = probeOp.getResult().getType();
+          Type gepElemType = gepOp.getElemType();
+          if (isa<hw::StructType, hw::ArrayType>(resultType) &&
+              gepElemType &&
+              isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(
+                  gepElemType)) {
+            APInt hwValue =
+                convertLLVMToHWLayout(memValue, gepElemType, resultType);
+            setValue(procId, probeOp.getResult(), InterpretedValue(hwValue));
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Probe of GEP pointer 0x"
+                       << llvm::format_hex(ptrVal.getUInt64(), 0)
+                       << " (LLVM->HW layout) width=" << width << "\n");
+          } else {
+            setValue(procId, probeOp.getResult(), InterpretedValue(memValue));
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Probe of GEP pointer 0x"
+                       << llvm::format_hex(ptrVal.getUInt64(), 0)
+                       << " width=" << width << "\n");
+          }
           return success();
         }
         // Handle AllocaOp - local variables in functions backed by llvm.alloca
@@ -11201,7 +11251,6 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
 
   // First check for pending epsilon drives - this enables blocking assignment
   // semantics where a probe sees the value driven earlier in the same process.
-  llvm::errs() << "[PROBE-POST-SIGID0] sigId=" << sigId << "\n";
   auto pendingIt = pendingEpsilonDrives.find(sigId);
   if (pendingIt != pendingEpsilonDrives.end()) {
     setValue(procId, probeOp.getResult(), pendingIt->second);
@@ -11220,26 +11269,15 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
   //          %result = llhd.prb %sig        <- should see the stored value
   {
     auto backingIt = signalBackingMemory.find(sigId);
-    llvm::errs() << "[PROBE-CHECK] sigId=" << sigId
-                 << " hasBacking=" << (backingIt != signalBackingMemory.end())
-                 << "\n";
     if (backingIt != signalBackingMemory.end()) {
       ProcessId backingProcId = backingIt->second.first;
       Value backingKey = backingIt->second.second;
       auto &st = processStates[backingProcId];
       auto blkIt = st.memoryBlocks.find(backingKey);
-      llvm::errs() << "[PROBE-BACKING] found block="
-                   << (blkIt != st.memoryBlocks.end()) << "\n";
       if (blkIt != st.memoryBlocks.end()) {
         MemoryBlock &block = blkIt->second;
         unsigned width = getTypeWidth(probeOp.getResult().getType());
         unsigned loadSize = (width + 7) / 8;
-        llvm::errs() << "[PROBE-BACKING] initialized=" << block.initialized
-                     << " loadSize=" << loadSize << " blockSize=" << block.size
-                     << " data=";
-        for (unsigned i = 0; i < block.size; ++i)
-          llvm::errs() << llvm::format_hex(block.data[i], 4) << " ";
-        llvm::errs() << "\n";
         if (block.initialized && loadSize <= block.size) {
           APInt memValue = APInt::getZero(width);
           for (unsigned i = 0; i < loadSize && i * 8 < width; ++i) {
@@ -11249,8 +11287,6 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                 block.data[i] & ((1u << bitsToInsert) - 1));
             safeInsertBits(memValue, byteVal, i * 8);
           }
-          llvm::errs() << "[PROBE-BACKING] result=0x"
-                       << llvm::format_hex(memValue.getZExtValue(), 0) << "\n";
           setValue(procId, probeOp.getResult(),
                    InterpretedValue(memValue));
           return success();
@@ -11512,14 +11548,17 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             }
           }
 
-          // Insert the drive value at the bit offset
+          // Insert the drive value at the bit offset.
+          // Treat X as 0 (consistent with SigStructExtractOp handler)
+          // rather than silently skipping the write.
           unsigned extractWidth = driveVal.getWidth();
-          if (!driveVal.isX() &&
-              totalBitOffset + extractWidth <= parentWidth) {
-            APInt insertVal = driveVal.getAPInt();
+          if (totalBitOffset + extractWidth <= parentWidth) {
+            APInt insertVal = driveVal.isX()
+                                  ? APInt::getZero(extractWidth)
+                                  : driveVal.getAPInt();
             if (insertVal.getBitWidth() != extractWidth)
               insertVal = insertVal.zextOrTrunc(extractWidth);
-            safeInsertBits(currentVal,insertVal, totalBitOffset);
+            safeInsertBits(currentVal, insertVal, totalBitOffset);
           }
 
           // Write back to memory
@@ -13433,7 +13472,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting func.call to '"
                           << callOp.getCallee() << "'\n");
   StringRef calleeName = callOp.getCallee();
-  bool traceSeq = std::getenv("CIRCT_SIM_TRACE_SEQ") != nullptr;
+  bool traceSeq = traceSeqEnabled;
 
   LLVM_DEBUG({
     if (calleeName.contains("driver_bfm::") || calleeName.contains("monitor_bfm::")) {
@@ -13746,8 +13785,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     uint64_t providerAddr = providerVal.isX() ? 0 : providerVal.getUInt64();
     if (selfAddr != 0 && providerAddr != 0) {
       auto &conns = analysisPortConnections[selfAddr];
-      if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end())
+      if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end()) {
         conns.push_back(providerAddr);
+        portToSequencerQueue.erase(selfAddr);
+      }
     }
     // [SEQ-CONN] func.call connect diagnostic removed
     return success();
@@ -13800,9 +13841,19 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                    << " fifoMaps=" << sequencerItemFifo.size() << "\n";
 
     uint64_t seqrAddr = 0;
-    auto connIt = analysisPortConnections.find(portAddr);
-    if (connIt != analysisPortConnections.end() && !connIt->second.empty())
-      seqrAddr = connIt->second[0];
+    if (portAddr != 0) {
+      auto cachedSeqrIt = portToSequencerQueue.find(portAddr);
+      if (cachedSeqrIt != portToSequencerQueue.end())
+        seqrAddr = cachedSeqrIt->second;
+    }
+    if (seqrAddr == 0) {
+      auto connIt = analysisPortConnections.find(portAddr);
+      if (connIt != analysisPortConnections.end() && !connIt->second.empty())
+        // Prefer the most recent connect() target for pull ports.
+        seqrAddr = connIt->second.back();
+      if (portAddr != 0 && seqrAddr != 0)
+        portToSequencerQueue[portAddr] = seqrAddr;
+    }
 
     uint64_t itemAddr = 0;
     bool found = false;
@@ -16700,24 +16751,20 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
       }
 
       if (idx == 0) {
-        // First index: scales by the size of the pointed-to type
-        offset += indexVal * getLLVMTypeSize(elemType);
+        offset += indexVal * getLLVMTypeSizeForGEP(elemType);
       } else if (auto structType = dyn_cast<LLVM::LLVMStructType>(currentType)) {
-        // Struct indexing: accumulate offsets of previous fields
         auto body = structType.getBody();
         for (int64_t i = 0; i < indexVal && static_cast<size_t>(i) < body.size(); ++i) {
-          offset += getLLVMTypeSize(body[i]);
+          offset += getLLVMTypeSizeForGEP(body[i]);
         }
         if (static_cast<size_t>(indexVal) < body.size()) {
           currentType = body[indexVal];
         }
       } else if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
-        // Array indexing: multiply by element size
-        offset += indexVal * getLLVMTypeSize(arrayType.getElementType());
+        offset += indexVal * getLLVMTypeSizeForGEP(arrayType.getElementType());
         currentType = arrayType.getElementType();
       } else {
-        // For other types, treat as array of the current type
-        offset += indexVal * getLLVMTypeSize(currentType);
+        offset += indexVal * getLLVMTypeSizeForGEP(currentType);
       }
       ++idx;
     }
@@ -17993,22 +18040,22 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
                 indexVal = static_cast<int64_t>(dynVal.getUInt64());
               }
               if (idx == 0) {
-                offset += indexVal * getLLVMTypeSize(elemType);
+                offset += indexVal * getLLVMTypeSizeForGEP(elemType);
               } else if (auto structType =
                              dyn_cast<LLVM::LLVMStructType>(currentType)) {
                 auto body = structType.getBody();
                 for (int64_t i = 0;
                      i < indexVal && static_cast<size_t>(i) < body.size(); ++i)
-                  offset += getLLVMTypeSize(body[i]);
+                  offset += getLLVMTypeSizeForGEP(body[i]);
                 if (static_cast<size_t>(indexVal) < body.size())
                   currentType = body[indexVal];
               } else if (auto arrayType =
                              dyn_cast<LLVM::LLVMArrayType>(currentType)) {
                 offset +=
-                    indexVal * getLLVMTypeSize(arrayType.getElementType());
+                    indexVal * getLLVMTypeSizeForGEP(arrayType.getElementType());
                 currentType = arrayType.getElementType();
               } else {
-                offset += indexVal * getLLVMTypeSize(currentType);
+                offset += indexVal * getLLVMTypeSizeForGEP(currentType);
               }
               ++idx;
             }
@@ -18315,13 +18362,12 @@ unsigned LLHDProcessInterpreter::getLLVMTypeAlignment(Type type) {
 
 unsigned LLHDProcessInterpreter::getLLVMStructFieldOffset(
     LLVM::LLVMStructType structType, unsigned fieldIndex) {
-  // Use unaligned layout to match MooreToCore's sizeof computation.
-  // MooreToCore computes struct sizes as the sum of field sizes without
-  // alignment padding, so we must use the same layout here.
+  // Use GEP-aligned sizes: each sub-byte field occupies at least one byte,
+  // matching LLVM's data layout for GEP offset computation.
   auto body = structType.getBody();
   unsigned offset = 0;
   for (unsigned i = 0; i < fieldIndex && i < body.size(); ++i)
-    offset += getLLVMTypeSize(body[i]);
+    offset += getLLVMTypeSizeForGEP(body[i]);
   return offset;
 }
 
@@ -18354,6 +18400,32 @@ unsigned LLHDProcessInterpreter::getLLVMTypeSize(Type type) {
   // Default: try to use getTypeWidth and convert to bytes
   unsigned bitWidth = getTypeWidth(type);
   return (bitWidth + 7) / 8;
+}
+
+unsigned LLHDProcessInterpreter::getLLVMTypeSizeForGEP(Type type) {
+  // Returns the byte size of a type as seen by GEP offset computation.
+  // For struct types, each field occupies at least one byte (matching LLVM's
+  // data layout where sub-byte fields like i1, i3 each occupy 1 byte in
+  // memory). This differs from getLLVMTypeSize which uses bit-packed sizes.
+  // The distinction matters for structs with sub-byte fields: e.g.
+  // struct<(i3, i3)> is 1 byte bit-packed but 2 bytes in GEP layout.
+  if (isa<LLVM::LLVMPointerType>(type))
+    return 8;
+
+  if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
+    unsigned totalBytes = 0;
+    for (Type elemType : structType.getBody())
+      totalBytes += getLLVMTypeSizeForGEP(elemType);
+    return totalBytes;
+  }
+
+  if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(type)) {
+    return getLLVMTypeSizeForGEP(arrayType.getElementType()) *
+           arrayType.getNumElements();
+  }
+
+  // For non-aggregate types, same as getLLVMTypeSize
+  return getLLVMTypeSize(type);
 }
 
 MemoryBlock *LLHDProcessInterpreter::findMemoryBlock(ProcessId procId,
@@ -18694,7 +18766,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
           APInt result = APInt::getZero(bitWidth);
           unsigned bitOffset = 0;
           bool anyNonX = false;
-          for (size_t fi = static_cast<size_t>(fieldIdx) + 1;
+          for (size_t fi = static_cast<size_t>(fieldIdx);
                fi < parentFieldSigIds.size() && bitOffset < bitWidth; ++fi) {
             SignalId parentFieldSig = parentFieldSigIds[fi];
             auto propIt2 = interfaceFieldPropagation.find(parentFieldSig);
@@ -19150,6 +19222,42 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
       }
     }
   }
+  // Sync signal backing memory: when a store writes to a memory block that
+  // backs an LLHD signal (allocated in unrealized_conversion_cast for signals
+  // without llhd.drv users), also update pendingEpsilonDrives and the
+  // scheduler so that llhd.prb sees the new value.
+  if (block && !signalBackingMemory.empty()) {
+    for (auto &[backingSigId, backingInfo] : signalBackingMemory) {
+      auto &backingSt = processStates[backingInfo.first];
+      auto backingBlkIt = backingSt.memoryBlocks.find(backingInfo.second);
+      if (backingBlkIt != backingSt.memoryBlocks.end() &&
+          &backingBlkIt->second == block) {
+        // This store wrote to signal backing memory — read back and sync
+        const SignalValue &current = scheduler.getSignalValue(backingSigId);
+        unsigned sigWidth = current.getWidth();
+        unsigned sigBytes = (sigWidth + 7) / 8;
+        APInt newBits = APInt::getZero(sigWidth);
+        for (unsigned i = 0; i < sigBytes && i * 8 < sigWidth; ++i) {
+          unsigned bitsToInsert = std::min(8u, sigWidth - i * 8);
+          APInt byteVal(bitsToInsert,
+                        block->data[i] & ((1u << bitsToInsert) - 1));
+          safeInsertBits(newBits, byteVal, i * 8);
+        }
+        // Convert LLVM layout to HW layout if the signal has struct type
+        Type sigType = getSignalValueType(backingSigId);
+        if (sigType && isa<hw::StructType, hw::ArrayType>(sigType)) {
+          Type llvmType = storeOp.getValue().getType();
+          if (isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(llvmType))
+            newBits = convertLLVMToHWLayout(newBits, llvmType, sigType);
+        }
+        InterpretedValue syncVal(newBits);
+        pendingEpsilonDrives[backingSigId] = syncVal;
+        scheduler.updateSignal(backingSigId, syncVal.toSignalValue());
+        break;
+      }
+    }
+  }
+
   // Drive interface field shadow signals. When a store targets an address
   // within a known interface struct, also drive the corresponding shadow
   // signal so that processes sensitive to the interface field wake up.
@@ -19261,10 +19369,40 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
             propagateToSignal(childSigId);
         }
 
-        // Reverse propagation is intentionally disabled for now.
-        // Copy-pair discovery can record bidirectional links for a given
-        // interface field, and mirroring child->parent writes here creates
-        // feedback loops that stall time advancement in AVIP runs.
+        // Reverse propagation: when a CHILD interface field is written,
+        // propagate UP to the parent field, then forward from the parent
+        // to all OTHER children. This ensures sibling BFMs (e.g., monitor
+        // and driver on the same bus) see each other's writes.
+        // The value-changed check in propagateToSignal prevents loops.
+        auto childAddrIt = fieldSignalToAddr.find(fieldSigId);
+        if (childAddrIt != fieldSignalToAddr.end()) {
+          auto parentAddrIt =
+              childToParentFieldAddr.find(childAddrIt->second);
+          if (parentAddrIt != childToParentFieldAddr.end()) {
+            auto parentFieldIt =
+                interfaceFieldSignals.find(parentAddrIt->second);
+            if (parentFieldIt != interfaceFieldSignals.end()) {
+              SignalId parentFieldSigId = parentFieldIt->second;
+              // Update parent shadow signal (skips if unchanged).
+              const SignalValue &parentCurrent =
+                  scheduler.getSignalValue(parentFieldSigId);
+              if (!(parentCurrent == newSigVal)) {
+                propagateToSignal(parentFieldSigId);
+                // Forward-propagate from parent to all children
+                // (the originating child will be skipped by the
+                // value-changed check since it already has the value).
+                auto parentPropIt =
+                    interfaceFieldPropagation.find(parentFieldSigId);
+                if (parentPropIt != interfaceFieldPropagation.end()) {
+                  for (SignalId siblingId : parentPropIt->second) {
+                    if (siblingId != fieldSigId)
+                      propagateToSignal(siblingId);
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -19323,23 +19461,25 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMGEP(ProcessId procId,
 
     if (idx == 0) {
       // First index: scales by the size of the pointed-to type
-      offset += indexVal * getLLVMTypeSize(elemType);
+      offset += indexVal * getLLVMTypeSizeForGEP(elemType);
     } else if (auto structType = dyn_cast<LLVM::LLVMStructType>(currentType)) {
-      // Struct indexing: accumulate offsets of previous fields
+      // Struct indexing: accumulate offsets of previous fields.
+      // Use GEP-aligned sizes so sub-byte struct fields (e.g. struct<(i3,i3)>)
+      // occupy their correct byte span, keeping subsequent field offsets right.
       auto body = structType.getBody();
       for (int64_t i = 0; i < indexVal && static_cast<size_t>(i) < body.size(); ++i) {
-        offset += getLLVMTypeSize(body[i]);
+        offset += getLLVMTypeSizeForGEP(body[i]);
       }
       if (static_cast<size_t>(indexVal) < body.size()) {
         currentType = body[indexVal];
       }
     } else if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
       // Array indexing: multiply by element size
-      offset += indexVal * getLLVMTypeSize(arrayType.getElementType());
+      offset += indexVal * getLLVMTypeSizeForGEP(arrayType.getElementType());
       currentType = arrayType.getElementType();
     } else {
       // For other types, treat as array of the current type
-      offset += indexVal * getLLVMTypeSize(currentType);
+      offset += indexVal * getLLVMTypeSizeForGEP(currentType);
     }
     ++idx;
   }
@@ -19416,8 +19556,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       uint64_t providerAddr = connectArgs[1].getUInt64();
       if (selfAddr != 0 && providerAddr != 0) {
         auto &conns = analysisPortConnections[selfAddr];
-        if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end())
+        if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end()) {
           conns.push_back(providerAddr);
+          portToSequencerQueue.erase(selfAddr);
+        }
       }
     }
     return success();
@@ -23030,7 +23172,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                       llvm::dyn_cast_if_present<IntegerAttr>(indexValue))
                 indexVal = intAttr.getInt();
               if (idx == 0) {
-                fieldOffset += indexVal * getLLVMTypeSize(currentType);
+                fieldOffset += indexVal * getLLVMTypeSizeForGEP(currentType);
               } else if (auto structType =
                              dyn_cast<LLVM::LLVMStructType>(currentType)) {
                 auto body = structType.getBody();
@@ -23038,7 +23180,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                      j < indexVal &&
                      static_cast<size_t>(j) < body.size();
                      ++j)
-                  fieldOffset += getLLVMTypeSize(body[j]);
+                  fieldOffset += getLLVMTypeSizeForGEP(body[j]);
                 if (static_cast<size_t>(indexVal) < body.size())
                   currentType = body[indexVal];
               }
@@ -27756,7 +27898,7 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
 
     // Get the global's type to calculate size
     Type globalType = globalOp.getGlobalType();
-    unsigned size = getLLVMTypeSize(globalType);
+    unsigned size = getLLVMTypeSizeForGEP(globalType);
     if (size == 0)
       size = 8; // Default minimum size
 
