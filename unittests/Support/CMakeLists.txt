@@ -8,13 +8,13 @@ add_circt_unittest(CIRCTSupportTests
   FVIntTest.cpp
   I1ValueSimplifierTest.cpp
   JSONTest.cpp
-  NPNClassTest.cpp
   PrettyPrinterTest.cpp
   ProjectConfigTest.cpp
   ResourceGuardTest.cpp
   SMTModelTest.cpp
   SMTDeadCodeEliminationTest.cpp
   TestReportingTest.cpp
+  TruthTableTest.cpp
   TwoStateUtilsTest.cpp
   WallClockTimeoutTest.cpp
 )
