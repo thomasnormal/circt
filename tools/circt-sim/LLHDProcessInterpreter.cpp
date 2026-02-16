@@ -38,6 +38,7 @@ unsigned g_lastFuncProcId = 0;
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cerrno>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -242,13 +243,73 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
     }
     return false;
   };
+  auto envUint64Value = [](const char *name, uint64_t defaultValue) {
+    if (const char *env = std::getenv(name)) {
+      char *end = nullptr;
+      errno = 0;
+      unsigned long long parsed = std::strtoull(env, &end, 10);
+      if (errno == 0 && end != env)
+        return static_cast<uint64_t>(parsed);
+    }
+    return defaultValue;
+  };
+  auto envInt64Value = [](const char *name, int64_t defaultValue) {
+    if (const char *env = std::getenv(name)) {
+      char *end = nullptr;
+      errno = 0;
+      long long parsed = std::strtoll(env, &end, 10);
+      if (errno == 0 && end != env)
+        return static_cast<int64_t>(parsed);
+    }
+    return defaultValue;
+  };
   profilingEnabled = std::getenv("CIRCT_SIM_PROFILE_FUNCS") != nullptr;
   traceSeqEnabled = std::getenv("CIRCT_SIM_TRACE_SEQ") != nullptr;
+  traceAnalysisEnabled = std::getenv("CIRCT_SIM_TRACE_ANALYSIS") != nullptr;
   fastPathUvmReportInfo = envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_INFO");
   fastPathUvmReportWarning =
       envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_WARNING");
   fastPathUvmGetReportObject =
       envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_GET_REPORT_OBJECT");
+  uvmJitHotThreshold = envUint64Value("CIRCT_SIM_UVM_JIT_HOT_THRESHOLD", 0);
+  uvmJitPromotionBudget =
+      envInt64Value("CIRCT_SIM_UVM_JIT_PROMOTION_BUDGET", 0);
+  uvmJitTracePromotions =
+      envFlagEnabled("CIRCT_SIM_UVM_JIT_TRACE_PROMOTIONS");
+}
+
+void LLHDProcessInterpreter::noteUvmFastPathActionHit(llvm::StringRef actionKey) {
+  if (profilingEnabled)
+    ++uvmFastPathProfile[actionKey];
+
+  auto &hitCount = uvmFastPathHitCount[actionKey];
+  ++hitCount;
+
+  if (uvmJitHotThreshold == 0 || hitCount < uvmJitHotThreshold)
+    return;
+
+  if (uvmJitPromotionBudget == 0)
+    return;
+
+  auto storageIt = uvmJitPromotedStorage.find(actionKey);
+  llvm::StringRef stableKey;
+  if (storageIt == uvmJitPromotedStorage.end())
+    stableKey = uvmJitPromotedStorage.try_emplace(actionKey, 0).first->getKey();
+  else
+    stableKey = storageIt->getKey();
+
+  if (!uvmJitPromotedFastPaths.insert(stableKey).second)
+    return;
+
+  if (uvmJitPromotionBudget > 0)
+    --uvmJitPromotionBudget;
+
+  if (uvmJitTracePromotions) {
+    llvm::errs() << "[circt-sim] UVM JIT promotion candidate: " << stableKey
+                 << " hits=" << hitCount
+                 << " threshold=" << uvmJitHotThreshold
+                 << " budget_remaining=" << uvmJitPromotionBudget << "\n";
+  }
 }
 
 void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
@@ -292,6 +353,27 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
     });
     for (size_t i = 0; i < std::min(sorted.size(), (size_t)30); ++i)
       os << "  " << sorted[i].second << "x " << sorted[i].first << "\n";
+  }
+
+  if (profilingEnabled && !uvmFastPathProfile.empty()) {
+    os << "[circt-sim] UVM fast-path profile (top 20):\n";
+    llvm::SmallVector<std::pair<llvm::StringRef, uint64_t>> sorted;
+    for (const auto &entry : uvmFastPathProfile)
+      sorted.push_back({entry.getKey(), entry.getValue()});
+    llvm::sort(sorted, [](const auto &a, const auto &b) {
+      return a.second > b.second;
+    });
+    for (size_t i = 0; i < std::min(sorted.size(), (size_t)20); ++i)
+      os << "  " << sorted[i].second << "x " << sorted[i].first << "\n";
+  }
+
+  if (!uvmJitPromotedFastPaths.empty()) {
+    os << "[circt-sim] UVM JIT promotion candidates ("
+       << uvmJitPromotedFastPaths.size() << "):\n";
+    for (llvm::StringRef key : uvmJitPromotedFastPaths)
+      os << "  " << key << "\n";
+    os << "[circt-sim] UVM JIT budget remaining: " << uvmJitPromotionBudget
+       << "\n";
   }
 
   os.flush();
@@ -348,6 +430,11 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
   // create shadow signals for each field. This enables event-driven
   // sensitivity for processes that read interface fields from memory.
 
+  llvm::errs() << "[DBG] createInterfaceFieldShadowSignals: valueToSignal="
+               << valueToSignal.size() << " instanceValueToSignal="
+               << instanceValueToSignal.size() << " childModuleCopyPairs="
+               << childModuleCopyPairs.size() << "\n";
+
   for (auto &[sigValue, sigId] : valueToSignal) {
     auto sigOp = sigValue.getDefiningOp<llhd::SignalOp>();
     if (!sigOp)
@@ -387,16 +474,22 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
     //   %field = llvm.getelementptr %ptr[0, N] : ... !llvm.struct<"interface.*", ...>
     // The GEP's element type tells us the interface struct layout.
     LLVM::LLVMStructType ifaceStructTy;
+    unsigned numUsers = 0, numProbes = 0, numGeps = 0;
     for (auto *user : sigOp.getResult().getUsers()) {
+      ++numUsers;
       auto probeOp = dyn_cast<llhd::ProbeOp>(user);
       if (!probeOp)
         continue;
+      ++numProbes;
       for (auto *probeUser : probeOp.getResult().getUsers()) {
         auto gepOp = dyn_cast<LLVM::GEPOp>(probeUser);
         if (!gepOp)
           continue;
+        ++numGeps;
         if (auto elemTy = gepOp.getElemType()) {
           if (auto structTy = dyn_cast<LLVM::LLVMStructType>(elemTy)) {
+            llvm::errs() << "[DBG] parent GEP struct name: '"
+                         << structTy.getName() << "'\n";
             if (structTy.getName().starts_with("interface.")) {
               ifaceStructTy = structTy;
               break;
@@ -409,6 +502,11 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
       if (ifaceStructTy)
         break;
     }
+    llvm::errs() << "[DBG] parent sig " << sigId
+                 << ": users=" << numUsers << " probes=" << numProbes
+                 << " geps=" << numGeps
+                 << " ifaceFound=" << (ifaceStructTy ? "yes" : "no")
+                 << " addr=0x" << llvm::format_hex(mallocAddr, 10) << "\n";
 
     // Also check through unrealized_conversion_cast → GEP chains
     // (used when interface ptr is passed through module ports)
@@ -1078,6 +1176,18 @@ LogicalResult LLHDProcessInterpreter::finalizeInit() {
                << "LLHDProcessInterpreter: clearing terminationRequested "
                << "set during global init\n");
     terminationRequested = false;
+  }
+
+  // Set up signal change callback to re-evaluate module drives that depend
+  // on signals (via llhd.prb in the combinational chain).
+  if (!signalDependentModuleDrives.empty()) {
+    scheduler.setSignalChangeCallback(
+        [this](SignalId sigId, const SignalValue &) {
+          executeModuleDrivesForSignal(sigId);
+        });
+    llvm::errs() << "[DBG] Registered signal change callback for "
+                 << signalDependentModuleDrives.size()
+                 << " signal-dependent module drive mappings\n";
   }
 
   return success();
@@ -2344,30 +2454,74 @@ void LLHDProcessInterpreter::registerModuleDrive(
     }
   }
 
-  // Check if the drive value comes from a process result
-  if (auto processOp = driveValue.getDefiningOp<llhd::ProcessOp>()) {
-    // Find the process ID for this process
-    ProcessId procId = InvalidProcessId;
-    if (driveInstance != 0) {
-      auto ctxIt = instanceOpToProcessId.find(driveInstance);
-      if (ctxIt != instanceOpToProcessId.end()) {
-        auto procIt = ctxIt->second.find(processOp.getOperation());
-        if (procIt != ctxIt->second.end())
+  // Trace through combinational operations to find all upstream process results.
+  // The drive value may be a direct process result (llhd.process -> i1) or it
+  // may be derived through combinational logic (e.g., comb.and %proc_val, %in).
+  // We need to find ALL upstream processes so the drive is re-evaluated when
+  // any of them yields.
+  llvm::SmallVector<mlir::Value, 8> worklist;
+  llvm::DenseSet<mlir::Value> visited;
+  llvm::SmallVector<ProcessId, 4> connectedProcesses;
+  llvm::SmallVector<SignalId, 4> dependentSignals;
+  worklist.push_back(driveValue);
+  while (!worklist.empty()) {
+    mlir::Value v = worklist.pop_back_val();
+    if (!v || !visited.insert(v).second)
+      continue;
+    // Direct process result?
+    if (auto processOp = v.getDefiningOp<llhd::ProcessOp>()) {
+      ProcessId procId = InvalidProcessId;
+      if (driveInstance != 0) {
+        auto ctxIt = instanceOpToProcessId.find(driveInstance);
+        if (ctxIt != instanceOpToProcessId.end()) {
+          auto procIt = ctxIt->second.find(processOp.getOperation());
+          if (procIt != ctxIt->second.end())
+            procId = procIt->second;
+        }
+      }
+      if (procId == InvalidProcessId) {
+        auto procIt = opToProcessId.find(processOp.getOperation());
+        if (procIt != opToProcessId.end())
           procId = procIt->second;
       }
+      if (procId != InvalidProcessId)
+        connectedProcesses.push_back(procId);
+      continue;
     }
-    if (procId == InvalidProcessId) {
-      auto procIt = opToProcessId.find(processOp.getOperation());
-      if (procIt != opToProcessId.end())
-        procId = procIt->second;
+    // Track signal dependencies via llhd.prb
+    if (auto prbOp = v.getDefiningOp<llhd::ProbeOp>()) {
+      SignalId sigId = getSignalId(prbOp.getSignal());
+      if (sigId != 0)
+        dependentSignals.push_back(sigId);
+      continue;
     }
-    if (procId != InvalidProcessId) {
+    // Trace through combinational ops (comb.and, comb.or, comb.xor, comb.mux,
+    // comb.concat, comb.extract, hw.struct_extract, etc.)
+    if (auto *defOp = v.getDefiningOp()) {
+      if (defOp->getDialect() &&
+          (defOp->getDialect()->getNamespace() == "comb" ||
+           defOp->getDialect()->getNamespace() == "hw")) {
+        for (mlir::Value operand : defOp->getOperands())
+          worklist.push_back(operand);
+      }
+    }
+  }
 
+  if (!connectedProcesses.empty()) {
+    size_t driveIdx = moduleDrives.size();
+    for (ProcessId procId : connectedProcesses) {
       // Store this drive for later execution when the process yields
       moduleDrives.push_back({driveOp, procId, instanceId, inputMap});
 
       LLVM_DEBUG(llvm::dbgs() << "  Registered module-level drive connected to "
                               << "process " << procId << "\n");
+    }
+    // Register signal dependencies for all entries we just added
+    for (SignalId sigId : dependentSignals) {
+      for (size_t i = driveIdx; i < moduleDrives.size(); ++i)
+        signalDependentModuleDrives[sigId].push_back(i);
+      llvm::errs() << "[DBG] Module drive also depends on signal "
+                   << sigId << " (driveIdx=" << driveIdx << ")\n";
     }
   } else {
     // For non-process-connected drives, schedule them immediately
@@ -2468,6 +2622,68 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
         }));
   }
   (void)drivesProcessed;
+}
+
+void LLHDProcessInterpreter::executeModuleDrivesForSignal(SignalId sigId) {
+  auto it = signalDependentModuleDrives.find(sigId);
+  if (it == signalDependentModuleDrives.end())
+    return;
+
+  llvm::errs() << "[DBG] executeModuleDrivesForSignal: signal " << sigId
+               << " changed, re-evaluating " << it->second.size()
+               << " dependent module drives\n";
+
+  for (size_t idx : it->second) {
+    if (idx >= moduleDrives.size())
+      continue;
+    auto &entry = moduleDrives[idx];
+    ScopedInstanceContext instScope(*this, entry.instanceId);
+    ScopedInputValueMap inputScope(*this, entry.inputMap);
+    llhd::DriveOp driveOp = entry.driveOp;
+
+    SignalId dstSigId = getSignalId(driveOp.getSignal());
+    if (dstSigId == 0)
+      continue;
+
+    // Check enable condition if present
+    if (driveOp.getEnable()) {
+      InterpretedValue enableVal = getValue(entry.procId, driveOp.getEnable());
+      if (enableVal.isX() || enableVal.getUInt64() == 0)
+        continue;
+    }
+
+    InterpretedValue driveVal = getValue(entry.procId, driveOp.getValue());
+    llvm::errs() << "[DBG]   driveVal="
+                 << (driveVal.isX() ? "X" : std::to_string(driveVal.getUInt64()))
+                 << " dstSig=" << dstSigId << " procId=" << entry.procId << "\n";
+    SimTime delay = convertTimeValue(entry.procId, driveOp.getTime());
+    SimTime currentTime = scheduler.getCurrentTime();
+    SimTime targetTime = currentTime.advanceTime(delay.realTime);
+    if (delay.deltaStep > 0)
+      targetTime.deltaStep = delay.deltaStep;
+
+    llvm::errs() << "[DBG]   targetTime=" << targetTime.realTime
+                 << " delta=" << targetTime.deltaStep << "\n";
+
+    SignalValue newVal = driveVal.toSignalValue();
+    DriveStrength strength0 = DriveStrength::Strong;
+    DriveStrength strength1 = DriveStrength::Strong;
+    if (auto s0Attr = driveOp.getStrength0Attr())
+      strength0 =
+          static_cast<DriveStrength>(static_cast<uint8_t>(s0Attr.getValue()));
+    if (auto s1Attr = driveOp.getStrength1Attr())
+      strength1 =
+          static_cast<DriveStrength>(static_cast<uint8_t>(s1Attr.getValue()));
+
+    uint64_t driverId = reinterpret_cast<uint64_t>(driveOp.getOperation());
+
+    scheduler.getEventScheduler().schedule(
+        targetTime, SchedulingRegion::NBA,
+        Event([this, dstSigId, driverId, newVal, strength0, strength1]() {
+          scheduler.updateSignalWithStrength(dstSigId, driverId, newVal,
+                                             strength0, strength1);
+        }));
+  }
 }
 
 void LLHDProcessInterpreter::executeInstanceOutputUpdates(ProcessId procId) {
@@ -6613,6 +6829,47 @@ arith_dispatch:
     InterpretedValue funcPtrVal = getValue(procId, calleeValue);
     bool traceSeq = traceSeqEnabled;
 
+    // Early trace: log every call_indirect to detect analysis_port writes.
+    if (traceAnalysisEnabled) {
+      // Try to identify the callee from the SSA chain (GEP → vtable)
+      auto castOp0 = calleeValue.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+      if (castOp0 && castOp0.getInputs().size() == 1) {
+        auto loadOp0 = castOp0.getInputs()[0].getDefiningOp<LLVM::LoadOp>();
+        if (loadOp0) {
+          auto gepOp0 = loadOp0.getAddr().getDefiningOp<LLVM::GEPOp>();
+          if (gepOp0) {
+            auto baseLoad0 = gepOp0.getBase().getDefiningOp<LLVM::LoadOp>();
+            if (baseLoad0) {
+              auto objGep0 = baseLoad0.getAddr().getDefiningOp<LLVM::GEPOp>();
+              if (objGep0) {
+                if (auto structTy0 = dyn_cast<LLVM::LLVMStructType>(
+                        objGep0.getElemType())) {
+                  if (structTy0.isIdentified() &&
+                      structTy0.getName().contains("analysis_port")) {
+                    auto indices0 = gepOp0.getIndices();
+                    int64_t slot0 = -1;
+                    if (indices0.size() >= 2) {
+                      if (auto ia = llvm::dyn_cast_if_present<IntegerAttr>(
+                              indices0[indices0.size() - 1]))
+                        slot0 = ia.getInt();
+                    }
+                    llvm::errs() << "[ANALYSIS-CI-ENTRY] struct="
+                                 << structTy0.getName() << " slot=" << slot0
+                                 << " funcPtrIsX=" << funcPtrVal.isX()
+                                 << " funcAddr=0x"
+                                 << (funcPtrVal.isX()
+                                         ? std::string("X")
+                                         : llvm::utohexstr(funcPtrVal.getUInt64()))
+                                 << "\n";
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Throttle vtable dispatch warnings to prevent flooding stderr during
     // UVM initialization. Both X function pointers and unmapped addresses
     // share a single counter.
@@ -6826,6 +7083,106 @@ arith_dispatch:
             }
           }
           // [SEQ-CONN] X-fallback connect diagnostic removed
+          resolved = true;
+          break;
+        }
+
+        // Intercept analysis_port::write in X-fallback path.
+        // The UVM write() body iterates m_imp_list via get_if(i), but
+        // m_if is empty because we skip resolve_bindings. Use our native
+        // analysisPortConnections map to dispatch to terminal imps.
+        if (resolvedName.contains("analysis_port") &&
+            resolvedName.contains("::write") &&
+            !resolvedName.contains("write_m_") && args.size() >= 2) {
+          uint64_t portAddr = args[0].isX() ? 0 : args[0].getUInt64();
+          if (traceAnalysisEnabled)
+            llvm::errs() << "[ANALYSIS-WRITE-XFALLBACK] " << resolvedName
+                         << " portAddr=0x" << llvm::format_hex(portAddr, 0)
+                         << " inMap=" << analysisPortConnections.count(portAddr)
+                         << "\n";
+          // Flatten the connection chain to find all terminal imps.
+          llvm::SmallVector<uint64_t, 4> terminals;
+          llvm::SmallVector<uint64_t, 8> worklist;
+          llvm::DenseSet<uint64_t> visited;
+          auto seedIt = analysisPortConnections.find(portAddr);
+          if (seedIt != analysisPortConnections.end()) {
+            for (uint64_t a : seedIt->second)
+              worklist.push_back(a);
+          }
+          while (!worklist.empty()) {
+            uint64_t addr = worklist.pop_back_val();
+            if (!visited.insert(addr).second)
+              continue;
+            auto chainIt = analysisPortConnections.find(addr);
+            if (chainIt != analysisPortConnections.end() &&
+                !chainIt->second.empty()) {
+              for (uint64_t next : chainIt->second)
+                worklist.push_back(next);
+            } else {
+              terminals.push_back(addr);
+            }
+          }
+          if (!terminals.empty()) {
+            if (traceAnalysisEnabled)
+              llvm::errs() << "[ANALYSIS-WRITE-XFALLBACK] " << terminals.size()
+                           << " terminal(s) found\n";
+            for (uint64_t impAddr : terminals) {
+              // Read vtable pointer at byte offset 4 from the imp object.
+              uint64_t vtableOff2 = 0;
+              MemoryBlock *impBlock = findBlockByAddress(impAddr, vtableOff2);
+              if (!impBlock || vtableOff2 + 4 + 8 > impBlock->size)
+                continue;
+              uint64_t vtableAddr2 = 0;
+              for (unsigned i = 0; i < 8; ++i)
+                vtableAddr2 |= static_cast<uint64_t>(
+                                   impBlock->data[vtableOff2 + 4 + i])
+                               << (i * 8);
+              auto globalIt2 = addressToGlobal.find(vtableAddr2);
+              if (globalIt2 == addressToGlobal.end())
+                continue;
+              // Read write function pointer from vtable slot 11.
+              auto vtableBlockIt = globalMemoryBlocks.find(globalIt2->second);
+              if (vtableBlockIt == globalMemoryBlocks.end())
+                continue;
+              auto &vtableBlock2 = vtableBlockIt->second;
+              unsigned writeSlot = 11;
+              unsigned slotOff = writeSlot * 8;
+              if (slotOff + 8 > vtableBlock2.size)
+                continue;
+              uint64_t writeFuncAddr = 0;
+              for (unsigned i = 0; i < 8; ++i)
+                writeFuncAddr |=
+                    static_cast<uint64_t>(vtableBlock2.data[slotOff + i])
+                    << (i * 8);
+              auto funcIt2 = addressToFunction.find(writeFuncAddr);
+              if (funcIt2 == addressToFunction.end())
+                continue;
+              auto impWriteFunc = moduleOp.lookupSymbol<func::FuncOp>(
+                  funcIt2->second);
+              if (!impWriteFunc)
+                continue;
+              if (traceAnalysisEnabled)
+                llvm::errs() << "[ANALYSIS-WRITE-XFALLBACK] dispatching to "
+                             << funcIt2->second << "\n";
+              SmallVector<InterpretedValue, 2> impArgs;
+              impArgs.push_back(InterpretedValue(llvm::APInt(64, impAddr)));
+              impArgs.push_back(args[1]); // transaction object
+              SmallVector<InterpretedValue, 2> impResults;
+              auto &cState2 = processStates[procId];
+              ++cState2.callDepth;
+              interpretFuncBody(procId, impWriteFunc, impArgs, impResults,
+                                callIndirectOp);
+              --cState2.callDepth;
+            }
+            resolved = true;
+            break;
+          }
+          // If no native connections, fall through to normal UVM body dispatch.
+        }
+
+        // Intercept resolve_bindings in X-fallback path — skip it.
+        if (resolvedName.contains("uvm_port_base") &&
+            resolvedName.contains("::resolve_bindings")) {
           resolved = true;
           break;
         }
@@ -7189,6 +7546,96 @@ arith_dispatch:
             staticResolved = true;
             break;
           }
+        }
+
+        // Intercept analysis_port::write in non-X static fallback path.
+        if (resolvedName.contains("analysis_port") &&
+            resolvedName.contains("::write") &&
+            !resolvedName.contains("write_m_") && sArgs.size() >= 2) {
+          uint64_t portAddr3 = sArgs[0].isX() ? 0 : sArgs[0].getUInt64();
+          if (traceAnalysisEnabled)
+            llvm::errs() << "[ANALYSIS-WRITE-STATIC] " << resolvedName
+                         << " portAddr=0x" << llvm::format_hex(portAddr3, 0)
+                         << " inMap=" << analysisPortConnections.count(portAddr3)
+                         << "\n";
+          llvm::SmallVector<uint64_t, 4> terminals3;
+          llvm::SmallVector<uint64_t, 8> worklist3;
+          llvm::DenseSet<uint64_t> visited3;
+          auto seedIt3 = analysisPortConnections.find(portAddr3);
+          if (seedIt3 != analysisPortConnections.end()) {
+            for (uint64_t a : seedIt3->second)
+              worklist3.push_back(a);
+          }
+          while (!worklist3.empty()) {
+            uint64_t addr = worklist3.pop_back_val();
+            if (!visited3.insert(addr).second)
+              continue;
+            auto chainIt = analysisPortConnections.find(addr);
+            if (chainIt != analysisPortConnections.end() &&
+                !chainIt->second.empty()) {
+              for (uint64_t next : chainIt->second)
+                worklist3.push_back(next);
+            } else {
+              terminals3.push_back(addr);
+            }
+          }
+          if (!terminals3.empty()) {
+            if (traceAnalysisEnabled)
+              llvm::errs() << "[ANALYSIS-WRITE-STATIC] " << terminals3.size()
+                           << " terminal(s) found\n";
+            for (uint64_t impAddr : terminals3) {
+              uint64_t vtableOff3 = 0;
+              MemoryBlock *impBlock3 = findBlockByAddress(impAddr, vtableOff3);
+              if (!impBlock3 || vtableOff3 + 4 + 8 > impBlock3->size)
+                continue;
+              uint64_t vtableAddr3 = 0;
+              for (unsigned i = 0; i < 8; ++i)
+                vtableAddr3 |= static_cast<uint64_t>(
+                                   impBlock3->data[vtableOff3 + 4 + i])
+                               << (i * 8);
+              auto gIt = addressToGlobal.find(vtableAddr3);
+              if (gIt == addressToGlobal.end())
+                continue;
+              auto vbIt = globalMemoryBlocks.find(gIt->second);
+              if (vbIt == globalMemoryBlocks.end())
+                continue;
+              auto &vb = vbIt->second;
+              unsigned writeSlot3 = 11;
+              unsigned slotOff3 = writeSlot3 * 8;
+              if (slotOff3 + 8 > vb.size)
+                continue;
+              uint64_t wfa = 0;
+              for (unsigned i = 0; i < 8; ++i)
+                wfa |= static_cast<uint64_t>(vb.data[slotOff3 + i]) << (i * 8);
+              auto fi = addressToFunction.find(wfa);
+              if (fi == addressToFunction.end())
+                continue;
+              auto iwf = modOp.lookupSymbol<func::FuncOp>(fi->second);
+              if (!iwf)
+                continue;
+              if (traceAnalysisEnabled)
+                llvm::errs() << "[ANALYSIS-WRITE-STATIC] dispatching to "
+                             << fi->second << "\n";
+              SmallVector<InterpretedValue, 2> iArgs;
+              iArgs.push_back(InterpretedValue(llvm::APInt(64, impAddr)));
+              iArgs.push_back(sArgs[1]);
+              SmallVector<InterpretedValue, 2> iRes;
+              auto &cs3 = processStates[procId];
+              ++cs3.callDepth;
+              interpretFuncBody(procId, iwf, iArgs, iRes, callIndirectOp);
+              --cs3.callDepth;
+            }
+            staticResolved = true;
+            break;
+          }
+          // If no native connections, fall through to normal UVM body dispatch.
+        }
+
+        // Intercept resolve_bindings in non-X static fallback path.
+        if (resolvedName.contains("uvm_port_base") &&
+            resolvedName.contains("::resolve_bindings")) {
+          staticResolved = true;
+          break;
         }
 
         // [SEQ-UNMAPPED] diagnostic removed
@@ -8266,7 +8713,11 @@ arith_dispatch:
           portToSequencerQueue.erase(selfAddr);
         }
       }
-      // [SEQ-CONN] call_indirect connect diagnostic removed
+      if (traceAnalysisEnabled)
+        llvm::errs() << "[ANALYSIS-CONNECT] " << calleeName
+                     << " self=0x" << llvm::format_hex(selfAddr, 0)
+                     << " provider=0x" << llvm::format_hex(providerAddr, 0)
+                     << "\n";
       // Return immediately — don't fall through to UVM code which would
       // issue "Late Connection" warning and reject the connection.
       return success();
@@ -8292,6 +8743,11 @@ arith_dispatch:
     if (calleeName.contains("analysis_port") && calleeName.contains("::write") &&
         !calleeName.contains("write_m_") && args.size() >= 2) {
       uint64_t portAddr = args[0].isX() ? 0 : args[0].getUInt64();
+      if (traceAnalysisEnabled)
+        llvm::errs() << "[ANALYSIS-WRITE] " << calleeName
+                     << " portAddr=0x" << llvm::format_hex(portAddr, 0)
+                     << " inMap=" << analysisPortConnections.count(portAddr)
+                     << "\n";
       // Flatten the connection chain to find all terminal imps.
       // A terminal is any address that doesn't appear as a key in our map.
       llvm::SmallVector<uint64_t, 4> terminals;
@@ -8316,10 +8772,13 @@ arith_dispatch:
           terminals.push_back(addr);
         }
       }
+      if (traceAnalysisEnabled && terminals.empty())
+        llvm::errs() << "[ANALYSIS-WRITE] NO terminals found for portAddr=0x"
+                     << llvm::format_hex(portAddr, 0) << "\n";
       if (!terminals.empty()) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  call_indirect: analysis_port::write intercepted, "
-                   << terminals.size() << " terminal subscribers\n");
+        if (traceAnalysisEnabled)
+          llvm::errs() << "[ANALYSIS-WRITE] " << terminals.size()
+                       << " terminal(s) found\n";
         for (uint64_t impAddr : terminals) {
           // Resolve the imp's write function via vtable dispatch.
           // Object layout: [i32 class_id][ptr vtable_ptr][...fields...]
@@ -8370,15 +8829,14 @@ arith_dispatch:
           }
           auto impWriteFunc = moduleOp.lookupSymbol<func::FuncOp>(funcIt2->second);
           if (!impWriteFunc) {
-            LLVM_DEBUG(llvm::dbgs()
-                       << "  call_indirect: function \'" << funcIt2->second
-                       << "\' not found in module\n");
+            if (traceAnalysisEnabled)
+              llvm::errs() << "[ANALYSIS-WRITE] function '"
+                           << funcIt2->second << "' not found in module\n";
             continue;
           }
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  call_indirect: dispatching write to "
-                     << funcIt2->second << " (imp at 0x"
-                     << llvm::format_hex(impAddr, 16) << ")\n");
+          if (traceAnalysisEnabled)
+            llvm::errs() << "[ANALYSIS-WRITE] dispatching to "
+                         << funcIt2->second << "\n";
           SmallVector<InterpretedValue, 2> impArgs;
           impArgs.push_back(InterpretedValue(llvm::APInt(64, impAddr)));
           impArgs.push_back(args[1]); // transaction object
@@ -13818,6 +14276,123 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
+  // Intercept analysis_port::write at func.call level.
+  // uvm_analysis_port::write() is a non-virtual method, so it's called via
+  // func.call rather than call_indirect. We broadcast to connected subscribers
+  // using the same native connection map used by the call_indirect handler.
+  if (calleeName.contains("analysis_port") && calleeName.contains("::write") &&
+      !calleeName.contains("write_m_") && callOp.getNumOperands() >= 2) {
+    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+    InterpretedValue txnVal = getValue(procId, callOp.getOperand(1));
+    uint64_t portAddr = selfVal.isX() ? 0 : selfVal.getUInt64();
+    if (traceAnalysisEnabled)
+      llvm::errs() << "[ANALYSIS-WRITE-FC] " << calleeName
+                   << " portAddr=0x" << llvm::format_hex(portAddr, 0)
+                   << " inMap=" << analysisPortConnections.count(portAddr)
+                   << "\n";
+    // Flatten the connection chain to find all terminal imps.
+    llvm::SmallVector<uint64_t, 4> terminals;
+    llvm::SmallVector<uint64_t, 8> worklist;
+    llvm::DenseSet<uint64_t> visited;
+    auto seedIt = analysisPortConnections.find(portAddr);
+    if (seedIt != analysisPortConnections.end()) {
+      for (uint64_t a : seedIt->second)
+        worklist.push_back(a);
+    }
+    while (!worklist.empty()) {
+      uint64_t addr = worklist.pop_back_val();
+      if (!visited.insert(addr).second)
+        continue;
+      auto chainIt = analysisPortConnections.find(addr);
+      if (chainIt != analysisPortConnections.end() && !chainIt->second.empty()) {
+        for (uint64_t next : chainIt->second)
+          worklist.push_back(next);
+      } else {
+        terminals.push_back(addr);
+      }
+    }
+    if (!terminals.empty()) {
+      // Resolve the MLIR module for symbol lookup.
+      auto &cState = processStates[procId];
+      Operation *parent = cState.processOrInitialOp;
+      while (parent && !isa<ModuleOp>(parent))
+        parent = parent->getParentOp();
+      ModuleOp moduleOp = parent ? cast<ModuleOp>(parent) : rootModule;
+
+      if (traceAnalysisEnabled)
+        llvm::errs() << "[ANALYSIS-WRITE-FC] " << terminals.size()
+                     << " terminal(s)\n";
+      for (uint64_t impAddr : terminals) {
+        // Read vtable pointer at byte offset 4 from the imp object.
+        uint64_t vtableOff = 0;
+        MemoryBlock *impBlock = findBlockByAddress(impAddr, vtableOff);
+        if (!impBlock || vtableOff + 4 + 8 > impBlock->size) {
+          if (traceAnalysisEnabled)
+            llvm::errs() << "[ANALYSIS-WRITE-FC] imp 0x"
+                         << llvm::format_hex(impAddr, 0)
+                         << " not found in memory\n";
+          continue;
+        }
+        uint64_t vtableAddr = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          vtableAddr |= static_cast<uint64_t>(
+                            impBlock->data[vtableOff + 4 + i])
+                        << (i * 8);
+        auto globalIt = addressToGlobal.find(vtableAddr);
+        if (globalIt == addressToGlobal.end()) {
+          if (traceAnalysisEnabled)
+            llvm::errs() << "[ANALYSIS-WRITE-FC] vtable 0x"
+                         << llvm::format_hex(vtableAddr, 0)
+                         << " not in addressToGlobal\n";
+          continue;
+        }
+        // Read the write function pointer from vtable slot 11.
+        auto vtableBlockIt = globalMemoryBlocks.find(globalIt->second);
+        if (vtableBlockIt == globalMemoryBlocks.end())
+          continue;
+        auto &vtableBlock = vtableBlockIt->second;
+        unsigned writeSlot = 11;
+        unsigned slotOffset = writeSlot * 8;
+        if (slotOffset + 8 > vtableBlock.size)
+          continue;
+        uint64_t writeFuncAddr = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          writeFuncAddr |=
+              static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+              << (i * 8);
+        auto funcIt2 = addressToFunction.find(writeFuncAddr);
+        if (funcIt2 == addressToFunction.end()) {
+          if (traceAnalysisEnabled)
+            llvm::errs() << "[ANALYSIS-WRITE-FC] slot 11 func addr 0x"
+                         << llvm::format_hex(writeFuncAddr, 0)
+                         << " not in addressToFunction\n";
+          continue;
+        }
+        auto impWriteFunc =
+            moduleOp.lookupSymbol<func::FuncOp>(funcIt2->second);
+        if (!impWriteFunc) {
+          if (traceAnalysisEnabled)
+            llvm::errs() << "[ANALYSIS-WRITE-FC] function '"
+                         << funcIt2->second << "' not found in module\n";
+          continue;
+        }
+        if (traceAnalysisEnabled)
+          llvm::errs() << "[ANALYSIS-WRITE-FC] dispatching to "
+                       << funcIt2->second << "\n";
+        SmallVector<InterpretedValue, 2> impArgs;
+        impArgs.push_back(InterpretedValue(llvm::APInt(64, impAddr)));
+        impArgs.push_back(txnVal);
+        SmallVector<InterpretedValue, 2> impResults;
+        ++cState.callDepth;
+        interpretFuncBody(procId, impWriteFunc, impArgs, impResults,
+                          callOp);
+        --cState.callDepth;
+      }
+      return success();
+    }
+    // If no native connections, fall through to normal execution.
+  }
+
   // Intercept sequencer pull interface at func.call level.
   // This handles wrapper calls before they dereference m_if, which can be
   // null when UVM connect bookkeeping is bypassed by native connection logic.
@@ -14821,75 +15396,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     auto resultVal = callOp.getResult(0);
     setValue(procId, resultVal,
             InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(result))));
-    return success();
-  }
-
-  // Intercept wait_for_self_and_siblings_to_drop to replace the complex
-  // interpreted version (which iterates predecessors, creates assoc arrays,
-  // calls get_objection, wait_for, etc.) with a simple native implementation.
-  // This function should block until the phase's objection count drops to 0.
-  if (calleeName.contains("wait_for_self_and_siblings_to_drop")) {
-    InterpretedValue phaseVal = args[0]; // %arg0 = phase pointer
-    if (phaseVal.isX())
-      return success();
-    uint64_t phaseAddr = phaseVal.getUInt64();
-
-    // Look up or create the objection handle for this phase.
-    MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
-    auto it = phaseObjectionHandles.find(phaseAddr);
-    if (it != phaseObjectionHandles.end()) {
-      handle = it->second;
-    } else {
-      // No explicit handle yet — create one for this phase.
-      handle = __moore_objection_create("", 0);
-      phaseObjectionHandles[phaseAddr] = handle;
-    }
-
-    // Check current objection count.
-    int64_t count = 0;
-    if (handle != MOORE_OBJECTION_INVALID_HANDLE)
-      count = __moore_objection_get_count(handle);
-
-    static std::map<ProcessId, int> wfsstdYieldCount;
-    if (count <= 0) {
-      // Objection count is 0 — but we need to yield to give forked processes
-      // (like run_phase) a chance to raise objections first.
-      int &yields = wfsstdYieldCount[procId];
-      if (yields >= 10) {
-        // Yielded enough — objections are truly at 0, return.
-        yields = 0;
-        return success();
-      }
-      ++yields;
-    } else {
-      // Objections are raised — reset yield counter.
-      wfsstdYieldCount[procId] = 0;
-    }
-
-    // Suspend and poll later.
-    auto &state = processStates[procId];
-    state.waiting = true;
-
-    SimTime currentTime = scheduler.getCurrentTime();
-    constexpr uint32_t kMaxDeltaPolls = 1000;
-    constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
-    SimTime targetTime;
-    if (currentTime.deltaStep < kMaxDeltaPolls)
-      targetTime = currentTime.nextDelta();
-    else
-      targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
-
-    auto callIt = mlir::Block::iterator(callOp.getOperation());
-
-    scheduler.getEventScheduler().schedule(
-        targetTime, SchedulingRegion::Active,
-        Event([this, procId, callIt]() {
-          auto &st = processStates[procId];
-          st.waiting = false;
-          st.currentOp = callIt;
-          scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-        }));
-
     return success();
   }
 
@@ -19267,23 +19773,23 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     if (fieldIt != interfaceFieldSignals.end()) {
       SignalId fieldSigId = fieldIt->second;
       // Debug: track stores to 64-bit interface fields (PWDATA, PADDR, etc.)
-      {
+      LLVM_DEBUG({
         const SignalValue &dbgCur = scheduler.getSignalValue(fieldSigId);
         if (dbgCur.getWidth() == 64 && !storeVal.isX() &&
             storeVal.getUInt64() != 0) {
-          llvm::errs() << "[IFACE-STORE] sig=" << fieldSigId
+          llvm::dbgs() << "[IFACE-STORE] sig=" << fieldSigId
                        << " addr=0x" << llvm::format_hex(storeAddr, 10)
                        << " val=" << storeVal.getUInt64();
           auto revIt = childToParentFieldAddr.find(storeAddr);
           if (revIt != childToParentFieldAddr.end())
-            llvm::errs() << " (reverse→parent@0x"
+            llvm::dbgs() << " (reverse→parent@0x"
                          << llvm::format_hex(revIt->second, 10) << ")";
           auto propIt = interfaceFieldPropagation.find(fieldSigId);
           if (propIt != interfaceFieldPropagation.end())
-            llvm::errs() << " (fwd→" << propIt->second.size() << " children)";
-          llvm::errs() << "\n";
+            llvm::dbgs() << " (fwd→" << propIt->second.size() << " children)";
+          llvm::dbgs() << "\n";
         }
-      }
+      });
       const SignalValue &current = scheduler.getSignalValue(fieldSigId);
       unsigned targetWidth = current.getWidth();
 
@@ -22861,6 +23367,26 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           }
 
           scheduler.updateSignal(sigId, SignalValue(arrayBits));
+          pendingEpsilonDrives[sigId] = InterpretedValue(arrayBits);
+
+          // Also sync to backing memory block if one exists, so that
+          // llhd.prb (which checks backing memory before scheduler)
+          // sees the updated values.
+          auto backingIt = signalBackingMemory.find(sigId);
+          if (backingIt != signalBackingMemory.end()) {
+            auto &st = processStates[backingIt->second.first];
+            auto blkIt = st.memoryBlocks.find(backingIt->second.second);
+            if (blkIt != st.memoryBlocks.end()) {
+              unsigned totalBits = arrayBits.getBitWidth();
+              unsigned totalBytes = (totalBits + 7) / 8;
+              for (unsigned i = 0; i < totalBytes && i < blkIt->second.data.size(); ++i) {
+                blkIt->second.data[i] = static_cast<uint8_t>(
+                    arrayBits.extractBitsAsZExtValue(
+                        std::min(8u, totalBits - i * 8), i * 8));
+              }
+            }
+          }
+
           LLVM_DEBUG(llvm::dbgs() << "    Updated signal " << sigId
                                   << " with " << indexedValues.size()
                                   << " values\n");
@@ -28220,28 +28746,51 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
           std::function<uint64_t(Value)> traceSrcLoadAddr =
               [&](Value v) -> uint64_t {
             if (auto *defOp = v.getDefiningOp()) {
+              llvm::errs() << "  [TRACE] " << defOp->getName().getStringRef() << "\n";
               if (auto extractOp = dyn_cast<LLVM::ExtractValueOp>(defOp))
                 return traceSrcLoadAddr(extractOp.getContainer());
               if (auto insertOp = dyn_cast<LLVM::InsertValueOp>(defOp)) {
-                // Try tracing the inserted value first (data source), then
-                // fall back to the container. For BFM init patterns like
-                // load → extractvalue → insertvalue → store, the data comes
-                // from the VALUE operand, not the container (which is often
-                // undef when building a struct from scratch).
                 uint64_t addr = traceSrcLoadAddr(insertOp.getValue());
                 if (addr != 0)
                   return addr;
                 return traceSrcLoadAddr(insertOp.getContainer());
               }
               if (auto loadOp = dyn_cast<LLVM::LoadOp>(defOp)) {
-                uint64_t addr = getChildOrParentValue(loadOp.getAddr());
+                Value loadAddr = loadOp.getAddr();
+                uint64_t addr = getChildOrParentValue(loadAddr);
+                llvm::errs() << "  [TRACE] LoadOp addr=0x"
+                             << llvm::format_hex(addr, 10);
+                if (auto *addrOp = loadAddr.getDefiningOp())
+                  llvm::errs() << " addrOp=" << addrOp->getName().getStringRef();
+                else
+                  llvm::errs() << " addrOp=<blockarg>";
+                llvm::errs() << "\n";
                 if (addr != 0)
                   return addr;
               }
+            } else {
+              llvm::errs() << "  [TRACE] <blockarg>\n";
             }
             return 0;
           };
           uint64_t srcAddr = traceSrcLoadAddr(storeOp.getValue());
+          llvm::errs() << "[DBG] child store: destAddr=0x"
+                       << llvm::format_hex(destAddr.getUInt64(), 10)
+                       << " srcAddr=0x" << llvm::format_hex(srcAddr, 10);
+          if (auto *defOp = storeOp.getValue().getDefiningOp())
+            llvm::errs() << " storeVal=" << defOp->getName().getStringRef();
+          else
+            llvm::errs() << " storeVal=<blockarg>";
+          // Dump the store op for full context
+          llvm::errs() << "\n  "; storeOp.dump();
+          // Check if it's a load (after canonicalization simplified away insert/extract)
+          if (auto loadOp = storeOp.getValue().getDefiningOp<LLVM::LoadOp>()) {
+            Value loadAddr = loadOp.getAddr();
+            InterpretedValue addrVal = getValue(childTempProcId, loadAddr);
+            llvm::errs() << "  [DBG] direct load addr=0x"
+                         << llvm::format_hex(addrVal.isX() ? 0ULL : addrVal.getUInt64(), 10)
+                         << " isX=" << addrVal.isX() << "\n";
+          }
           if (srcAddr != 0)
             childModuleCopyPairs.push_back({srcAddr, destAddr.getUInt64()});
         }

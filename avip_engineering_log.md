@@ -801,3 +801,197 @@ Codex agent created `docs/AVIP_JIT_PLAN.md` covering 5 workstreams:
 - WS3: Hot-path fast paths (table-driven dispatch)
 - WS4: JIT compilation pipeline
 - WS5: Memory/OOM hardening (AHB priority)
+
+---
+
+## 2026-02-16 Session 9: JIT-Focused Follow-up (No Long AVIP Sweeps)
+
+User requested we stop spending wall time on long AVIP runs and focus on speed
+work so AVIPs become fast enough to run routinely.
+
+### Fix 1: Pull-port reconnect correctness (stale provider bug)
+
+**Issue**: after reconnecting a pull port, native routing still picked the first
+provider in `analysisPortConnections`, so reconnect could keep using old
+sequencer routing even with cache invalidation.
+
+**Change**:
+- In pull-port `get/get_next_item/try_next_item` resolution paths, use the
+  **latest** provider (`back()`) rather than the oldest entry.
+
+**Regression test**:
+- Added `test/Tools/circt-sim/seq-pull-port-reconnect-cache-invalidation.mlir`
+  to validate reconnect updates routing target and avoids stale selection.
+
+### Fix 2: Extend `wait_for_self_and_siblings_to_drop` fast-path to indirect calls
+
+**Issue**: `wait_for_self_and_siblings_to_drop` was fast-pathed only in the
+direct call path; indirect/vtable dispatch could still hit expensive interpreted
+logic on a known hot phase-wait path.
+
+**Change**:
+- Moved this interception into shared `UVMFastPaths.cpp` helper:
+  `handleUvmWaitForSelfAndSiblingsToDrop`.
+- Enabled handling from both:
+  - `handleUvmFuncCallFastPath` (direct)
+  - `handleUvmCallIndirectFastPath` (indirect)
+- Removed duplicate direct-only block from `LLHDProcessInterpreter.cpp`.
+
+**Regression test**:
+- Added `test/Tools/circt-sim/uvm-wait-for-self-siblings-fast-path.mlir`.
+- Test asserts fast-path bypasses function body for both direct and indirect
+  dispatch forms.
+
+### AVIP runner infrastructure updates (deterministic matrix scripts)
+
+Reworked local scripts for reproducible parity infrastructure:
+- `utils/run_avip_circt_sim.sh`
+- `utils/run_avip_xcelium_reference.sh`
+
+Both now support:
+- Fixed seed matrices (`SEEDS=...`)
+- Deterministic AVIP selection (`AVIP_SET`, `AVIPS`)
+- Structured TSV outputs (`matrix.tsv`) + metadata (`meta.txt`)
+- Uniform timeout/memory controls and normalized metric extraction
+
+Smoke checks:
+- CIRCT runner: `AVIPS=jtag SEEDS=1` (script path validated end-to-end)
+- Xcelium runner: `AVIPS=jtag SEEDS=1` with parsed sim-time normalization
+
+### Validation
+
+Rebuilt `circt-sim` and ran focused regressions:
+- `uvm-wait-for-self-siblings-fast-path.mlir` ✅
+- `seq-pull-port-reconnect-cache-invalidation.mlir` ✅
+- `finish-item-blocks-until-item-done.mlir` ✅
+- `uvm-get-report-object-fast-path.mlir` ✅
+
+### Notes on AVIP execution
+
+Started a full `core8` deterministic run, but per user direction (focus on JIT,
+avoid long waits), stopped pursuing long timeout-heavy sweeps in this session.
+Partial observed rows before interruption:
+- `apb`: compile OK, sim timeout at 180s
+- `ahb`: compile OK, sim timeout at 180s
+- `axi4`: compile completed (123s), run interrupted before matrix completion
+
+### Remaining limitations
+
+1. We still rely on targeted hot-path interception instead of a mature
+   hotness-driven JIT pipeline.
+2. Large UVM phase and report plumbing can still dominate wall time on heavy
+   AVIPs.
+3. Full parity gating exists at script level now, but long suites should run
+   after additional runtime speedups land.
+
+### Immediate next features (JIT maturity path)
+
+1. Introduce a fast-path/JIT dispatch registry keyed by callee symbol + call
+   form to reduce monolithic string-dispatch overhead.
+2. Add lightweight hotness counters and a compile budget to trigger selective
+   JIT compilation of recurrent helper bodies.
+3. Expand objection/phase fast-path coverage for remaining high-frequency
+   indirect calls.
+
+---
+
+## 2026-02-16 Session 10: Dispatch Registry Milestone
+
+Continued per plan with a concrete architectural step toward mature JIT/fast
+dispatch.
+
+### Implemented: exact fast-path dispatcher keyed by (call form, symbol)
+
+Added in `tools/circt-sim/UVMFastPaths.cpp`:
+- `UvmFastPathCallForm` (`FuncCall`, `CallIndirect`)
+- `UvmFastPathAction` enum
+- `lookupUvmFastPath(callForm, calleeName)` exact-match dispatcher
+
+### Behavior
+
+1. Fast-path handlers now run through a **registry first** for exact symbols.
+2. Existing `contains()`-based logic is retained as fallback for compatibility.
+3. Hot exact symbols now avoid linear `contains()` chains in the common path.
+
+### Covered by registry
+
+- `wait_for_self_and_siblings_to_drop` (direct + indirect)
+- report suppression controls:
+  - `uvm_report_info`
+  - `uvm_report_warning`
+- report-object helpers:
+  - `uvm_get_report_object`
+  - `get_report_verbosity_level`
+  - `get_report_action`
+- report-handler helpers:
+  - `get_verbosity_level`
+  - `get_action`
+  - `set_severity_file` (no-op fast-path)
+- printer hot exact paths (`adjust_name`, print_* no-op family)
+
+### Validation (focused, fast)
+
+Rebuilt `circt-sim` and re-ran key regressions:
+- `test/Tools/circt-sim/uvm-wait-for-self-siblings-fast-path.mlir` ✅
+- `test/Tools/circt-sim/seq-pull-port-reconnect-cache-invalidation.mlir` ✅
+- `test/Tools/circt-sim/uvm-get-report-object-fast-path.mlir` ✅
+- `test/Tools/circt-sim/uvm-printer-fast-path-call-indirect.mlir` ✅
+- `test/Tools/circt-sim/uvm-report-getters-fast-path.mlir` ✅
+- `test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir` ✅
+
+### Profiling support for next JIT step
+
+Added lightweight fast-path action counters:
+- `uvmFastPathProfile` map in interpreter state
+- emitted in diagnostics alongside function profile when
+  `CIRCT_SIM_PROFILE_FUNCS=1`
+
+This gives direct visibility into which registry actions are hottest before
+promoting them from native fast-paths toward JIT thunks.
+
+## 2026-02-16 Session 11: Hotness-Gated Promotion Hooks
+
+Implemented next plan step after registry dispatch:
+
+### New hook mechanics
+
+Added per-action hotness counters and promotion-candidate gating:
+- `CIRCT_SIM_UVM_JIT_HOT_THRESHOLD`
+- `CIRCT_SIM_UVM_JIT_PROMOTION_BUDGET`
+- `CIRCT_SIM_UVM_JIT_TRACE_PROMOTIONS`
+
+When a fast-path action crosses threshold and budget is available, it is marked
+as a JIT promotion candidate and (optionally) logged.
+
+### State and diagnostics
+
+- Added interpreter state for:
+  - `uvmFastPathHitCount`
+  - promoted action set/storage
+  - threshold/budget/trace controls
+- Extended process diagnostics to print:
+  - UVM fast-path profile
+  - selected JIT promotion candidates
+  - remaining promotion budget
+
+### Regression
+
+Added `test/Tools/circt-sim/uvm-fastpath-jit-promotion-hook.mlir`:
+- verifies threshold/budget-triggered promotion signal for a registry action
+  (`registry.func.call.get_report_verbosity`).
+
+### Focused validation
+
+All relevant focused checks pass after hook integration:
+- `uvm-fastpath-jit-promotion-hook.mlir` ✅
+- `uvm-wait-for-self-siblings-fast-path.mlir` ✅
+- `seq-pull-port-reconnect-cache-invalidation.mlir` ✅
+- `uvm-get-report-object-fast-path.mlir` ✅
+- `uvm-report-getters-fast-path.mlir` ✅
+
+### Why this matters long-term
+
+This establishes the dispatch architecture needed for the next plan steps:
+1. hotness counters attached to registry actions
+2. promotion from native fast-path action -> JIT thunk per action/symbol
+3. less growth pressure on `LLHDProcessInterpreter.cpp` by centralizing policy
