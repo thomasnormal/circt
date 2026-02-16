@@ -2075,3 +2075,22 @@ hw.module @andConstCombine(in %a: i4, out o: i4) {
   %0 = comb.and %a, %c3, %c5 : i4
   hw.output %0 : i4
 }
+
+// CHECK-LABEL: @notSext
+// ~sext(a) -> sext(~a)
+hw.module @notSext(in %a : i3, out negsext : i8) {
+  // CHECK-NEXT: %c-1_i3 = hw.constant -1 : i3
+  // CHECK-NEXT: %[[NOTA:.+]] = comb.xor bin %a, %c-1_i3 : i3
+  // CHECK-NEXT: %[[NOTASIGN:.+]] = comb.extract %[[NOTA]] from 2 : (i3) -> i1
+  // CHECK-NEXT: %[[SIGNBITS:.+]] = comb.replicate %[[NOTASIGN]] : (i1) -> i5
+  // CHECK-NEXT: %[[NEGSEXT:.+]] = comb.concat %[[SIGNBITS]], %[[NOTA]] : i5, i3
+  // CHECK-NEXT: hw.output %[[NEGSEXT]] : i8
+  %c-1_i8 = hw.constant -1 : i8
+  // sext(a)
+  %0 = comb.extract %a from 2 : (i3) -> i1
+  %1 = comb.replicate %0 : (i1) -> i5
+  %2 = comb.concat %1, %a : i5, i3
+  // ~sext(a)
+  %3 = comb.xor %2, %c-1_i8 : i8
+  hw.output %3 : i8
+}
