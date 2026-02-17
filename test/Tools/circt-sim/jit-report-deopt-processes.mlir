@@ -12,6 +12,7 @@
 // JSON: "jit_deopt_reason_unsupported_operation": 1
 // JSON: "jit_deopt_processes": [
 // JSON: "process_id": {{[1-9][0-9]*}}
+// JSON: "process_name": "llhd_process_{{[0-9]+}}"
 // JSON: "reason": "unsupported_operation"
 
 hw.module @top() {

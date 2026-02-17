@@ -810,6 +810,13 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
   os.flush();
 }
 
+std::string
+LLHDProcessInterpreter::getJitDeoptProcessName(ProcessId procId) const {
+  if (const Process *proc = scheduler.getProcess(procId))
+    return proc->getName();
+  return {};
+}
+
 void LLHDProcessInterpreter::rebuildAddrRangeIndex() {
   addrRangeIndex.clear();
   // Add global variable ranges

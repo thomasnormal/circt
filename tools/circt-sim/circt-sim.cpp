@@ -1597,7 +1597,12 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
   uint64_t uvmJitPromotedActionsTotal = 0;
   uint64_t uvmJitHotThreshold = 0;
   int64_t uvmJitPromotionBudgetRemaining = 0;
-  llvm::SmallVector<std::pair<uint64_t, std::string>, 8> jitDeoptProcesses;
+  struct JitDeoptProcessEntry {
+    uint64_t processId;
+    std::string processName;
+    std::string reason;
+  };
+  llvm::SmallVector<JitDeoptProcessEntry, 8> jitDeoptProcesses;
   if (interpreter) {
     uvmFastPathHitsTotal = interpreter->getUvmFastPathHitsTotal();
     uvmFastPathActionKeysTotal = interpreter->getUvmFastPathActionKeyCount();
@@ -1605,10 +1610,14 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
     uvmJitHotThreshold = interpreter->getUvmJitHotThreshold();
     uvmJitPromotionBudgetRemaining =
         interpreter->getUvmJitPromotionBudgetRemaining();
-    for (const auto &entry : interpreter->getJitDeoptReasonByProcess())
-      jitDeoptProcesses.emplace_back(entry.first, entry.second);
+    for (const auto &entry : interpreter->getJitDeoptReasonByProcess()) {
+      jitDeoptProcesses.push_back({entry.first,
+                                   interpreter->getJitDeoptProcessName(
+                                       entry.first),
+                                   entry.second});
+    }
     llvm::sort(jitDeoptProcesses, [](const auto &lhs, const auto &rhs) {
-      return lhs.first < rhs.first;
+      return lhs.processId < rhs.processId;
     });
   }
 
@@ -1667,8 +1676,9 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
       jos.attributeArray("jit_deopt_processes", [&] {
         for (const auto &entry : jitDeoptProcesses) {
           jos.object([&] {
-            jos.attribute("process_id", entry.first);
-            jos.attribute("reason", entry.second);
+            jos.attribute("process_id", entry.processId);
+            jos.attribute("process_name", entry.processName);
+            jos.attribute("reason", entry.reason);
           });
         }
       });

@@ -136,6 +136,8 @@
   - added per-process deopt reason telemetry to JIT reports:
     - JSON now includes `jit.jit_deopt_processes` with
       `{process_id, reason}` entries for first observed deopt per process.
+  - extended `jit.jit_deopt_processes` entries to include `process_name`
+    alongside `process_id` and `reason` for easier strict-mode triage.
   - added regression:
     - `test/Tools/circt-sim/jit-report-deopt-processes.mlir`
 
