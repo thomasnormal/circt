@@ -94,6 +94,10 @@
     - `test/Tools/circt-sim/jit-process-thunk-wait-event-dest-operand-halt-yield-guard-failed-env.mlir`
     - `test/Tools/circt-sim/jit-process-thunk-wait-event-multi-observed-dest-operand-halt-yield.mlir`
     - `test/Tools/circt-sim/jit-process-thunk-wait-event-multi-observed-dest-operand-halt-yield-guard-failed-env.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-dest-operand-halt-yield.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-dest-operand-halt-yield-guard-failed-env.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-wait-event-multi-derived-observed-dest-operand-halt-yield.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-wait-event-multi-derived-observed-dest-operand-halt-yield-guard-failed-env.mlir`
   - ran bounded AVIP mode-parity smoke (`jtag`, seed `1`, 120s bounds):
     - parity checker passed with one row per mode; both lanes hit timeout under
       the bound (expected for this short smoke configuration).
@@ -101,7 +105,7 @@
     `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1` at 90s and 180s bounds:
     - both lanes reached bounded timeout before graceful exit.
   - refreshed bounded AVIP compile-mode smoke (`jtag`, seed `1`, 90s bound):
-    - compile `OK` (68s), bounded sim `TIMEOUT`.
+    - compile `OK` (26s), bounded sim `TIMEOUT`.
   - parallel-runtime limitation identified while validating JIT thunk shapes:
     - `--parallel=4` currently shows hangs and allocator aborts (`double free`
       at `comb.xor`) on minimal LLHD wait/toggle tests in both interpret and
