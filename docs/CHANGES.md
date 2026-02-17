@@ -156,12 +156,18 @@
     - utility supports optional TSV outputs for reason ranking, reason+detail
       ranking, and per-process rows:
       `--out-reason-tsv`, `--out-detail-tsv`, `--out-process-tsv`.
+    - utility now also supports strict burn-down gating:
+      - allowlist file (`exact`/`prefix`/`regex`) over deopt tokens.
+      - `--fail-on-any-non-allowlisted-deopt`
+      - `--fail-on-reason=<reason>`
+      - `--fail-on-reason-detail=<reason>:<detail>`
   - added regression:
     - `test/Tools/circt-sim/jit-fail-on-deopt-missing-thunk-budget-zero-detail.mlir`
     - `test/Tools/circt-sim/jit-report-deopt-processes-missing-thunk-hot-threshold.mlir`
     - `test/Tools/circt-sim/jit-report-deopt-processes-missing-thunk-budget-exhausted.mlir`
     - `test/Tools/circt-sim/jit-report-deopt-processes.mlir`
     - `test/Tools/summarize-circt-sim-jit-reports.test`
+    - `test/Tools/summarize-circt-sim-jit-reports-policy.test`
 
 ### Why It Matters
 - Establishes deterministic artifact generation and machine-readable telemetry
@@ -170,6 +176,8 @@
   lowering is wired in Phase B.
 - Adds an explicit ranked deopt queue artifact for strict-native burn-down
   planning across AVIP-sized report bundles.
+- Adds a policy-enforceable strict convergence gate that can fail CI on
+  selected deopt classes while allowlisting planned temporary gaps.
 
 ## February 17, 2026 - circt-sim Full Native JIT Plan Published
 
