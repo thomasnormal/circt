@@ -267,7 +267,13 @@ Gate: default-on recommendation with rollback switch still available.
     - summary now emits:
       `[circt-sim] Memory delta window: samples=... configured_window=...`
       with signed deltas for total, malloc/native/process, dynamic string,
-      config-db, analysis edges, and sequencer FIFO items.
+      config-db, analysis edges, and sequencer FIFO items, plus structural
+      growth counters:
+      - global/malloc/native/process block counts
+      - dynamic string count
+      - config-db entry count
+      - analysis-connection port count
+      - sequencer FIFO map count
     - covered by:
       - `test/Tools/circt-sim/profile-summary-memory-delta-window.mlir`
       - updated `test/Tools/circt-sim/profile-summary-memory-peak.mlir`.

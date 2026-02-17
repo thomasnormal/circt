@@ -68505,3 +68505,20 @@ See CHANGELOG.md on recent progress.
     - Added regression coverage:
       - `test/Tools/circt-sim/profile-summary-memory-delta-window.mlir`
       - updated `test/Tools/circt-sim/profile-summary-memory-peak.mlir`.
+51. `circt-sim` memory delta-window structural growth buckets
+    (February 17, 2026):
+    - Extended `Memory delta window` summary output with signed structural
+      count deltas:
+      - `delta_global_blocks`
+      - `delta_malloc_blocks`
+      - `delta_native_blocks`
+      - `delta_process_blocks`
+      - `delta_dynamic_strings`
+      - `delta_config_db_entries`
+      - `delta_analysis_conn_ports`
+      - `delta_seq_fifo_maps`
+    - This complements byte-level deltas with map/block growth visibility for
+      lower-friction OOM triage.
+    - Updated regression coverage:
+      - `test/Tools/circt-sim/profile-summary-memory-delta-window.mlir`
+      - `test/Tools/circt-sim/profile-summary-memory-peak.mlir`.
