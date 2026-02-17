@@ -1323,6 +1323,11 @@ private:
   };
 
   MemoryStateSnapshot memoryPeakSnapshot;
+
+  /// Persisted process results: when a process halts and its valueMap is
+  /// cleared, any yield values are preserved here so that module-level drives
+  /// depending on process results can still read them.
+  llvm::DenseMap<mlir::Value, InterpretedValue> persistedProcessResults;
   std::deque<MemoryStateSample> memorySampleHistory;
   std::string memoryPeakLargestProcessFunc;
 

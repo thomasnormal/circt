@@ -787,10 +787,10 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
   // create shadow signals for each field. This enables event-driven
   // sensitivity for processes that read interface fields from memory.
 
-  llvm::errs() << "[DBG] createInterfaceFieldShadowSignals: valueToSignal="
-               << valueToSignal.size() << " instanceValueToSignal="
-               << instanceValueToSignal.size() << " childModuleCopyPairs="
-               << childModuleCopyPairs.size() << "\n";
+  LLVM_DEBUG(llvm::dbgs() << "createInterfaceFieldShadowSignals: valueToSignal="
+                          << valueToSignal.size() << " instanceValueToSignal="
+                          << instanceValueToSignal.size() << " childModuleCopyPairs="
+                          << childModuleCopyPairs.size() << "\n");
 
   for (auto &[sigValue, sigId] : valueToSignal) {
     auto sigOp = sigValue.getDefiningOp<llhd::SignalOp>();
@@ -845,8 +845,8 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
         ++numGeps;
         if (auto elemTy = gepOp.getElemType()) {
           if (auto structTy = dyn_cast<LLVM::LLVMStructType>(elemTy)) {
-            llvm::errs() << "[DBG] parent GEP struct name: '"
-                         << structTy.getName() << "'\n";
+            LLVM_DEBUG(llvm::dbgs() << "parent GEP struct name: '"
+                                    << structTy.getName() << "'\n");
             if (structTy.getName().starts_with("interface.")) {
               ifaceStructTy = structTy;
               break;
@@ -859,11 +859,11 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
       if (ifaceStructTy)
         break;
     }
-    llvm::errs() << "[DBG] parent sig " << sigId
-                 << ": users=" << numUsers << " probes=" << numProbes
-                 << " geps=" << numGeps
-                 << " ifaceFound=" << (ifaceStructTy ? "yes" : "no")
-                 << " addr=0x" << llvm::format_hex(mallocAddr, 10) << "\n";
+    LLVM_DEBUG(llvm::dbgs() << "parent sig " << sigId
+                            << ": users=" << numUsers << " probes=" << numProbes
+                            << " geps=" << numGeps
+                            << " ifaceFound=" << (ifaceStructTy ? "yes" : "no")
+                            << " addr=0x" << llvm::format_hex(mallocAddr, 10) << "\n");
 
     // Also check through unrealized_conversion_cast → GEP chains
     // (used when interface ptr is passed through module ports)
@@ -1542,9 +1542,9 @@ LogicalResult LLHDProcessInterpreter::finalizeInit() {
         [this](SignalId sigId, const SignalValue &) {
           executeModuleDrivesForSignal(sigId);
         });
-    llvm::errs() << "[DBG] Registered signal change callback for "
-                 << signalDependentModuleDrives.size()
-                 << " signal-dependent module drive mappings\n";
+    LLVM_DEBUG(llvm::dbgs() << "Registered signal change callback for "
+                            << signalDependentModuleDrives.size()
+                            << " signal-dependent module drive mappings\n");
   }
 
   return success();
@@ -2877,8 +2877,8 @@ void LLHDProcessInterpreter::registerModuleDrive(
     for (SignalId sigId : dependentSignals) {
       for (size_t i = driveIdx; i < moduleDrives.size(); ++i)
         signalDependentModuleDrives[sigId].push_back(i);
-      llvm::errs() << "[DBG] Module drive also depends on signal "
-                   << sigId << " (driveIdx=" << driveIdx << ")\n";
+      LLVM_DEBUG(llvm::dbgs() << "Module drive also depends on signal "
+                              << sigId << " (driveIdx=" << driveIdx << ")\n");
     }
   } else {
     // For non-process-connected drives, schedule them immediately
@@ -2986,9 +2986,9 @@ void LLHDProcessInterpreter::executeModuleDrivesForSignal(SignalId sigId) {
   if (it == signalDependentModuleDrives.end())
     return;
 
-  llvm::errs() << "[DBG] executeModuleDrivesForSignal: signal " << sigId
-               << " changed, re-evaluating " << it->second.size()
-               << " dependent module drives\n";
+  LLVM_DEBUG(llvm::dbgs() << "executeModuleDrivesForSignal: signal " << sigId
+                          << " changed, re-evaluating " << it->second.size()
+                          << " dependent module drives\n");
 
   for (size_t idx : it->second) {
     if (idx >= moduleDrives.size())
@@ -3004,23 +3004,23 @@ void LLHDProcessInterpreter::executeModuleDrivesForSignal(SignalId sigId) {
 
     // Check enable condition if present
     if (driveOp.getEnable()) {
-      InterpretedValue enableVal = getValue(entry.procId, driveOp.getEnable());
+      InterpretedValue enableVal = evaluateContinuousValue(driveOp.getEnable());
       if (enableVal.isX() || enableVal.getUInt64() == 0)
         continue;
     }
 
-    InterpretedValue driveVal = getValue(entry.procId, driveOp.getValue());
-    llvm::errs() << "[DBG]   driveVal="
-                 << (driveVal.isX() ? "X" : std::to_string(driveVal.getUInt64()))
-                 << " dstSig=" << dstSigId << " procId=" << entry.procId << "\n";
+    InterpretedValue driveVal = evaluateContinuousValue(driveOp.getValue());
+    LLVM_DEBUG(llvm::dbgs() << "  driveVal="
+                            << (driveVal.isX() ? "X" : std::to_string(driveVal.getUInt64()))
+                            << " dstSig=" << dstSigId << " procId=" << entry.procId << "\n");
     SimTime delay = convertTimeValue(entry.procId, driveOp.getTime());
     SimTime currentTime = scheduler.getCurrentTime();
     SimTime targetTime = currentTime.advanceTime(delay.realTime);
     if (delay.deltaStep > 0)
-      targetTime.deltaStep = delay.deltaStep;
+      targetTime.deltaStep = currentTime.deltaStep + delay.deltaStep;
 
-    llvm::errs() << "[DBG]   targetTime=" << targetTime.realTime
-                 << " delta=" << targetTime.deltaStep << "\n";
+    LLVM_DEBUG(llvm::dbgs() << "  targetTime=" << targetTime.realTime
+                            << " delta=" << targetTime.deltaStep << "\n");
 
     SignalValue newVal = driveVal.toSignalValue();
     DriveStrength strength0 = DriveStrength::Strong;
@@ -3904,6 +3904,15 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
                 finish(valIt->second);
                 continue;
               }
+            }
+          }
+          // Fallback: check persisted process results (process may have
+          // halted and its valueMap cleared).
+          {
+            auto persistIt = persistedProcessResults.find(current);
+            if (persistIt != persistedProcessResults.end()) {
+              finish(persistIt->second);
+              continue;
             }
           }
           finish(makeUnknown(current));
@@ -5779,6 +5788,16 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
           }
           break; // adopt into first active child only
         }
+      }
+    }
+
+    // Persist process results before clearing valueMap so that
+    // module-level drives depending on process outputs still work.
+    if (auto processOp = it->second.getProcessOp()) {
+      for (auto result : processOp.getResults()) {
+        auto valIt = it->second.valueMap.find(result);
+        if (valIt != it->second.valueMap.end())
+          persistedProcessResults[result] = valIt->second;
       }
     }
 
@@ -29164,22 +29183,23 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
             return 0;
           };
           uint64_t srcAddr = traceSrcLoadAddr(storeOp.getValue());
-          llvm::errs() << "[DBG] child store: destAddr=0x"
-                       << llvm::format_hex(destAddr.getUInt64(), 10)
-                       << " srcAddr=0x" << llvm::format_hex(srcAddr, 10);
-          if (auto *defOp = storeOp.getValue().getDefiningOp())
-            llvm::errs() << " storeVal=" << defOp->getName().getStringRef();
-          else
-            llvm::errs() << " storeVal=<blockarg>";
-          // Dump the store op for full context
-          llvm::errs() << "\n  "; storeOp.dump();
+          LLVM_DEBUG({
+            llvm::dbgs() << "child store: destAddr=0x"
+                         << llvm::format_hex(destAddr.getUInt64(), 10)
+                         << " srcAddr=0x" << llvm::format_hex(srcAddr, 10);
+            if (auto *defOp = storeOp.getValue().getDefiningOp())
+              llvm::dbgs() << " storeVal=" << defOp->getName().getStringRef();
+            else
+              llvm::dbgs() << " storeVal=<blockarg>";
+            llvm::dbgs() << "\n";
+          });
           // Check if it's a load (after canonicalization simplified away insert/extract)
           if (auto loadOp = storeOp.getValue().getDefiningOp<LLVM::LoadOp>()) {
             Value loadAddr = loadOp.getAddr();
             InterpretedValue addrVal = getValue(childTempProcId, loadAddr);
-            llvm::errs() << "  [DBG] direct load addr=0x"
-                         << llvm::format_hex(addrVal.isX() ? 0ULL : addrVal.getUInt64(), 10)
-                         << " isX=" << addrVal.isX() << "\n";
+            LLVM_DEBUG(llvm::dbgs() << "  direct load addr=0x"
+                                    << llvm::format_hex(addrVal.isX() ? 0ULL : addrVal.getUInt64(), 10)
+                                    << " isX=" << addrVal.isX() << "\n");
           }
           if (srcAddr != 0)
             childModuleCopyPairs.push_back({srcAddr, destAddr.getUInt64()});
