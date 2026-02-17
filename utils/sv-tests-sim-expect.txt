@@ -124,13 +124,14 @@ uvm_test_run_test	compile-only	UVM run_test (slow init)
 # Ch9: Infinite loop tests (no $finish, run forever by design)
 9.2.2.1--always	skip	Infinite loop: always #5 a = ~a with no $finish
 
-# Should-fail tests: circt-verilog doesn't yet detect these errors
-6.5--variable_mixed_assignments	skip	Should-fail: mixed procedural/continuous assignments
-6.5--variable_multiple_assignments	skip	Should-fail: multiple continuous assignments
-11.9--tagged_union_member_access_inv	skip	Should-fail: invalid tagged union member access
-16.10--property-local-var-fail	skip	Should-fail: property local var error detection
-16.10--sequence-local-var-fail	skip	Should-fail: sequence local var error detection
-16.15--property-disable-iff-fail	skip	Should-fail: property disable iff error detection
+# Should-fail tests now detected via slang analysis phase integration:
+# 6.5--variable_mixed_assignments: now correctly rejected (mixed procedural/continuous)
+# 6.5--variable_multiple_assignments: now correctly rejected (multiple continuous assigns)
+# 11.9--tagged_union_member_access_inv: now correctly rejected (invalid tagged union access)
+
+# Should-fail tests: require runtime SVA concurrent assertion evaluation (sim-time failure)
+16.10--property-local-var-fail	skip	Should-fail: runtime SVA property assertion failure (needs concurrent SVA eval)
+16.10--sequence-local-var-fail	skip	Should-fail: runtime SVA sequence assertion failure (needs concurrent SVA eval)
 
 # Ch18: Class-only tests (auto-wrapped by harness with class instantiation + randomize)
 # These tests have no module; the harness generates a wrapper that creates the class,
@@ -157,11 +158,8 @@ bp_multicore_4	xfail	Black-parrot: invalid expression in MLIR lowering (DynamicN
 bp_multicore_4_cce_ucode_cfg	xfail	Black-parrot: invalid expression in MLIR lowering (DynamicNotProcedural)
 bp_unicore	xfail	Black-parrot: invalid expression in MLIR lowering (DynamicNotProcedural)
 
-# math.ipowi: circt-sim doesn't register Math dialect (needed for ** operator)
-11.4.3--binary_op_pow	xfail	circt-sim: math dialect not registered for math.ipowi
-11.4.3--simple_exp_operator_sim	xfail	circt-sim: math dialect not registered for math.ipowi
+# math.ipowi: now supported (math::IPowIOp handler in interpreter)
 
 # $*_gclk sampled value functions: now supported (a6dfbd598)
 
-# scr1: uses $system (unsupported system call in tb/scr1_top_tb_runtests.sv)
-scr1	xfail	Unsupported system call $system in testbench
+# scr1: $system now supported (SystemBIOp in Moore dialect)
