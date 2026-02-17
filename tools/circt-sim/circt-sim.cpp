@@ -1222,8 +1222,11 @@ LogicalResult SimulationContext::run() {
       }
     });
 
-    // Fire VPI callbacks after delta processing.
-    if (!vpiLibrary.empty() && deltasExecuted > 0) {
+    // Fire VPI scheduling-region callbacks after each iteration.
+    // cocotb defers signal writes (vpi_put_value) to the ReadWriteSynch region,
+    // so we must fire these callbacks every iteration — not only when
+    // deltasExecuted > 0 — to ensure deferred writes are flushed.
+    if (!vpiLibrary.empty()) {
       auto &vpi = VPIRuntime::getInstance();
       vpi.fireCallbacks(cbReadWriteSynch);
       vpi.fireCallbacks(cbReadOnlySynch);

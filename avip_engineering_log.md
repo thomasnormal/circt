@@ -1395,3 +1395,47 @@ Task #4: compile and simulate lowRISC Ibex (RV32IMC) simple_system through circt
 - **ibex_simple_system (full SoC)**: 0 errors, 0 warnings, 27MB MLIR (443K lines)
 - **Simulation**: 1118 processes, clock toggles, 0 errors at 4ns (438K process executions)
 - **No regressions**: MooreToCore tests 45/125 fail (all pre-existing CHECK mismatches)
+
+---
+
+## 2026-02-17: VPI/cocotb Integration for CVDP Benchmark
+
+### Goal
+Implement VPI (IEEE 1800-2017 §36) runtime so circt-sim can run cocotb-based Python testbenches,
+enabling the 302 CVDP benchmark problems to execute end-to-end.
+
+### Changes
+
+#### VPIRuntime.cpp (new file, 1100+ lines)
+Full VPI runtime bridging cocotb's VPI calls to ProcessScheduler signals:
+- `buildHierarchy()`: uses actual --top module names instead of "top"; halves four-state
+  signal width (physical 2N → logical N) so cocotb sees correct bit widths
+- `getProperty()`: returns vpiTimePrecision=-12 (ps), vpiTimeUnit=-9 (ns) for cocotb
+- `getValue()`: four-state encoding — extracts value bits (upper N) and unknown bits (lower N)
+  from physical APInt, supports vpiBinStrVal/vpiIntVal/vpiScalarVal/vpiVectorVal formats
+- `putValue()`: constructs four-state physical value [value|unknown] from logical value
+- `registerCb()`: cbAfterDelay event scheduling with ReadWriteSynch flush after each callback
+  (CRITICAL: cocotb defers vpi_put_value to ReadWriteSynch region)
+- Iterator-safe callback dispatch (capture fields before cbFunc, re-find after)
+
+#### VPIRuntime.h (new file, ~595 lines)
+IEEE 1800-2017 VPI type definitions and constants, VPIRuntime class declaration.
+
+#### circt-sim.cpp
+- Pass --top module names to VPIRuntime via `setTopModuleNames()`
+- Fire cbReadWriteSynch/cbReadOnlySynch every main-loop iteration (not just when deltas>0)
+
+### Key Bugs Fixed
+1. **Module name mismatch**: buildHierarchy used "top" as default; cocotb couldn't find signals
+2. **Time precision**: vpiTimePrecision returned -1 (undefined); cocotb crashed on Timer()
+3. **Four-state width**: physical width 2x logical confused cocotb's scalar/vector detection
+4. **DenseMap iterator invalidation**: cbAfterDelay callback modified callbacks map during iteration
+5. **Signal readback stale values** (ROOT CAUSE): cocotb defers vpi_put_value to cbReadWriteSynch
+   region. Our cbAfterDelay event handler didn't fire ReadWriteSynch, so deferred writes never
+   flushed. Fix: fire ReadWriteSynch+ReadOnlySynch after every cbAfterDelay callback.
+
+### Test Results
+- Passthrough readback test: 4/4 assertions pass (write→advance→read cycle for 1-bit and 8-bit)
+- Counter test with always_ff: PASS (rst write/read, Timer advancement)
+- CVDP Brent-Kung adder: compiles + cocotb test runs (fails on assertions as expected — buggy input SV)
+- circt-sim lit tests: 287/325 pass (37 failures are pre-existing, unrelated to VPI)
