@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1450 - February 17, 2026
+
+### circt-sim: Add Allowlist-Aware Deopt Gate Policy Utility
+
+1. Extended `utils/summarize_circt_sim_jit_reports.py` with strict gate checks:
+   - `--allowlist-file` with `exact`/`prefix`/`regex` rule modes.
+   - `--fail-on-any-non-allowlisted-deopt`
+   - `--fail-on-reason=<reason>`
+   - `--fail-on-reason-detail=<reason>:<detail>`
+2. Utility now prints non-allowlisted deopt summaries:
+   - `deopt_process_rows_non_allowlisted`
+   - `top_non_allowlisted_reason[...]`
+   - `top_non_allowlisted_reason_detail[...]`.
+3. Added regression:
+   - `test/Tools/summarize-circt-sim-jit-reports-policy.test`.
+4. Validation:
+   - runline-equivalent summarizer regression bundle PASS.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK`, sim bounded `TIMEOUT` (90s).
+
 ## Iteration 1449 - February 17, 2026
 
 ### circt-sim: Reactive Interface Tri-State Runtime Rules (I3C Blocker)

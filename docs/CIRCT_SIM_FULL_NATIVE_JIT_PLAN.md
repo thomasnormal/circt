@@ -216,8 +216,13 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
        report files/directories and emits ranked reason/detail counters.
      - optional TSV outputs provide reason ranking, reason+detail ranking, and
        per-process rows for strict convergence queueing.
+     - utility now also supports allowlist-aware strict gating:
+       - `--fail-on-any-non-allowlisted-deopt`
+       - `--fail-on-reason=<reason>`
+       - `--fail-on-reason-detail=<reason>:<detail>`
      - added regression:
-       `test/Tools/summarize-circt-sim-jit-reports.test`.
+       `test/Tools/summarize-circt-sim-jit-reports.test`,
+       `test/Tools/summarize-circt-sim-jit-reports-policy.test`.
 5. Bounded integration parity smoke executed:
    - `AVIPS=jtag`, `SEEDS=1`, `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=120`.
    - mode-parity checker passed with one row per mode; both lanes hit the
