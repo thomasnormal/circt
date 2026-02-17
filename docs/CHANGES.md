@@ -131,6 +131,7 @@
       warning+fallback to `memory` for invalid inputs.
   - added regressions:
     - `test/Tools/circt-sim/jit-cache-policy-none.mlir`
+    - `test/Tools/circt-sim/jit-cache-policy-env-none.mlir`
     - `test/Tools/circt-sim/jit-cache-policy-invalid-env.mlir`
 
 ### Why It Matters
