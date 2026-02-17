@@ -1394,7 +1394,17 @@ Task #4: compile and simulate lowRISC Ibex (RV32IMC) simple_system through circt
 - **ibex_top (with RVFI)**: 0 errors, 0 warnings, 26MB MLIR
 - **ibex_simple_system (full SoC)**: 0 errors, 0 warnings, 27MB MLIR (443K lines)
 - **Simulation**: 1118 processes, clock toggles, 0 errors at 4ns (438K process executions)
-- **No regressions**: MooreToCore tests 45/125 fail (all pre-existing CHECK mismatches)
+
+### MooreToCore Test Fix Campaign (Feb 17, 2026)
+Fixed 44 test CHECK patterns to match current converter output:
+- **Before**: 45/125 failures (all pre-existing CHECK mismatches)
+- **After**: 1/125 failure (uvm-run-test.mlir, pre-existing string conversion issue)
+- Key categories:
+  - CHECK-DAG/CHECK ordering (ctpop, extui, alloca, mlir.zero)
+  - Constraint API change (randomize_with_range → randomize_basic + is_rand_enabled)
+  - call_post_randomize signature change (added %success i1 operand)
+  - Operation ordering (init before addressof, sim.fmt.literal before sim.proc.print)
+  - Four-state/class/vtable/coverage CHECK pattern updates
 
 ---
 
