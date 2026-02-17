@@ -31,6 +31,7 @@ unsigned g_lastFuncProcId = 0;
 #include "circt/Runtime/MooreRuntime.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -450,21 +451,22 @@ static bool matchInterfaceTriStateStore(Value storeValue,
 
 // Compute a native UVM port connection count by traversing the interpreter's
 // port connection graph and counting terminal providers.
-static int32_t getNativeUvmPortSize(
+static void collectNativeUvmPortTerminals(
     const llvm::DenseMap<uint64_t, llvm::SmallVector<uint64_t, 2>>
         &analysisPortConnections,
-    uint64_t portAddr) {
+    uint64_t portAddr, llvm::SmallVectorImpl<uint64_t> &terminals) {
+  terminals.clear();
   if (portAddr == 0)
-    return 0;
+    return;
 
   auto seedIt = analysisPortConnections.find(portAddr);
   if (seedIt == analysisPortConnections.end() || seedIt->second.empty())
-    return 0;
+    return;
 
   llvm::SmallVector<uint64_t, 8> worklist(seedIt->second.begin(),
                                           seedIt->second.end());
   llvm::DenseSet<uint64_t> visited;
-  llvm::DenseSet<uint64_t> terminalProviders;
+  llvm::DenseSet<uint64_t> emittedTerminals;
 
   while (!worklist.empty()) {
     uint64_t addr = worklist.pop_back_val();
@@ -477,12 +479,24 @@ static int32_t getNativeUvmPortSize(
         worklist.push_back(next);
       continue;
     }
-    terminalProviders.insert(addr);
+    if (emittedTerminals.insert(addr).second)
+      terminals.push_back(addr);
   }
+}
 
+static int32_t getNativeUvmPortSize(
+    const llvm::DenseMap<uint64_t, llvm::SmallVector<uint64_t, 2>>
+        &analysisPortConnections,
+    uint64_t portAddr) {
+  llvm::SmallVector<uint64_t, 4> terminalProviders;
+  collectNativeUvmPortTerminals(analysisPortConnections, portAddr,
+                                terminalProviders);
   if (!terminalProviders.empty())
     return static_cast<int32_t>(terminalProviders.size());
   // Fallback: preserve "connected means non-zero" even if graph is cyclic.
+  auto seedIt = analysisPortConnections.find(portAddr);
+  if (seedIt == analysisPortConnections.end())
+    return 0;
   return static_cast<int32_t>(seedIt->second.size());
 }
 
@@ -522,7 +536,10 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   };
   profilingEnabled = std::getenv("CIRCT_SIM_PROFILE_FUNCS") != nullptr;
   traceSeqEnabled = std::getenv("CIRCT_SIM_TRACE_SEQ") != nullptr;
+  traceSeqResolveLimit = envUint64Value("CIRCT_SIM_TRACE_SEQ_RESOLVE_LIMIT",
+                                        traceSeqEnabled ? 8 : 0);
   traceAnalysisEnabled = std::getenv("CIRCT_SIM_TRACE_ANALYSIS") != nullptr;
+  traceConfigDbEnabled = std::getenv("CIRCT_SIM_TRACE_CONFIG_DB") != nullptr;
   traceForkJoinEnabled = envFlagEnabled("CIRCT_SIM_TRACE_FORK_JOIN");
   fastPathUvmReportInfo = envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_INFO");
   fastPathUvmReportWarning =
@@ -557,6 +574,7 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
       envUint64Value("CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_MAX_ENTRIES", 0);
   uvmSeqQueueCacheEvictOnCap =
       envFlagEnabled("CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_EVICT_ON_CAP");
+  maxFunctionOps = envUint64Value("CIRCT_SIM_MAX_FUNC_OPS", 0);
 }
 
 bool LLHDProcessInterpreter::lookupUvmSequencerQueueCache(
@@ -605,6 +623,321 @@ void LLHDProcessInterpreter::invalidateUvmSequencerQueueCache(
   if (portAddr == 0)
     return;
   portToSequencerQueue.erase(portAddr);
+}
+
+uint64_t LLHDProcessInterpreter::canonicalizeUvmObjectAddress(ProcessId procId,
+                                                              uint64_t addr) {
+  if (addr == 0)
+    return 0;
+  uint64_t off = 0;
+  MemoryBlock *objBlock = findMemoryBlockByAddress(addr, procId, &off);
+  if (!objBlock)
+    objBlock = findBlockByAddress(addr, off);
+  if (objBlock && off != 0)
+    return addr - off;
+  uint64_t nativeOff = 0;
+  if (findNativeMemoryBlockByAddress(addr, &nativeOff, nullptr) &&
+      nativeOff != 0)
+    return addr - nativeOff;
+  return addr;
+}
+
+bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
+    ProcessId procId, uint64_t &queueAddr, Operation *callSite) {
+  if (queueAddr == 0)
+    return false;
+
+  bool strongHint = false;
+  auto promoteToSequencerQueue =
+      [&](uint64_t candidateAddr) -> std::pair<uint64_t, bool> {
+    if (candidateAddr == 0)
+      return {0, false};
+    if (sequencerItemFifo.contains(candidateAddr))
+      return {candidateAddr, true};
+
+    uint64_t ownerOff = 0;
+    MemoryBlock *ownerBlock =
+        findMemoryBlockByAddress(candidateAddr, procId, &ownerOff);
+    if (!ownerBlock)
+      ownerBlock = findBlockByAddress(candidateAddr, ownerOff);
+    if (ownerBlock && ownerOff != 0) {
+      uint64_t ownerAddr = candidateAddr - ownerOff;
+      if (sequencerItemFifo.contains(ownerAddr))
+        return {ownerAddr, true};
+      return {candidateAddr, false};
+    }
+
+    uint64_t nativeOff = 0;
+    if (findNativeMemoryBlockByAddress(candidateAddr, &nativeOff, nullptr) &&
+        nativeOff != 0) {
+      uint64_t ownerAddr = candidateAddr - nativeOff;
+      if (sequencerItemFifo.contains(ownerAddr))
+        return {ownerAddr, true};
+      return {candidateAddr, false};
+    }
+
+    return {candidateAddr, false};
+  };
+
+  auto [promotedAddr, promotedStrongHint] = promoteToSequencerQueue(queueAddr);
+  queueAddr = promotedAddr;
+  strongHint = strongHint || promotedStrongHint;
+
+  auto resolveGetComp =
+      [&](func::FuncOp getCompFunc, uint64_t getCompThisAddr) -> bool {
+    SmallVector<InterpretedValue, 1> getCompArgs;
+    getCompArgs.push_back(InterpretedValue(llvm::APInt(64, getCompThisAddr)));
+    SmallVector<InterpretedValue, 1> getCompResults;
+    auto &cState = processStates[procId];
+    ++cState.callDepth;
+    auto compRes = interpretFuncBody(procId, getCompFunc, getCompArgs,
+                                     getCompResults, callSite);
+    --cState.callDepth;
+    if (failed(compRes) || getCompResults.empty() || getCompResults[0].isX() ||
+        getCompResults[0].getWidth() != 64)
+      return false;
+    uint64_t resolvedCompAddr = getCompResults[0].getUInt64();
+    if (resolvedCompAddr == 0)
+      return false;
+    auto [resolvedQueueAddr, resolvedStrongHint] =
+        promoteToSequencerQueue(resolvedCompAddr);
+    if (resolvedQueueAddr == 0 || !sequencerItemFifo.contains(resolvedQueueAddr))
+      return false;
+    if (resolvedQueueAddr != queueAddr)
+      strongHint = true;
+    strongHint = strongHint || resolvedStrongHint;
+    queueAddr = resolvedQueueAddr;
+    return true;
+  };
+
+  if (queueAddr != 0 && !sequencerItemFifo.contains(queueAddr)) {
+    if (rootModule) {
+      if (auto getCompFunc = rootModule.lookupSymbol<func::FuncOp>(
+              "uvm_pkg::uvm_port_base::get_comp"))
+        (void)resolveGetComp(getCompFunc, queueAddr);
+    }
+  }
+
+  if (queueAddr != 0 && !sequencerItemFifo.contains(queueAddr)) {
+    uint64_t vtableAddr = 0;
+    bool hasVtableAddr = false;
+    uint64_t portOff = 0;
+    MemoryBlock *portBlock = findMemoryBlockByAddress(queueAddr, procId, &portOff);
+    if (!portBlock)
+      portBlock = findBlockByAddress(queueAddr, portOff);
+    if (portBlock && portBlock->initialized &&
+        portOff + 12 <= portBlock->data.size()) {
+      for (unsigned i = 0; i < 8; ++i)
+        vtableAddr |=
+            static_cast<uint64_t>(portBlock->data[portOff + 4 + i]) << (i * 8);
+      hasVtableAddr = true;
+    }
+    if (!hasVtableAddr) {
+      uint64_t nativeOff = 0;
+      size_t nativeSize = 0;
+      if (findNativeMemoryBlockByAddress(queueAddr, &nativeOff, &nativeSize) &&
+          nativeOff + 12 <= nativeSize) {
+        std::memcpy(&vtableAddr, reinterpret_cast<void *>(queueAddr + 4), 8);
+        hasVtableAddr = true;
+      }
+    }
+    if (hasVtableAddr) {
+      auto globalIt = addressToGlobal.find(vtableAddr);
+      if (globalIt != addressToGlobal.end()) {
+        auto vtableBlockIt = globalMemoryBlocks.find(globalIt->second);
+        if (vtableBlockIt != globalMemoryBlocks.end()) {
+          auto &vtableBlock = vtableBlockIt->second;
+          constexpr unsigned getCompSlot = 13;
+          unsigned slotOffset = getCompSlot * 8;
+          if (slotOffset + 8 <= vtableBlock.size) {
+            uint64_t getCompAddr = 0;
+            for (unsigned i = 0; i < 8; ++i)
+              getCompAddr |=
+                  static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+                  << (i * 8);
+            auto fnIt = addressToFunction.find(getCompAddr);
+            if (fnIt != addressToFunction.end()) {
+              if (rootModule) {
+                if (auto getCompDyn =
+                        rootModule.lookupSymbol<func::FuncOp>(fnIt->second))
+                  (void)resolveGetComp(getCompDyn, queueAddr);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  auto [finalAddr, finalStrongHint] = promoteToSequencerQueue(queueAddr);
+  if (finalAddr != queueAddr)
+    strongHint = true;
+  queueAddr = finalAddr;
+  strongHint = strongHint || finalStrongHint;
+  if (queueAddr != 0 && sequencerItemFifo.contains(queueAddr))
+    strongHint = true;
+  return strongHint;
+}
+
+bool LLHDProcessInterpreter::resolveUvmSequencerQueueAddress(
+    ProcessId procId, uint64_t portAddr, Operation *callSite,
+    uint64_t &queueAddr) {
+  queueAddr = 0;
+  if (portAddr == 0)
+    return false;
+
+  bool traceResolve = false;
+  if (traceSeqEnabled && traceSeqResolveLimit > 0) {
+    uint32_t &printed = traceSeqResolvePrints[portAddr];
+    if (printed < traceSeqResolveLimit) {
+      ++printed;
+      traceResolve = true;
+      llvm::errs() << "[SEQ-RESOLVE] port=0x"
+                   << llvm::format_hex(portAddr, 16)
+                   << " fifo_maps=" << sequencerItemFifo.size() << "\n";
+    }
+  }
+
+  if (lookupUvmSequencerQueueCache(portAddr, queueAddr)) {
+    if (traceResolve)
+      llvm::errs() << "[SEQ-RESOLVE] cache-hit queue=0x"
+                   << llvm::format_hex(queueAddr, 16) << "\n";
+    (void)canonicalizeUvmSequencerQueueAddress(procId, queueAddr, callSite);
+    if (traceResolve)
+      llvm::errs() << "[SEQ-RESOLVE] cache-hit canonical queue=0x"
+                   << llvm::format_hex(queueAddr, 16)
+                   << " in_fifo=" << (sequencerItemFifo.contains(queueAddr) ? 1 : 0)
+                   << "\n";
+    return queueAddr != 0;
+  }
+
+  llvm::SmallVector<uint64_t, 8> portLookupKeys;
+  llvm::DenseSet<uint64_t> seenPortLookupKeys;
+  auto addPortLookupKey = [&](uint64_t key) {
+    if (key != 0 && seenPortLookupKeys.insert(key).second)
+      portLookupKeys.push_back(key);
+  };
+  addPortLookupKey(portAddr);
+
+  uint64_t portOwnerAddr = canonicalizeUvmObjectAddress(procId, portAddr);
+  addPortLookupKey(portOwnerAddr);
+  if (traceResolve)
+    llvm::errs() << "[SEQ-RESOLVE] owner=0x"
+                 << llvm::format_hex(portOwnerAddr, 16) << "\n";
+
+  llvm::SmallVector<std::pair<uint64_t, uint64_t>, 8> ownerMatchedKeys;
+  if (portOwnerAddr != 0) {
+    for (const auto &entry : analysisPortConnections) {
+      uint64_t key = entry.first;
+      if (key == 0 || key == portAddr || key == portOwnerAddr)
+        continue;
+      if (canonicalizeUvmObjectAddress(procId, key) != portOwnerAddr)
+        continue;
+      uint64_t distance = key > portAddr ? key - portAddr : portAddr - key;
+      ownerMatchedKeys.push_back({distance, key});
+    }
+    llvm::sort(ownerMatchedKeys, [](const auto &lhs, const auto &rhs) {
+      if (lhs.first != rhs.first)
+        return lhs.first < rhs.first;
+      return lhs.second < rhs.second;
+    });
+    for (const auto &entry : ownerMatchedKeys)
+      addPortLookupKey(entry.second);
+  }
+
+  if (traceResolve) {
+    llvm::errs() << "[SEQ-RESOLVE] lookup_keys=";
+    for (uint64_t key : portLookupKeys)
+      llvm::errs() << " 0x" << llvm::format_hex(key, 16);
+    llvm::errs() << "\n";
+  }
+
+  llvm::SmallVector<uint64_t, 4> terminals;
+
+  bool hasStrongHint = false;
+  for (uint64_t portLookupKey : portLookupKeys) {
+    collectNativeUvmPortTerminals(analysisPortConnections, portLookupKey,
+                                  terminals);
+    if (traceResolve)
+      llvm::errs() << "[SEQ-RESOLVE] key=0x"
+                   << llvm::format_hex(portLookupKey, 16)
+                   << " terminals=" << terminals.size() << "\n";
+    for (uint64_t terminalAddr : terminals) {
+      uint64_t candidate = terminalAddr;
+      bool candidateStrong =
+          canonicalizeUvmSequencerQueueAddress(procId, candidate, callSite);
+      if (traceResolve)
+        llvm::errs() << "[SEQ-RESOLVE]   terminal=0x"
+                     << llvm::format_hex(terminalAddr, 16) << " -> candidate=0x"
+                     << llvm::format_hex(candidate, 16)
+                     << " strong=" << (candidateStrong ? 1 : 0)
+                     << " in_fifo="
+                     << (sequencerItemFifo.contains(candidate) ? 1 : 0) << "\n";
+      if (candidate == 0)
+        continue;
+      if (queueAddr == 0) {
+        queueAddr = candidate;
+        hasStrongHint = candidateStrong;
+      } else if (!hasStrongHint && candidateStrong) {
+        queueAddr = candidate;
+        hasStrongHint = true;
+      }
+      if (candidateStrong && sequencerItemFifo.contains(candidate)) {
+        queueAddr = candidate;
+        if (traceResolve)
+          llvm::errs() << "[SEQ-RESOLVE] select terminal queue=0x"
+                       << llvm::format_hex(queueAddr, 16) << "\n";
+        return true;
+      }
+    }
+  }
+  if (queueAddr != 0) {
+    if (traceResolve)
+      llvm::errs() << "[SEQ-RESOLVE] select weak queue=0x"
+                   << llvm::format_hex(queueAddr, 16)
+                   << " strong=" << (hasStrongHint ? 1 : 0)
+                   << " in_fifo=" << (sequencerItemFifo.contains(queueAddr) ? 1 : 0)
+                   << "\n";
+    return hasStrongHint;
+  }
+
+  for (uint64_t portLookupKey : portLookupKeys) {
+    auto connIt = analysisPortConnections.find(portLookupKey);
+    if (connIt == analysisPortConnections.end() || connIt->second.empty())
+      continue;
+    queueAddr = connIt->second.back();
+    bool strong =
+        canonicalizeUvmSequencerQueueAddress(procId, queueAddr, callSite);
+    if (traceResolve)
+      llvm::errs() << "[SEQ-RESOLVE] fallback key=0x"
+                   << llvm::format_hex(portLookupKey, 16) << " queue=0x"
+                   << llvm::format_hex(queueAddr, 16)
+                   << " strong=" << (strong ? 1 : 0)
+                   << " in_fifo=" << (sequencerItemFifo.contains(queueAddr) ? 1 : 0)
+                   << "\n";
+    if (strong)
+      return true;
+  }
+  if (traceResolve)
+    llvm::errs() << "[SEQ-RESOLVE] miss\n";
+  return false;
+}
+
+bool LLHDProcessInterpreter::readUvmObjectClassId(ProcessId procId,
+                                                  uint64_t objAddr,
+                                                  uint32_t &classId) {
+  if (objAddr == 0)
+    return false;
+  uint64_t off = 0;
+  MemoryBlock *objBlock = findMemoryBlockByAddress(objAddr, procId, &off);
+  if (!objBlock)
+    objBlock = findBlockByAddress(objAddr, off);
+  if (!objBlock || !objBlock->initialized || off + 4 > objBlock->data.size())
+    return false;
+  classId = 0;
+  for (unsigned i = 0; i < 4; ++i)
+    classId |= static_cast<uint32_t>(objBlock->data[off + i]) << (i * 8);
+  return true;
 }
 
 void LLHDProcessInterpreter::recordUvmSequencerItemOwner(uint64_t itemAddr,
@@ -1513,6 +1846,64 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
 
 }
 
+void LLHDProcessInterpreter::queueDeferredInterfaceSensitivityExpansion(
+    ProcessId procId, llvm::ArrayRef<SignalId> sourceSignals) {
+  if (procId == InvalidProcessId || sourceSignals.empty())
+    return;
+
+  DeferredInterfaceSensitivityExpansion pending;
+  pending.procId = procId;
+  llvm::DenseSet<SignalId> seen;
+  for (SignalId sigId : sourceSignals) {
+    if (sigId == 0 || !seen.insert(sigId).second)
+      continue;
+    pending.sourceSignals.push_back(sigId);
+  }
+  if (pending.sourceSignals.empty())
+    return;
+  deferredInterfaceSensitivityExpansions.push_back(std::move(pending));
+}
+
+void LLHDProcessInterpreter::expandDeferredInterfaceSensitivityExpansions() {
+  if (deferredInterfaceSensitivityExpansions.empty() ||
+      interfacePtrToFieldSignals.empty())
+    return;
+
+  for (const auto &pending : deferredInterfaceSensitivityExpansions) {
+    Process *proc = scheduler.getProcess(pending.procId);
+    if (!proc)
+      continue;
+
+    auto hasAnyEdgeSensitivity = [&](SignalId sigId) {
+      for (const auto &entry : proc->getSensitivityList().getEntries()) {
+        if (entry.signalId == sigId && entry.edge == EdgeType::AnyEdge)
+          return true;
+      }
+      return false;
+    };
+
+    bool added = false;
+    for (SignalId srcSigId : pending.sourceSignals) {
+      auto fieldIt = interfacePtrToFieldSignals.find(srcSigId);
+      if (fieldIt == interfacePtrToFieldSignals.end())
+        continue;
+      for (SignalId fieldSigId : fieldIt->second) {
+        if (fieldSigId == 0 || hasAnyEdgeSensitivity(fieldSigId))
+          continue;
+        scheduler.addSensitivity(pending.procId, fieldSigId, EdgeType::AnyEdge);
+        added = true;
+      }
+    }
+
+    if (added) {
+      // Re-run once so any already-updated interface fields are reflected.
+      scheduler.scheduleProcess(pending.procId, SchedulingRegion::Active);
+    }
+  }
+
+  deferredInterfaceSensitivityExpansions.clear();
+}
+
 void LLHDProcessInterpreter::dumpOpStats(llvm::raw_ostream &os,
                                          size_t topN) const {
   if (opStats.empty())
@@ -1707,6 +2098,10 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // both parent and child module-level ops so that all interface pointer
   // addresses are known.
   createInterfaceFieldShadowSignals();
+  // Continuous-assignment sensitivities registered before interface shadow
+  // creation can be stuck on pointer signals that never toggle. Expand those
+  // process sensitivities to the newly created field signals.
+  expandDeferredInterfaceSensitivityExpansions();
 
   LLVM_DEBUG({
     if (!interfaceFieldSignals.empty()) {
@@ -2594,6 +2989,20 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       LLVM_DEBUG(llvm::dbgs() << "    Registered child combinational '"
                               << combName << "' with ID " << procId << " and "
                               << seenSignals.size() << " sensitivities\n");
+      // DEBUG: dump child combinational sensitivities
+      {
+        static bool traceSens = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+        if (traceSens && combOp.getNumResults() == 2 &&
+            combOp.getResultTypes()[1].isInteger(1)) {
+          llvm::errs() << "[COMB-SENS] procId=" << procId
+                       << " instId=" << instanceId
+                       << " numResults=" << combOp.getNumResults()
+                       << " sigs:";
+          for (SignalId sid : seenSignals)
+            llvm::errs() << " " << sid << "(" << getSignalName(sid) << ")";
+          llvm::errs() << "\n";
+        }
+      }
 
       scheduler.scheduleProcess(procId, SchedulingRegion::Active);
     }
@@ -3835,6 +4244,16 @@ void LLHDProcessInterpreter::registerModuleDrive(
     // Trace through combinational ops (comb.and, comb.or, comb.xor, comb.mux,
     // comb.concat, comb.extract, hw.struct_extract, etc.)
     if (auto *defOp = v.getDefiningOp()) {
+      // Don't trace through hw.instance boundaries. Instance outputs are
+      // tracked by their own reactive processes (inst_out_NNN). A module-level
+      // drive that depends on an instance output should be treated as a static
+      // continuous assignment sensitive to the instance output signal, not as
+      // a drive connected to processes inside the child module. Without this
+      // guard, registerModuleDrive incorrectly traces through hw.instance
+      // operands, finds unrelated ProcessOps (e.g., rdata_i in
+      // tlul_adapter_reg), and misclassifies the drive as process-connected.
+      if (isa<hw::InstanceOp>(defOp))
+        continue;
       if (defOp->getDialect() &&
           (defOp->getDialect()->getNamespace() == "comb" ||
            defOp->getDialect()->getNamespace() == "hw")) {
@@ -4174,15 +4593,23 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
     if (requiresDistinctDrivers) {
       for (auto &info : drives) {
         bool hasConcreteSource = false;
+        bool hasPointerSource = false;
         for (SignalId srcSigId : info.sourceSignals) {
           if (srcSigId == targetSigId)
             continue;
+          if (isLikelyPointerSource(srcSigId)) {
+            hasPointerSource = true;
+            continue;
+          }
           if (!isLikelyPointerSource(srcSigId)) {
             hasConcreteSource = true;
             break;
           }
         }
-        if (!hasConcreteSource)
+        // Pointer-only source lists are expected for interface field accesses.
+        // Their concrete field sensitivities are added later by deferred
+        // expansion; avoid self-target fallback here to prevent hot self-loops.
+        if (!hasConcreteSource && !hasPointerSource)
           info.sourceSignals.push_back(targetSigId);
       }
     }
@@ -4364,6 +4791,7 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
         for (SignalId srcSigId : sensitivitySignals)
           scheduler.addSensitivity(procId, srcSigId);
       }
+      queueDeferredInterfaceSensitivityExpansion(procId, sensitivitySignals);
 
       // Execute all drives once at initialization (immediate updates).
       {
@@ -4394,6 +4822,15 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
       for (auto [driveIdx, info] : llvm::enumerate(drives)) {
         llhd::DriveOp driveOp = info.driveOp;
         const InstanceInputMapping &driveInputMap = info.inputMap;
+
+        // Constant distinct-driver drives (e.g. pullups) do not need a reactive
+        // process; execute once and keep the driver registered in resolution.
+        bool hasDynamicDependence =
+            !info.sourceSignals.empty() || !info.processIds.empty();
+        if (requiresDistinctDrivers && !hasDynamicDependence) {
+          executeContinuousAssignment(driveOp);
+          continue;
+        }
 
         LLVM_DEBUG(llvm::dbgs()
                    << "continuous assignment: static drive signal="
@@ -4430,6 +4867,7 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
             }
           }
         }
+        queueDeferredInterfaceSensitivityExpansion(procId, info.sourceSignals);
 
         // Execute once at initialization.
         executeContinuousAssignment(driveOp);
@@ -4718,6 +5156,18 @@ void LLHDProcessInterpreter::collectProcessIds(
       continue;
     visited.push_back(item);
 
+    // Don't trace through hw.instance boundaries — instance outputs are
+    // tracked by their own reactive processes (inst_out_NNN).  Without this
+    // guard we follow instanceOutputMap into the child module, find unrelated
+    // ProcessOps (e.g., rdata_i in tlul_adapter_reg), and incorrectly report
+    // a process dependency.  This prevents combSignalDriveMap from being
+    // populated for the drive, breaking inline evaluation of continuous
+    // assignments that depend on instance outputs.
+    if (auto *defOp = item.value.getDefiningOp()) {
+      if (isa<hw::InstanceOp>(defOp))
+        continue;
+    }
+
     auto instMapIt = instanceOutputMap.find(item.instanceId);
     if (instMapIt != instanceOutputMap.end()) {
       auto instIt = instMapIt->second.find(item.value);
@@ -4938,8 +5388,30 @@ void LLHDProcessInterpreter::executeFirReg(seq::FirRegOp regOp,
   if (!doUpdate)
     return;
 
-  // DEBUG: trace firreg updates for key signals
+  // DEBUG: trace firreg updates for key signals (including a_ack probe)
   {
+    static bool traceFirreg = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+    if (traceFirreg && state.signalId == 103) {
+      // Read a_ack signal value directly for debugging
+      for (auto &[sid, sname] : scheduler.getSignalNames()) {
+        if (sname.find("a_ack") != std::string::npos && sname.find("u_reg_if") != std::string::npos) {
+          const SignalValue &ackSv = scheduler.getSignalValue(sid);
+          llvm::SmallString<32> ackStr;
+          if (!ackSv.isUnknown())
+            ackSv.getAPInt().toString(ackStr, 16, false);
+          llvm::errs() << "[FIRREG-DBG] outstanding_q input: a_ack(sig=" << sid << ")=";
+          if (ackSv.isUnknown()) llvm::errs() << "X";
+          else llvm::errs() << "0x" << ackStr;
+          llvm::errs() << " outstanding_new=";
+          if (newVal.isX()) llvm::errs() << "X";
+          else { llvm::SmallString<32> s; newVal.getAPInt().toString(s, 16, false); llvm::errs() << "0x" << s; }
+          llvm::errs() << " instId=" << activeInstanceId
+                       << " t=" << scheduler.getCurrentTime().realTime
+                       << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
+          break;
+        }
+      }
+    }
     auto nameIt = scheduler.getSignalNames().find(state.signalId);
     if (nameIt != scheduler.getSignalNames().end()) {
       const auto &name = nameIt->second;
@@ -5423,6 +5895,23 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     };
 
     if (frame.stage == 0) {
+      // DEBUG: trace which handler catches CombinationalOp results
+      {
+        static bool traceCombPath = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+        if (traceCombPath) {
+          if (auto *defOp = current.getDefiningOp()) {
+            if (isa<llhd::CombinationalOp>(defOp)) {
+              auto resultIdx = dyn_cast<OpResult>(current);
+              llvm::errs() << "[COMB-ENTRY] result#"
+                           << (resultIdx ? resultIdx.getResultNumber() : 99)
+                           << " instId=" << activeInstanceId
+                           << " type=";
+              current.getType().print(llvm::errs());
+              llvm::errs() << "\n";
+            }
+          }
+        }
+      }
       // Check instanceOutputMap BEFORE getSignalId. Instance results are
       // registered as signals (for caching), but the signal value may be stale
       // when multiple combinational processes fire in response to the same
@@ -5445,6 +5934,22 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       }
 
       if (SignalId sigId = getSignalId(current)) {
+        // DEBUG: trace when getSignalId catches a CombinationalOp result
+        {
+          static bool traceCombPath = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+          if (traceCombPath) {
+            if (auto *defOp = current.getDefiningOp()) {
+              if (isa<llhd::CombinationalOp>(defOp)) {
+                auto resultIdx = dyn_cast<OpResult>(current);
+                llvm::errs() << "[COMB-SIGID] result#"
+                             << (resultIdx ? resultIdx.getResultNumber() : 99)
+                             << " sigId=" << sigId
+                             << " instId=" << activeInstanceId
+                             << " name=" << getSignalName(sigId) << "\n";
+              }
+            }
+          }
+        }
         // For signals driven by purely combinational expressions, trace
         // through the drive expression rather than reading the (potentially
         // stale) signal value. This handles the case where multiple levels
@@ -5653,6 +6158,18 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
           if (stateIt != processStates.end()) {
             auto valIt = stateIt->second.valueMap.find(current);
             if (valIt != stateIt->second.valueMap.end()) {
+              {
+                static bool traceComb = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+                if (traceComb) {
+                  auto resultIdx = dyn_cast<OpResult>(current);
+                  llvm::errs() << "[COMB-CACHE] procId=" << procId
+                               << " result#" << (resultIdx ? resultIdx.getResultNumber() : 99)
+                               << " cached=";
+                  if (valIt->second.isX()) llvm::errs() << "X";
+                  else { llvm::SmallString<32> s; valIt->second.getAPInt().toString(s, 16, false); llvm::errs() << "0x" << s; }
+                  llvm::errs() << " instId=" << activeInstanceId << "\n";
+                }
+              }
               finish(valIt->second);
               continue;
             }
@@ -5662,9 +6179,19 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         llvm::SmallVector<InterpretedValue, 4> results;
         (void)evaluateCombinationalOp(combOp, results);
         auto result = dyn_cast<OpResult>(current);
-        if (result && result.getResultNumber() < results.size())
+        if (result && result.getResultNumber() < results.size()) {
+          {
+            static bool traceComb = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+            if (traceComb) {
+              llvm::errs() << "[COMB-EVAL] result#" << result.getResultNumber()
+                           << " fresh=";
+              if (results[result.getResultNumber()].isX()) llvm::errs() << "X";
+              else { llvm::SmallString<32> s; results[result.getResultNumber()].getAPInt().toString(s, 16, false); llvm::errs() << "0x" << s; }
+              llvm::errs() << " instId=" << activeInstanceId << "\n";
+            }
+          }
           finish(results[result.getResultNumber()]);
-        else
+        } else
           finish(makeUnknown(current));
         continue;
       }
@@ -5971,6 +6498,37 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         auto modOp = current.getDefiningOp<comb::ModUOp>();
         pushValue(modOp.getLhs());
         pushValue(modOp.getRhs());
+        continue;
+      }
+
+      // hw.instance results map to signals registered during
+      // initializeChildInstances.  Read the current signal value so that
+      // continuous-assignment expressions that depend on sibling instance
+      // outputs (e.g., a_ready extracted from u_rsp_intg_gen.tl_o) get the
+      // correct value instead of X.
+      if (current.getDefiningOp<hw::InstanceOp>()) {
+        SignalId sigId = getSignalId(current);
+        if (sigId != 0) {
+          auto combIt = combSignalDriveMap.find(sigId);
+          if (combIt != combSignalDriveMap.end() &&
+              !continuousEvalVisitedSignals.count(sigId)) {
+            continuousEvalVisitedSignals.insert(sigId);
+            const auto &driveInfo = combIt->second;
+            ScopedInstanceContext instScope(*this, driveInfo.instanceId);
+            if (!driveInfo.inputMap.empty()) {
+              ScopedInputValueMap inputScope(*this, driveInfo.inputMap);
+              finish(evaluateContinuousValue(driveInfo.driveValue));
+            } else {
+              finish(evaluateContinuousValue(driveInfo.driveValue));
+            }
+            continuousEvalVisitedSignals.erase(sigId);
+          } else {
+            const SignalValue &sv = scheduler.getSignalValue(sigId);
+            finish(InterpretedValue::fromSignalValue(sv));
+          }
+        } else {
+          finish(makeUnknown(current));
+        }
         continue;
       }
 
@@ -9994,6 +10552,39 @@ arith_dispatch:
   }
 
   //===--------------------------------------------------------------------===//
+  // Math Dialect Operations
+  //===--------------------------------------------------------------------===//
+
+  if (auto ipowiOp = dyn_cast<mlir::math::IPowIOp>(op)) {
+    InterpretedValue base = getValue(procId, ipowiOp.getLhs());
+    InterpretedValue exp = getValue(procId, ipowiOp.getRhs());
+    unsigned targetWidth = getTypeWidth(ipowiOp.getType());
+    if (base.isX() || exp.isX()) {
+      setValue(procId, ipowiOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+    } else {
+      APInt baseVal = base.getAPInt();
+      APInt expVal = exp.getAPInt();
+      if (baseVal.getBitWidth() != targetWidth)
+        baseVal = baseVal.zextOrTrunc(targetWidth);
+      if (expVal.getBitWidth() != targetWidth)
+        expVal = expVal.zextOrTrunc(targetWidth);
+      // Compute base ** exp using repeated squaring
+      APInt result(targetWidth, 1);
+      APInt b = baseVal;
+      uint64_t e = expVal.getZExtValue();
+      while (e > 0) {
+        if (e & 1)
+          result *= b;
+        b *= b;
+        e >>= 1;
+      }
+      setValue(procId, ipowiOp.getResult(), InterpretedValue(result));
+    }
+    return success();
+  }
+
+  //===--------------------------------------------------------------------===//
   // SCF Dialect Operations (control flow for loops/conditionals)
   //===--------------------------------------------------------------------===//
 
@@ -12267,11 +12858,16 @@ arith_dispatch:
         }
       }
       if (itemAddr != 0 && sqrAddr != 0) {
-        recordUvmSequencerItemOwner(itemAddr, sqrAddr);
+        uint64_t canonicalSqrAddr =
+            canonicalizeUvmObjectAddress(procId, sqrAddr);
+        if (canonicalSqrAddr == 0)
+          canonicalSqrAddr = sqrAddr;
+        recordUvmSequencerItemOwner(itemAddr, canonicalSqrAddr);
         LLVM_DEBUG(llvm::dbgs()
                    << "  call_indirect: start_item intercepted: item 0x"
                    << llvm::format_hex(itemAddr, 16) << " → sequencer 0x"
-                   << llvm::format_hex(sqrAddr, 16) << "\n");
+                   << llvm::format_hex(canonicalSqrAddr, 16)
+                   << " (raw=0x" << llvm::format_hex(sqrAddr, 16) << ")\n");
       }
       // Call set_item_context to set up the item's parent sequence and
       // sequencer references, then return (skip wait_for_grant).
@@ -12316,18 +12912,22 @@ arith_dispatch:
         // First call (not a re-poll): push item to FIFO
         if (!finishItemWaiters.count(itemAddr)) {
           uint64_t sqrAddr = takeUvmSequencerItemOwner(itemAddr);
-          sequencerItemFifo[sqrAddr].push_back(itemAddr);
+          uint64_t queueAddr = canonicalizeUvmObjectAddress(procId, sqrAddr);
+          if (queueAddr == 0)
+            queueAddr = sqrAddr;
+          sequencerItemFifo[queueAddr].push_back(itemAddr);
           LLVM_DEBUG(llvm::dbgs()
                      << "  call_indirect: finish_item intercepted: item 0x"
                      << llvm::format_hex(itemAddr, 16) << " pushed to "
                      << "sequencer FIFO 0x"
-                     << llvm::format_hex(sqrAddr, 16) << " (depth "
-                     << sequencerItemFifo[sqrAddr].size() << ")\n");
+                     << llvm::format_hex(queueAddr, 16) << " (raw=0x"
+                     << llvm::format_hex(sqrAddr, 16) << ", depth "
+                     << sequencerItemFifo[queueAddr].size() << ")\n");
           if (traceSeq) {
             llvm::errs() << "[SEQ-CI] push item=0x"
                          << llvm::format_hex(itemAddr, 16) << " sqr=0x"
-                         << llvm::format_hex(sqrAddr, 16) << " depth="
-                         << sequencerItemFifo[sqrAddr].size() << "\n";
+                         << llvm::format_hex(queueAddr, 16) << " depth="
+                         << sequencerItemFifo[queueAddr].size() << "\n";
           }
         }
 
@@ -12362,181 +12962,19 @@ arith_dispatch:
         args.size() >= 2) {
       uint64_t portAddr = args[0].isX() ? 0 : args[0].getUInt64();
       bool isTryNextItem = calleeName.ends_with("::try_next_item");
-      // Resolve sequencer queue once and reuse for subsequent calls on this
-      // port. This avoids repeated get_comp/vtable resolution in tight loops.
-      uint64_t seqrAddr = 0;
       uint64_t seqrQueueAddr = 0;
-      bool usedCachedSeqrQueue = false;
-      if (lookupUvmSequencerQueueCache(portAddr, seqrQueueAddr)) {
-        seqrAddr = seqrQueueAddr;
-        usedCachedSeqrQueue = true;
-      }
-      if (!usedCachedSeqrQueue) {
-        // Find connected sequencer via connection map.
-        auto connIt = analysisPortConnections.find(portAddr);
-        if (connIt != analysisPortConnections.end() &&
-            !connIt->second.empty()) {
-          // The export address may have further connections, follow chain.
-          // Prefer the most recent connect() target for pull ports.
-          // UVM reconnect flows can update the provider at runtime.
-          uint64_t exportAddr = connIt->second.back();
-          // The export is on the sequencer object. We need the sequencer
-          // address. Check if the export appears as a sequencer FIFO key.
-          // If not, check all FIFOs for items.
-          seqrAddr = exportAddr;
-        }
-        seqrQueueAddr = seqrAddr;
-      }
-      auto promoteToSequencerQueue = [&](uint64_t candidateAddr) -> uint64_t {
-        if (candidateAddr == 0 || sequencerItemFifo.contains(candidateAddr))
-          return candidateAddr;
-        uint64_t ownerOff = 0;
-        MemoryBlock *ownerBlock =
-            findMemoryBlockByAddress(candidateAddr, procId, &ownerOff);
-        if (!ownerBlock)
-          ownerBlock = findBlockByAddress(candidateAddr, ownerOff);
-        if (ownerBlock && ownerOff != 0) {
-          uint64_t ownerAddr = candidateAddr - ownerOff;
-          if (sequencerItemFifo.contains(ownerAddr))
-            return ownerAddr;
-        }
-        uint64_t nativeOff = 0;
-        if (findNativeMemoryBlockByAddress(candidateAddr, &nativeOff, nullptr) &&
-            nativeOff != 0) {
-          uint64_t ownerAddr = candidateAddr - nativeOff;
-          if (sequencerItemFifo.contains(ownerAddr))
-            return ownerAddr;
-        }
-        return candidateAddr;
-      };
-      if (!usedCachedSeqrQueue && seqrQueueAddr != 0 &&
-          !sequencerItemFifo.contains(seqrQueueAddr)) {
-        // Connection maps often point to a seq_item_export object, not the
-        // owning sequencer. Resolve the owner component first.
-        if (auto getCompFunc =
-                moduleOp.lookupSymbol<func::FuncOp>(
-                    "uvm_pkg::uvm_port_base::get_comp")) {
-          SmallVector<InterpretedValue, 1> getCompArgs;
-          getCompArgs.push_back(InterpretedValue(llvm::APInt(64, seqrQueueAddr)));
-          SmallVector<InterpretedValue, 1> getCompResults;
-          auto &cState = processStates[procId];
-          ++cState.callDepth;
-          auto compRes = interpretFuncBody(procId, getCompFunc, getCompArgs,
-                                           getCompResults, callIndirectOp);
-          --cState.callDepth;
-          if (succeeded(compRes) && !getCompResults.empty() &&
-              !getCompResults[0].isX())
-            seqrQueueAddr =
-                promoteToSequencerQueue(getCompResults[0].getUInt64());
-        }
+      bool resolvedSeqrQueueHint = resolveUvmSequencerQueueAddress(
+          procId, portAddr, callIndirectOp.getOperation(), seqrQueueAddr);
 
-        if (!sequencerItemFifo.contains(seqrQueueAddr)) {
-          // Fallback: resolve get_comp through the runtime vtable slot.
-          uint64_t vtableAddr = 0;
-          bool hasVtableAddr = false;
-          uint64_t portOff = 0;
-          MemoryBlock *portBlock =
-              findMemoryBlockByAddress(seqrQueueAddr, procId, &portOff);
-          if (!portBlock)
-            portBlock = findBlockByAddress(seqrQueueAddr, portOff);
-          if (portBlock && portBlock->initialized &&
-              portOff + 12 <= portBlock->data.size()) {
-            for (unsigned i = 0; i < 8; ++i)
-              vtableAddr |= static_cast<uint64_t>(
-                                portBlock->data[portOff + 4 + i])
-                            << (i * 8);
-            hasVtableAddr = true;
-          }
-          if (!hasVtableAddr) {
-            uint64_t nativeOff = 0;
-            size_t nativeSize = 0;
-            if (findNativeMemoryBlockByAddress(seqrQueueAddr, &nativeOff,
-                                               &nativeSize) &&
-                nativeOff + 12 <= nativeSize) {
-              std::memcpy(&vtableAddr,
-                          reinterpret_cast<void *>(seqrQueueAddr + 4), 8);
-              hasVtableAddr = true;
-            }
-          }
-          if (hasVtableAddr) {
-            auto globalIt = addressToGlobal.find(vtableAddr);
-            if (globalIt != addressToGlobal.end()) {
-              auto vtableBlockIt = globalMemoryBlocks.find(globalIt->second);
-              if (vtableBlockIt != globalMemoryBlocks.end()) {
-                auto &vtableBlock = vtableBlockIt->second;
-                unsigned getCompSlot = 13;
-                unsigned slotOffset = getCompSlot * 8;
-                if (slotOffset + 8 <= vtableBlock.size) {
-                  uint64_t getCompAddr = 0;
-                  for (unsigned i = 0; i < 8; ++i)
-                    getCompAddr |=
-                        static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
-                        << (i * 8);
-                  auto fnIt = addressToFunction.find(getCompAddr);
-                  if (fnIt != addressToFunction.end()) {
-                    if (auto getCompDyn =
-                            moduleOp.lookupSymbol<func::FuncOp>(fnIt->second)) {
-                      SmallVector<InterpretedValue, 1> getCompArgs2;
-                      getCompArgs2.push_back(
-                          InterpretedValue(llvm::APInt(64, seqrQueueAddr)));
-                      SmallVector<InterpretedValue, 1> getCompResults2;
-                      auto &cState = processStates[procId];
-                      ++cState.callDepth;
-                      auto compRes2 = interpretFuncBody(
-                          procId, getCompDyn, getCompArgs2, getCompResults2,
-                          callIndirectOp);
-                      --cState.callDepth;
-                      if (succeeded(compRes2) && !getCompResults2.empty() &&
-                          !getCompResults2[0].isX())
-                        seqrQueueAddr =
-                            promoteToSequencerQueue(getCompResults2[0].getUInt64());
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
+      // Cache only explicit routing hints (cache hit or resolved connection
+      // chain). Do not cache opportunistic fallback choices.
+      if (resolvedSeqrQueueHint && seqrQueueAddr != 0)
+        cacheUvmSequencerQueueAddress(portAddr, seqrQueueAddr);
 
-        if (!sequencerItemFifo.contains(seqrQueueAddr))
-          seqrQueueAddr = promoteToSequencerQueue(seqrQueueAddr);
-      }
-
-      if (seqrQueueAddr != 0 && !sequencerItemFifo.contains(seqrQueueAddr) &&
-          !sequencerItemFifo.empty()) {
-        uint64_t bestKey = 0;
-        uint64_t bestDistance = ~uint64_t(0);
-        for (auto &[key, fifo] : sequencerItemFifo) {
-          uint64_t distance = key > seqrQueueAddr ? key - seqrQueueAddr
-                                                  : seqrQueueAddr - key;
-          if (distance < bestDistance) {
-            bestDistance = distance;
-            bestKey = key;
-          }
-        }
-        if (bestKey != 0)
-          seqrQueueAddr = bestKey;
-      }
-      cacheUvmSequencerQueueAddress(portAddr, seqrQueueAddr);
-      // Try to find an item in any FIFO (prioritize matched sequencer).
+      // Try to find an item for the resolved queue first.
       uint64_t itemAddr = 0;
       bool found = false;
       bool fromFallbackSearch = false;
-
-      auto readObjClassId = [&](uint64_t objAddr, uint32_t &classId) -> bool {
-        if (objAddr == 0)
-          return false;
-        uint64_t off = 0;
-        MemoryBlock *objBlock = findMemoryBlockByAddress(objAddr, procId, &off);
-        if (!objBlock)
-          objBlock = findBlockByAddress(objAddr, off);
-        if (!objBlock || !objBlock->initialized || off + 4 > objBlock->data.size())
-          return false;
-        classId = 0;
-        for (unsigned i = 0; i < 4; ++i)
-          classId |= static_cast<uint32_t>(objBlock->data[off + i]) << (i * 8);
-        return true;
-      };
 
       uint32_t expectedClassId = 0;
       bool hasExpectedClassId = false;
@@ -12567,7 +13005,8 @@ arith_dispatch:
           }
         }
         if (haveCurrentObjAddr && currentObjAddr != 0)
-          hasExpectedClassId = readObjClassId(currentObjAddr, expectedClassId);
+          hasExpectedClassId =
+              readUvmObjectClassId(procId, currentObjAddr, expectedClassId);
       }
 
       if (seqrQueueAddr != 0) {
@@ -12579,11 +13018,13 @@ arith_dispatch:
         }
       }
       if (!found && hasExpectedClassId) {
+        // If the queue hint is not directly usable, use class-id matching as
+        // a constrained fallback instead of arbitrarily draining another queue.
         for (auto &[key, fifo] : sequencerItemFifo) {
           if (fifo.empty())
             continue;
           uint32_t classId = 0;
-          if (!readObjClassId(fifo.front(), classId) ||
+          if (!readUvmObjectClassId(procId, fifo.front(), classId) ||
               classId != expectedClassId)
             continue;
           itemAddr = fifo.front();
@@ -12591,18 +13032,6 @@ arith_dispatch:
           found = true;
           fromFallbackSearch = true;
           break;
-        }
-      }
-      if (!found) {
-        // Search all FIFOs for any available item.
-        for (auto &[key, fifo] : sequencerItemFifo) {
-          if (!fifo.empty()) {
-            itemAddr = fifo.front();
-            fifo.pop_front();
-            found = true;
-            fromFallbackSearch = true;
-            break;
-          }
         }
       }
       if (found && itemAddr != 0) {
@@ -12619,7 +13048,7 @@ arith_dispatch:
           llvm::errs() << "[SEQ-CI] pop item=0x"
                        << llvm::format_hex(itemAddr, 16) << " port=0x"
                        << llvm::format_hex(portAddr, 16) << " seqr_hint=0x"
-                       << llvm::format_hex(seqrAddr, 16)
+                       << llvm::format_hex(seqrQueueAddr, 16)
                        << " seqr_q=0x" << llvm::format_hex(seqrQueueAddr, 16)
                        << " fallback=" << (fromFallbackSearch ? 1 : 0)
                        << "\n";
@@ -17946,43 +18375,85 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                    << llvm::format_hex(portAddr, 16)
                    << " fifoMaps=" << sequencerItemFifo.size() << "\n";
 
-    uint64_t seqrAddr = 0;
-    (void)lookupUvmSequencerQueueCache(portAddr, seqrAddr);
-    if (seqrAddr == 0) {
-      auto connIt = analysisPortConnections.find(portAddr);
-      if (connIt != analysisPortConnections.end() && !connIt->second.empty())
-        // Prefer the most recent connect() target for pull ports.
-        seqrAddr = connIt->second.back();
-      cacheUvmSequencerQueueAddress(portAddr, seqrAddr);
-    }
+    uint64_t seqrQueueAddr = 0;
+    bool resolvedSeqrQueueHint = resolveUvmSequencerQueueAddress(
+        procId, portAddr, callOp.getOperation(), seqrQueueAddr);
+    if (resolvedSeqrQueueHint && seqrQueueAddr != 0)
+      cacheUvmSequencerQueueAddress(portAddr, seqrQueueAddr);
 
     uint64_t itemAddr = 0;
     bool found = false;
-    if (seqrAddr != 0) {
-      auto fifoIt = sequencerItemFifo.find(seqrAddr);
+    bool fromFallbackSearch = false;
+    InterpretedValue outRefVal = getValue(procId, callOp.getOperand(1));
+    uint64_t refProbeAddr = outRefVal.isX() ? 0 : outRefVal.getUInt64();
+
+    uint32_t expectedClassId = 0;
+    bool hasExpectedClassId = false;
+    if (refProbeAddr != 0) {
+      uint64_t refOff = 0;
+      MemoryBlock *refProbeBlock =
+          findMemoryBlockByAddress(refProbeAddr, procId, &refOff);
+      if (!refProbeBlock)
+        refProbeBlock = findBlockByAddress(refProbeAddr, refOff);
+      uint64_t currentObjAddr = 0;
+      bool haveCurrentObjAddr = false;
+      if (refProbeBlock && refProbeBlock->initialized &&
+          refOff + 8 <= refProbeBlock->data.size()) {
+        for (unsigned i = 0; i < 8; ++i)
+          currentObjAddr |=
+              static_cast<uint64_t>(refProbeBlock->data[refOff + i]) << (i * 8);
+        haveCurrentObjAddr = true;
+      } else {
+        uint64_t nativeOffset = 0;
+        size_t nativeSize = 0;
+        if (findNativeMemoryBlockByAddress(refProbeAddr, &nativeOffset,
+                                           &nativeSize) &&
+            nativeOffset + 8 <= nativeSize) {
+          std::memcpy(&currentObjAddr, reinterpret_cast<void *>(refProbeAddr), 8);
+          haveCurrentObjAddr = true;
+        }
+      }
+      if (haveCurrentObjAddr && currentObjAddr != 0)
+        hasExpectedClassId =
+            readUvmObjectClassId(procId, currentObjAddr, expectedClassId);
+    }
+
+    if (seqrQueueAddr != 0) {
+      auto fifoIt = sequencerItemFifo.find(seqrQueueAddr);
       if (fifoIt != sequencerItemFifo.end() && !fifoIt->second.empty()) {
         itemAddr = fifoIt->second.front();
         fifoIt->second.pop_front();
         found = true;
       }
     }
-    if (!found) {
+    if (!found && hasExpectedClassId) {
       for (auto &[key, fifo] : sequencerItemFifo) {
-        if (!fifo.empty()) {
-          itemAddr = fifo.front();
-          fifo.pop_front();
-          found = true;
-          break;
-        }
+        if (fifo.empty())
+          continue;
+        uint32_t classId = 0;
+        if (!readUvmObjectClassId(procId, fifo.front(), classId) ||
+            classId != expectedClassId)
+          continue;
+        itemAddr = fifo.front();
+        fifo.pop_front();
+        found = true;
+        fromFallbackSearch = true;
+        break;
       }
     }
 
     if (found && itemAddr != 0) {
       lastDequeuedItem[portAddr] = itemAddr;
       uint64_t refAddr = 0;
-      InterpretedValue outRefVal = getValue(procId, callOp.getOperand(1));
       if (!outRefVal.isX())
         refAddr = outRefVal.getUInt64();
+
+      if (traceSeq) {
+        llvm::errs() << "[SEQ-FC] pop item=0x" << llvm::format_hex(itemAddr, 16)
+                     << " port=0x" << llvm::format_hex(portAddr, 16)
+                     << " seqr_q=0x" << llvm::format_hex(seqrQueueAddr, 16)
+                     << " fallback=" << (fromFallbackSearch ? 1 : 0) << "\n";
+      }
 
       if (refAddr != 0) {
         uint64_t offset = 0;
@@ -18008,7 +18479,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
     if (isTryNextItem) {
       uint64_t refAddr = 0;
-      InterpretedValue outRefVal = getValue(procId, callOp.getOperand(1));
       if (!outRefVal.isX())
         refAddr = outRefVal.getUInt64();
       if (traceSeq)
@@ -18152,6 +18622,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         std::string instName = readStr(1);
         std::string fieldName = readStr(2);
         std::string key = instName + "." + fieldName;
+        if (traceConfigDbEnabled) {
+          llvm::errs() << "[CFG-FC-GET] callee=" << callee
+                       << " key=\"" << key << "\" inst=\"" << instName
+                       << "\" field=\"" << fieldName
+                       << "\" entries=" << configDbEntries.size() << "\n";
+        }
 
         // Look up in configDbEntries with wildcard matching
         // (same logic as the call_indirect config_db handler)
@@ -18186,6 +18662,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         }
 
         if (it != configDbEntries.end()) {
+          if (traceConfigDbEnabled) {
+            llvm::errs() << "[CFG-FC-GET] hit key=\"" << it->first
+                         << "\" bytes=" << it->second.size() << "\n";
+          }
           Value outputRef = callOp.getOperand(3);
           const std::vector<uint8_t> &valueData = it->second;
           Type innerType = refType.getNestedType();
@@ -18226,6 +18706,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                   InterpretedValue(llvm::APInt(1, 1)));
           return success();
         } else {
+          if (traceConfigDbEnabled)
+            llvm::errs() << "[CFG-FC-GET] miss key=\"" << key << "\"\n";
           // Not found - return false
           setValue(procId, callOp.getResult(0),
                   InterpretedValue(llvm::APInt(1, 0)));
@@ -18302,6 +18784,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
               valBits.extractBits(8, i * 8).getZExtValue());
       }
       configDbEntries[key] = std::move(valueData);
+      if (traceConfigDbEnabled) {
+        llvm::errs() << "[CFG-FC-SET] callee=" << callee
+                     << " key=\"" << key << "\" valueBytes=" << valueBytes
+                     << " entries=" << configDbEntries.size() << "\n";
+      }
       LLVM_DEBUG(llvm::dbgs()
                  << "  func.call @" << callee
                  << ": config_db set intercepted, key=\"" << key
@@ -20388,13 +20875,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
 
   // Execute operations until we hit a return
   Block *currentBlock = resumeBlock ? resumeBlock : &entryBlock;
-  size_t maxOps = 1000000; // Prevent infinite loops (totalSteps is the real limit)
+  size_t maxOps = maxFunctionOps;
   size_t opCount = 0;
 
   // Track if we're starting from a resume point
   bool skipToResumeOp = (resumeBlock != nullptr);
 
-  while (currentBlock && opCount < maxOps) {
+  while (currentBlock && (maxOps == 0 || opCount < maxOps)) {
     // Check if termination was requested (e.g., UVM die() -> sim.terminate).
     // This prevents spending time executing function bodies in processes that
     // are still running after the simulation has been told to stop.
@@ -20468,7 +20955,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           return failure();
         }
       }
-      if (opCount >= maxOps) {
+      if (maxOps > 0 && opCount >= maxOps) {
         llvm::errs() << "circt-sim: Function '" << funcOp.getName()
                      << "' exceeded " << maxOps << " operations for process "
                      << procId << "\n";
@@ -22197,6 +22684,33 @@ LogicalResult LLHDProcessInterpreter::interpretCombinationalYield(
   for (auto [result, operand] :
        llvm::zip(combOp.getResults(), yieldOp.getOperands()))
     state.valueMap[result] = getValue(procId, operand);
+
+  // DEBUG: trace CombinationalOp yield values
+  {
+    static bool traceYield = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+    if (traceYield && combOp.getNumResults() == 2) {
+      // Check if result#1 type is i1 (the outstanding changed flag pattern)
+      if (combOp.getResultTypes()[1].isInteger(1)) {
+        auto it0 = state.valueMap.find(combOp.getResult(0));
+        auto it1 = state.valueMap.find(combOp.getResult(1));
+        llvm::errs() << "[COMB-YIELD] procId=" << procId
+                     << " instId=" << state.instanceId
+                     << " t=" << scheduler.getCurrentTime().realTime
+                     << " d=" << scheduler.getCurrentTime().deltaStep
+                     << " r0=";
+        if (it0 != state.valueMap.end()) {
+          if (it0->second.isX()) llvm::errs() << "X";
+          else { llvm::SmallString<32> s; it0->second.getAPInt().toString(s, 16, false); llvm::errs() << "0x" << s; }
+        } else llvm::errs() << "?";
+        llvm::errs() << " r1=";
+        if (it1 != state.valueMap.end()) {
+          if (it1->second.isX()) llvm::errs() << "X";
+          else { llvm::SmallString<32> s; it1->second.getAPInt().toString(s, 16, false); llvm::errs() << "0x" << s; }
+        } else llvm::errs() << "?";
+        llvm::errs() << "\n";
+      }
+    }
+  }
 
   // Restart from block entry on the next sensitivity wakeup.
   state.destBlock = &combOp.getBody().front();
@@ -32010,13 +32524,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
 
   // Execute the function body with operation limit to prevent infinite loops
   Block *currentBlock = resumeBlock ? resumeBlock : &entryBlock;
-  constexpr size_t maxOps = 1000000;
+  size_t maxOps = maxFunctionOps;
   size_t opCount = 0;
 
   // Track if we're starting from a resume point
   bool skipToResumeOp = (resumeBlock != nullptr);
 
-  while (currentBlock && opCount < maxOps) {
+  while (currentBlock && (maxOps == 0 || opCount < maxOps)) {
     bool tookBranch = false;
     for (auto opIt = currentBlock->begin(); opIt != currentBlock->end();
          ++opIt) {
@@ -32074,7 +32588,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
             return failure();
           }
       }
-      if (opCount >= maxOps) {
+      if (maxOps > 0 && opCount >= maxOps) {
         LLVM_DEBUG(llvm::dbgs() << "  Warning: LLVM function '"
                                 << funcOp.getName()
                                 << "' reached max operations (" << maxOps
@@ -32478,7 +32992,8 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
   // We need to execute them in order, so iterate through the block directly.
   for (Operation &op : hwModule.getBody().front()) {
     // Skip llhd.process and seq.initial - those have their own execution
-    if (isa<llhd::ProcessOp, seq::InitialOp, llhd::CombinationalOp>(&op))
+    if (isa<llhd::ProcessOp, seq::InitialOp, llhd::CombinationalOp,
+            llhd::SignalOp, hw::InstanceOp, hw::OutputOp>(&op))
       continue;
 
     // Execute LLVM operations that need initialization
@@ -32589,8 +33104,13 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
       if (!handled)
         (void)interpretOperation(tempProcId, &op);
       ++opsExecuted;
-    } else if (isa<LLVM::InsertValueOp>(&op)) {
+    } else if (isa<LLVM::InsertValueOp, LLVM::ExtractValueOp>(&op)) {
       (void)interpretOperation(tempProcId, &op);
+      ++opsExecuted;
+    } else if (isa<LLVM::GEPOp>(&op)) {
+      (void)interpretOperation(tempProcId, &op);
+      ++opsExecuted;
+    } else if (succeeded(interpretOperation(tempProcId, &op))) {
       ++opsExecuted;
     }
   }
@@ -32838,6 +33358,8 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
         }
         if (!handled)
           (void)interpretOperation(childTempProcId, &op);
+        ++childOpsExecuted;
+      } else if (succeeded(interpretOperation(childTempProcId, &op))) {
         ++childOpsExecuted;
       }
     }

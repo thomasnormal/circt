@@ -766,7 +766,22 @@ struct StmtVisitor {
       // string", $swrite is similar to $sformat but does not require a format
       // string. Arguments are formatted using their default representation.
       // Example: $swrite(v, pool[key]); formats pool[key] as a string into v.
-      if (!call->getSubroutineName().compare("$swrite")) {
+      StringRef swriteName = call->getSubroutineName();
+      moore::IntFormat swriteFormat = moore::IntFormat::Decimal;
+      bool isSWrite = false;
+      if (swriteName == "$swrite") {
+        isSWrite = true;
+      } else if (swriteName == "$swriteb") {
+        isSWrite = true;
+        swriteFormat = moore::IntFormat::Binary;
+      } else if (swriteName == "$swriteo") {
+        isSWrite = true;
+        swriteFormat = moore::IntFormat::Octal;
+      } else if (swriteName == "$swriteh") {
+        isSWrite = true;
+        swriteFormat = moore::IntFormat::HexLower;
+      }
+      if (isSWrite) {
 
         // Use the first argument as the output location
         auto *lhsExpr = call->arguments().front();
@@ -774,7 +789,7 @@ struct StmtVisitor {
         // formatting (no format string expected)
         auto fmtValue =
             context.convertFormatString(call->arguments().subspan(1), loc,
-                                        moore::IntFormat::Decimal, false);
+                                        swriteFormat, false);
         if (failed(fmtValue))
           return failure();
         // Convert the FormatString to a StringType
@@ -2483,6 +2498,104 @@ struct StmtVisitor {
     if (subroutine.name == "$set_coverage_db_name" ||
         subroutine.name == "$load_coverage_db") {
       mlir::emitRemark(loc) << "ignoring coverage task `" << subroutine.name
+                            << "`";
+      return true;
+    }
+
+    // Assertion control tasks (IEEE 1800-2017 Section 20.12)
+    // These control assertion evaluation at runtime. Stub as no-ops.
+    if (subroutine.name == "$assertcontrol" ||
+        subroutine.name == "$asserton" ||
+        subroutine.name == "$assertoff" ||
+        subroutine.name == "$assertkill" ||
+        subroutine.name == "$assertpasson" ||
+        subroutine.name == "$assertpassoff" ||
+        subroutine.name == "$assertfailon" ||
+        subroutine.name == "$assertfailoff" ||
+        subroutine.name == "$assertnonvacuouson" ||
+        subroutine.name == "$assertvacuousoff") {
+      return true;
+    }
+
+    // Checkpoint/restart tasks (legacy Verilog, IEEE 1800-2017 Section 21.8)
+    // These have no meaning in CIRCT's compilation flow. Stub as no-ops.
+    if (subroutine.name == "$save" ||
+        subroutine.name == "$restart" ||
+        subroutine.name == "$incsave" ||
+        subroutine.name == "$reset") {
+      return true;
+    }
+
+    // Debug/PLI tasks (IEEE 1800-2017 Sections 21.2, 21.9)
+    // These are interactive simulator commands. Stub as no-ops.
+    if (subroutine.name == "$stacktrace" ||
+        subroutine.name == "$showscopes" ||
+        subroutine.name == "$showvars" ||
+        subroutine.name == "$input" ||
+        subroutine.name == "$key" ||
+        subroutine.name == "$nokey" ||
+        subroutine.name == "$log" ||
+        subroutine.name == "$nolog" ||
+        subroutine.name == "$scope" ||
+        subroutine.name == "$list") {
+      return true;
+    }
+
+    // PLD array tasks (IEEE 1800-2017 Section 21.7)
+    // Legacy gate-array modeling functions. Stub as no-ops.
+    if (subroutine.name == "$async$and$array" ||
+        subroutine.name == "$async$and$plane" ||
+        subroutine.name == "$async$nand$array" ||
+        subroutine.name == "$async$nand$plane" ||
+        subroutine.name == "$async$nor$array" ||
+        subroutine.name == "$async$nor$plane" ||
+        subroutine.name == "$async$or$array" ||
+        subroutine.name == "$async$or$plane" ||
+        subroutine.name == "$sync$and$array" ||
+        subroutine.name == "$sync$and$plane" ||
+        subroutine.name == "$sync$nand$array" ||
+        subroutine.name == "$sync$nand$plane" ||
+        subroutine.name == "$sync$nor$array" ||
+        subroutine.name == "$sync$nor$plane" ||
+        subroutine.name == "$sync$or$array" ||
+        subroutine.name == "$sync$or$plane") {
+      return true;
+    }
+
+    // Stochastic queue tasks (IEEE 1800-2017 Section 21.6)
+    // Legacy abstract queue functions. Stub as no-ops.
+    if (subroutine.name == "$q_initialize" ||
+        subroutine.name == "$q_add" ||
+        subroutine.name == "$q_remove") {
+      return true;
+    }
+
+    // SDF annotation (IEEE 1800-2017 Section 30)
+    // Timing back-annotation. Stub as no-op.
+    if (subroutine.name == "$sdf_annotate") {
+      return true;
+    }
+
+    // $static_assert (compile-time assertion, already evaluated by slang)
+    if (subroutine.name == "$static_assert") {
+      return true;
+    }
+
+    // $writememb/$writememh - write memory contents to file
+    // IEEE 1800-2017 Section 21.4
+    // Stub as no-ops for now.
+    if (subroutine.name == "$writememb" ||
+        subroutine.name == "$writememh") {
+      mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
+                            << "`";
+      return true;
+    }
+
+    // $sreadmemb/$sreadmemh - read memory from string
+    // Stub as no-ops.
+    if (subroutine.name == "$sreadmemb" ||
+        subroutine.name == "$sreadmemh") {
+      mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
                             << "`";
       return true;
     }

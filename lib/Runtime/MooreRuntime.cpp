@@ -10763,6 +10763,23 @@ extern "C" int32_t __moore_fopen(MooreString *filename, MooreString *mode) {
   return 1 << slot;
 }
 
+extern "C" int32_t __moore_system(MooreString *command) {
+  if (!command || !command->data) {
+    // No command provided - implementation-defined behavior.
+    // Return whether a command processor is available (like C system(NULL)).
+    return std::system(nullptr) ? 1 : 0;
+  }
+
+  // Convert to null-terminated C string
+  char *cmdStr = toCString(command);
+  if (!cmdStr)
+    return -1;
+
+  int result = std::system(cmdStr);
+  std::free(cmdStr);
+  return static_cast<int32_t>(result);
+}
+
 extern "C" void __moore_fwrite(int32_t fd, MooreString *message) {
   // Validate message
   if (!message || !message->data || message->len <= 0)

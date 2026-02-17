@@ -2877,6 +2877,13 @@ int32_t __moore_is_rand_enabled(void *classPtr, const char *propertyName);
 /// @return A 32-bit file descriptor (MCD), or 0 if the open fails
 int32_t __moore_fopen(MooreString *filename, MooreString *mode);
 
+/// Execute an OS command via the system shell.
+/// Implements the SystemVerilog $system system function (IEEE 1800-2017 §20.18.1).
+/// @param command Pointer to the command string structure.
+///        If command is NULL, checks whether a command processor is available.
+/// @return The exit status of the command, or -1 on error.
+int32_t __moore_system(MooreString *command);
+
 /// Write a formatted string to a file.
 /// Implements the SystemVerilog $fwrite system task.
 /// The format string has already been evaluated by the Moore dialect's

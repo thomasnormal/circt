@@ -9935,6 +9935,20 @@ struct HypotBIOpConversion : public OpConversionPattern<HypotBIOp> {
   }
 };
 
+/// Conversion pattern for $pow(x, y) - power function.
+/// Maps directly to math::PowFOp.
+struct PowBIOpConversion : public OpConversionPattern<PowBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(PowBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<math::PowFOp>(op, adaptor.getX(),
+                                               adaptor.getY());
+    return success();
+  }
+};
+
 template <typename SourceOp, ICmpPredicate pred>
 struct ICmpOpConversion : public OpConversionPattern<SourceOp> {
   using OpConversionPattern<SourceOp>::OpConversionPattern;
@@ -14116,6 +14130,50 @@ struct FOpenBIOpConversion : public OpConversionPattern<FOpenBIOp> {
         LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
                              SymbolRefAttr::get(fn),
                              ValueRange{filenameAlloca, modePtr});
+
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.system -> runtime function call.
+/// Lowers $system(command) to __moore_system(command_ptr).
+struct SystemBIOpConversion : public OpConversionPattern<SystemBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(SystemBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto stringTy = getFileIOStringStructType(ctx);
+
+    // Get or create __moore_system function: int32_t(ptr)
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_system", fnTy);
+
+    Value cmdPtr;
+    if (adaptor.getCommand()) {
+      // Command string provided - allocate stack space and store it
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                           rewriter.getI64IntegerAttr(1));
+      auto cmdAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringTy, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getCommand(), cmdAlloca);
+      cmdPtr = cmdAlloca;
+    } else {
+      // No command - pass null pointer
+      cmdPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+    }
+
+    // Call __moore_system(command_ptr)
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                      SymbolRefAttr::get(fn),
+                                      ValueRange{cmdPtr});
 
     rewriter.replaceOp(op, call.getResult());
     return success();
@@ -27095,6 +27153,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     // Virtual interface comparison patterns.
     VirtualInterfaceNullOpConversion,
     VirtualInterfaceCmpOpConversion,
+    VirtualInterfaceBindOpConversion,
     // Patterns of declaration operations.
     VariableOpConversion,
     NetOpConversion,
@@ -27200,6 +27259,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     // Patterns for binary real math functions.
     Atan2BIOpConversion,
     HypotBIOpConversion,
+    PowBIOpConversion,
 
     // Patterns for real/bits conversion functions.
     RealtobitsBIOpConversion,
@@ -27300,6 +27360,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     // Patterns for file I/O operations.
     FOpenBIOpConversion,
     FWriteBIOpConversion,
+    SystemBIOpConversion,
     FCloseBIOpConversion,
     FGetCBIOpConversion,
     FGetSBIOpConversion,
