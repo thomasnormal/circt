@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1452 - February 17, 2026
+
+### circt-sim: Close `llhd.combinational` Registration Gap Baseline
+
+1. Added explicit `llhd.combinational` process registration in
+   `LLHDProcessInterpreter`:
+   - top-level discovered combinational ops are now scheduler-registered.
+   - child-instance discovered combinational ops are now also registered.
+   - inferred sensitivities are collected from combinational-body value
+     dependencies (excluding `llhd.drv` destination refs).
+2. Added combinational execution semantics:
+   - added `interpretCombinationalYield` for `llhd.yield` in combinational
+     contexts.
+   - combinational yields now store result values, suspend, and re-arm
+     sensitivity wakeups.
+   - combinational reactivation now clears cached per-activation value state to
+     force fresh input reads.
+3. Updated value paths:
+   - `getValue` and continuous evaluation now read registered combinational
+     process results before falling back to on-demand combinational evaluation.
+4. Compile-mode governance hardening:
+   - compile-mode JIT thunk dispatch now explicitly bypasses combinational
+     process states (until dedicated native combinational thunk ABI exists),
+     avoiding strict deopt noise from this still-interpreted path.
+5. Added regressions:
+   - `test/Tools/circt-sim/llhd-combinational-triggered-print.mlir`
+   - `test/Tools/circt-sim/llhd-combinational-child-triggered-print.mlir`
+6. Validation:
+   - `CCACHE_DISABLE=1 ninja -C build-test circt-sim -k 0` PASS
+   - manual runline-equivalent checks PASS:
+     - `llhd-combinational-triggered-print`
+     - `llhd-combinational-child-triggered-print`
+     - `llhd-combinational`
+     - `llhd-comb-ref-mux-probe`
+     - `seq-firreg-async-reset-comb`
+   - compile-mode sanity with report:
+     - `test/Tools/circt-sim/llhd-combinational-triggered-print.mlir`
+     - JIT report deopt rows contained no combinational process names.
+   - bounded AVIP compile smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK` (26s), sim bounded `TIMEOUT` (90s).
+   - profiling summary smoke:
+     - `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1 build-test/bin/circt-sim test/Tools/circt-sim/profile-summary-memory-state.mlir --skip-passes`
+     - memory state/peak summary lines present.
+
 ## Iteration 1451 - February 17, 2026
 
 ### circt-sim: Add AVIP End-to-End JIT Deopt Policy Gate Wrapper

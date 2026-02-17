@@ -433,6 +433,7 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   profilingEnabled = std::getenv("CIRCT_SIM_PROFILE_FUNCS") != nullptr;
   traceSeqEnabled = std::getenv("CIRCT_SIM_TRACE_SEQ") != nullptr;
   traceAnalysisEnabled = std::getenv("CIRCT_SIM_TRACE_ANALYSIS") != nullptr;
+  traceForkJoinEnabled = envFlagEnabled("CIRCT_SIM_TRACE_FORK_JOIN");
   fastPathUvmReportInfo = envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_INFO");
   fastPathUvmReportWarning =
       envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_WARNING");
@@ -724,7 +725,12 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
     os << "  proc " << procId;
     if (proc)
       os << " '" << proc->getName() << "'";
-    os << " type=" << (state.isInitialBlock ? "initial" : "process");
+    llvm::StringRef kind = "process";
+    if (state.getCombinationalOp())
+      kind = "combinational";
+    else if (state.isInitialBlock)
+      kind = "initial";
+    os << " type=" << kind;
     if (proc)
       os << " state=" << getProcessStateName(proc->getState());
     os << " waiting=" << (state.waiting ? "1" : "0")
@@ -739,6 +745,8 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
         os << "(" << *callee << ")";
     if (!state.currentFuncName.empty())
       os << " func=" << state.currentFuncName;
+    if (state.parentProcessId != InvalidProcessId)
+      os << " parent=" << state.parentProcessId;
     if (!state.callStack.empty()) {
       const auto &top = state.callStack.back();
       os << " callStack=" << state.callStack.size()
@@ -2317,6 +2325,60 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       scheduler.scheduleProcess(procId, SchedulingRegion::Active);
     }
 
+    for (llhd::CombinationalOp combOp : childOps.combinationals) {
+      std::string combName =
+          instOp.getInstanceName().str() + ".llhd_combinational_" +
+          std::to_string(processStates.size());
+
+      ProcessExecutionState state(combOp);
+      state.instanceId = instanceId;
+      state.inputMap = instanceInputMap;
+      state.cacheable = false;
+      state.currentBlock = &combOp.getBody().front();
+      state.currentOp = state.currentBlock->begin();
+
+      ProcessId procId = scheduler.registerProcess(combName, []() {});
+      if (auto *process = scheduler.getProcess(procId)) {
+        process->setCallback([this, procId]() { executeProcess(procId); });
+        process->setCombinational(true);
+      }
+
+      registerProcessState(procId, std::move(state));
+      instanceOpToProcessId[instanceId][combOp.getOperation()] = procId;
+
+      llvm::DenseSet<SignalId> seenSignals;
+      auto addSensitivityForValue = [&](Value value) {
+        llvm::SmallVector<SignalId, 8> signalIds;
+        ScopedInstanceContext instScope(*this, instanceId);
+        ScopedInputValueMap inputScope(*this, instanceInputMap);
+        collectSignalIds(value, signalIds);
+        for (SignalId signalId : signalIds) {
+          if (signalId == 0 || !seenSignals.insert(signalId).second)
+            continue;
+          scheduler.addSensitivity(procId, signalId);
+        }
+      };
+
+      combOp.walk([&](Operation *op) {
+        if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
+          addSensitivityForValue(driveOp.getValue());
+          if (driveOp.getEnable())
+            addSensitivityForValue(driveOp.getEnable());
+          if (driveOp.getTime())
+            addSensitivityForValue(driveOp.getTime());
+          return;
+        }
+        for (Value operand : op->getOperands())
+          addSensitivityForValue(operand);
+      });
+
+      LLVM_DEBUG(llvm::dbgs() << "    Registered child combinational '"
+                              << combName << "' with ID " << procId << " and "
+                              << seenSignals.size() << " sensitivities\n");
+
+      scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+    }
+
     // Register module-level llhd.drv operations using pre-discovered ops.
     for (llhd::DriveOp driveOp : childOps.moduleDrives) {
       registerModuleDrive(driveOp, instanceId, instanceInputMap);
@@ -3318,11 +3380,8 @@ LLHDProcessInterpreter::registerProcesses(const DiscoveredOps &ops) {
     registerProcess(processOp);
   }
 
-  // Handle pre-discovered llhd.combinational operations
-  for ([[maybe_unused]] llhd::CombinationalOp combOp : ops.combinationals) {
-    // TODO: Handle combinational processes in Phase 1B
-    LLVM_DEBUG(llvm::dbgs() << "  Found combinational process (TODO)\n");
-  }
+  for (llhd::CombinationalOp combOp : ops.combinationals)
+    registerCombinational(combOp);
 
   // Register all pre-discovered seq.initial operations (no walk() needed)
   for (seq::InitialOp initialOp : ops.initials) {
@@ -3373,6 +3432,62 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
   // Schedule the process to run at time 0 (initialization)
   scheduler.scheduleProcess(procId, SchedulingRegion::Active);
 
+  return procId;
+}
+
+ProcessId LLHDProcessInterpreter::registerCombinational(
+    llhd::CombinationalOp combOp) {
+  std::string name =
+      "llhd_combinational_" + std::to_string(processStates.size());
+
+  ProcessExecutionState state(combOp);
+  state.cacheable = false;
+  state.currentBlock = &combOp.getBody().front();
+  state.currentOp = state.currentBlock->begin();
+
+  ProcessId procId = scheduler.registerProcess(name, []() {});
+  if (auto *process = scheduler.getProcess(procId)) {
+    process->setCallback([this, procId]() { executeProcess(procId); });
+    process->setCombinational(true);
+  }
+
+  registerProcessState(procId, std::move(state));
+  opToProcessId[combOp.getOperation()] = procId;
+
+  llvm::DenseSet<SignalId> seenSignals;
+  auto addSensitivityForValue = [&](Value value) {
+    llvm::SmallVector<SignalId, 8> signalIds;
+    collectSignalIds(value, signalIds);
+    for (SignalId signalId : signalIds) {
+      if (signalId == 0 || !seenSignals.insert(signalId).second)
+        continue;
+      scheduler.addSensitivity(procId, signalId);
+    }
+  };
+
+  {
+    ScopedInstanceContext instScope(*this, /*instanceId=*/0);
+    combOp.walk([&](Operation *op) {
+      if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
+        // Do not derive sensitivity from the destination signal reference.
+        addSensitivityForValue(driveOp.getValue());
+        if (driveOp.getEnable())
+          addSensitivityForValue(driveOp.getEnable());
+        if (driveOp.getTime())
+          addSensitivityForValue(driveOp.getTime());
+        return;
+      }
+      for (Value operand : op->getOperands())
+        addSensitivityForValue(operand);
+    });
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "  Registered combinational process '" << name
+                          << "' with ID " << procId << " and "
+                          << seenSignals.size() << " sensitivities\n");
+
+  // Execute once at initialization, then suspend on llhd.yield.
+  scheduler.scheduleProcess(procId, SchedulingRegion::Active);
   return procId;
 }
 
@@ -4775,6 +4890,31 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       }
 
       if (auto combOp = current.getDefiningOp<llhd::CombinationalOp>()) {
+        ProcessId procId = InvalidProcessId;
+        if (activeInstanceId != 0) {
+          auto ctxIt = instanceOpToProcessId.find(activeInstanceId);
+          if (ctxIt != instanceOpToProcessId.end()) {
+            auto procIt = ctxIt->second.find(combOp.getOperation());
+            if (procIt != ctxIt->second.end())
+              procId = procIt->second;
+          }
+        }
+        if (procId == InvalidProcessId) {
+          auto procIt = opToProcessId.find(combOp.getOperation());
+          if (procIt != opToProcessId.end())
+            procId = procIt->second;
+        }
+        if (procId != InvalidProcessId) {
+          auto stateIt = processStates.find(procId);
+          if (stateIt != processStates.end()) {
+            auto valIt = stateIt->second.valueMap.find(current);
+            if (valIt != stateIt->second.valueMap.end()) {
+              finish(valIt->second);
+              continue;
+            }
+          }
+        }
+
         llvm::SmallVector<InterpretedValue, 4> results;
         (void)evaluateCombinationalOp(combOp, results);
         auto result = dyn_cast<OpResult>(current);
@@ -6520,7 +6660,10 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
   // Compile-mode entry hook: try native process thunk first, then attempt
   // on-demand install for currently supported trivial process shapes.
-  if (compileModeEnabled && jitCompileManager) {
+  // Native JIT currently targets llhd.process/seq.initial paths. Keep
+  // llhd.combinational on the interpreter path until a dedicated thunk ABI is
+  // added for combinational execution.
+  if (compileModeEnabled && jitCompileManager && !state.getCombinationalOp()) {
     JITDeoptStateSnapshot deoptSnapshot;
     bool hasDeoptSnapshot = snapshotJITDeoptState(procId, deoptSnapshot);
     auto noteProcessDeoptReason = [&](JITCompileManager::DeoptReason reason,
@@ -6701,6 +6844,12 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       state.valueMap[arg] = val;
       if (isa<llhd::RefType>(arg.getType()))
         state.refBlockArgSources.erase(arg);
+    }
+
+    if (state.getCombinationalOp()) {
+      // Recompute combinational bodies from fresh inputs on every trigger.
+      state.valueMap.clear();
+      state.refBlockArgSources.clear();
     }
 
     state.waiting = false;
@@ -7565,6 +7714,9 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
   if (auto constTimeOp = dyn_cast<llhd::ConstantTimeOp>(op))
     return interpretConstantTime(procId, constTimeOp);
+
+  if (auto yieldOp = dyn_cast<llhd::YieldOp>(op))
+    return interpretCombinationalYield(procId, yieldOp);
 
   // Handle llhd.sig.extract - extracts a bit range from a signal/ref.
   // For signal-backed refs, propagate the signal mapping.
@@ -19466,6 +19618,31 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
       // Process result not yet computed - return X
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
     }
+
+    if (auto combOp = dyn_cast<llhd::CombinationalOp>(result.getOwner())) {
+      ProcessId procId = InvalidProcessId;
+      if (activeInstanceId != 0) {
+        auto ctxIt = instanceOpToProcessId.find(activeInstanceId);
+        if (ctxIt != instanceOpToProcessId.end()) {
+          auto procIt = ctxIt->second.find(combOp.getOperation());
+          if (procIt != ctxIt->second.end())
+            procId = procIt->second;
+        }
+      }
+      if (procId == InvalidProcessId) {
+        auto procIt = opToProcessId.find(combOp.getOperation());
+        if (procIt != opToProcessId.end())
+          procId = procIt->second;
+      }
+      if (procId != InvalidProcessId) {
+        auto stateIt = processStates.find(procId);
+        if (stateIt != processStates.end()) {
+          auto valIt = stateIt->second.valueMap.find(value);
+          if (valIt != stateIt->second.valueMap.end())
+            return valIt->second;
+        }
+      }
+    }
   }
 
   if (auto combOp = value.getDefiningOp<llhd::CombinationalOp>()) {
@@ -20622,7 +20799,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimForkTerminator(
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.fork.terminator\n");
 
   // Diagnostic: log fork child completion with step count
-  {
+  if (traceForkJoinEnabled) {
     auto stIt = processStates.find(procId);
     if (stIt != processStates.end()) {
       auto &ps = stIt->second;
@@ -20702,7 +20879,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimJoinAny(
   if (forkJoinManager.joinAny(forkId)) {
     LLVM_DEBUG(llvm::dbgs() << "    At least one child already complete\n");
     // Diagnostic: log when join_any returns immediately for driver procs
-    {
+    if (traceForkJoinEnabled) {
       static unsigned joinAnyImmDiagCount = 0;
       if (joinAnyImmDiagCount < 30 && procId > 100) {
         ++joinAnyImmDiagCount;
@@ -20793,6 +20970,34 @@ LogicalResult LLHDProcessInterpreter::interpretSimDisableFork(
 //===----------------------------------------------------------------------===//
 // Seq Dialect Operation Handlers
 //===----------------------------------------------------------------------===//
+
+LogicalResult LLHDProcessInterpreter::interpretCombinationalYield(
+    ProcessId procId, llhd::YieldOp yieldOp) {
+  auto stateIt = processStates.find(procId);
+  if (stateIt == processStates.end())
+    return failure();
+  auto &state = stateIt->second;
+
+  auto combOp = state.getCombinationalOp();
+  if (!combOp)
+    return failure();
+
+  for (auto [result, operand] :
+       llvm::zip(combOp.getResults(), yieldOp.getOperands()))
+    state.valueMap[result] = getValue(procId, operand);
+
+  // Restart from block entry on the next sensitivity wakeup.
+  state.destBlock = &combOp.getBody().front();
+  state.destOperands.clear();
+  state.resumeAtCurrentOp = false;
+  state.waiting = true;
+
+  SensitivityList waitList;
+  if (auto *proc = scheduler.getProcess(procId))
+    waitList = proc->getSensitivityList();
+  scheduler.suspendProcessForEvents(procId, waitList);
+  return success();
+}
 
 LogicalResult LLHDProcessInterpreter::interpretSeqYield(ProcessId procId,
                                                          seq::YieldOp yieldOp) {
