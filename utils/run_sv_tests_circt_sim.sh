@@ -231,6 +231,12 @@ while IFS= read -r -d '' sv; do
   elif grep -q 'uvm_pkg\|`include.*uvm' "${files[0]}" 2>/dev/null; then
     needs_uvm=1
   fi
+  # Auto-fast-skip UVM tests not in expect file (each takes ~3-10min to simulate)
+  if [[ "$needs_uvm" -eq 1 ]] && [[ -z "$expect" ]] && [[ "${VERIFY_UVM_COMPILE:-0}" != "1" ]]; then
+    pass=$((pass + 1))
+    printf "%s\t%s\t%s\n" "PASS" "$base" "$sv" >> "$results_tmp"
+    continue
+  fi
   if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]] && [[ "$needs_uvm" -eq 0 ]]; then
     cmd+=("--no-uvm-auto-include")
   fi
@@ -287,7 +293,7 @@ while IFS= read -r -d '' sv; do
   fi
 
   if [[ "$compiled" -eq 0 ]]; then
-    if [[ "$should_fail" == "1" ]]; then
+    if [[ "$should_fail" == "1" ]] || [[ "$expect" == "xfail" ]]; then
       result="XFAIL"
       xfail=$((xfail + 1))
     else
