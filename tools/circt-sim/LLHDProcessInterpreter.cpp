@@ -5602,20 +5602,24 @@ bool LLHDProcessInterpreter::isResumableWaitThenHaltNativeThunkCandidate(
   if (!waitOp || (!waitOp.getDelay() && waitOp.getObserved().empty()) ||
       !waitOp.getYieldOperands().empty() || !waitOp.getDestOperands().empty())
     return false;
-  llhd::ProbeOp preWaitProbe;
+  llvm::SmallVector<llhd::ProbeOp, 4> preWaitProbes;
   for (auto it = entry.begin(); it != waitIt; ++it) {
-    if (!preWaitProbe) {
-      preWaitProbe = dyn_cast<llhd::ProbeOp>(*it);
-      if (preWaitProbe)
-        continue;
-    }
-    return false;
-  }
-  if (preWaitProbe) {
-    auto observed = waitOp.getObserved();
-    if (!llvm::hasSingleElement(observed) ||
-        observed.front() != preWaitProbe.getResult())
+    auto probe = dyn_cast<llhd::ProbeOp>(*it);
+    if (!probe)
       return false;
+    preWaitProbes.push_back(probe);
+  }
+  auto observed = waitOp.getObserved();
+  if (preWaitProbes.empty()) {
+    if (!observed.empty())
+      return false;
+  } else {
+    if (preWaitProbes.size() != observed.size())
+      return false;
+    for (size_t i = 0, e = preWaitProbes.size(); i != e; ++i) {
+      if (observed[i] != preWaitProbes[i].getResult())
+        return false;
+    }
   }
   Block *dest = waitOp.getDest();
   if (!dest || dest == &entry || dest->empty())
@@ -5713,15 +5717,32 @@ bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
     thunkState.deoptRequested = true;
     return true;
   }
-  llhd::ProbeOp preWaitProbe;
+  llvm::SmallVector<llhd::ProbeOp, 4> preWaitProbes;
   for (auto it = entry.begin(); it != waitIt; ++it) {
-    if (!preWaitProbe) {
-      preWaitProbe = dyn_cast<llhd::ProbeOp>(*it);
-      if (preWaitProbe)
-        continue;
+    auto probe = dyn_cast<llhd::ProbeOp>(*it);
+    if (!probe) {
+      thunkState.deoptRequested = true;
+      return true;
     }
-    thunkState.deoptRequested = true;
-    return true;
+    preWaitProbes.push_back(probe);
+  }
+  auto observed = waitOp.getObserved();
+  if (preWaitProbes.empty()) {
+    if (!observed.empty()) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
+  } else {
+    if (preWaitProbes.size() != observed.size()) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
+    for (size_t i = 0, e = preWaitProbes.size(); i != e; ++i) {
+      if (observed[i] != preWaitProbes[i].getResult()) {
+        thunkState.deoptRequested = true;
+        return true;
+      }
+    }
   }
   Block *terminalBlock = waitOp.getDest();
   auto opIt = terminalBlock->begin();
@@ -5742,15 +5763,17 @@ bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
     return true;
   }
 
-  // Token 0: first activation, execute wait(delay) and suspend.
+  // Token 0: first activation, execute pre-wait probes, then suspend on wait.
   if (state.jitThunkResumeToken == 0) {
     if (state.waiting || state.destBlock) {
       thunkState.deoptRequested = true;
       return true;
     }
-    if (preWaitProbe && failed(interpretProbe(procId, preWaitProbe))) {
-      thunkState.deoptRequested = true;
-      return true;
+    for (auto probe : preWaitProbes) {
+      if (failed(interpretProbe(procId, probe))) {
+        thunkState.deoptRequested = true;
+        return true;
+      }
     }
     if (failed(interpretWait(procId, waitOp))) {
       thunkState.deoptRequested = true;
