@@ -633,11 +633,12 @@ uint64_t LLHDProcessInterpreter::canonicalizeUvmObjectAddress(ProcessId procId,
   MemoryBlock *objBlock = findMemoryBlockByAddress(addr, procId, &off);
   if (!objBlock)
     objBlock = findBlockByAddress(addr, off);
-  if (objBlock && off != 0)
+  if (objBlock && off != 0 && off < objBlock->size)
     return addr - off;
   uint64_t nativeOff = 0;
-  if (findNativeMemoryBlockByAddress(addr, &nativeOff, nullptr) &&
-      nativeOff != 0)
+  size_t nativeSize = 0;
+  if (findNativeMemoryBlockByAddress(addr, &nativeOff, &nativeSize) &&
+      nativeOff != 0 && nativeOff < nativeSize)
     return addr - nativeOff;
   return addr;
 }
@@ -660,7 +661,7 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
         findMemoryBlockByAddress(candidateAddr, procId, &ownerOff);
     if (!ownerBlock)
       ownerBlock = findBlockByAddress(candidateAddr, ownerOff);
-    if (ownerBlock && ownerOff != 0) {
+    if (ownerBlock && ownerOff != 0 && ownerOff < ownerBlock->size) {
       uint64_t ownerAddr = candidateAddr - ownerOff;
       if (sequencerItemFifo.contains(ownerAddr))
         return {ownerAddr, true};
@@ -668,8 +669,9 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
     }
 
     uint64_t nativeOff = 0;
-    if (findNativeMemoryBlockByAddress(candidateAddr, &nativeOff, nullptr) &&
-        nativeOff != 0) {
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(candidateAddr, &nativeOff, &nativeSize) &&
+        nativeOff != 0 && nativeOff < nativeSize) {
       uint64_t ownerAddr = candidateAddr - nativeOff;
       if (sequencerItemFifo.contains(ownerAddr))
         return {ownerAddr, true};
@@ -683,24 +685,24 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
   queueAddr = promotedAddr;
   strongHint = strongHint || promotedStrongHint;
 
-  auto resolveGetComp =
-      [&](func::FuncOp getCompFunc, uint64_t getCompThisAddr) -> bool {
-    SmallVector<InterpretedValue, 1> getCompArgs;
-    getCompArgs.push_back(InterpretedValue(llvm::APInt(64, getCompThisAddr)));
-    SmallVector<InterpretedValue, 1> getCompResults;
+  auto resolvePortOwner =
+      [&](func::FuncOp ownerFunc, uint64_t ownerThisAddr) -> bool {
+    SmallVector<InterpretedValue, 1> ownerArgs;
+    ownerArgs.push_back(InterpretedValue(llvm::APInt(64, ownerThisAddr)));
+    SmallVector<InterpretedValue, 1> ownerResults;
     auto &cState = processStates[procId];
     ++cState.callDepth;
-    auto compRes = interpretFuncBody(procId, getCompFunc, getCompArgs,
-                                     getCompResults, callSite);
+    auto ownerRes =
+        interpretFuncBody(procId, ownerFunc, ownerArgs, ownerResults, callSite);
     --cState.callDepth;
-    if (failed(compRes) || getCompResults.empty() || getCompResults[0].isX() ||
-        getCompResults[0].getWidth() != 64)
+    if (failed(ownerRes) || ownerResults.empty() || ownerResults[0].isX() ||
+        ownerResults[0].getWidth() != 64)
       return false;
-    uint64_t resolvedCompAddr = getCompResults[0].getUInt64();
-    if (resolvedCompAddr == 0)
+    uint64_t resolvedOwnerAddr = ownerResults[0].getUInt64();
+    if (resolvedOwnerAddr == 0)
       return false;
     auto [resolvedQueueAddr, resolvedStrongHint] =
-        promoteToSequencerQueue(resolvedCompAddr);
+        promoteToSequencerQueue(resolvedOwnerAddr);
     if (resolvedQueueAddr == 0 || !sequencerItemFifo.contains(resolvedQueueAddr))
       return false;
     if (resolvedQueueAddr != queueAddr)
@@ -710,12 +712,24 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
     return true;
   };
 
+  auto resolvePortOwnerByName = [&](llvm::StringRef symbolName,
+                                    uint64_t ownerThisAddr) -> bool {
+    if (!rootModule)
+      return false;
+    auto ownerFunc = rootModule.lookupSymbol<func::FuncOp>(symbolName);
+    if (!ownerFunc)
+      return false;
+    return resolvePortOwner(ownerFunc, ownerThisAddr);
+  };
+
   if (queueAddr != 0 && !sequencerItemFifo.contains(queueAddr)) {
-    if (rootModule) {
-      if (auto getCompFunc = rootModule.lookupSymbol<func::FuncOp>(
-              "uvm_pkg::uvm_port_base::get_comp"))
-        (void)resolveGetComp(getCompFunc, queueAddr);
-    }
+    // For pull-imps, get_parent() resolves to the owning sequencer component.
+    // get_comp() resolves to the proxy component and is only a fallback.
+    (void)resolvePortOwnerByName("uvm_pkg::uvm_port_base::get_parent",
+                                 queueAddr);
+    if (!sequencerItemFifo.contains(queueAddr))
+      (void)resolvePortOwnerByName("uvm_pkg::uvm_port_base::get_comp",
+                                   queueAddr);
   }
 
   if (queueAddr != 0 && !sequencerItemFifo.contains(queueAddr)) {
@@ -747,23 +761,27 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
         auto vtableBlockIt = globalMemoryBlocks.find(globalIt->second);
         if (vtableBlockIt != globalMemoryBlocks.end()) {
           auto &vtableBlock = vtableBlockIt->second;
-          constexpr unsigned getCompSlot = 13;
-          unsigned slotOffset = getCompSlot * 8;
-          if (slotOffset + 8 <= vtableBlock.size) {
-            uint64_t getCompAddr = 0;
+          auto resolveVtableSlot = [&](unsigned slot) -> bool {
+            unsigned slotOffset = slot * 8;
+            if (slotOffset + 8 > vtableBlock.size)
+              return false;
+            uint64_t methodAddr = 0;
             for (unsigned i = 0; i < 8; ++i)
-              getCompAddr |=
+              methodAddr |=
                   static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
                   << (i * 8);
-            auto fnIt = addressToFunction.find(getCompAddr);
-            if (fnIt != addressToFunction.end()) {
-              if (rootModule) {
-                if (auto getCompDyn =
-                        rootModule.lookupSymbol<func::FuncOp>(fnIt->second))
-                  (void)resolveGetComp(getCompDyn, queueAddr);
-              }
-            }
-          }
+            auto fnIt = addressToFunction.find(methodAddr);
+            if (fnIt == addressToFunction.end() || !rootModule)
+              return false;
+            auto ownerFunc = rootModule.lookupSymbol<func::FuncOp>(fnIt->second);
+            if (!ownerFunc)
+              return false;
+            return resolvePortOwner(ownerFunc, queueAddr);
+          };
+
+          (void)resolveVtableSlot(/*get_parent slot=*/12);
+          if (!sequencerItemFifo.contains(queueAddr))
+            (void)resolveVtableSlot(/*get_comp slot=*/13);
         }
       }
     }
@@ -923,23 +941,6 @@ bool LLHDProcessInterpreter::resolveUvmSequencerQueueAddress(
   return false;
 }
 
-bool LLHDProcessInterpreter::readUvmObjectClassId(ProcessId procId,
-                                                  uint64_t objAddr,
-                                                  uint32_t &classId) {
-  if (objAddr == 0)
-    return false;
-  uint64_t off = 0;
-  MemoryBlock *objBlock = findMemoryBlockByAddress(objAddr, procId, &off);
-  if (!objBlock)
-    objBlock = findBlockByAddress(objAddr, off);
-  if (!objBlock || !objBlock->initialized || off + 4 > objBlock->data.size())
-    return false;
-  classId = 0;
-  for (unsigned i = 0; i < 4; ++i)
-    classId |= static_cast<uint32_t>(objBlock->data[off + i]) << (i * 8);
-  return true;
-}
-
 void LLHDProcessInterpreter::recordUvmSequencerItemOwner(uint64_t itemAddr,
                                                          uint64_t sqrAddr) {
   if (itemAddr == 0 || sqrAddr == 0)
@@ -964,6 +965,55 @@ uint64_t LLHDProcessInterpreter::takeUvmSequencerItemOwner(uint64_t itemAddr) {
   itemToSequencer.erase(it);
   ++uvmSeqItemOwnerErases;
   return sqrAddr;
+}
+
+void LLHDProcessInterpreter::recordUvmDequeuedItem(uint64_t portAddr,
+                                                   uint64_t queueAddr,
+                                                   uint64_t itemAddr) {
+  if (itemAddr == 0)
+    return;
+  if (portAddr != 0)
+    lastDequeuedItem[portAddr] = itemAddr;
+  if (queueAddr != 0)
+    lastDequeuedItem[queueAddr] = itemAddr;
+}
+
+uint64_t LLHDProcessInterpreter::takeUvmDequeuedItemForDone(
+    ProcessId procId, uint64_t doneAddr, Operation *callSite) {
+  if (doneAddr == 0)
+    return 0;
+
+  auto consumeByKey = [&](uint64_t key) -> uint64_t {
+    auto it = lastDequeuedItem.find(key);
+    if (it == lastDequeuedItem.end())
+      return 0;
+    uint64_t itemAddr = it->second;
+    llvm::SmallVector<uint64_t, 4> eraseKeys;
+    for (const auto &entry : lastDequeuedItem)
+      if (entry.second == itemAddr)
+        eraseKeys.push_back(entry.first);
+    for (uint64_t eraseKey : eraseKeys)
+      lastDequeuedItem.erase(eraseKey);
+    return itemAddr;
+  };
+
+  if (uint64_t itemAddr = consumeByKey(doneAddr))
+    return itemAddr;
+
+  uint64_t ownerAddr = canonicalizeUvmObjectAddress(procId, doneAddr);
+  if (ownerAddr != 0 && ownerAddr != doneAddr) {
+    if (uint64_t itemAddr = consumeByKey(ownerAddr))
+      return itemAddr;
+  }
+
+  uint64_t queueAddr = 0;
+  (void)resolveUvmSequencerQueueAddress(procId, doneAddr, callSite, queueAddr);
+  if (queueAddr != 0) {
+    if (uint64_t itemAddr = consumeByKey(queueAddr))
+      return itemAddr;
+  }
+
+  return 0;
 }
 
 LLHDProcessInterpreter::MemoryStateSnapshot
@@ -5749,6 +5799,16 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
   tempState.currentOp = tempState.currentBlock->begin();
   processStates[tempProcId] = std::move(tempState);
 
+  // DEBUG: trace CombinationalOp body execution
+  static bool traceCombBody = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+  if (traceCombBody && combOp.getNumResults() == 2 &&
+      combOp.getResultTypes()[1].isInteger(1)) {
+    llvm::errs() << "[COMB-BODY] evaluateCombinationalOp instId="
+                 << activeInstanceId << " t="
+                 << scheduler.getCurrentTime().realTime
+                 << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
+  }
+
   bool sawYield = false;
   auto &state = processStates[tempProcId];
   for (Operation &op : *state.currentBlock) {
@@ -5769,6 +5829,23 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
       llvm::errs() << "\n";
       llvm::errs() << "  Location: " << op.getLoc() << "\n";
       break;
+    }
+
+    // DEBUG: trace probe results inside CombinationalOp body
+    if (traceCombBody && combOp.getNumResults() == 2 &&
+        combOp.getResultTypes()[1].isInteger(1)) {
+      if (auto probeOp = dyn_cast<llhd::ProbeOp>(&op)) {
+        SignalId sigId = resolveSignalId(probeOp.getSignal());
+        auto probeVal = getValue(tempProcId, probeOp.getResult());
+        llvm::SmallVector<char, 16> probeBuf, sigBuf;
+        probeVal.getAPInt().toString(probeBuf, 16, false);
+        scheduler.getSignalValue(sigId).getAPInt().toString(sigBuf, 16, false);
+        llvm::errs() << "[COMB-BODY]   prb sig=" << sigId
+                     << "(" << getSignalName(sigId) << ")"
+                     << " val=0x" << StringRef(probeBuf.data(), probeBuf.size())
+                     << " sigVal=0x" << StringRef(sigBuf.data(), sigBuf.size())
+                     << "\n";
+      }
     }
   }
 
@@ -6139,57 +6216,16 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       }
 
       if (auto combOp = current.getDefiningOp<llhd::CombinationalOp>()) {
-        ProcessId procId = InvalidProcessId;
-        if (activeInstanceId != 0) {
-          auto ctxIt = instanceOpToProcessId.find(activeInstanceId);
-          if (ctxIt != instanceOpToProcessId.end()) {
-            auto procIt = ctxIt->second.find(combOp.getOperation());
-            if (procIt != ctxIt->second.end())
-              procId = procIt->second;
-          }
-        }
-        if (procId == InvalidProcessId) {
-          auto procIt = opToProcessId.find(combOp.getOperation());
-          if (procIt != opToProcessId.end())
-            procId = procIt->second;
-        }
-        if (procId != InvalidProcessId) {
-          auto stateIt = processStates.find(procId);
-          if (stateIt != processStates.end()) {
-            auto valIt = stateIt->second.valueMap.find(current);
-            if (valIt != stateIt->second.valueMap.end()) {
-              {
-                static bool traceComb = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-                if (traceComb) {
-                  auto resultIdx = dyn_cast<OpResult>(current);
-                  llvm::errs() << "[COMB-CACHE] procId=" << procId
-                               << " result#" << (resultIdx ? resultIdx.getResultNumber() : 99)
-                               << " cached=";
-                  if (valIt->second.isX()) llvm::errs() << "X";
-                  else { llvm::SmallString<32> s; valIt->second.getAPInt().toString(s, 16, false); llvm::errs() << "0x" << s; }
-                  llvm::errs() << " instId=" << activeInstanceId << "\n";
-                }
-              }
-              finish(valIt->second);
-              continue;
-            }
-          }
-        }
-
+        // Always do fresh evaluation of CombinationalOp body using current
+        // signal values. The process cache (valueMap) may be stale if the
+        // CombinationalOp's input signals changed since the process last ran
+        // (e.g., between delta steps within the same time slot). Fresh
+        // evaluation reads signals directly, ensuring correct combinational
+        // propagation for firreg inputs and other continuous expressions.
         llvm::SmallVector<InterpretedValue, 4> results;
         (void)evaluateCombinationalOp(combOp, results);
         auto result = dyn_cast<OpResult>(current);
         if (result && result.getResultNumber() < results.size()) {
-          {
-            static bool traceComb = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-            if (traceComb) {
-              llvm::errs() << "[COMB-EVAL] result#" << result.getResultNumber()
-                           << " fresh=";
-              if (results[result.getResultNumber()].isX()) llvm::errs() << "X";
-              else { llvm::SmallString<32> s; results[result.getResultNumber()].getAPInt().toString(s, 16, false); llvm::errs() << "0x" << s; }
-              llvm::errs() << " instId=" << activeInstanceId << "\n";
-            }
-          }
           finish(results[result.getResultNumber()]);
         } else
           finish(makeUnknown(current));
@@ -10584,6 +10620,67 @@ arith_dispatch:
     return success();
   }
 
+  // Unary math floating-point operations on f64 values.
+  // Each op: extract double from APInt, apply C math function, store back.
+#define INTERPRET_UNARY_MATH_F64(OpType, mathFn)                              \
+  if (auto mathOp = dyn_cast<OpType>(op)) {                                   \
+    InterpretedValue input = getValue(procId, mathOp.getOperand());            \
+    unsigned width = getTypeWidth(mathOp.getType());                           \
+    if (input.isX()) {                                                        \
+      setValue(procId, mathOp.getResult(), InterpretedValue::makeX(width));    \
+    } else {                                                                  \
+      double val = llvm::bit_cast<double>(input.getAPInt().getZExtValue());   \
+      double res = mathFn(val);                                               \
+      setValue(procId, mathOp.getResult(),                                     \
+               InterpretedValue(llvm::bit_cast<uint64_t>(res), 64));          \
+    }                                                                         \
+    return success();                                                         \
+  }
+
+  INTERPRET_UNARY_MATH_F64(mlir::math::SinOp, std::sin)
+  INTERPRET_UNARY_MATH_F64(mlir::math::CosOp, std::cos)
+  INTERPRET_UNARY_MATH_F64(mlir::math::TanOp, std::tan)
+  INTERPRET_UNARY_MATH_F64(mlir::math::AsinOp, std::asin)
+  INTERPRET_UNARY_MATH_F64(mlir::math::AcosOp, std::acos)
+  INTERPRET_UNARY_MATH_F64(mlir::math::AtanOp, std::atan)
+  INTERPRET_UNARY_MATH_F64(mlir::math::SinhOp, std::sinh)
+  INTERPRET_UNARY_MATH_F64(mlir::math::CoshOp, std::cosh)
+  INTERPRET_UNARY_MATH_F64(mlir::math::TanhOp, std::tanh)
+  INTERPRET_UNARY_MATH_F64(mlir::math::AsinhOp, std::asinh)
+  INTERPRET_UNARY_MATH_F64(mlir::math::AcoshOp, std::acosh)
+  INTERPRET_UNARY_MATH_F64(mlir::math::AtanhOp, std::atanh)
+  INTERPRET_UNARY_MATH_F64(mlir::math::ExpOp, std::exp)
+  INTERPRET_UNARY_MATH_F64(mlir::math::LogOp, std::log)
+  INTERPRET_UNARY_MATH_F64(mlir::math::Log10Op, std::log10)
+  INTERPRET_UNARY_MATH_F64(mlir::math::SqrtOp, std::sqrt)
+  INTERPRET_UNARY_MATH_F64(mlir::math::FloorOp, std::floor)
+  INTERPRET_UNARY_MATH_F64(mlir::math::CeilOp, std::ceil)
+
+#undef INTERPRET_UNARY_MATH_F64
+
+  // Binary math floating-point operations on f64 values.
+#define INTERPRET_BINARY_MATH_F64(OpType, mathFn)                             \
+  if (auto mathOp = dyn_cast<OpType>(op)) {                                   \
+    InterpretedValue lhs = getValue(procId, mathOp.getLhs());                  \
+    InterpretedValue rhs = getValue(procId, mathOp.getRhs());                 \
+    unsigned width = getTypeWidth(mathOp.getType());                           \
+    if (lhs.isX() || rhs.isX()) {                                            \
+      setValue(procId, mathOp.getResult(), InterpretedValue::makeX(width));    \
+    } else {                                                                  \
+      double l = llvm::bit_cast<double>(lhs.getAPInt().getZExtValue());       \
+      double r = llvm::bit_cast<double>(rhs.getAPInt().getZExtValue());       \
+      double res = mathFn(l, r);                                              \
+      setValue(procId, mathOp.getResult(),                                     \
+               InterpretedValue(llvm::bit_cast<uint64_t>(res), 64));          \
+    }                                                                         \
+    return success();                                                         \
+  }
+
+  INTERPRET_BINARY_MATH_F64(mlir::math::PowFOp, std::pow)
+  INTERPRET_BINARY_MATH_F64(mlir::math::Atan2Op, std::atan2)
+
+#undef INTERPRET_BINARY_MATH_F64
+
   //===--------------------------------------------------------------------===//
   // SCF Dialect Operations (control flow for loops/conditionals)
   //===--------------------------------------------------------------------===//
@@ -12976,39 +13073,6 @@ arith_dispatch:
       bool found = false;
       bool fromFallbackSearch = false;
 
-      uint32_t expectedClassId = 0;
-      bool hasExpectedClassId = false;
-      uint64_t refProbeAddr = args[1].isX() ? 0 : args[1].getUInt64();
-      if (refProbeAddr != 0) {
-        uint64_t refOff = 0;
-        MemoryBlock *refProbeBlock =
-            findMemoryBlockByAddress(refProbeAddr, procId, &refOff);
-        if (!refProbeBlock)
-          refProbeBlock = findBlockByAddress(refProbeAddr, refOff);
-        uint64_t currentObjAddr = 0;
-        bool haveCurrentObjAddr = false;
-        if (refProbeBlock && refProbeBlock->initialized &&
-            refOff + 8 <= refProbeBlock->data.size()) {
-          for (unsigned i = 0; i < 8; ++i)
-            currentObjAddr |=
-                static_cast<uint64_t>(refProbeBlock->data[refOff + i]) << (i * 8);
-          haveCurrentObjAddr = true;
-        } else {
-          uint64_t nativeOffset = 0;
-          size_t nativeSize = 0;
-          if (findNativeMemoryBlockByAddress(refProbeAddr, &nativeOffset,
-                                             &nativeSize) &&
-              nativeOffset + 8 <= nativeSize) {
-            std::memcpy(&currentObjAddr,
-                        reinterpret_cast<void *>(refProbeAddr), 8);
-            haveCurrentObjAddr = true;
-          }
-        }
-        if (haveCurrentObjAddr && currentObjAddr != 0)
-          hasExpectedClassId =
-              readUvmObjectClassId(procId, currentObjAddr, expectedClassId);
-      }
-
       if (seqrQueueAddr != 0) {
         auto fifoIt = sequencerItemFifo.find(seqrQueueAddr);
         if (fifoIt != sequencerItemFifo.end() && !fifoIt->second.empty()) {
@@ -13017,26 +13081,9 @@ arith_dispatch:
           found = true;
         }
       }
-      if (!found && hasExpectedClassId) {
-        // If the queue hint is not directly usable, use class-id matching as
-        // a constrained fallback instead of arbitrarily draining another queue.
-        for (auto &[key, fifo] : sequencerItemFifo) {
-          if (fifo.empty())
-            continue;
-          uint32_t classId = 0;
-          if (!readUvmObjectClassId(procId, fifo.front(), classId) ||
-              classId != expectedClassId)
-            continue;
-          itemAddr = fifo.front();
-          fifo.pop_front();
-          found = true;
-          fromFallbackSearch = true;
-          break;
-        }
-      }
       if (found && itemAddr != 0) {
-        // Track which item was dequeued by this port (for item_done)
-        lastDequeuedItem[portAddr] = itemAddr;
+        // Track the dequeued item by both pull-port and resolved queue alias.
+        recordUvmDequeuedItem(portAddr, seqrQueueAddr, itemAddr);
         // Write item address to output ref (args[1]).
         // The output ref is an llhd.ref or alloca-backed ptr.
         uint64_t refAddr = args[1].isX() ? 0 : args[1].getUInt64();
@@ -13139,19 +13186,17 @@ arith_dispatch:
          calleeName.contains("sqr_if_base") ||
          calleeName.contains("uvm_sequencer")) &&
         calleeName.ends_with("::item_done")) {
-      uint64_t portAddr =
+      uint64_t doneAddr =
           args.size() > 0 && !args[0].isX() ? args[0].getUInt64() : 0;
-      // Find which item was last dequeued by this port
-      auto lastIt = lastDequeuedItem.find(portAddr);
-      if (lastIt != lastDequeuedItem.end()) {
-        uint64_t itemAddr = lastIt->second;
+      uint64_t itemAddr = takeUvmDequeuedItemForDone(
+          procId, doneAddr, callIndirectOp.getOperation());
+      if (itemAddr != 0) {
         itemDoneReceived.insert(itemAddr);
-        lastDequeuedItem.erase(lastIt);
         LLVM_DEBUG(llvm::dbgs()
                    << "  call_indirect: item_done: item 0x"
                    << llvm::format_hex(itemAddr, 16)
-                   << " marked done (port 0x"
-                   << llvm::format_hex(portAddr, 16) << ")\n");
+                   << " marked done (caller 0x"
+                   << llvm::format_hex(doneAddr, 16) << ")\n");
 
         // Directly resume the process blocked in finish_item for this item.
         auto waiterIt = finishItemWaiters.find(itemAddr);
@@ -13169,6 +13214,9 @@ arith_dispatch:
                        << waiterProcId << "\n");
           }
         }
+      } else if (traceSeq) {
+        llvm::errs() << "[SEQ-CI] item_done miss caller=0x"
+                     << llvm::format_hex(doneAddr, 16) << "\n";
       }
       return success();
     }
@@ -15495,6 +15543,16 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
   // semantics where a probe sees the value driven earlier in the same process.
   auto pendingIt = pendingEpsilonDrives.find(sigId);
   if (pendingIt != pendingEpsilonDrives.end()) {
+    // DEBUG: trace pending epsilon drive intercept
+    {
+      static bool traceProbe = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+      if (traceProbe && sigId == 98) {
+        llvm::errs() << "[PROBE-PATH] sig=98 PENDING-EPSILON val=0x"
+                     << pendingIt->second.getUInt64() << " t="
+                     << scheduler.getCurrentTime().realTime
+                     << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
+      }
+    }
     setValue(procId, probeOp.getResult(), pendingIt->second);
     LLVM_DEBUG(llvm::dbgs() << "  Probed signal " << sigId
                             << " = " << (pendingIt->second.isX() ? "X"
@@ -15528,6 +15586,16 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                 bitsToInsert,
                 block.data[i] & ((1u << bitsToInsert) - 1));
             safeInsertBits(memValue, byteVal, i * 8);
+          }
+          // DEBUG: trace memory-backed read
+          {
+            static bool traceProbe = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+            if (traceProbe && sigId == 98) {
+              llvm::errs() << "[PROBE-PATH] sig=98 BACKING-MEM val=0x"
+                           << memValue.getZExtValue() << " t="
+                           << scheduler.getCurrentTime().realTime
+                           << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
+            }
           }
           setValue(procId, probeOp.getResult(),
                    InterpretedValue(memValue));
@@ -15575,6 +15643,16 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                     block->data[blockOffset + i] & ((1u << bitsToInsert) - 1));
       safeInsertBits(memValue, byteVal, i * 8);
     }
+    // DEBUG: trace ref-ptr-cast memory read
+    {
+      static bool traceProbe = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+      if (traceProbe && sigId == 98) {
+        llvm::errs() << "[PROBE-PATH] sig=98 CAST-STORE-MEM val=0x"
+                     << memValue.getZExtValue() << " t="
+                     << scheduler.getCurrentTime().realTime
+                     << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
+      }
+    }
     setValue(procId, probeOp.getResult(), InterpretedValue(memValue));
     LLVM_DEBUG(llvm::dbgs() << "  Probed signal " << sigId
                             << " from memory at 0x"
@@ -15582,6 +15660,17 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                             << llvm::format_hex(memValue.getZExtValue(), 0)
                             << " (width=" << width << ")\n");
     return success();
+  }
+
+  // DEBUG: trace scheduler read
+  {
+    static bool traceProbe = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
+    if (traceProbe && sigId == 98) {
+      llvm::errs() << "[PROBE-PATH] sig=98 SCHEDULER val=0x"
+                   << scheduler.getSignalValue(sigId).getValue() << " t="
+                   << scheduler.getCurrentTime().realTime
+                   << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
+    }
   }
 
   // Get the current signal value from the scheduler
@@ -18385,38 +18474,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     bool found = false;
     bool fromFallbackSearch = false;
     InterpretedValue outRefVal = getValue(procId, callOp.getOperand(1));
-    uint64_t refProbeAddr = outRefVal.isX() ? 0 : outRefVal.getUInt64();
-
-    uint32_t expectedClassId = 0;
-    bool hasExpectedClassId = false;
-    if (refProbeAddr != 0) {
-      uint64_t refOff = 0;
-      MemoryBlock *refProbeBlock =
-          findMemoryBlockByAddress(refProbeAddr, procId, &refOff);
-      if (!refProbeBlock)
-        refProbeBlock = findBlockByAddress(refProbeAddr, refOff);
-      uint64_t currentObjAddr = 0;
-      bool haveCurrentObjAddr = false;
-      if (refProbeBlock && refProbeBlock->initialized &&
-          refOff + 8 <= refProbeBlock->data.size()) {
-        for (unsigned i = 0; i < 8; ++i)
-          currentObjAddr |=
-              static_cast<uint64_t>(refProbeBlock->data[refOff + i]) << (i * 8);
-        haveCurrentObjAddr = true;
-      } else {
-        uint64_t nativeOffset = 0;
-        size_t nativeSize = 0;
-        if (findNativeMemoryBlockByAddress(refProbeAddr, &nativeOffset,
-                                           &nativeSize) &&
-            nativeOffset + 8 <= nativeSize) {
-          std::memcpy(&currentObjAddr, reinterpret_cast<void *>(refProbeAddr), 8);
-          haveCurrentObjAddr = true;
-        }
-      }
-      if (haveCurrentObjAddr && currentObjAddr != 0)
-        hasExpectedClassId =
-            readUvmObjectClassId(procId, currentObjAddr, expectedClassId);
-    }
 
     if (seqrQueueAddr != 0) {
       auto fifoIt = sequencerItemFifo.find(seqrQueueAddr);
@@ -18426,24 +18483,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         found = true;
       }
     }
-    if (!found && hasExpectedClassId) {
-      for (auto &[key, fifo] : sequencerItemFifo) {
-        if (fifo.empty())
-          continue;
-        uint32_t classId = 0;
-        if (!readUvmObjectClassId(procId, fifo.front(), classId) ||
-            classId != expectedClassId)
-          continue;
-        itemAddr = fifo.front();
-        fifo.pop_front();
-        found = true;
-        fromFallbackSearch = true;
-        break;
-      }
-    }
 
     if (found && itemAddr != 0) {
-      lastDequeuedItem[portAddr] = itemAddr;
+      recordUvmDequeuedItem(portAddr, seqrQueueAddr, itemAddr);
       uint64_t refAddr = 0;
       if (!outRefVal.isX())
         refAddr = outRefVal.getUInt64();
@@ -18534,16 +18576,15 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
        calleeName.contains("sqr_if_base") ||
          calleeName.contains("uvm_sequencer")) &&
       calleeName.ends_with("::item_done") && callOp.getNumOperands() >= 1) {
-    uint64_t portAddr = 0;
+    uint64_t doneAddr = 0;
     InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
     if (!selfVal.isX())
-      portAddr = selfVal.getUInt64();
+      doneAddr = selfVal.getUInt64();
 
-    auto lastIt = lastDequeuedItem.find(portAddr);
-    if (lastIt != lastDequeuedItem.end()) {
-      uint64_t itemAddr = lastIt->second;
+    uint64_t itemAddr =
+        takeUvmDequeuedItemForDone(procId, doneAddr, callOp.getOperation());
+    if (itemAddr != 0) {
       itemDoneReceived.insert(itemAddr);
-      lastDequeuedItem.erase(lastIt);
 
       auto waiterIt = finishItemWaiters.find(itemAddr);
       if (waiterIt != finishItemWaiters.end()) {
@@ -18555,6 +18596,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           scheduler.scheduleProcess(waiterProcId, SchedulingRegion::Active);
         }
       }
+    } else if (traceSeq) {
+      llvm::errs() << "[SEQ-FC] item_done miss caller=0x"
+                   << llvm::format_hex(doneAddr, 16) << "\n";
     }
     return success();
   }
@@ -28493,6 +28537,96 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_fgetc ----
+    if (calleeName == "__moore_fgetc") {
+      int32_t result = -1;
+      if (callOp.getNumOperands() >= 1) {
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        result = __moore_fgetc(fd);
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_fgetc() = " << result
+                               << "\n");
+      return success();
+    }
+
+    // ---- __moore_fgets ----
+    if (calleeName == "__moore_fgets") {
+      int32_t result = 0;
+      if (callOp.getNumOperands() >= 2) {
+        uint64_t strAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        MooreString str = {nullptr, 0};
+        result = __moore_fgets(&str, fd);
+        if (strAddr != 0) {
+          uint64_t offset = 0;
+          auto *block = findMemoryBlockByAddress(strAddr, procId, &offset);
+          if (block && block->initialized &&
+              offset + 16 <= block->data.size()) {
+            uint64_t ptrVal = reinterpret_cast<uint64_t>(str.data);
+            std::memcpy(block->data.data() + offset, &ptrVal, 8);
+            int64_t lenVal = str.len;
+            std::memcpy(block->data.data() + offset + 8, &lenVal, 8);
+          }
+        }
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_fgets() = " << result
+                               << "\n");
+      return success();
+    }
+
+    // ---- __moore_feof ----
+    if (calleeName == "__moore_feof") {
+      int32_t result = 1;
+      if (callOp.getNumOperands() >= 1) {
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        result = __moore_feof(fd);
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_feof() = " << result
+                               << "\n");
+      return success();
+    }
+
+    // ---- __moore_fflush ----
+    if (calleeName == "__moore_fflush") {
+      if (callOp.getNumOperands() >= 1) {
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        __moore_fflush(fd);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_fflush(fd=" << fd << ")\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_ftell ----
+    if (calleeName == "__moore_ftell") {
+      int32_t result = -1;
+      if (callOp.getNumOperands() >= 1) {
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        result = __moore_ftell(fd);
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_ftell() = " << result
+                               << "\n");
+      return success();
+    }
+
     //===------------------------------------------------------------------===//
     // String method interceptors
     //===------------------------------------------------------------------===//
@@ -31672,6 +31806,109 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_display(\"" << message
                                 << "\")\n");
       }
+      return success();
+    }
+
+    // ---- __moore_error ----
+    if (calleeName == "__moore_error") {
+      if (callOp.getNumOperands() >= 1) {
+        std::string message = readStringFromPtr(callOp.getOperand(0));
+        MooreString msgStr = {const_cast<char *>(message.c_str()),
+                               static_cast<int64_t>(message.size())};
+        __moore_error(&msgStr);
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_error(\"" << message
+                                << "\")\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_warning ----
+    if (calleeName == "__moore_warning") {
+      if (callOp.getNumOperands() >= 1) {
+        std::string message = readStringFromPtr(callOp.getOperand(0));
+        MooreString msgStr = {const_cast<char *>(message.c_str()),
+                               static_cast<int64_t>(message.size())};
+        __moore_warning(&msgStr);
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_warning(\"" << message
+                                << "\")\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_info ----
+    if (calleeName == "__moore_info") {
+      if (callOp.getNumOperands() >= 1) {
+        std::string message = readStringFromPtr(callOp.getOperand(0));
+        MooreString msgStr = {const_cast<char *>(message.c_str()),
+                               static_cast<int64_t>(message.size())};
+        __moore_info(&msgStr);
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_info(\"" << message
+                                << "\")\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_constraint_unique_check ----
+    if (calleeName == "__moore_constraint_unique_check") {
+      int32_t result = 1;
+      if (callOp.getNumOperands() >= 3) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t numElements = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t elementSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        if (arrayAddr >= 0x10000000000ULL) {
+          result = __moore_constraint_unique_check(
+              reinterpret_cast<void *>(arrayAddr), numElements, elementSize);
+        } else if (arrayAddr != 0) {
+          uint64_t offset = 0;
+          auto *block =
+              findMemoryBlockByAddress(arrayAddr, procId, &offset);
+          if (block && block->initialized) {
+            result = __moore_constraint_unique_check(
+                block->data.data() + offset, numElements, elementSize);
+          }
+        }
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_constraint_unique_check() = "
+                 << result << "\n");
+      return success();
+    }
+
+    // ---- __moore_constraint_unique_scalars ----
+    if (calleeName == "__moore_constraint_unique_scalars") {
+      int32_t result = 1;
+      if (callOp.getNumOperands() >= 3) {
+        uint64_t valuesAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t numValues = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t valueSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        if (valuesAddr >= 0x10000000000ULL) {
+          result = __moore_constraint_unique_scalars(
+              reinterpret_cast<void *>(valuesAddr), numValues, valueSize);
+        } else if (valuesAddr != 0) {
+          uint64_t offset = 0;
+          auto *block =
+              findMemoryBlockByAddress(valuesAddr, procId, &offset);
+          if (block && block->initialized) {
+            result = __moore_constraint_unique_scalars(
+                block->data.data() + offset, numValues, valueSize);
+          }
+        }
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_constraint_unique_scalars() = "
+                 << result << "\n");
       return success();
     }
 

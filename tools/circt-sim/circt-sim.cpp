@@ -67,6 +67,7 @@
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -599,6 +600,7 @@ private:
   // Maps from MLIR values to simulation signals
   llvm::DenseMap<mlir::Value, SignalId> valueToSignal;
   llvm::StringMap<SignalId> nameToSignal;
+  llvm::StringMap<SignalId> inputPortSignals; // Input-only subset for interpreter
 
   // Traced signals for VCD output
   llvm::SmallVector<std::pair<SignalId, char>, 64> tracedSignals;
@@ -635,28 +637,42 @@ LogicalResult SimulationContext::initialize(
       requestAbort("Interrupt signal received");
     return abortRequested.load();
   });
-  scheduler.setSignalChangeCallback(
-      [this](SignalId signal, const SignalValue &value) {
-        recordValueChange(signal, value);
-        // Forward-propagate parent interface signal changes to child BFM copies.
-        if (llhdInterpreter)
-          llhdInterpreter->forwardPropagateOnSignalChange(signal, value);
-        // Fire VPI cbValueChange callbacks for cocotb RisingEdge/FallingEdge.
-        if (!vpiLibrary.empty())
-          VPIRuntime::getInstance().fireValueChangeCallbacks(signal);
-      });
+  // Note: signal change callback is set up AFTER buildSimulationModel()
+  // below, because the interpreter's initialize() also sets a callback
+  // which would overwrite one set here.
 
   // Collect all top modules to simulate
   llvm::SmallVector<hw::HWModuleOp, 4> hwModules;
 
   if (tops.empty()) {
-    // No top modules specified - find the last module (typically the top)
-    auto hwModule = findTopModule(module, "");
-    if (!hwModule) {
-      return failure();
+    // Auto-detect split UVM tops when both hdl_top and hvl_top are present.
+    // This lets hdl_top interface/config_db setup run alongside hvl_top
+    // run_test() without requiring explicit --top flags.
+    auto findModuleByName = [&](llvm::StringRef target) -> hw::HWModuleOp {
+      hw::HWModuleOp found;
+      module.walk([&](hw::HWModuleOp hwModule) {
+        if (!found && hwModule.getName() == target)
+          found = hwModule;
+      });
+      return found;
+    };
+
+    auto hdlTop = findModuleByName("hdl_top");
+    auto hvlTop = findModuleByName("hvl_top");
+    if (hdlTop && hvlTop) {
+      hwModules.push_back(hdlTop);
+      topModuleNames.push_back(hdlTop.getName().str());
+      hwModules.push_back(hvlTop);
+      topModuleNames.push_back(hvlTop.getName().str());
+    } else {
+      // No top modules specified - find the last module (typically the top)
+      auto hwModule = findTopModule(module, "");
+      if (!hwModule) {
+        return failure();
+      }
+      hwModules.push_back(hwModule);
+      topModuleNames.push_back(hwModule.getName().str());
     }
-    hwModules.push_back(hwModule);
-    topModuleNames.push_back(hwModule.getName().str());
   } else {
     // Find all specified top modules
     for (const auto &top : tops) {
@@ -696,6 +712,26 @@ LogicalResult SimulationContext::initialize(
     if (failed(buildSimulationModel(hwModule)))
       return failure();
   }
+
+  // Set up the unified signal change callback AFTER buildSimulationModel()
+  // completes. The interpreter's initialize() sets its own callback, so we
+  // must overwrite it here to include all handlers: module drive re-evaluation,
+  // VIF forward propagation, VCD recording, and VPI value-change callbacks.
+  scheduler.setSignalChangeCallback(
+      [this](SignalId signal, const SignalValue &value) {
+        recordValueChange(signal, value);
+        if (llhdInterpreter) {
+          // Re-evaluate combinational module drives that depend on this signal.
+          // Critical for VPI: when cocotb writes an input via vpi_put_value,
+          // continuous assignments must re-compute dependent outputs.
+          llhdInterpreter->executeModuleDrivesForSignal(signal);
+          // Forward-propagate parent interface signal changes to child BFM copies.
+          llhdInterpreter->forwardPropagateOnSignalChange(signal, value);
+        }
+        // Fire VPI cbValueChange callbacks for cocotb RisingEdge/FallingEdge.
+        if (!vpiLibrary.empty())
+          VPIRuntime::getInstance().fireValueChangeCallbacks(signal);
+      });
 
   // Finalize initialization: execute global constructors (UVM init) AFTER all
   // modules' module-level ops have run. This ensures that hdl_top's initial
@@ -789,11 +825,14 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       registerTracedSignal(signalId, portInfo.getName().str());
   }
 
-  // Check if this module contains LLHD processes, seq.initial blocks, or
-  // hw.instance ops (which may contain processes in submodules)
+  // Check if this module contains LLHD processes, seq.initial blocks,
+  // hw.instance ops, seq.firreg, or llhd.combinational ops
   bool hasLLHDProcesses = false;
   bool hasSeqInitial = false;
   bool hasInstances = false;
+  bool hasFirRegs = false;
+  bool hasCombinationals = false;
+  bool hasLLHDSignals = false;
   size_t llhdProcessCount = 0;
   size_t seqInitialCount = 0;
   size_t instanceCount = 0;
@@ -814,6 +853,12 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
     } else if (isa<hw::InstanceOp>(op)) {
       hasInstances = true;
       instanceCount++;
+    } else if (isa<seq::FirRegOp>(op)) {
+      hasFirRegs = true;
+    } else if (isa<llhd::CombinationalOp>(op)) {
+      hasCombinationals = true;
+    } else if (isa<llhd::SignalOp, llhd::DriveOp>(op)) {
+      hasLLHDSignals = true;
     }
     return WalkResult::advance();
   });
@@ -825,10 +870,10 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
                << ", and " << instanceCount << " hw.instance ops"
                << " (out of " << totalOpsCount << " total ops) in module\n";
 
-  // Initialize the interpreter if we have processes, initial blocks, or
-  // instances (instances may contain processes in submodules that need
-  // recursive initialization)
-  if (hasLLHDProcesses || hasSeqInitial || hasInstances) {
+  // Initialize the interpreter if we have processes, initial blocks,
+  // instances, firreg, combinational ops, or LLHD signals/drives
+  if (hasLLHDProcesses || hasSeqInitial || hasInstances || hasFirRegs ||
+      hasCombinationals || hasLLHDSignals) {
     // Create the interpreter if it doesn't exist yet (supports multiple top
     // modules - the interpreter accumulates signals and processes across calls)
     if (!llhdInterpreter) {
@@ -879,6 +924,21 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
     llhdInterpreter->setCompileModeEnabled(runMode == RunMode::Compile);
     llhdInterpreter->setJITCompileManager(jitCompileManager);
 
+    // Provide port signal mappings so the interpreter can map non-ref-type
+    // block arguments (e.g., four-state struct ports) to signal IDs.
+    // IMPORTANT: Only include INPUT ports. Output ports share argNum indices
+    // with input ports but refer to hw.output operands, not block arguments.
+    // Including output ports would overwrite input block arg → signal mappings.
+    inputPortSignals.clear();
+    for (auto portInfo : hwModule.getPortList()) {
+      if (portInfo.isOutput())
+        continue;
+      auto it = nameToSignal.find(portInfo.getName());
+      if (it != nameToSignal.end())
+        inputPortSignals[portInfo.getName()] = it->second;
+    }
+    llhdInterpreter->setPortSignalMap(inputPortSignals);
+
     // Initialize this module (will add to existing signals and processes)
     if (failed(llhdInterpreter->initialize(hwModule))) {
       llvm::errs() << "Error: Failed to initialize LLHD process interpreter\n";
@@ -888,6 +948,72 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
     llvm::outs() << "[circt-sim] Registered " << llhdInterpreter->getNumSignals()
                  << " LLHD signals and " << llhdInterpreter->getNumProcesses()
                  << " LLHD processes/initial blocks\n";
+
+    // Register combinational processes for hw.output operands of the top-level
+    // module. The interpreter handles llhd.drv via registerContinuousAssignments
+    // but hw.output is the module terminator that defines output port values.
+    // Without this, output port signals are only computed once during init and
+    // never re-evaluated when input signals change (e.g., via VPI writes).
+    if (auto *bodyBlock = hwModule.getBodyBlock()) {
+      if (auto outputOp = dyn_cast<hw::OutputOp>(bodyBlock->getTerminator())) {
+        // Collect input port signal IDs for sensitivity
+        llvm::SmallVector<SignalId, 4> inputSigIds;
+        for (auto portInfo : hwModule.getPortList()) {
+          if (!portInfo.isOutput()) {
+            auto it = nameToSignal.find(portInfo.getName());
+            if (it != nameToSignal.end())
+              inputSigIds.push_back(it->second);
+          }
+        }
+
+        // Also collect internal LLHD signal IDs for sensitivity
+        llvm::SmallVector<SignalId, 16> internalSigIds;
+        hwModule.walk([&](llhd::SignalOp sigOp) {
+          SignalId sigId = llhdInterpreter->getSignalId(sigOp.getResult());
+          if (sigId != 0)
+            internalSigIds.push_back(sigId);
+        });
+
+        // Build output port name → signal ID mapping
+        auto outputPorts = hwModule.getPortList();
+        unsigned outputIdx = 0;
+        for (auto portInfo : outputPorts) {
+          if (!portInfo.isOutput())
+            continue;
+          if (outputIdx >= outputOp.getNumOperands())
+            break;
+          mlir::Value outputValue = outputOp.getOperand(outputIdx);
+          auto sigIt = nameToSignal.find(portInfo.getName());
+          if (sigIt == nameToSignal.end()) {
+            ++outputIdx;
+            continue;
+          }
+          SignalId outSigId = sigIt->second;
+
+          // Create a combinational process that re-evaluates this output
+          std::string procName = "hw_output_" + portInfo.getName().str();
+          auto procId = scheduler.registerProcess(
+              procName,
+              [this, outputValue, outSigId]() {
+                InterpretedValue val =
+                    llhdInterpreter->evaluateContinuousValue(outputValue);
+                scheduler.updateSignal(outSigId, val.toSignalValue());
+              });
+
+          auto *proc = scheduler.getProcess(procId);
+          if (proc) {
+            proc->setCombinational(true);
+            // Sensitive to all input ports
+            for (SignalId inSig : inputSigIds)
+              scheduler.addSensitivity(procId, inSig);
+            // Sensitive to all internal LLHD signals
+            for (SignalId intSig : internalSigIds)
+              scheduler.addSensitivity(procId, intSig);
+          }
+          ++outputIdx;
+        }
+      }
+    }
   } else {
     // For modules without LLHD processes, create a simple placeholder process
     auto topProcessId = scheduler.registerProcess(
@@ -2085,6 +2211,18 @@ static LogicalResult processInput(MLIRContext &context,
     }
     exitCode = 1;
   }
+  // Check for SVA clocked assertion failures.
+  if (exitCode == 0) {
+    if (const auto *interp = simContext.getInterpreter()) {
+      size_t assertionFailures = interp->getClockedAssertionFailures();
+      if (assertionFailures > 0) {
+        llvm::errs() << "[circt-sim] " << assertionFailures
+                     << " SVA assertion failure(s)\n";
+        exitCode = 1;
+      }
+    }
+  }
+
   if (exitCode == 0)
     llvm::outs() << "[circt-sim] Simulation completed\n";
   else
@@ -2193,6 +2331,7 @@ int main(int argc, char **argv) {
       mlir::func::FuncDialect,
       mlir::index::IndexDialect,
       mlir::LLVM::LLVMDialect,
+      mlir::math::MathDialect,
       mlir::scf::SCFDialect,
       moore::MooreDialect,
       om::OMDialect,

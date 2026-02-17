@@ -28,15 +28,18 @@ set(libs
   MLIRIndexDialect
   MLIRLLVMDialect
   MLIRLLVMIRTransforms
+  MLIRMathDialect
   MLIRParser
   MLIRSCFDialect
   MLIRTransforms
 )
 
 add_circt_tool(circt-sim
+  PARTIAL_SOURCES_INTENDED
   circt-sim.cpp
   JITCompileManager.cpp
   LLHDProcessInterpreter.cpp
+  LLHDProcessInterpreterWaitCondition.cpp
   UVMFastPaths.cpp
   DEPENDS ${libs}
 )
