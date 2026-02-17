@@ -208,6 +208,9 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
      `CIRCT_SIM_EXPERIMENTAL_PARALLEL=1`.
    - added parallel-mode regression for resumable wait/yield process-result
      thunk shape to keep CLI compatibility covered while hardening continues.
+   - added parallel-mode regression for derived-observed event-wait resumable
+     process-result thunk shape to protect compile-mode coverage while the
+     experimental parallel scheduler remains gated.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
