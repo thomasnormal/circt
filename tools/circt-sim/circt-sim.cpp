@@ -1537,13 +1537,34 @@ static bool resolveBoolOptionOrEnv(const llvm::cl::opt<bool> &option,
   return option;
 }
 
+static std::string resolveJitCachePolicy() {
+  std::string policy = jitCachePolicy;
+  llvm::StringRef source = "--jit-cache-policy";
+  if (jitCachePolicy.getNumOccurrences() == 0) {
+    if (const char *env = std::getenv("CIRCT_SIM_JIT_CACHE_POLICY")) {
+      policy = env;
+      source = "CIRCT_SIM_JIT_CACHE_POLICY";
+    }
+  }
+
+  std::string normalized = llvm::StringRef(policy).trim().lower();
+  if (normalized.empty() || normalized == "memory")
+    return "memory";
+  if (normalized == "none")
+    return "none";
+
+  llvm::errs() << "[circt-sim] Warning: invalid " << source << "='" << policy
+               << "' (expected 'memory' or 'none'); using 'memory'\n";
+  return "memory";
+}
+
 static JITCompileManager::Config resolveJitCompileManagerConfig() {
   JITCompileManager::Config config;
   config.hotThreshold =
       resolveUint64OptionOrEnv(jitHotThreshold, "CIRCT_SIM_JIT_HOT_THRESHOLD");
   config.compileBudget = resolveInt64OptionOrEnv(
       jitCompileBudget, "CIRCT_SIM_JIT_COMPILE_BUDGET");
-  config.cachePolicy = jitCachePolicy;
+  config.cachePolicy = resolveJitCachePolicy();
   config.failOnDeopt = resolveBoolOptionOrEnv(
       jitFailOnDeopt, "CIRCT_SIM_JIT_FAIL_ON_DEOPT");
   return config;

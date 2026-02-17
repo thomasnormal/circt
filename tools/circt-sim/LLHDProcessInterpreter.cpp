@@ -6133,12 +6133,18 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   if (compileModeEnabled && jitCompileManager) {
     JITDeoptStateSnapshot deoptSnapshot;
     bool hasDeoptSnapshot = snapshotJITDeoptState(procId, deoptSnapshot);
+    auto maybeInvalidateThunkForNoCachePolicy = [&]() {
+      if (llvm::StringRef(jitCompileManager->getConfig().cachePolicy)
+              .equals_insensitive("none"))
+        jitCompileManager->invalidateProcessThunk(procId);
+    };
 
     ProcessThunkExecutionState thunkState;
     thunkState.resumeToken = state.jitThunkResumeToken;
     if (jitCompileManager->executeProcessThunk(procId, thunkState)) {
       if (!thunkState.deoptRequested) {
         state.jitThunkResumeToken = thunkState.resumeToken;
+        maybeInvalidateThunkForNoCachePolicy();
         return;
       }
       if (hasDeoptSnapshot)
@@ -6154,6 +6160,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
         if (jitCompileManager->executeProcessThunk(procId, installedThunkState)) {
           if (!installedThunkState.deoptRequested) {
             state.jitThunkResumeToken = installedThunkState.resumeToken;
+            maybeInvalidateThunkForNoCachePolicy();
             return;
           }
           if (hasDeoptSnapshot)

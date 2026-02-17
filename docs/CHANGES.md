@@ -125,6 +125,13 @@
     - pre-wait ops must now be side-effect-free (`llhd.prb` remains allowed).
     - impure preludes (for example `llvm.alloca`) are classified as
       `unsupported_operation` and stay on interpreter fallback paths.
+  - implemented `jit-cache-policy` governance behavior:
+    - `--jit-cache-policy=none` now evicts process thunks after each execution.
+    - added env override `CIRCT_SIM_JIT_CACHE_POLICY` with value validation and
+      warning+fallback to `memory` for invalid inputs.
+  - added regressions:
+    - `test/Tools/circt-sim/jit-cache-policy-none.mlir`
+    - `test/Tools/circt-sim/jit-cache-policy-invalid-env.mlir`
 
 ### Why It Matters
 - Establishes deterministic artifact generation and machine-readable telemetry
