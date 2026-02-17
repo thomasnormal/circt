@@ -6,6 +6,7 @@
 //
 // LOG: jit-process-thunk-wait-event-derived-observed-impure-prewait-unsupported-strict
 // LOG: [circt-sim] Strict JIT policy violation: deopts_total=1
+// LOG: [circt-sim] Strict JIT deopt process: id={{[1-9][0-9]*}} name=llhd_process_{{[0-9]+}} reason=unsupported_operation
 // LOG: [circt-sim] Simulation finished with exit code 1
 //
 // JSON: "mode": "compile"

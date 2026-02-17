@@ -201,6 +201,8 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
      `jit_deopt_processes`, including both `process_id` and `process_name`,
      enabling strict-mode triage to pinpoint which processes are still leaving
      native coverage.
+   - strict fail-on-deopt diagnostics now print per-process deopt details in
+     stderr (`id`, `name`, `reason`) to reduce triage latency in strict lanes.
 5. Bounded integration parity smoke executed:
    - `AVIPS=jtag`, `SEEDS=1`, `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=120`.
    - mode-parity checker passed with one row per mode; both lanes hit the
