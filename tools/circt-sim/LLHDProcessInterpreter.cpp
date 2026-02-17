@@ -675,6 +675,23 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
                   end.snapshot.analysisConnEdges)
          << " delta_seq_fifo_items="
          << delta(start.snapshot.seqFifoItems, end.snapshot.seqFifoItems)
+         << " delta_global_blocks="
+         << delta(start.snapshot.globalBlocks, end.snapshot.globalBlocks)
+         << " delta_malloc_blocks="
+         << delta(start.snapshot.mallocBlocks, end.snapshot.mallocBlocks)
+         << " delta_native_blocks="
+         << delta(start.snapshot.nativeBlocks, end.snapshot.nativeBlocks)
+         << " delta_process_blocks="
+         << delta(start.snapshot.processBlocks, end.snapshot.processBlocks)
+         << " delta_dynamic_strings="
+         << delta(start.snapshot.dynamicStrings, end.snapshot.dynamicStrings)
+         << " delta_config_db_entries="
+         << delta(start.snapshot.configDbEntries, end.snapshot.configDbEntries)
+         << " delta_analysis_conn_ports="
+         << delta(start.snapshot.analysisConnPorts,
+                  end.snapshot.analysisConnPorts)
+         << " delta_seq_fifo_maps="
+         << delta(start.snapshot.seqFifoMaps, end.snapshot.seqFifoMaps)
          << "\n";
     }
 

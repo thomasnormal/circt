@@ -1279,3 +1279,48 @@ attribution (not just point-in-time snapshots).
    low-overhead map-level delta attribution buckets (e.g. top growth sources
    across config-db / analysis graph / sequencer internals) to tighten AHB OOM
    root-cause prioritization.
+
+---
+
+## 2026-02-17 Session 13: WS5 Delta-Window Structural Buckets
+
+Follow-on step after Session 12 to close the "aggregate-only" limitation.
+
+### Implemented
+
+Extended `[circt-sim] Memory delta window: ...` with signed structural deltas:
+- `delta_global_blocks`
+- `delta_malloc_blocks`
+- `delta_native_blocks`
+- `delta_process_blocks`
+- `delta_dynamic_strings`
+- `delta_config_db_entries`
+- `delta_analysis_conn_ports`
+- `delta_seq_fifo_maps`
+
+These are emitted alongside existing byte/edge/item deltas, giving immediate
+shape-of-growth attribution in summary mode.
+
+### Regression updates
+
+Updated checks in:
+- `test/Tools/circt-sim/profile-summary-memory-delta-window.mlir`
+- `test/Tools/circt-sim/profile-summary-memory-peak.mlir`
+
+### Validation
+
+1. Rebuilt `build-test/bin/circt-sim` ✅
+2. Focused lit slice (`5/5`) ✅
+   - `profile-summary-memory-peak.mlir`
+   - `profile-summary-memory-state.mlir`
+   - `profile-summary-memory-delta-window.mlir`
+   - `finish-item-blocks-until-item-done.mlir`
+   - `uvm-sequencer-queue-cache-cap.mlir`
+3. Bounded AVIP pulse (`AVIPS=jtag SEEDS=1 SIM_TIMEOUT=5`) ✅
+   - compile: `OK`
+   - sim: expected short timeout
+
+### Remaining WS5 gap
+
+1. We still need top-k **source attribution** (which specific process/map keys
+   grew the most over the window), not just category-level counts/bytes.
