@@ -40,8 +40,8 @@
    - `missing_thunk` deopt detail now records these decision labels.
    - thunk install miss now records `detail=install_failed`.
 2. Updated regressions:
-   - `test/Tools/circt-sim/jit-fail-on-deopt-env.mlir`
-   - `test/Tools/circt-sim/jit-report.mlir`
+   - `test/Tools/circt-sim/jit-fail-on-deopt-missing-thunk-budget-zero-detail.mlir`
+   - `test/Tools/circt-sim/jit-report-deopt-processes-missing-thunk-hot-threshold.mlir`
    - `test/Tools/circt-sim/jit-report-deopt-processes-missing-thunk-budget-exhausted.mlir`.
 3. Validation:
    - targeted runline-equivalent deopt detail bundle PASS.

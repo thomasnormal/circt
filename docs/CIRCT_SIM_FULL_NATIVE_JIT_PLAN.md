@@ -207,6 +207,10 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
    - deopt telemetry now also carries optional per-process detail hints
      (`detail`) for unsupported-shape classification, and strict diagnostics
      append that detail when available.
+   - compile-governor detail hints now classify `missing_thunk` deopts as
+     `below_hot_threshold`, `compile_budget_zero`, or
+     `compile_budget_exhausted` (plus `install_failed` on install miss), so
+     strict convergence burn-down can separate policy gating from shape gaps.
    - added deopt burn-down aggregation utility:
      - `utils/summarize_circt_sim_jit_reports.py` aggregates one or more JIT
        report files/directories and emits ranked reason/detail counters.

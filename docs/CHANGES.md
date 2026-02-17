@@ -145,6 +145,11 @@
       classifier text (for example,
       `prewait_impure:sim.proc.print`) when available.
     - strict fail-on-deopt logs now append `detail=<...>` when known.
+  - added compile-governor detail hints for `missing_thunk` deopts:
+    - report/strict detail now distinguishes
+      `below_hot_threshold`, `compile_budget_zero`,
+      and `compile_budget_exhausted`.
+    - install failures now surface as `detail=install_failed`.
   - added deopt burn-down aggregation utility:
     - `utils/summarize_circt_sim_jit_reports.py` now scans one or more JIT
       report files/directories and emits ranked reason/detail counts.
@@ -152,6 +157,9 @@
       ranking, and per-process rows:
       `--out-reason-tsv`, `--out-detail-tsv`, `--out-process-tsv`.
   - added regression:
+    - `test/Tools/circt-sim/jit-fail-on-deopt-missing-thunk-budget-zero-detail.mlir`
+    - `test/Tools/circt-sim/jit-report-deopt-processes-missing-thunk-hot-threshold.mlir`
+    - `test/Tools/circt-sim/jit-report-deopt-processes-missing-thunk-budget-exhausted.mlir`
     - `test/Tools/circt-sim/jit-report-deopt-processes.mlir`
     - `test/Tools/summarize-circt-sim-jit-reports.test`
 
