@@ -33,6 +33,54 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-17 Session: I3C 0% Coverage Root-Cause Pass — Reactive Interface Tri-State
+
+### Why this pass
+I3C remained at 0% coverage with earlier runs timing out. Investigation showed
+interface-internal assigns like:
+- `assign scl = scl_oen ? scl_o : 1'bz;`
+- `assign scl_i = scl;`
+were imported as one-time module-level stores, not reactive LLHD processes.
+That left BFM-visible interface fields stale after runtime writes.
+
+### Changes
+1. Added module/child module init-store pattern extraction in
+   `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+   - records copy-pair links from module-level stores.
+   - records tri-state candidates `(cond, src, dest, else)` from store value
+     expression patterns.
+2. Added module-level `llhd.prb` init handling in
+   `executeModuleLevelLLVMOps()`:
+   - probes now use freshly computed module-init values (malloc pointers)
+     during init-store execution instead of stale scheduler values.
+3. Added resolved runtime tri-state rules:
+   - candidate address rules resolved to field shadow signal IDs after
+     `createInterfaceFieldShadowSignals()`.
+   - runtime store handling now reevaluates affected tri-state rules and
+     drives destination field signals + backing memory reactively.
+4. Added focused regression:
+   - `test/Tools/circt-sim/interface-intra-tristate-propagation.sv`
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-sim -k 0` PASS
+2. Focused regressions:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/interface-field-propagation.sv build-test/test/Tools/circt-sim/iface-field-reverse-propagation.mlir build-test/test/Tools/circt-sim/interface-intra-tristate-propagation.sv` PASS (`3/3`)
+3. Bounded AVIP pulse:
+   - `AVIPS=i3c SEEDS=1 COMPILE_TIMEOUT=240 SIM_TIMEOUT=180 MAX_WALL_MS=180000 CIRCT_SIM_MODE=interpret utils/run_avip_circt_sim.sh`
+   - result: compile `OK` (~29s), sim `TIMEOUT` (180s), no final coverage report.
+4. I3C trace evidence for the fix:
+   - with `CIRCT_SIM_TRACE_SEQ=1`, startup logs show:
+     - `TriState candidates: 4, installed=4`
+   - confirms reactive tri-state rules are being installed for I3C interface fields.
+
+### Remaining limitation
+I3C still times out under current bounded runtime settings. This pass closes an
+interface-field semantic gap, but full AVIP coverage closure still requires
+additional runtime throughput work (scheduler/JIT/memory pressure).
+
+---
+
 ## 2026-02-17 Session: sv-tests Parity — $*_gclk Functions + Black-Parrot OnlyParse Fix
 
 ### Goal
@@ -1449,3 +1497,46 @@ IEEE 1800-2017 VPI type definitions and constants, VPIRuntime class declaration.
 - Counter test with always_ff: PASS (rst write/read, Timer advancement)
 - CVDP Brent-Kung adder: compiles + cocotb test runs (fails on assertions as expected — buggy input SV)
 - circt-sim lit tests: 287/325 pass (37 failures are pre-existing, unrelated to VPI)
+
+---
+
+## 2026-02-17: Parallel AVIP stability check + hopper fast-path crash fix
+
+### Issue
+- A direct `I2S` run regressed to a host crash (`Segmentation fault`) during init.
+- Symbolized stack pinned the crash inside:
+  - `tools/circt-sim/UVMFastPaths.cpp:509`
+  - lambda `writePointerToOutAddr` at `tools/circt-sim/UVMFastPaths.cpp:250`
+- The failing path was `uvm_phase_hopper::{peek,get,try_peek,try_get}` fast-path output-pointer writes.
+
+### Fix
+- Hardened `writePointerToOutAddr` in `handleUvmFuncBodyFastPath`:
+  - keep writes to interpreter-managed memory blocks
+  - remove raw native-pointer write fallback for this helper
+- Rationale: stale native block bookkeeping can leave dangling addresses during
+  early init; raw host writes can crash the simulator process.
+
+### Parallel simulation validation (requested)
+
+Ran `I2S` and `I3C` in parallel (separate lanes, same start timestamp):
+
+- `I2S`
+  - log: `/tmp/par-i2s-20260217-122724.log`
+  - jit: `/tmp/par-i2s-20260217-122724.jit.json`
+  - result: exit `0`, no crash
+  - coverage: `100.00%` / `100.00%`
+  - final time: `43,520,000,000 fs`
+  - wall: `run_wall_ms=51287`, `total_wall_ms=60008`
+
+- `I3C`
+  - log: `/tmp/par-i3c-20260217-122724.log`
+  - jit: `/tmp/par-i3c-20260217-122724.jit.json`
+  - result: exit `0`, no crash
+  - coverage: `0.00%` / `0.00%`
+  - final time: `145,250,000,000 fs`
+  - wall: `run_wall_ms=51370`, `total_wall_ms=60029`
+
+### Current state
+- Parallel bounded simulation path is working (both lanes complete, no segfault).
+- `I2S` is back to full coverage in this run.
+- `I3C` remains the primary functional/coverage gap (still 0%).
