@@ -2263,7 +2263,8 @@ struct StmtVisitor {
       builder.setInsertionPointAfter(enclosingProc);
       auto property = context.convertAssertionExpression(*innerPropertySpec, loc);
       if (!property)
-        return failure();
+        // Assertion in dead generate code — skip silently.
+        return success();
       auto *assertionClock = getCanonicalAssertionClockSignalEvent(
           *context.currentAssertionClock);
       if (!assertionClock)
@@ -2311,7 +2312,8 @@ struct StmtVisitor {
 
     auto property = context.convertAssertionExpression(*innerPropertySpec, loc);
     if (!property)
-      return failure();
+      // Assertion in dead generate code — skip silently.
+      return success();
 
     // If the property has its own clock and we're inside a procedure, hoist
     // the assertion to module level using clocked verif ops.

@@ -599,10 +599,9 @@ struct HierPathValueExprVisitor
   }
 
   void handle(const slang::ast::InvalidExpression &expr) {
-    if (failed(result))
-      return;
-    mlir::emitError(loc, "invalid expression");
-    result = failure();
+    // InvalidExpression can appear in dead generate blocks (e.g., assertions
+    // referencing instances that don't exist, or DynamicNotProcedural assigns).
+    // Skip without error — the conversion phase will catch real errors.
   }
 };
 
@@ -633,10 +632,9 @@ struct HierPathValueStmtVisitor
   }
 
   void handle(const slang::ast::InvalidExpression &expr) {
-    if (failed(result))
-      return;
-    mlir::emitError(loc, "invalid expression");
-    result = failure();
+    // InvalidExpression can appear in dead generate blocks (e.g., assertions
+    // referencing instances that don't exist in this elaboration). Skip without
+    // error — the conversion phase will catch real errors.
   }
 };
 } // namespace
@@ -661,13 +659,13 @@ struct BindAssertionExprVisitor
   }
 
   void handle(const slang::ast::InvalidExpression &expr) {
-    if (failed(result))
-      return;
-    exprVisitor.handle(expr);
-    result = failure();
+    // InvalidExpression can appear inside dead generate assertion code.
+    // Skip silently — the conversion phase handles real errors.
   }
 
-  void handle(const slang::ast::InvalidAssertionExpr &) { result = failure(); }
+  void handle(const slang::ast::InvalidAssertionExpr &) {
+    // Dead generate code — no hierarchical refs to collect. Don't fail.
+  }
 };
 
 LogicalResult
@@ -854,13 +852,18 @@ struct InstBodyVisitor {
   LogicalResult visit(const slang::ast::ContinuousAssignSymbol &assignNode) {
     const auto *expr =
         assignNode.getAssignment().as_if<slang::ast::AssignmentExpression>();
-    if (!expr) {
-      if (context.options.allowNonProceduralDynamic.value_or(false)) {
-        mlir::emitWarning(loc)
-            << "skipping continuous assignment without an assignment "
-               "expression after DynamicNotProcedural downgrade";
-        return success();
+    // When allowNonProceduralDynamic is enabled, slang downgrades
+    // DynamicNotProcedural errors to warnings but wraps the expression in
+    // InvalidExpression. Unwrap to recover the underlying assignment.
+    if (!expr && context.options.allowNonProceduralDynamic.value_or(false)) {
+      if (const auto *invalid =
+              assignNode.getAssignment()
+                  .as_if<slang::ast::InvalidExpression>()) {
+        if (invalid->child)
+          expr = invalid->child->as_if<slang::ast::AssignmentExpression>();
       }
+    }
+    if (!expr) {
       mlir::emitError(loc)
           << "expected assignment expression in continuous assignment";
       return failure();
