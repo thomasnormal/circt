@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1439 - February 17, 2026
+
+### circt-sim: Event-Wait Process-Result Resumable Thunk Coverage
+
+1. Added regression coverage for resumable event-wait native thunks that carry
+   process results through wait-yield and destination block operands to
+   terminal halt-yield:
+   - single-observed event wait:
+     - `test/Tools/circt-sim/jit-process-thunk-wait-event-dest-operand-halt-yield.mlir`
+     - `test/Tools/circt-sim/jit-process-thunk-wait-event-dest-operand-halt-yield-guard-failed-env.mlir`
+   - multi-observed event wait:
+     - `test/Tools/circt-sim/jit-process-thunk-wait-event-multi-observed-dest-operand-halt-yield.mlir`
+     - `test/Tools/circt-sim/jit-process-thunk-wait-event-multi-observed-dest-operand-halt-yield-guard-failed-env.mlir`
+2. Validation:
+   - targeted manual runline-equivalent bundle PASS, including:
+     - existing delay/event/periodic JIT thunk tests
+     - new single/multi observed event process-result tests
+   - telemetry regression sanity:
+     - `env CIRCT_SIM_JIT_HOT_THRESHOLD=7 CIRCT_SIM_JIT_COMPILE_BUDGET=11 circt-sim test/Tools/circt-sim/jit-report.mlir --mode=compile ...` PASS
+   - profile-summary sanity:
+     - `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1 build/bin/circt-sim test/Tools/circt-sim/profile-summary-memory-state.mlir`
+       emits `Memory state`, `Memory peak`, `Memory process top`.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK` (68s), sim bounded `TIMEOUT` (90s).
+
 ## Iteration 1438 - February 17, 2026
 
 ### circt-sim: Parallel Scheduler Safety Gate + Regression Coverage

@@ -172,6 +172,10 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
        observed value is produced by a pre-wait `llhd.prb`.
      - extended to support multi-observed event waits when the observed list
        is produced by matching pre-wait probe sequences.
+     - added dedicated regression coverage for event-sensitive process-result
+       shapes (`wait yield (...)` + dest operands + terminal `halt` yields) in
+       both single-observed and multi-observed wait forms, including strict
+       guard-failed deopt variants.
      - wired per-process native resume tokens through thunk dispatch and deopt
        snapshot/restore to keep resumable state-machine handoff explicit.
      - periodic toggle clock native thunk now also uses explicit token-guarded
