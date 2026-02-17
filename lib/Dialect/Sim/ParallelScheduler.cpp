@@ -30,7 +30,7 @@ using namespace circt::sim;
 ParallelScheduler::ParallelScheduler(ProcessScheduler &baseScheduler,
                                      Config config)
     : baseScheduler(baseScheduler), config(config), running(false),
-      workAvailable(false), activeWorkers(0) {
+      workEpoch(0), activeWorkers(0) {
   // Determine number of threads
   if (config.numThreads == 0) {
     numThreads = std::thread::hardware_concurrency();
@@ -45,9 +45,6 @@ ParallelScheduler::ParallelScheduler(ProcessScheduler &baseScheduler,
   for (size_t i = 0; i < numThreads; ++i) {
     workQueues[i] = std::make_unique<WorkStealingQueue<PartitionId>>(1024);
   }
-
-  // Create barrier for thread synchronization
-  barrier = std::make_unique<ThreadBarrier>(numThreads);
 
   // Initialize thread-local state
   threadStates.resize(numThreads);
@@ -95,9 +92,8 @@ void ParallelScheduler::assignProcess(ProcessId processId,
   // Remove from old partition if already assigned
   auto it = processToPartition.find(processId);
   if (it != processToPartition.end()) {
-    auto &oldProcs = partitions[it->second]->getProcesses();
-    // Note: This is a simplified removal; actual implementation would need
-    // mutable access
+    // Note: process removal from the old partition is intentionally deferred.
+    // The current partition container exposes only const access.
   }
 
   processToPartition[processId] = partitionId;
@@ -225,20 +221,21 @@ void ParallelScheduler::stopWorkers() {
 
 void ParallelScheduler::workerMain(size_t threadId) {
   LLVM_DEBUG(llvm::dbgs() << "Worker " << threadId << " started\n");
+  uint64_t seenEpoch = 0;
 
   while (running.load()) {
-    // Wait for work to be available
+    // Wait for the controller thread to publish a new work epoch.
     {
       std::unique_lock<std::mutex> lock(distributionMutex);
-      workCondition.wait(lock, [this] {
-        return !running.load() || workAvailable.load();
+      workCondition.wait(lock, [this, &seenEpoch] {
+        return !running.load() ||
+               workEpoch.load(std::memory_order_acquire) != seenEpoch;
       });
     }
 
     if (!running.load())
       break;
-
-    activeWorkers.fetch_add(1);
+    seenEpoch = workEpoch.load(std::memory_order_relaxed);
 
     auto startTime = std::chrono::high_resolution_clock::now();
 
@@ -261,11 +258,11 @@ void ParallelScheduler::workerMain(size_t threadId) {
         endTime - startTime);
     threadStates[threadId].lastExecutionNs = duration.count();
 
-    activeWorkers.fetch_sub(1);
-
-    // Wait at barrier for synchronization
-    barrier->wait();
-    stats.barrierWaits.fetch_add(1);
+    // Signal this worker's completion for the current epoch.
+    if (activeWorkers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      std::lock_guard<std::mutex> lock(distributionMutex);
+      workCondition.notify_one();
+    }
   }
 
   LLVM_DEBUG(llvm::dbgs() << "Worker " << threadId << " exiting\n");
@@ -324,9 +321,10 @@ size_t ParallelScheduler::executePartitionProcesses(Partition &partition) {
       process->execute();
       eventsProcessed++;
 
-      // Check if process should be rescheduled
+      // Mirror ProcessScheduler semantics: if a process returns while still in
+      // Running state, it becomes suspended until an explicit trigger.
       if (process->getState() == ProcessState::Running) {
-        process->setState(ProcessState::Ready);
+        process->setState(ProcessState::Suspended);
       }
     }
   }
@@ -361,20 +359,26 @@ bool ParallelScheduler::executeParallelDeltaCycle() {
   // Distribute work to queues
   distributeWork();
 
-  // Signal workers
+  // Signal workers by publishing a new dispatch epoch.
   {
     std::lock_guard<std::mutex> lock(distributionMutex);
-    workAvailable.store(true);
+    activeWorkers.store(numThreads, std::memory_order_release);
+    workEpoch.fetch_add(1, std::memory_order_release);
   }
   workCondition.notify_all();
 
-  // Wait for workers to complete
-  barrier->wait();
+  // Wait for workers to complete this epoch.
+  {
+    std::unique_lock<std::mutex> lock(distributionMutex);
+    workCondition.wait(lock, [this] {
+      return activeWorkers.load(std::memory_order_acquire) == 0 ||
+             !running.load() || baseScheduler.isAbortRequested();
+    });
+  }
 
   // Synchronize boundary signals
   synchronizeBoundaries();
 
-  workAvailable.store(false);
   stats.parallelDeltaCycles.fetch_add(1);
 
   return true;

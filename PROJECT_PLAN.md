@@ -58,6 +58,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
     minimal LLHD process tests under `--parallel=4` currently hang or abort in
     both interpret and compile modes (allocator corruption crashes observed),
     so multi-threaded parity remains blocked pending scheduler/runtime fixes.
+  - parallel safety gate landed:
+    `--parallel` now defaults to a stable sequential fallback with warning;
+    force-enable path for continuing hardening:
+    `CIRCT_SIM_EXPERIMENTAL_PARALLEL=1`.
 
 ### Current Status
 - **sv-tests simulation**: 1172 pass + 321 xfail = 1493/1493 (100%), 0 fail (Feb 17)

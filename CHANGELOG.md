@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1438 - February 17, 2026
+
+### circt-sim: Parallel Scheduler Safety Gate + Regression Coverage
+
+1. Added a safety gate for parallel simulation startup in `circt-sim`:
+   - `--parallel` remains accepted.
+   - default behavior now falls back to stable sequential execution with an
+     explicit warning.
+   - experimental parallel scheduler can still be force-enabled via:
+     `CIRCT_SIM_EXPERIMENTAL_PARALLEL=1`.
+2. Added parallel-mode regression coverage for resumable JIT wait/yield
+   process-result thunks:
+   - `test/Tools/circt-sim/jit-process-thunk-wait-delay-dest-operand-halt-yield-parallel.mlir`
+3. Validation:
+   - `CCACHE_DISABLE=1 ninja -C build circt-sim` PASS
+   - manual runline-equivalent checks PASS:
+     - new parallel regression (`--parallel=4`) passes and emits the
+       sequential-fallback warning.
+     - existing wait-dest/halt-yield tests (normal + guard-failed strict) PASS.
+4. Tracked limitation status:
+   - force-enabled experimental parallel mode still reproduces hangs on minimal
+     LLHD wait/toggle tests, so parallel runtime hardening remains an explicit
+     blocker for true multi-threaded parity.
+
 ## Iteration 1437 - February 17, 2026
 
 ### circt-sim: Resumable Wait/Halt-Yield Process-Result Thunks + Parallel Runtime Findings
