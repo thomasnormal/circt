@@ -8885,6 +8885,48 @@ struct BoolCastOpConversion : public OpConversionPattern<BoolCastOp> {
           op, createFourStateStruct(rewriter, loc, anyOne, unknown));
       return success();
     }
+    // Handle nested packed structs where each field is a four-state struct.
+    // E.g., !hw.struct<valid: !hw.struct<value: i1, unknown: i1>,
+    //                   is_read: !hw.struct<value: i1, unknown: i1>>
+    if (auto structTy = dyn_cast<hw::StructType>(input.getType())) {
+      auto fields = structTy.getElements();
+      bool allFourState =
+          !fields.empty() &&
+          llvm::all_of(fields, [](const hw::StructType::FieldInfo &f) {
+            return isFourStateStructType(f.type);
+          });
+      if (allFourState) {
+        // Extract value and unknown from each field, OR them together.
+        SmallVector<Value> valueBits, unknownBits;
+        for (auto &field : fields) {
+          Value fieldVal =
+              hw::StructExtractOp::create(rewriter, loc, input, field.name);
+          valueBits.push_back(extractFourStateValue(rewriter, loc, fieldVal));
+          unknownBits.push_back(
+              extractFourStateUnknown(rewriter, loc, fieldVal));
+        }
+        // Concatenate all value bits and all unknown bits.
+        Value allValues = comb::ConcatOp::create(rewriter, loc, valueBits);
+        Value allUnknowns = comb::ConcatOp::create(rewriter, loc, unknownBits);
+        Value zeroVal =
+            hw::ConstantOp::create(rewriter, loc, allValues.getType(), 0);
+        Value zeroUnk =
+            hw::ConstantOp::create(rewriter, loc, allUnknowns.getType(), 0);
+        Value anyOne = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, allValues, zeroVal);
+        Value anyUnknown = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, allUnknowns, zeroUnk);
+        Value one =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+        Value noUnknown =
+            comb::XorOp::create(rewriter, loc, anyUnknown, one, false);
+        Value resultVal =
+            comb::AndOp::create(rewriter, loc, anyOne, noUnknown, false);
+        rewriter.replaceOp(
+            op, createFourStateStruct(rewriter, loc, resultVal, anyUnknown));
+        return success();
+      }
+    }
     return failure();
   }
 };
@@ -8975,16 +9017,6 @@ struct FourStateSubNegOneOpConversion : public OpConversionPattern<SubOp> {
     Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, rhsUnk);
     auto result = createFourStateStruct(rewriter, loc, maskedVal, rhsUnk);
     rewriter.replaceOp(op, result);
-    return success();
-  }
-};
-
-struct NegRealOpConversion : public OpConversionPattern<NegRealOp> {
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult
-  matchAndRewrite(NegRealOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<arith::NegFOp>(op, adaptor.getInput());
     return success();
   }
 };
@@ -13872,54 +13904,94 @@ struct FormatStringToStringOpConversion
     if (auto dynStringOp = dyn_cast<sim::FormatDynStringOp>(defOp))
       return dynStringOp.getValue();
 
-    // Case 3: Formatted integer - call __moore_int_to_string
+    auto convertIntToI64 = [&](Value intVal, bool isSigned) -> Value {
+      auto intWidth = intVal.getType().getIntOrFloatBitWidth();
+      if (intWidth < 64) {
+        if (isSigned)
+          return arith::ExtSIOp::create(rewriter, loc, i64Ty, intVal);
+        return arith::ExtUIOp::create(rewriter, loc, i64Ty, intVal);
+      }
+      if (intWidth > 64)
+        return arith::TruncIOp::create(rewriter, loc, i64Ty, intVal);
+      return intVal;
+    };
+
+    auto callStringFromI64 = [&](StringRef runtimeName, Value intI64) -> Value {
+      auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
+      auto runtimeFn =
+          getOrCreateRuntimeFunc(mod, rewriter, runtimeName.str(), fnTy);
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                       SymbolRefAttr::get(runtimeFn),
+                                       ValueRange{intI64});
+      return call.getResult();
+    };
+
+    // Case 3: Formatted decimal integer.
     if (auto decOp = dyn_cast<sim::FormatDecOp>(defOp)) {
-      Value intVal = decOp.getValue();
-      auto intWidth = intVal.getType().getIntOrFloatBitWidth();
-
-      // Extend or truncate to i64
-      Value intI64;
-      if (intWidth < 64)
-        intI64 = arith::ExtSIOp::create(rewriter, loc, i64Ty, intVal);
-      else if (intWidth > 64)
-        intI64 = arith::TruncIOp::create(rewriter, loc, i64Ty, intVal);
-      else
-        intI64 = intVal;
-
-      // Call __moore_int_to_string
-      auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
-      auto runtimeFn =
-          getOrCreateRuntimeFunc(mod, rewriter, "__moore_int_to_string", fnTy);
-      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
-                                       SymbolRefAttr::get(runtimeFn),
-                                       ValueRange{intI64});
-      return call.getResult();
+      Value intI64 = convertIntToI64(decOp.getValue(), decOp.getIsSigned());
+      return callStringFromI64("__moore_int_to_string", intI64);
     }
 
-    // Case 4: Formatted hex integer
+    // Case 4: Formatted hexadecimal integer.
     if (auto hexOp = dyn_cast<sim::FormatHexOp>(defOp)) {
-      // For now, use int_to_string as a fallback (TODO: implement hex version)
-      Value intVal = hexOp.getValue();
-      auto intWidth = intVal.getType().getIntOrFloatBitWidth();
+      Value intI64 = convertIntToI64(hexOp.getValue(), /*isSigned=*/false);
+      return callStringFromI64("__moore_string_hextoa", intI64);
+    }
 
-      Value intI64;
-      if (intWidth < 64)
-        intI64 = arith::ExtUIOp::create(rewriter, loc, i64Ty, intVal);
-      else if (intWidth > 64)
-        intI64 = arith::TruncIOp::create(rewriter, loc, i64Ty, intVal);
-      else
-        intI64 = intVal;
+    // Case 5: Formatted octal integer.
+    if (auto octOp = dyn_cast<sim::FormatOctOp>(defOp)) {
+      Value intI64 = convertIntToI64(octOp.getValue(), /*isSigned=*/false);
+      return callStringFromI64("__moore_string_octtoa", intI64);
+    }
 
-      auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
+    // Case 6: Formatted binary integer.
+    if (auto binOp = dyn_cast<sim::FormatBinOp>(defOp)) {
+      Value intI64 = convertIntToI64(binOp.getValue(), /*isSigned=*/false);
+      return callStringFromI64("__moore_string_bintoa", intI64);
+    }
+
+    // Case 7: Formatted real value.
+    if (auto realOp = dyn_cast<sim::FormatFloatOp>(defOp)) {
+      Value realVal = realOp.getValue();
+      auto f64Ty = Float64Type::get(ctx);
+      if (realVal.getType() != f64Ty)
+        realVal = arith::ExtFOp::create(rewriter, loc, f64Ty, realVal);
+      auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {f64Ty});
       auto runtimeFn =
-          getOrCreateRuntimeFunc(mod, rewriter, "__moore_int_to_string", fnTy);
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_realtoa", fnTy);
       auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
                                        SymbolRefAttr::get(runtimeFn),
-                                       ValueRange{intI64});
+                                       ValueRange{realVal});
+      return call.getResult();
+    }
+    if (auto realOp = dyn_cast<sim::FormatGeneralOp>(defOp)) {
+      Value realVal = realOp.getValue();
+      auto f64Ty = Float64Type::get(ctx);
+      if (realVal.getType() != f64Ty)
+        realVal = arith::ExtFOp::create(rewriter, loc, f64Ty, realVal);
+      auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {f64Ty});
+      auto runtimeFn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_realtoa", fnTy);
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                       SymbolRefAttr::get(runtimeFn),
+                                       ValueRange{realVal});
+      return call.getResult();
+    }
+    if (auto realOp = dyn_cast<sim::FormatScientificOp>(defOp)) {
+      Value realVal = realOp.getValue();
+      auto f64Ty = Float64Type::get(ctx);
+      if (realVal.getType() != f64Ty)
+        realVal = arith::ExtFOp::create(rewriter, loc, f64Ty, realVal);
+      auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {f64Ty});
+      auto runtimeFn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_realtoa", fnTy);
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                       SymbolRefAttr::get(runtimeFn),
+                                       ValueRange{realVal});
       return call.getResult();
     }
 
-    // Case 5: Format concatenation - recursively convert each input
+    // Case 8: Format concatenation - recursively convert each input
     if (auto concatOp = dyn_cast<sim::FormatStringConcatOp>(defOp)) {
       auto inputs = concatOp.getInputs();
       if (inputs.empty())
@@ -14072,6 +14144,9 @@ struct FWriteBIOpConversion : public OpConversionPattern<FWriteBIOp> {
 
     // Get the file descriptor (convert to i32 if needed)
     Value fd = adaptor.getFd();
+    // Extract value from four-state struct if needed.
+    if (isFourStateStructType(fd.getType()))
+      fd = extractFourStateValue(rewriter, loc, fd);
     if (fd.getType() != i32Ty) {
       fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
     }
@@ -14127,6 +14202,9 @@ struct FCloseBIOpConversion : public OpConversionPattern<FCloseBIOp> {
 
     // Get the file descriptor (convert to i32 if needed)
     Value fd = adaptor.getFd();
+    // Extract value from four-state struct if needed.
+    if (isFourStateStructType(fd.getType()))
+      fd = extractFourStateValue(rewriter, loc, fd);
     if (fd.getType() != i32Ty) {
       fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
     }
@@ -14161,6 +14239,9 @@ struct FGetCBIOpConversion : public OpConversionPattern<FGetCBIOp> {
 
     // Get the file descriptor (convert to i32 if needed)
     Value fd = adaptor.getFd();
+    // Extract value from four-state struct if needed.
+    if (isFourStateStructType(fd.getType()))
+      fd = extractFourStateValue(rewriter, loc, fd);
     if (fd.getType() != i32Ty) {
       fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
     }
@@ -14231,6 +14312,9 @@ struct FEofBIOpConversion : public OpConversionPattern<FEofBIOp> {
 
     // Get the file descriptor (convert to i32 if needed)
     Value fd = adaptor.getFd();
+    // Extract value from four-state struct if needed.
+    if (isFourStateStructType(fd.getType()))
+      fd = extractFourStateValue(rewriter, loc, fd);
     if (fd.getType() != i32Ty) {
       fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
     }
@@ -14266,6 +14350,9 @@ struct FFlushBIOpConversion : public OpConversionPattern<FFlushBIOp> {
 
     // Get the file descriptor (convert to i32 if needed)
     Value fd = adaptor.getFd();
+    // Extract value from four-state struct if needed.
+    if (isFourStateStructType(fd.getType()))
+      fd = extractFourStateValue(rewriter, loc, fd);
     if (fd.getType() != i32Ty) {
       fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
     }
@@ -14300,6 +14387,9 @@ struct FTellBIOpConversion : public OpConversionPattern<FTellBIOp> {
 
     // Get the file descriptor (convert to i32 if needed)
     Value fd = adaptor.getFd();
+    // Extract value from four-state struct if needed.
+    if (isFourStateStructType(fd.getType()))
+      fd = extractFourStateValue(rewriter, loc, fd);
     if (fd.getType() != i32Ty) {
       fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
     }
