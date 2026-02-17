@@ -16,7 +16,8 @@
 4. Validation:
    - All 10 gclk sv-tests compile successfully
    - All 6 black-parrot tests pass (exit=0)
-   - Full sv-tests run in progress to verify 1622/1622
+   - Full sv-tests run: **1620/1622 = 99.9%** (1289 PASS + 331 XFAIL correct;
+     2 XFAIL wrong are slang §6.5 enforcement gaps)
 
 ## Iteration 1430 - February 17, 2026
 
