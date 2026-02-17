@@ -2032,6 +2032,40 @@ static LogicalResult processInput(MLIRContext &context,
     llvm::errs() << "[circt-sim] Strict JIT policy violation: deopts_total="
                  << jitCompileManager.getStatistics().jitDeoptsTotal
                  << " (native-thunk coverage is not complete yet)\n";
+    if (const LLHDProcessInterpreter *interpreter = simContext.getInterpreter()) {
+      struct StrictDeoptProcessEntry {
+        uint64_t processId;
+        std::string processName;
+        std::string reason;
+      };
+      llvm::SmallVector<StrictDeoptProcessEntry, 8> strictDeoptProcesses;
+      for (const auto &entry : interpreter->getJitDeoptReasonByProcess()) {
+        strictDeoptProcesses.push_back(
+            {entry.first, interpreter->getJitDeoptProcessName(entry.first),
+             entry.second});
+      }
+      llvm::sort(strictDeoptProcesses, [](const auto &lhs, const auto &rhs) {
+        return lhs.processId < rhs.processId;
+      });
+
+      constexpr size_t kStrictDeoptLogLimit = 20;
+      size_t emitCount = std::min(strictDeoptProcesses.size(),
+                                  kStrictDeoptLogLimit);
+      for (size_t i = 0; i < emitCount; ++i) {
+        const auto &entry = strictDeoptProcesses[i];
+        llvm::StringRef name =
+            entry.processName.empty() ? llvm::StringRef("-")
+                                      : llvm::StringRef(entry.processName);
+        llvm::errs() << "[circt-sim] Strict JIT deopt process: id="
+                     << entry.processId << " name=" << name
+                     << " reason=" << entry.reason << "\n";
+      }
+      if (strictDeoptProcesses.size() > kStrictDeoptLogLimit) {
+        llvm::errs() << "[circt-sim] Strict JIT deopt process: omitted="
+                     << (strictDeoptProcesses.size() - kStrictDeoptLogLimit)
+                     << " (log limit=" << kStrictDeoptLogLimit << ")\n";
+      }
+    }
     exitCode = 1;
   }
   if (exitCode == 0)

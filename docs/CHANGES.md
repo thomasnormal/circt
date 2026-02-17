@@ -138,6 +138,8 @@
       `{process_id, reason}` entries for first observed deopt per process.
   - extended `jit.jit_deopt_processes` entries to include `process_name`
     alongside `process_id` and `reason` for easier strict-mode triage.
+  - strict compile-mode (`--jit-fail-on-deopt`) now logs per-process deopt
+    details (`id`, `name`, `reason`) when a strict violation occurs.
   - added regression:
     - `test/Tools/circt-sim/jit-report-deopt-processes.mlir`
 

@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1445 - February 17, 2026
+
+### circt-sim: Strict Deopt Process Diagnostics
+
+1. Strengthened strict compile-mode diagnostics:
+   - when `--jit-fail-on-deopt` triggers, stderr now emits per-process
+     deopt details:
+     `Strict JIT deopt process: id=<...> name=<...> reason=<...>`.
+2. Added regression coverage update:
+   - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-impure-prewait-unsupported-strict.mlir`.
+3. Validation:
+   - targeted strict/jit-report/cache-policy/parallel-thunk bundle PASS.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK`, sim bounded `TIMEOUT` (90s).
+
 ## Iteration 1444 - February 17, 2026
 
 ### circt-sim: Add Process Names to JIT Deopt Telemetry
