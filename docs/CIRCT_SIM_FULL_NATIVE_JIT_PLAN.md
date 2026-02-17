@@ -281,6 +281,16 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       `CIRCT_SIM_MODE` is unset.
     - this pins non-default JIT activation until compile-mode parity gates are
       broadly green.
+11. Deopt triage precision and stack-memory prelude closure advanced:
+    - one-block terminating process/fork-child native thunk candidate now
+      accepts safe LLVM stack-memory prelude ops (`alloca/gep/load/store`).
+    - unsupported-operation detail classification now reports first unsupported
+      prelude op for one-block terminating bodies (instead of coarse first-op
+      reporting), improving burn-down queue fidelity.
+    - refreshed AVIP explicit-JIT jtag burn-down now shows refined queue:
+      `first_op:llvm.call` (81), `first_op:llvm.getelementptr` (45),
+      `first_op:func.call_indirect` (11), `first_op:func.call` (3),
+      `first_op:llvm.alloca` (3).
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
