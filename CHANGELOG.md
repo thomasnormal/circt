@@ -1,5 +1,122 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1468 - February 17, 2026
+
+### circt-sim: root-cause fix for dual-top config_db::set loss on X-vtable fallback
+
+1. **Identified root cause** for dual-top `uvm_config_db` misses:
+   - `hdl_setter` reached `func.call_indirect` with `funcPtrVal.isX()`.
+   - The existing X-fallback dispatch path could execute the resolved method
+     body without running the config-db interception logic, so
+     `config_db::set` values were not stored.
+2. **Implemented a shared config-db call-indirect interceptor**:
+   - Added `tryInterceptConfigDbCallIndirect(...)` in
+     `LLHDProcessInterpreter` and wired it into the X-fallback call-indirect
+     path.
+   - Preserves the same key construction (`inst_name.field_name`), wildcard
+     matching, fuzzy `_x` matching, and writeback semantics used by the
+     existing config-db interceptors.
+3. **Validation**:
+   - `test/Tools/circt-sim/config-db.sv` passes.
+   - `test/Tools/circt-sim/config-db-dual-top.sv` now passes (`get_success=1`).
+   - `test/Tools/circt-sim/config-db-dual-top-static-set-dynamic-get.sv` passes.
+   - `test/Tools/circt-sim/config-db-dynamic-array-native.sv` passes.
+   - Generated lit scripts for the existing three config-db tests also pass.
+
+## Iteration 1467 - February 17, 2026
+
+### circt-sim JIT: multiblock wait_condition closure and unsupported-tail burn-down
+
+1. **Resumable multiblock wait-thunk matching widened** in
+   `LLHDProcessInterpreter.cpp`:
+   - multiblock suspend detection now accepts either `llhd.wait` terminators
+     or `llvm.call @__moore_wait_condition` prelude suspend points.
+2. **Resumable multiblock wait-thunk execution extended** for
+   wait-condition polling state:
+   - preserves wait-condition armed state on spurious wakeups
+     (`waiting + waitConditionRestartBlock`),
+   - resumes from `waitConditionRestartOp` with condition-input invalidation.
+3. **Deopt detail classification aligned** for multiblock process bodies:
+   - `multiblock_no_terminal` is now emitted only when neither terminal nor
+     recognized suspend source exists.
+4. **Expanded non-suspending prelude allowlists**:
+   - LLVM call: `__moore_queue_pop_front_ptr`
+   - func.call: `m_process_guard` and `*::m_process_guard`
+5. **Added strict regressions**:
+   - `test/Tools/circt-sim/jit-process-thunk-multiblock-wait-condition-loop-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-llvm-call-queue-pop-front-ptr-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-func-call-m-process-guard-halt.mlir`
+6. **Validation**:
+   - All new strict tests pass under `--jit-fail-on-deopt`.
+   - Parallel compatibility smokes (`--parallel=4`) pass for representative
+     new shapes.
+   - Bounded AVIP compile-lane progression (`jtag`, seed-1):
+     - `/tmp/avip-circt-sim-20260217-230144`: unsupported
+       `first_op:llvm.call:__moore_queue_pop_front_ptr` present.
+     - `/tmp/avip-circt-sim-20260217-230458`: queue-pop tail removed;
+       unsupported `first_op:func.call:m_process_guard` present.
+     - `/tmp/avip-circt-sim-20260217-230749`: m_process_guard tail removed.
+     - Current unsupported tail: `__moore_delay` + `multiblock_no_terminal`.
+
+## Iteration 1466 - February 17, 2026
+
+### circt-sim JIT: structured-control/fork prelude closure and resumable halt guard support
+
+1. **Expanded one-block native-thunk safe prelude matching** in
+   `LLHDProcessInterpreter.cpp` to cover:
+   - safe `scf.for` / `scf.if` / `scf.while` region execution,
+   - `sim.fork join_none` prelude shapes with fork-branch
+     `sim.fork.terminator` closure,
+   - single-block direct `llvm.call @__moore_wait_condition`.
+2. **Extended one-block terminating thunk execution to handle suspend/resume
+   paths without deopt**:
+   - wait-condition polling suspend (`waitConditionRestartBlock` path),
+   - deferred halt suspend while fork children are still active
+     (`destBlock + resumeAtCurrentOp` at `llhd.halt`).
+3. **Added guard-failed triage diagnostics**:
+   - `CIRCT_SIM_TRACE_JIT_THUNK_GUARDS=1` emits per-process guard reason lines
+     for single-block terminating thunk failures.
+4. **Added strict regression tests**:
+   - `test/Tools/circt-sim/jit-process-thunk-fork-join-none-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-scf-for-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-llvm-call-wait-condition-halt.mlir`
+5. **Validation results**:
+   - Targeted strict regressions above pass with `--jit-fail-on-deopt`.
+   - Existing unsupported-shape regression
+     `jit-process-thunk-llvm-call-delay-unsupported.mlir` remains valid.
+   - Bounded AVIP compile-lane run (`jtag`, seed-1) at
+     `/tmp/avip-circt-sim-20260217-225344` now shows unsupported tails:
+     - `first_op:llvm.call:__moore_wait_condition` (1)
+     - `first_op:llvm.call:__moore_delay` (1)
+     - `multiblock_no_terminal` (1)
+   - Previously observed tails `first_op:sim.fork` and `first_op:scf.for`
+     were eliminated in this run.
+
+## Iteration 1465 - February 17, 2026
+
+### circt-sim: root-cause fix for dual-top module-init lifetime bugs
+
+1. **Reworked module-init value scoping**:
+   - `moduleInitValueMap` now merges top-module init values across `initialize()`
+     calls instead of replacing the map with only the latest top.
+   - This fixes a real dual-top (`hdl_top` + `hvl_top`) lifetime bug where
+     module-level LLVM results from the first top were dropped before runtime.
+2. **Added per-instance child-module init maps**:
+   - New `instanceModuleInitValueMaps` stores child module-level values by
+     concrete instance ID, avoiding global `mlir::Value` aliasing hazards across
+     repeated child instances.
+   - `getValue()` now checks instance-scoped module-init values before the
+     shared top-module map.
+3. **Removed ad-hoc persistent signal-init workaround**:
+   - `createInterfaceFieldShadowSignals()` now resolves pointer addresses using
+     correct scope order: instance init map, global init map, then scheduler
+     signal value.
+   - Eliminates dependency on `persistentSignalInitValues`.
+4. **Added regression test**:
+   - `test/Tools/circt-sim/multi-top-module-init-value-preserve.mlir`
+   - Ensures module-level call results from `hdl_top` are preserved under
+     multi-top initialization and not recomputed later.
+
 ## Iteration 1464 - February 17, 2026
 
 ### VPI/cocotb signal-change callback fix and time conversion
@@ -69495,3 +69612,59 @@ See CHANGELOG.md on recent progress.
     - This fixes a host-side segmentation fault observed during AVIP init
       (symbolized to `UVMFastPaths.cpp` in `handleUvmFuncBodyFastPath`) while
       preserving fast-path behavior for managed memory.
+53. `circt-sim` forward-only multiblock terminating native thunk coverage
+    (February 17, 2026):
+    - Added compile-mode native thunk matching/execution for forward-only
+      multiblock process/fork regions:
+      safe-prelude ops in each block, `cf.br`/`cf.cond_br` control-flow, and
+      terminal `llhd.halt` or `sim.fork.terminator`.
+    - This closes strict deopts for static-target
+      `func.call_indirect -> cf.br -> halt` process shapes and keeps deopt
+      fallback guarded for unsupported/back-edge control-flow.
+    - Updated strict regression
+      `test/Tools/circt-sim/jit-process-thunk-func-call-indirect-static-target-unsupported.mlir`
+      to expect native-hit pass (`jit_deopts_total=0`) instead of strict fail.
+    - Added regression
+      `test/Tools/circt-sim/jit-process-thunk-multiblock-call-indirect-condbr-halt.mlir`
+      for `func.call_indirect` + `cf.cond_br` + block-argument merge.
+    - Validation:
+      - targeted strict compile-mode tests: PASS
+      - `--parallel=4` compile-mode smokes on new multiblock paths: PASS
+        (sequential fallback warning expected while experimental parallel mode
+        remains gated)
+      - bounded AVIP compile smoke (`AVIPS=jtag`, `SEEDS=1`,
+        `COMPILE_TIMEOUT=90`, `SIM_TIMEOUT=90`, `CIRCT_SIM_MODE=compile`):
+        compile `OK`, sim `TIMEOUT`.
+54. `circt-sim` UVM prelude closure wave for one-block terminating JIT thunks
+    (February 17, 2026):
+    - Expanded non-suspending `func.call` prelude allowlist for one-block
+      terminating process/fork native thunks to include:
+      - `uvm_pkg::uvm_get_report_object` and `*::uvm_get_report_object`
+      - `uvm_pkg::run_test`
+      - `m_execute_scheduled_forks`
+      - `get_global_hopper` and `*::get_global_hopper`
+      - `*::get_report_verbosity_level`
+      - `*::get_report_action`
+      - config-db `set_<digits>` wrappers (signature-gated)
+    - Expanded non-suspending LLVM-call prelude allowlist for the same thunk
+      path to include:
+      - `__moore_uvm_report_info`
+      - `__moore_queue_push_front`
+    - Expanded one-block terminating safe prelude coverage to accept
+      `llhd.prb`.
+    - Added strict compile-mode regressions:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-uvm-prelude-closure-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-get-report-verbosity-level-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-get-report-action-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-prb-prelude-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-llvm-call-uvm-report-and-queue-halt.mlir`
+    - Validation:
+      - targeted strict compile-mode regressions: PASS
+      - targeted `--parallel=4` compile-mode smokes: PASS
+        (sequential fallback warning expected while experimental parallel mode
+        remains gated)
+      - bounded AVIP compile-lane burn-down (`AVIPS=jtag`, `SEEDS=1`,
+        `CIRCT_SIM=/home/thomas-ahle/circt/build/bin/circt-sim`,
+        `SIM_TIMEOUT=180`, `MAX_WALL_MS=120000`,
+        `--jit-hot-threshold=1 --jit-compile-budget=100000`):
+        `jit_deopts_total` improved `18 -> 14`.
