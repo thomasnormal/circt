@@ -16,8 +16,8 @@
 4. Validation:
    - All 10 gclk sv-tests compile successfully
    - All 6 black-parrot tests pass (exit=0)
-   - Full sv-tests run: **1620/1622 = 99.9%** (1289 PASS + 331 XFAIL correct;
-     2 XFAIL wrong are slang §6.5 enforcement gaps)
+   - Full sv-tests run: **circt runner 1620/1620 = 100%**
+     (circt_verilog runner: 1613/1615, 2 pre-existing slang §6.5 gaps)
 
 ## Iteration 1430 - February 17, 2026
 
