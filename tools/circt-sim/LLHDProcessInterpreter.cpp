@@ -6133,6 +6133,13 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   if (compileModeEnabled && jitCompileManager) {
     JITDeoptStateSnapshot deoptSnapshot;
     bool hasDeoptSnapshot = snapshotJITDeoptState(procId, deoptSnapshot);
+    auto noteProcessDeoptReason = [&](JITCompileManager::DeoptReason reason) {
+      if (jitCompileManager)
+        jitCompileManager->noteProcessDeoptOnce(procId, reason);
+      if (!jitDeoptReasonByProcess.count(procId))
+        jitDeoptReasonByProcess[procId] =
+            JITCompileManager::getDeoptReasonName(reason).str();
+    };
     auto maybeInvalidateThunkForNoCachePolicy = [&]() {
       if (llvm::StringRef(jitCompileManager->getConfig().cachePolicy)
               .equals_insensitive("none"))
@@ -6149,8 +6156,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       }
       if (hasDeoptSnapshot)
         (void)restoreJITDeoptState(procId, deoptSnapshot);
-      jitCompileManager->noteProcessDeoptOnce(
-          procId, JITCompileManager::DeoptReason::GuardFailed);
+      noteProcessDeoptReason(JITCompileManager::DeoptReason::GuardFailed);
     } else {
       ProcessThunkInstallResult installResult =
           tryInstallProcessThunk(procId, state);
@@ -6165,8 +6171,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
           }
           if (hasDeoptSnapshot)
             (void)restoreJITDeoptState(procId, deoptSnapshot);
-          jitCompileManager->noteProcessDeoptOnce(
-              procId, JITCompileManager::DeoptReason::GuardFailed);
+          noteProcessDeoptReason(JITCompileManager::DeoptReason::GuardFailed);
         } else {
           installResult = ProcessThunkInstallResult::MissingThunk;
         }
@@ -6177,7 +6182,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
             JITCompileManager::DeoptReason::MissingThunk;
         if (installResult == ProcessThunkInstallResult::UnsupportedOperation)
           reason = JITCompileManager::DeoptReason::UnsupportedOperation;
-        jitCompileManager->noteProcessDeoptOnce(procId, reason);
+        noteProcessDeoptReason(reason);
       }
     }
   }

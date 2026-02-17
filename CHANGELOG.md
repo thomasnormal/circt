@@ -1,5 +1,20 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1443 - February 17, 2026
+
+### circt-sim: Per-Process JIT Deopt Telemetry
+
+1. Extended compile-mode telemetry to record first deopt reason per process.
+2. JIT JSON reports now include `jit_deopt_processes` with entries:
+   `{process_id, reason}`.
+3. Added regression:
+   - `test/Tools/circt-sim/jit-report-deopt-processes.mlir`
+4. Validation:
+   - targeted JIT report/cache-policy/deopt bundles PASS.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK`, sim bounded `TIMEOUT` (90s).
+
 ## Iteration 1442 - February 17, 2026
 
 ### circt-sim: Enforce JIT Cache Policy Behavior

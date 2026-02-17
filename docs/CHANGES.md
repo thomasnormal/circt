@@ -133,6 +133,11 @@
     - `test/Tools/circt-sim/jit-cache-policy-none.mlir`
     - `test/Tools/circt-sim/jit-cache-policy-env-none.mlir`
     - `test/Tools/circt-sim/jit-cache-policy-invalid-env.mlir`
+  - added per-process deopt reason telemetry to JIT reports:
+    - JSON now includes `jit.jit_deopt_processes` with
+      `{process_id, reason}` entries for first observed deopt per process.
+  - added regression:
+    - `test/Tools/circt-sim/jit-report-deopt-processes.mlir`
 
 ### Why It Matters
 - Establishes deterministic artifact generation and machine-readable telemetry

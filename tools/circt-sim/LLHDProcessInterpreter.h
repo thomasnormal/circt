@@ -572,6 +572,12 @@ public:
     return uvmJitPromotionBudget;
   }
 
+  /// Per-process first deopt reason observed by compile-mode dispatch.
+  const llvm::DenseMap<uint64_t, std::string> &getJitDeoptReasonByProcess()
+      const {
+    return jitDeoptReasonByProcess;
+  }
+
   friend class LLHDProcessInterpreterTest;
   friend struct ScopedInstanceContext;
   friend struct ScopedInputValueMap;
@@ -1367,6 +1373,9 @@ private:
 
   /// Optional JIT manager used for thunk dispatch/deopt accounting.
   JITCompileManager *jitCompileManager = nullptr;
+
+  /// First observed JIT deopt reason for each process ID.
+  llvm::DenseMap<uint64_t, std::string> jitDeoptReasonByProcess;
 
   /// Per-process metadata for periodic clock toggle native thunks.
   llvm::DenseMap<ProcessId, PeriodicToggleClockThunkSpec>
