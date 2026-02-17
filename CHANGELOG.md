@@ -1,5 +1,120 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1429 - February 17, 2026
+
+### circt-sim: WS5 Memory Attribution (Largest Process/Function at Peak)
+
+1. Extended `MemoryStateSnapshot` attribution fields:
+   - `largest_process`
+   - `largest_process_bytes`
+2. Memory-state collection now computes the process with the largest
+   process-local memory footprint at each snapshot.
+3. Peak sampling now captures the function context for the largest process at
+   the global peak sample:
+   - `largest_process_func`
+4. Summary lines now expose attribution fields:
+   - `[circt-sim] Memory state: ... largest_process=... largest_process_bytes=...`
+   - `[circt-sim] Memory peak: ... largest_process=... largest_process_bytes=... largest_process_func=...`
+5. Regression updates:
+   - `test/Tools/circt-sim/profile-summary-memory-state.mlir`
+   - `test/Tools/circt-sim/profile-summary-memory-peak.mlir`
+6. Validation:
+   - rebuilt/relinked `build-test/bin/circt-sim` with updated
+     `LLHDProcessInterpreter` dependents.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/profile-summary-memory-peak.mlir build-test/test/Tools/circt-sim/profile-summary-memory-state.mlir build-test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir build-test/test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir` PASS (`4/4`)
+   - bounded AVIP sanity:
+     `AVIPS=jtag,spi SEEDS=1 SIM_TIMEOUT=3` compile `OK`, bounded timeout as
+     expected (`/tmp/avip-circt-sim-20260217-081030/matrix.tsv`).
+
+## Iteration 1428 - February 17, 2026
+
+### circt-sim: WS5 Memory Peak Sampling Telemetry
+
+1. Added reusable memory snapshot collection in
+   `LLHDProcessInterpreter`:
+   - `collectMemoryStateSnapshot()`
+   - shared by exit-summary reporting and runtime peak sampling.
+2. Added periodic memory sampling in execution hot loops:
+   - wired through `maybeSampleMemoryState(totalSteps)` from:
+     - top-level `executeStep(...)`
+     - `interpretFuncBody(...)`
+     - `interpretLLVMFuncBody(...)`
+3. Added sampled peak telemetry line under summary mode:
+   - enabled when `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1`
+   - sample interval controlled by
+     `CIRCT_SIM_PROFILE_MEMORY_SAMPLE_INTERVAL`
+   - default interval is `65536` steps in summary mode.
+   - summary now emits:
+     `[circt-sim] Memory peak: samples=... sample_interval_steps=...`
+     with peak step/bytes and key memory dimensions.
+4. Added focused regression:
+   - `test/Tools/circt-sim/profile-summary-memory-peak.mlir`
+5. Validation:
+   - `ninja -C build-test tools/circt-sim/CMakeFiles/circt-sim.dir/LLHDProcessInterpreter.cpp.o -k 0` PASS
+   - manual `bin/circt-sim` relink from `ninja -t commands` PASS
+     (full `ninja -C build-test circt-sim -k 0` currently blocked by an
+     unrelated existing compile error in `lib/Dialect/Sim/VPIRuntime.cpp`:
+     `routines[i]();`).
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/profile-summary-memory-peak.mlir build-test/test/Tools/circt-sim/profile-summary-memory-state.mlir build-test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir build-test/test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir` PASS (`4/4`)
+   - bounded AVIP sanity:
+     `AVIPS=jtag,spi SEEDS=1 SIM_TIMEOUT=3` compile `OK`, bounded timeout as
+     expected (`/tmp/avip-circt-sim-20260217-075943/matrix.tsv`).
+
+## Iteration 1427 - February 17, 2026
+
+### circt-sim: Memory State Summary Telemetry (WS5)
+
+1. Added profile-summary memory telemetry in `dumpProcessStates(...)` gated by
+   `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1`.
+2. New memory summary line reports key runtime footprint dimensions:
+   - global memory blocks/bytes
+   - malloc blocks/bytes
+   - native memory blocks/bytes
+   - process-local memory blocks/bytes
+   - dynamic string entries/bytes
+   - config_db entry count/bytes
+   - analysis connection ports/edges
+   - sequencer FIFO maps/items
+3. Added focused regression:
+   - `test/Tools/circt-sim/profile-summary-memory-state.mlir`
+4. Validation:
+   - `ninja -C build-test circt-sim -k 0` PASS
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/profile-summary-memory-state.mlir build-test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir build-test/test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir` PASS
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='profile-summary-memory-state|finish-item-blocks-until-item-done|seq-pull-port-reconnect-cache-invalidation|uvm-sequencer-queue-cache-cap'` PASS
+   - bounded AVIP sanity:
+     `AVIPS=jtag,spi SEEDS=1 SIM_TIMEOUT=3` compile `OK`, bounded timeout as
+     expected (`/tmp/avip-circt-sim-20260217-074917/matrix.tsv`).
+
+## Iteration 1426 - February 17, 2026
+
+### circt-sim: Sequencer Retention Hardening + Queue-Cache Bounds
+
+1. Added bounded policy for pull-port sequencer queue cache:
+   - `CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_MAX_ENTRIES`
+   - `CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_EVICT_ON_CAP`
+2. Added sequencer queue-cache telemetry in profile summary:
+   - `hits`, `misses`, `installs`, `entries`, `capacity_skips`, `evictions`
+   - explicit limits line with `max_entries` + `evict_on_cap`.
+3. Hardened sequencer item ownership retention:
+   - ownership map (`item -> sequencer`) now reclaims entries when
+     `finish_item` consumes them (instead of retaining historical items).
+   - stale waiter cleanup on process finalization now also drops residual
+     `finish_item`/`item_done` ownership state.
+4. Added sequencer native-state telemetry:
+   - `item_map_live`, `item_map_peak`, `item_map_stores`, `item_map_erases`
+   - `fifo_maps`, `fifo_items`, `waiters`, `done_pending`, `last_dequeued`.
+5. Added/updated regressions:
+   - added `test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir`
+     (cap + evict-on-cap behavior).
+   - updated `test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir`
+     to check ownership-map reclamation under summary mode.
+6. Validation:
+   - `ninja -C build-test circt-sim -k 0` PASS
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir build-test/test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir` PASS
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='finish-item-blocks-until-item-done|seq-pull-port-reconnect-cache-invalidation|uvm-sequencer-queue-cache-cap'` PASS
+   - bounded AVIP smoke: `AVIPS=jtag SEEDS=1 SIM_TIMEOUT=3` compile `OK`,
+     bounded timeout as expected (`/tmp/avip-circt-sim-20260217-074342/matrix.tsv`).
+
 ## Iteration 1425 - February 16, 2026
 
 ### circt-sim: Report Getter Fast Paths + UVM Fast-Path File Split

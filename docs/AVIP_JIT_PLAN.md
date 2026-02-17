@@ -208,3 +208,47 @@ Gate: default-on recommendation with rollback switch still available.
 1. Update `avip_engineering_log.md` after each major benchmark pass.
 2. Update `CHANGELOG.md` for significant runtime behavior/perf changes.
 3. Track milestone status in this document with dates and commit IDs.
+
+## 11. Progress Notes (2026-02-17)
+
+1. WS5 memory hardening (sequencer retention) advanced:
+   - pull-port sequencer queue cache now has bounded-entry policy with optional
+     eviction (`CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_MAX_ENTRIES`,
+     `CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_EVICT_ON_CAP`) and summary telemetry.
+   - sequence item ownership mapping (`item -> sequencer`) is now consumed when
+     `finish_item` enqueues, reducing historical retention in long runs.
+   - sequencer native-state telemetry now reports ownership-map
+     stores/erases/peak/live and FIFO/live waiter dimensions.
+2. Regression coverage added for both cap policy and ownership-map reclamation:
+   - `test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir`
+   - `test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir`
+3. WS5 observability expanded with profile-summary memory telemetry:
+   - summary now reports global/malloc/native/process memory footprint, dynamic
+     string + config_db sizes, analysis connection graph size, and sequencer
+     FIFO dimensions.
+   - covered by `test/Tools/circt-sim/profile-summary-memory-state.mlir`.
+4. WS5 now includes sampled runtime peak memory telemetry:
+   - added periodic sampling hook in execution hot loops
+     (`executeStep`, `interpretFuncBody`, `interpretLLVMFuncBody`) with shared
+     snapshot helper.
+   - sampling is controlled by
+     `CIRCT_SIM_PROFILE_MEMORY_SAMPLE_INTERVAL` (default `65536` in
+     summary mode).
+   - summary now emits:
+     `[circt-sim] Memory peak: samples=... sample_interval_steps=...`.
+   - covered by `test/Tools/circt-sim/profile-summary-memory-peak.mlir`.
+5. Current WS5 limitation:
+   - peak visibility is global-only; we still need low-overhead attribution
+     buckets (by process/function class) for deterministic AHB OOM root-cause
+     prioritization.
+6. WS5 attribution step landed for largest-process peak visibility:
+   - memory snapshots now record `largest_process` and
+     `largest_process_bytes`.
+   - peak summary now reports `largest_process_func` for the largest process
+     at the global memory peak sample.
+   - covered by:
+     - `test/Tools/circt-sim/profile-summary-memory-state.mlir`
+     - `test/Tools/circt-sim/profile-summary-memory-peak.mlir`
+7. Remaining WS5 gap after this pass:
+   - attribution is single-winner only; we still need top-N process buckets and
+     growth-delta attribution categories for robust AHB closure triage.

@@ -1282,6 +1282,41 @@ private:
   uint64_t uvmJitHotThreshold = 0;
   int64_t uvmJitPromotionBudget = 0;
   bool uvmJitTracePromotions = false;
+  bool profileSummaryAtExitEnabled = false;
+  uint64_t memorySampleIntervalSteps = 0;
+  uint64_t memorySampleNextStep = 0;
+  uint64_t memorySampleCount = 0;
+  uint64_t memorySamplePeakStep = 0;
+  uint64_t memorySamplePeakTotalBytes = 0;
+
+  struct MemoryStateSnapshot {
+    uint64_t globalBlocks = 0;
+    uint64_t globalBytes = 0;
+    uint64_t mallocBlocks = 0;
+    uint64_t mallocBytes = 0;
+    uint64_t nativeBlocks = 0;
+    uint64_t nativeBytes = 0;
+    uint64_t processBlocks = 0;
+    uint64_t processBytes = 0;
+    uint64_t dynamicStrings = 0;
+    uint64_t dynamicStringBytes = 0;
+    uint64_t configDbEntries = 0;
+    uint64_t configDbBytes = 0;
+    uint64_t analysisConnPorts = 0;
+    uint64_t analysisConnEdges = 0;
+    uint64_t seqFifoMaps = 0;
+    uint64_t seqFifoItems = 0;
+    ProcessId largestProcessId = InvalidProcessId;
+    uint64_t largestProcessBytes = 0;
+
+    uint64_t totalTrackedBytes() const {
+      return globalBytes + mallocBytes + nativeBytes + processBytes +
+             dynamicStringBytes + configDbBytes;
+    }
+  };
+
+  MemoryStateSnapshot memoryPeakSnapshot;
+  std::string memoryPeakLargestProcessFunc;
 
   bool profilingEnabled = false;
 
@@ -1304,6 +1339,27 @@ private:
 
   /// Track a UVM fast-path hit and evaluate hotness-gated promotion hooks.
   void noteUvmFastPathActionHit(llvm::StringRef actionKey);
+
+  /// Look up sequencer queue cache entry for a pull-port address.
+  bool lookupUvmSequencerQueueCache(uint64_t portAddr, uint64_t &queueAddr);
+
+  /// Insert or update sequencer queue cache entry for a pull-port address.
+  void cacheUvmSequencerQueueAddress(uint64_t portAddr, uint64_t queueAddr);
+
+  /// Invalidate sequencer queue cache entry for a pull-port address.
+  void invalidateUvmSequencerQueueCache(uint64_t portAddr);
+
+  /// Record ownership mapping for sequence item -> sequencer address.
+  void recordUvmSequencerItemOwner(uint64_t itemAddr, uint64_t sqrAddr);
+
+  /// Consume ownership mapping for sequence item and return sequencer address.
+  uint64_t takeUvmSequencerItemOwner(uint64_t itemAddr);
+
+  /// Build a point-in-time snapshot of runtime memory/state dimensions.
+  MemoryStateSnapshot collectMemoryStateSnapshot() const;
+
+  /// Periodically sample memory-state dimensions and update high-water marks.
+  void maybeSampleMemoryState(uint64_t totalSteps);
 
   /// Cache for external functions that are NOT intercepted: when we've already
   /// determined that an external function has no matching __moore_* handler,
@@ -1395,6 +1451,9 @@ private:
   /// Set during start_item() interception so finish_item() knows which
   /// sequencer FIFO to push the item into.
   llvm::DenseMap<uint64_t, uint64_t> itemToSequencer;
+  uint64_t uvmSeqItemOwnerStores = 0;
+  uint64_t uvmSeqItemOwnerErases = 0;
+  uint64_t uvmSeqItemOwnerPeak = 0;
 
   /// Maps item address to the process waiting for item_done.
   /// Set during finish_item() when the sequence suspends waiting for the
@@ -1413,6 +1472,13 @@ private:
   /// This avoids repeating expensive port->export->component resolution on
   /// every get/get_next_item call.
   llvm::DenseMap<uint64_t, uint64_t> portToSequencerQueue;
+  uint64_t uvmSeqQueueCacheMaxEntries = 0;
+  bool uvmSeqQueueCacheEvictOnCap = false;
+  uint64_t uvmSeqQueueCacheHits = 0;
+  uint64_t uvmSeqQueueCacheMisses = 0;
+  uint64_t uvmSeqQueueCacheInstalls = 0;
+  uint64_t uvmSeqQueueCacheCapacitySkips = 0;
+  uint64_t uvmSeqQueueCacheEvictions = 0;
 
   /// Tracks valid associative array base addresses returned by __moore_assoc_create.
   /// Used to distinguish properly-initialized arrays from uninitialized class members.
