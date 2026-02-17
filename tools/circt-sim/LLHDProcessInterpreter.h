@@ -24,6 +24,7 @@
 #include "circt/Dialect/Sim/EventQueue.h"
 #include "circt/Dialect/Sim/ProcessScheduler.h"
 #include "circt/Dialect/Sim/SimOps.h"
+#include "circt/Dialect/Verif/VerifOps.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
@@ -481,6 +482,9 @@ struct DiscoveredOps {
   /// seq.firreg operations found in the module.
   llvm::SmallVector<seq::FirRegOp, 32> firRegs;
 
+  /// verif.clocked_assert operations found at module level.
+  llvm::SmallVector<verif::ClockedAssertOp, 4> clockedAsserts;
+
   /// Clear all collected operations.
   void clear() {
     instances.clear();
@@ -491,6 +495,7 @@ struct DiscoveredOps {
     initials.clear();
     moduleDrives.clear();
     firRegs.clear();
+    clockedAsserts.clear();
   }
 };
 
@@ -557,6 +562,9 @@ public:
   /// Forward-propagate a parent interface signal change to all child copies.
   void forwardPropagateOnSignalChange(SignalId signal,
                                        const SignalValue &value);
+
+  /// Re-evaluate interface tri-state rules for this signal trigger.
+  void reevaluateInterfaceTriState(SignalId signal);
 
   /// Re-evaluate module drives that depend on the given signal.
   /// Called from the signal-change callback so that combinational logic
@@ -685,6 +693,11 @@ public:
     return shouldAbortCallback && shouldAbortCallback();
   }
 
+  /// Get the number of clocked assertion failures observed during simulation.
+  size_t getClockedAssertionFailures() const {
+    return clockedAssertionFailures;
+  }
+
   /// Get the bit width of a type. Made public for use by helper functions.
   /// Uses a cache for composite types (struct/array) to avoid repeated recursion.
   static unsigned getTypeWidth(mlir::Type type);
@@ -767,6 +780,15 @@ private:
   /// Execute a single seq.firreg register update.
   void executeFirReg(seq::FirRegOp regOp, InstanceId instanceId);
 
+  /// Register verif.clocked_assert operations as reactive processes.
+  void registerClockedAssertions(const DiscoveredOps &ops,
+                                 InstanceId instanceId,
+                                 const InstanceInputMapping &inputMap);
+
+  /// Execute a single clocked assertion check (called on clock edge).
+  void executeClockedAssertion(verif::ClockedAssertOp assertOp,
+                               InstanceId instanceId);
+
   /// Resolve a signal ID from an arbitrary value.
   SignalId resolveSignalId(mlir::Value value) const;
 
@@ -816,8 +838,12 @@ private:
   InterpretedValue evaluateContinuousValueImpl(mlir::Value value);
 
   /// Evaluate an llhd.combinational op and return its yielded values.
+  /// When \p traceThrough is true, probes inside the body use
+  /// combSignalDriveMap to trace through combinational expressions rather
+  /// than reading potentially stale scheduler signal values.
   bool evaluateCombinationalOp(llhd::CombinationalOp combOp,
-                               llvm::SmallVectorImpl<InterpretedValue> &results);
+                               llvm::SmallVectorImpl<InterpretedValue> &results,
+                               bool traceThrough = false);
 
   //===--------------------------------------------------------------------===//
   // Process Execution
@@ -865,9 +891,28 @@ private:
   bool isSingleBlockTerminatingNativeThunkCandidate(
       const ProcessExecutionState &state) const;
 
+  /// Return true when the process executes a forward-only multiblock body
+  /// where each block has safe preludes and terminates with either
+  /// `cf.br`/`cf.cond_br` or `llhd.halt`/`sim.fork.terminator`.
+  bool isMultiBlockTerminatingNativeThunkCandidate(
+      const ProcessExecutionState &state) const;
+
   /// Return true when the process matches one-block combinational
   /// `... -> llhd.yield` execution that can be thunk-dispatched.
   bool isCombinationalNativeThunkCandidate(
+      const ProcessExecutionState &state) const;
+
+  /// Return true when the process matches a resumable self-looping wait body:
+  /// optional entry `cf.br` into a loop block with safe preludes ending in
+  /// `llhd.wait` whose destination is the same loop block.
+  bool isResumableWaitSelfLoopNativeThunkCandidate(
+      const ProcessExecutionState &state) const;
+
+  /// Return true when the process/fork region is a resumable multiblock wait
+  /// state machine: all terminators are branch/cond_br/wait/(optional)
+  /// terminal halt, with at least one suspend source (`llhd.wait`,
+  /// `__moore_wait_condition`, or `__moore_delay`).
+  bool isResumableMultiblockWaitNativeThunkCandidate(
       const ProcessExecutionState &state) const;
 
   /// Return true when the process matches
@@ -883,7 +928,19 @@ private:
       ProcessId procId, ProcessExecutionState &state,
       ProcessThunkExecutionState &thunkState);
 
+  bool executeResumableWaitSelfLoopNativeThunk(
+      ProcessId procId, ProcessExecutionState &state,
+      ProcessThunkExecutionState &thunkState);
+
+  bool executeResumableMultiblockWaitNativeThunk(
+      ProcessId procId, ProcessExecutionState &state,
+      ProcessThunkExecutionState &thunkState);
+
   bool executeSingleBlockTerminatingNativeThunk(
+      ProcessId procId, ProcessExecutionState &state,
+      ProcessThunkExecutionState &thunkState);
+
+  bool executeMultiBlockTerminatingNativeThunk(
       ProcessId procId, ProcessExecutionState &state,
       ProcessThunkExecutionState &thunkState);
 
@@ -1013,6 +1070,8 @@ private:
   /// Register a process as waiting for an objection handle to reach zero.
   void enqueueObjectionZeroWaiter(int64_t handle, ProcessId procId,
                                   mlir::Operation *retryOp);
+  /// Remove a process from any objection-zero wait list.
+  void removeObjectionZeroWaiter(ProcessId procId);
   /// Wake zero-waiters if the objection count has reached zero.
   void wakeObjectionZeroWaitersIfReady(int64_t handle);
 
@@ -1142,6 +1201,10 @@ private:
   mlir::LogicalResult interpretLLVMCall(ProcessId procId,
                                          mlir::LLVM::CallOp callOp);
 
+  /// Interpret the runtime helper for SystemVerilog wait(condition).
+  mlir::LogicalResult interpretMooreWaitConditionCall(
+      ProcessId procId, mlir::LLVM::CallOp callOp);
+
   /// Intercept a DPI function call (func.func with no body).
   /// Returns success if the function was intercepted, failure otherwise.
   mlir::LogicalResult interceptDPIFunc(ProcessId procId,
@@ -1198,6 +1261,17 @@ private:
   bool tryReadStringKey(ProcessId procId, uint64_t strPtrVal, int64_t strLen,
                         std::string &out);
 
+  /// Decode a Moore packed string value ({ptr, len}) to std::string.
+  std::string readMooreStringStruct(ProcessId procId,
+                                    InterpretedValue packedValue);
+  std::string readMooreStringStruct(ProcessId procId, mlir::Value operand);
+
+  /// Intercept config_db implementation methods invoked via call_indirect.
+  bool tryInterceptConfigDbCallIndirect(
+      ProcessId procId, mlir::func::CallIndirectOp callIndirectOp,
+      llvm::StringRef calleeName,
+      llvm::ArrayRef<InterpretedValue> args);
+
   //===--------------------------------------------------------------------===//
   // Value Management
   //===--------------------------------------------------------------------===//
@@ -1251,6 +1325,10 @@ private:
 
   /// Maximum number of ops a process may execute before forcing a stop.
   size_t maxProcessSteps = 0;
+
+  /// Optional per-function operation cap (0 = unlimited).
+  /// Guarded by CIRCT_SIM_MAX_FUNC_OPS for debugging pathological loops.
+  size_t maxFunctionOps = 0;
 
   /// Name of the top module (for hierarchical path construction).
   std::string moduleName;
@@ -1306,6 +1384,14 @@ private:
 
   struct FirRegState {
     SignalId signalId = 0;
+    InterpretedValue prevClock;
+    bool hasPrevClock = false;
+    InstanceId instanceId = 0;
+    InstanceInputMapping inputMap;
+  };
+
+  /// State for a clocked assertion checker (edge detection).
+  struct ClockedAssertionState {
     InterpretedValue prevClock;
     bool hasPrevClock = false;
     InstanceId instanceId = 0;
@@ -1419,6 +1505,19 @@ private:
   };
   llvm::DenseMap<SignalId, CombSignalDriveInfo> combSignalDriveMap;
 
+  /// Signals that have multiple drives and should NOT be in combSignalDriveMap.
+  /// For read-modify-write patterns (e.g., Brent-Kung adder bit-by-bit drives),
+  /// the combSignalDriveMap shortcut would only record the last drive.
+  llvm::DenseSet<SignalId> multiDrivenSignals;
+
+  /// Signals that require distinct continuous-assignment driver IDs and
+  /// strength-based multi-driver resolution.
+  ///
+  /// We keep the existing grouped last-write-wins path for read-modify-write
+  /// combinational patterns, but nets with explicit non-default strengths
+  /// (e.g. pullups/open-drain) need true multi-driver resolution.
+  llvm::DenseSet<SignalId> distinctContinuousDriverSignals;
+
   /// Memory event waiter for polling-based event detection.
   /// Used for UVM events stored as boolean fields in class instances where
   /// no signal is available to wait on.
@@ -1450,6 +1549,12 @@ private:
 
   /// Registered seq.firreg state keyed by op.
   llvm::DenseMap<mlir::Operation *, FirRegState> firRegStates;
+
+  /// Registered clocked assertion state keyed by op.
+  llvm::DenseMap<mlir::Operation *, ClockedAssertionState> clockedAssertionStates;
+
+  /// Counter of clocked assertion failures during simulation.
+  size_t clockedAssertionFailures = 0;
 
   /// Callback for sim.terminate operation.
   std::function<void(bool, bool)> terminateCallback;
@@ -1619,6 +1724,14 @@ private:
   /// Read once at construction to avoid std::getenv on every port operation.
   bool traceAnalysisEnabled = false;
 
+  /// Per-port cap for verbose sequencer queue resolution diagnostics.
+  uint64_t traceSeqResolveLimit = 0;
+  llvm::DenseMap<uint64_t, uint32_t> traceSeqResolvePrints;
+
+  /// Cached env flag for config_db tracing (CIRCT_SIM_TRACE_CONFIG_DB).
+  /// When enabled, prints set/get keys and hit/miss outcomes.
+  bool traceConfigDbEnabled = false;
+
   /// Cached env flag for fork/join diagnostics (CIRCT_SIM_TRACE_FORK_JOIN).
   bool traceForkJoinEnabled = false;
 
@@ -1634,11 +1747,35 @@ private:
   /// Invalidate sequencer queue cache entry for a pull-port address.
   void invalidateUvmSequencerQueueCache(uint64_t portAddr);
 
+  /// Canonicalize an object address to its allocation-owner base address.
+  /// This is a structural normalization (no dynamic function calls).
+  uint64_t canonicalizeUvmObjectAddress(ProcessId procId, uint64_t addr);
+
+  /// Canonicalize a queue hint to the owning sequencer address.
+  /// Returns true when the resolved address is strong enough to cache.
+  bool canonicalizeUvmSequencerQueueAddress(ProcessId procId,
+                                            uint64_t &queueAddr,
+                                            mlir::Operation *callSite);
+
+  /// Resolve the queue address for a pull port through cache and connection
+  /// graph traversal. Returns true when the resolved hint should be cached.
+  bool resolveUvmSequencerQueueAddress(ProcessId procId, uint64_t portAddr,
+                                       mlir::Operation *callSite,
+                                       uint64_t &queueAddr);
+
   /// Record ownership mapping for sequence item -> sequencer address.
   void recordUvmSequencerItemOwner(uint64_t itemAddr, uint64_t sqrAddr);
 
   /// Consume ownership mapping for sequence item and return sequencer address.
   uint64_t takeUvmSequencerItemOwner(uint64_t itemAddr);
+
+  /// Track a dequeued sequence item by both pull-port and sequencer aliases.
+  void recordUvmDequeuedItem(uint64_t portAddr, uint64_t queueAddr,
+                             uint64_t itemAddr);
+
+  /// Resolve and consume the last dequeued item for an item_done caller.
+  uint64_t takeUvmDequeuedItemForDone(ProcessId procId, uint64_t doneAddr,
+                                      mlir::Operation *callSite);
 
   /// Build a point-in-time snapshot of runtime memory/state dimensions.
   MemoryStateSnapshot collectMemoryStateSnapshot() const;
@@ -1691,6 +1828,13 @@ private:
   /// Used during sensitivity derivation: when a process probes an interface
   /// pointer signal, its field shadow signals are added to the sensitivity.
   llvm::DenseMap<SignalId, llvm::SmallVector<SignalId, 4>> interfacePtrToFieldSignals;
+
+  struct DeferredInterfaceSensitivityExpansion {
+    ProcessId procId = InvalidProcessId;
+    llvm::SmallVector<SignalId, 4> sourceSignals;
+  };
+  llvm::SmallVector<DeferredInterfaceSensitivityExpansion, 32>
+      deferredInterfaceSensitivityExpansions;
 
   /// Interface field signal propagation links. When a child BFM interface
   /// field is initialized by copying from a parent interface field, this maps
@@ -1830,6 +1974,7 @@ private:
   };
   llvm::DenseMap<int64_t, llvm::SmallVector<ObjectionWaiter, 4>>
       objectionZeroWaiters;
+  llvm::DenseMap<ProcessId, int64_t> objectionWaitHandleByProc;
 
   /// Per-process mapping of execute_phase's task phase address.
   /// When execute_phase is intercepted for a task phase, the phase address
@@ -1931,10 +2076,22 @@ private:
   /// the hw.module body, accessible by all processes in the module.
   llvm::DenseMap<mlir::Value, MemoryBlock> moduleLevelAllocas;
 
+  /// Stable base address for each module-level alloca Value.
+  /// Kept separate from moduleInitValueMap so address-based lookups do not
+  /// depend on transient SSA value-map merges.
+  llvm::DenseMap<mlir::Value, uint64_t> moduleLevelAllocaBaseAddr;
+
   /// Value map for module-level initialization values.
   /// This stores values computed during executeModuleLevelLLVMOps() so
   /// processes can access values defined at module level.
   llvm::DenseMap<mlir::Value, InterpretedValue> moduleInitValueMap;
+
+  /// Per-instance module-level initialization values for child modules.
+  /// Child modules can be instantiated multiple times, and their module-level
+  /// SSA values are instance-specific. Storing them by instance avoids
+  /// collisions in moduleInitValueMap (which is shared across top modules).
+  llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Value, InterpretedValue>>
+      instanceModuleInitValueMaps;
 
   /// Map from simulated addresses to function names (for vtable entries).
   /// When a vtable entry is loaded, we store the function name it maps to.
@@ -1993,9 +2150,23 @@ private:
   /// creates per-field shadow signals based on GEP usage patterns.
   void createInterfaceFieldShadowSignals();
 
+  /// Queue a process for post-init interface-pointer sensitivity expansion.
+  /// Continuous-assignment processes are registered before interface shadow
+  /// signals exist, so they may only be sensitive to pointer-holding signals.
+  /// After createInterfaceFieldShadowSignals(), this queue is expanded to
+  /// include field-level sensitivities.
+  void queueDeferredInterfaceSensitivityExpansion(
+      ProcessId procId, llvm::ArrayRef<SignalId> sourceSignals);
+
+  /// Expand deferred pointer sensitivities to interface field sensitivities.
+  void expandDeferredInterfaceSensitivityExpansions();
+
   /// Find a global or malloc memory block by address using the range index.
   /// Returns the MemoryBlock pointer and sets offset, or nullptr if not found.
   MemoryBlock *findBlockByAddress(uint64_t addr, uint64_t &offset);
+
+  /// Resolve the base address for a module-level alloca value.
+  uint64_t getModuleLevelAllocaBaseAddress(mlir::Value value) const;
 
   //===--------------------------------------------------------------------===//
   // UVM Root Re-entrancy Support

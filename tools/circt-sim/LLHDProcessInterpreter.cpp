@@ -44,6 +44,7 @@ unsigned g_lastFuncProcId = 0;
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cerrno>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -62,6 +63,8 @@ static size_t countRegionOps(mlir::Region &region);
 static bool isProcessCacheableBody(Operation *op);
 static Value traceBlockArgThroughPred(Block *pred, Block *block,
                                       unsigned argIdx);
+static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op);
+static bool isBranchTerminatorInRegion(Operation &terminator, Region &bodyRegion);
 static bool isPureResumableWaitPreludeOp(Operation *op) {
   if (!op || op->getNumResults() == 0)
     return false;
@@ -78,11 +81,146 @@ static bool isPureResumableWaitPreludeOp(Operation *op) {
   return mlir::isMemoryEffectFree(op);
 }
 
+static bool isConfigDbSetWrapperName(StringRef calleeName) {
+  if (!calleeName.starts_with("set_") || calleeName.size() <= 4)
+    return false;
+  for (char c : calleeName.drop_front(4))
+    if (!std::isdigit(static_cast<unsigned char>(c)))
+      return false;
+  return true;
+}
+
+static bool isConfigDbSetWrapperCallPrelude(mlir::func::CallOp callOp) {
+  if (callOp.getNumResults() != 0 || callOp.getNumOperands() != 4)
+    return false;
+  if (!isa<LLVM::LLVMPointerType>(callOp.getOperand(0).getType()) ||
+      !isa<LLVM::LLVMPointerType>(callOp.getOperand(3).getType()))
+    return false;
+  return isConfigDbSetWrapperName(callOp.getCallee());
+}
+
+static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp) {
+  StringRef calleeName = callOp.getCallee();
+  if (calleeName == "m_execute_scheduled_forks" ||
+      calleeName == "m_process_guard" ||
+      calleeName == "uvm_pkg::run_test" ||
+      calleeName == "uvm_pkg::uvm_get_report_object" ||
+      calleeName == "uvm_pkg::uvm_root::find_all" ||
+      calleeName.ends_with("::get_report_action") ||
+      calleeName.ends_with("::get_report_verbosity_level") ||
+      calleeName.ends_with("::set_report_verbosity_level") ||
+      calleeName.ends_with("::uvm_get_report_object") ||
+      calleeName.ends_with("::m_process_guard") ||
+      calleeName == "get_global_hopper" ||
+      calleeName.ends_with("::get_global_hopper"))
+    return true;
+
+  if (isConfigDbSetWrapperCallPrelude(callOp))
+    return true;
+
+  return false;
+}
+
+static bool isMooreWaitConditionCall(LLVM::CallOp callOp) {
+  auto callee = callOp.getCallee();
+  return callee && *callee == "__moore_wait_condition";
+}
+
+static bool isMooreDelayCall(LLVM::CallOp callOp) {
+  auto callee = callOp.getCallee();
+  return callee && *callee == "__moore_delay";
+}
+
+static bool isSafeStructuredControlPreludeRegion(Region &region) {
+  if (region.empty())
+    return false;
+
+  for (Block &block : region) {
+    if (block.empty())
+      return false;
+    Operation &terminator = block.back();
+    if (!isa<mlir::scf::YieldOp, mlir::scf::ConditionOp>(terminator))
+      return false;
+    for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
+      if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
+        return false;
+    }
+  }
+  return true;
+}
+
+static bool isSafeStructuredControlPreludeOp(Operation *op) {
+  if (!op)
+    return false;
+  if (auto forOp = dyn_cast<mlir::scf::ForOp>(op))
+    return isSafeStructuredControlPreludeRegion(forOp.getRegion());
+  if (auto ifOp = dyn_cast<mlir::scf::IfOp>(op)) {
+    if (!isSafeStructuredControlPreludeRegion(ifOp.getThenRegion()))
+      return false;
+    if (!ifOp.getElseRegion().empty() &&
+        !isSafeStructuredControlPreludeRegion(ifOp.getElseRegion()))
+      return false;
+    return true;
+  }
+  if (auto whileOp = dyn_cast<mlir::scf::WhileOp>(op))
+    return isSafeStructuredControlPreludeRegion(whileOp.getBefore()) &&
+           isSafeStructuredControlPreludeRegion(whileOp.getAfter());
+  return false;
+}
+
+static bool isSafeJoinNoneForkPreludeRegion(Region &region) {
+  if (region.empty())
+    return false;
+  bool sawTerminator = false;
+  for (Block &block : region) {
+    if (block.empty())
+      return false;
+    Operation &terminator = block.back();
+    bool isTerminal = isa<sim::SimForkTerminatorOp>(terminator);
+    bool isBranch = isBranchTerminatorInRegion(terminator, region);
+    if (!isTerminal && !isBranch)
+      return false;
+    sawTerminator |= isTerminal;
+    for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
+      if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
+        return false;
+    }
+  }
+  return sawTerminator;
+}
+
+static bool isSafeJoinNoneForkPreludeOp(sim::SimForkOp forkOp) {
+  if (!forkOp.getJoinType().equals_insensitive("join_none"))
+    return false;
+  for (Region &branch : forkOp.getBranches()) {
+    if (!isSafeJoinNoneForkPreludeRegion(branch))
+      return false;
+  }
+  return true;
+}
+
+static bool hasMooreWaitConditionCall(Region &region) {
+  bool found = false;
+  region.walk([&](LLVM::CallOp callOp) {
+    if (isMooreWaitConditionCall(callOp))
+      found = true;
+  });
+  return found;
+}
+
 static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
   if (!op)
     return false;
   if (isa<sim::PrintFormattedProcOp>(op))
     return true;
+  if (isa<llhd::ProbeOp>(op))
+    return true;
+  if (auto forkOp = dyn_cast<sim::SimForkOp>(op))
+    return isSafeJoinNoneForkPreludeOp(forkOp);
+  if (isSafeStructuredControlPreludeOp(op))
+    return true;
+  if (auto callOp = dyn_cast<mlir::func::CallOp>(op))
+    return isInterceptedNonSuspendingFuncCallPrelude(callOp);
   if (isa<mlir::func::CallIndirectOp>(op))
     return true;
   if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
@@ -91,8 +229,18 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
       return false;
     llvm::StringRef calleeName = *callee;
     if (calleeName == "__moore_process_self" ||
-        calleeName == "__moore_packed_string_to_string")
+        calleeName == "__moore_packed_string_to_string" ||
+        calleeName == "__moore_string_cmp" ||
+        calleeName == "__moore_assoc_get_ref" ||
+        calleeName == "__moore_uvm_report_info" ||
+        calleeName == "__moore_queue_push_front" ||
+        calleeName == "__moore_queue_pop_front_ptr")
       return true;
+    if (calleeName == "__moore_wait_condition") {
+      Region *parentRegion = callOp->getBlock() ? callOp->getBlock()->getParent()
+                                                : nullptr;
+      return parentRegion && parentRegion->hasOneBlock();
+    }
     return false;
   }
   if (isa<LLVM::StoreOp>(op))
@@ -109,6 +257,42 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
           LLVM::CallOp, mlir::cf::BranchOp, mlir::cf::CondBranchOp>(op))
     return false;
   return mlir::isMemoryEffectFree(op);
+}
+
+static bool isSafeResumableMultiblockWaitPreludeOp(Operation *op) {
+  if (!op)
+    return false;
+  if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
+    // wait_condition and __moore_delay can suspend/resume; resumable
+    // multiblock thunks handle these state-machine paths explicitly.
+    if (isMooreWaitConditionCall(callOp) || isMooreDelayCall(callOp))
+      return true;
+  }
+  // Multiblock wait loops commonly drive signals between waits.
+  if (isa<llhd::DriveOp>(op))
+    return true;
+  return isSafeSingleBlockTerminatingPreludeOp(op);
+}
+
+static bool isBranchTerminatorInRegion(Operation &terminator, Region &bodyRegion) {
+  if (auto branchOp = dyn_cast<mlir::cf::BranchOp>(terminator)) {
+    if (!branchOp.getDest() || branchOp.getDest()->getParent() != &bodyRegion)
+      return false;
+    return branchOp.getDestOperands().size() ==
+           branchOp.getDest()->getNumArguments();
+  }
+  if (auto condBrOp = dyn_cast<mlir::cf::CondBranchOp>(terminator)) {
+    if (!condBrOp.getTrueDest() ||
+        condBrOp.getTrueDest()->getParent() != &bodyRegion ||
+        !condBrOp.getFalseDest() ||
+        condBrOp.getFalseDest()->getParent() != &bodyRegion)
+      return false;
+    return condBrOp.getTrueDestOperands().size() ==
+               condBrOp.getTrueDest()->getNumArguments() &&
+           condBrOp.getFalseDestOperands().size() ==
+               condBrOp.getFalseDest()->getNumArguments();
+  }
+  return false;
 }
 
 static Value stripCallIndirectCalleeCasts(Value value) {
@@ -1611,6 +1795,19 @@ MemoryBlock *LLHDProcessInterpreter::findBlockByAddress(uint64_t addr,
   return nullptr;
 }
 
+uint64_t
+LLHDProcessInterpreter::getModuleLevelAllocaBaseAddress(Value value) const {
+  auto baseIt = moduleLevelAllocaBaseAddr.find(value);
+  if (baseIt != moduleLevelAllocaBaseAddr.end())
+    return baseIt->second;
+
+  auto initIt = moduleInitValueMap.find(value);
+  if (initIt != moduleInitValueMap.end() && !initIt->second.isX())
+    return initIt->second.getUInt64();
+
+  return 0;
+}
+
 void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
   // For each llhd.sig whose initial value is a pointer (interface instance
   // pattern), scan GEP uses to discover the interface struct layout, then
@@ -1622,6 +1819,39 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
                           << instanceValueToSignal.size() << " childModuleCopyPairs="
                           << childModuleCopyPairs.size() << "\n");
 
+  // Resolve interface pointer addresses from the correct scope:
+  // 1) per-instance child-module init map, 2) global top-module init map,
+  // 3) current scheduler signal value.
+  auto resolveInterfacePtrAddr = [&](InstanceId instId, llhd::SignalOp sigOp,
+                                     SignalId sigId) -> uint64_t {
+    if (instId != 0) {
+      auto instIt = instanceModuleInitValueMaps.find(instId);
+      if (instIt != instanceModuleInitValueMaps.end()) {
+        auto valIt = instIt->second.find(sigOp.getInit());
+        if (valIt != instIt->second.end() && !valIt->second.isX()) {
+          uint64_t addr = valIt->second.getUInt64();
+          if (addr != 0)
+            return addr;
+        }
+      }
+    }
+
+    auto globalIt = moduleInitValueMap.find(sigOp.getInit());
+    if (globalIt != moduleInitValueMap.end() && !globalIt->second.isX()) {
+      uint64_t addr = globalIt->second.getUInt64();
+      if (addr != 0)
+        return addr;
+    }
+
+    const auto &sigVal = scheduler.getSignalValue(sigId);
+    if (!sigVal.isUnknown() && sigVal.getWidth() >= 64) {
+      uint64_t addr = sigVal.getValue();
+      if (addr != 0)
+        return addr;
+    }
+    return 0;
+  };
+
   for (auto &[sigValue, sigId] : valueToSignal) {
     auto sigOp = sigValue.getDefiningOp<llhd::SignalOp>();
     if (!sigOp)
@@ -1632,26 +1862,8 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
     if (!isa<LLVM::LLVMPointerType>(initType))
       continue;
 
-    // Get the malloc'd address from the moduleInitValueMap.
-    auto addrIt = moduleInitValueMap.find(sigOp.getInit());
-    if (addrIt == moduleInitValueMap.end() || addrIt->second.isX()) {
-      // Also try looking up via the signal's initial value in the scheduler.
-      // The init SSA value may not be in moduleInitValueMap if the sig was
-      // registered during registerSignals (before executeModuleLevelLLVMOps).
-      // In that case, try the scheduler's signal value directly.
-      const auto &sigVal = scheduler.getSignalValue(sigId);
-      if (!sigVal.isUnknown() && sigVal.getWidth() >= 64) {
-        uint64_t ptrAddr = sigVal.getValue();
-        if (ptrAddr != 0) {
-          // Found a non-zero pointer value in the signal. Use it.
-          moduleInitValueMap[sigOp.getInit()] = InterpretedValue(ptrAddr, 64);
-          addrIt = moduleInitValueMap.find(sigOp.getInit());
-        }
-      }
-      if (addrIt == moduleInitValueMap.end() || addrIt->second.isX())
-        continue;
-    }
-    uint64_t mallocAddr = addrIt->second.getUInt64();
+    uint64_t mallocAddr =
+        resolveInterfacePtrAddr(/*instId=*/0, sigOp, sigId);
     if (mallocAddr == 0)
       continue;
 
@@ -1799,22 +2011,7 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
       if (!isa<LLVM::LLVMPointerType>(initType))
         continue;
 
-      // Get the malloc'd address — try moduleInitValueMap first, then signal
-      auto addrIt = moduleInitValueMap.find(sigOp.getInit());
-      if (addrIt == moduleInitValueMap.end() || addrIt->second.isX()) {
-        const auto &sigVal = scheduler.getSignalValue(sigId);
-        if (!sigVal.isUnknown() && sigVal.getWidth() >= 64) {
-          uint64_t ptrAddr = sigVal.getValue();
-          if (ptrAddr != 0) {
-            moduleInitValueMap[sigOp.getInit()] =
-                InterpretedValue(ptrAddr, 64);
-            addrIt = moduleInitValueMap.find(sigOp.getInit());
-          }
-        }
-        if (addrIt == moduleInitValueMap.end() || addrIt->second.isX())
-          continue;
-      }
-      uint64_t mallocAddr = addrIt->second.getUInt64();
+      uint64_t mallocAddr = resolveInterfacePtrAddr(instId, sigOp, sigId);
       if (mallocAddr == 0)
         continue;
 
@@ -1919,6 +2116,11 @@ void LLHDProcessInterpreter::expandDeferredInterfaceSensitivityExpansions() {
       interfacePtrToFieldSignals.empty())
     return;
 
+  static bool traceIfaceSensitivity = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_IFACE_SENS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+
   for (const auto &pending : deferredInterfaceSensitivityExpansions) {
     Process *proc = scheduler.getProcess(pending.procId);
     if (!proc)
@@ -1933,15 +2135,32 @@ void LLHDProcessInterpreter::expandDeferredInterfaceSensitivityExpansions() {
     };
 
     bool added = false;
+    if (traceIfaceSensitivity) {
+      llvm::errs() << "[IFACE-SENS] proc=" << pending.procId << " name='"
+                   << proc->getName() << "' src=" << pending.sourceSignals.size()
+                   << "\n";
+    }
     for (SignalId srcSigId : pending.sourceSignals) {
       auto fieldIt = interfacePtrToFieldSignals.find(srcSigId);
       if (fieldIt == interfacePtrToFieldSignals.end())
         continue;
+      if (traceIfaceSensitivity) {
+        llvm::errs() << "[IFACE-SENS]   srcSig=" << srcSigId << " fields="
+                     << fieldIt->second.size() << "\n";
+      }
       for (SignalId fieldSigId : fieldIt->second) {
         if (fieldSigId == 0 || hasAnyEdgeSensitivity(fieldSigId))
           continue;
         scheduler.addSensitivity(pending.procId, fieldSigId, EdgeType::AnyEdge);
         added = true;
+        if (traceIfaceSensitivity) {
+          llvm::StringRef name = "<unknown>";
+          auto it = signalIdToName.find(fieldSigId);
+          if (it != signalIdToName.end())
+            name = it->second;
+          llvm::errs() << "[IFACE-SENS]     + fieldSig=" << fieldSigId
+                       << " (" << name << ")\n";
+        }
       }
     }
 
@@ -2657,6 +2876,15 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
       rule.srcSigId = srcIt->second;
       rule.destSigId = destIt->second;
       rule.condBitIndex = cand.condBitIndex;
+      // Tri-state condition values are extracted from LLVM struct field 0
+      // ("value"). For FourStateStruct encoding, value bits live in the
+      // upper half, so remap the bit index accordingly.
+      if (scheduler.getSignalEncoding(rule.condSigId) ==
+          SignalEncoding::FourStateStruct) {
+        unsigned condWidth = scheduler.getSignalValue(rule.condSigId).getWidth();
+        if (condWidth >= 2 && (condWidth % 2) == 0)
+          rule.condBitIndex += condWidth / 2;
+      }
       rule.elseValue = cand.elseValue;
 
       bool duplicate = false;
@@ -2778,6 +3006,12 @@ LogicalResult LLHDProcessInterpreter::finalizeInit() {
   {
     scheduler.setSignalChangeCallback(
         [this](SignalId sigId, const SignalValue &newVal) {
+          // Interface field updates often arrive through reactive signal
+          // propagation (scheduler.updateSignal) rather than direct
+          // llvm.store operations. Keep interface copy-links and synthetic
+          // tri-state rules reactive on every relevant signal change.
+          forwardPropagateOnSignalChange(sigId, newVal);
+          applyInterfaceTriStateRules(sigId);
           executeModuleDrivesForSignal(sigId);
         });
     LLVM_DEBUG(llvm::dbgs() << "Registered signal change callback for "
@@ -3039,20 +3273,6 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       LLVM_DEBUG(llvm::dbgs() << "    Registered child combinational '"
                               << combName << "' with ID " << procId << " and "
                               << seenSignals.size() << " sensitivities\n");
-      // DEBUG: dump child combinational sensitivities
-      {
-        static bool traceSens = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-        if (traceSens && combOp.getNumResults() == 2 &&
-            combOp.getResultTypes()[1].isInteger(1)) {
-          llvm::errs() << "[COMB-SENS] procId=" << procId
-                       << " instId=" << instanceId
-                       << " numResults=" << combOp.getNumResults()
-                       << " sigs:";
-          for (SignalId sid : seenSignals)
-            llvm::errs() << " " << sid << "(" << getSignalName(sid) << ")";
-          llvm::errs() << "\n";
-        }
-      }
 
       scheduler.scheduleProcess(procId, SchedulingRegion::Active);
     }
@@ -3116,6 +3336,31 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
         } else {
           ScopedInputValueMap scope(*this, update.inputMap);
           collectSignalIds(update.outputValue, sourceSignals);
+        }
+      }
+      {
+        static bool traceInstOut = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_INST_OUT");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
+        if (traceInstOut) {
+          auto nameIt = scheduler.getSignalNames().find(update.signalId);
+          llvm::StringRef sigName = nameIt != scheduler.getSignalNames().end()
+                                       ? llvm::StringRef(nameIt->second)
+                                       : llvm::StringRef("<unknown>");
+          llvm::errs() << "[INST-OUT] sig=" << update.signalId
+                       << " name=" << sigName
+                       << " srcSignals=" << sourceSignals.size()
+                       << " processIds=" << update.processIds.size();
+          for (SignalId s : sourceSignals) {
+            auto srcNameIt = scheduler.getSignalNames().find(s);
+            llvm::errs() << " src=" << s << "("
+                         << (srcNameIt != scheduler.getSignalNames().end()
+                                 ? llvm::StringRef(srcNameIt->second)
+                                 : llvm::StringRef("?"))
+                         << ")";
+          }
+          llvm::errs() << "\n";
         }
       }
       if (sourceSignals.empty() && update.processIds.empty()) {
@@ -5069,13 +5314,6 @@ void LLHDProcessInterpreter::collectSignalIds(
     visited.push_back(item);
 
     if (SignalId sigId = getSignalId(item.value)) {
-      static bool traceCollect = std::getenv("CIRCT_SIM_TRACE_COLLECT_SIGS") != nullptr;
-      if (traceCollect) {
-        llvm::StringRef sigName = getSignalName(sigId);
-        llvm::errs() << "[COLLECT-SIG] found sigId=" << sigId
-                     << " name=" << sigName
-                     << " instId=" << item.instanceId << "\n";
-      }
       signals.push_back(sigId);
       continue;
     }
@@ -5085,12 +5323,6 @@ void LLHDProcessInterpreter::collectSignalIds(
       auto instIt = instMapIt->second.find(item.value);
       if (instIt != instMapIt->second.end()) {
         const auto &info = instIt->second;
-        static bool traceCollect = std::getenv("CIRCT_SIM_TRACE_COLLECT_SIGS") != nullptr;
-        if (traceCollect) {
-          llvm::errs() << "[COLLECT-SIG] instanceOutputMap redirect instId="
-                       << item.instanceId << " -> childInstId="
-                       << info.instanceId << "\n";
-        }
         worklist.push_back({info.outputValue, &info.inputMap, info.instanceId});
         continue;
       }
@@ -5108,28 +5340,6 @@ void LLHDProcessInterpreter::collectSignalIds(
       Value mappedValue;
       InstanceId mappedInstance = item.instanceId;
       if (lookupInputMapping(arg, mappedValue, mappedInstance)) {
-        static bool traceCollect = std::getenv("CIRCT_SIM_TRACE_COLLECT_SIGS") != nullptr;
-        if (traceCollect) {
-          SignalId mappedSigId = getSignalIdInInstance(mappedValue, mappedInstance);
-          if (mappedSigId == 0) {
-            // Check global valueToSignal
-            auto vtsIt = valueToSignal.find(mappedValue);
-            mappedSigId = (vtsIt != valueToSignal.end()) ? vtsIt->second : 0;
-          }
-          llvm::errs() << "[COLLECT-SIG] BlockArg lookupInputMapping instId="
-                       << item.instanceId << " -> mappedInstId="
-                       << mappedInstance << " mappedSigId=" << mappedSigId;
-          if (mappedSigId != 0)
-            llvm::errs() << " name=" << getSignalName(mappedSigId);
-          // Check instanceOutputMap for the mapped value
-          auto ioIt = instanceOutputMap.find(mappedInstance);
-          if (ioIt != instanceOutputMap.end()) {
-            auto valIt = ioIt->second.find(mappedValue);
-            if (valIt != ioIt->second.end())
-              llvm::errs() << " [has instanceOutputMap entry]";
-          }
-          llvm::errs() << "\n";
-        }
         worklist.push_back({mappedValue, nullptr, mappedInstance});
         continue;
       }
@@ -5438,42 +5648,25 @@ void LLHDProcessInterpreter::executeFirReg(seq::FirRegOp regOp,
   if (!doUpdate)
     return;
 
-  // DEBUG: trace firreg updates for key signals (including a_ack probe)
   {
-    static bool traceFirreg = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-    if (traceFirreg && state.signalId == 103) {
-      // Read a_ack signal value directly for debugging
-      for (auto &[sid, sname] : scheduler.getSignalNames()) {
-        if (sname.find("a_ack") != std::string::npos && sname.find("u_reg_if") != std::string::npos) {
-          const SignalValue &ackSv = scheduler.getSignalValue(sid);
-          llvm::SmallString<32> ackStr;
-          if (!ackSv.isUnknown())
-            ackSv.getAPInt().toString(ackStr, 16, false);
-          llvm::errs() << "[FIRREG-DBG] outstanding_q input: a_ack(sig=" << sid << ")=";
-          if (ackSv.isUnknown()) llvm::errs() << "X";
-          else llvm::errs() << "0x" << ackStr;
-          llvm::errs() << " outstanding_new=";
-          if (newVal.isX()) llvm::errs() << "X";
-          else { llvm::SmallString<32> s; newVal.getAPInt().toString(s, 16, false); llvm::errs() << "0x" << s; }
-          llvm::errs() << " instId=" << activeInstanceId
-                       << " t=" << scheduler.getCurrentTime().realTime
-                       << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
-          break;
-        }
-      }
-    }
-    auto nameIt = scheduler.getSignalNames().find(state.signalId);
-    if (nameIt != scheduler.getSignalNames().end()) {
-      const auto &name = nameIt->second;
-      if (name.find("outstanding") != std::string::npos ||
-          name.find("a_ack") != std::string::npos) {
-        llvm::errs() << "[FIRREG] t=" << scheduler.getCurrentTime().realTime
-                     << " d=" << scheduler.getCurrentTime().deltaStep
-                     << " sig=" << state.signalId << " (" << name << ")"
-                     << " new=" << (newVal.isX() ? std::string("X") : [&]() { llvm::SmallString<32> s; newVal.getAPInt().toString(s, 16, false); return ("0x" + s).str(); }())
-                     << " posedge=" << clockPosedge
-                     << " resetActive=" << resetActive << "\n";
-      }
+    static bool traceFireg = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_FIRREG");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+    if (traceFireg) {
+      auto nameIt = scheduler.getSignalNames().find(state.signalId);
+      llvm::StringRef sigName = nameIt != scheduler.getSignalNames().end()
+                                    ? llvm::StringRef(nameIt->second)
+                                    : llvm::StringRef("<unknown>");
+      llvm::SmallString<64> bits;
+      if (newVal.isX()) bits = "X";
+      else newVal.getAPInt().toString(bits, 16, false);
+      llvm::errs() << "[FIRREG] sig=" << state.signalId
+                   << " name=" << sigName
+                   << " val=0x" << bits
+                   << " posedge=" << clockPosedge
+                   << " t=" << scheduler.getCurrentTime().realTime
+                   << "\n";
     }
   }
 
@@ -5621,6 +5814,30 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
   }
   InterpretedValue driveVal = evaluateContinuousValue(driveOp.getValue());
 
+  {
+    static bool traceContExec = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_CONT_EXEC");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+    if (traceContExec) {
+      auto nameIt = scheduler.getSignalNames().find(targetSigId);
+      llvm::StringRef sigName = nameIt != scheduler.getSignalNames().end()
+                                    ? llvm::StringRef(nameIt->second)
+                                    : llvm::StringRef("<unknown>");
+      llvm::SmallString<64> bits;
+      if (driveVal.isX())
+        bits = "X";
+      else
+        driveVal.getAPInt().toString(bits, 16, false);
+      llvm::errs() << "[CONT-EXEC] sig=" << targetSigId
+                   << " name=" << sigName
+                   << " val=0x" << bits
+                   << " t=" << scheduler.getCurrentTime().realTime
+                   << " d=" << scheduler.getCurrentTime().deltaStep
+                   << "\n";
+    }
+  }
+
   // Get the delay time
   SimTime delay;
   if (auto timeOp = driveOp.getTime().getDefiningOp<llhd::ConstantTimeOp>()) {
@@ -5666,31 +5883,6 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
     }
   }
 
-  // DEBUG: trace key signals for tlul_adapter_reg readback investigation
-  {
-    auto nameIt = scheduler.getSignalNames().find(targetSigId);
-    if (nameIt != scheduler.getSignalNames().end()) {
-      const auto &name = nameIt->second;
-      if (name.find("we_o") != std::string::npos ||
-          name.find("reg_q") != std::string::npos ||
-          name.find("wdata_o") != std::string::npos ||
-          name.find("wr_req") != std::string::npos ||
-          name.find("rdata") != std::string::npos ||
-          name.find("a_ack") != std::string::npos ||
-          name.find("outstanding") != std::string::npos ||
-          name.find("d_ack") != std::string::npos ||
-          name.find("tl_i") != std::string::npos ||
-          name.find("tl_o") != std::string::npos) {
-        llvm::errs() << "[SIG-TRACE] t=" << currentTime.realTime
-                     << " d=" << currentTime.deltaStep
-                     << " sig=" << targetSigId << " (" << name << ")"
-                     << " val=" << (driveVal.isX() ? std::string("X") : [&]() { llvm::SmallString<32> s; driveVal.getAPInt().toString(s, 16, false); return ("0x" + s).str(); }())
-                     << " sched_t=" << targetTime.realTime
-                     << " sched_d=" << targetTime.deltaStep << "\n";
-      }
-    }
-  }
-
   // Schedule the signal update.
   // Use updateSignalWithStrength to support multi-driver resolution (wand/wor).
   // Each DriveOp gets a unique driver ID based on its pointer address.
@@ -5720,6 +5912,9 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
       Event([this, targetSigId, driverId, newVal, strength0, strength1]() {
         scheduler.updateSignalWithStrength(targetSigId, driverId, newVal,
                                            strength0, strength1);
+        // Clear any stale pending epsilon drive so future probes see
+        // the scheduler's committed value rather than a stale pending.
+        pendingEpsilonDrives.erase(targetSigId);
       }));
 }
 
@@ -5727,66 +5922,45 @@ void LLHDProcessInterpreter::scheduleInstanceOutputUpdate(
     SignalId signalId, mlir::Value outputValue, InstanceId instanceId,
     const InstanceInputMapping *inputMap) {
   ScopedInstanceContext instScope(*this, instanceId);
+  InterpretedValue driveVal;
   if (inputMap && !inputMap->empty()) {
     ScopedInputValueMap scope(*this, *inputMap);
-    InterpretedValue driveVal = evaluateContinuousValue(outputValue);
-    SignalValue newVal = driveVal.toSignalValue();
-    // DEBUG: trace key instance output signals
-    {
-      auto nameIt = scheduler.getSignalNames().find(signalId);
-      if (nameIt != scheduler.getSignalNames().end()) {
-        const auto &name = nameIt->second;
-        if (name.find("we_o") != std::string::npos ||
-            name.find("reg_q") != std::string::npos ||
-            name.find("wdata_o") != std::string::npos ||
-            name.find("rdata") != std::string::npos ||
-            name.find("tl_o") != std::string::npos) {
-          auto curTime = scheduler.getCurrentTime();
-          llvm::errs() << "[INST-OUT] t=" << curTime.realTime
-                       << " d=" << curTime.deltaStep
-                       << " sig=" << signalId << " (" << name << ")"
-                       << " val=" << (driveVal.isX() ? std::string("X") : [&]() { llvm::SmallString<64> s; driveVal.getAPInt().toString(s, 16, false); return ("0x" + s).str(); }())
-                       << " changed=" << (scheduler.getSignalValue(signalId) != newVal ? "Y" : "N")
-                       << "\n";
-        }
-      }
-    }
-    if (scheduler.getSignalValue(signalId) == newVal)
-      return;
-    scheduler.updateSignal(signalId, newVal);
-    return;
+    driveVal = evaluateContinuousValue(outputValue);
+  } else {
+    driveVal = evaluateContinuousValue(outputValue);
   }
-  InterpretedValue driveVal = evaluateContinuousValue(outputValue);
   SignalValue newVal = driveVal.toSignalValue();
-  // DEBUG: trace key instance output signals (no input map path)
-  {
-    auto nameIt = scheduler.getSignalNames().find(signalId);
-    if (nameIt != scheduler.getSignalNames().end()) {
-      const auto &name = nameIt->second;
-      if (name.find("we_o") != std::string::npos ||
-          name.find("reg_q") != std::string::npos ||
-          name.find("wdata_o") != std::string::npos ||
-          name.find("rdata") != std::string::npos ||
-          name.find("tl_o") != std::string::npos) {
-        auto curTime = scheduler.getCurrentTime();
-        llvm::errs() << "[INST-OUT] t=" << curTime.realTime
-                     << " d=" << curTime.deltaStep
-                     << " sig=" << signalId << " (" << name << ")"
-                     << " val=" << (driveVal.isX() ? std::string("X") : [&]() { llvm::SmallString<64> s; driveVal.getAPInt().toString(s, 16, false); return ("0x" + s).str(); }())
-                     << " changed=" << (scheduler.getSignalValue(signalId) != newVal ? "Y" : "N")
-                     << "\n";
-      }
-    }
-  }
   if (scheduler.getSignalValue(signalId) == newVal)
     return;
+
+  static bool traceInstOutUpdate = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_INST_OUT_UPDATE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (traceInstOutUpdate) {
+    auto nameIt = scheduler.getSignalNames().find(signalId);
+    llvm::StringRef sigName = nameIt != scheduler.getSignalNames().end()
+                                 ? llvm::StringRef(nameIt->second)
+                                 : llvm::StringRef("<unknown>");
+    llvm::SmallString<64> bits;
+    if (driveVal.isX())
+      bits = "X";
+    else
+      driveVal.getAPInt().toString(bits, 16, false);
+    llvm::errs() << "[INST-OUT-UPD] sig=" << signalId
+                 << " name=" << sigName
+                 << " val=0x" << bits
+                 << " t=" << scheduler.getCurrentTime().realTime
+                 << "\n";
+  }
 
   scheduler.updateSignal(signalId, newVal);
 }
 
 bool LLHDProcessInterpreter::evaluateCombinationalOp(
     llhd::CombinationalOp combOp,
-    llvm::SmallVectorImpl<InterpretedValue> &results) {
+    llvm::SmallVectorImpl<InterpretedValue> &results,
+    bool traceThrough) {
   results.clear();
 
   ProcessId tempProcId = nextTempProcId++;
@@ -5799,16 +5973,6 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
   tempState.currentOp = tempState.currentBlock->begin();
   processStates[tempProcId] = std::move(tempState);
 
-  // DEBUG: trace CombinationalOp body execution
-  static bool traceCombBody = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-  if (traceCombBody && combOp.getNumResults() == 2 &&
-      combOp.getResultTypes()[1].isInteger(1)) {
-    llvm::errs() << "[COMB-BODY] evaluateCombinationalOp instId="
-                 << activeInstanceId << " t="
-                 << scheduler.getCurrentTime().realTime
-                 << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
-  }
-
   bool sawYield = false;
   auto &state = processStates[tempProcId];
   for (Operation &op : *state.currentBlock) {
@@ -5817,6 +5981,70 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
         results.push_back(getValue(tempProcId, operand));
       sawYield = true;
       break;
+    }
+
+    // When traceThrough is set, probes inside the CombinationalOp body
+    // use evaluateContinuousValue to trace through combSignalDriveMap.
+    // This ensures fresh values are read when the CombinationalOp is
+    // evaluated as part of a firreg or continuous assignment chain,
+    // where scheduler signal values may be stale (not yet propagated
+    // through their epsilon-delay continuous assignment chain).
+    if (traceThrough) {
+      if (auto probeOp = dyn_cast<llhd::ProbeOp>(&op)) {
+        SignalId sigId = resolveSignalId(probeOp.getSignal());
+        if (sigId != 0) {
+          static bool traceTT = []() {
+            const char *env = std::getenv("CIRCT_SIM_TRACE_COMB_TT");
+            return env && env[0] != '\0' && env[0] != '0';
+          }();
+          auto combIt = combSignalDriveMap.find(sigId);
+          if (combIt != combSignalDriveMap.end() &&
+              !continuousEvalVisitedSignals.count(sigId)) {
+            continuousEvalVisitedSignals.insert(sigId);
+            const auto &driveInfo = combIt->second;
+            ScopedInstanceContext instScope(*this, driveInfo.instanceId);
+            InterpretedValue val;
+            if (!driveInfo.inputMap.empty()) {
+              ScopedInputValueMap inputScope(*this, driveInfo.inputMap);
+              val = evaluateContinuousValue(driveInfo.driveValue);
+            } else {
+              val = evaluateContinuousValue(driveInfo.driveValue);
+            }
+            continuousEvalVisitedSignals.erase(sigId);
+            if (traceTT) {
+              auto nameIt = scheduler.getSignalNames().find(sigId);
+              llvm::StringRef sigName = nameIt != scheduler.getSignalNames().end()
+                                           ? llvm::StringRef(nameIt->second)
+                                           : llvm::StringRef("<unknown>");
+              llvm::SmallString<64> bits;
+              if (val.isX()) bits = "X";
+              else val.getAPInt().toString(bits, 16, false);
+              llvm::errs() << "[COMB-TT] sig=" << sigId
+                           << " name=" << sigName
+                           << " combDrv=0x" << bits
+                           << " t=" << scheduler.getCurrentTime().realTime
+                           << "\n";
+            }
+            setValue(tempProcId, probeOp.getResult(), val);
+            continue;
+          } else {
+            if (traceTT) {
+              auto nameIt = scheduler.getSignalNames().find(sigId);
+              llvm::StringRef sigName = nameIt != scheduler.getSignalNames().end()
+                                           ? llvm::StringRef(nameIt->second)
+                                           : llvm::StringRef("<unknown>");
+              llvm::errs() << "[COMB-TT-MISS] sig=" << sigId
+                           << " name=" << sigName
+                           << " inCombMap=" << (combIt != combSignalDriveMap.end() ? 1 : 0)
+                           << " visited=" << continuousEvalVisitedSignals.count(sigId)
+                           << " t=" << scheduler.getCurrentTime().realTime
+                           << "\n";
+            }
+          }
+        }
+        // Fall through to normal interpretProbe for signals not in
+        // combSignalDriveMap.
+      }
     }
 
     if (failed(interpretOperation(tempProcId, &op))) {
@@ -5829,23 +6057,6 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
       llvm::errs() << "\n";
       llvm::errs() << "  Location: " << op.getLoc() << "\n";
       break;
-    }
-
-    // DEBUG: trace probe results inside CombinationalOp body
-    if (traceCombBody && combOp.getNumResults() == 2 &&
-        combOp.getResultTypes()[1].isInteger(1)) {
-      if (auto probeOp = dyn_cast<llhd::ProbeOp>(&op)) {
-        SignalId sigId = resolveSignalId(probeOp.getSignal());
-        auto probeVal = getValue(tempProcId, probeOp.getResult());
-        llvm::SmallVector<char, 16> probeBuf, sigBuf;
-        probeVal.getAPInt().toString(probeBuf, 16, false);
-        scheduler.getSignalValue(sigId).getAPInt().toString(sigBuf, 16, false);
-        llvm::errs() << "[COMB-BODY]   prb sig=" << sigId
-                     << "(" << getSignalName(sigId) << ")"
-                     << " val=0x" << StringRef(probeBuf.data(), probeBuf.size())
-                     << " sigVal=0x" << StringRef(sigBuf.data(), sigBuf.size())
-                     << "\n";
-      }
     }
   }
 
@@ -5972,23 +6183,6 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     };
 
     if (frame.stage == 0) {
-      // DEBUG: trace which handler catches CombinationalOp results
-      {
-        static bool traceCombPath = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-        if (traceCombPath) {
-          if (auto *defOp = current.getDefiningOp()) {
-            if (isa<llhd::CombinationalOp>(defOp)) {
-              auto resultIdx = dyn_cast<OpResult>(current);
-              llvm::errs() << "[COMB-ENTRY] result#"
-                           << (resultIdx ? resultIdx.getResultNumber() : 99)
-                           << " instId=" << activeInstanceId
-                           << " type=";
-              current.getType().print(llvm::errs());
-              llvm::errs() << "\n";
-            }
-          }
-        }
-      }
       // Check instanceOutputMap BEFORE getSignalId. Instance results are
       // registered as signals (for caching), but the signal value may be stale
       // when multiple combinational processes fire in response to the same
@@ -6011,22 +6205,6 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       }
 
       if (SignalId sigId = getSignalId(current)) {
-        // DEBUG: trace when getSignalId catches a CombinationalOp result
-        {
-          static bool traceCombPath = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-          if (traceCombPath) {
-            if (auto *defOp = current.getDefiningOp()) {
-              if (isa<llhd::CombinationalOp>(defOp)) {
-                auto resultIdx = dyn_cast<OpResult>(current);
-                llvm::errs() << "[COMB-SIGID] result#"
-                             << (resultIdx ? resultIdx.getResultNumber() : 99)
-                             << " sigId=" << sigId
-                             << " instId=" << activeInstanceId
-                             << " name=" << getSignalName(sigId) << "\n";
-              }
-            }
-          }
-        }
         // For signals driven by purely combinational expressions, trace
         // through the drive expression rather than reading the (potentially
         // stale) signal value. This handles the case where multiple levels
@@ -6216,14 +6394,15 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       }
 
       if (auto combOp = current.getDefiningOp<llhd::CombinationalOp>()) {
-        // Always do fresh evaluation of CombinationalOp body using current
-        // signal values. The process cache (valueMap) may be stale if the
-        // CombinationalOp's input signals changed since the process last ran
-        // (e.g., between delta steps within the same time slot). Fresh
-        // evaluation reads signals directly, ensuring correct combinational
-        // propagation for firreg inputs and other continuous expressions.
+        // Always do a fresh evaluation of the CombinationalOp body.
+        // Cached results from the process valueMap can be stale when
+        // input signals changed since the process last ran.
+        // Pass traceThrough=true so that probes inside the body use
+        // combSignalDriveMap to trace through combinational expressions
+        // and get fresh values, not stale scheduler signal values.
         llvm::SmallVector<InterpretedValue, 4> results;
-        (void)evaluateCombinationalOp(combOp, results);
+        (void)evaluateCombinationalOp(combOp, results,
+                                       /*traceThrough=*/true);
         auto result = dyn_cast<OpResult>(current);
         if (result && result.getResultNumber() < results.size()) {
           finish(results[result.getResultNumber()]);
@@ -6566,6 +6745,36 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
           finish(makeUnknown(current));
         }
         continue;
+      }
+
+      // Fall back to the general LLVM evaluator for raw LLVM SSA chains
+      // used in some continuous assignments (e.g., interface field loads).
+      if (Operation *defOp = current.getDefiningOp()) {
+        if (isa<LLVM::ExtractValueOp, LLVM::InsertValueOp, LLVM::LoadOp,
+                LLVM::GEPOp, LLVM::AddressOfOp, LLVM::ConstantOp,
+                LLVM::UndefOp, LLVM::ZeroOp>(defOp)) {
+          ProcessExecutionState tempState;
+          ProcessId tempProcId = nextTempProcId++;
+          while (processStates.count(tempProcId) ||
+                 tempProcId == InvalidProcessId)
+            tempProcId = nextTempProcId++;
+          processStates[tempProcId] = std::move(tempState);
+
+          auto &tmpState = processStates[tempProcId];
+          tmpState.valueMap = moduleInitValueMap;
+          if (activeProcessId != InvalidProcessId) {
+            auto activeIt = processStates.find(activeProcessId);
+            if (activeIt != processStates.end()) {
+              for (const auto &entry : activeIt->second.valueMap)
+                tmpState.valueMap.try_emplace(entry.first, entry.second);
+            }
+          }
+
+          InterpretedValue evalVal = getValue(tempProcId, current);
+          processStates.erase(tempProcId);
+          finish(evalVal);
+          continue;
+        }
       }
 
       LLVM_DEBUG(llvm::dbgs()
@@ -7280,14 +7489,11 @@ void LLHDProcessInterpreter::checkMemoryEventWaiters() {
 
     // Check module-level allocas first (by address)
     for (auto &[val, memBlock] : moduleLevelAllocas) {
-      auto addrIt = moduleInitValueMap.find(val);
-      if (addrIt != moduleInitValueMap.end()) {
-        uint64_t blockAddr = addrIt->second.getUInt64();
-        if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
-          block = &memBlock;
-          offset = addr - blockAddr;
-          break;
-        }
+      uint64_t blockAddr = getModuleLevelAllocaBaseAddress(val);
+      if (blockAddr != 0 && addr >= blockAddr && addr < blockAddr + memBlock.size) {
+        block = &memBlock;
+        offset = addr - blockAddr;
+        break;
       }
     }
 
@@ -7474,6 +7680,41 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
               return formatUnsupportedProcessOpDetail(*it);
           }
         }
+      } else {
+        bool sawTerminal = false;
+        bool sawSuspend = false;
+        for (Block &block : body) {
+          if (block.empty())
+            return "multiblock_empty_block";
+          Operation &terminator = block.back();
+          if (auto waitOp = dyn_cast<llhd::WaitOp>(terminator)) {
+            if ((!waitOp.getDelay() && waitOp.getObserved().empty()) ||
+                !waitOp.getDest() || waitOp.getDest()->getParent() != &body ||
+                waitOp.getDestOperands().size() !=
+                    waitOp.getDest()->getNumArguments()) {
+              return (Twine("multiblock_unsupported_terminator:") +
+                      terminator.getName().getStringRef())
+                  .str();
+            }
+            sawSuspend = true;
+          } else if (isa<llhd::HaltOp, sim::SimForkTerminatorOp>(terminator)) {
+            sawTerminal = true;
+          } else if (!isBranchTerminatorInRegion(terminator, body)) {
+            return (Twine("multiblock_unsupported_terminator:") +
+                    terminator.getName().getStringRef())
+                .str();
+          }
+          for (auto it = block.begin(), e = std::prev(block.end()); it != e;
+               ++it) {
+            if (!isSafeResumableMultiblockWaitPreludeOp(&*it))
+              return formatUnsupportedProcessOpDetail(*it);
+            if (auto callOp = dyn_cast<LLVM::CallOp>(&*it))
+              sawSuspend |=
+                  isMooreWaitConditionCall(callOp) || isMooreDelayCall(callOp);
+          }
+        }
+        if (!sawTerminal && !sawSuspend)
+          return "multiblock_no_terminal";
       }
       Block &entry = body.front();
       if (!entry.empty()) {
@@ -7550,6 +7791,15 @@ bool LLHDProcessInterpreter::isTrivialNativeThunkCandidate(
     return true;
 
   if (isSingleBlockTerminatingNativeThunkCandidate(state))
+    return true;
+
+  if (isMultiBlockTerminatingNativeThunkCandidate(state))
+    return true;
+
+  if (isResumableWaitSelfLoopNativeThunkCandidate(state))
+    return true;
+
+  if (isResumableMultiblockWaitNativeThunkCandidate(state))
     return true;
 
   if (isResumableWaitThenHaltNativeThunkCandidate(state))
@@ -7635,6 +7885,34 @@ bool LLHDProcessInterpreter::isSingleBlockTerminatingNativeThunkCandidate(
   return true;
 }
 
+bool LLHDProcessInterpreter::isMultiBlockTerminatingNativeThunkCandidate(
+    const ProcessExecutionState &state) const {
+  Region *bodyRegion =
+      resolveNativeThunkProcessRegion(const_cast<ProcessExecutionState &>(state));
+  if (!bodyRegion || bodyRegion->empty() || bodyRegion->hasOneBlock())
+    return false;
+
+  bool sawTerminal = false;
+  for (Block &block : *bodyRegion) {
+    if (block.empty())
+      return false;
+
+    Operation &terminator = block.back();
+    bool isTerminal = isa<llhd::HaltOp, sim::SimForkTerminatorOp>(terminator);
+    bool isBranch = isBranchTerminatorInRegion(terminator, *bodyRegion);
+    if (!isTerminal && !isBranch)
+      return false;
+    sawTerminal |= isTerminal;
+
+    for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
+      if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
+        return false;
+    }
+  }
+
+  return sawTerminal;
+}
+
 bool LLHDProcessInterpreter::isCombinationalNativeThunkCandidate(
     const ProcessExecutionState &state) const {
   auto combOp = state.getCombinationalOp();
@@ -7659,6 +7937,103 @@ bool LLHDProcessInterpreter::isCombinationalNativeThunkCandidate(
     }
   }
   return sawYield;
+}
+
+bool LLHDProcessInterpreter::isResumableWaitSelfLoopNativeThunkCandidate(
+    const ProcessExecutionState &state) const {
+  auto processOp = state.getProcessOp();
+  if (!processOp)
+    return false;
+
+  Region &bodyRegion = processOp.getBody();
+  if (bodyRegion.empty() || llvm::hasNItemsOrMore(bodyRegion, 3))
+    return false;
+
+  Block *loopBlock = nullptr;
+  if (bodyRegion.hasOneBlock()) {
+    loopBlock = &bodyRegion.front();
+  } else {
+    Block &entry = bodyRegion.front();
+    if (entry.empty())
+      return false;
+    auto entryBranch = dyn_cast<mlir::cf::BranchOp>(entry.back());
+    if (!entryBranch || !entryBranch.getDestOperands().empty())
+      return false;
+    for (auto it = entry.begin(), e = std::prev(entry.end()); it != e; ++it) {
+      if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
+        return false;
+    }
+    loopBlock = entryBranch.getDest();
+  }
+
+  if (!loopBlock || loopBlock->empty())
+    return false;
+  auto waitOp = dyn_cast<llhd::WaitOp>(loopBlock->back());
+  if (!waitOp || (!waitOp.getDelay() && waitOp.getObserved().empty()))
+    return false;
+  if (waitOp.getDest() != loopBlock)
+    return false;
+  if (waitOp.getDestOperands().size() != loopBlock->getNumArguments())
+    return false;
+
+  for (auto it = loopBlock->begin(), e = std::prev(loopBlock->end()); it != e;
+       ++it) {
+    if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
+      return false;
+  }
+  return true;
+}
+
+bool LLHDProcessInterpreter::isResumableMultiblockWaitNativeThunkCandidate(
+    const ProcessExecutionState &state) const {
+  Region *bodyRegion =
+      resolveNativeThunkProcessRegion(const_cast<ProcessExecutionState &>(state));
+  if (!bodyRegion || bodyRegion->empty())
+    return false;
+
+  bool sawSuspendSource = false;
+  for (Block &block : *bodyRegion) {
+    if (block.empty())
+      return false;
+
+    Operation &terminator = block.back();
+    if (auto waitOp = dyn_cast<llhd::WaitOp>(terminator)) {
+      if ((!waitOp.getDelay() && waitOp.getObserved().empty()) ||
+          !waitOp.getDest() || waitOp.getDest()->getParent() != bodyRegion)
+        return false;
+      if (waitOp.getDestOperands().size() != waitOp.getDest()->getNumArguments())
+        return false;
+      sawSuspendSource = true;
+    } else if (auto branchOp = dyn_cast<mlir::cf::BranchOp>(terminator)) {
+      if (!branchOp.getDest() || branchOp.getDest()->getParent() != bodyRegion)
+        return false;
+      if (branchOp.getDestOperands().size() != branchOp.getDest()->getNumArguments())
+        return false;
+    } else if (auto condBrOp = dyn_cast<mlir::cf::CondBranchOp>(terminator)) {
+      if (!condBrOp.getTrueDest() ||
+          condBrOp.getTrueDest()->getParent() != bodyRegion ||
+          !condBrOp.getFalseDest() ||
+          condBrOp.getFalseDest()->getParent() != bodyRegion)
+        return false;
+      if (condBrOp.getTrueDestOperands().size() !=
+              condBrOp.getTrueDest()->getNumArguments() ||
+          condBrOp.getFalseDestOperands().size() !=
+              condBrOp.getFalseDest()->getNumArguments())
+        return false;
+    } else if (!isa<llhd::HaltOp, sim::SimForkTerminatorOp>(terminator)) {
+      return false;
+    }
+
+    for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
+      if (!isSafeResumableMultiblockWaitPreludeOp(&*it))
+        return false;
+      if (auto callOp = dyn_cast<LLVM::CallOp>(&*it))
+        sawSuspendSource |=
+            isMooreWaitConditionCall(callOp) || isMooreDelayCall(callOp);
+    }
+  }
+
+  return sawSuspendSource;
 }
 
 bool LLHDProcessInterpreter::isResumableWaitThenHaltNativeThunkCandidate(
@@ -7730,6 +8105,15 @@ void LLHDProcessInterpreter::executeTrivialNativeThunk(
   if (executePeriodicToggleClockNativeThunk(procId, it->second, thunkState))
     return;
 
+  if (executeResumableWaitSelfLoopNativeThunk(procId, it->second, thunkState))
+    return;
+
+  if (executeResumableMultiblockWaitNativeThunk(procId, it->second, thunkState))
+    return;
+
+  if (executeMultiBlockTerminatingNativeThunk(procId, it->second, thunkState))
+    return;
+
   if (executeSingleBlockTerminatingNativeThunk(procId, it->second, thunkState))
     return;
 
@@ -7796,20 +8180,98 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     return true;
   }
   Block &body = bodyRegion->front();
+  bool containsWaitConditionCall = hasMooreWaitConditionCall(*bodyRegion);
+  static bool traceThunkGuards = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_JIT_THUNK_GUARDS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto requestDeopt = [&](StringRef reason, bool restoreSnapshot) {
+    if (traceThunkGuards) {
+      llvm::errs() << "[JIT-THUNK-GUARD] proc=" << procId
+                   << " shape=single_block_terminating"
+                   << " reason=" << reason << "\n";
+    }
+    thunkState.deoptRequested = true;
+    thunkState.restoreSnapshotOnDeopt = restoreSnapshot;
+  };
+  auto isDeferredHaltState = [&](const ProcessExecutionState &s) {
+    if (!s.destBlock || s.destBlock != &body || !s.resumeAtCurrentOp)
+      return false;
+    if (!s.currentBlock || s.currentBlock != s.destBlock ||
+        s.currentOp == s.currentBlock->end())
+      return false;
+    return isa<llhd::HaltOp>(*s.currentOp);
+  };
+  bool resumingDeferredHalt = false;
 
   // This thunk is non-resumable and only valid on token 0.
   if (thunkState.resumeToken != state.jitThunkResumeToken ||
       state.jitThunkResumeToken != 0) {
-    thunkState.deoptRequested = true;
+    requestDeopt("resume_token_mismatch", /*restoreSnapshot=*/true);
     return true;
   }
-  if (state.waiting || state.destBlock || state.resumeAtCurrentOp) {
-    thunkState.deoptRequested = true;
+  if (!state.callStack.empty()) {
+    requestDeopt("non_empty_call_stack", /*restoreSnapshot=*/true);
+    return true;
+  }
+  if (state.destBlock || state.resumeAtCurrentOp) {
+    if (!isDeferredHaltState(state)) {
+      requestDeopt("unexpected_resume_state", /*restoreSnapshot=*/true);
+      return true;
+    }
+    resumingDeferredHalt = true;
+    state.currentBlock = state.destBlock;
+    for (auto [arg, val] :
+         llvm::zip(state.currentBlock->getArguments(), state.destOperands)) {
+      state.valueMap[arg] = val;
+      if (isa<llhd::RefType>(arg.getType()))
+        state.refBlockArgSources.erase(arg);
+    }
+    state.waiting = false;
+    state.destBlock = nullptr;
+    state.destOperands.clear();
+    state.resumeAtCurrentOp = false;
+  }
+  if (state.waiting) {
+    if (containsWaitConditionCall && state.waitConditionRestartBlock &&
+        !state.halted) {
+      // Ignore spurious wakeups while wait_condition polling remains armed.
+      thunkState.halted = state.halted;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
+    }
+    if (!isDeferredHaltState(state)) {
+      requestDeopt("unexpected_waiting_state", /*restoreSnapshot=*/true);
+      return true;
+    }
+    resumingDeferredHalt = true;
+    state.currentBlock = state.destBlock;
+    for (auto [arg, val] :
+         llvm::zip(state.currentBlock->getArguments(), state.destOperands)) {
+      state.valueMap[arg] = val;
+      if (isa<llhd::RefType>(arg.getType()))
+        state.refBlockArgSources.erase(arg);
+    }
+    state.waiting = false;
+    state.destBlock = nullptr;
+    state.destOperands.clear();
+    state.resumeAtCurrentOp = false;
+  }
+  if (state.halted) {
+    requestDeopt("unexpected_resume_state", /*restoreSnapshot=*/true);
     return true;
   }
 
-  state.currentBlock = &body;
-  state.currentOp = state.currentBlock->begin();
+  if (containsWaitConditionCall && state.waitConditionRestartBlock) {
+    state.currentBlock = state.waitConditionRestartBlock;
+    state.currentOp = state.waitConditionRestartOp;
+    for (Value value : state.waitConditionValuesToInvalidate)
+      state.valueMap.erase(value);
+  } else if (!resumingDeferredHalt) {
+    state.currentBlock = &body;
+    state.currentOp = state.currentBlock->begin();
+  }
 
   ProcessId savedActiveProcessId = activeProcessId;
   ProcessExecutionState *savedActiveProcessState = activeProcessState;
@@ -7823,6 +8285,88 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
   // Allow enough headroom for call-heavy prelude ops (e.g. call_indirect
   // dispatch chains) while still bounding the native-thunk attempt.
   size_t maxSteps = std::max<size_t>(8192, body.getOperations().size() * 128);
+  bool reachedStepLimit = true;
+  for (size_t steps = 0; steps < maxSteps; ++steps) {
+    if (!executeStep(procId)) {
+      reachedStepLimit = false;
+      break;
+    }
+  }
+  if (reachedStepLimit) {
+    requestDeopt("step_limit_reached", /*restoreSnapshot=*/false);
+    return true;
+  }
+
+  auto post = processStates.find(procId);
+  if (post == processStates.end()) {
+    requestDeopt("process_state_missing_post_exec", /*restoreSnapshot=*/false);
+    return true;
+  }
+  bool waitingOnWaitCondition = containsWaitConditionCall &&
+                                post->second.waiting &&
+                                post->second.waitConditionRestartBlock &&
+                                !post->second.halted;
+  bool waitingOnDeferredHalt =
+      post->second.waiting && isDeferredHaltState(post->second) &&
+      !post->second.halted;
+  if (!post->second.halted && !waitingOnWaitCondition &&
+      !waitingOnDeferredHalt) {
+    requestDeopt("post_exec_not_halted_or_waiting", /*restoreSnapshot=*/false);
+    return true;
+  }
+  if (post->second.waiting && !waitingOnWaitCondition &&
+      !waitingOnDeferredHalt) {
+    requestDeopt("post_exec_waiting_without_wait_condition", /*restoreSnapshot=*/false);
+    return true;
+  }
+
+  thunkState.halted = post->second.halted;
+  thunkState.waiting = post->second.waiting;
+  thunkState.resumeToken = post->second.jitThunkResumeToken;
+  return true;
+}
+
+bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
+    ProcessId procId, ProcessExecutionState &state,
+    ProcessThunkExecutionState &thunkState) {
+  if (!isMultiBlockTerminatingNativeThunkCandidate(state))
+    return false;
+
+  Region *bodyRegion = resolveNativeThunkProcessRegion(state);
+  if (!bodyRegion || bodyRegion->empty() || bodyRegion->front().empty()) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  // This thunk is non-resumable and only valid on token 0.
+  if (thunkState.resumeToken != state.jitThunkResumeToken ||
+      state.jitThunkResumeToken != 0) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+  if (state.waiting || state.destBlock || state.resumeAtCurrentOp) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  state.currentBlock = &bodyRegion->front();
+  state.currentOp = state.currentBlock->begin();
+
+  ProcessId savedActiveProcessId = activeProcessId;
+  ProcessExecutionState *savedActiveProcessState = activeProcessState;
+  activeProcessId = procId;
+  activeProcessState = &state;
+  auto restoreActive = llvm::make_scope_exit([&]() {
+    activeProcessId = savedActiveProcessId;
+    activeProcessState = savedActiveProcessState;
+  });
+
+  size_t regionOps = 0;
+  for (Block &block : *bodyRegion)
+    regionOps += block.getOperations().size();
+
+  // Multiblock lowering can include larger branchy preludes.
+  size_t maxSteps = std::max<size_t>(16384, regionOps * 256);
   bool reachedStepLimit = true;
   for (size_t steps = 0; steps < maxSteps; ++steps) {
     if (!executeStep(procId)) {
@@ -7848,6 +8392,266 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     return true;
   }
 
+  thunkState.halted = post->second.halted;
+  thunkState.waiting = post->second.waiting;
+  thunkState.resumeToken = post->second.jitThunkResumeToken;
+  return true;
+}
+
+bool LLHDProcessInterpreter::executeResumableWaitSelfLoopNativeThunk(
+    ProcessId procId, ProcessExecutionState &state,
+    ProcessThunkExecutionState &thunkState) {
+  if (!isResumableWaitSelfLoopNativeThunkCandidate(state))
+    return false;
+
+  auto processOp = state.getProcessOp();
+  if (!processOp) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  Region &bodyRegion = processOp.getBody();
+  Block *loopBlock = nullptr;
+  if (bodyRegion.hasOneBlock()) {
+    loopBlock = &bodyRegion.front();
+  } else {
+    Block &entry = bodyRegion.front();
+    auto entryBranch = dyn_cast<mlir::cf::BranchOp>(entry.back());
+    if (!entryBranch) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
+    loopBlock = entryBranch.getDest();
+  }
+  if (!loopBlock || loopBlock->empty()) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+  auto waitOp = dyn_cast<llhd::WaitOp>(loopBlock->back());
+  if (!waitOp || waitOp.getDest() != loopBlock) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  // This resumable loop thunk expects a stable token.
+  if (thunkState.resumeToken != state.jitThunkResumeToken ||
+      state.jitThunkResumeToken != 0) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+  if (!state.callStack.empty()) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  if (state.destBlock) {
+    if (state.destBlock != loopBlock ||
+        state.destOperands.size() != loopBlock->getNumArguments()) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
+    state.currentBlock = state.destBlock;
+    if (!state.resumeAtCurrentOp)
+      state.currentOp = state.currentBlock->begin();
+    for (auto [arg, val] :
+         llvm::zip(state.currentBlock->getArguments(), state.destOperands)) {
+      state.valueMap[arg] = val;
+      if (isa<llhd::RefType>(arg.getType()))
+        state.refBlockArgSources.erase(arg);
+    }
+    state.waiting = false;
+    state.destBlock = nullptr;
+    state.destOperands.clear();
+    state.resumeAtCurrentOp = false;
+  } else if (state.waiting) {
+    // Some wait wakeups clear waiting before schedule, some do not.
+    state.waiting = false;
+  }
+
+  if (!state.currentBlock || state.currentOp == state.currentBlock->end()) {
+    state.currentBlock = &bodyRegion.front();
+    state.currentOp = state.currentBlock->begin();
+  }
+
+  ProcessId savedActiveProcessId = activeProcessId;
+  ProcessExecutionState *savedActiveProcessState = activeProcessState;
+  activeProcessId = procId;
+  activeProcessState = &state;
+  auto restoreActive = llvm::make_scope_exit([&]() {
+    activeProcessId = savedActiveProcessId;
+    activeProcessState = savedActiveProcessState;
+  });
+
+  size_t maxSteps =
+      std::max<size_t>(8192, countRegionOps(bodyRegion) * 256);
+  bool reachedStepLimit = true;
+  for (size_t steps = 0; steps < maxSteps; ++steps) {
+    if (!executeStep(procId)) {
+      reachedStepLimit = false;
+      break;
+    }
+  }
+  if (reachedStepLimit) {
+    thunkState.deoptRequested = true;
+    thunkState.restoreSnapshotOnDeopt = false;
+    return true;
+  }
+
+  auto post = processStates.find(procId);
+  if (post == processStates.end()) {
+    thunkState.deoptRequested = true;
+    thunkState.restoreSnapshotOnDeopt = false;
+    return true;
+  }
+  if (!post->second.halted && !post->second.waiting) {
+    thunkState.deoptRequested = true;
+    thunkState.restoreSnapshotOnDeopt = false;
+    return true;
+  }
+
+  if (post->second.waiting && post->second.pendingDelayFs > 0) {
+    SimTime currentTime = scheduler.getCurrentTime();
+    SimTime targetTime = currentTime.advanceTime(post->second.pendingDelayFs);
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Scheduling __moore_delay resumption (native thunk): "
+               << post->second.pendingDelayFs << " fs from time "
+               << currentTime.realTime << " to " << targetTime.realTime
+               << "\n");
+    post->second.pendingDelayFs = 0;
+    scheduler.getEventScheduler().schedule(
+        targetTime, SchedulingRegion::Active,
+        Event([this, procId]() { resumeProcess(procId); }));
+  }
+
+  post->second.jitThunkResumeToken = 0;
+  thunkState.halted = post->second.halted;
+  thunkState.waiting = post->second.waiting;
+  thunkState.resumeToken = post->second.jitThunkResumeToken;
+  return true;
+}
+
+bool LLHDProcessInterpreter::executeResumableMultiblockWaitNativeThunk(
+    ProcessId procId, ProcessExecutionState &state,
+    ProcessThunkExecutionState &thunkState) {
+  if (!isResumableMultiblockWaitNativeThunkCandidate(state))
+    return false;
+
+  Region *bodyRegion = resolveNativeThunkProcessRegion(state);
+  if (!bodyRegion || bodyRegion->empty()) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  // Keep a stable token for resumable wait state machines.
+  if (thunkState.resumeToken != state.jitThunkResumeToken ||
+      state.jitThunkResumeToken != 0) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+  if (!state.callStack.empty()) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+  bool containsWaitConditionCall = hasMooreWaitConditionCall(*bodyRegion);
+
+  if (state.destBlock) {
+    if (state.destBlock->getParent() != bodyRegion ||
+        state.destOperands.size() != state.destBlock->getNumArguments()) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
+    state.currentBlock = state.destBlock;
+    if (!state.resumeAtCurrentOp)
+      state.currentOp = state.currentBlock->begin();
+    for (auto [arg, val] :
+         llvm::zip(state.currentBlock->getArguments(), state.destOperands)) {
+      state.valueMap[arg] = val;
+      if (isa<llhd::RefType>(arg.getType()))
+        state.refBlockArgSources.erase(arg);
+    }
+    state.waiting = false;
+    state.destBlock = nullptr;
+    state.destOperands.clear();
+    state.resumeAtCurrentOp = false;
+  } else if (state.waiting) {
+    if (containsWaitConditionCall && state.waitConditionRestartBlock &&
+        !state.halted) {
+      // Ignore spurious triggers while wait_condition poll state is active.
+      thunkState.halted = state.halted;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
+    }
+    state.waiting = false;
+  }
+
+  if (containsWaitConditionCall && state.waitConditionRestartBlock) {
+    if (state.waitConditionRestartBlock->getParent() != bodyRegion) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
+    state.currentBlock = state.waitConditionRestartBlock;
+    state.currentOp = state.waitConditionRestartOp;
+    for (Value value : state.waitConditionValuesToInvalidate)
+      state.valueMap.erase(value);
+  } else if (!state.currentBlock ||
+             state.currentBlock->getParent() != bodyRegion ||
+             state.currentOp == state.currentBlock->end()) {
+    state.currentBlock = &bodyRegion->front();
+    state.currentOp = state.currentBlock->begin();
+  }
+
+  ProcessId savedActiveProcessId = activeProcessId;
+  ProcessExecutionState *savedActiveProcessState = activeProcessState;
+  activeProcessId = procId;
+  activeProcessState = &state;
+  auto restoreActive = llvm::make_scope_exit([&]() {
+    activeProcessId = savedActiveProcessId;
+    activeProcessState = savedActiveProcessState;
+  });
+
+  size_t maxSteps =
+      std::max<size_t>(8192, countRegionOps(*bodyRegion) * 256);
+  bool reachedStepLimit = true;
+  for (size_t steps = 0; steps < maxSteps; ++steps) {
+    if (!executeStep(procId)) {
+      reachedStepLimit = false;
+      break;
+    }
+  }
+  if (reachedStepLimit) {
+    thunkState.deoptRequested = true;
+    thunkState.restoreSnapshotOnDeopt = false;
+    return true;
+  }
+
+  auto post = processStates.find(procId);
+  if (post == processStates.end()) {
+    thunkState.deoptRequested = true;
+    thunkState.restoreSnapshotOnDeopt = false;
+    return true;
+  }
+  if (!post->second.halted && !post->second.waiting) {
+    thunkState.deoptRequested = true;
+    thunkState.restoreSnapshotOnDeopt = false;
+    return true;
+  }
+
+  if (post->second.waiting && post->second.pendingDelayFs > 0) {
+    SimTime currentTime = scheduler.getCurrentTime();
+    SimTime targetTime = currentTime.advanceTime(post->second.pendingDelayFs);
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Scheduling __moore_delay resumption (native thunk): "
+               << post->second.pendingDelayFs << " fs from time "
+               << currentTime.realTime << " to " << targetTime.realTime
+               << "\n");
+    post->second.pendingDelayFs = 0;
+    scheduler.getEventScheduler().schedule(
+        targetTime, SchedulingRegion::Active,
+        Event([this, procId]() { resumeProcess(procId); }));
+  }
+
+  post->second.jitThunkResumeToken = 0;
   thunkState.halted = post->second.halted;
   thunkState.waiting = post->second.waiting;
   thunkState.resumeToken = post->second.jitThunkResumeToken;
@@ -8350,14 +9154,11 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
     // Check module-level allocas first (by address)
     for (auto &[val, memBlock] : moduleLevelAllocas) {
-      auto addrIt = moduleInitValueMap.find(val);
-      if (addrIt != moduleInitValueMap.end()) {
-        uint64_t blockAddr = addrIt->second.getUInt64();
-        if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
-          block = &memBlock;
-          offset = addr - blockAddr;
-          break;
-        }
+      uint64_t blockAddr = getModuleLevelAllocaBaseAddress(val);
+      if (blockAddr != 0 && addr >= blockAddr && addr < blockAddr + memBlock.size) {
+        block = &memBlock;
+        offset = addr - blockAddr;
+        break;
       }
     }
 
@@ -9018,9 +9819,33 @@ void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
   }
 }
 
+void LLHDProcessInterpreter::reevaluateInterfaceTriState(SignalId signal) {
+  applyInterfaceTriStateRules(signal);
+}
+
 void LLHDProcessInterpreter::applyInterfaceTriStateRules(SignalId triggerSigId) {
   if (interfaceTriStateRulesBySource.empty())
     return;
+
+  static bool traceTriState = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_INTERFACE_TRISTATE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+
+  auto signalName = [&](SignalId sigId) -> llvm::StringRef {
+    auto it = signalIdToName.find(sigId);
+    if (it != signalIdToName.end())
+      return it->second;
+    return "<unknown>";
+  };
+
+  auto formatValue = [](const InterpretedValue &value) -> std::string {
+    if (value.isX())
+      return "X";
+    llvm::SmallString<64> bits;
+    value.getAPInt().toStringUnsigned(bits, /*Radix=*/2);
+    return std::string(bits);
+  };
 
   auto normalizeForSignal = [&](InterpretedValue value,
                                 SignalId sigId) -> InterpretedValue {
@@ -9092,6 +9917,12 @@ void LLHDProcessInterpreter::applyInterfaceTriStateRules(SignalId triggerSigId) 
     if (ruleIt == interfaceTriStateRulesBySource.end())
       continue;
 
+    if (traceTriState) {
+      llvm::errs() << "[TRI-RULE] trigger sig=" << sourceSig << " ("
+                   << signalName(sourceSig) << ") rules="
+                   << ruleIt->second.size() << "\n";
+    }
+
     for (unsigned ruleIndex : ruleIt->second) {
       if (ruleIndex >= interfaceTriStateRules.size())
         continue;
@@ -9105,6 +9936,23 @@ void LLHDProcessInterpreter::applyInterfaceTriStateRules(SignalId triggerSigId) 
 
       InterpretedValue selectedVal =
           condTrue ? getSignalValue(rule.srcSigId) : rule.elseValue;
+
+      if (traceTriState) {
+        InterpretedValue srcVal = getSignalValue(rule.srcSigId);
+        InterpretedValue destBefore =
+            InterpretedValue::fromSignalValue(scheduler.getSignalValue(rule.destSigId));
+        llvm::errs() << "[TRI-RULE] idx=" << ruleIndex
+                     << " cond=" << rule.condSigId << "("
+                     << signalName(rule.condSigId) << ")="
+                     << formatValue(condVal) << " bit=" << rule.condBitIndex
+                     << " condTrue=" << (condTrue ? 1 : 0)
+                     << " src=" << rule.srcSigId << "("
+                     << signalName(rule.srcSigId) << ")="
+                     << formatValue(srcVal) << " dest=" << rule.destSigId
+                     << "(" << signalName(rule.destSigId) << ") before="
+                     << formatValue(destBefore) << " sel="
+                     << formatValue(selectedVal) << "\n";
+      }
 
       if (!driveSignalAndMemory(rule.destSigId, selectedVal))
         continue;
@@ -9315,8 +10163,10 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   // Dispatch to specific handlers based on operation type
 
   // LLHD operations
-  if (auto probeOp = dyn_cast<llhd::ProbeOp>(op))
+  if (auto probeOp = dyn_cast<llhd::ProbeOp>(op)) {
+    fprintf(stderr, "[PROBE-DISPATCH] procId=%u\n", (unsigned)procId);
     return interpretProbe(procId, probeOp);
+  }
 
   if (auto driveOp = dyn_cast<llhd::DriveOp>(op))
     return interpretDrive(procId, driveOp);
@@ -10931,6 +11781,14 @@ arith_dispatch:
         for (Value arg : callIndirectOp.getArgOperands())
           args.push_back(getValue(procId, arg));
 
+        // Keep config_db interception behavior identical across call_indirect
+        // dispatch paths, including funcPtrVal.isX() fallback.
+        if (tryInterceptConfigDbCallIndirect(procId, callIndirectOp,
+                                             resolvedName, args)) {
+          resolved = true;
+          break;
+        }
+
         // Intercept UVM phase/objection methods in the X-fallback path.
         if ((resolvedName.contains("uvm_phase::raise_objection") ||
              resolvedName.contains("uvm_phase::drop_objection")) &&
@@ -11216,6 +12074,11 @@ arith_dispatch:
                    << "  func.call_indirect: static fallback: "
                    << vtableGlobalName << "[" << methodIndex << "] -> "
                    << resolvedName << "\n");
+        if (traceConfigDbEnabled && procId == 1) {
+          llvm::errs() << "[CFG-CI-STATIC-PROC1] "
+                       << vtableGlobalName << "[" << methodIndex << "] -> "
+                       << resolvedName << "\n";
+        }
         auto &st2 = processStates[procId];
         Operation *par = st2.processOrInitialOp;
         while (par && !isa<ModuleOp>(par))
@@ -11285,37 +12148,7 @@ arith_dispatch:
           auto readStr2 = [&](unsigned argIdx) -> std::string {
             if (argIdx >= sArgs.size())
               return "";
-            InterpretedValue val = sArgs[argIdx];
-            if (val.isX() || val.getWidth() < 128)
-              return "";
-            llvm::APInt bits = val.getAPInt();
-            uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
-            int64_t strLen = bits.extractBits(64, 64).getSExtValue();
-            if (strPtr == 0 || strLen <= 0)
-              return "";
-            auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
-            if (dynIt != dynamicStrings.end() && dynIt->second.first &&
-                dynIt->second.second > 0)
-              return std::string(
-                  dynIt->second.first,
-                  std::min(static_cast<size_t>(strLen),
-                           static_cast<size_t>(dynIt->second.second)));
-            uint64_t off2 = 0;
-            MemoryBlock *gBlock2 = findBlockByAddress(strPtr, off2);
-            if (gBlock2 && gBlock2->initialized) {
-              size_t avail = std::min(
-                  static_cast<size_t>(strLen),
-                  gBlock2->data.size() - static_cast<size_t>(off2));
-              if (avail > 0)
-                return std::string(
-                    reinterpret_cast<const char *>(gBlock2->data.data() + off2),
-                    avail);
-            }
-            if (strPtr >= 0x10000) {
-              const char *p = reinterpret_cast<const char *>(strPtr);
-              return std::string(p, static_cast<size_t>(strLen));
-            }
-            return "";
+            return readMooreStringStruct(procId, sArgs[argIdx]);
           };
 
           if (resolvedName.contains("::set") &&
@@ -11441,6 +12274,202 @@ arith_dispatch:
           }
         }
 
+        // Intercept config_db implementation in static fallback path.
+        // This covers cases where call_indirect cannot resolve a runtime
+        // function pointer (e.g. null/uninitialized vtable slot), but the
+        // static vtable slot still identifies config_db::set/get.
+        if (resolvedName.contains("config_db") &&
+            resolvedName.contains("implementation") &&
+            (resolvedName.contains("::set") ||
+             resolvedName.contains("::get"))) {
+          auto readStr2 = [&](unsigned argIdx) -> std::string {
+            if (argIdx >= sArgs.size())
+              return "";
+            return readMooreStringStruct(procId, sArgs[argIdx]);
+          };
+
+          if (resolvedName.contains("::set") &&
+              !resolvedName.contains("set_default") &&
+              !resolvedName.contains("set_override") &&
+              !resolvedName.contains("set_anonymous")) {
+            if (sArgs.size() >= 5) {
+              std::string str1 = readStr2(1);
+              std::string str2 = readStr2(2);
+              std::string str3 = readStr2(3);
+
+              std::string instName = str2;
+              std::string fieldName = str3;
+              if (fieldName.empty()) {
+                instName = str1;
+                fieldName = str2;
+              }
+              std::string key = instName + "." + fieldName;
+
+              InterpretedValue &valueArg = sArgs[4];
+              unsigned valueBits = valueArg.getWidth();
+              unsigned valueBytes = (valueBits + 7) / 8;
+              std::vector<uint8_t> valueData(valueBytes, 0);
+              if (!valueArg.isX()) {
+                llvm::APInt valBits = valueArg.getAPInt();
+                for (unsigned i = 0; i < valueBytes; ++i)
+                  valueData[i] = static_cast<uint8_t>(
+                      valBits.extractBits(8, i * 8).getZExtValue());
+              }
+              if (traceConfigDbEnabled) {
+                llvm::errs() << "[CFG-CI-STATIC-SET] callee=" << resolvedName
+                             << " key=\"" << key << "\" s1=\"" << str1
+                             << "\" s2=\"" << str2 << "\" s3=\"" << str3
+                             << "\" entries_before=" << configDbEntries.size()
+                             << "\n";
+              }
+              configDbEntries[key] = std::move(valueData);
+              if (traceConfigDbEnabled) {
+                llvm::errs() << "[CFG-CI-STATIC-SET] stored key=\"" << key
+                             << "\" entries_after=" << configDbEntries.size()
+                             << "\n";
+              }
+            }
+            staticResolved = true;
+            break;
+          }
+
+          if (resolvedName.contains("::get") &&
+              !resolvedName.contains("get_default") &&
+              sArgs.size() >= 5 && callIndirectOp.getNumResults() >= 1) {
+            std::string str1 = readStr2(1);
+            std::string str2 = readStr2(2);
+            std::string str3 = readStr2(3);
+
+            std::string instName = str2;
+            std::string fieldName = str3;
+            if (fieldName.empty()) {
+              instName = str1;
+              fieldName = str2;
+            }
+            std::string key = instName + "." + fieldName;
+            if (traceConfigDbEnabled) {
+              llvm::errs() << "[CFG-CI-STATIC-GET] callee=" << resolvedName
+                           << " key=\"" << key << "\" s1=\"" << str1
+                           << "\" s2=\"" << str2 << "\" s3=\"" << str3
+                           << "\" entries=" << configDbEntries.size() << "\n";
+            }
+
+            auto it = configDbEntries.find(key);
+            if (it == configDbEntries.end()) {
+              for (auto &[k, v] : configDbEntries) {
+                size_t dotPos = k.rfind('.');
+                if (dotPos != std::string::npos &&
+                    k.substr(dotPos + 1) == fieldName) {
+                  it = configDbEntries.find(k);
+                  break;
+                }
+              }
+            }
+            if (it == configDbEntries.end() && fieldName.size() > 2 &&
+                fieldName.back() == 'x' &&
+                fieldName[fieldName.size() - 2] == '_') {
+              std::string baseName = fieldName.substr(0, fieldName.size() - 1);
+              for (auto &[k, v] : configDbEntries) {
+                size_t dotPos = k.rfind('.');
+                if (dotPos == std::string::npos)
+                  continue;
+                std::string storedField = k.substr(dotPos + 1);
+                if (storedField.size() > baseName.size() &&
+                    storedField.substr(0, baseName.size()) == baseName &&
+                    std::isdigit(storedField[baseName.size()])) {
+                  it = configDbEntries.find(k);
+                  break;
+                }
+              }
+            }
+
+            if (it != configDbEntries.end()) {
+              if (traceConfigDbEnabled) {
+                llvm::errs() << "[CFG-CI-STATIC-GET] hit key=\"" << it->first
+                             << "\" bytes=" << it->second.size() << "\n";
+              }
+              Value outputRef = callIndirectOp.getArgOperands()[4];
+              const std::vector<uint8_t> &valueData = it->second;
+              Type refType = outputRef.getType();
+
+              if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+                Type innerType = refT.getNestedType();
+                unsigned innerBits = getTypeWidth(innerType);
+                unsigned innerBytes = (innerBits + 7) / 8;
+                llvm::APInt valueBits(innerBits, 0);
+                for (unsigned i = 0;
+                     i < std::min(innerBytes, (unsigned)valueData.size());
+                     ++i)
+                  safeInsertBits(valueBits, llvm::APInt(8, valueData[i]), i * 8);
+                SignalId sigId3 = resolveSignalId(outputRef);
+                if (sigId3 != 0)
+                  pendingEpsilonDrives[sigId3] = InterpretedValue(valueBits);
+                InterpretedValue refAddr3 = getValue(procId, outputRef);
+                if (!refAddr3.isX()) {
+                  uint64_t addr3 = refAddr3.getUInt64();
+                  uint64_t off4 = 0;
+                  MemoryBlock *blk3 =
+                      findMemoryBlockByAddress(addr3, procId, &off4);
+                  if (!blk3)
+                    blk3 = findBlockByAddress(addr3, off4);
+                  if (blk3) {
+                    writeConfigDbBytesToMemoryBlock(
+                        blk3, off4, valueData, innerBytes,
+                        /*zeroFillMissing=*/true);
+                  } else {
+                    uint64_t nativeOff = 0;
+                    size_t nativeSize = 0;
+                    if (findNativeMemoryBlockByAddress(addr3, &nativeOff,
+                                                       &nativeSize)) {
+                      writeConfigDbBytesToNativeMemory(
+                          addr3, nativeOff, nativeSize, valueData, innerBytes,
+                          /*zeroFillMissing=*/true);
+                    }
+                  }
+                }
+              } else if (isa<LLVM::LLVMPointerType>(refType)) {
+                if (!sArgs[4].isX()) {
+                  uint64_t outputAddr = sArgs[4].getUInt64();
+                  uint64_t outOff2 = 0;
+                  MemoryBlock *outBlock =
+                      findMemoryBlockByAddress(outputAddr, procId, &outOff2);
+                  if (!outBlock)
+                    outBlock = findBlockByAddress(outputAddr, outOff2);
+                  if (outBlock) {
+                    writeConfigDbBytesToMemoryBlock(
+                        outBlock, outOff2, valueData,
+                        static_cast<unsigned>(valueData.size()),
+                        /*zeroFillMissing=*/false);
+                  } else {
+                    uint64_t nativeOff = 0;
+                    size_t nativeSize = 0;
+                    if (findNativeMemoryBlockByAddress(outputAddr, &nativeOff,
+                                                       &nativeSize)) {
+                      writeConfigDbBytesToNativeMemory(
+                          outputAddr, nativeOff, nativeSize, valueData,
+                          static_cast<unsigned>(valueData.size()),
+                          /*zeroFillMissing=*/false);
+                    }
+                  }
+                }
+              }
+
+              setValue(procId, callIndirectOp.getResult(0),
+                       InterpretedValue(llvm::APInt(1, 1)));
+              staticResolved = true;
+              break;
+            }
+
+            if (traceConfigDbEnabled)
+              llvm::errs() << "[CFG-CI-STATIC-GET] miss key=\"" << key
+                           << "\"\n";
+            setValue(procId, callIndirectOp.getResult(0),
+                     InterpretedValue(llvm::APInt(1, 0)));
+            staticResolved = true;
+            break;
+          }
+        }
+
         // Intercept analysis_port::write in non-X static fallback path.
         if (resolvedName.contains("analysis_port") &&
             resolvedName.contains("::write") &&
@@ -11546,6 +12575,215 @@ arith_dispatch:
         staticResolved = true;
       } while (false);
       if (!staticResolved) {
+        auto isMooreStringStructType = [](Type ty) -> bool {
+          auto structTy = dyn_cast<LLVM::LLVMStructType>(ty);
+          if (!structTy || structTy.isOpaque() || structTy.getBody().size() != 2)
+            return false;
+          Type t0 = structTy.getBody()[0];
+          Type t1 = structTy.getBody()[1];
+          return isa<LLVM::LLVMPointerType>(t0) &&
+                 t1.isSignlessInteger(64);
+        };
+
+        auto readUnresolvedStrArg = [&](unsigned argIdx,
+                                        llvm::ArrayRef<InterpretedValue> vals)
+            -> std::string {
+          if (argIdx >= vals.size())
+            return "";
+          return readMooreStringStruct(procId, vals[argIdx]);
+        };
+
+        auto writeConfigDbGetResult = [&](Value outputRef,
+                                          const std::vector<uint8_t> &valueData,
+                                          InterpretedValue outputArgVal) {
+          Type refType = outputRef.getType();
+          if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+            Type innerType = refT.getNestedType();
+            unsigned innerBits = getTypeWidth(innerType);
+            unsigned innerBytes = (innerBits + 7) / 8;
+            llvm::APInt valueBits(innerBits, 0);
+            for (unsigned i = 0;
+                 i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
+              safeInsertBits(valueBits, llvm::APInt(8, valueData[i]), i * 8);
+            SignalId sigId = resolveSignalId(outputRef);
+            if (sigId != 0)
+              pendingEpsilonDrives[sigId] = InterpretedValue(valueBits);
+            InterpretedValue refAddr = getValue(procId, outputRef);
+            if (!refAddr.isX()) {
+              uint64_t addr = refAddr.getUInt64();
+              uint64_t off = 0;
+              MemoryBlock *blk = findMemoryBlockByAddress(addr, procId, &off);
+              if (!blk)
+                blk = findBlockByAddress(addr, off);
+              if (blk) {
+                writeConfigDbBytesToMemoryBlock(
+                    blk, off, valueData, innerBytes,
+                    /*zeroFillMissing=*/true);
+              } else {
+                uint64_t nativeOff = 0;
+                size_t nativeSize = 0;
+                if (findNativeMemoryBlockByAddress(addr, &nativeOff,
+                                                   &nativeSize)) {
+                  writeConfigDbBytesToNativeMemory(
+                      addr, nativeOff, nativeSize, valueData, innerBytes,
+                      /*zeroFillMissing=*/true);
+                }
+              }
+            }
+          } else if (isa<LLVM::LLVMPointerType>(refType) && !outputArgVal.isX()) {
+            uint64_t outputAddr = outputArgVal.getUInt64();
+            uint64_t outOff = 0;
+            MemoryBlock *outBlock =
+                findMemoryBlockByAddress(outputAddr, procId, &outOff);
+            if (!outBlock)
+              outBlock = findBlockByAddress(outputAddr, outOff);
+            if (outBlock) {
+              writeConfigDbBytesToMemoryBlock(
+                  outBlock, outOff, valueData,
+                  static_cast<unsigned>(valueData.size()),
+                  /*zeroFillMissing=*/false);
+            } else {
+              uint64_t nativeOff = 0;
+              size_t nativeSize = 0;
+              if (findNativeMemoryBlockByAddress(outputAddr, &nativeOff,
+                                                 &nativeSize)) {
+                writeConfigDbBytesToNativeMemory(
+                    outputAddr, nativeOff, nativeSize, valueData,
+                    static_cast<unsigned>(valueData.size()),
+                    /*zeroFillMissing=*/false);
+              }
+            }
+          }
+        };
+
+        // Final fallback: unresolved call_indirect heuristic for config_db
+        // implementation signatures. This is intentionally narrow and only
+        // triggers when vtable resolution failed.
+        {
+          SmallVector<InterpretedValue, 8> unresolvedArgs;
+          unresolvedArgs.reserve(callIndirectOp.getNumOperands());
+          for (Value arg : callIndirectOp.getArgOperands())
+            unresolvedArgs.push_back(getValue(procId, arg));
+
+          // Heuristic config_db::set
+          if (callIndirectOp.getNumResults() == 0 &&
+              callIndirectOp.getNumOperands() >= 5 &&
+              isa<LLVM::LLVMPointerType>(callIndirectOp.getArgOperands()[0].getType()) &&
+              isMooreStringStructType(callIndirectOp.getArgOperands()[1].getType()) &&
+              isMooreStringStructType(callIndirectOp.getArgOperands()[2].getType()) &&
+              isMooreStringStructType(callIndirectOp.getArgOperands()[3].getType())) {
+            std::string str1 = readUnresolvedStrArg(1, unresolvedArgs);
+            std::string str2 = readUnresolvedStrArg(2, unresolvedArgs);
+            std::string str3 = readUnresolvedStrArg(3, unresolvedArgs);
+            std::string instName = str2;
+            std::string fieldName = str3;
+            if (fieldName.empty()) {
+              instName = str1;
+              fieldName = str2;
+            }
+            std::string key = instName + "." + fieldName;
+
+            InterpretedValue &valueArg = unresolvedArgs[4];
+            unsigned valueBits = valueArg.getWidth();
+            unsigned valueBytes = (valueBits + 7) / 8;
+            std::vector<uint8_t> valueData(valueBytes, 0);
+            if (!valueArg.isX()) {
+              llvm::APInt valBits = valueArg.getAPInt();
+              for (unsigned i = 0; i < valueBytes; ++i)
+                valueData[i] = static_cast<uint8_t>(
+                    valBits.extractBits(8, i * 8).getZExtValue());
+            }
+            if (traceConfigDbEnabled) {
+              llvm::errs() << "[CFG-CI-UNRES-SET] key=\"" << key
+                           << "\" s1=\"" << str1 << "\" s2=\"" << str2
+                           << "\" s3=\"" << str3
+                           << "\" entries_before=" << configDbEntries.size()
+                           << "\n";
+            }
+            configDbEntries[key] = std::move(valueData);
+            if (traceConfigDbEnabled) {
+              llvm::errs() << "[CFG-CI-UNRES-SET] stored key=\"" << key
+                           << "\" entries_after=" << configDbEntries.size()
+                           << "\n";
+            }
+            return success();
+          }
+
+          // Heuristic config_db::get
+          if (callIndirectOp.getNumResults() == 1 &&
+              callIndirectOp.getResult(0).getType().isSignlessInteger(1) &&
+              callIndirectOp.getNumOperands() >= 5 &&
+              isa<LLVM::LLVMPointerType>(callIndirectOp.getArgOperands()[0].getType()) &&
+              isa<LLVM::LLVMPointerType>(callIndirectOp.getArgOperands()[1].getType()) &&
+              isMooreStringStructType(callIndirectOp.getArgOperands()[2].getType()) &&
+              isMooreStringStructType(callIndirectOp.getArgOperands()[3].getType())) {
+            std::string str1 = readUnresolvedStrArg(1, unresolvedArgs);
+            std::string str2 = readUnresolvedStrArg(2, unresolvedArgs);
+            std::string str3 = readUnresolvedStrArg(3, unresolvedArgs);
+            std::string instName = str2;
+            std::string fieldName = str3;
+            if (fieldName.empty()) {
+              instName = str1;
+              fieldName = str2;
+            }
+            std::string key = instName + "." + fieldName;
+            if (traceConfigDbEnabled) {
+              llvm::errs() << "[CFG-CI-UNRES-GET] key=\"" << key
+                           << "\" s1=\"" << str1 << "\" s2=\"" << str2
+                           << "\" s3=\"" << str3
+                           << "\" entries=" << configDbEntries.size() << "\n";
+            }
+
+            auto it = configDbEntries.find(key);
+            if (it == configDbEntries.end()) {
+              for (auto &[k, v] : configDbEntries) {
+                size_t dotPos = k.rfind('.');
+                if (dotPos != std::string::npos &&
+                    k.substr(dotPos + 1) == fieldName) {
+                  it = configDbEntries.find(k);
+                  break;
+                }
+              }
+            }
+            if (it == configDbEntries.end() && fieldName.size() > 2 &&
+                fieldName.back() == 'x' &&
+                fieldName[fieldName.size() - 2] == '_') {
+              std::string baseName = fieldName.substr(0, fieldName.size() - 1);
+              for (auto &[k, v] : configDbEntries) {
+                size_t dotPos = k.rfind('.');
+                if (dotPos == std::string::npos)
+                  continue;
+                std::string storedField = k.substr(dotPos + 1);
+                if (storedField.size() > baseName.size() &&
+                    storedField.substr(0, baseName.size()) == baseName &&
+                    std::isdigit(storedField[baseName.size()])) {
+                  it = configDbEntries.find(k);
+                  break;
+                }
+              }
+            }
+
+            if (it != configDbEntries.end()) {
+              if (traceConfigDbEnabled) {
+                llvm::errs() << "[CFG-CI-UNRES-GET] hit key=\"" << it->first
+                             << "\" bytes=" << it->second.size() << "\n";
+              }
+              writeConfigDbGetResult(callIndirectOp.getArgOperands()[4],
+                                     it->second, unresolvedArgs[4]);
+              setValue(procId, callIndirectOp.getResult(0),
+                       InterpretedValue(llvm::APInt(1, 1)));
+              return success();
+            }
+
+            if (traceConfigDbEnabled)
+              llvm::errs() << "[CFG-CI-UNRES-GET] miss key=\"" << key
+                           << "\"\n";
+            setValue(procId, callIndirectOp.getResult(0),
+                     InterpretedValue(llvm::APInt(1, 0)));
+            return success();
+          }
+        }
+
         LLVM_DEBUG(llvm::dbgs()
                    << "  func.call_indirect: address 0x"
                    << llvm::format_hex(funcAddr, 16)
@@ -11664,6 +12902,14 @@ arith_dispatch:
                  << " slot=" << methodIndex << ")\n");
       calleeName = overriddenCalleeName;
     } while (false);
+
+    if (traceConfigDbEnabled && calleeName.contains("config_db")) {
+      llvm::errs() << "[CFG-CI-DISPATCH] callee=" << calleeName
+                   << " nargs=" << callIndirectOp.getArgOperands().size()
+                   << " nresults=" << callIndirectOp.getNumResults() << "\n";
+    }
+    if (traceConfigDbEnabled && procId == 1)
+      llvm::errs() << "[CFG-CI-PROC1] callee=" << calleeName << "\n";
 
     // Intercept uvm_default_factory::register — fast-path native
     // registration. The original MLIR calls get_type_name 3-7 times via
@@ -12368,34 +13614,7 @@ arith_dispatch:
       auto readStr = [&](unsigned argIdx) -> std::string {
         if (argIdx >= args.size())
           return "";
-        InterpretedValue val = args[argIdx];
-        if (val.isX() || val.getWidth() < 128)
-          return "";
-        llvm::APInt bits = val.getAPInt();
-        uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
-        int64_t strLen = bits.extractBits(64, 64).getSExtValue();
-        if (strPtr == 0 || strLen <= 0)
-          return "";
-        auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
-        if (dynIt != dynamicStrings.end() && dynIt->second.first &&
-            dynIt->second.second > 0)
-          return std::string(dynIt->second.first,
-                             std::min(static_cast<size_t>(strLen),
-                                      static_cast<size_t>(dynIt->second.second)));
-        uint64_t off = 0;
-        MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
-        if (gBlock && gBlock->initialized) {
-          size_t avail = std::min(static_cast<size_t>(strLen),
-                                  gBlock->data.size() - static_cast<size_t>(off));
-          if (avail > 0)
-            return std::string(
-                reinterpret_cast<const char *>(gBlock->data.data() + off), avail);
-        }
-        if (strPtr >= 0x10000) {
-          const char *p = reinterpret_cast<const char *>(strPtr);
-          return std::string(p, static_cast<size_t>(strLen));
-        }
-        return "";
+        return readMooreStringStruct(procId, args[argIdx]);
       };
 
       if (calleeName.contains("::set") && !calleeName.contains("set_default") &&
@@ -12522,6 +13741,10 @@ arith_dispatch:
       }
     }
 
+    if (tryInterceptConfigDbCallIndirect(procId, callIndirectOp, calleeName,
+                                         args))
+      return success();
+
     // Intercept config_db implementation via call_indirect (vtable dispatch).
     // config_db#(T) is parametric, so each specialization has its own vtable
     // and calls go through call_indirect, not func.call. Without this
@@ -12535,34 +13758,7 @@ arith_dispatch:
       auto readStr = [&](unsigned argIdx) -> std::string {
         if (argIdx >= args.size())
           return "";
-        InterpretedValue val = args[argIdx];
-        if (val.isX() || val.getWidth() < 128)
-          return "";
-        llvm::APInt bits = val.getAPInt();
-        uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
-        int64_t strLen = bits.extractBits(64, 64).getSExtValue();
-        if (strPtr == 0 || strLen <= 0)
-          return "";
-        auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
-        if (dynIt != dynamicStrings.end() && dynIt->second.first &&
-            dynIt->second.second > 0)
-          return std::string(dynIt->second.first,
-                             std::min(static_cast<size_t>(strLen),
-                                      static_cast<size_t>(dynIt->second.second)));
-        uint64_t off = 0;
-        MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
-        if (gBlock && gBlock->initialized) {
-          size_t avail = std::min(static_cast<size_t>(strLen),
-                                  gBlock->data.size() - static_cast<size_t>(off));
-          if (avail > 0)
-            return std::string(
-                reinterpret_cast<const char *>(gBlock->data.data() + off), avail);
-        }
-        if (strPtr >= 0x10000) {
-          const char *p = reinterpret_cast<const char *>(strPtr);
-          return std::string(p, static_cast<size_t>(strLen));
-        }
-        return "";
+        return readMooreStringStruct(procId, args[argIdx]);
       };
 
       if (calleeName.contains("::set") && !calleeName.contains("set_default") &&
@@ -12587,6 +13783,13 @@ arith_dispatch:
             fieldName = str2;
           }
           std::string key = instName + "." + fieldName;
+          if (traceConfigDbEnabled) {
+            llvm::errs() << "[CFG-CI-SET] callee=" << calleeName
+                         << " key=\"" << key << "\" s1=\"" << str1
+                         << "\" s2=\"" << str2 << "\" s3=\"" << str3
+                         << "\" entries_before=" << configDbEntries.size()
+                         << "\n";
+          }
 
           InterpretedValue &valueArg = args[4];
           unsigned valueBits = valueArg.getWidth();
@@ -12599,6 +13802,11 @@ arith_dispatch:
                   valBits.extractBits(8, i * 8).getZExtValue());
           }
           configDbEntries[key] = std::move(valueData);
+          if (traceConfigDbEnabled) {
+            llvm::errs() << "[CFG-CI-SET] stored key=\"" << key
+                         << "\" entries_after=" << configDbEntries.size()
+                         << "\n";
+          }
         }
         return success();
       }
@@ -12621,6 +13829,12 @@ arith_dispatch:
             fieldName = str2;
           }
           std::string key = instName + "." + fieldName;
+          if (traceConfigDbEnabled) {
+            llvm::errs() << "[CFG-CI-GET] callee=" << calleeName
+                         << " key=\"" << key << "\" s1=\"" << str1
+                         << "\" s2=\"" << str2 << "\" s3=\"" << str3
+                         << "\" entries=" << configDbEntries.size() << "\n";
+          }
 
           auto it = configDbEntries.find(key);
           if (it == configDbEntries.end()) {
@@ -12659,6 +13873,10 @@ arith_dispatch:
           }
 
           if (it != configDbEntries.end()) {
+            if (traceConfigDbEnabled) {
+              llvm::errs() << "[CFG-CI-GET] hit key=\"" << it->first
+                           << "\" bytes=" << it->second.size() << "\n";
+            }
             Value outputRef = callIndirectOp.getArgOperands()[4];
             const std::vector<uint8_t> &valueData = it->second;
             Type refType = outputRef.getType();
@@ -12735,6 +13953,8 @@ arith_dispatch:
 
           setValue(procId, callIndirectOp.getResult(0),
                   InterpretedValue(llvm::APInt(1, 0)));
+          if (traceConfigDbEnabled)
+            llvm::errs() << "[CFG-CI-GET] miss key=\"" << key << "\"\n";
           LLVM_DEBUG(llvm::dbgs()
                      << "  config_db::get(\"" << key
                      << "\") -> not found via call_indirect\n");
@@ -14746,6 +15966,16 @@ llvm_dispatch:
 
 LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                                                       llhd::ProbeOp probeOp) {
+  {
+    static bool traceProbeEntry = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_PROBE_ENTRY");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+    if (traceProbeEntry) {
+      llvm::errs() << "[PROBE-ENTRY] procId=" << procId << "\n";
+      llvm::errs().flush();
+    }
+  }
   auto *statePtr = (procId == activeProcessId && activeProcessState)
                        ? activeProcessState
                        : &processStates[procId];
@@ -15543,16 +16773,6 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
   // semantics where a probe sees the value driven earlier in the same process.
   auto pendingIt = pendingEpsilonDrives.find(sigId);
   if (pendingIt != pendingEpsilonDrives.end()) {
-    // DEBUG: trace pending epsilon drive intercept
-    {
-      static bool traceProbe = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-      if (traceProbe && sigId == 98) {
-        llvm::errs() << "[PROBE-PATH] sig=98 PENDING-EPSILON val=0x"
-                     << pendingIt->second.getUInt64() << " t="
-                     << scheduler.getCurrentTime().realTime
-                     << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
-      }
-    }
     setValue(procId, probeOp.getResult(), pendingIt->second);
     LLVM_DEBUG(llvm::dbgs() << "  Probed signal " << sigId
                             << " = " << (pendingIt->second.isX() ? "X"
@@ -15586,16 +16806,6 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                 bitsToInsert,
                 block.data[i] & ((1u << bitsToInsert) - 1));
             safeInsertBits(memValue, byteVal, i * 8);
-          }
-          // DEBUG: trace memory-backed read
-          {
-            static bool traceProbe = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-            if (traceProbe && sigId == 98) {
-              llvm::errs() << "[PROBE-PATH] sig=98 BACKING-MEM val=0x"
-                           << memValue.getZExtValue() << " t="
-                           << scheduler.getCurrentTime().realTime
-                           << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
-            }
           }
           setValue(procId, probeOp.getResult(),
                    InterpretedValue(memValue));
@@ -15643,16 +16853,6 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                     block->data[blockOffset + i] & ((1u << bitsToInsert) - 1));
       safeInsertBits(memValue, byteVal, i * 8);
     }
-    // DEBUG: trace ref-ptr-cast memory read
-    {
-      static bool traceProbe = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-      if (traceProbe && sigId == 98) {
-        llvm::errs() << "[PROBE-PATH] sig=98 CAST-STORE-MEM val=0x"
-                     << memValue.getZExtValue() << " t="
-                     << scheduler.getCurrentTime().realTime
-                     << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
-      }
-    }
     setValue(procId, probeOp.getResult(), InterpretedValue(memValue));
     LLVM_DEBUG(llvm::dbgs() << "  Probed signal " << sigId
                             << " from memory at 0x"
@@ -15662,18 +16862,44 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
     return success();
   }
 
-  // DEBUG: trace scheduler read
+  // For purely combinational signals (in combSignalDriveMap), trace through
+  // the drive expression to get the fresh computed value instead of reading
+  // potentially stale scheduler signal values.
   {
-    static bool traceProbe = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-    if (traceProbe && sigId == 98) {
-      llvm::errs() << "[PROBE-PATH] sig=98 SCHEDULER val=0x"
-                   << scheduler.getSignalValue(sigId).getValue() << " t="
-                   << scheduler.getCurrentTime().realTime
-                   << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
+    auto combIt = combSignalDriveMap.find(sigId);
+    {
+      static bool traceProbe = []() {
+        const char *env = std::getenv("CIRCT_SIM_TRACE_PROBE_COMB");
+        return env && env[0] != '\0' && env[0] != '0';
+      }();
+      if (traceProbe) {
+        llvm::StringRef sigName = getSignalName(sigId);
+        llvm::errs() << "[PROBE-COMB] sig=" << sigId << " name=" << sigName
+                     << " inCombMap="
+                     << (combIt != combSignalDriveMap.end() ? "YES" : "NO")
+                     << "\n";
+      }
+    }
+    if (combIt != combSignalDriveMap.end() &&
+        !continuousEvalVisitedSignals.count(sigId)) {
+      continuousEvalVisitedSignals.insert(sigId);
+      const auto &driveInfo = combIt->second;
+      ScopedInstanceContext instScope(*this, driveInfo.instanceId);
+      InterpretedValue val;
+      if (!driveInfo.inputMap.empty()) {
+        ScopedInputValueMap inputScope(*this, driveInfo.inputMap);
+        val = evaluateContinuousValue(driveInfo.driveValue);
+      } else {
+        val = evaluateContinuousValue(driveInfo.driveValue);
+      }
+      continuousEvalVisitedSignals.erase(sigId);
+      setValue(procId, probeOp.getResult(), val);
+      return success();
     }
   }
 
-  // Get the current signal value from the scheduler
+  // Get the current signal value from the scheduler (fallback for non-comb
+  // signals or when cycle detection fires)
   const SignalValue &sigVal = scheduler.getSignalValue(sigId);
 
   // Convert to InterpretedValue and store
@@ -17074,6 +18300,10 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       Event([this, sigId, driverId, newVal, strength0, strength1]() {
         scheduler.updateSignalWithStrength(sigId, driverId, newVal, strength0,
                                            strength1);
+        // Clear the pending epsilon drive now that the scheduler has been
+        // updated. This prevents stale pending values from shadowing
+        // future signal reads.
+        pendingEpsilonDrives.erase(sigId);
       }));
 
   return success();
@@ -18632,33 +19862,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         // This is a config_db::get wrapper. Extract string args and handle
         // via our key-value store, bypassing the singleton dispatch.
         auto readStr = [&](unsigned argIdx) -> std::string {
-          InterpretedValue val = getValue(procId, callOp.getOperand(argIdx));
-          if (val.isX() || val.getWidth() < 128)
-            return "";
-          llvm::APInt bits = val.getAPInt();
-          uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
-          int64_t strLen = bits.extractBits(64, 64).getSExtValue();
-          if (strPtr == 0 || strLen <= 0)
-            return "";
-          // Check dynamicStrings first (for runtime-allocated strings from
-          // __moore_string_concat, __moore_int_to_string, etc.)
-          auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
-          if (dynIt != dynamicStrings.end() && dynIt->second.first &&
-              dynIt->second.second > 0) {
-            return std::string(
-                dynIt->second.first,
-                std::min(static_cast<size_t>(strLen),
-                         static_cast<size_t>(dynIt->second.second)));
-          }
-          // Fall back to global/alloca memory blocks
-          uint64_t strOff = 0;
-          MemoryBlock *strBlock = findBlockByAddress(strPtr, strOff);
-          if (!strBlock || !strBlock->initialized)
-            return "";
-          std::string result;
-          for (int64_t i = 0; i < strLen && strOff + i < strBlock->data.size(); ++i)
-            result += static_cast<char>(strBlock->data[strOff + i]);
-          return result;
+          return readMooreStringStruct(procId, callOp.getOperand(argIdx));
         };
 
         // Build config_db key from self context + inst_name + field_name
@@ -18784,31 +19988,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     if (isConfigDbSetWrapper) {
       // Read inst_name and field_name from struct<(ptr,i64)> args
       auto readStr = [&](unsigned argIdx) -> std::string {
-        InterpretedValue val = getValue(procId, callOp.getOperand(argIdx));
-        if (val.isX() || val.getWidth() < 128)
-          return "";
-        llvm::APInt bits = val.getAPInt();
-        uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
-        int64_t strLen = bits.extractBits(64, 64).getSExtValue();
-        if (strPtr == 0 || strLen <= 0)
-          return "";
-        auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
-        if (dynIt != dynamicStrings.end() && dynIt->second.first &&
-            dynIt->second.second > 0) {
-          return std::string(
-              dynIt->second.first,
-              std::min(static_cast<size_t>(strLen),
-                       static_cast<size_t>(dynIt->second.second)));
-        }
-        uint64_t strOff = 0;
-        MemoryBlock *strBlock = findBlockByAddress(strPtr, strOff);
-        if (!strBlock || !strBlock->initialized)
-          return "";
-        std::string result;
-        for (int64_t i = 0; i < strLen && strOff + i < strBlock->data.size();
-             ++i)
-          result += static_cast<char>(strBlock->data[strOff + i]);
-        return result;
+        return readMooreStringStruct(procId, callOp.getOperand(argIdx));
       };
 
       std::string instName = readStr(1);
@@ -19745,53 +20925,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
     // Helper: read a string from a struct<(ptr, i64)> value argument.
     auto readStringFromStructVal = [&](Value operand) -> std::string {
-      InterpretedValue val = getValue(procId, operand);
-      if (val.isX() || val.getWidth() < 128)
-        return "";
-      // Low 64 bits = pointer, high 64 bits = length
-      llvm::APInt bits = val.getAPInt();
-      uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
-      int64_t strLen = bits.extractBits(64, 64).getSExtValue();
-      if (strPtr == 0 || strLen <= 0)
-        return "";
-
-      // Try dynamicStrings registry
-      auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
-      if (dynIt != dynamicStrings.end() && dynIt->second.first &&
-          dynIt->second.second > 0) {
-        return std::string(dynIt->second.first,
-                           std::min(static_cast<size_t>(strLen),
-                                    static_cast<size_t>(dynIt->second.second)));
-      }
-
-      // Try global/malloc memory via O(log n) range index
-      {
-        uint64_t off = 0;
-        MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
-        if (gBlock && gBlock->initialized) {
-          size_t avail = std::min(static_cast<size_t>(strLen),
-                                  gBlock->data.size() - static_cast<size_t>(off));
-          if (avail > 0)
-            return std::string(
-                reinterpret_cast<const char *>(gBlock->data.data() + off),
-                avail);
-        }
-      }
-
-      // Try native memory (direct pointer read)
-      bool isNative = false;
-      for (auto &entry : nativeMemoryBlocks) {
-        if (strPtr >= entry.first && strPtr < entry.first + entry.second) {
-          isNative = true;
-          break;
-        }
-      }
-      if (isNative || strPtr >= 0x10000) {
-        const char *p = reinterpret_cast<const char *>(strPtr);
-        return std::string(p, static_cast<size_t>(strLen));
-      }
-
-      return "";
+      return readMooreStringStruct(procId, operand);
     };
 
     if (calleeName.contains("::set")) {
@@ -19959,41 +21093,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
     // Reuse the config_db string helper
     auto readStringFromStructVal2 = [&](Value operand) -> std::string {
-      InterpretedValue val = getValue(procId, operand);
-      if (val.isX() || val.getWidth() < 128)
-        return "";
-      llvm::APInt bits = val.getAPInt();
-      uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
-      int64_t strLen = bits.extractBits(64, 64).getSExtValue();
-      if (strPtr == 0 || strLen <= 0)
-        return "";
-      auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
-      if (dynIt != dynamicStrings.end() && dynIt->second.first &&
-          dynIt->second.second > 0) {
-        return std::string(dynIt->second.first,
-                           std::min(static_cast<size_t>(strLen),
-                                    static_cast<size_t>(dynIt->second.second)));
-      }
-      uint64_t off = 0;
-      MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
-      if (gBlock && gBlock->initialized) {
-        size_t avail = std::min(static_cast<size_t>(strLen),
-                                gBlock->data.size() - static_cast<size_t>(off));
-        if (avail > 0)
-          return std::string(
-              reinterpret_cast<const char *>(gBlock->data.data() + off), avail);
-      }
-      for (auto &entry : nativeMemoryBlocks) {
-        if (strPtr >= entry.first && strPtr < entry.first + entry.second) {
-          const char *p = reinterpret_cast<const char *>(strPtr);
-          return std::string(p, static_cast<size_t>(strLen));
-        }
-      }
-      if (strPtr >= 0x10000) {
-        const char *p = reinterpret_cast<const char *>(strPtr);
-        return std::string(p, static_cast<size_t>(strLen));
-      }
-      return "";
+      return readMooreStringStruct(procId, operand);
     };
 
     if (calleeName.contains("::set") && !calleeName.contains("set_default") &&
@@ -21166,7 +22266,23 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   if (valIt != valueMap.end())
     return valIt->second;
 
-  // Check module-level init values (for values computed during module init)
+  // Check per-instance module-level init values first (child module context).
+  InstanceId moduleInitInstance = activeInstanceId;
+  if (moduleInitInstance == 0)
+    moduleInitInstance = statePtr->instanceId;
+  if (moduleInitInstance != 0) {
+    auto instIt = instanceModuleInitValueMaps.find(moduleInitInstance);
+    if (instIt != instanceModuleInitValueMaps.end()) {
+      auto it = instIt->second.find(value);
+      if (it != instIt->second.end() && !it->second.isX()) {
+        if (!isa<LLVM::LLVMPointerType>(value.getType()) ||
+            it->second.getUInt64() != 0)
+          return it->second;
+      }
+    }
+  }
+
+  // Check shared top-module init values.
   auto moduleIt = moduleInitValueMap.find(value);
   if (moduleIt != moduleInitValueMap.end())
     return moduleIt->second;
@@ -21531,6 +22647,59 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     unsigned bitWidth = getTypeWidth(resultType);
     unsigned loadSize = getLLVMTypeSize(resultType);
 
+    // Interface fields are represented as shadow signals. Prefer reading
+    // the live signal value over backing memory so continuous assignments
+    // observe reactive updates.
+    if (!interfaceFieldSignals.empty()) {
+      auto fieldIt = interfaceFieldSignals.find(addr);
+      if (fieldIt != interfaceFieldSignals.end()) {
+        SignalId fieldSigId = fieldIt->second;
+        InterpretedValue signalVal;
+        auto pendingIt = pendingEpsilonDrives.find(fieldSigId);
+        if (pendingIt != pendingEpsilonDrives.end())
+          signalVal = pendingIt->second;
+        else
+          signalVal =
+              InterpretedValue::fromSignalValue(scheduler.getSignalValue(fieldSigId));
+
+        if (!signalVal.isX() &&
+            scheduler.getSignalEncoding(fieldSigId) ==
+                SignalEncoding::FourStateStruct) {
+          if (auto llvmStructTy = dyn_cast<LLVM::LLVMStructType>(resultType)) {
+            auto body = llvmStructTy.getBody();
+            if (body.size() == 2) {
+              unsigned valueWidth = getTypeWidth(body[0]);
+              unsigned unknownWidth = getTypeWidth(body[1]);
+              if (valueWidth == unknownWidth &&
+                  valueWidth + unknownWidth == signalVal.getWidth()) {
+                APInt bits = signalVal.getAPInt();
+                APInt unknownBits = bits.extractBits(unknownWidth, 0);
+                APInt valueBits = bits.extractBits(valueWidth, unknownWidth);
+                APInt llvmBits = APInt::getZero(valueWidth + unknownWidth);
+                safeInsertBits(llvmBits, valueBits, 0);
+                safeInsertBits(llvmBits, unknownBits, valueWidth);
+                signalVal = InterpretedValue(llvmBits);
+              }
+            }
+          }
+        }
+
+        if (signalVal.isX()) {
+          signalVal = InterpretedValue::makeX(bitWidth);
+        } else if (signalVal.getWidth() != bitWidth) {
+          APInt apVal = signalVal.getAPInt();
+          if (apVal.getBitWidth() < bitWidth)
+            apVal = apVal.zext(bitWidth);
+          else if (apVal.getBitWidth() > bitWidth)
+            apVal = apVal.trunc(bitWidth);
+          signalVal = InterpretedValue(apVal);
+        }
+
+        valueMap[value] = signalVal;
+        return signalVal;
+      }
+    }
+
     // Find the memory block containing this address
     MemoryBlock *block = nullptr;
     uint64_t offset = 0;
@@ -21541,14 +22710,11 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     // Check module-level allocas
     if (!block) {
       for (auto &[val, memBlock] : moduleLevelAllocas) {
-        auto addrIt = moduleInitValueMap.find(val);
-        if (addrIt != moduleInitValueMap.end()) {
-          uint64_t blockAddr = addrIt->second.getUInt64();
-          if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
-            block = &memBlock;
-            offset = addr - blockAddr;
-            break;
-          }
+        uint64_t blockAddr = getModuleLevelAllocaBaseAddress(val);
+        if (blockAddr != 0 && addr >= blockAddr && addr < blockAddr + memBlock.size) {
+          block = &memBlock;
+          offset = addr - blockAddr;
+          break;
         }
       }
     }
@@ -21720,6 +22886,16 @@ SignalEncoding LLHDProcessInterpreter::getSignalEncoding(Type type) {
       unsigned valueWidth = getTypeWidth(elements[0].type);
       unsigned unknownWidth = getTypeWidth(elements[1].type);
       if (valueWidth == unknownWidth)
+        return SignalEncoding::FourStateStruct;
+    }
+  }
+  if (auto llvmStructType = dyn_cast<LLVM::LLVMStructType>(type)) {
+    auto body = llvmStructType.getBody();
+    if (body.size() == 2) {
+      auto valueTy = dyn_cast<IntegerType>(body[0]);
+      auto unknownTy = dyn_cast<IntegerType>(body[1]);
+      if (valueTy && unknownTy &&
+          valueTy.getWidth() == unknownTy.getWidth())
         return SignalEncoding::FourStateStruct;
     }
   }
@@ -22729,33 +23905,6 @@ LogicalResult LLHDProcessInterpreter::interpretCombinationalYield(
        llvm::zip(combOp.getResults(), yieldOp.getOperands()))
     state.valueMap[result] = getValue(procId, operand);
 
-  // DEBUG: trace CombinationalOp yield values
-  {
-    static bool traceYield = std::getenv("CIRCT_SIM_TRACE_FIRREG") != nullptr;
-    if (traceYield && combOp.getNumResults() == 2) {
-      // Check if result#1 type is i1 (the outstanding changed flag pattern)
-      if (combOp.getResultTypes()[1].isInteger(1)) {
-        auto it0 = state.valueMap.find(combOp.getResult(0));
-        auto it1 = state.valueMap.find(combOp.getResult(1));
-        llvm::errs() << "[COMB-YIELD] procId=" << procId
-                     << " instId=" << state.instanceId
-                     << " t=" << scheduler.getCurrentTime().realTime
-                     << " d=" << scheduler.getCurrentTime().deltaStep
-                     << " r0=";
-        if (it0 != state.valueMap.end()) {
-          if (it0->second.isX()) llvm::errs() << "X";
-          else { llvm::SmallString<32> s; it0->second.getAPInt().toString(s, 16, false); llvm::errs() << "0x" << s; }
-        } else llvm::errs() << "?";
-        llvm::errs() << " r1=";
-        if (it1 != state.valueMap.end()) {
-          if (it1->second.isX()) llvm::errs() << "X";
-          else { llvm::SmallString<32> s; it1->second.getAPInt().toString(s, 16, false); llvm::errs() << "0x" << s; }
-        } else llvm::errs() << "?";
-        llvm::errs() << "\n";
-      }
-    }
-  }
-
   // Restart from block entry on the next sensitivity wakeup.
   state.destBlock = &combOp.getBody().front();
   state.destOperands.clear();
@@ -23223,14 +24372,12 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
       // If not found by value, check by address
       if (!block) {
         for (auto &[val, memBlock] : moduleLevelAllocas) {
-          auto addrIt = moduleInitValueMap.find(val);
-          if (addrIt != moduleInitValueMap.end()) {
-            uint64_t blockAddr = addrIt->second.getUInt64();
-            if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
-              block = &memBlock;
-              offset = addr - blockAddr;
-              break;
-            }
+          uint64_t blockAddr = getModuleLevelAllocaBaseAddress(val);
+          if (blockAddr != 0 &&
+              addr >= blockAddr && addr < blockAddr + memBlock.size) {
+            block = &memBlock;
+            offset = addr - blockAddr;
+            break;
           }
         }
       }
@@ -23502,14 +24649,10 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlockByAddress(uint64_t addr,
   }
   // Check module-level allocas
   for (auto &[val, block] : moduleLevelAllocas) {
-    // Check in moduleInitValueMap for the address
-    auto it = moduleInitValueMap.find(val);
-    if (it != moduleInitValueMap.end()) {
-      uint64_t blockAddr = it->second.getUInt64();
-      if (addr >= blockAddr && addr < blockAddr + block.size) {
-        if (outOffset) *outOffset = addr - blockAddr;
-        return &block;
-      }
+    uint64_t blockAddr = getModuleLevelAllocaBaseAddress(val);
+    if (blockAddr != 0 && addr >= blockAddr && addr < blockAddr + block.size) {
+      if (outOffset) *outOffset = addr - blockAddr;
+      return &block;
     }
   }
   // Check global and malloc blocks via O(log n) range index
@@ -23554,35 +24697,299 @@ bool LLHDProcessInterpreter::tryReadStringKey(ProcessId procId,
   if (strLen > kMaxStringKeyBytes)
     return false;
 
+  auto assignBounded = [&](const char *data, size_t availableBytes) -> bool {
+    if (!data || availableBytes == 0)
+      return false;
+    size_t copyLen =
+        std::min(static_cast<size_t>(strLen), static_cast<size_t>(availableBytes));
+    if (copyLen == 0)
+      return false;
+    out.assign(data, copyLen);
+    return true;
+  };
+
   // Check dynamicStrings registry first (for strings from __moore_packed_string_to_string)
   auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtrVal));
   if (dynIt != dynamicStrings.end() && dynIt->second.first && dynIt->second.second > 0) {
-    size_t effectiveLen = std::min(static_cast<size_t>(strLen),
-                                   static_cast<size_t>(dynIt->second.second));
-    out.assign(dynIt->second.first, effectiveLen);
-    return true;
+    if (assignBounded(dynIt->second.first,
+                      static_cast<size_t>(dynIt->second.second)))
+      return true;
   }
 
   uint64_t offset = 0;
   if (auto *block = findMemoryBlockByAddress(strPtrVal, procId, &offset)) {
-    if (!block->initialized)
-      return false;
-    if (offset + static_cast<uint64_t>(strLen) > block->data.size())
-      return false;
-    out.assign(reinterpret_cast<const char *>(block->data.data() + offset),
-               static_cast<size_t>(strLen));
-    return true;
+    if (block->initialized && offset < block->data.size()) {
+      if (assignBounded(
+              reinterpret_cast<const char *>(block->data.data() + offset),
+              block->data.size() - static_cast<size_t>(offset)))
+        return true;
+    }
+  }
+
+  // Fallback: exact global base lookup (covers cases where the range index
+  // does not yet include a newly-created global block).
+  auto globalIt = addressToGlobal.find(strPtrVal);
+  if (globalIt != addressToGlobal.end()) {
+    auto blockIt = globalMemoryBlocks.find(globalIt->second);
+    if (blockIt != globalMemoryBlocks.end() && blockIt->second.initialized) {
+      if (assignBounded(
+              reinterpret_cast<const char *>(blockIt->second.data.data()),
+              blockIt->second.data.size()))
+        return true;
+    }
+  }
+
+  // Slow-path fallback: linear global-range scan for interior pointers.
+  for (auto &entry : globalAddresses) {
+    uint64_t baseAddr = entry.getValue();
+    auto blockIt = globalMemoryBlocks.find(entry.getKey());
+    if (blockIt == globalMemoryBlocks.end())
+      continue;
+    MemoryBlock &block = blockIt->second;
+    if (!block.initialized || block.size == 0)
+      continue;
+    if (strPtrVal < baseAddr || strPtrVal >= baseAddr + block.size)
+      continue;
+    size_t globalOffset = static_cast<size_t>(strPtrVal - baseAddr);
+    if (globalOffset >= block.data.size())
+      continue;
+    if (assignBounded(
+            reinterpret_cast<const char *>(block.data.data() + globalOffset),
+            block.data.size() - globalOffset))
+      return true;
   }
 
   uint64_t nativeOffset = 0;
   size_t nativeSize = 0;
 
   if (findNativeMemoryBlockByAddress(strPtrVal, &nativeOffset, &nativeSize)) {
-    if (nativeOffset + static_cast<size_t>(strLen) > nativeSize)
-      return false;
-    auto *nativePtr = reinterpret_cast<const char *>(strPtrVal);
-    out.assign(nativePtr, static_cast<size_t>(strLen));
+    if (nativeOffset < nativeSize) {
+      auto *nativePtr = reinterpret_cast<const char *>(strPtrVal);
+      if (assignBounded(nativePtr, nativeSize - static_cast<size_t>(nativeOffset)))
+        return true;
+    }
+  }
+
+  return false;
+}
+
+std::string LLHDProcessInterpreter::readMooreStringStruct(
+    ProcessId procId, InterpretedValue packedValue) {
+  if (packedValue.isX() || packedValue.getWidth() < 128)
+    return "";
+
+  llvm::APInt bits = packedValue.getAPInt();
+  uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
+  int64_t strLen = bits.extractBits(64, 64).getSExtValue();
+  std::string out;
+  if (tryReadStringKey(procId, strPtr, strLen, out))
+    return out;
+  return "";
+}
+
+std::string LLHDProcessInterpreter::readMooreStringStruct(ProcessId procId,
+                                                          Value operand) {
+  return readMooreStringStruct(procId, getValue(procId, operand));
+}
+
+bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
+    ProcessId procId, mlir::func::CallIndirectOp callIndirectOp,
+    StringRef calleeName, ArrayRef<InterpretedValue> args) {
+  // Intercept config_db implementation via call_indirect (vtable dispatch).
+  // This helper is used from both normal dispatch and X-fallback dispatch so
+  // config_db behavior is independent of function pointer materialization.
+  if (!(calleeName.contains("config_db") && calleeName.contains("implementation") &&
+        (calleeName.contains("::set") || calleeName.contains("::get"))))
+    return false;
+
+  auto readStr = [&](unsigned argIdx) -> std::string {
+    if (argIdx >= args.size())
+      return "";
+    return readMooreStringStruct(procId, args[argIdx]);
+  };
+
+  if (calleeName.contains("::set") && !calleeName.contains("set_default") &&
+      !calleeName.contains("set_override") &&
+      !calleeName.contains("set_anonymous")) {
+    // set(self, computed_inst, sv_inst_name, sv_field_name, value, ...)
+    if (args.size() >= 5) {
+      std::string str1 = readStr(1);
+      std::string str2 = readStr(2);
+      std::string str3 = readStr(3);
+
+      std::string instName = str2;
+      std::string fieldName = str3;
+      // Fallback for older lowering layouts.
+      if (fieldName.empty()) {
+        instName = str1;
+        fieldName = str2;
+      }
+      std::string key = instName + "." + fieldName;
+      if (traceConfigDbEnabled) {
+        llvm::errs() << "[CFG-CI-SET] callee=" << calleeName
+                     << " key=\"" << key << "\" s1=\"" << str1
+                     << "\" s2=\"" << str2 << "\" s3=\"" << str3
+                     << "\" entries_before=" << configDbEntries.size()
+                     << "\n";
+      }
+
+      InterpretedValue valueArg = args[4];
+      unsigned valueBits = valueArg.getWidth();
+      unsigned valueBytes = (valueBits + 7) / 8;
+      std::vector<uint8_t> valueData(valueBytes, 0);
+      if (!valueArg.isX()) {
+        llvm::APInt valBits = valueArg.getAPInt();
+        for (unsigned i = 0; i < valueBytes; ++i)
+          valueData[i] = static_cast<uint8_t>(
+              valBits.extractBits(8, i * 8).getZExtValue());
+      }
+      configDbEntries[key] = std::move(valueData);
+      if (traceConfigDbEnabled) {
+        llvm::errs() << "[CFG-CI-SET] stored key=\"" << key
+                     << "\" entries_after=" << configDbEntries.size()
+                     << "\n";
+      }
+    }
     return true;
+  }
+
+  if (calleeName.contains("::get") && !calleeName.contains("get_default")) {
+    // get(self, context_ptr, sv_inst_name, sv_field_name, value_ref) -> i1
+    if (args.size() >= 5 && callIndirectOp.getNumResults() >= 1) {
+      std::string str1 = readStr(1);
+      std::string str2 = readStr(2);
+      std::string str3 = readStr(3);
+
+      std::string instName = str2;
+      std::string fieldName = str3;
+      if (fieldName.empty()) {
+        instName = str1;
+        fieldName = str2;
+      }
+      std::string key = instName + "." + fieldName;
+      if (traceConfigDbEnabled) {
+        llvm::errs() << "[CFG-CI-GET] callee=" << calleeName
+                     << " key=\"" << key << "\" s1=\"" << str1
+                     << "\" s2=\"" << str2 << "\" s3=\"" << str3
+                     << "\" entries=" << configDbEntries.size() << "\n";
+      }
+
+      auto it = configDbEntries.find(key);
+      if (it == configDbEntries.end()) {
+        // Wildcard match: look for entries where field name matches.
+        for (auto &[k, v] : configDbEntries) {
+          size_t dotPos = k.rfind('.');
+          if (dotPos != std::string::npos &&
+              k.substr(dotPos + 1) == fieldName) {
+            it = configDbEntries.find(k);
+            break;
+          }
+        }
+      }
+      // Fuzzy match: unresolved "_x" suffix can match numeric instance index.
+      if (it == configDbEntries.end() && fieldName.size() > 2 &&
+          fieldName.back() == 'x' && fieldName[fieldName.size() - 2] == '_') {
+        std::string baseName = fieldName.substr(0, fieldName.size() - 1);
+        for (auto &[k, v] : configDbEntries) {
+          size_t dotPos = k.rfind('.');
+          if (dotPos == std::string::npos)
+            continue;
+          std::string storedField = k.substr(dotPos + 1);
+          if (storedField.size() > baseName.size() &&
+              storedField.substr(0, baseName.size()) == baseName &&
+              std::isdigit(storedField[baseName.size()])) {
+            it = configDbEntries.find(k);
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  config_db fuzzy match: '" << fieldName
+                       << "' -> '" << storedField << "'\n");
+            break;
+          }
+        }
+      }
+
+      if (it != configDbEntries.end()) {
+        if (traceConfigDbEnabled) {
+          llvm::errs() << "[CFG-CI-GET] hit key=\"" << it->first
+                       << "\" bytes=" << it->second.size() << "\n";
+        }
+        Value outputRef = callIndirectOp.getArgOperands()[4];
+        const std::vector<uint8_t> &valueData = it->second;
+        Type refType = outputRef.getType();
+
+        if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+          Type innerType = refT.getNestedType();
+          unsigned innerBits = getTypeWidth(innerType);
+          unsigned innerBytes = (innerBits + 7) / 8;
+          llvm::APInt valueBits(innerBits, 0);
+          for (unsigned i = 0;
+               i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
+            safeInsertBits(valueBits, llvm::APInt(8, valueData[i]), i * 8);
+          SignalId sigId2 = resolveSignalId(outputRef);
+          if (sigId2 != 0)
+            pendingEpsilonDrives[sigId2] = InterpretedValue(valueBits);
+          // Also write directly to memory (alloca-backed and native refs).
+          InterpretedValue refAddr = getValue(procId, outputRef);
+          if (!refAddr.isX()) {
+            uint64_t addr = refAddr.getUInt64();
+            uint64_t off3 = 0;
+            MemoryBlock *blk = findMemoryBlockByAddress(addr, procId, &off3);
+            if (blk) {
+              writeConfigDbBytesToMemoryBlock(
+                  blk, off3, valueData, innerBytes,
+                  /*zeroFillMissing=*/true);
+            } else {
+              uint64_t nativeOff = 0;
+              size_t nativeSize = 0;
+              if (findNativeMemoryBlockByAddress(addr, &nativeOff,
+                                                 &nativeSize)) {
+                writeConfigDbBytesToNativeMemory(
+                    addr, nativeOff, nativeSize, valueData, innerBytes,
+                    /*zeroFillMissing=*/true);
+              }
+            }
+          }
+        } else if (isa<LLVM::LLVMPointerType>(refType)) {
+          if (!args[4].isX()) {
+            uint64_t outputAddr = args[4].getUInt64();
+            uint64_t outOff = 0;
+            MemoryBlock *outBlock =
+                findMemoryBlockByAddress(outputAddr, procId, &outOff);
+            if (outBlock) {
+              writeConfigDbBytesToMemoryBlock(
+                  outBlock, outOff, valueData,
+                  static_cast<unsigned>(valueData.size()),
+                  /*zeroFillMissing=*/false);
+            } else {
+              uint64_t nativeOff = 0;
+              size_t nativeSize = 0;
+              if (findNativeMemoryBlockByAddress(outputAddr, &nativeOff,
+                                                 &nativeSize)) {
+                writeConfigDbBytesToNativeMemory(
+                    outputAddr, nativeOff, nativeSize, valueData,
+                    static_cast<unsigned>(valueData.size()),
+                    /*zeroFillMissing=*/false);
+              }
+            }
+          }
+        }
+
+        setValue(procId, callIndirectOp.getResult(0),
+                 InterpretedValue(llvm::APInt(1, 1)));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  config_db::get(\"" << key << "\") -> found ("
+                   << valueData.size() << " bytes) via call_indirect\n");
+        return true;
+      }
+
+      setValue(procId, callIndirectOp.getResult(0),
+               InterpretedValue(llvm::APInt(1, 0)));
+      if (traceConfigDbEnabled)
+        llvm::errs() << "[CFG-CI-GET] miss key=\"" << key << "\"\n";
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  config_db::get(\"" << key
+                 << "\") -> not found via call_indirect\n");
+      return true;
+    }
   }
 
   return false;
@@ -23634,6 +25041,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
 
   // Store the pointer value (the address)
   setValue(procId, allocaOp.getResult(), InterpretedValue(addr, 64));
+  if (isModuleLevel)
+    moduleLevelAllocaBaseAddr[allocaOp.getResult()] = addr;
 
   LLVM_DEBUG(llvm::dbgs() << "  llvm.alloca: allocated " << totalSize
                           << " bytes at address 0x" << llvm::format_hex(addr, 16)
@@ -24066,17 +25475,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     // class member access through a heap-allocated class instance).
     if (!block) {
       for (auto &[val, memBlock] : moduleLevelAllocas) {
-        auto addrIt = moduleInitValueMap.find(val);
-        if (addrIt != moduleInitValueMap.end()) {
-          uint64_t blockAddr = addrIt->second.getUInt64();
-          if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
-            block = &memBlock;
-            offset = addr - blockAddr;
-            LLVM_DEBUG(llvm::dbgs() << "  llvm.store: found module-level alloca at 0x"
-                                    << llvm::format_hex(blockAddr, 16)
-                                    << " offset " << offset << "\n");
-            break;
-          }
+        uint64_t blockAddr = getModuleLevelAllocaBaseAddress(val);
+        if (blockAddr != 0 && addr >= blockAddr && addr < blockAddr + memBlock.size) {
+          block = &memBlock;
+          offset = addr - blockAddr;
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.store: found module-level alloca at 0x"
+                                  << llvm::format_hex(blockAddr, 16)
+                                  << " offset " << offset << "\n");
+          break;
         }
       }
     }
@@ -24251,6 +25657,46 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     auto fieldIt = interfaceFieldSignals.find(storeAddr);
     if (fieldIt != interfaceFieldSignals.end()) {
       SignalId fieldSigId = fieldIt->second;
+      Type storeLLVMType = storeOp.getValue().getType();
+
+      auto normalizeInterfaceStoreValue = [&](SignalId targetSigId,
+                                              InterpretedValue rawVal)
+          -> InterpretedValue {
+        const SignalValue &targetCurrent = scheduler.getSignalValue(targetSigId);
+        unsigned targetWidth = targetCurrent.getWidth();
+        if (rawVal.isX())
+          return InterpretedValue::makeX(targetWidth);
+
+        APInt bits = rawVal.getAPInt();
+        if (bits.getBitWidth() < targetWidth)
+          bits = bits.zext(targetWidth);
+        else if (bits.getBitWidth() > targetWidth)
+          bits = bits.trunc(targetWidth);
+
+        // LLVM stores for 4-state fields commonly use struct<(value, unknown)>
+        // layout, while FourStateStruct signals encode bits as
+        // {value(high half), unknown(low half)}. Normalize to signal encoding.
+        if (scheduler.getSignalEncoding(targetSigId) ==
+            SignalEncoding::FourStateStruct) {
+          if (auto llvmStructTy = dyn_cast<LLVM::LLVMStructType>(storeLLVMType)) {
+            auto body = llvmStructTy.getBody();
+            if (body.size() == 2) {
+              unsigned valueWidth = getTypeWidth(body[0]);
+              unsigned unknownWidth = getTypeWidth(body[1]);
+              if (valueWidth == unknownWidth && valueWidth * 2 == targetWidth) {
+                APInt valueBits = bits.extractBits(valueWidth, 0);
+                APInt unknownBits = bits.extractBits(unknownWidth, valueWidth);
+                APInt encoded = APInt::getZero(targetWidth);
+                safeInsertBits(encoded, unknownBits, 0);
+                safeInsertBits(encoded, valueBits, unknownWidth);
+                bits = encoded;
+              }
+            }
+          }
+        }
+        return InterpretedValue(bits);
+      };
+
       // Debug: track stores to 64-bit interface fields (PWDATA, PADDR, etc.)
       LLVM_DEBUG({
         const SignalValue &dbgCur = scheduler.getSignalValue(fieldSigId);
@@ -24270,19 +25716,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         }
       });
       const SignalValue &current = scheduler.getSignalValue(fieldSigId);
-      unsigned targetWidth = current.getWidth();
 
-      InterpretedValue driveVal = storeVal;
-      if (driveVal.isX()) {
-        driveVal = InterpretedValue::makeX(targetWidth);
-      } else if (driveVal.getWidth() != targetWidth) {
-        APInt apVal = driveVal.getAPInt();
-        if (apVal.getBitWidth() < targetWidth)
-          apVal = apVal.zext(targetWidth);
-        else if (apVal.getBitWidth() > targetWidth)
-          apVal = apVal.trunc(targetWidth);
-        driveVal = InterpretedValue(apVal);
-      }
+      InterpretedValue driveVal =
+          normalizeInterfaceStoreValue(fieldSigId, storeVal);
 
       // Only drive if the value actually changed — prevents zero-delta loops
       // in always_comb processes that copy interface fields bidirectionally.
@@ -24306,17 +25742,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           const SignalValue &targetCurrent =
               scheduler.getSignalValue(targetSigId);
           unsigned targetW = targetCurrent.getWidth();
-          InterpretedValue targetDriveVal = storeVal;
-          if (targetDriveVal.isX()) {
-            targetDriveVal = InterpretedValue::makeX(targetW);
-          } else if (targetDriveVal.getWidth() != targetW) {
-            APInt apVal = targetDriveVal.getAPInt();
-            if (apVal.getBitWidth() < targetW)
-              apVal = apVal.zext(targetW);
-            else if (apVal.getBitWidth() > targetW)
-              apVal = apVal.trunc(targetW);
-            targetDriveVal = InterpretedValue(apVal);
-          }
+          InterpretedValue targetDriveVal =
+              normalizeInterfaceStoreValue(targetSigId, storeVal);
           SignalValue targetNewVal = targetDriveVal.toSignalValue();
           pendingEpsilonDrives[targetSigId] = targetDriveVal;
 
@@ -32030,51 +33457,7 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
   // Helper: extract a std::string from a MooreString struct value argument.
   // The argument is an InterpretedValue holding a 128-bit {ptr, len} struct.
   auto extractStringFromVal = [&](Value operand) -> std::string {
-    InterpretedValue val = getValue(procId, operand);
-    if (val.isX() || val.getWidth() < 128)
-      return "";
-    APInt bits = val.getAPInt();
-    uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
-    int64_t strLen = bits.extractBits(64, 64).getSExtValue();
-    if (strPtr == 0 || strLen <= 0)
-      return "";
-
-    // Try dynamicStrings registry
-    auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
-    if (dynIt != dynamicStrings.end() && dynIt->second.first &&
-        dynIt->second.second > 0) {
-      return std::string(dynIt->second.first,
-                         std::min(static_cast<size_t>(strLen),
-                                  static_cast<size_t>(dynIt->second.second)));
-    }
-
-    // Try global/malloc memory via O(log n) range index
-    {
-      uint64_t off = 0;
-      MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
-      if (gBlock && gBlock->initialized) {
-        size_t avail = std::min(static_cast<size_t>(strLen),
-                                gBlock->data.size() - static_cast<size_t>(off));
-        if (avail > 0)
-          return std::string(
-              reinterpret_cast<const char *>(gBlock->data.data() + off), avail);
-      }
-    }
-
-    // Try native memory (direct pointer read)
-    bool isNative = false;
-    for (auto &entry : nativeMemoryBlocks) {
-      if (strPtr >= entry.first && strPtr < entry.first + entry.second) {
-        isNative = true;
-        break;
-      }
-    }
-    if (isNative || strPtr >= 0x10000) {
-      const char *p = reinterpret_cast<const char *>(strPtr);
-      return std::string(p, static_cast<size_t>(strLen));
-    }
-
-    return "";
+    return readMooreStringStruct(procId, operand);
   };
 
   // Helper: pack a string result into a 128-bit MooreString struct.
@@ -32358,48 +33741,7 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
 
   // Helper: extract a std::string from a MooreString struct value argument.
   auto extractStringFromVal = [&](Value operand) -> std::string {
-    InterpretedValue val = getValue(procId, operand);
-    if (val.isX() || val.getWidth() < 128)
-      return "";
-    APInt bits = val.getAPInt();
-    uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
-    int64_t strLen = bits.extractBits(64, 64).getSExtValue();
-    if (strPtr == 0 || strLen <= 0)
-      return "";
-
-    auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
-    if (dynIt != dynamicStrings.end() && dynIt->second.first &&
-        dynIt->second.second > 0) {
-      return std::string(dynIt->second.first,
-                         std::min(static_cast<size_t>(strLen),
-                                  static_cast<size_t>(dynIt->second.second)));
-    }
-
-    {
-      uint64_t off = 0;
-      MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
-      if (gBlock && gBlock->initialized) {
-        size_t avail = std::min(static_cast<size_t>(strLen),
-                                gBlock->data.size() - static_cast<size_t>(off));
-        if (avail > 0)
-          return std::string(
-              reinterpret_cast<const char *>(gBlock->data.data() + off), avail);
-      }
-    }
-
-    bool isNative = false;
-    for (auto &entry : nativeMemoryBlocks) {
-      if (strPtr >= entry.first && strPtr < entry.first + entry.second) {
-        isNative = true;
-        break;
-      }
-    }
-    if (isNative || strPtr >= 0x10000) {
-      const char *p = reinterpret_cast<const char *>(strPtr);
-      return std::string(p, static_cast<size_t>(strLen));
-    }
-
-    return "";
+    return readMooreStringStruct(procId, operand);
   };
 
   auto packStringResult = [&](const std::string &str, Value resultVal) {
@@ -33376,12 +34718,38 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
                << "module-level LLVM op result\n");
   }
 
-  // Copy the module-level value map to a special "module init" state
-  // that processes can access for module-level values
-  moduleInitValueMap = std::move(processStates[tempProcId].valueMap);
+  // Backfill pointer-valued signal init SSA entries from the scheduler when
+  // they are missing or stale in the temporary map. This avoids later on-demand
+  // recomputation of module-level values and keeps dual-top init state stable.
+  for (Operation &op : hwModule.getBody().front()) {
+    auto sigOp = dyn_cast<llhd::SignalOp>(&op);
+    if (!sigOp || !isa<LLVM::LLVMPointerType>(sigOp.getInit().getType()))
+      continue;
+    SignalId sigId = valueToSignal.lookup(sigOp.getResult());
+    if (sigId == 0)
+      continue;
+    const SignalValue &sigVal = scheduler.getSignalValue(sigId);
+    if (sigVal.isUnknown() || sigVal.getWidth() < 64 || sigVal.getValue() == 0)
+      continue;
+
+    auto &tmpMap = processStates[tempProcId].valueMap;
+    auto it = tmpMap.find(sigOp.getInit());
+    if (it == tmpMap.end() || it->second.isX() || it->second.getUInt64() == 0)
+      tmpMap[sigOp.getInit()] = InterpretedValue(sigVal.getValue(), 64);
+  }
+
+  // Merge this module's computed values into the shared top-module init map.
+  // We overwrite duplicate keys so re-initializing the same module body keeps
+  // the latest value, while preserving values from previously initialized tops.
+  for (auto &[val, intVal] : processStates[tempProcId].valueMap)
+    moduleInitValueMap[val] = intVal;
 
   // Copy module-level memory blocks too
   for (auto &[value, block] : processStates[tempProcId].memoryBlocks) {
+    auto addrIt = processStates[tempProcId].valueMap.find(value);
+    if (addrIt != processStates[tempProcId].valueMap.end() &&
+        !addrIt->second.isX())
+      moduleLevelAllocaBaseAddr[value] = addrIt->second.getUInt64();
     moduleLevelAllocas[value] = std::move(block);
   }
 
@@ -33620,13 +34988,47 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
                  << " from module-level op result\n");
     }
 
+    // Backfill missing/stale pointer init SSA values from scheduler for this
+    // concrete child instance.
+    for (llhd::SignalOp sigOp : childOps.signals) {
+      if (!isa<LLVM::LLVMPointerType>(sigOp.getInit().getType()))
+        continue;
+      auto sigIt = instanceValueToSignal[instanceId].find(sigOp.getResult());
+      if (sigIt == instanceValueToSignal[instanceId].end())
+        continue;
+      SignalId sigId = sigIt->second;
+      const SignalValue &sigVal = scheduler.getSignalValue(sigId);
+      if (sigVal.isUnknown() || sigVal.getWidth() < 64 || sigVal.getValue() == 0)
+        continue;
+
+      auto &tmpMap = processStates[childTempProcId].valueMap;
+      auto it = tmpMap.find(sigOp.getInit());
+      if (it == tmpMap.end() || it->second.isX() || it->second.getUInt64() == 0)
+        tmpMap[sigOp.getInit()] = InterpretedValue(sigVal.getValue(), 64);
+    }
+
+    // Child module-level values are instance-specific.
+    auto &instanceInitMap = instanceModuleInitValueMaps[instanceId];
+    for (auto &[val, intVal] : processStates[childTempProcId].valueMap) {
+      if (intVal.isX())
+        continue;
+      if (isa<LLVM::LLVMPointerType>(val.getType()) && intVal.getUInt64() == 0)
+        continue;
+      instanceInitMap[val] = intVal;
+    }
+
     // Copy child module-level values into moduleInitValueMap
     for (auto &[val, intVal] : processStates[childTempProcId].valueMap)
-      moduleInitValueMap.try_emplace(val, intVal);
+      moduleInitValueMap[val] = intVal;
 
     // Copy child module-level memory blocks to moduleLevelAllocas
-    for (auto &[val, block] : processStates[childTempProcId].memoryBlocks)
-      moduleLevelAllocas.try_emplace(val, std::move(block));
+    for (auto &[val, block] : processStates[childTempProcId].memoryBlocks) {
+      auto addrIt = processStates[childTempProcId].valueMap.find(val);
+      if (addrIt != processStates[childTempProcId].valueMap.end() &&
+          !addrIt->second.isX())
+        moduleLevelAllocaBaseAddr[val] = addrIt->second.getUInt64();
+      moduleLevelAllocas[val] = std::move(block);
+    }
 
     processStates.erase(childTempProcId);
 
