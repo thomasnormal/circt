@@ -161,14 +161,7 @@ bp_unicore	xfail	Black-parrot: invalid expression in MLIR lowering (DynamicNotPr
 11.4.3--binary_op_pow	xfail	circt-sim: math dialect not registered for math.ipowi
 11.4.3--simple_exp_operator_sim	xfail	circt-sim: math dialect not registered for math.ipowi
 
-# $*_gclk sampled value functions: unsupported system calls
-20.13--changed_gclk	xfail	Unsupported system call $changed_gclk
-20.13--changing_gclk	xfail	Unsupported system call $changing_gclk
-20.13--falling_gclk	xfail	Unsupported system call $falling_gclk
-20.13--fell_gclk	xfail	Unsupported system call $fell_gclk
-20.13--future_gclk	xfail	Unsupported system call $future_gclk
-20.13--past_gclk	xfail	Unsupported system call $past_gclk
-20.13--rising_gclk	xfail	Unsupported system call $rising_gclk
-20.13--rose_gclk	xfail	Unsupported system call $rose_gclk
-20.13--stable_gclk	xfail	Unsupported system call $stable_gclk
-20.13--steady_gclk	xfail	Unsupported system call $steady_gclk
+# $*_gclk sampled value functions: now supported (a6dfbd598)
+
+# scr1: uses $system (unsupported system call in tb/scr1_top_tb_runtests.sv)
+scr1	xfail	Unsupported system call $system in testbench
