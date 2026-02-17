@@ -99,6 +99,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
 3. Env equivalents:
    - `CIRCT_SIM_JIT_HOT_THRESHOLD`
    - `CIRCT_SIM_JIT_COMPILE_BUDGET`
+   - `CIRCT_SIM_JIT_CACHE_POLICY`
    - `CIRCT_SIM_JIT_FAIL_ON_DEOPT`
    - `CIRCT_SIM_JIT_REPORT_PATH`
 
@@ -189,6 +190,12 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
    - deopt classification now distinguishes `missing_thunk` from
      `unsupported_operation` when compile is attempted but process shape is not
      yet supported.
+   - cache policy governance now has explicit behavior:
+     - `memory`: keep compiled process thunks resident (default).
+     - `none`: evict process thunks after each execution to force
+       re-install/recompile and expose no-cache behavior in telemetry.
+   - `--jit-cache-policy` now validates accepted values (`memory`/`none`) and
+     honors `CIRCT_SIM_JIT_CACHE_POLICY` with warning+fallback on invalid input.
 5. Bounded integration parity smoke executed:
    - `AVIPS=jtag`, `SEEDS=1`, `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=120`.
    - mode-parity checker passed with one row per mode; both lanes hit the

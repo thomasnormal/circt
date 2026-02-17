@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1442 - February 17, 2026
+
+### circt-sim: Enforce JIT Cache Policy Behavior
+
+1. Wired real compile-mode cache policy behavior for process thunks:
+   - `memory` (default): keep installed process thunks resident.
+   - `none`: evict process thunks after each successful execution to force
+     re-install/recompile on later activations.
+2. Added cache-policy config hardening in `circt-sim`:
+   - `--jit-cache-policy` now validates accepted values (`memory`/`none`).
+   - added `CIRCT_SIM_JIT_CACHE_POLICY` env override.
+   - invalid policy values now emit a warning and fall back to `memory`.
+3. Added regressions:
+   - `test/Tools/circt-sim/jit-cache-policy-none.mlir`
+   - `test/Tools/circt-sim/jit-cache-policy-invalid-env.mlir`
+4. Validation:
+   - targeted cache-policy and derived-observed bundles PASS.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK`, sim bounded `TIMEOUT` (90s).
+
 ## Iteration 1441 - February 17, 2026
 
 ### circt-sim: Pure Prelude Guard for Derived-Observed Wait Thunks
