@@ -5,7 +5,7 @@
 // RUN: FileCheck %s --check-prefix=JSON < %t/jit.json
 //
 // LOG: [circt-sim] Strict JIT policy violation: deopts_total=1
-// LOG: [circt-sim] Strict JIT deopt process: id={{[1-9][0-9]*}} name=llhd_process_{{[0-9]+}} reason=unsupported_operation detail=first_op:llvm.call
+// LOG: [circt-sim] Strict JIT deopt process: id={{[1-9][0-9]*}} name=llhd_process_{{[0-9]+}} reason=unsupported_operation detail=first_op:llvm.call:__moore_delay
 // LOG: [circt-sim] Simulation finished with exit code 1
 //
 // JSON: "mode": "compile"
@@ -15,7 +15,7 @@
 // JSON: "jit_strict_violations_total": 1
 // JSON: "jit_deopt_processes":
 // JSON: "reason": "unsupported_operation"
-// JSON: "detail": "first_op:llvm.call"
+// JSON: "detail": "first_op:llvm.call:__moore_delay"
 
 module {
   llvm.func @__moore_delay(i64)

@@ -291,6 +291,17 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       `first_op:llvm.call` (81), `first_op:llvm.getelementptr` (45),
       `first_op:func.call_indirect` (11), `first_op:func.call` (3),
       `first_op:llvm.alloca` (3).
+12. Call-target triage precision and `process::self` closure update:
+    - unsupported detail for one-block terminating process shapes now includes
+      direct callee names for `llvm.call` and `func.call` entries.
+    - native prelude coverage now includes the non-suspending
+      `llvm.call @__moore_process_self` and
+      `llvm.call @__moore_packed_string_to_string` cases.
+    - AVIP explicit-JIT jtag queue re-ranked from opaque `first_op:llvm.call`
+      to targetable call sites; post-update dominant tails are:
+      - `first_op:func.call_indirect` (90)
+      - `first_op:llvm.getelementptr` (45)
+      - residual `first_op:llvm.alloca` (3)
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
