@@ -13,6 +13,8 @@ uvm_scoreboard_env	compile-only	UVM testbench: analysis port connect/write inter
 uvm_scoreboard_monitor_env	compile-only	UVM testbench: analysis port chain-following write dispatch
 uvm_scoreboard_monitor_agent_env	compile-only	UVM testbench: analysis port chain-following write dispatch
 uvm_driver_sequencer_env	compile-only	UVM testbench: native sequencer interface (start_item/finish_item/get)
+top	compile-only	easyUVM full testbench: compile-only (10+ min simulation)
+uvm_sequence	compile-only	UVM sequence testbench: compile-only (full UVM library)
 
 # Ch18: UVM-module constraint/random tests — compile-only because each UVM test
 # takes ~3min to compile + ~5min to simulate (400K-line MLIR with full UVM library).
@@ -146,3 +148,27 @@ uvm_test_run_test	compile-only	UVM run_test (slow init)
 
 # UVM utility test: no top module
 uvm_files	skip	No top module (utility file)
+
+# Black-parrot tests: <unknown>:0: error: invalid expression in lowering
+bp_default	xfail	Black-parrot: invalid expression in MLIR lowering (DynamicNotProcedural)
+bp_multicore_1	xfail	Black-parrot: invalid expression in MLIR lowering (DynamicNotProcedural)
+bp_multicore_1_cce_ucode	xfail	Black-parrot: invalid expression in MLIR lowering (DynamicNotProcedural)
+bp_multicore_4	xfail	Black-parrot: invalid expression in MLIR lowering (DynamicNotProcedural)
+bp_multicore_4_cce_ucode_cfg	xfail	Black-parrot: invalid expression in MLIR lowering (DynamicNotProcedural)
+bp_unicore	xfail	Black-parrot: invalid expression in MLIR lowering (DynamicNotProcedural)
+
+# math.ipowi: circt-sim doesn't register Math dialect (needed for ** operator)
+11.4.3--binary_op_pow	xfail	circt-sim: math dialect not registered for math.ipowi
+11.4.3--simple_exp_operator_sim	xfail	circt-sim: math dialect not registered for math.ipowi
+
+# $*_gclk sampled value functions: unsupported system calls
+20.13--changed_gclk	xfail	Unsupported system call $changed_gclk
+20.13--changing_gclk	xfail	Unsupported system call $changing_gclk
+20.13--falling_gclk	xfail	Unsupported system call $falling_gclk
+20.13--fell_gclk	xfail	Unsupported system call $fell_gclk
+20.13--future_gclk	xfail	Unsupported system call $future_gclk
+20.13--past_gclk	xfail	Unsupported system call $past_gclk
+20.13--rising_gclk	xfail	Unsupported system call $rising_gclk
+20.13--rose_gclk	xfail	Unsupported system call $rose_gclk
+20.13--stable_gclk	xfail	Unsupported system call $stable_gclk
+20.13--steady_gclk	xfail	Unsupported system call $steady_gclk
