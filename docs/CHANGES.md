@@ -1,5 +1,45 @@
 # Recent Changes (UVM Parity Work)
 
+## February 17, 2026 - circt-sim wait(condition) queue-backed wakeups
+
+**Status**: In progress. Runtime hot-loop reduction for queue wait conditions.
+
+### What's New
+- Added queue-backed waiter infrastructure in `LLHDProcessInterpreter`:
+  - queue waiter registration/removal helpers:
+    - `enqueueQueueNotEmptyWaiter`
+    - `removeQueueNotEmptyWaiter`
+    - `wakeQueueNotEmptyWaitersIfReady`
+  - process-side tracking:
+    - `waitConditionQueueAddr`
+    - `waitConditionPollToken` (stale poll callback guard)
+  - queue waiter state maps:
+    - `queueNotEmptyWaiters`
+    - `queueWaitAddrByProc`
+- Extended `__moore_wait_condition` handling to detect queue wait shapes:
+  - direct `__moore_queue_size(...)` dependency
+  - queue-struct length extraction pattern (`llvm.load` + `llvm.extractvalue [1]`)
+  - when detected, use queue-backed wakeups plus low-frequency safety poll
+    (100 ps), instead of high-frequency generic polling.
+- Hardened poll callback semantics:
+  - stale callbacks are ignored via per-process poll token checks.
+  - callbacks now guard against waking halted/non-waiting processes.
+- Integrated queue wakeups into queue mutation interceptors:
+  - `__moore_queue_push_back`
+  - `__moore_queue_push_front`
+  - `__moore_queue_insert`
+- Added/strengthened regression:
+  - `test/Tools/circt-sim/wait-queue-size.sv`
+  - now compiles with `--no-uvm-auto-include`, uses a long wait window, and
+    enforces `--max-process-steps=40000` to catch poll storms.
+
+### Validation
+- Build:
+  - `ninja -C build-test circt-sim -k 0` PASS
+- Focused regressions:
+  - `PATH=/home/thomas-ahle/circt/build-test/bin:$PATH llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/wait-queue-size.sv` PASS
+  - `PATH=/home/thomas-ahle/circt/build-test/bin:$PATH llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/wait-condition-memory.mlir build-test/test/Tools/circt-sim/wait-condition-signal.sv build-test/test/Tools/circt-sim/wait-condition-spurious-trigger.mlir build-test/test/Tools/circt-sim/wait-queue-size.sv` PASS (`4/4`)
+
 ## February 17, 2026 - circt-sim Native JIT Phase A Scaffolding (Telemetry + Mode Parity Harness)
 
 **Status**: In progress. Phase A groundwork landed for native JIT rollout gates.

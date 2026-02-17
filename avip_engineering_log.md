@@ -33,6 +33,57 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-17 Session: wait(condition) Queue Wakeup Fast Path (I3C Throughput Work)
+
+### Why this pass
+Recent I3C diagnostics showed heavy runtime churn in fork children repeatedly
+stuck on `llvm.call(__moore_wait_condition)`. The previous path relied on
+high-frequency polling, which scales poorly in long queue-wait windows.
+
+### Changes
+1. Added queue-backed waiter infrastructure in:
+   - `tools/circt-sim/LLHDProcessInterpreter.h`
+   - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+2. Extended `__moore_wait_condition` handling to detect queue-backed condition
+   shapes and switch from pure polling to queue wakeups + low-frequency safety
+   polling:
+   - direct `__moore_queue_size(...)` dependency
+   - direct queue-struct length extraction (`llvm.load` + `llvm.extractvalue [1]`)
+3. Added stale callback protection for wait_condition poll events using
+   per-process tokens (`waitConditionPollToken`) to prevent old polls from
+   waking new wait contexts.
+4. Wired queue wakeups on queue-growth operations:
+   - `__moore_queue_push_back`
+   - `__moore_queue_push_front`
+   - `__moore_queue_insert`
+5. Updated process finalization to clean up queue waiters.
+6. Strengthened regression:
+   - `test/Tools/circt-sim/wait-queue-size.sv`
+   - now uses:
+     - `--no-uvm-auto-include`
+     - long wait window (`#1000`)
+     - `--max-process-steps=40000` guard to catch polling storms.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-sim -k 0` PASS
+2. Focused regressions:
+   - `PATH=/home/thomas-ahle/circt/build-test/bin:$PATH llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/wait-queue-size.sv` PASS
+   - `PATH=/home/thomas-ahle/circt/build-test/bin:$PATH llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/wait-condition-memory.mlir build-test/test/Tools/circt-sim/wait-condition-signal.sv build-test/test/Tools/circt-sim/wait-condition-spurious-trigger.mlir build-test/test/Tools/circt-sim/wait-queue-size.sv` PASS (`4/4`)
+3. Direct regression execution:
+   - `circt-sim /tmp/wait-queue-size.mlir --max-time=2000000000 --max-process-steps=40000` PASS
+   - observed:
+     - `Fork branch 2 - pushing to queue`
+     - `Fork branch 1 - done, q.size()=1`
+     - no `PROCESS_STEP_OVERFLOW`
+
+### Remaining limitation
+This pass removes a broad wait-condition hot loop class, but I3C AVIP closure
+still needs additional runtime work. A full bounded I3C sweep remains expensive
+because compile + long simulation windows dominate wall time.
+
+---
+
 ## 2026-02-17 Session: I3C 0% Coverage Root-Cause Pass — Reactive Interface Tri-State
 
 ### Why this pass
