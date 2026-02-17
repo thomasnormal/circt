@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1470 - February 17, 2026
+
+### ImportVerilog: Replace silent no-op stubs with explicit warnings
+
+Replaced all 63 silent no-op/constant stubs with explicit diagnostics:
+
+1. **44 void system task stubs** in Statements.cpp now emit `mlir::emitRemark`:
+   - Assertion control (10): `$assertcontrol`, `$asserton`, `$assertoff`, etc.
+   - Checkpoint/restart (4): `$save`, `$restart`, `$incsave`, `$reset`
+   - Debug/PLI (10): `$stacktrace`, `$showvars`, `$showscopes`, etc.
+   - PLD array (16): all `$async$*`/`$sync$*` tasks
+   - Stochastic queue (3): `$q_initialize`, `$q_add`, `$q_remove`
+   - SDF annotation (1): `$sdf_annotate`
+
+2. **$dist_* distribution functions** (7) now generate `$urandom`/`$urandom_range`
+   calls instead of returning constant 0. Distribution shape is not modeled
+   but values are random rather than deterministic zeros.
+
+3. **Type query functions** (`$bits`, `$size`, `$dimensions`,
+   `$unpacked_dimensions`) on dynamic types now emit `mlir::emitWarning`
+   instead of silently returning 0.
+
+4. **$timeunit/$timeprecision** emit `mlir::emitWarning` when not
+   constant-folded by slang.
+
+5. **Legacy functions** (`$countdrivers`, `$getpattern`, `$q_exam`, `$q_full`)
+   emit `mlir::emitRemark`.
+
 ## Iteration 1469 - February 17, 2026
 
 ### circt-sim JIT: native `__moore_delay` suspend closure + AVIP timeout burn-down
