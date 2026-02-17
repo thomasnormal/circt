@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1462 - February 17, 2026
+
+### ImportVerilog: Complete IEEE 1800-2017 system call coverage
+
+1. Added full support for `$system` (IEEE 1800-2017 Section 20.18.1):
+   - New Moore dialect op `SystemBIOp`, MooreToCore lowering, runtime function
+     `__moore_system`, and interpreter handler in `LLHDProcessInterpreter.cpp`.
+   - Fixed `llvm.alloca` inside `seq.initial` blocks being incorrectly classified
+     as module-level (added `!allocaOp->getParentOfType<seq::InitialOp>()` check).
+2. Added `$pow` (IEEE 1800-2017 Section 20.8.2):
+   - New Moore dialect op `PowBIOp` with MooreToCore lowering to `math::PowFOp`.
+3. Added `$rtoi` / `$itor` (IEEE 1800-2017 Section 20.5):
+   - Real-integer conversion via identity + type coercion (slang handles types).
+4. Added `$psprintf` as alias for `$sformatf` (non-standard, widely used in UVM).
+5. Added `$swriteb` / `$swriteo` / `$swriteh` string write format variants.
+6. Added no-op stubs for 47 void system tasks:
+   - Assertion control (10): `$assertcontrol`, `$asserton`, `$assertoff`, etc.
+   - Checkpoint/restart (4): `$save`, `$restart`, `$incsave`, `$reset`.
+   - Debug/PLI (10): `$stacktrace`, `$showvars`, `$showscopes`, `$list`, etc.
+   - PLD array (16): all `$async$*`/`$sync$*` tasks.
+   - Stochastic queue (3): `$q_initialize`, `$q_add`, `$q_remove`.
+   - Other (4): `$sdf_annotate`, `$static_assert`, `$writememb/h`, `$sreadmemb/h`.
+7. Added constant stubs for 16 expression-returning functions:
+   - `$timeunit`, `$timeprecision`, `$scale`, `$isunbounded`, `$bits`, `$size`,
+     `$dimensions`, `$unpacked_dimensions`, `$increment`, `$countdrivers`,
+     `$getpattern`, `$reset_count`, `$reset_value`, `$q_exam`, `$q_full`.
+8. Added assertion-context routing for `$global_clock`, `$inferred_clock`,
+   `$inferred_disable`.
+9. Added regression test: `test/Conversion/ImportVerilog/system-calls-complete.sv`.
+10. Result: all 227 slang-recognized system names now compile without errors.
+
 ## Iteration 1461 - February 17, 2026
 
 ### circt-sim: I3C continuous-drive diagnostics, sensitivity hardening, and `scf.if` X-branch semantics
