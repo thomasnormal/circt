@@ -276,6 +276,171 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
       envInt64Value("CIRCT_SIM_UVM_JIT_PROMOTION_BUDGET", 0);
   uvmJitTracePromotions =
       envFlagEnabled("CIRCT_SIM_UVM_JIT_TRACE_PROMOTIONS");
+  profileSummaryAtExitEnabled =
+      std::getenv("CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT") != nullptr;
+  memorySampleIntervalSteps = envUint64Value(
+      "CIRCT_SIM_PROFILE_MEMORY_SAMPLE_INTERVAL",
+      profileSummaryAtExitEnabled ? 65536 : 0);
+  if (memorySampleIntervalSteps > 0)
+    memorySampleNextStep = memorySampleIntervalSteps;
+  uvmSeqQueueCacheMaxEntries =
+      envUint64Value("CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_MAX_ENTRIES", 0);
+  uvmSeqQueueCacheEvictOnCap =
+      envFlagEnabled("CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_EVICT_ON_CAP");
+}
+
+bool LLHDProcessInterpreter::lookupUvmSequencerQueueCache(
+    uint64_t portAddr, uint64_t &queueAddr) {
+  if (portAddr == 0)
+    return false;
+  auto it = portToSequencerQueue.find(portAddr);
+  if (it == portToSequencerQueue.end()) {
+    ++uvmSeqQueueCacheMisses;
+    return false;
+  }
+  ++uvmSeqQueueCacheHits;
+  queueAddr = it->second;
+  return true;
+}
+
+void LLHDProcessInterpreter::cacheUvmSequencerQueueAddress(uint64_t portAddr,
+                                                           uint64_t queueAddr) {
+  if (portAddr == 0 || queueAddr == 0)
+    return;
+
+  auto it = portToSequencerQueue.find(portAddr);
+  if (it != portToSequencerQueue.end()) {
+    it->second = queueAddr;
+    return;
+  }
+
+  if (uvmSeqQueueCacheMaxEntries &&
+      portToSequencerQueue.size() >= uvmSeqQueueCacheMaxEntries) {
+    if (!uvmSeqQueueCacheEvictOnCap) {
+      ++uvmSeqQueueCacheCapacitySkips;
+      return;
+    }
+    if (!portToSequencerQueue.empty()) {
+      portToSequencerQueue.erase(portToSequencerQueue.begin());
+      ++uvmSeqQueueCacheEvictions;
+    }
+  }
+
+  portToSequencerQueue.try_emplace(portAddr, queueAddr);
+  ++uvmSeqQueueCacheInstalls;
+}
+
+void LLHDProcessInterpreter::invalidateUvmSequencerQueueCache(
+    uint64_t portAddr) {
+  if (portAddr == 0)
+    return;
+  portToSequencerQueue.erase(portAddr);
+}
+
+void LLHDProcessInterpreter::recordUvmSequencerItemOwner(uint64_t itemAddr,
+                                                         uint64_t sqrAddr) {
+  if (itemAddr == 0 || sqrAddr == 0)
+    return;
+  auto [it, inserted] = itemToSequencer.try_emplace(itemAddr, sqrAddr);
+  if (!inserted) {
+    it->second = sqrAddr;
+    return;
+  }
+  ++uvmSeqItemOwnerStores;
+  uvmSeqItemOwnerPeak =
+      std::max<uint64_t>(uvmSeqItemOwnerPeak, itemToSequencer.size());
+}
+
+uint64_t LLHDProcessInterpreter::takeUvmSequencerItemOwner(uint64_t itemAddr) {
+  if (itemAddr == 0)
+    return 0;
+  auto it = itemToSequencer.find(itemAddr);
+  if (it == itemToSequencer.end())
+    return 0;
+  uint64_t sqrAddr = it->second;
+  itemToSequencer.erase(it);
+  ++uvmSeqItemOwnerErases;
+  return sqrAddr;
+}
+
+LLHDProcessInterpreter::MemoryStateSnapshot
+LLHDProcessInterpreter::collectMemoryStateSnapshot() const {
+  MemoryStateSnapshot snapshot;
+  snapshot.globalBlocks = globalMemoryBlocks.size();
+  for (const auto &entry : globalMemoryBlocks)
+    snapshot.globalBytes += entry.second.size;
+
+  snapshot.mallocBlocks = mallocBlocks.size();
+  for (const auto &entry : mallocBlocks)
+    snapshot.mallocBytes += entry.second.size;
+
+  snapshot.nativeBlocks = nativeMemoryBlocks.size();
+  for (const auto &entry : nativeMemoryBlocks)
+    snapshot.nativeBytes += entry.second;
+
+  for (const auto &procEntry : processStates) {
+    uint64_t procBytes = 0;
+    for (const auto &blockEntry : procEntry.second.memoryBlocks) {
+      ++snapshot.processBlocks;
+      snapshot.processBytes += blockEntry.second.size;
+      procBytes += blockEntry.second.size;
+    }
+    if (procBytes >= snapshot.largestProcessBytes) {
+      snapshot.largestProcessBytes = procBytes;
+      snapshot.largestProcessId = procEntry.first;
+    }
+  }
+
+  snapshot.dynamicStrings = dynamicStrings.size();
+  for (const auto &entry : dynamicStrings) {
+    if (entry.second.second > 0)
+      snapshot.dynamicStringBytes +=
+          static_cast<uint64_t>(entry.second.second);
+  }
+
+  snapshot.configDbEntries = configDbEntries.size();
+  for (const auto &entry : configDbEntries)
+    snapshot.configDbBytes += entry.second.size();
+
+  snapshot.analysisConnPorts = analysisPortConnections.size();
+  for (const auto &entry : analysisPortConnections)
+    snapshot.analysisConnEdges += entry.second.size();
+
+  snapshot.seqFifoMaps = sequencerItemFifo.size();
+  for (const auto &entry : sequencerItemFifo)
+    snapshot.seqFifoItems += entry.second.size();
+
+  return snapshot;
+}
+
+void LLHDProcessInterpreter::maybeSampleMemoryState(uint64_t totalSteps) {
+  if (!profileSummaryAtExitEnabled || memorySampleIntervalSteps == 0)
+    return;
+  if (totalSteps < memorySampleNextStep)
+    return;
+
+  MemoryStateSnapshot snapshot = collectMemoryStateSnapshot();
+  ++memorySampleCount;
+  uint64_t trackedBytes = snapshot.totalTrackedBytes();
+  if (trackedBytes >= memorySamplePeakTotalBytes) {
+    memorySamplePeakTotalBytes = trackedBytes;
+    memorySamplePeakStep = totalSteps;
+    memoryPeakSnapshot = snapshot;
+    memoryPeakLargestProcessFunc.clear();
+    if (snapshot.largestProcessId != InvalidProcessId) {
+      auto procIt = processStates.find(snapshot.largestProcessId);
+      if (procIt != processStates.end())
+        memoryPeakLargestProcessFunc = procIt->second.currentFuncName;
+    }
+  }
+
+  while (memorySampleNextStep <= totalSteps) {
+    if (memorySampleNextStep > UINT64_MAX - memorySampleIntervalSteps) {
+      memorySampleNextStep = UINT64_MAX;
+      break;
+    }
+    memorySampleNextStep += memorySampleIntervalSteps;
+  }
 }
 
 void LLHDProcessInterpreter::noteUvmFastPathActionHit(llvm::StringRef actionKey) {
@@ -374,6 +539,94 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
       os << "  " << key << "\n";
     os << "[circt-sim] UVM JIT budget remaining: " << uvmJitPromotionBudget
        << "\n";
+  }
+
+  uint64_t fifoItems = 0;
+  for (const auto &entry : sequencerItemFifo)
+    fifoItems += entry.second.size();
+
+  if (uvmSeqItemOwnerStores || uvmSeqItemOwnerErases || !itemToSequencer.empty() ||
+      !sequencerItemFifo.empty() || !finishItemWaiters.empty() ||
+      !itemDoneReceived.empty() || !lastDequeuedItem.empty()) {
+    os << "[circt-sim] UVM sequencer native state: item_map_live="
+       << itemToSequencer.size() << " item_map_peak=" << uvmSeqItemOwnerPeak
+       << " item_map_stores=" << uvmSeqItemOwnerStores
+       << " item_map_erases=" << uvmSeqItemOwnerErases
+       << " fifo_maps=" << sequencerItemFifo.size()
+       << " fifo_items=" << fifoItems
+       << " waiters=" << finishItemWaiters.size()
+       << " done_pending=" << itemDoneReceived.size()
+       << " last_dequeued=" << lastDequeuedItem.size() << "\n";
+  }
+
+  if (uvmSeqQueueCacheHits || uvmSeqQueueCacheMisses || uvmSeqQueueCacheInstalls ||
+      uvmSeqQueueCacheCapacitySkips || uvmSeqQueueCacheEvictions ||
+      !portToSequencerQueue.empty()) {
+    os << "[circt-sim] UVM sequencer queue cache: hits=" << uvmSeqQueueCacheHits
+       << " misses=" << uvmSeqQueueCacheMisses
+       << " installs=" << uvmSeqQueueCacheInstalls
+       << " entries=" << portToSequencerQueue.size()
+       << " capacity_skips=" << uvmSeqQueueCacheCapacitySkips
+       << " evictions=" << uvmSeqQueueCacheEvictions << "\n";
+  }
+
+  if (uvmSeqQueueCacheMaxEntries || uvmSeqQueueCacheCapacitySkips ||
+      uvmSeqQueueCacheEvictions || uvmSeqQueueCacheEvictOnCap) {
+    os << "[circt-sim] UVM sequencer queue cache limits: max_entries="
+       << uvmSeqQueueCacheMaxEntries
+       << " capacity_skips=" << uvmSeqQueueCacheCapacitySkips
+       << " evictions=" << uvmSeqQueueCacheEvictions
+       << " evict_on_cap=" << (uvmSeqQueueCacheEvictOnCap ? 1 : 0) << "\n";
+  }
+
+  if (profileSummaryAtExitEnabled) {
+    MemoryStateSnapshot snapshot = collectMemoryStateSnapshot();
+    os << "[circt-sim] Memory state: global_blocks=" << snapshot.globalBlocks
+       << " global_bytes=" << snapshot.globalBytes
+       << " malloc_blocks=" << snapshot.mallocBlocks
+       << " malloc_bytes=" << snapshot.mallocBytes
+       << " native_blocks=" << snapshot.nativeBlocks
+       << " native_bytes=" << snapshot.nativeBytes
+       << " process_blocks=" << snapshot.processBlocks
+       << " process_bytes=" << snapshot.processBytes
+       << " dynamic_strings=" << snapshot.dynamicStrings
+       << " dynamic_string_bytes=" << snapshot.dynamicStringBytes
+       << " config_db_entries=" << snapshot.configDbEntries
+       << " config_db_bytes=" << snapshot.configDbBytes
+       << " analysis_conn_ports=" << snapshot.analysisConnPorts
+       << " analysis_conn_edges=" << snapshot.analysisConnEdges
+       << " seq_fifo_maps=" << snapshot.seqFifoMaps
+       << " seq_fifo_items=" << snapshot.seqFifoItems
+       << " largest_process=" << snapshot.largestProcessId
+       << " largest_process_bytes=" << snapshot.largestProcessBytes << "\n";
+
+    if (memorySampleIntervalSteps > 0) {
+      const MemoryStateSnapshot &peakSnapshot =
+          (memorySampleCount > 0) ? memoryPeakSnapshot : snapshot;
+      uint64_t peakStep = (memorySampleCount > 0) ? memorySamplePeakStep : 0;
+      uint64_t peakTotalBytes = (memorySampleCount > 0)
+                                    ? memorySamplePeakTotalBytes
+                                    : snapshot.totalTrackedBytes();
+      llvm::StringRef peakLargestFunc =
+          (memorySampleCount > 0 && !memoryPeakLargestProcessFunc.empty())
+              ? llvm::StringRef(memoryPeakLargestProcessFunc)
+              : llvm::StringRef("-");
+      os << "[circt-sim] Memory peak: samples=" << memorySampleCount
+         << " sample_interval_steps=" << memorySampleIntervalSteps
+         << " peak_step=" << peakStep
+         << " peak_total_bytes=" << peakTotalBytes
+         << " global_bytes=" << peakSnapshot.globalBytes
+         << " malloc_bytes=" << peakSnapshot.mallocBytes
+         << " native_bytes=" << peakSnapshot.nativeBytes
+         << " process_bytes=" << peakSnapshot.processBytes
+         << " dynamic_string_bytes=" << peakSnapshot.dynamicStringBytes
+         << " config_db_bytes=" << peakSnapshot.configDbBytes
+         << " analysis_conn_edges=" << peakSnapshot.analysisConnEdges
+         << " seq_fifo_items=" << peakSnapshot.seqFifoItems
+         << " largest_process=" << peakSnapshot.largestProcessId
+         << " largest_process_bytes=" << peakSnapshot.largestProcessBytes
+         << " largest_process_func=" << peakLargestFunc << "\n";
+    }
   }
 
   os.flush();
@@ -5268,6 +5521,7 @@ bool LLHDProcessInterpreter::executeStep(ProcessId procId) {
   ++state.currentOp;
   state.lastOp = op;
   ++state.totalSteps;
+  maybeSampleMemoryState(state.totalSteps);
   if (collectOpStats)
     ++opStats[op->getName().getStringRef()];
 
@@ -5398,6 +5652,32 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     it->second.halted = true;
     if (killed)
       it->second.killed = true;
+    // Migrate memory blocks and value mappings to active child processes
+    // before clearing.  Children reference parent memory via the
+    // parentProcessId chain, so clearing a parent's memoryBlocks/valueMap
+    // would make those blocks unreachable (causing stores through refs to
+    // be silently skipped).  This is critical for UVM's phase hopper: the
+    // run_phases function creates an alloca for the phase output variable,
+    // then forks a loop child that calls get() which stores to that alloca
+    // via a ref parameter.  If the parent halts first, the child can no
+    // longer find the alloca's memory block.
+    if (!it->second.memoryBlocks.empty()) {
+      for (auto &[childProcId, childState] : processStates) {
+        if (childState.parentProcessId == procId && !childState.halted) {
+          for (auto &[val, block] : it->second.memoryBlocks) {
+            if (childState.memoryBlocks.find(val) ==
+                childState.memoryBlocks.end())
+              childState.memoryBlocks[val] = std::move(block);
+          }
+          for (auto &[val, iv] : it->second.valueMap) {
+            if (childState.valueMap.find(val) == childState.valueMap.end())
+              childState.valueMap[val] = iv;
+          }
+          break; // adopt into first active child only
+        }
+      }
+    }
+
     // Free heavyweight data structures to prevent unbounded memory growth.
     // The entry itself is kept (with halted=true) so callers that check
     // the halted flag still work correctly.
@@ -5408,6 +5688,19 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     it->second.waitSensitivityCache.clear();
     it->second.callStack.clear();
     it->second.refBlockArgSources.clear();
+  }
+
+  if (!finishItemWaiters.empty()) {
+    llvm::SmallVector<uint64_t, 4> staleItems;
+    for (const auto &entry : finishItemWaiters) {
+      if (entry.second == procId)
+        staleItems.push_back(entry.first);
+    }
+    for (uint64_t itemAddr : staleItems) {
+      finishItemWaiters.erase(itemAddr);
+      itemDoneReceived.erase(itemAddr);
+      (void)takeUvmSequencerItemOwner(itemAddr);
+    }
   }
 
   if (forkJoinManager.getForkGroupForChild(procId))
@@ -7079,7 +7372,7 @@ arith_dispatch:
             if (std::find(conns.begin(), conns.end(), providerAddr2) ==
                 conns.end()) {
               conns.push_back(providerAddr2);
-              portToSequencerQueue.erase(selfAddr2);
+              invalidateUvmSequencerQueueCache(selfAddr2);
             }
           }
           // [SEQ-CONN] X-fallback connect diagnostic removed
@@ -7170,8 +7463,8 @@ arith_dispatch:
               SmallVector<InterpretedValue, 2> impResults;
               auto &cState2 = processStates[procId];
               ++cState2.callDepth;
-              interpretFuncBody(procId, impWriteFunc, impArgs, impResults,
-                                callIndirectOp);
+              (void)interpretFuncBody(procId, impWriteFunc, impArgs, impResults,
+                                     callIndirectOp);
               --cState2.callDepth;
             }
             resolved = true;
@@ -7375,7 +7668,7 @@ arith_dispatch:
             if (std::find(conns.begin(), conns.end(), providerAddr3) ==
                 conns.end()) {
               conns.push_back(providerAddr3);
-              portToSequencerQueue.erase(selfAddr3);
+              invalidateUvmSequencerQueueCache(selfAddr3);
             }
           }
           // [SEQ-CONN] static-fallback connect diagnostic removed
@@ -7622,7 +7915,7 @@ arith_dispatch:
               SmallVector<InterpretedValue, 2> iRes;
               auto &cs3 = processStates[procId];
               ++cs3.callDepth;
-              interpretFuncBody(procId, iwf, iArgs, iRes, callIndirectOp);
+              (void)interpretFuncBody(procId, iwf, iArgs, iRes, callIndirectOp);
               --cs3.callDepth;
             }
             staticResolved = true;
@@ -8710,7 +9003,7 @@ arith_dispatch:
         auto &conns = analysisPortConnections[selfAddr];
         if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end()) {
           conns.push_back(providerAddr);
-          portToSequencerQueue.erase(selfAddr);
+          invalidateUvmSequencerQueueCache(selfAddr);
         }
       }
       if (traceAnalysisEnabled)
@@ -8843,8 +9136,8 @@ arith_dispatch:
           SmallVector<InterpretedValue, 2> impResults;
           auto &cState = processStates[procId];
           ++cState.callDepth;
-          interpretFuncBody(procId, impWriteFunc, impArgs, impResults,
-                            callIndirectOp);
+          (void)interpretFuncBody(procId, impWriteFunc, impArgs, impResults,
+                                 callIndirectOp);
           --cState.callDepth;
         }
         return success();
@@ -8907,7 +9200,7 @@ arith_dispatch:
         }
       }
       if (itemAddr != 0 && sqrAddr != 0) {
-        itemToSequencer[itemAddr] = sqrAddr;
+        recordUvmSequencerItemOwner(itemAddr, sqrAddr);
         LLVM_DEBUG(llvm::dbgs()
                    << "  call_indirect: start_item intercepted: item 0x"
                    << llvm::format_hex(itemAddr, 16) << " → sequencer 0x"
@@ -8927,8 +9220,8 @@ arith_dispatch:
         SmallVector<InterpretedValue, 1> ctxResults;
         auto &cState = processStates[procId];
         ++cState.callDepth;
-        interpretFuncBody(procId, setContextFunc, ctxArgs, ctxResults,
-                          callIndirectOp);
+        (void)interpretFuncBody(procId, setContextFunc, ctxArgs, ctxResults,
+                               callIndirectOp);
         --cState.callDepth;
       }
       return success();
@@ -8944,6 +9237,7 @@ arith_dispatch:
       if (itemAddr != 0) {
         // Check if item_done was already received (re-poll after wake)
         if (itemDoneReceived.count(itemAddr)) {
+          (void)takeUvmSequencerItemOwner(itemAddr);
           itemDoneReceived.erase(itemAddr);
           finishItemWaiters.erase(itemAddr);
           LLVM_DEBUG(llvm::dbgs()
@@ -8954,9 +9248,7 @@ arith_dispatch:
 
         // First call (not a re-poll): push item to FIFO
         if (!finishItemWaiters.count(itemAddr)) {
-          auto sqrIt = itemToSequencer.find(itemAddr);
-          uint64_t sqrAddr =
-              sqrIt != itemToSequencer.end() ? sqrIt->second : 0;
+          uint64_t sqrAddr = takeUvmSequencerItemOwner(itemAddr);
           sequencerItemFifo[sqrAddr].push_back(itemAddr);
           LLVM_DEBUG(llvm::dbgs()
                      << "  call_indirect: finish_item intercepted: item 0x"
@@ -9008,13 +9300,9 @@ arith_dispatch:
       uint64_t seqrAddr = 0;
       uint64_t seqrQueueAddr = 0;
       bool usedCachedSeqrQueue = false;
-      if (portAddr != 0) {
-        auto cachedSeqrIt = portToSequencerQueue.find(portAddr);
-        if (cachedSeqrIt != portToSequencerQueue.end()) {
-          seqrQueueAddr = cachedSeqrIt->second;
-          seqrAddr = seqrQueueAddr;
-          usedCachedSeqrQueue = true;
-        }
+      if (lookupUvmSequencerQueueCache(portAddr, seqrQueueAddr)) {
+        seqrAddr = seqrQueueAddr;
+        usedCachedSeqrQueue = true;
       }
       if (!usedCachedSeqrQueue) {
         // Find connected sequencer via connection map.
@@ -9162,8 +9450,7 @@ arith_dispatch:
         if (bestKey != 0)
           seqrQueueAddr = bestKey;
       }
-      if (portAddr != 0 && seqrQueueAddr != 0)
-        portToSequencerQueue[portAddr] = seqrQueueAddr;
+      cacheUvmSequencerQueueAddress(portAddr, seqrQueueAddr);
       // Try to find an item in any FIFO (prioritize matched sequencer).
       uint64_t itemAddr = 0;
       bool found = false;
@@ -9374,6 +9661,7 @@ arith_dispatch:
         auto waiterIt = finishItemWaiters.find(itemAddr);
         if (waiterIt != finishItemWaiters.end()) {
           ProcessId waiterProcId = waiterIt->second;
+          finishItemWaiters.erase(waiterIt);
           auto waiterStateIt = processStates.find(waiterProcId);
           if (waiterStateIt != processStates.end() &&
               waiterStateIt->second.waiting) {
@@ -14245,7 +14533,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       auto &conns = analysisPortConnections[selfAddr];
       if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end()) {
         conns.push_back(providerAddr);
-        portToSequencerQueue.erase(selfAddr);
+        invalidateUvmSequencerQueueCache(selfAddr);
       }
     }
     // [SEQ-CONN] func.call connect diagnostic removed
@@ -14384,8 +14672,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         impArgs.push_back(txnVal);
         SmallVector<InterpretedValue, 2> impResults;
         ++cState.callDepth;
-        interpretFuncBody(procId, impWriteFunc, impArgs, impResults,
-                          callOp);
+        (void)interpretFuncBody(procId, impWriteFunc, impArgs, impResults,
+                               callOp);
         --cState.callDepth;
       }
       return success();
@@ -14416,18 +14704,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                    << " fifoMaps=" << sequencerItemFifo.size() << "\n";
 
     uint64_t seqrAddr = 0;
-    if (portAddr != 0) {
-      auto cachedSeqrIt = portToSequencerQueue.find(portAddr);
-      if (cachedSeqrIt != portToSequencerQueue.end())
-        seqrAddr = cachedSeqrIt->second;
-    }
+    (void)lookupUvmSequencerQueueCache(portAddr, seqrAddr);
     if (seqrAddr == 0) {
       auto connIt = analysisPortConnections.find(portAddr);
       if (connIt != analysisPortConnections.end() && !connIt->second.empty())
         // Prefer the most recent connect() target for pull ports.
         seqrAddr = connIt->second.back();
-      if (portAddr != 0 && seqrAddr != 0)
-        portToSequencerQueue[portAddr] = seqrAddr;
+      cacheUvmSequencerQueueAddress(portAddr, seqrAddr);
     }
 
     uint64_t itemAddr = 0;
@@ -14552,6 +14835,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       auto waiterIt = finishItemWaiters.find(itemAddr);
       if (waiterIt != finishItemWaiters.end()) {
         ProcessId waiterProcId = waiterIt->second;
+        finishItemWaiters.erase(waiterIt);
         auto waiterStateIt = processStates.find(waiterProcId);
         if (waiterStateIt != processStates.end() && waiterStateIt->second.waiting) {
           waiterStateIt->second.waiting = false;
@@ -16770,6 +17054,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
                 : &processStates[procId];
         ++statePtr->totalSteps;
         ++statePtr->funcBodySteps;
+        maybeSampleMemoryState(statePtr->totalSteps);
         if (collectOpStats)
           ++opStats[op.getName().getStringRef()];
         // Progress report every ~16M func body steps (power-of-2 for cheap
@@ -20064,7 +20349,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto &conns = analysisPortConnections[selfAddr];
         if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end()) {
           conns.push_back(providerAddr);
-          portToSequencerQueue.erase(selfAddr);
+          invalidateUvmSequencerQueueCache(selfAddr);
         }
       }
     }
@@ -28174,6 +28459,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
       {
           ++cachedState->totalSteps;
           ++cachedState->funcBodySteps;
+          maybeSampleMemoryState(cachedState->totalSteps);
           if (collectOpStats)
             ++opStats[op.getName().getStringRef()];
           // Progress report every ~16M func body steps (power-of-2 for cheap

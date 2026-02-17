@@ -33,6 +33,198 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-17 Session: WS5 Memory Attribution Buckets (Largest Process/Function)
+
+### Why this pass
+Global memory totals and peak bytes alone are not enough for AHB OOM closure.
+We need attribution that identifies which process/function dominates footprint
+at peak so optimization work is targeted.
+
+### Changes
+1. Extended memory snapshot attribution in
+   `tools/circt-sim/LLHDProcessInterpreter.{h,cpp}`:
+   - `largest_process`
+   - `largest_process_bytes`
+2. Snapshot collection now computes per-process byte totals and tracks the
+   largest process in each sample.
+3. Peak sampling now stores the function context for the largest process at the
+   global peak sample:
+   - `largest_process_func`
+4. Memory summary output now includes attribution:
+   - `[circt-sim] Memory state: ... largest_process=... largest_process_bytes=...`
+   - `[circt-sim] Memory peak: ... largest_process=... largest_process_bytes=... largest_process_func=...`
+5. Updated focused regressions:
+   - `test/Tools/circt-sim/profile-summary-memory-state.mlir`
+   - `test/Tools/circt-sim/profile-summary-memory-peak.mlir`
+
+### Validation
+1. Rebuilt touched `circt-sim` objects and relinked `build-test/bin/circt-sim`.
+2. Focused regression slice:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/profile-summary-memory-peak.mlir build-test/test/Tools/circt-sim/profile-summary-memory-state.mlir build-test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir build-test/test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir` PASS (`4/4`)
+3. Occasional bounded AVIP pulse:
+   - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build-test/bin/circt-sim AVIPS=jtag,spi SEEDS=1 SIM_TIMEOUT=3 COMPILE_TIMEOUT=180 MEMORY_LIMIT_GB=20 MATRIX_TAG=memory-attribution-smoke utils/run_avip_circt_sim.sh`
+   - matrix: `/tmp/avip-circt-sim-20260217-081030/matrix.tsv`
+   - `jtag`: compile `OK` (29s), sim timeout (`137`) at 3s bound.
+   - `spi`: compile `OK` (37s), sim timeout (`137`) at 3s bound.
+
+### Remaining limitation
+Attribution is currently single-winner (largest process at sample/peak). Next
+WS5 step should add multi-bucket attribution (top-N process bytes and growth
+delta categories) to prioritize memory work across AHB/APB/AXI4 runs.
+
+---
+
+## 2026-02-17 Session: WS5 Memory Peak Sampling (Runtime)
+
+### Why this pass
+Exit-only memory snapshots are useful but miss transient high-water behavior
+during long UVM deltas. For AHB OOM triage we need sampled in-run peaks, not
+just final-state dimensions.
+
+### Changes
+1. Added reusable memory snapshot helper in
+   `tools/circt-sim/LLHDProcessInterpreter.{h,cpp}`:
+   - `collectMemoryStateSnapshot()`
+2. Added periodic in-run sampling hook:
+   - `maybeSampleMemoryState(totalSteps)`
+   - invoked from:
+     - `executeStep(...)`
+     - `interpretFuncBody(...)`
+     - `interpretLLVMFuncBody(...)`
+3. Added sampling controls:
+   - `CIRCT_SIM_PROFILE_MEMORY_SAMPLE_INTERVAL` (steps)
+   - default `65536` when `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1`
+4. Extended summary output with peak line:
+   - `[circt-sim] Memory peak: samples=... sample_interval_steps=...`
+   - includes `peak_step`, `peak_total_bytes`, and key byte dimensions.
+5. Added focused regression:
+   - `test/Tools/circt-sim/profile-summary-memory-peak.mlir`
+
+### Validation
+1. Compile check for touched runtime object:
+   - `ninja -C build-test tools/circt-sim/CMakeFiles/circt-sim.dir/LLHDProcessInterpreter.cpp.o -k 0` PASS
+2. `circt-sim` relink:
+   - manual relink from `ninja -C build-test -t commands bin/circt-sim` PASS
+   - note: full `ninja -C build-test circt-sim -k 0` remains blocked by an
+     unrelated pre-existing compile error in
+     `lib/Dialect/Sim/VPIRuntime.cpp` (`routines[i]();`).
+3. Focused regressions:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/profile-summary-memory-peak.mlir build-test/test/Tools/circt-sim/profile-summary-memory-state.mlir build-test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir build-test/test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir` PASS (`4/4`)
+4. Occasional bounded AVIP pulse:
+   - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build-test/bin/circt-sim AVIPS=jtag,spi SEEDS=1 SIM_TIMEOUT=3 COMPILE_TIMEOUT=180 MEMORY_LIMIT_GB=20 MATRIX_TAG=memory-peak-smoke utils/run_avip_circt_sim.sh`
+   - matrix: `/tmp/avip-circt-sim-20260217-075943/matrix.tsv`
+   - `jtag`: compile `OK` (24s), sim timeout (`137`) at 3s bound.
+   - `spi`: compile `OK` (36s), sim timeout (`137`) at 3s bound.
+
+### Remaining limitation
+This adds high-water visibility but still lacks phase/function-level attribution
+for where memory growth originates. Next WS5 step should add lightweight
+attribution buckets (e.g., by process/function class) so AHB OOM work can be
+prioritized by source, not only by total footprint.
+
+---
+
+## 2026-02-17 Session: Memory State Summary Telemetry (WS5)
+
+### Why this pass
+We now have bounded sequencer metadata paths, but AHB/OOM closure still needs
+high-signal runtime footprint visibility across the main memory structures.
+Without this, retention work is still guess-driven.
+
+### Changes
+1. Added profile-summary memory-state telemetry in
+   `LLHDProcessInterpreter::dumpProcessStates(...)`, gated by
+   `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1`.
+2. New summary line reports:
+   - `global_blocks/global_bytes`
+   - `malloc_blocks/malloc_bytes`
+   - `native_blocks/native_bytes`
+   - `process_blocks/process_bytes`
+   - `dynamic_strings/dynamic_string_bytes`
+   - `config_db_entries/config_db_bytes`
+   - `analysis_conn_ports/analysis_conn_edges`
+   - `seq_fifo_maps/seq_fifo_items`
+3. Added focused regression:
+   - `test/Tools/circt-sim/profile-summary-memory-state.mlir`
+   validating the memory summary schema is emitted.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-sim -k 0` PASS
+2. Focused regressions:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/profile-summary-memory-state.mlir build-test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir build-test/test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir` PASS (`3/3`)
+3. Sequencer/memory slice:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='profile-summary-memory-state|finish-item-blocks-until-item-done|seq-pull-port-reconnect-cache-invalidation|uvm-sequencer-queue-cache-cap'` PASS (`4/4`)
+4. Occasional AVIP bounded smoke:
+   - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build-test/bin/circt-sim AVIPS=jtag,spi SEEDS=1 SIM_TIMEOUT=3 COMPILE_TIMEOUT=180 MEMORY_LIMIT_GB=20 MATRIX_TAG=memory-summary-smoke utils/run_avip_circt_sim.sh`
+   - matrix: `/tmp/avip-circt-sim-20260217-074917/matrix.tsv`
+   - `jtag`: compile `OK` (26s), sim timeout (`137`) at 3s bound.
+   - `spi`: compile `OK` (35s), sim timeout (`137`) at 3s bound.
+
+### Remaining limitation
+This gives the observability needed for AHB memory-hardening, but does not yet
+add staged long-window sampling or retention policies for all large runtime
+maps. Next step is to use this summary to define bounded policies where growth
+is monotonic under long AVIP windows.
+
+---
+
+## 2026-02-17 Session: Sequencer Retention Hardening + Queue Cache Bounds
+
+### Why this pass
+AHB-style long runs still need explicit retention controls in native sequencer
+state. Two paths were still riskier than needed:
+1. Pull-port sequencer queue-address cache had no capacity policy.
+2. `item -> sequencer` ownership mapping could retain historical entries longer
+   than required by the handshake.
+
+### Changes
+1. Added bounded sequencer queue-cache policy:
+   - `CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_MAX_ENTRIES`
+   - `CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_EVICT_ON_CAP`
+2. Added queue-cache telemetry in profile summary:
+   - `hits`, `misses`, `installs`, `entries`, `capacity_skips`, `evictions`
+   - explicit limits line (`max_entries`, `evict_on_cap`).
+3. Hardened item-ownership retention:
+   - `start_item` ownership map stores now tracked.
+   - `finish_item` consumes ownership mapping immediately when enqueueing.
+   - stale waiter cleanup on process finalization now clears residual
+     `finishItemWaiters`/`itemDoneReceived` and ownership entries for killed
+     waiters.
+4. Added sequencer native-state telemetry:
+   - `item_map_live`, `item_map_peak`, `item_map_stores`, `item_map_erases`
+   - `fifo_maps`, `fifo_items`, `waiters`, `done_pending`, `last_dequeued`.
+5. Refactored repeated cache operations into helpers:
+   - `lookupUvmSequencerQueueCache(...)`
+   - `cacheUvmSequencerQueueAddress(...)`
+   - `invalidateUvmSequencerQueueCache(...)`
+   to centralize retention/cap behavior across call-indirect, func.call, and
+   llvm.call connect/get flows.
+
+### Tests
+1. Added:
+   - `test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir`
+     (cap and evict-on-cap behavior).
+2. Updated:
+   - `test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir`
+     with summary-mode check for ownership reclamation (`item_map_live=0`).
+
+### Validation
+1. `ninja -C build-test circt-sim -k 0` PASS
+2. `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir build-test/test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir` PASS (`2/2`)
+3. `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='finish-item-blocks-until-item-done|seq-pull-port-reconnect-cache-invalidation|uvm-sequencer-queue-cache-cap'` PASS (`3/3`)
+4. Bounded AVIP sanity:
+   - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build-test/bin/circt-sim AVIPS=jtag SEEDS=1 SIM_TIMEOUT=3 COMPILE_TIMEOUT=180 MEMORY_LIMIT_GB=20 MATRIX_TAG=seq-cache-hardening-smoke utils/run_avip_circt_sim.sh`
+   - matrix: `/tmp/avip-circt-sim-20260217-074342/matrix.tsv`
+   - `jtag`: compile `OK` (26s), sim bounded timeout (`137`) as expected.
+
+### Remaining limitation
+This closes retention gaps for sequencer metadata, but not all AHB RSS drivers.
+Next WS5 pass should target broader object/queue lifetime telemetry in longer
+AHB windows.
+
+---
+
 ## 2026-02-16 Session 7: Cross-Field Fix + config_db set_ Wrapper
 
 ### v12 Baseline Results (After Cross-Field Contamination Fix)
