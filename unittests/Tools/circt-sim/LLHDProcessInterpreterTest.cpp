@@ -15,6 +15,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Parser/Parser.h"
@@ -249,6 +251,25 @@ module {
       llhd.yield %unk : i1
     }
 
+    hw.output
+  }
+}
+)MLIR";
+
+static constexpr llvm::StringLiteral kScfIfXConditionIR = R"MLIR(
+module {
+  hw.module @test() {
+    %comb:1 = llhd.combinational -> i1 {
+      %true = hw.constant true
+      %false = hw.constant false
+      %x = llvm.mlir.undef : i1
+      %res = scf.if %x -> (i1) {
+        scf.yield %true : i1
+      } else {
+        scf.yield %false : i1
+      }
+      llhd.yield %res : i1
+    }
     hw.output
   }
 }
@@ -816,6 +837,37 @@ TEST(LLHDProcessInterpreterToolTest, ProbeEncodedUnknown) {
   ASSERT_EQ(results.size(), 1u);
   EXPECT_FALSE(results[0].isX());
   EXPECT_EQ(results[0].getUInt64(), 1u);
+}
+
+TEST(LLHDProcessInterpreterToolTest, ScfIfXConditionTakesElse) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect>();
+  context.loadDialect<llhd::LLHDDialect>();
+  context.loadDialect<LLVM::LLVMDialect>();
+  context.loadDialect<scf::SCFDialect>();
+
+  OwningOpRef<ModuleOp> module =
+      parseSourceString<ModuleOp>(kScfIfXConditionIR, &context);
+  ASSERT_TRUE(module);
+
+  SymbolTable symbols(*module);
+  auto hwModule = symbols.lookup<hw::HWModuleOp>("test");
+  ASSERT_TRUE(hwModule);
+
+  ProcessScheduler scheduler;
+  LLHDProcessInterpreter interpreter(scheduler);
+  ASSERT_TRUE(succeeded(interpreter.initialize(hwModule)));
+
+  llhd::CombinationalOp combOp;
+  hwModule.walk([&](llhd::CombinationalOp op) { combOp = op; });
+  ASSERT_TRUE(combOp);
+
+  llvm::SmallVector<InterpretedValue, 4> results;
+  EXPECT_TRUE(LLHDProcessInterpreterTest::evaluateCombinational(interpreter,
+                                                                combOp, results));
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_FALSE(results[0].isX());
+  EXPECT_EQ(results[0].getUInt64(), 0u);
 }
 
 TEST(LLHDProcessInterpreterToolTest, LLVMSignalLoadStore) {

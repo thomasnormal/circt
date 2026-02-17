@@ -1,5 +1,66 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1461 - February 17, 2026
+
+### circt-sim: I3C continuous-drive diagnostics, sensitivity hardening, and `scf.if` X-branch semantics
+
+1. Added targeted continuous-assignment diagnostics (env-gated) for drive-group
+   triage:
+   - `CIRCT_SIM_TRACE_CONT_ASSIGN=1`
+   - `CIRCT_SIM_TRACE_CONT_ASSIGN_FILTER=<substring>`
+   - emits per-target drive metadata (strengths, source signal IDs/names, encodings).
+2. Added targeted I3C drive-value trace (env-gated) in continuous assignment execution:
+   - `CIRCT_SIM_TRACE_I3C_DRIVES=1`
+   - emits driven bit patterns for `I3C_SCL` / `I3C_SDA`.
+3. Hardened strength-sensitive continuous-drive sensitivity setup:
+   - preserve distinct-driver resolution for non-default strengths;
+   - add fallback target-sensitivity for strength-sensitive drives with pointer-like
+     `sig_*` dependencies that are not FourStateStruct-encoded.
+4. Added interface-pointer source expansion pass for drive dependency collection:
+   - expands source dependencies via `interfacePtrToFieldSignals` when available.
+5. Added post-module-init static-drive re-evaluation pass:
+   - re-executes `staticModuleDrives` after `executeModuleLevelLLVMOps` and deferred
+     child module-level ops to reduce stale pre-init drive snapshots.
+6. Updated `scf.if` runtime semantics for X conditions:
+   - `X/Z` condition now follows branch semantics (not-true => else) instead of
+     immediate X-result propagation; aligns with existing `cf.cond_br` handling.
+7. Added unit regression:
+   - `LLHDProcessInterpreterToolTest.ScfIfXConditionTakesElse`
+   - validates `scf.if` X-condition takes else branch in combinational evaluation.
+8. Validation:
+   - `CCACHE_DISABLE=1 ninja -C build circt-sim` PASS
+   - `CCACHE_DISABLE=1 ninja -C build CIRCTSimToolTests` PASS
+   - `build/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter=LLHDProcessInterpreterToolTest.ScfIfXConditionTakesElse` PASS
+   - full unit suite run:
+     - `build/unittests/Tools/circt-sim/CIRCTSimToolTests`
+     - `24/25` PASS; existing failure observed in
+       `LLHDProcessInterpreterToolTest.LLVMNativeStoreFallback`.
+   - AVIP spot checks with patched `build/bin/circt-sim`:
+     - I2S direct run preserved `100%/100%` coverage.
+     - I3C still reproduces `0%/0%` coverage and `wait_for_idle_state` process-step
+       overflows (diagnostics improved; root cause not fully resolved).
+
+## Iteration 1460 - February 17, 2026
+
+### circt-sim: Refactor wait(condition) handling into a dedicated translation unit
+
+1. Split `__moore_wait_condition` handling out of
+   `tools/circt-sim/LLHDProcessInterpreter.cpp` into:
+   - `tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp`
+2. Reduced `interpretLLVMCall` hot path size by replacing the inline
+   wait-condition block with a direct helper dispatch:
+   - `return interpretMooreWaitConditionCall(procId, callOp);`
+3. Wired the new file into build targets:
+   - `tools/circt-sim/CMakeLists.txt`
+   - `unittests/Tools/circt-sim/CMakeLists.txt`
+4. Added `PARTIAL_SOURCES_INTENDED` on `circt-sim` target to satisfy LLVM
+   source-list checks when sharing interpreter source files with unittests.
+5. Validation:
+   - `ninja -C build-test circt-sim` PASS
+   - `ninja -C build-test check-circt-circt-sim` blocked by pre-existing
+     compile errors in `LLHDProcessInterpreter.cpp` unrelated to this
+     refactor (APInt API/use-site mismatches present in the working tree).
+
 ## Iteration 1459 - February 17, 2026
 
 ### circt-sim: Process-Self Call Coverage and Call-Targeted Deopt Detail
@@ -34,6 +95,32 @@
      - new dominant:
        `unsupported_operation:first_op:func.call_indirect` = 90
      - `first_op:llvm.getelementptr` remains 45.
+
+## Iteration 1458 - February 17, 2026
+
+### circt-sim: wait(condition) execute_phase guardrails + global-init fast-path safety
+
+1. Added execute-phase wait-condition coverage regression:
+   - `test/Tools/circt-sim/wait-condition-execute-phase-objection.mlir`
+   - validates `__moore_wait_condition` in
+     `uvm_pkg::uvm_phase_hopper::execute_phase` avoids process-step overflow
+     and keeps simulation advancing to termination.
+2. Hardened wait-condition objection waiter bookkeeping:
+   - added per-process objection waiter handle tracking and explicit removal on
+     process-finalize / re-arm transitions to avoid stale waiter buildup.
+3. Improved wait-condition phase resolution fallback:
+   - when in LLVM execute_phase context, `__moore_wait_condition` now attempts
+     phase recovery from process-local state and ancestor process chain before
+     deciding fallback polling strategy.
+4. Added global-init safety guard in UVM factory registry fast path:
+   - `handleUvmFuncBodyFastPath` now skips wrapper-vtable registry
+     initialization fast path while `inGlobalInit` is true, avoiding early-init
+     crashes in bounded I3C runs.
+5. Validation:
+   - `ninja -C build-test circt-sim` PASS
+   - `llvm/build/bin/llvm-lit -sv --config-prefix=lit.site build-test/test/Tools/circt-sim/wait-condition-memory.mlir build-test/test/Tools/circt-sim/wait-condition-execute-phase-objection.mlir` PASS
+   - bounded I3C interpret run no longer crashes in init (still wall-time bound):
+     - `CIRCT_UVM_ARGS='+UVM_TESTNAME=i3c_writeOperationWith8bitsData_test +ntb_random_seed=1 +UVM_VERBOSITY=UVM_LOW' build-test/bin/circt-sim ... --max-wall-ms=12000`
 
 ## Iteration 1457 - February 17, 2026
 
