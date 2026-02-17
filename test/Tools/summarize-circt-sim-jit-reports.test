@@ -1,0 +1,36 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/reports %t/empty
+// RUN: python3 -c "import json,pathlib; p=pathlib.Path(r'%t/reports/a.json'); p.write_text(json.dumps({'jit':{'jit_deopt_processes':[{'process_id':1,'process_name':'llhd_process_1','reason':'unsupported_operation','detail':'prewait_impure:sim.proc.print'},{'process_id':2,'process_name':'llhd_process_2','reason':'missing_thunk','detail':'compile_budget_zero'}]}}, indent=2), encoding='utf-8')"
+// RUN: python3 -c "import json,pathlib; p=pathlib.Path(r'%t/reports/b.json'); p.write_text(json.dumps({'jit':{'jit_deopt_processes':[{'process_id':7,'process_name':'llhd_process_7','reason':'unsupported_operation','detail':'first_op:llvm.call'}]}}, indent=2), encoding='utf-8')"
+// RUN: python3 %S/../../utils/summarize_circt_sim_jit_reports.py %t/reports --out-reason-tsv %t/reasons.tsv --out-detail-tsv %t/details.tsv --out-process-tsv %t/processes.tsv > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=REASON < %t/reasons.tsv
+// RUN: FileCheck %s --check-prefix=DETAIL < %t/details.tsv
+// RUN: FileCheck %s --check-prefix=PROC < %t/processes.tsv
+// RUN: not python3 %S/../../utils/summarize_circt_sim_jit_reports.py %t/empty 2>&1 | FileCheck %s --check-prefix=EMPTY
+//
+// LOG: reports_scanned=2
+// LOG: deopt_process_rows=3
+// LOG: unique_reasons=2
+// LOG: unique_reason_details=3
+// LOG: top_reason[1] reason=unsupported_operation count=2
+// LOG: top_reason[2] reason=missing_thunk count=1
+// LOG: top_reason_detail[1] reason=missing_thunk detail=compile_budget_zero count=1
+// LOG: top_reason_detail[2] reason=unsupported_operation detail=first_op:llvm.call count=1
+// LOG: top_reason_detail[3] reason=unsupported_operation detail=prewait_impure:sim.proc.print count=1
+//
+// REASON: rank{{[[:space:]]+}}reason{{[[:space:]]+}}count
+// REASON: 1{{[[:space:]]+}}unsupported_operation{{[[:space:]]+}}2
+// REASON: 2{{[[:space:]]+}}missing_thunk{{[[:space:]]+}}1
+//
+// DETAIL: rank{{[[:space:]]+}}reason{{[[:space:]]+}}detail{{[[:space:]]+}}count
+// DETAIL: 1{{[[:space:]]+}}missing_thunk{{[[:space:]]+}}compile_budget_zero{{[[:space:]]+}}1
+// DETAIL: 2{{[[:space:]]+}}unsupported_operation{{[[:space:]]+}}first_op:llvm.call{{[[:space:]]+}}1
+// DETAIL: 3{{[[:space:]]+}}unsupported_operation{{[[:space:]]+}}prewait_impure:sim.proc.print{{[[:space:]]+}}1
+//
+// PROC: report{{[[:space:]]+}}process_id{{[[:space:]]+}}process_name{{[[:space:]]+}}reason{{[[:space:]]+}}detail
+// PROC: {{.*}}/reports/a.json{{[[:space:]]+}}1{{[[:space:]]+}}llhd_process_1{{[[:space:]]+}}unsupported_operation{{[[:space:]]+}}prewait_impure:sim.proc.print
+// PROC: {{.*}}/reports/a.json{{[[:space:]]+}}2{{[[:space:]]+}}llhd_process_2{{[[:space:]]+}}missing_thunk{{[[:space:]]+}}compile_budget_zero
+// PROC: {{.*}}/reports/b.json{{[[:space:]]+}}7{{[[:space:]]+}}llhd_process_7{{[[:space:]]+}}unsupported_operation{{[[:space:]]+}}first_op:llvm.call
+//
+// EMPTY: no JIT report JSON files found

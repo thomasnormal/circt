@@ -207,6 +207,13 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
    - deopt telemetry now also carries optional per-process detail hints
      (`detail`) for unsupported-shape classification, and strict diagnostics
      append that detail when available.
+   - added deopt burn-down aggregation utility:
+     - `utils/summarize_circt_sim_jit_reports.py` aggregates one or more JIT
+       report files/directories and emits ranked reason/detail counters.
+     - optional TSV outputs provide reason ranking, reason+detail ranking, and
+       per-process rows for strict convergence queueing.
+     - added regression:
+       `test/Tools/summarize-circt-sim-jit-reports.test`.
 5. Bounded integration parity smoke executed:
    - `AVIPS=jtag`, `SEEDS=1`, `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=120`.
    - mode-parity checker passed with one row per mode; both lanes hit the

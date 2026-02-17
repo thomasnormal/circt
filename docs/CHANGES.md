@@ -145,14 +145,23 @@
       classifier text (for example,
       `prewait_impure:sim.proc.print`) when available.
     - strict fail-on-deopt logs now append `detail=<...>` when known.
+  - added deopt burn-down aggregation utility:
+    - `utils/summarize_circt_sim_jit_reports.py` now scans one or more JIT
+      report files/directories and emits ranked reason/detail counts.
+    - utility supports optional TSV outputs for reason ranking, reason+detail
+      ranking, and per-process rows:
+      `--out-reason-tsv`, `--out-detail-tsv`, `--out-process-tsv`.
   - added regression:
     - `test/Tools/circt-sim/jit-report-deopt-processes.mlir`
+    - `test/Tools/summarize-circt-sim-jit-reports.test`
 
 ### Why It Matters
 - Establishes deterministic artifact generation and machine-readable telemetry
   required for Phase A parity governance.
 - Provides one-command interpret-vs-compile drift detection before deeper JIT
   lowering is wired in Phase B.
+- Adds an explicit ranked deopt queue artifact for strict-native burn-down
+  planning across AVIP-sized report bundles.
 
 ## February 17, 2026 - circt-sim Full Native JIT Plan Published
 
