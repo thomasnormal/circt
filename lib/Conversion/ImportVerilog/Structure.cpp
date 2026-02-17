@@ -1333,10 +1333,16 @@ struct ModuleVisitor : public BaseVisitor {
     const auto *expr =
         assignNode.getAssignment().as_if<slang::ast::AssignmentExpression>();
     // When allowNonProceduralDynamic is enabled (the default), slang downgrades
-    // DynamicNotProcedural errors to warnings. This allows slang to still produce
-    // a valid AssignmentExpression that we can convert normally. The dynamic type
-    // member accesses (like class property accesses) are handled by the standard
-    // conversion path below.
+    // DynamicNotProcedural errors to warnings but wraps the expression in
+    // InvalidExpression. Unwrap to recover the underlying assignment.
+    if (!expr && context.options.allowNonProceduralDynamic.value_or(false)) {
+      if (const auto *invalid =
+              assignNode.getAssignment()
+                  .as_if<slang::ast::InvalidExpression>()) {
+        if (invalid->child)
+          expr = invalid->child->as_if<slang::ast::AssignmentExpression>();
+      }
+    }
     if (!expr) {
       mlir::emitError(loc)
           << "expected assignment expression in continuous assignment";
@@ -2667,7 +2673,9 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
       continue;
     }
     if (member.kind == slang::ast::SymbolKind::ContinuousAssign ||
-        member.kind == slang::ast::SymbolKind::ProceduralBlock) {
+        member.kind == slang::ast::SymbolKind::ProceduralBlock ||
+        member.kind == slang::ast::SymbolKind::GenerateBlock ||
+        member.kind == slang::ast::SymbolKind::GenerateBlockArray) {
       postInstanceMembers.push_back(&member);
     } else {
       // Check if variables/nets have initializers with hierarchical expressions.

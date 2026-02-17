@@ -801,6 +801,9 @@ struct AssertionExprVisitor {
     // For assertion instances the value is already the expected type, convert
     // boolean value
     if (!mlir::isa<ltl::SequenceType, ltl::PropertyType>(valueType)) {
+      // Multi-bit values (e.g., packed structs used in boolean context) need
+      // to be reduced to 1-bit via BoolCast (!=0) before converting to i1.
+      value = context.convertToBool(value);
       value = context.convertToI1(value);
     }
     if (!value)
@@ -1248,6 +1251,20 @@ struct AssertionExprVisitor {
   }
 
   Value visitInvalid(const slang::ast::AssertionExpr &expr) {
+    // Slang wraps assertion expressions in InvalidAssertionExpr when they
+    // appear in dead generate blocks (e.g., `if (ICache)` defaulting to 0).
+    // Try to unwrap and convert the child; if that also fails (unresolvable
+    // hierarchical refs in dead code), return {} so the caller can skip the
+    // assertion entirely.
+    if (auto *invalid =
+            expr.as_if<slang::ast::InvalidAssertionExpr>()) {
+      if (invalid->child) {
+        auto result = invalid->child->visit(*this);
+        if (result)
+          return result;
+      }
+      return {};
+    }
     mlir::emitError(loc, "invalid expression");
     return {};
   }
