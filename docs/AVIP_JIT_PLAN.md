@@ -252,3 +252,11 @@ Gate: default-on recommendation with rollback switch still available.
 7. Remaining WS5 gap after this pass:
    - attribution is single-winner only; we still need top-N process buckets and
      growth-delta attribution categories for robust AHB closure triage.
+8. WS5 attribution now includes top-N process ranking at summary time:
+   - `CIRCT_SIM_PROFILE_MEMORY_TOP_PROCESSES` controls rank depth
+     (default `3` in summary mode).
+   - summary emits:
+     `[circt-sim] Memory process top[N]: proc=... bytes=... name=... func=...`.
+9. Remaining WS5 gap after top-N landing:
+   - ranking is point-in-time only; we still need time-window delta attribution
+     and map-level growth buckets for deterministic OOM root cause closure.

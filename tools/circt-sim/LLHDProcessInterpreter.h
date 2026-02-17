@@ -1284,6 +1284,7 @@ private:
   bool uvmJitTracePromotions = false;
   bool profileSummaryAtExitEnabled = false;
   uint64_t memorySampleIntervalSteps = 0;
+  uint64_t memorySummaryTopProcesses = 0;
   uint64_t memorySampleNextStep = 0;
   uint64_t memorySampleCount = 0;
   uint64_t memorySamplePeakStep = 0;
