@@ -59,6 +59,9 @@
   - resumable native thunk coverage expanded:
     - two-block `llhd.wait delay ... -> sim.proc.print -> llhd.halt` now
       executes natively across activations.
+    - two-block `llhd.wait (observed ...) -> sim.proc.print -> llhd.halt` now
+      executes natively across activations when the wait observed operand is a
+      pre-wait `llhd.prb`.
     - per-process native resume tokens are now synchronized through thunk ABI
       dispatch and deopt snapshot/restore paths.
     - periodic toggle clock native thunks now use explicit token-guarded
@@ -76,9 +79,14 @@
   - added regression:
     - `test/Tools/circt-sim/jit-process-thunk-wait-delay-print-halt.mlir`
     - `test/Tools/circt-sim/jit-process-thunk-periodic-toggle-guard-failed-env.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-wait-event-print-halt.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-wait-event-print-halt-guard-failed-env.mlir`
   - ran bounded AVIP mode-parity smoke (`jtag`, seed `1`, 120s bounds):
     - parity checker passed with one row per mode; both lanes hit timeout under
       the bound (expected for this short smoke configuration).
+  - ran bounded AVIP compile-mode profiling smokes (`jtag`, seed `1`) with
+    `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1` at 90s and 180s bounds:
+    - both lanes reached bounded timeout before graceful exit.
 
 ### Why It Matters
 - Establishes deterministic artifact generation and machine-readable telemetry

@@ -1,0 +1,53 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: circt-sim %s --skip-passes --mode=compile --jit-hot-threshold=1 --jit-compile-budget=2 --max-time=2500 --jit-report=%t/jit.json > %t/log.txt 2>&1
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=JSON < %t/jit.json
+//
+// LOG: jit-process-thunk-wait-event-print-halt
+// LOG: [circt-sim] Simulation completed
+//
+// JSON: "mode": "compile"
+// JSON: "jit":
+// JSON: "jit_compiles_total": 2
+// JSON: "jit_cache_hits_total": {{[1-9][0-9]*}}
+// JSON: "jit_exec_hits_total": {{[1-9][0-9]*}}
+// JSON: "jit_deopts_total": 0
+// JSON: "jit_deopt_reason_guard_failed": 0
+// JSON: "jit_deopt_reason_unsupported_operation": 0
+// JSON: "jit_deopt_reason_missing_thunk": 0
+// JSON: "jit_strict_violations_total": 0
+
+hw.module @top() {
+  %false = hw.constant false
+  %true = hw.constant true
+  %eps = llhd.constant_time <0ns, 0d, 1e>
+  %c1000_i64 = arith.constant 1000 : i64
+  %clk = llhd.sig %false : i1
+  %fmt = sim.fmt.literal "jit-process-thunk-wait-event-print-halt\0A"
+
+  // Process 1: periodic toggle source for event waits.
+  llhd.process {
+    llhd.drv %clk, %false after %eps : i1
+    cf.br ^bb1
+  ^bb1:  // 2 preds: ^bb0, ^bb2
+    %delay = llhd.int_to_time %c1000_i64
+    llhd.wait delay %delay, ^bb2
+  ^bb2:  // pred: ^bb1
+    %cur = llhd.prb %clk : i1
+    %next = comb.xor %cur, %true : i1
+    llhd.drv %clk, %next after %eps : i1
+    cf.br ^bb1
+  }
+
+  // Process 2: event-sensitive wait thunk (now natively resumable).
+  llhd.process {
+    %val = llhd.prb %clk : i1
+    llhd.wait (%val : i1), ^bb1
+  ^bb1:
+    sim.proc.print %fmt
+    llhd.halt
+  }
+
+  hw.output
+}
