@@ -35,6 +35,7 @@ unsigned g_lastFuncProcId = 0;
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
@@ -57,6 +58,22 @@ static bool getSignalInitValue(Value initValue, unsigned width,
                                llvm::APInt &outValue);
 static size_t countRegionOps(mlir::Region &region);
 static bool isProcessCacheableBody(Operation *op);
+static bool isPureResumableWaitPreludeOp(Operation *op) {
+  if (!op || op->getNumResults() == 0)
+    return false;
+  if (op->getNumRegions() != 0 || op->hasTrait<OpTrait::IsTerminator>())
+    return false;
+  if (isa<llhd::DriveOp, llhd::WaitOp, llhd::HaltOp, mlir::cf::BranchOp,
+          mlir::cf::CondBranchOp, mlir::func::CallOp,
+          mlir::func::CallIndirectOp, LLVM::CallOp,
+          sim::PrintFormattedProcOp>(op))
+    return false;
+  // Probe reads are intentionally allowed for event sensitivity setup.
+  if (isa<llhd::ProbeOp>(op))
+    return true;
+  return mlir::isMemoryEffectFree(op);
+}
+
 static Type unwrapSignalType(Type type) {
   if (auto refType = dyn_cast<llhd::RefType>(type))
     return refType.getNestedType();
@@ -5693,12 +5710,7 @@ bool LLHDProcessInterpreter::isResumableWaitThenHaltNativeThunkCandidate(
   llvm::SmallDenseSet<Value, 8> preWaitResults;
   for (auto it = entry.begin(); it != waitIt; ++it) {
     Operation *op = &*it;
-    if (isa<llhd::DriveOp, llhd::WaitOp, llhd::HaltOp, mlir::cf::BranchOp,
-            mlir::cf::CondBranchOp, mlir::func::CallOp,
-            mlir::func::CallIndirectOp, LLVM::CallOp,
-            sim::PrintFormattedProcOp>(op))
-      return false;
-    if (op->getNumResults() == 0)
+    if (!isPureResumableWaitPreludeOp(op))
       return false;
     preWaitOps.push_back(op);
     for (Value result : op->getResults())
@@ -5814,11 +5826,7 @@ bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
   llvm::SmallDenseSet<Value, 8> preWaitResults;
   for (auto it = entry.begin(); it != waitIt; ++it) {
     Operation *op = &*it;
-    if (isa<llhd::DriveOp, llhd::WaitOp, llhd::HaltOp, mlir::cf::BranchOp,
-            mlir::cf::CondBranchOp, mlir::func::CallOp,
-            mlir::func::CallIndirectOp, LLVM::CallOp,
-            sim::PrintFormattedProcOp>(op) ||
-        op->getNumResults() == 0) {
+    if (!isPureResumableWaitPreludeOp(op)) {
       thunkState.deoptRequested = true;
       return true;
     }

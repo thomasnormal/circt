@@ -179,6 +179,9 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
      - matcher/executor now also support event-sensitive waits where observed
        operands are derived by pure pre-wait computations in the entry block,
        rather than only direct probe result operands.
+     - matcher now enforces that pre-wait derived-observed preludes are pure
+       (side-effect-free; `llhd.prb` allowed), so impure shapes are classified
+       as `unsupported_operation` rather than being JIT-thunked.
      - wired per-process native resume tokens through thunk dispatch and deopt
        snapshot/restore to keep resumable state-machine handoff explicit.
      - periodic toggle clock native thunk now also uses explicit token-guarded

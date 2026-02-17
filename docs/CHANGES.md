@@ -119,6 +119,12 @@
   - added regression:
     - `test/Tools/circt-sim/jit-process-thunk-wait-delay-dest-operand-halt-yield-parallel.mlir`
     - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-dest-operand-halt-yield-parallel.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-impure-prewait-unsupported.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-impure-prewait-unsupported-strict.mlir`
+  - hardened derived-observed resumable wait thunk prelude matching:
+    - pre-wait ops must now be side-effect-free (`llhd.prb` remains allowed).
+    - impure preludes (for example `llvm.alloca`) are classified as
+      `unsupported_operation` and stay on interpreter fallback paths.
 
 ### Why It Matters
 - Establishes deterministic artifact generation and machine-readable telemetry
