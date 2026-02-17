@@ -1364,3 +1364,34 @@ Updated checks in:
 
 1. We still need top-k **source attribution** (which specific process/map keys
    grew the most over the window), not just category-level counts/bytes.
+
+---
+
+## Ibex RTL Compilation & Simulation (Feb 17, 2026)
+
+### Context
+Task #4: compile and simulate lowRISC Ibex (RV32IMC) simple_system through circt-verilog + circt-sim.
+
+### Bugs Fixed
+
+1. **BoolCastOpConversion nested packed structs** (MooreToCore.cpp)
+   - SVA assertions on packed struct types (e.g., `ibex_pkg::crash_dump_t`) failed
+     because `BoolCastOp` only handled flat four-state types, not structs-of-structs
+   - Fix: extract value/unknown from each field, concat, compare non-zero
+
+2. **FWriteBIOp four-state file descriptor** (MooreToCore.cpp)
+   - `$fwrite(log_fd, ...)` where `log_fd` is four-state i64 struct caused
+     `llvm.trunc` on a struct type (invalid LLVM)
+   - Fix: `extractFourStateValue` before `llvm.trunc` in 6 file I/O ops
+
+3. **Generate block ordering** (Structure.cpp)
+   - `GenerateBlock`/`GenerateBlockArray` were processed as `preInstanceMembers`
+   - Hierarchical refs to instance internals inside generate blocks failed
+   - Fix: moved to `postInstanceMembers` so instances exist before generate block body runs
+   - Unblocks Ibex RVFI instrumentation (`if (RVFI) begin : gen_rvfi`)
+
+### Results
+- **ibex_top (with RVFI)**: 0 errors, 0 warnings, 26MB MLIR
+- **ibex_simple_system (full SoC)**: 0 errors, 0 warnings, 27MB MLIR (443K lines)
+- **Simulation**: 1118 processes, clock toggles, 0 errors at 4ns (438K process executions)
+- **No regressions**: MooreToCore tests 45/125 fail (all pre-existing CHECK mismatches)

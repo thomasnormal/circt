@@ -261,7 +261,7 @@ func.func @FStringToStringFormattedBin(%val: !moore.i32) -> !moore.string {
 
 // Test fstring_to_string conversion with formatted real
 // CHECK-LABEL: func @FStringToStringFormattedReal
-func.func @FStringToStringFormattedReal(%val: f64) -> !moore.string {
+func.func @FStringToStringFormattedReal(%val: !moore.f64) -> !moore.string {
   // CHECK: llvm.call @__moore_string_realtoa
   %0 = moore.fmt.real float %val, align right fracDigits 2 : f64
   %1 = moore.fstring_to_string %0
