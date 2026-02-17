@@ -1505,16 +1505,25 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // don't have forward propagation children, and link them to matching public
   // fields in the same interface.
   if (!childToParentFieldAddr.empty() && !interfaceFieldPropagation.empty()) {
-    // Collect parent interface fields that are reverse-propagation targets.
-    // Map: parent signal ID → set of child signal IDs that write to it.
+    // Collect interface fields that are destinations of cross-block copies
+    // but have no forward propagation children of their own.
+    // childToParentFieldAddr maps destAddr → srcAddr. For "reverse" copies
+    // (BFM → parent interface), destAddr is the parent interface field and
+    // srcAddr is the BFM field. We want the parent interface field as key.
     llvm::DenseMap<SignalId, llvm::SmallVector<SignalId, 2>> reverseTargets;
-    for (auto &[childAddr, parentAddr] : childToParentFieldAddr) {
-      auto childSigIt = interfaceFieldSignals.find(childAddr);
-      auto parentSigIt = interfaceFieldSignals.find(parentAddr);
-      if (childSigIt != interfaceFieldSignals.end() &&
-          parentSigIt != interfaceFieldSignals.end()) {
-        reverseTargets[parentSigIt->second].push_back(childSigIt->second);
-      }
+    for (auto &[destAddr, srcAddr] : childToParentFieldAddr) {
+      auto destSigIt = interfaceFieldSignals.find(destAddr);
+      auto srcSigIt = interfaceFieldSignals.find(srcAddr);
+      if (destSigIt == interfaceFieldSignals.end() ||
+          srcSigIt == interfaceFieldSignals.end())
+        continue;
+      // Only include cross-block entries (same-block = self-link).
+      uint64_t destOff = 0, srcOff = 0;
+      MemoryBlock *destBlk = findBlockByAddress(destAddr, destOff);
+      MemoryBlock *srcBlk = findBlockByAddress(srcAddr, srcOff);
+      if (!destBlk || !srcBlk || destBlk == srcBlk)
+        continue;
+      reverseTargets[destSigIt->second].push_back(srcSigIt->second);
     }
 
     // Group parent interface field signals by their memory block (interface).
@@ -5756,10 +5765,11 @@ bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
 
   // Token 1: resumed activation, run optional print and halt.
   if (state.jitThunkResumeToken == 1) {
-    if (state.waiting || state.destBlock != terminalBlock) {
+    if (state.destBlock != terminalBlock) {
       thunkState.deoptRequested = true;
       return true;
     }
+    state.waiting = false;
     if (printOp && failed(interpretProcPrint(procId, printOp))) {
       thunkState.deoptRequested = true;
       return true;
@@ -5948,10 +5958,11 @@ bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(
 
   // Token 1: resumed activation, toggle drive value, then wait again.
   if (state.jitThunkResumeToken == 1) {
-    if (state.waiting || state.destBlock != spec.waitDestBlock) {
+    if (state.destBlock != spec.waitDestBlock) {
       thunkState.deoptRequested = true;
       return true;
     }
+    state.waiting = false;
     if (failed(interpretProbe(procId, spec.probeOp)) ||
         failed(interpretOperation(procId, spec.toggleOp)) ||
         failed(interpretDrive(procId, spec.toggleDriveOp))) {
@@ -21642,6 +21653,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         if (propIt != interfaceFieldPropagation.end()) {
           for (SignalId childSigId : propIt->second)
             propagateToSignal(childSigId);
+          // Cascade one level: if any propagated child has its own forward
+          // children (from intra-interface links), propagate to them too.
+          // This bridges: BFM.txSclkOutput → Interface.txSclkOutput →
+          //               Interface.sclk → MonitorBFM.sclk
+          for (SignalId childSigId : propIt->second) {
+            auto childPropIt = interfaceFieldPropagation.find(childSigId);
+            if (childPropIt != interfaceFieldPropagation.end()) {
+              for (SignalId grandchildId : childPropIt->second) {
+                if (grandchildId != fieldSigId)
+                  propagateToSignal(grandchildId);
+              }
+            }
+          }
         }
 
         // Reverse propagation: when a CHILD interface field is written,
