@@ -35,6 +35,7 @@ set(libs
 
 add_circt_tool(circt-sim
   circt-sim.cpp
+  JITCompileManager.cpp
   LLHDProcessInterpreter.cpp
   UVMFastPaths.cpp
   DEPENDS ${libs}
@@ -47,3 +48,8 @@ target_link_libraries(circt-sim
 
 llvm_update_compile_flags(circt-sim)
 mlir_check_all_link_libraries(circt-sim)
+
+# Export symbols from the executable so that dlopen'd VPI libraries (e.g., cocotb)
+# can resolve vpi_* C API functions. Without this, the VPI functions defined in
+# VPIRuntime.cpp and MooreRuntime.cpp are invisible to loaded shared libraries.
+set_target_properties(circt-sim PROPERTIES ENABLE_EXPORTS 1)

@@ -1,4 +1,5 @@
 // RUN: circt-sim %s --max-time 100000000 2>&1 | FileCheck %s
+// RUN: env CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1 circt-sim %s --max-time 100000000 2>&1 | FileCheck %s --check-prefix=CHECK-SUMMARY
 //
 // Test that finish_item blocks until the driver calls item_done.
 // This is the standard UVM sequence-driver handshake:
@@ -12,6 +13,8 @@
 // CHECK: driver: item_done
 // CHECK: sequence: finish_item returned
 // CHECK: [circt-sim] Simulation completed
+
+// CHECK-SUMMARY: [circt-sim] UVM sequencer native state: item_map_live=0 item_map_peak=1 item_map_stores=1 item_map_erases=1
 
 module {
   // Storage for the item and sequencer address.
