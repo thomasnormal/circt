@@ -167,6 +167,8 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
      - extended to support event-sensitive two-block
        `wait(observed...) -> sim.proc.print -> halt` process bodies when the
        observed value is produced by a pre-wait `llhd.prb`.
+     - extended to support multi-observed event waits when the observed list
+       is produced by matching pre-wait probe sequences.
      - wired per-process native resume tokens through thunk dispatch and deopt
        snapshot/restore to keep resumable state-machine handoff explicit.
      - periodic toggle clock native thunk now also uses explicit token-guarded
@@ -181,6 +183,9 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
 6. Bounded compile-mode profiling smokes executed (`AVIPS=jtag`, `SEEDS=1`,
    `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1`):
    - 90s and 180s bounds both reached timeout before graceful summary emission.
+7. Refreshed bounded compile-mode smoke executed (`AVIPS=jtag`, `SEEDS=1`,
+   `SIM_TIMEOUT=90`):
+   - compile `OK`; bounded sim `TIMEOUT`.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

@@ -41,12 +41,16 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
     activation phases with deopt fallback on mismatched token/state transitions.
   - resumable wait thunks now include event-sensitive waits with a pre-wait
     probe (`llhd.wait (observed ...)`) for print/halt terminal bodies.
+  - event-sensitive resumable wait thunks now also support multi-observed wait
+    lists with matching pre-wait probe sequences.
   - deopt reasons are now split between `missing_thunk` and
     `unsupported_operation` when compile is attempted on unsupported bodies.
   - bounded AVIP mode-parity smoke remains green on `jtag`/seed `1`
     (`rows_interpret=1`, `rows_compile=1`; both bounded-timeout under 120s cap).
   - bounded AVIP compile-mode profiling smokes (jtag/seed=1) at 90s and 180s
     bounds both timed out before graceful profile-summary emission.
+  - refreshed bounded AVIP compile-mode smoke (jtag/seed=1, 90s) remains:
+    compile `OK`, bounded sim `TIMEOUT`.
 
 ### Current Status
 - **sv-tests simulation**: 1172 pass + 321 xfail = 1493/1493 (100%), 0 fail (Feb 17)
