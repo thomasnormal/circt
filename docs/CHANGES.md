@@ -1,5 +1,108 @@
 # Recent Changes (UVM Parity Work)
 
+## February 17, 2026 - circt-sim Native JIT Phase A Scaffolding (Telemetry + Mode Parity Harness)
+
+**Status**: In progress. Phase A groundwork landed for native JIT rollout gates.
+
+### What's New
+- Added `circt-sim` telemetry artifact output:
+  - new CLI: `--jit-report=<path>`
+  - new env fallback: `CIRCT_SIM_JIT_REPORT_PATH`
+  - JSON report includes scheduler/control stats, placeholder JIT counters, and
+    UVM fast-path/JIT-promotion counters.
+- Added deterministic mode controls to AVIP matrix runner:
+  - `utils/run_avip_circt_sim.sh` now supports `CIRCT_SIM_MODE=interpret|compile`
+  - supports `CIRCT_SIM_EXTRA_ARGS` passthrough
+  - supports optional per-seed JIT report emission via
+    `CIRCT_SIM_WRITE_JIT_REPORT=1`
+- Added compile-vs-interpret parity tooling:
+  - `utils/check_avip_circt_sim_mode_parity.py`
+  - `utils/run_avip_circt_sim_mode_parity.sh`
+- Added regression tests:
+  - `test/Tools/circt-sim/jit-report.mlir`
+  - `test/Tools/circt-sim/jit-fail-on-deopt.mlir`
+  - `test/Tools/circt-sim/jit-process-thunk.mlir`
+  - `test/Tools/circt-sim/jit-process-thunk-halt-yield.mlir`
+  - `test/Tools/circt-sim/jit-process-thunk-print-halt.mlir`
+  - `test/Tools/circt-sim/jit-initial-thunk-print-yield.mlir`
+  - `test/Tools/circt-sim/jit-guard-failed-deopt-env.mlir`
+  - `test/Tools/circt-sim/jit-process-thunk-wait-delay-halt.mlir`
+  - `test/Tools/check-avip-circt-sim-mode-parity-none.test`
+  - `test/Tools/check-avip-circt-sim-mode-parity-fail.test`
+- Added compile-mode governor scaffolding in `circt-sim`:
+  - new internal `JITCompileManager` for stable counter/deopt accounting
+  - added initial process-thunk cache API (`install/has/execute/invalidate`)
+    for upcoming ORC thunk integration
+  - new CLI controls:
+    - `--jit-hot-threshold`
+    - `--jit-compile-budget`
+    - `--jit-cache-policy`
+    - `--jit-fail-on-deopt`
+  - env fallbacks:
+    - `CIRCT_SIM_JIT_HOT_THRESHOLD`
+    - `CIRCT_SIM_JIT_COMPILE_BUDGET`
+    - `CIRCT_SIM_JIT_FAIL_ON_DEOPT`
+  - strict policy enforcement now fails compile-mode runs when deopts occur and
+    `--jit-fail-on-deopt` (or env equivalent) is enabled.
+  - compile-mode deopt reason now records per-process `missing_thunk` at
+    dispatch time (replacing coarse end-of-run placeholder accounting).
+  - compile-mode now installs and executes an initial native thunk for trivial
+    terminating process bodies (`llhd.halt`-only, including halt-yield process
+    results, `sim.proc.print` + `llhd.halt`, and trivial initial blocks
+    (`seq.yield`-only and `sim.proc.print` + `seq.yield`)), so
+    `jit_compiles_total`/`jit_exec_hits_total` can increment on real native
+    dispatch paths.
+  - first resumable native thunk shape landed:
+    - two-block `llhd.wait delay ... -> llhd.halt` processes now execute natively
+      across activations (wait suspend + delayed resume + halt completion).
+    - compile telemetry now shows multi-hit native execution for this shape.
+  - resumable native thunk coverage expanded:
+    - two-block `llhd.wait delay ... -> sim.proc.print -> llhd.halt` now
+      executes natively across activations.
+    - per-process native resume tokens are now synchronized through thunk ABI
+      dispatch and deopt snapshot/restore paths.
+    - periodic toggle clock native thunks now use explicit token-guarded
+      state-machine dispatch (`token 0` initial activation, `token 1` resumed
+      loop activation) with deopt fallback on token/state mismatches.
+  - added initial deopt-bridge scaffold at thunk dispatch:
+    - native dispatch now uses an explicit thunk execution state ABI.
+    - interpreter snapshots/restores process state when a thunk requests deopt.
+    - `guard_failed` deopt reason is now exercised via
+      `CIRCT_SIM_JIT_FORCE_DEOPT_REQUEST=1` test hook.
+  - added hotness/budget-aware compile-attempt gating in `JITCompileManager`,
+    and split deopt classification between:
+    - `missing_thunk` (not hot yet / budget disabled or exhausted / install miss)
+    - `unsupported_operation` (compile attempted but process shape unsupported)
+  - added regression:
+    - `test/Tools/circt-sim/jit-process-thunk-wait-delay-print-halt.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-periodic-toggle-guard-failed-env.mlir`
+  - ran bounded AVIP mode-parity smoke (`jtag`, seed `1`, 120s bounds):
+    - parity checker passed with one row per mode; both lanes hit timeout under
+      the bound (expected for this short smoke configuration).
+
+### Why It Matters
+- Establishes deterministic artifact generation and machine-readable telemetry
+  required for Phase A parity governance.
+- Provides one-command interpret-vs-compile drift detection before deeper JIT
+  lowering is wired in Phase B.
+
+## February 17, 2026 - circt-sim Full Native JIT Plan Published
+
+**Status**: Planning milestone. A comprehensive implementation roadmap for
+full native JIT in `circt-sim` is now documented.
+
+### What's New
+- Added `docs/CIRCT_SIM_FULL_NATIVE_JIT_PLAN.md`
+- Locked decisions for execution model:
+  - big-bang rollout
+  - bit-exact parity gate
+  - strict-native as end-state (with convergence phase)
+
+### Why It Matters
+- Consolidates architecture, milestones, gates, and risk controls in one
+  implementation-ready plan.
+- Aligns `circt-sim` JIT workstream tracking across planning and execution docs.
+
 ## January 16, 2026 - Iteration 26: Upstream Merge + Fork Publication + SVA Verification
 
 **Status**: Major infrastructure milestone - fork published and synced with upstream.

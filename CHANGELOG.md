@@ -1,5 +1,100 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1434 - February 17, 2026
+
+### circt-sim: Periodic Toggle Native Thunk Token-Gated Resume + Strict Guard Test
+
+1. Hardened periodic toggle native process thunk state machine in
+   `LLHDProcessInterpreter`:
+   - added explicit resume-token guard before side effects.
+   - split activation phases:
+     - token `0`: initial activation (`optional init drive -> wait(delay)`).
+     - token `1`: resumed activation (`probe -> toggle -> drive -> wait(delay)`).
+   - token/state mismatches now request deopt bridge fallback.
+2. Synced periodic thunk token lifecycle with process state:
+   - schedule-next-wait now sets `ProcessExecutionState::jitThunkResumeToken = 1`.
+   - halted path now returns token `0`.
+3. Added regression coverage for strict guard-failed policy on periodic thunk:
+   - `test/Tools/circt-sim/jit-process-thunk-periodic-toggle-guard-failed-env.mlir`
+4. Validation:
+   - `CCACHE_DISABLE=1 ninja -C build circt-sim` PASS
+   - targeted manual `circt-sim + FileCheck` JIT regressions PASS:
+     - `jit-process-thunk.mlir`
+     - `jit-process-thunk-halt-yield.mlir`
+     - `jit-process-thunk-print-halt.mlir`
+     - `jit-initial-thunk-print-yield.mlir`
+     - `jit-process-thunk-wait-delay-halt.mlir`
+     - `jit-process-thunk-wait-delay-print-halt.mlir`
+     - `jit-process-thunk-periodic-toggle.mlir`
+     - `jit-process-thunk-periodic-toggle-guard-failed-env.mlir`
+     - `jit-guard-failed-deopt-env.mlir`
+     - `jit-fail-on-deopt-env.mlir`
+     - `jit-fail-on-deopt.mlir`
+     - `jit-report.mlir`
+   - bounded AVIP parity smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=120 MAX_WALL_MS=120000 FAIL_ON_MISMATCH=0 utils/run_avip_circt_sim_mode_parity.sh`
+     - result: parity checker PASS (`rows_interpret=1`, `rows_compile=1`),
+       both modes bounded-timeout as expected.
+
+## Iteration 1433 - February 17, 2026
+
+### circt-sim: Resumable Native Thunk Token Plumbing + wait(delay)->print->halt
+
+1. Extended resumable native process thunk coverage in
+   `LLHDProcessInterpreter`:
+   - existing shape: `wait(delay) -> halt`
+   - new shape: `wait(delay) -> sim.proc.print -> halt`
+2. Wired per-process native resume token state end-to-end:
+   - `ProcessExecutionState::jitThunkResumeToken`
+   - thunk dispatch synchronization through `ProcessThunkExecutionState`
+   - deopt snapshot/restore now persists the token.
+3. Hardened resumable thunk dispatch with explicit token/state guards before
+   side effects, and clear token reset on process finalization.
+4. Added regression:
+   - `test/Tools/circt-sim/jit-process-thunk-wait-delay-print-halt.mlir`
+5. Validation:
+   - `CCACHE_DISABLE=1 ninja -C build circt-sim` PASS
+   - targeted manual `circt-sim + FileCheck` JIT regressions PASS:
+     - `jit-process-thunk.mlir`
+     - `jit-process-thunk-halt-yield.mlir`
+     - `jit-process-thunk-print-halt.mlir`
+     - `jit-initial-thunk-print-yield.mlir`
+     - `jit-process-thunk-wait-delay-halt.mlir`
+     - `jit-process-thunk-wait-delay-print-halt.mlir`
+     - `jit-guard-failed-deopt-env.mlir`
+     - `jit-fail-on-deopt-env.mlir`
+     - `jit-fail-on-deopt.mlir`
+     - `jit-report.mlir`
+
+## Iteration 1432 - February 17, 2026
+
+### circt-sim: Event-Driven Phase Hopper Waiters + Phase::add Call-Site Dedupe
+
+1. Replaced delta-poll retry loops for `uvm_phase_hopper::peek/get` with
+   event-driven waiter queues in both interpreter intercept paths:
+   - `func.call_indirect` fast path in `LLHDProcessInterpreter.cpp`
+   - `func.call` fast path in `LLHDProcessInterpreter.cpp`
+   - `try_put` now wakes blocked waiter processes immediately.
+2. Added `uvm_phase::add` call-site dedupe in `func.call` interception:
+   - skips duplicate adds before entering interpreted function body.
+   - phase-graph query cache invalidation now only occurs on unique add calls.
+3. Added dedicated call-site tracking storage:
+   - `nativePhaseAddCallKeys` in `LLHDProcessInterpreter.h`.
+4. Fixed `JITCompileManager` constructor declarations for GCC compatibility:
+   - introduced explicit default constructor + `Config` constructor overload.
+5. Validation:
+   - `ninja -C build-test -j1 bin/circt-sim` PASS
+   - `PATH=/home/thomas-ahle/circt/build-test/bin:$PATH llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/uvm-phase-hopper-func-body-fast-path.mlir build-test/test/Tools/circt-sim/uvm-phase-hopper-queue-fast-path.mlir build-test/test/Tools/circt-sim/uvm-factory-create-component-func-body-fast-path.mlir build-test/test/Tools/circt-sim/uvm-phase-add-duplicate-fast-path.mlir` PASS (`4/4`)
+   - I3C bounded AVIP checks:
+     - `/tmp/avip-circt-sim-20260217-i3c-eventwait/matrix.tsv`: compile `OK` (39s), sim `TIMEOUT` (90s).
+     - `/tmp/avip-circt-sim-20260217-i3c-calladd-m30/matrix.tsv`: compile `OK` (31s), sim `TIMEOUT` (90s).
+   - bounded profile evidence:
+     - pre-fix baseline: `/tmp/i3c-maxsteps-50k-fastpath.log` showed
+       `49918x uvm_pkg::uvm_phase_hopper::get`.
+     - post-fix runs: `/tmp/i3c-maxsteps-50k-eventwait-profile.log` and
+       `/tmp/i3c-maxsteps-50k-calladd-profile.log` no longer show
+       `uvm_phase_hopper::get` in top call profile.
+
 ## Iteration 1431 - February 17, 2026
 
 ### ImportVerilog: $*_gclk Sampled Value Functions + OnlyParse Fix

@@ -9,6 +9,41 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Simulation Workstream (circt-sim) — February 12, 2026
 
+### Native JIT Roadmap (February 17, 2026)
+- Comprehensive execution roadmap added: `docs/CIRCT_SIM_FULL_NATIVE_JIT_PLAN.md`
+- Scope locked to big-bang rollout with strict-native as end-state.
+- Correctness gate locked to bit-exact parity before default-on.
+- Phase A scaffolding now in-tree (Feb 17):
+  - `circt-sim` `--jit-report` JSON artifacts with stable keys.
+  - deterministic interpret-vs-compile AVIP parity harness and checker scripts.
+- Compile-governor scaffold now in-tree (Feb 17):
+  - `JITCompileManager` counters/deopt-reason accounting.
+  - initial process-thunk cache seam (`install/has/execute/invalidate`) for ORC.
+  - `--jit-hot-threshold`, `--jit-compile-budget`, `--jit-cache-policy`,
+    `--jit-fail-on-deopt` (+ env equivalents).
+  - strict deopt policy path for compile-mode gating on per-process
+    `missing_thunk` deopts.
+  - initial native thunk path now executes for trivial terminating process
+    shapes, including one-op `llhd.halt` (with yielded process results) and
+    `sim.proc.print` + `llhd.halt`, plus trivial `seq.initial` print/yield
+    shapes; compile mode can produce non-zero `jit_compiles_total` and
+    `jit_exec_hits_total` on supported paths.
+  - initial deopt-bridge scaffold now captures/restores process state when a
+    native thunk requests deopt, and reports `guard_failed` in compile-mode
+    telemetry.
+  - first resumable native thunk path is in-tree for delay-wait processes
+    (`llhd.wait delay -> llhd.halt`), exercising native suspend/resume flow.
+  - resumable native thunk coverage now also includes
+    `llhd.wait delay -> sim.proc.print -> llhd.halt`.
+  - per-process native resume tokens are now wired through thunk dispatch and
+    deopt snapshot/restore state.
+  - periodic toggle clock native thunk dispatch now uses explicit token-guarded
+    activation phases with deopt fallback on mismatched token/state transitions.
+  - deopt reasons are now split between `missing_thunk` and
+    `unsupported_operation` when compile is attempted on unsupported bodies.
+  - bounded AVIP mode-parity smoke remains green on `jtag`/seed `1`
+    (`rows_interpret=1`, `rows_compile=1`; both bounded-timeout under 120s cap).
+
 ### Current Status
 - **sv-tests simulation**: 1172 pass + 321 xfail = 1493/1493 (100%), 0 fail (Feb 17)
 - **circt-sim unit tests**: 307/318 pass (11 UVM fast-path caching test failures)
