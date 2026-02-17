@@ -30,11 +30,11 @@ func.func @test_pre_randomize(%obj: !moore.class<@RandomizeCallbackClass>) {
 }
 
 // CHECK-LABEL: func.func @test_post_randomize
-// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr, %[[S:.*]]: i1)
 // CHECK:         call @"RandomizeCallbackClass::post_randomize"(%[[OBJ]]) : (!llvm.ptr) -> ()
 // CHECK:         return
-func.func @test_post_randomize(%obj: !moore.class<@RandomizeCallbackClass>) {
-  moore.call_post_randomize %obj : !moore.class<@RandomizeCallbackClass>
+func.func @test_post_randomize(%obj: !moore.class<@RandomizeCallbackClass>, %success: i1) {
+  moore.call_post_randomize %obj, %success : !moore.class<@RandomizeCallbackClass>
   return
 }
 
@@ -53,11 +53,11 @@ func.func @test_no_pre_randomize(%obj: !moore.class<@NoCallbackClass>) {
 }
 
 // CHECK-LABEL: func.func @test_no_post_randomize
-// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr, %[[S:.*]]: i1)
 // CHECK-NOT:     call @
 // CHECK:         return
-func.func @test_no_post_randomize(%obj: !moore.class<@NoCallbackClass>) {
-  moore.call_post_randomize %obj : !moore.class<@NoCallbackClass>
+func.func @test_no_post_randomize(%obj: !moore.class<@NoCallbackClass>, %success: i1) {
+  moore.call_post_randomize %obj, %success : !moore.class<@NoCallbackClass>
   return
 }
 
@@ -81,11 +81,11 @@ func.func @test_pre_only_pre(%obj: !moore.class<@PreOnlyClass>) {
 }
 
 // CHECK-LABEL: func.func @test_pre_only_post
-// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr, %[[S:.*]]: i1)
 // CHECK-NOT:     call @
 // CHECK:         return
-func.func @test_pre_only_post(%obj: !moore.class<@PreOnlyClass>) {
-  moore.call_post_randomize %obj : !moore.class<@PreOnlyClass>
+func.func @test_pre_only_post(%obj: !moore.class<@PreOnlyClass>, %success: i1) {
+  moore.call_post_randomize %obj, %success : !moore.class<@PreOnlyClass>
   return
 }
 
@@ -109,10 +109,10 @@ func.func @test_post_only_pre(%obj: !moore.class<@PostOnlyClass>) {
 }
 
 // CHECK-LABEL: func.func @test_post_only_post
-// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr, %[[S:.*]]: i1)
 // CHECK:         call @"PostOnlyClass::post_randomize"(%[[OBJ]]) : (!llvm.ptr) -> ()
 // CHECK:         return
-func.func @test_post_only_post(%obj: !moore.class<@PostOnlyClass>) {
-  moore.call_post_randomize %obj : !moore.class<@PostOnlyClass>
+func.func @test_post_only_post(%obj: !moore.class<@PostOnlyClass>, %success: i1) {
+  moore.call_post_randomize %obj, %success : !moore.class<@PostOnlyClass>
   return
 }

@@ -1,10 +1,7 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
-// CHECK-DAG: llvm.func @__moore_randomize_with_range(i64, i64) -> i64
-// CHECK-DAG: llvm.func @__moore_randomize_with_ranges(!llvm.ptr, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
-// CHECK-DAG: llvm.func @__moore_is_constraint_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
 //===----------------------------------------------------------------------===//
 // Range Constraint Support Tests
@@ -25,16 +22,18 @@ moore.class.classdecl @RangeConstrainedClass {
 // CHECK-LABEL: func.func @test_range_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_range_constraint(%obj: !moore.class<@RangeConstrainedClass>) -> i1 {
-  // CHECK-DAG: %[[MIN:.*]] = llvm.mlir.constant(1 : i64) : i64
-  // CHECK-DAG: %[[MAX:.*]] = llvm.mlir.constant(99 : i64) : i64
-  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
-  // CHECK: llvm.call @__moore_is_rand_enabled
-  // CHECK: llvm.call @__moore_is_constraint_enabled
+  // Save old value, check rand_enabled, call randomize_basic, restore if disabled
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: llvm.load
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}})
+  // CHECK: arith.trunci {{.*}} : i32 to i1
   // CHECK: scf.if
-  // CHECK: llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]]) : (i64, i64) -> i64
-  // CHECK: arith.trunci {{.*}} : i64 to i32
-  // CHECK: llvm.store {{.*}} : i32, !llvm.ptr
-  // CHECK: return %{{.*}} : i1
+  // CHECK:   llvm.store
+  // CHECK: llvm.call @__moore_is_rand_enabled
+  // CHECK: arith.ori
+  // CHECK: arith.andi
+  // CHECK: return {{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@RangeConstrainedClass>
   return %success : i1
 }
@@ -48,8 +47,15 @@ moore.class.classdecl @UnconstrainedClass {
 // CHECK-LABEL: func.func @test_unconstrained
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_unconstrained(%obj: !moore.class<@UnconstrainedClass>) -> i1 {
-  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: llvm.load
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}})
   // CHECK: arith.trunci {{.*}} : i32 to i1
+  // CHECK: scf.if
+  // CHECK:   llvm.store
+  // CHECK: arith.ori
+  // CHECK: arith.andi
   // CHECK: return
   %success = moore.randomize %obj : !moore.class<@UnconstrainedClass>
   return %success : i1
@@ -66,7 +72,7 @@ moore.class.classdecl @EmptyConstraintClass {
 // CHECK-LABEL: func.func @test_empty_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_empty_constraint(%obj: !moore.class<@EmptyConstraintClass>) -> i1 {
-  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}})
   // CHECK: arith.trunci {{.*}} : i32 to i1
   // CHECK: return
   %success = moore.randomize %obj : !moore.class<@EmptyConstraintClass>
@@ -88,10 +94,20 @@ moore.class.classdecl @PartialConstraintClass {
 // CHECK-LABEL: func.func @test_partial_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_partial_constraint(%obj: !moore.class<@PartialConstraintClass>) -> i1 {
-  // CHECK-DAG: %[[MIN:.*]] = llvm.mlir.constant(10 : i64) : i64
-  // CHECK-DAG: %[[MAX:.*]] = llvm.mlir.constant(20 : i64) : i64
+  // Both properties are saved/restored based on rand_enabled
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: llvm.load
+  // CHECK: llvm.call @__moore_is_rand_enabled
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 3]
+  // CHECK: llvm.load
+  // CHECK: llvm.call @__moore_is_rand_enabled
   // CHECK: llvm.call @__moore_randomize_basic
-  // CHECK: llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]])
+  // CHECK: scf.if
+  // CHECK: scf.if
+  // CHECK: arith.ori
+  // CHECK: arith.ori
+  // CHECK: arith.andi
+  // CHECK: return
   %success = moore.randomize %obj : !moore.class<@PartialConstraintClass>
   return %success : i1
 }
@@ -250,7 +266,9 @@ moore.class.classdecl @MultiRangeClass {
 }
 
 // CHECK-LABEL: func.func @test_multi_range
-// CHECK: llvm.call @__moore_randomize_with_ranges
+// CHECK: llvm.call @__moore_randomize_basic
+// CHECK: arith.trunci {{.*}} : i32 to i1
+// CHECK: return
 func.func @test_multi_range(%obj: !moore.class<@MultiRangeClass>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@MultiRangeClass>
   return %success : i1

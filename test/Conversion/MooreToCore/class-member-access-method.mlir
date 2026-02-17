@@ -30,7 +30,7 @@ moore.class.classdecl @TestClass {
 
 // CHECK-LABEL: func.func @test_get_value
 // CHECK-SAME: (%[[THIS:.*]]: !llvm.ptr) -> i32
-// CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[THIS]][0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"TestClass"
+// CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[THIS]][{{%.+}}, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"TestClass"
 // CHECK:   %[[LOAD:.*]] = llvm.load %[[GEP]] : !llvm.ptr -> i32
 // CHECK:   return %[[LOAD]] : i32
 func.func @test_get_value(%this: !moore.class<@TestClass>) -> !moore.i32 {
@@ -45,7 +45,7 @@ func.func @test_get_value(%this: !moore.class<@TestClass>) -> !moore.i32 {
 
 // CHECK-LABEL: func.func @test_set_value
 // CHECK-SAME: (%[[THIS2:.*]]: !llvm.ptr, %[[VAL:.*]]: i32)
-// CHECK:   %[[GEP2:.*]] = llvm.getelementptr %[[THIS2]][0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"TestClass"
+// CHECK:   %[[GEP2:.*]] = llvm.getelementptr %[[THIS2]][{{%.+}}, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"TestClass"
 // CHECK:   llvm.store %[[VAL]], %[[GEP2]] : i32, !llvm.ptr
 func.func @test_set_value(%this: !moore.class<@TestClass>, %newval: !moore.i32) {
   %ref = moore.class.property_ref %this[@value] : <@TestClass> -> !moore.ref<i32>

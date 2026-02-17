@@ -46,8 +46,8 @@ moore.covergroup.decl @CrossCG {
 
 // CHECK-LABEL: func @TestCrossInst
 func.func @TestCrossInst() -> !moore.covergroup<@CrossCG> {
-  // CHECK: [[HANDLE_PTR:%.+]] = llvm.mlir.addressof @__cg_handle_CrossCG : !llvm.ptr
   // CHECK: llvm.call @__cg_init_CrossCG() : () -> ()
+  // CHECK: [[HANDLE_PTR:%.+]] = llvm.mlir.addressof @__cg_handle_CrossCG : !llvm.ptr
   // CHECK: [[HANDLE:%.+]] = llvm.load [[HANDLE_PTR]] : !llvm.ptr -> !llvm.ptr
   // CHECK: return [[HANDLE]] : !llvm.ptr
   %cg = moore.covergroup.inst @CrossCG : !moore.covergroup<@CrossCG>
@@ -57,11 +57,11 @@ func.func @TestCrossInst() -> !moore.covergroup<@CrossCG> {
 // CHECK-LABEL: func @TestCrossSample
 // CHECK-SAME: (%[[CG:.*]]: !llvm.ptr, %[[ADDR:.*]]: i8, %[[CMD:.*]]: i4)
 func.func @TestCrossSample(%cg: !moore.covergroup<@CrossCG>, %addr: !moore.i8, %cmd: !moore.i4) {
-  // CHECK-DAG: %[[IDX0:.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-DAG: %[[IDX1:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK: %[[ADDR_EXT:.*]] = arith.extui %[[ADDR]] : i8 to i64
+  // CHECK: %[[IDX0:.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK: llvm.call @__moore_coverpoint_sample(%[[CG]], %[[IDX0]], %[[ADDR_EXT]]) : (!llvm.ptr, i32, i64) -> ()
   // CHECK: %[[CMD_EXT:.*]] = arith.extui %[[CMD]] : i4 to i64
+  // CHECK: %[[IDX1:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK: llvm.call @__moore_coverpoint_sample(%[[CG]], %[[IDX1]], %[[CMD_EXT]]) : (!llvm.ptr, i32, i64) -> ()
   // CHECK: llvm.call @__moore_cross_sample(%[[CG]], {{.*}}, {{.*}}) : (!llvm.ptr, !llvm.ptr, i32) -> ()
   moore.covergroup.sample %cg(%addr, %cmd) : !moore.covergroup<@CrossCG> (!moore.i8, !moore.i4)

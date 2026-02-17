@@ -18,21 +18,21 @@ moore.class.classdecl @RootClass {
 }
 
 // CHECK-LABEL: func.func @test_root_field0
-// CHECK: llvm.getelementptr %arg0[0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"RootClass"
+// CHECK: llvm.getelementptr %arg0[{{%.+}}, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"RootClass"
 func.func @test_root_field0(%obj: !moore.class<@RootClass>) -> !moore.ref<i32> {
   %ref = moore.class.property_ref %obj[@field0] : <@RootClass> -> !moore.ref<i32>
   return %ref : !moore.ref<i32>
 }
 
 // CHECK-LABEL: func.func @test_root_field1
-// CHECK: llvm.getelementptr %arg0[0, 3] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"RootClass"
+// CHECK: llvm.getelementptr %arg0[{{%.+}}, 3] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"RootClass"
 func.func @test_root_field1(%obj: !moore.class<@RootClass>) -> !moore.ref<i64> {
   %ref = moore.class.property_ref %obj[@field1] : <@RootClass> -> !moore.ref<i64>
   return %ref : !moore.ref<i64>
 }
 
 // CHECK-LABEL: func.func @test_root_field2
-// CHECK: llvm.getelementptr %arg0[0, 4] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"RootClass"
+// CHECK: llvm.getelementptr %arg0[{{%.+}}, 4] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"RootClass"
 func.func @test_root_field2(%obj: !moore.class<@RootClass>) -> !moore.ref<i8> {
   %ref = moore.class.property_ref %obj[@field2] : <@RootClass> -> !moore.ref<i8>
   return %ref : !moore.ref<i8>
@@ -54,14 +54,14 @@ moore.class.classdecl @DerivedOwn extends @BaseForDerived {
 }
 
 // CHECK-LABEL: func.func @test_derived_own_field0
-// CHECK: llvm.getelementptr %arg0[0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"DerivedOwn"
+// CHECK: llvm.getelementptr %arg0[{{%.+}}, 1] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"DerivedOwn"
 func.func @test_derived_own_field0(%obj: !moore.class<@DerivedOwn>) -> !moore.ref<i64> {
   %ref = moore.class.property_ref %obj[@derived_y] : <@DerivedOwn> -> !moore.ref<i64>
   return %ref : !moore.ref<i64>
 }
 
 // CHECK-LABEL: func.func @test_derived_own_field1
-// CHECK: llvm.getelementptr %arg0[0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"DerivedOwn"
+// CHECK: llvm.getelementptr %arg0[{{%.+}}, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"DerivedOwn"
 func.func @test_derived_own_field1(%obj: !moore.class<@DerivedOwn>) -> !moore.ref<i16> {
   %ref = moore.class.property_ref %obj[@derived_z] : <@DerivedOwn> -> !moore.ref<i16>
   return %ref : !moore.ref<i16>
@@ -74,7 +74,7 @@ func.func @test_derived_own_field1(%obj: !moore.class<@DerivedOwn>) -> !moore.re
 // When accessing inherited field, path goes: [0 (ptr deref), 0 (into base), field_index]
 // CHECK-LABEL: func.func @test_derived_inherited_field
 // Inherited field base_x is at base[0].field[2] (base is at index 0 in derived, field at index 2 after typeId and vtablePtr in base)
-// CHECK: llvm.getelementptr %arg0[0, 0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"DerivedOwn"
+// CHECK: llvm.getelementptr %arg0[{{%.+}}, 0, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"DerivedOwn"
 func.func @test_derived_inherited_field(%obj: !moore.class<@DerivedOwn>) -> !moore.ref<i32> {
   %ref = moore.class.property_ref %obj[@base_x] : <@DerivedOwn> -> !moore.ref<i32>
   return %ref : !moore.ref<i32>
@@ -98,7 +98,7 @@ moore.class.classdecl @Level2 extends @Level1 {
 
 // Accessing Level2's own field
 // CHECK-LABEL: func.func @test_multi_level_own
-// CHECK: llvm.getelementptr %arg0[0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level2"
+// CHECK: llvm.getelementptr %arg0[{{%.+}}, 1] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level2"
 func.func @test_multi_level_own(%obj: !moore.class<@Level2>) -> !moore.ref<i32> {
   %ref = moore.class.property_ref %obj[@level2_field] : <@Level2> -> !moore.ref<i32>
   return %ref : !moore.ref<i32>
@@ -107,7 +107,7 @@ func.func @test_multi_level_own(%obj: !moore.class<@Level2>) -> !moore.ref<i32> 
 // Accessing Level1's field from Level2
 // Path: [0 (ptr deref), 0 (into Level1 base), 1 (level1_field after Level0 base)]
 // CHECK-LABEL: func.func @test_multi_level_parent
-// CHECK: llvm.getelementptr %arg0[0, 0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level2"
+// CHECK: llvm.getelementptr %arg0[{{%.+}}, 0, 1] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level2"
 func.func @test_multi_level_parent(%obj: !moore.class<@Level2>) -> !moore.ref<i16> {
   %ref = moore.class.property_ref %obj[@level1_field] : <@Level2> -> !moore.ref<i16>
   return %ref : !moore.ref<i16>
@@ -116,7 +116,7 @@ func.func @test_multi_level_parent(%obj: !moore.class<@Level2>) -> !moore.ref<i1
 // Accessing Level0's field from Level2
 // Path: [0 (ptr deref), 0 (into Level1), 0 (into Level0), 2 (level0_field after typeId and vtablePtr)]
 // CHECK-LABEL: func.func @test_multi_level_grandparent
-// CHECK: llvm.getelementptr %arg0[0, 0, 0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level2"
+// CHECK: llvm.getelementptr %arg0[{{%.+}}, 0, 0, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level2"
 func.func @test_multi_level_grandparent(%obj: !moore.class<@Level2>) -> !moore.ref<i8> {
   %ref = moore.class.property_ref %obj[@level0_field] : <@Level2> -> !moore.ref<i8>
   return %ref : !moore.ref<i8>

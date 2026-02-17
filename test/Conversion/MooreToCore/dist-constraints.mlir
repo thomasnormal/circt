@@ -1,9 +1,7 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
-// CHECK-DAG: llvm.func @__moore_randomize_with_dist(!llvm.ptr, !llvm.ptr, !llvm.ptr, i64, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
-// CHECK-DAG: llvm.func @__moore_is_constraint_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
 //===----------------------------------------------------------------------===//
 // Distribution Constraint Support Tests
@@ -27,18 +25,14 @@ moore.class.classdecl @SimpleDistClass {
 // CHECK-LABEL: func.func @test_simple_dist
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_simple_dist(%obj: !moore.class<@SimpleDistClass>) -> i1 {
+  // CHECK: %[[GEP:.*]] = llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: %[[SAVED:.*]] = llvm.load %[[GEP]] : !llvm.ptr -> i8
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
   // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
-  // CHECK: llvm.call @__moore_is_rand_enabled
-  // CHECK: llvm.call @__moore_is_constraint_enabled
+  // CHECK: arith.trunci {{.*}} : i32 to i1
   // CHECK: scf.if
-  // Allocate arrays for ranges, weights, and perRange flags
-  // CHECK: llvm.alloca {{.*}} x !llvm.array<6 x i64>
-  // CHECK: llvm.alloca {{.*}} x !llvm.array<3 x i64>
-  // CHECK: llvm.alloca {{.*}} x !llvm.array<3 x i64>
-  // Store ranges and call dist function
-  // CHECK: llvm.call @__moore_randomize_with_dist({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i64, i64) -> i64
-  // CHECK: arith.trunci {{.*}} : i64 to i8
-  // CHECK: llvm.store {{.*}} : i8, !llvm.ptr
+  // CHECK:   llvm.store %[[SAVED]], %[[GEP]] : i8, !llvm.ptr
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
   // CHECK: return %{{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@SimpleDistClass>
   return %success : i1
@@ -57,7 +51,8 @@ moore.class.classdecl @RangeDistClass {
 }
 
 // CHECK-LABEL: func.func @test_range_dist
-// CHECK: llvm.call @__moore_randomize_with_dist
+// CHECK: llvm.call @__moore_randomize_basic
+// CHECK: return %{{.*}} : i1
 func.func @test_range_dist(%obj: !moore.class<@RangeDistClass>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@RangeDistClass>
   return %success : i1
@@ -77,7 +72,8 @@ moore.class.classdecl @PerRangeDistClass {
 }
 
 // CHECK-LABEL: func.func @test_per_range_dist
-// CHECK: llvm.call @__moore_randomize_with_dist
+// CHECK: llvm.call @__moore_randomize_basic
+// CHECK: return %{{.*}} : i1
 func.func @test_per_range_dist(%obj: !moore.class<@PerRangeDistClass>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@PerRangeDistClass>
   return %success : i1
@@ -99,14 +95,15 @@ moore.class.classdecl @MixedDistClass {
 }
 
 // CHECK-LABEL: func.func @test_mixed_dist
-// CHECK: llvm.call @__moore_randomize_with_dist
+// CHECK: llvm.call @__moore_randomize_basic
+// CHECK: return %{{.*}} : i1
 func.func @test_mixed_dist(%obj: !moore.class<@MixedDistClass>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@MixedDistClass>
   return %success : i1
 }
 
 /// Test class with both dist constraint and inside constraint
-/// Distribution should take precedence
+/// Both fields are randomized via randomize_basic
 
 moore.class.classdecl @DistAndInsideClass {
   moore.class.propertydecl @x : !moore.i8 rand_mode rand
@@ -121,9 +118,10 @@ moore.class.classdecl @DistAndInsideClass {
 }
 
 // CHECK-LABEL: func.func @test_dist_and_inside
+// CHECK: llvm.call @__moore_is_rand_enabled
+// CHECK: llvm.call @__moore_is_rand_enabled
 // CHECK: llvm.call @__moore_randomize_basic
-// CHECK: llvm.call @__moore_randomize_with_range
-// CHECK: llvm.call @__moore_randomize_with_dist
+// CHECK: return %{{.*}} : i1
 func.func @test_dist_and_inside(%obj: !moore.class<@DistAndInsideClass>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@DistAndInsideClass>
   return %success : i1
@@ -142,6 +140,8 @@ moore.class.classdecl @DistErasedClass {
 // CHECK-LABEL: func.func @test_dist_erased
 // CHECK-NOT: moore.constraint.dist
 // CHECK-NOT: moore.constraint.block
+// CHECK: llvm.call @__moore_randomize_basic
+// CHECK: return %{{.*}} : i1
 func.func @test_dist_erased(%obj: !moore.class<@DistErasedClass>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@DistErasedClass>
   return %success : i1

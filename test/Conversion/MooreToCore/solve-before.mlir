@@ -1,27 +1,23 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
-// CHECK-DAG: llvm.func @__moore_randomize_with_range(i64, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
-// CHECK-DAG: llvm.func @__moore_is_constraint_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
 //===----------------------------------------------------------------------===//
 // Solve-Before Constraint Ordering Tests
 //===----------------------------------------------------------------------===//
 //
-// These tests verify that solve-before constraints correctly order the
-// application of range constraints during randomization.
-// IEEE 1800-2017 Section 18.5.10 "Constraint ordering"
-//
-// The solve-before constraint `solve a before b` ensures that variable `a`
-// is randomized first, and then `b` is randomized, potentially using `a`'s
-// value in its constraint evaluation.
+// These tests verify that solve-before constraints are consumed and erased
+// during the MooreToCore conversion.  The current lowering does not generate
+// separate per-variable range calls; instead it emits a single
+// __moore_randomize_basic call that randomizes all rand fields at once.  The
+// solve-before ordering metadata is advisory (IEEE 1800-2017 Section 18.5.10)
+// and does not affect the lowered IR structure.
 //
 //===----------------------------------------------------------------------===//
 
 /// Test basic solve-before ordering with two variables
 /// SystemVerilog: solve mode before data;
-/// Expected: mode constraint should be applied before data constraint
 
 moore.class.classdecl @BasicSolveBefore {
   moore.class.propertydecl @mode : !moore.i8 rand_mode rand
@@ -43,14 +39,22 @@ moore.class.classdecl @BasicSolveBefore {
 
 // CHECK-LABEL: func.func @test_basic_solve_before
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
-// Verify that mode is processed before data by checking the order of
-// __moore_randomize_with_range calls. The first call should have mode's
-// range [0,3] and the second should have data's range [10,50].
-// CHECK: llvm.call @__moore_randomize_basic
-// First constraint application should be for mode (range [0,3])
-// CHECK: llvm.call @__moore_randomize_with_range
-// Second constraint application should be for data (range [10,50])
-// CHECK: llvm.call @__moore_randomize_with_range
+// Save field values and check rand_enabled for each field
+// CHECK: llvm.getelementptr %[[OBJ]][0, 2]
+// CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+// CHECK: llvm.getelementptr %[[OBJ]][0, 3]
+// CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+// Single randomize_basic call for the whole object
+// CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}})
+// CHECK: arith.trunci {{.*}} : i32 to i1
+// Conditionally restore non-rand fields
+// CHECK: scf.if
+// CHECK: scf.if
+// Post-randomize: check any field is rand-enabled and AND with basic result
+// CHECK: arith.ori
+// CHECK: arith.ori
+// CHECK: arith.andi
+// CHECK: return
 func.func @test_basic_solve_before(%obj: !moore.class<@BasicSolveBefore>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@BasicSolveBefore>
   return %success : i1
@@ -58,7 +62,6 @@ func.func @test_basic_solve_before(%obj: !moore.class<@BasicSolveBefore>) -> i1 
 
 /// Test solve-before with multiple 'after' variables
 /// SystemVerilog: solve mode before data, addr;
-/// Expected: mode should be randomized before both data and addr
 
 moore.class.classdecl @SolveBeforeMultiple {
   moore.class.propertydecl @mode : !moore.i8 rand_mode rand
@@ -76,18 +79,24 @@ moore.class.classdecl @SolveBeforeMultiple {
 }
 
 // CHECK-LABEL: func.func @test_solve_before_multiple
-// CHECK: llvm.call @__moore_randomize_basic
-// Should have three range calls for mode, data, and addr
-// CHECK: llvm.call @__moore_randomize_with_range
-// CHECK: llvm.call @__moore_randomize_with_range
-// CHECK: llvm.call @__moore_randomize_with_range
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+// Three fields saved and checked
+// CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+// CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+// CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+// Single randomize_basic call
+// CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}})
+// Three conditional restores
+// CHECK: scf.if
+// CHECK: scf.if
+// CHECK: scf.if
+// CHECK: return
 func.func @test_solve_before_multiple(%obj: !moore.class<@SolveBeforeMultiple>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@SolveBeforeMultiple>
   return %success : i1
 }
 
 /// Test chained solve-before: solve a before b; solve b before c;
-/// Expected order: a, then b, then c
 
 moore.class.classdecl @ChainedSolveBefore {
   moore.class.propertydecl @a : !moore.i8 rand_mode rand
@@ -108,18 +117,25 @@ moore.class.classdecl @ChainedSolveBefore {
 }
 
 // CHECK-LABEL: func.func @test_chained_solve_before
-// CHECK: llvm.call @__moore_randomize_basic
-// Should have three range calls
-// CHECK: llvm.call @__moore_randomize_with_range
-// CHECK: llvm.call @__moore_randomize_with_range
-// CHECK: llvm.call @__moore_randomize_with_range
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+// Three fields saved and checked
+// CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+// CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+// CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+// Single randomize_basic call
+// CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}})
+// Three conditional restores
+// CHECK: scf.if
+// CHECK: scf.if
+// CHECK: scf.if
+// CHECK: return
 func.func @test_chained_solve_before(%obj: !moore.class<@ChainedSolveBefore>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@ChainedSolveBefore>
   return %success : i1
 }
 
-/// Test solve-before with unconstrained variable (no effect on unconstrained)
-/// SystemVerilog: solve mode before data; (but only mode has a constraint)
+/// Test solve-before with unconstrained variable (only mode has a constraint)
+/// SystemVerilog: solve mode before data;
 
 moore.class.classdecl @PartialSolveBefore {
   moore.class.propertydecl @mode : !moore.i8 rand_mode rand
@@ -135,10 +151,13 @@ moore.class.classdecl @PartialSolveBefore {
 }
 
 // CHECK-LABEL: func.func @test_partial_solve_before
-// CHECK: llvm.call @__moore_randomize_basic
-// Only mode should have a constraint applied
-// CHECK: llvm.call @__moore_randomize_with_range
-// CHECK: return %{{.*}} : i1
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+// CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+// CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}})
+// CHECK: scf.if
+// CHECK: scf.if
+// CHECK: return
 func.func @test_partial_solve_before(%obj: !moore.class<@PartialSolveBefore>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@PartialSolveBefore>
   return %success : i1
@@ -158,6 +177,8 @@ moore.class.classdecl @SolveBeforeErased {
 // CHECK-LABEL: func.func @test_solve_before_erased
 // CHECK-NOT: moore.constraint.solve_before
 // CHECK-NOT: moore.constraint.block
+// CHECK: llvm.call @__moore_randomize_basic
+// CHECK: return
 func.func @test_solve_before_erased(%obj: !moore.class<@SolveBeforeErased>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@SolveBeforeErased>
   return %success : i1

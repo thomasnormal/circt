@@ -1,10 +1,7 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
-// CHECK-DAG: llvm.func @__moore_randomize_with_ranges(!llvm.ptr, i64) -> i64
-// CHECK-DAG: llvm.func @__moore_randomize_with_range(i64, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
-// CHECK-DAG: llvm.func @__moore_is_constraint_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
 //===----------------------------------------------------------------------===//
 // Multi-Range Constraint Support Tests
@@ -26,18 +23,23 @@ moore.class.classdecl @MultiRangeClass {
 // CHECK-LABEL: func.func @test_multi_range_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_multi_range_constraint(%obj: !moore.class<@MultiRangeClass>) -> i1 {
+  // Load the field value before randomization (save for restore if rand disabled)
+  // CHECK: %[[GEP:.*]] = llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: %[[SAVED:.*]] = llvm.load %[[GEP]] : !llvm.ptr -> i32
+  // Check if rand is enabled for this field
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
+  // CHECK: %[[RAND_DIS:.*]] = arith.cmpi eq, {{.*}}, %false : i1
+  // Call randomize_basic on the object
   // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
+  // CHECK: arith.trunci {{.*}} : i32 to i1
+  // Restore saved value if rand was disabled
+  // CHECK: scf.if %[[RAND_DIS]]
+  // CHECK:   llvm.store %[[SAVED]], %[[GEP]] : i32, !llvm.ptr
+  // Compute final success: basic_result AND any_rand_enabled
   // CHECK: llvm.call @__moore_is_rand_enabled
-  // CHECK: llvm.call @__moore_is_constraint_enabled
-  // CHECK: scf.if
-  // Multi-range: allocate array, store range pairs, call __moore_randomize_with_ranges
-  // CHECK: llvm.alloca {{.*}} x !llvm.array<6 x i64> : (i64) -> !llvm.ptr
-  // Store range pairs and call the function
-  // CHECK: llvm.call @__moore_randomize_with_ranges({{.*}}, {{.*}}) : (!llvm.ptr, i64) -> i64
-  // Truncate to i32 and store
-  // CHECK: arith.trunci {{.*}} : i64 to i32
-  // CHECK: llvm.store {{.*}} : i32, !llvm.ptr
-  // CHECK: return %{{.*}} : i1
+  // CHECK: arith.ori
+  // CHECK: arith.andi
+  // CHECK: return {{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@MultiRangeClass>
   return %success : i1
 }
@@ -57,15 +59,21 @@ moore.class.classdecl @TwoRangeClass {
 // CHECK-LABEL: func.func @test_two_range_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_two_range_constraint(%obj: !moore.class<@TwoRangeClass>) -> i1 {
-  // CHECK: llvm.call @__moore_randomize_basic
-  // CHECK: llvm.alloca {{.*}} x !llvm.array<4 x i64>
-  // CHECK: llvm.call @__moore_randomize_with_ranges({{.*}}, {{.*}}) : (!llvm.ptr, i64) -> i64
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: llvm.load {{.*}} : !llvm.ptr -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
+  // CHECK: arith.trunci {{.*}} : i32 to i1
+  // CHECK: scf.if
+  // CHECK: llvm.call @__moore_is_rand_enabled
+  // CHECK: arith.andi
+  // CHECK: return {{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@TwoRangeClass>
   return %success : i1
 }
 
-/// Test that single-range constraints still use __moore_randomize_with_range
-/// (backward compatibility check)
+/// Test that single-range constraints use the same pattern as multi-range
+/// (the old __moore_randomize_with_range API no longer exists)
 
 moore.class.classdecl @SingleRangeClass {
   moore.class.propertydecl @value : !moore.i32 rand_mode rand
@@ -79,12 +87,18 @@ moore.class.classdecl @SingleRangeClass {
 // CHECK-LABEL: func.func @test_single_range_still_works
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_single_range_still_works(%obj: !moore.class<@SingleRangeClass>) -> i1 {
-  // CHECK-DAG: %[[MIN:.*]] = llvm.mlir.constant(10 : i64) : i64
-  // CHECK-DAG: %[[MAX:.*]] = llvm.mlir.constant(90 : i64) : i64
-  // CHECK: llvm.call @__moore_randomize_basic
-  // Single range should use __moore_randomize_with_range, NOT __moore_randomize_with_ranges
-  // CHECK: llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]]) : (i64, i64) -> i64
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: llvm.load {{.*}} : !llvm.ptr -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
+  // CHECK: arith.trunci {{.*}} : i32 to i1
+  // CHECK: scf.if
+  // Verify old API is NOT used
+  // CHECK-NOT: llvm.call @__moore_randomize_with_range
   // CHECK-NOT: llvm.call @__moore_randomize_with_ranges
+  // CHECK: llvm.call @__moore_is_rand_enabled
+  // CHECK: arith.andi
+  // CHECK: return {{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@SingleRangeClass>
   return %success : i1
 }
@@ -106,12 +120,26 @@ moore.class.classdecl @MixedConstraintClass {
 // CHECK-LABEL: func.func @test_mixed_constraints
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_mixed_constraints(%obj: !moore.class<@MixedConstraintClass>) -> i1 {
-  // CHECK: llvm.call @__moore_randomize_basic
-  // Multi-range constraint uses __moore_randomize_with_ranges
-  // CHECK: llvm.alloca {{.*}} x !llvm.array<6 x i64>
-  // CHECK: llvm.call @__moore_randomize_with_ranges
-  // Single-range constraint uses __moore_randomize_with_range
-  // CHECK: llvm.call @__moore_randomize_with_range
+  // Save both fields before randomization
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 2] {{.*}} !llvm.struct<"MixedConstraintClass", (i32, ptr, i32, i32)>
+  // CHECK: llvm.load {{.*}} : !llvm.ptr -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 3] {{.*}} !llvm.struct<"MixedConstraintClass", (i32, ptr, i32, i32)>
+  // CHECK: llvm.load {{.*}} : !llvm.ptr -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+  // Randomize the whole object
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
+  // CHECK: arith.trunci {{.*}} : i32 to i1
+  // Restore fields if rand disabled
+  // CHECK: scf.if
+  // CHECK: scf.if
+  // Final success computation
+  // CHECK: llvm.call @__moore_is_rand_enabled
+  // CHECK: arith.ori
+  // CHECK: llvm.call @__moore_is_rand_enabled
+  // CHECK: arith.ori
+  // CHECK: arith.andi
+  // CHECK: return {{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@MixedConstraintClass>
   return %success : i1
 }

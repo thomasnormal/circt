@@ -59,6 +59,9 @@
   - resumable native thunk coverage expanded:
     - two-block `llhd.wait delay ... -> sim.proc.print -> llhd.halt` now
       executes natively across activations.
+    - process-result terminal shapes with `llhd.wait yield (...)` and
+      destination block operands feeding terminal `llhd.halt` yields now
+      execute natively across activations.
     - two-block `llhd.wait (observed ...) -> sim.proc.print -> llhd.halt` now
       executes natively across activations when the wait observed operand is a
       pre-wait `llhd.prb`.
@@ -80,6 +83,8 @@
     - `unsupported_operation` (compile attempted but process shape unsupported)
   - added regression:
     - `test/Tools/circt-sim/jit-process-thunk-wait-delay-print-halt.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-wait-delay-dest-operand-halt-yield.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-wait-delay-dest-operand-halt-yield-guard-failed-env.mlir`
     - `test/Tools/circt-sim/jit-process-thunk-periodic-toggle-guard-failed-env.mlir`
     - `test/Tools/circt-sim/jit-process-thunk-wait-event-print-halt.mlir`
     - `test/Tools/circt-sim/jit-process-thunk-wait-event-print-halt-guard-failed-env.mlir`
@@ -93,6 +98,12 @@
     - both lanes reached bounded timeout before graceful exit.
   - refreshed bounded AVIP compile-mode smoke (`jtag`, seed `1`, 90s bound):
     - compile `OK`, bounded sim `TIMEOUT`.
+  - parallel-runtime limitation identified while validating JIT thunk shapes:
+    - `--parallel=4` currently shows hangs and allocator aborts (`double free`
+      at `comb.xor`) on minimal LLHD wait/toggle tests in both interpret and
+      compile modes.
+    - multi-threaded parity is therefore still blocked on parallel scheduler
+      hardening.
 
 ### Why It Matters
 - Establishes deterministic artifact generation and machine-readable telemetry

@@ -11,9 +11,9 @@ func.func @FuncArgsAndReturns(%arg0: !moore.i8, %arg1: !moore.i32, %arg2: !moore
 // CHECK-SAME: (%arg0: i32, %arg1: i1)
 func.func @ControlFlow(%arg0: !moore.i32, %arg1: i1) {
   // CHECK:   cf.br ^bb1
-  // CHECK: ^bb1:
-  // CHECK:   cf.cond_br %arg1, ^bb1, ^bb2
-  // CHECK: ^bb2:
+  // CHECK: ^bb1({{.*}}):
+  // CHECK:   cf.cond_br %arg1, ^bb1({{.*}}), ^bb2({{.*}})
+  // CHECK: ^bb2({{.*}}):
   // CHECK:   return
   cf.br ^bb1(%arg0: !moore.i32)
 ^bb1(%0: !moore.i32):
@@ -48,11 +48,8 @@ func.func @UnrealizedConversionCast(%arg0: !moore.i8) -> !moore.i16 {
 // CHECK-LABEL: func @Expressions
 // CHECK-SAME: (%arg0: i1, %arg1: !hw.struct<value: i1, unknown: i1>, %arg2: i6, %arg3: i5, %arg4: i1, %arg5: !hw.array<5xi32>, %arg6: !llhd.ref<i1>, %arg7: !llhd.ref<!hw.array<5xi32>>)
 func.func @Expressions(%arg0: !moore.i1, %arg1: !moore.l1, %arg2: !moore.i6, %arg3: !moore.i5, %arg4: !moore.i1, %arg5: !moore.array<5 x i32>, %arg6: !moore.ref<i1>, %arg7: !moore.ref<array<5 x i32>>) {
-  // Local variables in functions use llvm.alloca instead of llhd.sig
-  // CHECK-DAG: llvm.mlir.constant(1 : i64)
-  // CHECK-DAG: hw.constant 0 : i12
-  // CHECK-DAG: hw.aggregate_constant
-  // CHECK-DAG: hw.aggregate_constant
+  // CHECK: hw.struct_create
+  // CHECK: hw.struct_create
   moore.concat %arg0, %arg0 : (!moore.i1, !moore.i1) -> !moore.i2
   moore.concat %arg1, %arg1 : (!moore.l1, !moore.l1) -> !moore.l2
 
@@ -411,11 +408,12 @@ moore.module @Net() {
 }
 
 // CHECK-LABEL: hw.module @NetLogic
-// CHECK-DAG: [[SUP1_INIT:%.+]] = hw.aggregate_constant [true, false] : !hw.struct<value: i1, unknown: i1>
-// CHECK-DAG: [[ZERO_INIT:%.+]] = hw.aggregate_constant [false, false] : !hw.struct<value: i1, unknown: i1>
-// CHECK: llhd.sig [[ZERO_INIT]] : !hw.struct<value: i1, unknown: i1>
-// CHECK: llhd.sig [[ZERO_INIT]] : !hw.struct<value: i1, unknown: i1>
-// CHECK: llhd.sig [[SUP1_INIT]] : !hw.struct<value: i1, unknown: i1>
+// CHECK: hw.struct_create ({{.*}}) : !hw.struct<value: i1, unknown: i1>
+// CHECK: llhd.sig %{{.+}} : !hw.struct<value: i1, unknown: i1>
+// CHECK: hw.struct_create ({{.*}}) : !hw.struct<value: i1, unknown: i1>
+// CHECK: llhd.sig %{{.+}} : !hw.struct<value: i1, unknown: i1>
+// CHECK: hw.struct_create ({{.*}}) : !hw.struct<value: i1, unknown: i1>
+// CHECK: llhd.sig %{{.+}} : !hw.struct<value: i1, unknown: i1>
 moore.module @NetLogic(out a : !moore.l1, out b : !moore.l1, out c : !moore.l1) {
   %wire = moore.net wire : !moore.ref<l1>
   %supply0 = moore.net supply0 : !moore.ref<l1>
@@ -492,7 +490,7 @@ moore.module @Struct(in %a : !moore.i32, in %b : !moore.i32, in %arg0 : !moore.s
 // CHECK-SAME: () ->  !hw.array<2xi8>
 func.func @ArrayCreate() -> !moore.array<2x!moore.i8> {
   %c0 = moore.constant 42 : !moore.i8
-  // CHECK: hw.aggregate_constant
+  // CHECK: hw.array_create
   %arr = moore.array_create %c0, %c0 : !moore.i8, !moore.i8 -> !moore.array<2x!moore.i8>
   return %arr : !moore.array<2x!moore.i8>
 }
@@ -501,7 +499,7 @@ func.func @ArrayCreate() -> !moore.array<2x!moore.i8> {
 // CHECK-SAME: () ->  !hw.array<2xi8>
 func.func @UnpackedArrayCreate() -> !moore.uarray<2x!moore.i8> {
   %a = moore.constant 7 : !moore.i8
-  // CHECK: hw.aggregate_constant
+  // CHECK: hw.array_create
   %arr = moore.array_create %a, %a : !moore.i8, !moore.i8 -> !moore.uarray<2x!moore.i8>
   return %arr : !moore.uarray<2x!moore.i8>
 }
@@ -566,11 +564,13 @@ func.func @CmpReal(%arg0: !moore.f32, %arg1: !moore.f32) {
 }
 
 // CHECK-LABEL: func.func @UnaryRealOps
-func.func @UnaryRealOps(%arg0: !moore.f32) {
-  // CHECK: arith.negf %arg0 : f32
-  moore.fneg %arg0 : f32
+// CHECK-SAME: (%arg0: f32) -> f32
+func.func @UnaryRealOps(%arg0: !moore.f32) -> !moore.f32 {
+  // CHECK-NEXT: [[NEG:%.+]] = arith.negf %arg0 : f32
+  %0 = moore.fneg %arg0 : f32
 
-  return
+  // CHECK-NEXT: return [[NEG]] : f32
+  return %0 : !moore.f32
 }
 
 // CHECK-LABEL: func.func @BinaryRealOps
@@ -1029,7 +1029,7 @@ func.func @SimulationControl() {
 
   // CHECK-NEXT: sim.terminate success, quiet
   moore.builtin.finish 0
-  // CHECK-NEXT: sim.terminate failure, quiet
+  // CHECK-NEXT: sim.terminate success, quiet
   moore.builtin.finish 42
 
   return

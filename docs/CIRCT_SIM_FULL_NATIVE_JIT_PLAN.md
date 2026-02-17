@@ -164,6 +164,9 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
        suspend/resume across activations.
      - extended to support two-block
        `wait(delay) -> sim.proc.print -> halt` process bodies.
+     - extended to support process-result terminal shapes with
+       `wait yield (...)` and destination block operands feeding terminal
+       `halt` yield operands.
      - extended to support event-sensitive two-block
        `wait(observed...) -> sim.proc.print -> halt` process bodies when the
        observed value is produced by a pre-wait `llhd.prb`.
@@ -186,6 +189,11 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
 7. Refreshed bounded compile-mode smoke executed (`AVIPS=jtag`, `SEEDS=1`,
    `SIM_TIMEOUT=90`):
    - compile `OK`; bounded sim `TIMEOUT`.
+8. Parallel runtime hardening gap identified:
+   - minimal LLHD process tests under `--parallel=4` currently exhibit hangs
+     and allocator corruption aborts in both interpret and compile modes.
+   - strict-native convergence now explicitly depends on fixing parallel
+     scheduler/runtime stability before multi-threaded parity gates can pass.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

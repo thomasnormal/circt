@@ -30,11 +30,11 @@ func.func @test_pre_randomize_func_lookup(%obj: !moore.class<@CallbackClassFunc>
 }
 
 // CHECK-LABEL: func.func @test_post_randomize_func_lookup
-// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr, %[[S:.*]]: i1)
 // CHECK:         call @"CallbackClassFunc::post_randomize"(%[[OBJ]]) : (!llvm.ptr) -> ()
 // CHECK:         return
-func.func @test_post_randomize_func_lookup(%obj: !moore.class<@CallbackClassFunc>) {
-  moore.call_post_randomize %obj : !moore.class<@CallbackClassFunc>
+func.func @test_post_randomize_func_lookup(%obj: !moore.class<@CallbackClassFunc>, %success: i1) {
+  moore.call_post_randomize %obj, %success : !moore.class<@CallbackClassFunc>
   return
 }
 
@@ -57,11 +57,11 @@ func.func @test_pre_only_func_pre(%obj: !moore.class<@PreOnlyFuncClass>) {
 }
 
 // CHECK-LABEL: func.func @test_pre_only_func_post
-// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr, %[[S:.*]]: i1)
 // CHECK-NOT:     call @
 // CHECK:         return
-func.func @test_pre_only_func_post(%obj: !moore.class<@PreOnlyFuncClass>) {
-  moore.call_post_randomize %obj : !moore.class<@PreOnlyFuncClass>
+func.func @test_pre_only_func_post(%obj: !moore.class<@PreOnlyFuncClass>, %success: i1) {
+  moore.call_post_randomize %obj, %success : !moore.class<@PreOnlyFuncClass>
   return
 }
 
@@ -84,10 +84,10 @@ func.func @test_post_only_func_pre(%obj: !moore.class<@PostOnlyFuncClass>) {
 }
 
 // CHECK-LABEL: func.func @test_post_only_func_post
-// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr, %[[S:.*]]: i1)
 // CHECK:         call @"PostOnlyFuncClass::post_randomize"(%[[OBJ]]) : (!llvm.ptr) -> ()
 // CHECK:         return
-func.func @test_post_only_func_post(%obj: !moore.class<@PostOnlyFuncClass>) {
-  moore.call_post_randomize %obj : !moore.class<@PostOnlyFuncClass>
+func.func @test_post_only_func_post(%obj: !moore.class<@PostOnlyFuncClass>, %success: i1) {
+  moore.call_post_randomize %obj, %success : !moore.class<@PostOnlyFuncClass>
   return
 }

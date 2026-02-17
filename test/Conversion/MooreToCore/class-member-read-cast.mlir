@@ -24,7 +24,7 @@ moore.class.classdecl @TestClass {
 
 // CHECK-LABEL: func.func @test_class_member_read
 // CHECK-SAME: (%[[THIS:arg0]]: !llvm.ptr) -> i32
-// CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[THIS]][0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"TestClass"
+// CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[THIS]][{{%.+}}, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"TestClass"
 // CHECK:   %[[LOAD:.*]] = llvm.load %[[GEP]] : !llvm.ptr -> i32
 // CHECK:   return %[[LOAD]] : i32
 // CHECK-NOT: llhd.prb
@@ -43,7 +43,7 @@ func.func @test_class_member_read(%this: !moore.class<@TestClass>) -> !moore.i32
 
 // CHECK-LABEL: func.func @test_class_member_read_fourstate
 // CHECK-SAME: (%[[THIS:arg0]]: !llvm.ptr)
-// CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[THIS]][0, 3] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"TestClass"
+// CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[THIS]][{{%.+}}, 3] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"TestClass"
 // CHECK:   llvm.load %[[GEP]]
 // CHECK-NOT: llhd.prb
 func.func @test_class_member_read_fourstate(%this: !moore.class<@TestClass>) -> !moore.l64 {
@@ -58,9 +58,9 @@ func.func @test_class_member_read_fourstate(%this: !moore.class<@TestClass>) -> 
 
 // CHECK-LABEL: func.func @test_multiple_reads
 // CHECK-SAME: (%[[THIS:arg0]]: !llvm.ptr)
-// CHECK:   llvm.getelementptr %[[THIS]][0, 2]
+// CHECK:   llvm.getelementptr %[[THIS]][{{%.+}}, 2]
 // CHECK:   llvm.load
-// CHECK:   llvm.getelementptr %[[THIS]][0, 3]
+// CHECK:   llvm.getelementptr %[[THIS]][{{%.+}}, 3]
 // CHECK:   llvm.load
 // CHECK-NOT: llhd.prb
 func.func @test_multiple_reads(%this: !moore.class<@TestClass>) -> (!moore.i32, !moore.l64) {
