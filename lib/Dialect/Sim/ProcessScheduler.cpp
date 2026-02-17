@@ -349,20 +349,20 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
   SignalValue normalizedValue =
       normalizeSignalValueWidth(newValue, signalWidth);
   SignalValue oldValue = it->second.getCurrentValue();
+  SignalEncoding encoding = getSignalEncoding(signalId);
 
   // Add/update the driver with its strength information
   it->second.addOrUpdateDriver(driverId, normalizedValue, strength0, strength1);
 
   // Resolve all drivers to get the final signal value
-  SignalValue resolvedValue = it->second.resolveDrivers();
+  SignalValue resolvedValue = it->second.resolveDrivers(encoding);
   SignalValue normalizedResolved =
       normalizeSignalValueWidth(resolvedValue, signalWidth);
 
   // Update the signal with the resolved value
   (void)it->second.updateValue(normalizedResolved);
   EdgeType edge =
-      detectEdgeWithEncoding(oldValue, normalizedResolved,
-                             getSignalEncoding(signalId));
+      detectEdgeWithEncoding(oldValue, normalizedResolved, encoding);
 
   ++stats.signalUpdates;
 

@@ -713,10 +713,19 @@ LogicalResult SimulationContext::initialize(
       return failure();
   }
 
-  // Set up the unified signal change callback AFTER buildSimulationModel()
-  // completes. The interpreter's initialize() sets its own callback, so we
-  // must overwrite it here to include all handlers: module drive re-evaluation,
-  // VIF forward propagation, VCD recording, and VPI value-change callbacks.
+  // Finalize initialization: execute global constructors (UVM init) AFTER all
+  // modules' module-level ops have run. This ensures that hdl_top's initial
+  // blocks (which call config_db::set) complete before hvl_top's UVM
+  // build_phase (which calls config_db::get) starts.
+  if (llhdInterpreter) {
+    if (failed(llhdInterpreter->finalizeInit()))
+      return failure();
+  }
+
+  // Set up the unified signal change callback AFTER finalizeInit() completes.
+  // finalizeInit() sets its own callback, so we must overwrite it here to
+  // include all handlers: module drive re-evaluation, VIF forward propagation,
+  // VCD recording, and VPI value-change callbacks.
   scheduler.setSignalChangeCallback(
       [this](SignalId signal, const SignalValue &value) {
         recordValueChange(signal, value);
@@ -732,15 +741,6 @@ LogicalResult SimulationContext::initialize(
         if (!vpiLibrary.empty())
           VPIRuntime::getInstance().fireValueChangeCallbacks(signal);
       });
-
-  // Finalize initialization: execute global constructors (UVM init) AFTER all
-  // modules' module-level ops have run. This ensures that hdl_top's initial
-  // blocks (which call config_db::set) complete before hvl_top's UVM
-  // build_phase (which calls config_db::get) starts.
-  if (llhdInterpreter) {
-    if (failed(llhdInterpreter->finalizeInit()))
-      return failure();
-  }
 
   if (traceAll || !traceSignals.empty())
     registerRequestedTraces();
