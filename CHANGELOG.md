@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1435 - February 17, 2026
+
+### circt-sim: Event-Sensitive Resumable Wait Thunks + Profile Smoke Refresh
+
+1. Generalized resumable wait native thunk matching/execution from
+   delay-only waits to delay-or-observed waits:
+   - matcher now accepts `llhd.wait (observed...)` terminal shapes.
+   - supports a minimal pre-wait probe prelude in entry block:
+     `llhd.prb` feeding the wait observed operand.
+2. Kept token-gated state-machine semantics for resumable waits:
+   - token `0`: execute pre-wait probe (if present) and wait.
+   - token `1`: resume into terminal block (`print` optional) then halt.
+3. Improved resume robustness by allowing token-1 native paths to clear
+   `waiting` when destination-block guards already prove resumed state.
+4. Added regressions:
+   - `test/Tools/circt-sim/jit-process-thunk-wait-event-print-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-wait-event-print-halt-guard-failed-env.mlir`
+5. Validation:
+   - `CCACHE_DISABLE=1 ninja -C build circt-sim` PASS
+   - targeted manual `circt-sim + FileCheck` JIT regressions PASS:
+     - `jit-process-thunk.mlir`
+     - `jit-process-thunk-halt-yield.mlir`
+     - `jit-process-thunk-print-halt.mlir`
+     - `jit-initial-thunk-print-yield.mlir`
+     - `jit-process-thunk-wait-delay-halt.mlir`
+     - `jit-process-thunk-wait-delay-print-halt.mlir`
+     - `jit-process-thunk-periodic-toggle.mlir`
+     - `jit-process-thunk-periodic-toggle-guard-failed-env.mlir`
+     - `jit-process-thunk-wait-event-print-halt.mlir`
+     - `jit-process-thunk-wait-event-print-halt-guard-failed-env.mlir`
+     - `jit-guard-failed-deopt-env.mlir`
+     - `jit-fail-on-deopt-env.mlir`
+     - `jit-fail-on-deopt.mlir`
+     - `jit-report.mlir`
+   - bounded AVIP compile-mode profile smokes (`jtag`, seed `1`) with
+     `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1`:
+     - 90s and 180s bounds: compile `OK`, sim bounded `TIMEOUT`.
+   - local profile-summary sanity:
+     - `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1 build/bin/circt-sim test/Tools/circt-sim/profile-summary-memory-state.mlir`
+       emits `Memory state` and `Memory peak` summary lines.
+
 ## Iteration 1434 - February 17, 2026
 
 ### circt-sim: Periodic Toggle Native Thunk Token-Gated Resume + Strict Guard Test
