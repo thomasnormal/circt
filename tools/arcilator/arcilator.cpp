@@ -11,9 +11,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "BehavioralLowering.h"
 #include "circt/Conversion/ArcToLLVM.h"
 #include "circt/Conversion/CombToArith.h"
+#include "circt/Conversion/CombToLLVM.h"
 #include "circt/Conversion/ConvertToArcs.h"
+#include "circt/Conversion/HWToLLVM.h"
 #include "circt/Conversion/Passes.h"
 #include "circt/Conversion/SeqToSV.h"
 #include "circt/Dialect/Arc/ArcDialect.h"
@@ -27,6 +30,7 @@
 #include "circt/Dialect/Emit/EmitPasses.h"
 #include "circt/Dialect/HW/HWPasses.h"
 #include "circt/Dialect/LLHD/IR/LLHDDialect.h"
+#include "circt/Dialect/Moore/MooreDialect.h"
 #include "circt/Dialect/OM/OMDialect.h"
 #include "circt/Dialect/OM/OMPasses.h"
 #include "circt/Dialect/SV/SVDialect.h"
@@ -64,6 +68,12 @@
 #include "mlir/Support/ToolUtilities.h"
 #include "mlir/Target/LLVMIR/Dialect/All.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
+#include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/IR/LLVMContext.h"
@@ -249,6 +259,12 @@ static llvm::cl::list<std::string>
             llvm::cl::cat(mainCategory));
 
 static llvm::cl::opt<bool>
+    behavioral("behavioral",
+               llvm::cl::desc("Use behavioral pipeline for LLHD process-based "
+                              "designs (UVM/testbench support)"),
+               llvm::cl::init(false), llvm::cl::cat(mainCategory));
+
+static llvm::cl::opt<bool>
     noRuntime("no-runtime",
               llvm::cl::desc("Don't emit calls to the runtime library"),
               llvm::cl::init(false), llvm::cl::cat(mainCategory));
@@ -361,6 +377,34 @@ static void populateHwModuleToArcPipeline(PassManager &pm) {
   populateArcStateAllocationPipeline(pm, allocationOpt);
 }
 
+/// Populate a pass manager with the behavioral simulation pipeline.
+/// This pipeline bypasses Arc conversion and instead lowers LLHD processes,
+/// Moore ops, and Sim ops directly to LLVM IR for native compilation.
+/// This enables arcilator to handle UVM/testbench designs that use
+/// behavioral LLHD process-based simulation.
+static void populateBehavioralToLLVMPipeline(PassManager &pm) {
+  if (verbosePassExecutions)
+    pm.addInstrumentation(
+        std::make_unique<VerbosePassInstrumentation<mlir::ModuleOp>>(
+            "arcilator-behavioral"));
+
+  // For the behavioral pipeline, we skip Arc conversion entirely.
+  // Instead, we lower all dialect ops directly to LLVM:
+  //   1. SCF → ControlFlow
+  //   2. Comb → Arith (then Arith → LLVM)
+  //   3. HW types/ops → LLVM
+  //   4. Func → LLVM
+  //   5. ControlFlow → LLVM
+  //   6. LLHD/Moore/Sim ops are handled as pass-through (already LLVM-friendly
+  //      or will be lowered to runtime calls in a future pass)
+
+  // First, canonicalize to clean up the IR.
+  pm.addPass(createCanonicalizerPass());
+
+  // Lower behavioral LLHD/Moore/Sim ops to LLVM IR with runtime calls.
+  pm.addPass(createLowerBehavioralToLLVMPass());
+}
+
 static LogicalResult processBuffer(
     MLIRContext &context, TimingScope &ts, llvm::SourceMgr &sourceMgr,
     std::optional<std::unique_ptr<llvm::ToolOutputFile>> &outputFile) {
@@ -372,54 +416,67 @@ static LogicalResult processBuffer(
   if (!module)
     return failure();
 
-  // Lower HwModule to Arc model.
-  PassManager pmArc(&context);
-  pmArc.enableVerifier(verifyPasses);
-  pmArc.enableTiming(ts);
-  if (failed(applyPassManagerCLOptions(pmArc)))
-    return failure();
-  populateHwModuleToArcPipeline(pmArc);
-
-  if (failed(pmArc.run(module.get())))
-    return failure();
-
-  // Output state info as JSON if requested.
-  if (!stateFile.empty() && !untilReached(UntilStateLowering)) {
-    std::error_code ec;
-    llvm::ToolOutputFile outputFile(stateFile, ec,
-                                    llvm::sys::fs::OpenFlags::OF_None);
-    if (ec) {
-      llvm::errs() << "unable to open state file: " << ec.message() << '\n';
+  if (behavioral) {
+    // Behavioral pipeline: lower LLHD/Moore/Sim directly to LLVM.
+    PassManager pmBehavioral(&context);
+    pmBehavioral.enableVerifier(verifyPasses);
+    pmBehavioral.enableTiming(ts);
+    if (failed(applyPassManagerCLOptions(pmBehavioral)))
       return failure();
-    }
-    if (failed(collectAndExportModelInfo(module.get(), outputFile.os()))) {
-      llvm::errs() << "failed to collect model info\n";
+    populateBehavioralToLLVMPipeline(pmBehavioral);
+
+    if (failed(pmBehavioral.run(module.get())))
       return failure();
+  } else {
+    // Standard Arc pipeline: lower HwModule to Arc model.
+    PassManager pmArc(&context);
+    pmArc.enableVerifier(verifyPasses);
+    pmArc.enableTiming(ts);
+    if (failed(applyPassManagerCLOptions(pmArc)))
+      return failure();
+    populateHwModuleToArcPipeline(pmArc);
+
+    if (failed(pmArc.run(module.get())))
+      return failure();
+
+    // Output state info as JSON if requested.
+    if (!stateFile.empty() && !untilReached(UntilStateLowering)) {
+      std::error_code ec;
+      llvm::ToolOutputFile outputFile(stateFile, ec,
+                                      llvm::sys::fs::OpenFlags::OF_None);
+      if (ec) {
+        llvm::errs() << "unable to open state file: " << ec.message() << '\n';
+        return failure();
+      }
+      if (failed(collectAndExportModelInfo(module.get(), outputFile.os()))) {
+        llvm::errs() << "failed to collect model info\n";
+        return failure();
+      }
+
+      outputFile.keep();
     }
 
-    outputFile.keep();
+    // Lower Arc model to LLVM IR.
+    PassManager pmLlvm(&context);
+    pmLlvm.enableVerifier(verifyPasses);
+    pmLlvm.enableTiming(ts);
+    if (failed(applyPassManagerCLOptions(pmLlvm)))
+      return failure();
+    if (verbosePassExecutions)
+      pmLlvm.addInstrumentation(
+          std::make_unique<VerbosePassInstrumentation<mlir::ModuleOp>>(
+              "arcilator"));
+
+    if (!untilReached(UntilLLVMLowering)) {
+      populateArcToLLVMPipeline(pmLlvm, !noRuntime, extraRuntimeArgs);
+    }
+
+    if (printDebugInfo && outputFormat == OutputLLVM)
+      pmLlvm.addPass(LLVM::createDIScopeForLLVMFuncOpPass());
+
+    if (failed(pmLlvm.run(module.get())))
+      return failure();
   }
-
-  // Lower Arc model to LLVM IR.
-  PassManager pmLlvm(&context);
-  pmLlvm.enableVerifier(verifyPasses);
-  pmLlvm.enableTiming(ts);
-  if (failed(applyPassManagerCLOptions(pmLlvm)))
-    return failure();
-  if (verbosePassExecutions)
-    pmLlvm.addInstrumentation(
-        std::make_unique<VerbosePassInstrumentation<mlir::ModuleOp>>(
-            "arcilator"));
-
-  if (!untilReached(UntilLLVMLowering)) {
-    populateArcToLLVMPipeline(pmLlvm, !noRuntime, extraRuntimeArgs);
-  }
-
-  if (printDebugInfo && outputFormat == OutputLLVM)
-    pmLlvm.addPass(LLVM::createDIScopeForLLVMFuncOpPass());
-
-  if (failed(pmLlvm.run(module.get())))
-    return failure();
 
 #ifdef ARCILATOR_ENABLE_JIT
   // Handle JIT execution.
@@ -657,6 +714,7 @@ static LogicalResult executeArcilator(MLIRContext &context) {
     emit::EmitDialect,
     hw::HWDialect,
     llhd::LLHDDialect,
+    moore::MooreDialect,
     mlir::arith::ArithDialect,
     mlir::cf::ControlFlowDialect,
     mlir::DLTIDialect,

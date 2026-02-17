@@ -16,6 +16,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/Runtime/MooreRuntime.h"
+#include "circt/Runtime/VPIDispatch.h"
 
 #include <algorithm>
 #include <atomic>
@@ -12547,6 +12548,10 @@ extern "C" void __moore_uvm_set_field_range(const char *field_name,
 // VPI Stub Support
 //===----------------------------------------------------------------------===//
 
+// Define the global VPI dispatch table (declared in VPIDispatch.h).
+// When VPIRuntime is active, it fills in function pointers here.
+VPIDispatchTable gVPIDispatch;
+
 namespace {
 struct VpiHandleImpl {
   std::string name;
@@ -12563,6 +12568,10 @@ void releaseVpiHandle(vpiHandle handle) {
 } // namespace
 
 extern "C" vpiHandle vpi_handle_by_name(const char *name, vpiHandle scope) {
+  // Delegate to VPIRuntime when active (proper IEEE VPI implementation).
+  if (gVPIDispatch.isActive && gVPIDispatch.handleByName)
+    return static_cast<vpiHandle>(gVPIDispatch.handleByName(name, scope));
+
   (void)scope;
   if (!name || !*name)
     return nullptr;
@@ -12579,11 +12588,15 @@ extern "C" vpiHandle vpi_handle_by_name(const char *name, vpiHandle scope) {
 }
 
 extern "C" int32_t vpi_get(int32_t property, vpiHandle obj) {
+  if (gVPIDispatch.isActive && gVPIDispatch.getProperty)
+    return gVPIDispatch.getProperty(property, obj);
   (void)property;
   return obj ? 1 : 0;
 }
 
 extern "C" char *vpi_get_str(int32_t property, vpiHandle obj) {
+  if (gVPIDispatch.isActive && gVPIDispatch.getStrProperty)
+    return const_cast<char *>(gVPIDispatch.getStrProperty(property, obj));
   (void)property;
   if (!obj)
     return nullptr;
@@ -12593,10 +12606,19 @@ extern "C" char *vpi_get_str(int32_t property, vpiHandle obj) {
 }
 
 extern "C" void vpi_release_handle(vpiHandle obj) {
+  if (gVPIDispatch.isActive && gVPIDispatch.releaseHandle) {
+    gVPIDispatch.releaseHandle(obj);
+    return;
+  }
   releaseVpiHandle(obj);
 }
 
 extern "C" int32_t vpi_get_value(vpiHandle obj, vpi_value *value) {
+  // When VPIRuntime is active, delegate (IEEE standard t_vpi_value layout).
+  if (gVPIDispatch.isActive && gVPIDispatch.getValue) {
+    gVPIDispatch.getValue(obj, value);
+    return 0;
+  }
   if (!obj || !value || !value->value)
     return 0;
   auto *handle = static_cast<VpiHandleImpl *>(obj);
@@ -12621,6 +12643,8 @@ extern "C" int32_t vpi_get_value(vpiHandle obj, vpi_value *value) {
 
 extern "C" int32_t vpi_put_value(vpiHandle obj, vpi_value *value, void *time,
                                  int32_t flags) {
+  if (gVPIDispatch.isActive && gVPIDispatch.putValue)
+    return gVPIDispatch.putValue(obj, value, time, flags);
   (void)time;
   if (!obj || !value || !value->value)
     return 0;

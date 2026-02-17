@@ -16,6 +16,9 @@
 #   SIM_TIMEOUT=240            seconds
 #   MEMORY_LIMIT_GB=20
 #   MAX_WALL_MS=240000
+#   CIRCT_SIM_MODE=interpret|compile   (default: interpret)
+#   CIRCT_SIM_EXTRA_ARGS="..."         (default: empty)
+#   CIRCT_SIM_WRITE_JIT_REPORT=0|1     (default: 0)
 
 set -euo pipefail
 
@@ -32,6 +35,9 @@ MBIT_DIR="${MBIT_DIR:-/home/thomas-ahle/mbit}"
 AVIP_SET="${AVIP_SET:-core8}"
 SEEDS_CSV="${SEEDS:-1}"
 UVM_VERBOSITY="${UVM_VERBOSITY:-UVM_LOW}"
+CIRCT_SIM_MODE="${CIRCT_SIM_MODE:-interpret}"
+CIRCT_SIM_EXTRA_ARGS="${CIRCT_SIM_EXTRA_ARGS:-}"
+CIRCT_SIM_WRITE_JIT_REPORT="${CIRCT_SIM_WRITE_JIT_REPORT:-0}"
 
 MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-20}"
 COMPILE_TIMEOUT="${COMPILE_TIMEOUT:-240}"
@@ -123,6 +129,20 @@ if [[ ${#seeds[@]} -eq 0 ]]; then
   exit 1
 fi
 
+case "$CIRCT_SIM_MODE" in
+  interpret|compile) ;;
+  *)
+    echo "error: unsupported CIRCT_SIM_MODE '$CIRCT_SIM_MODE' (use interpret or compile)" >&2
+    exit 1
+    ;;
+esac
+
+sim_extra_args=()
+if [[ -n "$CIRCT_SIM_EXTRA_ARGS" ]]; then
+  # Parsed as shell words; quote-preserving parsing is intentionally not used.
+  read -r -a sim_extra_args <<< "$CIRCT_SIM_EXTRA_ARGS"
+fi
+
 run_limited() {
   local timeout_secs="$1"
   shift
@@ -191,6 +211,9 @@ meta="$OUT_DIR/meta.txt"
   echo "compile_timeout=$COMPILE_TIMEOUT"
   echo "sim_timeout=$SIM_TIMEOUT"
   echo "max_wall_ms=$MAX_WALL_MS"
+  echo "circt_sim_mode=$CIRCT_SIM_MODE"
+  echo "circt_sim_extra_args=${CIRCT_SIM_EXTRA_ARGS:-<none>}"
+  echo "circt_sim_write_jit_report=$CIRCT_SIM_WRITE_JIT_REPORT"
   echo "time_tool=${TIME_TOOL:-<none>}"
 } > "$meta"
 
@@ -244,6 +267,7 @@ for row in "${selected_avips[@]}"; do
 
     sim_log="$avip_out/sim_seed_${seed}.log"
     rss_log="$avip_out/sim_seed_${seed}.rss_kb"
+    jit_report="$avip_out/sim_seed_${seed}.jit-report.json"
 
     if [[ "$compile_status" == "OK" ]]; then
       top_flags=()
@@ -258,6 +282,12 @@ for row in "${selected_avips[@]}"; do
         uvm_args="+UVM_TESTNAME=$test_name $uvm_args"
       fi
 
+      mode_flags=(--mode="$CIRCT_SIM_MODE")
+      jit_report_flags=()
+      if [[ "$CIRCT_SIM_WRITE_JIT_REPORT" != "0" ]]; then
+        jit_report_flags+=(--jit-report="$jit_report")
+      fi
+
       start_sim=$(date +%s)
       set +e
       if [[ -n "$TIME_TOOL" ]]; then
@@ -266,6 +296,9 @@ for row in "${selected_avips[@]}"; do
           env CIRCT_UVM_ARGS="$uvm_args" \
           "$CIRCT_SIM" "$mlir_file" \
           "${top_flags[@]}" \
+          "${mode_flags[@]}" \
+          "${sim_extra_args[@]}" \
+          "${jit_report_flags[@]}" \
           --max-time="$max_sim_fs" \
           --max-wall-ms="$MAX_WALL_MS" \
           > "$sim_log" 2>&1
@@ -274,6 +307,9 @@ for row in "${selected_avips[@]}"; do
           env CIRCT_UVM_ARGS="$uvm_args" \
           "$CIRCT_SIM" "$mlir_file" \
           "${top_flags[@]}" \
+          "${mode_flags[@]}" \
+          "${sim_extra_args[@]}" \
+          "${jit_report_flags[@]}" \
           --max-time="$max_sim_fs" \
           --max-wall-ms="$MAX_WALL_MS" \
           > "$sim_log" 2>&1

@@ -16,11 +16,16 @@ set(libs
   CIRCTArcTransforms
   CIRCTArcilator
   CIRCTCombToArith
+  CIRCTCombToLLVM
   CIRCTConvertToArcs
   CIRCTEmitTransforms
+  CIRCTHWToLLVM
   CIRCTExportArc
   CIRCTHWTransforms
   CIRCTLLHD
+  CIRCTLLHDTransforms
+  CIRCTMoore
+  CIRCTMooreToCore
   CIRCTOMTransforms
   CIRCTSeqToSV
   CIRCTSeqTransforms
@@ -32,17 +37,21 @@ set(libs
   MLIRBuiltinToLLVMIRTranslation
   MLIRControlFlowDialect
   MLIRDLTIDialect
+  MLIRArithToLLVM
+  MLIRControlFlowToLLVM
   MLIRFuncDialect
   MLIRFuncInlinerExtension
+  MLIRFuncToLLVM
   MLIRIndexDialect
   MLIRLLVMIRTransforms
   MLIRLLVMToLLVMIRTranslation
   MLIRParser
   MLIRSCFDialect
+  MLIRSCFToControlFlow
   MLIRTargetLLVMIRExport
 )
 
-add_circt_tool(arcilator arcilator.cpp DEPENDS ${libs})
+add_circt_tool(arcilator arcilator.cpp BehavioralLowering.cpp DEPENDS ${libs})
 target_link_libraries(arcilator
   PRIVATE
   ${libs}

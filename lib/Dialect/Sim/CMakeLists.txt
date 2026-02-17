@@ -23,6 +23,7 @@ add_circt_dialect_library(CIRCTSim
   SimulationControl.cpp
   UVMFactory.cpp
   UVMPhaseManager.cpp
+  VPIRuntime.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${CIRCT_MAIN_INCLUDE_DIR}/circt/Dialect/Sim

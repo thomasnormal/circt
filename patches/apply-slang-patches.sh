@@ -30,3 +30,5 @@ git apply --ignore-whitespace "$script_dir/slang-randomize-with-scope.patch" || 
 git apply --ignore-whitespace "$script_dir/slang-covergroup-iff-noparen.patch" || true
 # Allow missing semicolon before endsequence in sequence declarations
 git apply --ignore-whitespace "$script_dir/slang-sequence-decl-semicolon.patch" || true
+# Skip ifdef/endif inside `define bodies in skipped preprocessor branches (IEEE §22.5.1)
+git apply --ignore-whitespace "$script_dir/slang-define-skip-ifdef.patch" || true
