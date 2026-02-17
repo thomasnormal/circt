@@ -33,6 +33,40 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-17 Session: WS5 Memory Attribution Top-N Process Ranking
+
+### Why this pass
+Largest-process attribution is useful but insufficient for mature triage. We
+need ranked process buckets to prioritize memory work when multiple processes
+contribute materially.
+
+### Changes
+1. Added top-N process memory ranking in summary output:
+   - env: `CIRCT_SIM_PROFILE_MEMORY_TOP_PROCESSES`
+   - default `3` when `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1`
+2. New summary lines:
+   - `[circt-sim] Memory process top[N]: proc=... bytes=... name=... func=...`
+3. Updated focused memory-summary regressions to cover top-N output:
+   - `test/Tools/circt-sim/profile-summary-memory-state.mlir`
+   - `test/Tools/circt-sim/profile-summary-memory-peak.mlir`
+
+### Validation
+1. Build:
+   - `ninja -C build-test -j1 bin/circt-sim -k 0` PASS
+2. Focused regressions:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/profile-summary-memory-peak.mlir build-test/test/Tools/circt-sim/profile-summary-memory-state.mlir build-test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir build-test/test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir` PASS (`4/4`)
+3. Bounded AVIP pulse:
+   - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build-test/bin/circt-sim AVIPS=jtag SEEDS=1 SIM_TIMEOUT=3 COMPILE_TIMEOUT=180 MEMORY_LIMIT_GB=20 MATRIX_TAG=memory-topn-smoke utils/run_avip_circt_sim.sh`
+   - matrix: `/tmp/avip-circt-sim-20260217-081450/matrix.tsv`
+   - `jtag`: compile `OK` (33s), sim timeout (`137`) at 3s bound.
+
+### Remaining limitation
+Top-N ranking is snapshot-based and does not yet report growth deltas across
+time windows. Next WS5 pass should add per-bucket delta tracking to isolate
+which runtime structures are actively growing in long AHB windows.
+
+---
+
 ## 2026-02-17 Session: WS5 Memory Attribution Buckets (Largest Process/Function)
 
 ### Why this pass

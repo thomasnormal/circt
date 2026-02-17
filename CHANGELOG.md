@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1430 - February 17, 2026
+
+### circt-sim: WS5 Memory Attribution Top-N Process Summary
+
+1. Added configurable top-process memory ranking in profile summary:
+   - env: `CIRCT_SIM_PROFILE_MEMORY_TOP_PROCESSES`
+   - default: `3` when `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1`
+2. Summary now emits ranked lines:
+   - `[circt-sim] Memory process top[N]: proc=... bytes=... name=... func=...`
+3. Validation updates:
+   - `test/Tools/circt-sim/profile-summary-memory-state.mlir`
+   - `test/Tools/circt-sim/profile-summary-memory-peak.mlir`
+4. Validation:
+   - `ninja -C build-test -j1 bin/circt-sim -k 0` PASS
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/profile-summary-memory-peak.mlir build-test/test/Tools/circt-sim/profile-summary-memory-state.mlir build-test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir build-test/test/Tools/circt-sim/uvm-sequencer-queue-cache-cap.mlir` PASS (`4/4`)
+   - bounded AVIP sanity:
+     `AVIPS=jtag SEEDS=1 SIM_TIMEOUT=3` compile `OK`, bounded timeout as
+     expected (`/tmp/avip-circt-sim-20260217-081450/matrix.tsv`).
+
 ## Iteration 1429 - February 17, 2026
 
 ### circt-sim: WS5 Memory Attribution (Largest Process/Function at Peak)

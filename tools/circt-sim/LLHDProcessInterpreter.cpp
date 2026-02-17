@@ -281,6 +281,9 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   memorySampleIntervalSteps = envUint64Value(
       "CIRCT_SIM_PROFILE_MEMORY_SAMPLE_INTERVAL",
       profileSummaryAtExitEnabled ? 65536 : 0);
+  memorySummaryTopProcesses = envUint64Value(
+      "CIRCT_SIM_PROFILE_MEMORY_TOP_PROCESSES",
+      profileSummaryAtExitEnabled ? 3 : 0);
   if (memorySampleIntervalSteps > 0)
     memorySampleNextStep = memorySampleIntervalSteps;
   uvmSeqQueueCacheMaxEntries =
@@ -626,6 +629,43 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
          << " largest_process=" << peakSnapshot.largestProcessId
          << " largest_process_bytes=" << peakSnapshot.largestProcessBytes
          << " largest_process_func=" << peakLargestFunc << "\n";
+    }
+
+    if (memorySummaryTopProcesses > 0 && !processStates.empty()) {
+      llvm::SmallVector<std::pair<ProcessId, uint64_t>, 16> ranked;
+      ranked.reserve(processStates.size());
+      for (const auto &entry : processStates) {
+        uint64_t bytes = 0;
+        for (const auto &block : entry.second.memoryBlocks)
+          bytes += block.second.size;
+        ranked.push_back({entry.first, bytes});
+      }
+      llvm::sort(ranked, [](const auto &lhs, const auto &rhs) {
+        if (lhs.second != rhs.second)
+          return lhs.second > rhs.second;
+        return lhs.first < rhs.first;
+      });
+      size_t limit = std::min<size_t>(memorySummaryTopProcesses, ranked.size());
+      for (size_t i = 0; i < limit; ++i) {
+        ProcessId pid = ranked[i].first;
+        uint64_t bytes = ranked[i].second;
+        llvm::StringRef procName = "-";
+        if (const Process *proc = scheduler.getProcess(pid)) {
+          if (!proc->getName().empty())
+            procName = proc->getName();
+        }
+        llvm::StringRef funcName = "-";
+        auto procIt = processStates.find(pid);
+        if (procIt != processStates.end() &&
+            !procIt->second.currentFuncName.empty())
+          funcName = procIt->second.currentFuncName;
+
+        os << "[circt-sim] Memory process top[" << i
+           << "]: proc=" << pid
+           << " bytes=" << bytes
+           << " name=" << procName
+           << " func=" << funcName << "\n";
+      }
     }
   }
 
