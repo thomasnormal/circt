@@ -118,6 +118,7 @@
       `CIRCT_SIM_EXPERIMENTAL_PARALLEL=1` for continued hardening.
   - added regression:
     - `test/Tools/circt-sim/jit-process-thunk-wait-delay-dest-operand-halt-yield-parallel.mlir`
+    - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-dest-operand-halt-yield-parallel.mlir`
 
 ### Why It Matters
 - Establishes deterministic artifact generation and machine-readable telemetry
