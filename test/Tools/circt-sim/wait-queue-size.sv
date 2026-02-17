@@ -1,8 +1,11 @@
-// RUN: circt-verilog %s --ir-hw -o %t.mlir
-// RUN: circt-sim %t.mlir --max-time=10000000000 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --ir-llhd --no-uvm-auto-include -o %t.mlir
+// RUN: circt-sim %t.mlir --max-time=2000000000 --max-process-steps=40000 2>&1 | FileCheck %s
 
 // Test that wait(queue.size() != 0) properly wakes up when queue is modified.
-// This tests the wait_condition polling mechanism with queue-based conditions.
+// This tests queue-backed wait_condition wakeups with a long idle window.
+// The process-step cap guards against poll storms in this wait path.
+
+`timescale 1ns/1ps
 
 module test;
   int q[$];
@@ -18,7 +21,7 @@ module test;
         $display("T=%0t: Fork branch 1 - done, q.size()=%0d", $time, q.size());
       end
       begin
-        #2;
+        #1000;
         // CHECK-DAG: Fork branch 2 - pushing
         $display("T=%0t: Fork branch 2 - pushing to queue", $time);
         q.push_back(42);

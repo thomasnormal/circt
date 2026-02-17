@@ -368,6 +368,16 @@ struct ProcessExecutionState {
   mlir::Block *waitConditionSavedBlock = nullptr;
   mlir::Block::iterator waitConditionSavedOp;
 
+  /// Queue object currently associated with a wait(condition) on queue size.
+  /// Non-zero when wait_condition observed a __moore_queue_size dependency and
+  /// registered queue-backed wakeup state for this process.
+  uint64_t waitConditionQueueAddr = 0;
+
+  /// Monotonic token for wait_condition polling callbacks.
+  /// Incremented each time a new poll callback is scheduled so stale callbacks
+  /// from previous waits do not wake newer wait states.
+  uint64_t waitConditionPollToken = 0;
+
   /// Call stack for resuming execution after a wait inside a function.
   /// When a wait (e.g., sim.fork with blocking join) occurs inside a nested
   /// function call, we push the function's context onto this stack so that
@@ -682,6 +692,11 @@ public:
   /// Determine signal encoding based on the type.
   static SignalEncoding getSignalEncoding(mlir::Type type);
 
+  /// Evaluate a value for continuous assignments by reading from signal state.
+  /// Made public so circt-sim can re-evaluate hw.output operands when VPI
+  /// changes input port signals.
+  InterpretedValue evaluateContinuousValue(mlir::Value value);
+
 private:
   struct InstanceOutputInfo {
     mlir::Value outputValue;
@@ -797,9 +812,6 @@ private:
       SignalId signalId, mlir::Value outputValue, InstanceId instanceId,
       const InstanceInputMapping *inputMap);
 
-  /// Evaluate a value for continuous assignments by reading from signal state.
-  InterpretedValue evaluateContinuousValue(mlir::Value value);
-
   /// Helper for iterative continuous-value evaluation with cycle detection.
   InterpretedValue evaluateContinuousValueImpl(mlir::Value value);
 
@@ -848,6 +860,11 @@ private:
   /// Return true when this process is eligible for the initial native thunk.
   bool isTrivialNativeThunkCandidate(const ProcessExecutionState &state) const;
 
+  /// Return true when the process matches one-block combinational
+  /// `... -> llhd.yield` execution that can be thunk-dispatched.
+  bool isCombinationalNativeThunkCandidate(
+      const ProcessExecutionState &state) const;
+
   /// Return true when the process matches
   /// wait(delay|observed)->(optional print)->halt.
   bool
@@ -858,6 +875,10 @@ private:
                                  ProcessThunkExecutionState &thunkState);
 
   bool executeResumableWaitThenHaltNativeThunk(
+      ProcessId procId, ProcessExecutionState &state,
+      ProcessThunkExecutionState &thunkState);
+
+  bool executeCombinationalNativeThunk(
       ProcessId procId, ProcessExecutionState &state,
       ProcessThunkExecutionState &thunkState);
 
@@ -985,6 +1006,13 @@ private:
                                   mlir::Operation *retryOp);
   /// Wake zero-waiters if the objection count has reached zero.
   void wakeObjectionZeroWaitersIfReady(int64_t handle);
+
+  /// Register/remove wait(condition) queue waiters keyed by queue object.
+  void enqueueQueueNotEmptyWaiter(uint64_t queueAddr, ProcessId procId,
+                                  mlir::Operation *retryOp);
+  void removeQueueNotEmptyWaiter(ProcessId procId);
+  /// Wake queue-backed wait(condition) waiters for a queue that became non-empty.
+  void wakeQueueNotEmptyWaitersIfReady(uint64_t queueAddr);
 
   /// Handle UVM-focused fast-paths at func body entry.
   /// Returns true when handled; caller should skip normal function execution.
@@ -1821,6 +1849,18 @@ private:
   /// Processes blocked in phase_hopper::get/peek waiting for queue data.
   /// Key: phase hopper object pointer, value: waiter process IDs.
   llvm::DenseMap<uint64_t, llvm::SmallVector<ProcessId, 4>> phaseHopperWaiters;
+
+  /// Processes blocked in wait(condition) where the condition depends on
+  /// __moore_queue_size(queue). Key: queue object pointer.
+  struct QueueWaiter {
+    ProcessId procId;
+    mlir::Operation *retryOp = nullptr;
+  };
+  llvm::DenseMap<uint64_t, llvm::SmallVector<QueueWaiter, 4>>
+      queueNotEmptyWaiters;
+
+  /// Reverse index to remove queue waiters when processes complete/deopt.
+  llvm::DenseMap<ProcessId, uint64_t> queueWaitAddrByProc;
 
   /// Function phase IMP sequencing: tracks which function phase IMP nodes
   /// have completed their traversal. The UVM phase graph IMP nodes for

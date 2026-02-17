@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1453 - February 17, 2026
+
+### circt-sim: Queue-Backed wait(condition) Wakeups for Hot Queue Wait Loops
+
+1. Added queue-backed waiter runtime for `__moore_wait_condition` paths:
+   - new helpers in `LLHDProcessInterpreter`:
+     - `enqueueQueueNotEmptyWaiter`
+     - `removeQueueNotEmptyWaiter`
+     - `wakeQueueNotEmptyWaitersIfReady`
+   - per-process wait state now tracks:
+     - `waitConditionQueueAddr`
+     - `waitConditionPollToken` (stale callback guard)
+2. Extended wait-condition shape detection:
+   - detects direct `__moore_queue_size(...)` dependencies.
+   - detects direct queue-header length extraction
+     (`llvm.load` + `llvm.extractvalue [1]`) dependencies.
+3. Added stale wait-condition callback hardening:
+   - poll callbacks now verify token/process wait-state before wakeup.
+   - avoids waking newer wait contexts from older scheduled callbacks.
+4. Integrated queue wakeups into queue growth operations:
+   - `__moore_queue_push_back`
+   - `__moore_queue_push_front`
+   - `__moore_queue_insert`
+5. Added process-finalization cleanup for queue waiters.
+6. Strengthened regression coverage:
+   - updated `test/Tools/circt-sim/wait-queue-size.sv`:
+     - uses `--no-uvm-auto-include`
+     - long wait window (`#1000`)
+     - `--max-process-steps=40000` guard to catch poll storms.
+7. Validation:
+   - `ninja -C build-test circt-sim -k 0` PASS
+   - `PATH=/home/thomas-ahle/circt/build-test/bin:$PATH llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/wait-queue-size.sv` PASS
+   - `PATH=/home/thomas-ahle/circt/build-test/bin:$PATH llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/wait-condition-memory.mlir build-test/test/Tools/circt-sim/wait-condition-signal.sv build-test/test/Tools/circt-sim/wait-condition-spurious-trigger.mlir build-test/test/Tools/circt-sim/wait-queue-size.sv` PASS (`4/4`)
+
 ## Iteration 1452 - February 17, 2026
 
 ### circt-sim: Close `llhd.combinational` Registration Gap Baseline

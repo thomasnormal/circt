@@ -716,6 +716,75 @@ void LLHDProcessInterpreter::wakeObjectionZeroWaitersIfReady(int64_t handle) {
   }
 }
 
+void LLHDProcessInterpreter::enqueueQueueNotEmptyWaiter(uint64_t queueAddr,
+                                                        ProcessId procId,
+                                                        Operation *retryOp) {
+  if (queueAddr == 0 || !retryOp)
+    return;
+
+  auto existingIt = queueWaitAddrByProc.find(procId);
+  if (existingIt != queueWaitAddrByProc.end() && existingIt->second != queueAddr)
+    removeQueueNotEmptyWaiter(procId);
+
+  auto &waiters = queueNotEmptyWaiters[queueAddr];
+  for (auto &waiter : waiters) {
+    if (waiter.procId != procId)
+      continue;
+    waiter.retryOp = retryOp;
+    queueWaitAddrByProc[procId] = queueAddr;
+    return;
+  }
+
+  waiters.push_back({procId, retryOp});
+  queueWaitAddrByProc[procId] = queueAddr;
+}
+
+void LLHDProcessInterpreter::removeQueueNotEmptyWaiter(ProcessId procId) {
+  auto procIt = queueWaitAddrByProc.find(procId);
+  if (procIt == queueWaitAddrByProc.end())
+    return;
+
+  uint64_t queueAddr = procIt->second;
+  queueWaitAddrByProc.erase(procIt);
+
+  auto waitIt = queueNotEmptyWaiters.find(queueAddr);
+  if (waitIt == queueNotEmptyWaiters.end())
+    return;
+
+  auto &waiters = waitIt->second;
+  llvm::erase_if(waiters,
+                 [&](const QueueWaiter &waiter) { return waiter.procId == procId; });
+  if (waiters.empty())
+    queueNotEmptyWaiters.erase(waitIt);
+}
+
+void LLHDProcessInterpreter::wakeQueueNotEmptyWaitersIfReady(uint64_t queueAddr) {
+  if (queueAddr == 0)
+    return;
+
+  auto waitIt = queueNotEmptyWaiters.find(queueAddr);
+  if (waitIt == queueNotEmptyWaiters.end())
+    return;
+
+  auto waiters = std::move(waitIt->second);
+  queueNotEmptyWaiters.erase(waitIt);
+  for (const auto &waiter : waiters)
+    queueWaitAddrByProc.erase(waiter.procId);
+
+  for (const auto &waiter : waiters) {
+    auto stateIt = processStates.find(waiter.procId);
+    if (stateIt == processStates.end())
+      continue;
+    auto &state = stateIt->second;
+    if (state.halted)
+      continue;
+    state.waiting = false;
+    if (waiter.retryOp)
+      state.currentOp = mlir::Block::iterator(waiter.retryOp);
+    scheduler.scheduleProcess(waiter.procId, SchedulingRegion::Active);
+  }
+}
+
 void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
   os << "[circt-sim] Process states:\n";
   for (const auto &entry : processStates) {
@@ -6087,6 +6156,27 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
 
 std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
     const ProcessExecutionState &state) const {
+  if (auto combOp = state.getCombinationalOp()) {
+    Region &body = combOp.getBody();
+    if (!body.hasOneBlock())
+      return "combinational_multiblock";
+    Block &block = body.front();
+    if (block.empty())
+      return "combinational_empty";
+    if (!isa<llhd::YieldOp>(block.back()))
+      return "combinational_no_yield_terminator";
+    for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
+      Operation *op = &*it;
+      if (isa<llhd::WaitOp, llhd::HaltOp, llhd::YieldOp>(op))
+        return (Twine("combinational_unsupported:") +
+                op->getName().getStringRef())
+            .str();
+    }
+    return (Twine("combinational_unsupported:first_op:") +
+            block.front().getName().getStringRef())
+        .str();
+  }
+
   if (auto processOp = state.getProcessOp()) {
     Region &body = processOp.getBody();
     if (!body.empty()) {
@@ -6161,6 +6251,9 @@ bool LLHDProcessInterpreter::restoreJITDeoptState(
 
 bool LLHDProcessInterpreter::isTrivialNativeThunkCandidate(
     const ProcessExecutionState &state) const {
+  if (isCombinationalNativeThunkCandidate(state))
+    return true;
+
   if (isResumableWaitThenHaltNativeThunkCandidate(state))
     return true;
 
@@ -6219,6 +6312,28 @@ bool LLHDProcessInterpreter::isTrivialNativeThunkCandidate(
   }
 
   return false;
+}
+
+bool LLHDProcessInterpreter::isCombinationalNativeThunkCandidate(
+    const ProcessExecutionState &state) const {
+  auto combOp = state.getCombinationalOp();
+  if (!combOp)
+    return false;
+  Region &body = combOp.getBody();
+  if (!body.hasOneBlock())
+    return false;
+  Block &block = body.front();
+  if (block.empty())
+    return false;
+  if (!isa<llhd::YieldOp>(block.back()))
+    return false;
+
+  for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
+    Operation *op = &*it;
+    if (isa<llhd::WaitOp, llhd::HaltOp, llhd::YieldOp>(op))
+      return false;
+  }
+  return true;
 }
 
 bool LLHDProcessInterpreter::isResumableWaitThenHaltNativeThunkCandidate(
@@ -6288,6 +6403,9 @@ void LLHDProcessInterpreter::executeTrivialNativeThunk(
     return;
 
   if (executePeriodicToggleClockNativeThunk(procId, it->second, thunkState))
+    return;
+
+  if (executeCombinationalNativeThunk(procId, it->second, thunkState))
     return;
 
   if (auto processOp = it->second.getProcessOp()) {
@@ -6461,6 +6579,67 @@ bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
 
   // Any unexpected shape/state transition requests deopt bridge fallback.
   thunkState.deoptRequested = true;
+  return true;
+}
+
+bool LLHDProcessInterpreter::executeCombinationalNativeThunk(
+    ProcessId procId, ProcessExecutionState &state,
+    ProcessThunkExecutionState &thunkState) {
+  if (!isCombinationalNativeThunkCandidate(state))
+    return false;
+
+  auto combOp = state.getCombinationalOp();
+  if (!combOp) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  Block &body = combOp.getBody().front();
+
+  // Compile-mode combinational thunk expects a stable token.
+  if (thunkState.resumeToken != state.jitThunkResumeToken ||
+      state.jitThunkResumeToken != 0) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  // If waking from a prior yield, normalize to block-entry execution.
+  if (state.destBlock) {
+    if (state.destBlock != &body) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
+    state.currentBlock = state.destBlock;
+    state.currentOp = state.currentBlock->begin();
+    state.destBlock = nullptr;
+    state.destOperands.clear();
+    state.resumeAtCurrentOp = false;
+  }
+
+  // Combinational processes recompute from fresh inputs each activation.
+  state.valueMap.clear();
+  state.refBlockArgSources.clear();
+  state.waiting = false;
+  state.halted = false;
+
+  for (Operation &op : body) {
+    if (failed(interpretOperation(procId, &op))) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
+    // llhd.yield should suspend the process for event wakeup.
+    if (state.waiting || state.halted)
+      break;
+  }
+
+  if (!state.waiting || state.halted) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  thunkState.halted = state.halted;
+  thunkState.waiting = state.waiting;
+  thunkState.resumeToken = state.jitThunkResumeToken;
   return true;
 }
 
@@ -6660,10 +6839,15 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
   // Compile-mode entry hook: try native process thunk first, then attempt
   // on-demand install for currently supported trivial process shapes.
-  // Native JIT currently targets llhd.process/seq.initial paths. Keep
-  // llhd.combinational on the interpreter path until a dedicated thunk ABI is
-  // added for combinational execution.
-  if (compileModeEnabled && jitCompileManager && !state.getCombinationalOp()) {
+  //
+  // For llhd.combinational processes, only run through compile-mode thunk
+  // governance when the shape matches the native combinational thunk baseline.
+  // Non-candidate combinational bodies stay on interpreter dispatch to avoid
+  // strict-lane deopt noise while coverage converges.
+  bool compilePathEligible = true;
+  if (state.getCombinationalOp())
+    compilePathEligible = isCombinationalNativeThunkCandidate(state);
+  if (compileModeEnabled && jitCompileManager && compilePathEligible) {
     JITDeoptStateSnapshot deoptSnapshot;
     bool hasDeoptSnapshot = snapshotJITDeoptState(procId, deoptSnapshot);
     auto noteProcessDeoptReason = [&](JITCompileManager::DeoptReason reason,
@@ -7519,12 +7703,17 @@ void LLHDProcessInterpreter::applyInterfaceTriStateRules(SignalId triggerSigId) 
 void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
   if (auto *proc = scheduler.getProcess(procId)) {
     if (proc->getState() == ProcessState::Terminated) {
+      removeQueueNotEmptyWaiter(procId);
       notifyProcessAwaiters(procId);
       return;
     }
   }
   auto it = processStates.find(procId);
   if (it != processStates.end()) {
+    if (it->second.waitConditionQueueAddr != 0) {
+      removeQueueNotEmptyWaiter(procId);
+      it->second.waitConditionQueueAddr = 0;
+    }
     it->second.halted = true;
     it->second.jitThunkResumeToken = 0;
     if (killed)
@@ -24026,6 +24215,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           // Condition is already true, continue immediately.
           // Clear the restart block and delta poll counter since we're done.
           auto &state = processStates[procId];
+          ++state.waitConditionPollToken;
+          if (state.waitConditionQueueAddr != 0) {
+            removeQueueNotEmptyWaiter(procId);
+            state.waitConditionQueueAddr = 0;
+          }
           state.waitConditionRestartBlock = nullptr;
           return success();
         }
@@ -24033,6 +24227,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         // Condition is false - suspend the process and set up sensitivity
         // to all probed signals so we wake up when something changes.
         auto &state = processStates[procId];
+        if (state.waitConditionQueueAddr != 0) {
+          removeQueueNotEmptyWaiter(procId);
+          state.waitConditionQueueAddr = 0;
+        }
 
         state.waiting = true;
 
@@ -24066,6 +24264,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         worklist.push_back(condValue);
 
         Operation *earliestLoadOp = nullptr;
+        uint64_t queueWaitAddr = 0;
 
         while (!worklist.empty()) {
           Value v = worklist.pop_back_val();
@@ -24081,6 +24280,39 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 // Track the earliest load/probe/call operation
                 if (!earliestLoadOp || defOp->isBeforeInBlock(earliestLoadOp))
                   earliestLoadOp = defOp;
+              }
+              if (queueWaitAddr == 0) {
+                if (auto queueSizeCall = dyn_cast<LLVM::CallOp>(defOp)) {
+                  if (queueSizeCall.getCallee() == "__moore_queue_size" &&
+                      queueSizeCall.getNumOperands() >= 1) {
+                    InterpretedValue queueArg =
+                        getValue(procId, queueSizeCall.getOperand(0));
+                    if (!queueArg.isX())
+                      queueWaitAddr = queueArg.getUInt64();
+                  }
+                }
+                if (queueWaitAddr == 0) {
+                  if (auto extractOp = dyn_cast<LLVM::ExtractValueOp>(defOp)) {
+                    if (hasSingleFieldIndex(extractOp.getPosition(), 1)) {
+                      if (auto queueLoad =
+                              extractOp.getContainer().getDefiningOp<LLVM::LoadOp>()) {
+                        auto queueStructType =
+                            dyn_cast<LLVM::LLVMStructType>(queueLoad.getType());
+                        if (queueStructType && !queueStructType.isOpaque()) {
+                          ArrayRef<Type> body = queueStructType.getBody();
+                          if (body.size() == 2 &&
+                              isa<LLVM::LLVMPointerType>(body[0]) &&
+                              isa<IntegerType>(body[1])) {
+                            InterpretedValue queueAddrValue =
+                                getValue(procId, queueLoad.getAddr());
+                            if (!queueAddrValue.isX())
+                              queueWaitAddr = queueAddrValue.getUInt64();
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
 
               // Add operands to worklist - trace through comparison, arithmetic,
@@ -24130,22 +24362,49 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         SimTime currentTime = scheduler.getCurrentTime();
         constexpr uint32_t kMaxDeltaPolls = 1000;
         constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
+        constexpr int64_t kQueueFallbackPollDelayFs = 100000000; // 100 ps
         SimTime targetTime;
-        if (currentTime.deltaStep < kMaxDeltaPolls) {
-          targetTime = currentTime.nextDelta();
+        if (queueWaitAddr != 0) {
+          // Queue wait conditions (`wait(__moore_queue_size(...) > 0)`) are
+          // common in UVM hot loops. Register an event-style wakeup on queue
+          // mutation and keep a low-frequency timed poll as a safety net.
+          state.waitConditionQueueAddr = queueWaitAddr;
+          enqueueQueueNotEmptyWaiter(queueWaitAddr, procId, callOp.getOperation());
+          targetTime = currentTime.advanceTime(kQueueFallbackPollDelayFs);
         } else {
-          targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
+          if (currentTime.deltaStep < kMaxDeltaPolls) {
+            targetTime = currentTime.nextDelta();
+          } else {
+            targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
+          }
         }
 
         LLVM_DEBUG(llvm::dbgs() << "    Scheduling wait_condition poll (time="
                                 << targetTime.realTime << " fs, delta="
-                                << targetTime.deltaStep << ")\n");
+                                << targetTime.deltaStep
+                                << ", queueWait=0x"
+                                << llvm::format_hex(queueWaitAddr, 16) << ")\n");
+
+        uint64_t pollToken = ++state.waitConditionPollToken;
+        uint64_t scheduledQueueWaitAddr = state.waitConditionQueueAddr;
 
         // Schedule the process to resume after the delay
         scheduler.getEventScheduler().schedule(
             targetTime, SchedulingRegion::Active,
-            Event([this, procId]() {
-              auto &st = processStates[procId];
+            Event([this, procId, pollToken, scheduledQueueWaitAddr]() {
+              auto stIt = processStates.find(procId);
+              if (stIt == processStates.end())
+                return;
+              auto &st = stIt->second;
+              if (st.halted || !st.waiting)
+                return;
+              if (st.waitConditionPollToken != pollToken)
+                return;
+              if (scheduledQueueWaitAddr != 0 &&
+                  st.waitConditionQueueAddr != scheduledQueueWaitAddr)
+                return;
+              if (st.waitConditionQueueAddr != 0)
+                removeQueueNotEmptyWaiter(procId);
               st.waiting = false;
               scheduler.scheduleProcess(procId, SchedulingRegion::Active);
             }));
@@ -24419,6 +24678,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                     << " elemSize=" << elemSize
                                     << " newLen=" << newLen << "\n");
 
+            // Wake wait(condition) queue waiters now that this queue is non-empty.
+            wakeQueueNotEmptyWaitersIfReady(queueAddr);
+
             // Queue content changed - check if any process is waiting on memory events
             checkMemoryEventWaiters();
           }
@@ -24655,6 +24917,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_push_front("
                                     << "queue=0x" << llvm::format_hex(queueAddr, 16)
                                     << ") -> len=" << newLen << "\n");
+
+            // Wake wait(condition) queue waiters now that this queue is non-empty.
+            wakeQueueNotEmptyWaitersIfReady(queueAddr);
           }
         }
       }
@@ -27476,6 +27741,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
 
             checkMemoryEventWaiters();
+
+            // Wake wait(condition) queue waiters now that this queue is non-empty.
+            wakeQueueNotEmptyWaitersIfReady(queueAddr);
 
             LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_insert("
                                     << "0x" << llvm::format_hex(queueAddr, 16)
