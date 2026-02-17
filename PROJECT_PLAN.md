@@ -46,6 +46,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   - resumable wait thunks now also support process-result terminal shapes with
     `llhd.wait yield (...)` + destination block operands and terminal
     `llhd.halt` yield operands.
+  - event-sensitive resumable wait thunks are now covered for process-result
+    terminal shapes as well (single- and multi-observed wait lists), with
+    dedicated strict/deopt regressions.
   - deopt reasons are now split between `missing_thunk` and
     `unsupported_operation` when compile is attempted on unsupported bodies.
   - bounded AVIP mode-parity smoke remains green on `jtag`/seed `1`
