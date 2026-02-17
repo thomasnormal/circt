@@ -6158,22 +6158,32 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
     const ProcessExecutionState &state) const {
   if (auto combOp = state.getCombinationalOp()) {
     Region &body = combOp.getBody();
-    if (!body.hasOneBlock())
-      return "combinational_multiblock";
-    Block &block = body.front();
-    if (block.empty())
+    if (body.empty())
       return "combinational_empty";
-    if (!isa<llhd::YieldOp>(block.back()))
-      return "combinational_no_yield_terminator";
-    for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
-      Operation *op = &*it;
-      if (isa<llhd::WaitOp, llhd::HaltOp, llhd::YieldOp>(op))
-        return (Twine("combinational_unsupported:") +
-                op->getName().getStringRef())
+    bool sawYield = false;
+    for (Block &block : body) {
+      if (block.empty())
+        return "combinational_empty_block";
+      Operation &terminator = block.back();
+      if (!isa<llhd::YieldOp, mlir::cf::BranchOp, mlir::cf::CondBranchOp>(
+              terminator)) {
+        return (Twine("combinational_unsupported_terminator:") +
+                terminator.getName().getStringRef())
             .str();
+      }
+      for (Operation &op : block) {
+        if (isa<llhd::WaitOp, llhd::HaltOp>(op))
+          return (Twine("combinational_unsupported:") +
+                  op.getName().getStringRef())
+              .str();
+        if (isa<llhd::YieldOp>(op))
+          sawYield = true;
+      }
     }
+    if (!sawYield)
+      return "combinational_no_yield";
     return (Twine("combinational_unsupported:first_op:") +
-            block.front().getName().getStringRef())
+            body.front().front().getName().getStringRef())
         .str();
   }
 
@@ -6320,20 +6330,24 @@ bool LLHDProcessInterpreter::isCombinationalNativeThunkCandidate(
   if (!combOp)
     return false;
   Region &body = combOp.getBody();
-  if (!body.hasOneBlock())
+  if (body.empty())
     return false;
-  Block &block = body.front();
-  if (block.empty())
-    return false;
-  if (!isa<llhd::YieldOp>(block.back()))
-    return false;
-
-  for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
-    Operation *op = &*it;
-    if (isa<llhd::WaitOp, llhd::HaltOp, llhd::YieldOp>(op))
+  bool sawYield = false;
+  for (Block &block : body) {
+    if (block.empty())
       return false;
+    Operation &terminator = block.back();
+    if (!isa<llhd::YieldOp, mlir::cf::BranchOp, mlir::cf::CondBranchOp>(
+            terminator))
+      return false;
+    for (Operation &op : block) {
+      if (isa<llhd::WaitOp, llhd::HaltOp>(op))
+        return false;
+      if (isa<llhd::YieldOp>(op))
+        sawYield = true;
+    }
   }
-  return true;
+  return sawYield;
 }
 
 bool LLHDProcessInterpreter::isResumableWaitThenHaltNativeThunkCandidate(
@@ -6594,7 +6608,7 @@ bool LLHDProcessInterpreter::executeCombinationalNativeThunk(
     return true;
   }
 
-  Block &body = combOp.getBody().front();
+  Block &entry = combOp.getBody().front();
 
   // Compile-mode combinational thunk expects a stable token.
   if (thunkState.resumeToken != state.jitThunkResumeToken ||
@@ -6605,16 +6619,16 @@ bool LLHDProcessInterpreter::executeCombinationalNativeThunk(
 
   // If waking from a prior yield, normalize to block-entry execution.
   if (state.destBlock) {
-    if (state.destBlock != &body) {
+    if (state.destBlock != &entry || !state.destOperands.empty()) {
       thunkState.deoptRequested = true;
       return true;
     }
-    state.currentBlock = state.destBlock;
-    state.currentOp = state.currentBlock->begin();
-    state.destBlock = nullptr;
-    state.destOperands.clear();
-    state.resumeAtCurrentOp = false;
   }
+  state.currentBlock = &entry;
+  state.currentOp = state.currentBlock->begin();
+  state.destBlock = nullptr;
+  state.destOperands.clear();
+  state.resumeAtCurrentOp = false;
 
   // Combinational processes recompute from fresh inputs each activation.
   state.valueMap.clear();
@@ -6622,19 +6636,43 @@ bool LLHDProcessInterpreter::executeCombinationalNativeThunk(
   state.waiting = false;
   state.halted = false;
 
-  for (Operation &op : body) {
-    if (failed(interpretOperation(procId, &op))) {
-      thunkState.deoptRequested = true;
-      return true;
-    }
-    // llhd.yield should suspend the process for event wakeup.
-    if (state.waiting || state.halted)
+  ProcessId savedActiveProcessId = activeProcessId;
+  ProcessExecutionState *savedActiveProcessState = activeProcessState;
+  activeProcessId = procId;
+  activeProcessState = &state;
+  auto restoreActive = llvm::make_scope_exit([&]() {
+    activeProcessId = savedActiveProcessId;
+    activeProcessState = savedActiveProcessState;
+  });
+
+  size_t totalBodyOps = 0;
+  for (Block &block : combOp.getBody())
+    totalBodyOps += block.getOperations().size();
+  size_t maxSteps = std::max<size_t>(64, totalBodyOps * 16);
+
+  bool reachedStepLimit = true;
+  for (size_t steps = 0; steps < maxSteps; ++steps) {
+    if (!executeStep(procId)) {
+      reachedStepLimit = false;
       break;
+    }
+  }
+  if (reachedStepLimit && !state.waiting && !state.halted) {
+    thunkState.deoptRequested = true;
+    return true;
   }
 
   if (!state.waiting || state.halted) {
+    // Native combinational thunks must suspend on llhd.yield.
     thunkState.deoptRequested = true;
     return true;
+  }
+
+  if (state.currentBlock == nullptr || state.currentOp == state.currentBlock->end()) {
+    if (!state.destBlock) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
   }
 
   thunkState.halted = state.halted;

@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1454 - February 17, 2026
+
+### circt-sim: Native Combinational Thunks for CF Multiblock Bodies
+
+1. Expanded compile-mode combinational thunk eligibility beyond one-block
+   bodies:
+   - native thunk matcher now accepts multiblock combinational regions with
+     `cf.br`/`cf.cond_br` control flow and at least one `llhd.yield`.
+   - matcher still rejects `llhd.wait`/`llhd.halt` in combinational bodies.
+2. Reworked combinational native thunk execution:
+   - switched from one-block linear op walking to `executeStep`-driven process
+     execution with a bounded step budget.
+   - preserves fresh-input recompute behavior per activation and requires
+     suspension on `llhd.yield` (otherwise deopt).
+3. Strengthened combinational unsupported-shape detail classification:
+   - added detail hints for empty blocks, missing yields, and unsupported
+     terminators.
+4. Added regressions:
+   - `test/Tools/circt-sim/jit-combinational-thunk-print-yield.mlir`
+   - `test/Tools/circt-sim/jit-combinational-thunk-cf-cond-br-yield.mlir`
+5. Validation:
+   - `CCACHE_DISABLE=1 ninja -C build-test circt-sim -k 0` PASS
+   - runline-equivalent targeted bundle PASS:
+     - `jit-combinational-thunk-cf-cond-br-yield`
+     - `jit-combinational-thunk-print-yield`
+     - `llhd-combinational-triggered-print`
+     - `llhd-combinational-child-triggered-print`
+     - `jit-process-thunk-wait-delay-halt`
+   - compile-mode parallel CLI compatibility smoke PASS:
+     - `--parallel=4` run emits expected sequential-fallback warning and
+       preserves output parity.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK` (26s), sim bounded `TIMEOUT` (90s), no crash.
+
 ## Iteration 1453 - February 17, 2026
 
 ### circt-sim: Queue-Backed wait(condition) Wakeups for Hot Queue Wait Loops

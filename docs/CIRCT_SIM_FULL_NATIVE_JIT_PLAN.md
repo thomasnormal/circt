@@ -234,8 +234,10 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
        sensitivity wakeups.
      - value lookup paths now consume registered combinational results first
        (with on-demand fallback retained for uncovered paths).
-     - compile-mode JIT dispatch now explicitly bypasses combinational process
-       states until dedicated native combinational thunks are implemented.
+     - compile-mode JIT dispatch now executes native combinational thunks for
+       `llhd.yield`-suspending bodies, including multiblock
+       `cf.cond_br`/`cf.br` control-flow shapes; non-candidate combinational
+       bodies still bypass compile dispatch to avoid strict-lane deopt noise.
 5. Bounded integration parity smoke executed:
    - `AVIPS=jtag`, `SEEDS=1`, `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=120`.
    - mode-parity checker passed with one row per mode; both lanes hit the
