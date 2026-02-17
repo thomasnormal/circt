@@ -223,6 +223,12 @@ public:
       auto *defOp = v.getDefiningOp();
       if (!defOp)
         continue;
+      // Don't walk through hw.instance operands. Instance outputs are separate
+      // SSA values from instance inputs — the module boundary means any real
+      // dependency goes through sequential elements (flip-flops) inside the
+      // instance, which breaks the combinational feedback loop.
+      if (isa<hw::InstanceOp>(defOp))
+        continue;
       for (Value operand : defOp->getOperands())
         worklist.push_back(operand);
       // For ops with regions (e.g. llhd.process), also collect values

@@ -55,12 +55,8 @@ struct TruthTableOpConversion : OpConversionPattern<TruthTableOp> {
     auto tableAttr = op.getLookupTable();
     SmallVector<bool> table;
     table.reserve(tableAttr.size());
-    for (Attribute entry : tableAttr) {
-      auto boolAttr = dyn_cast<BoolAttr>(entry);
-      if (!boolAttr)
-        return rewriter.notifyMatchFailure(op, "expected BoolAttr lookup table");
-      table.push_back(boolAttr.getValue());
-    }
+    for (bool entry : tableAttr)
+      table.push_back(entry);
 
     auto allTrue = llvm::all_of(table, [](bool v) { return v; });
     auto allFalse = llvm::all_of(table, [](bool v) { return !v; });

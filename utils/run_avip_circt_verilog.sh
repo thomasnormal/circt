@@ -368,6 +368,52 @@ warnings_path = out_path.with_suffix(".warnings.log")
 with out_path.open("w") as log, warnings_path.open("w") as wlog:
     result = subprocess.run(cmd, stdout=log, stderr=wlog, text=True)
 
+def sanitize_ir_output(out_path: pathlib.Path, warnings_path: pathlib.Path):
+    """Ensure OUT starts at the first MLIR module line.
+
+    Some front-end diagnostics are emitted on stdout and can otherwise pollute
+    the IR file, causing circt-sim parse failures.
+    """
+    try:
+        text = out_path.read_text()
+    except OSError:
+        return
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return
+
+    def is_module_start(line: str):
+        stripped = line.lstrip()
+        return (stripped.startswith("module ") or
+                stripped.startswith("module{") or
+                stripped.startswith("module\t") or
+                stripped.startswith("module\n") or
+                stripped.startswith("module{") or
+                stripped.startswith("module {") or
+                stripped.startswith("builtin.module"))
+
+    start = None
+    for i, line in enumerate(lines):
+        if is_module_start(line):
+            start = i
+            break
+    if start is None or start == 0:
+        return
+
+    try:
+        with warnings_path.open("a") as wlog:
+            wlog.write("\n# stdout diagnostics moved from IR output\n")
+            for line in lines[:start]:
+                wlog.write(line)
+        with out_path.open("w") as out:
+            for line in lines[start:]:
+                out.write(line)
+    except OSError:
+        return
+
+if result.returncode == 0:
+    sanitize_ir_output(out_path, warnings_path)
+
 print(result.returncode)
 print(str(out_path))
 raise SystemExit(result.returncode)

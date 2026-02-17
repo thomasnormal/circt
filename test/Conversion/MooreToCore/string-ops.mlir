@@ -239,6 +239,35 @@ func.func @FStringToStringFormattedInt(%val: !moore.i32) -> !moore.string {
   return %1 : !moore.string
 }
 
+// Test fstring_to_string conversion with formatted hex integer
+// CHECK-LABEL: func @FStringToStringFormattedHex
+func.func @FStringToStringFormattedHex(%val: !moore.i32) -> !moore.string {
+  // CHECK: arith.extui %arg0 : i32 to i64
+  // CHECK: llvm.call @__moore_string_hextoa
+  %0 = moore.fmt.int hex_lower %val, align right, pad zero : i32
+  %1 = moore.fstring_to_string %0
+  return %1 : !moore.string
+}
+
+// Test fstring_to_string conversion with formatted binary integer
+// CHECK-LABEL: func @FStringToStringFormattedBin
+func.func @FStringToStringFormattedBin(%val: !moore.i32) -> !moore.string {
+  // CHECK: arith.extui %arg0 : i32 to i64
+  // CHECK: llvm.call @__moore_string_bintoa
+  %0 = moore.fmt.int binary %val, align right, pad zero : i32
+  %1 = moore.fstring_to_string %0
+  return %1 : !moore.string
+}
+
+// Test fstring_to_string conversion with formatted real
+// CHECK-LABEL: func @FStringToStringFormattedReal
+func.func @FStringToStringFormattedReal(%val: f64) -> !moore.string {
+  // CHECK: llvm.call @__moore_string_realtoa
+  %0 = moore.fmt.real float %val, align right fracDigits 2 : f64
+  %1 = moore.fstring_to_string %0
+  return %1 : !moore.string
+}
+
 // Test fstring_to_string conversion with concatenation
 // CHECK-LABEL: func @FStringToStringConcat
 func.func @FStringToStringConcat(%str: !moore.string) -> !moore.string {
