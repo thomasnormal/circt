@@ -64,7 +64,13 @@ Added 10 global-clocking sampled value function variants to ImportVerilog:
 - All 10 gclk sv-tests compile (exit=0)
 - All 6 black-parrot tests (bp_default, bp_multicore_1, bp_multicore_1_cce_ucode,
   bp_multicore_4, bp_multicore_4_cce_ucode_cfg, bp_unicore) pass (exit=0)
-- Full sv-tests run in progress to verify 1622/1622
+- Full sv-tests run completed: **1620/1622 = 99.9%**
+  - PASS: 1289
+  - XFAIL (correctly rejected): 331
+  - XFAIL wrong (should reject but accepts): 2
+    - `6.5--variable_mixed_assignments.sv`: slang accepts mixed procedural/continuous assignments
+    - `6.5--variable_multiple_assignments.sv`: slang accepts multiple continuous assignments
+  - These 2 are genuine slang limitations (IEEE §6.5 enforcement), not regressions
 
 ---
 
