@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1469 - February 17, 2026
+
+### circt-sim JIT: native `__moore_delay` suspend closure + AVIP timeout burn-down
+
+1. **Closed native-thunk `__moore_delay` suspend parity gap** in
+   `LLHDProcessInterpreter.cpp`:
+   - resumable multiblock wait-thunk matching now recognizes
+     `llvm.call @__moore_delay` as a suspend source.
+   - resumable multiblock wait-thunk execution now schedules pending delay
+     callbacks when `waiting && pendingDelayFs > 0`, matching interpreter
+     wakeup behavior.
+2. **Expanded non-suspending prelude coverage for AVIP tails**:
+   - `func.call`: `uvm_pkg::uvm_root::find_all`,
+     `*::set_report_verbosity_level`.
+   - `llvm.call`: `__moore_string_cmp`, `__moore_assoc_get_ref`.
+3. **Regression coverage updates**:
+   - updated
+     `test/Tools/circt-sim/jit-process-thunk-llvm-call-delay-unsupported.mlir`
+     from strict expected-fail to strict pass.
+   - added strict pass tests:
+     - `test/Tools/circt-sim/jit-process-thunk-multiblock-llvm-call-delay-halt.mlir`
+     - `test/Tools/circt-sim/jit-process-thunk-func-call-uvm-root-find-all-halt.mlir`
+     - `test/Tools/circt-sim/jit-process-thunk-llvm-call-string-cmp-halt.mlir`
+     - `test/Tools/circt-sim/jit-process-thunk-llvm-call-assoc-get-ref-halt.mlir`
+     - `test/Tools/circt-sim/jit-process-thunk-func-call-set-report-verbosity-level-halt.mlir`
+4. **Validation results**:
+   - all updated/new strict regressions above pass with
+     `--mode=compile --jit-fail-on-deopt`.
+   - parallel compatibility smokes for new delay tests pass with
+     `--parallel=4` (expected sequential fallback warning).
+   - bounded AVIP compile-lane (`jtag`, seed-1) now completes instead of
+     timing out:
+     - `/tmp/avip-circt-sim-20260217-232100`:
+       `sim_status=OK`, `sim_sec=31s`,
+       unsupported tails: `uvm_root::find_all`, `multiblock_no_terminal`.
+     - `/tmp/avip-circt-sim-20260217-232403`:
+       `uvm_root::find_all` closed; new tail `__moore_string_cmp`.
+     - `/tmp/avip-circt-sim-20260217-232923`:
+       `__moore_string_cmp`/`__moore_assoc_get_ref` closed; new tail
+       `set_report_verbosity_level`.
+     - `/tmp/avip-circt-sim-20260217-233506`:
+       `set_report_verbosity_level` closed; current unsupported tails are
+       `set_report_id_verbosity` and `multiblock_no_terminal`.
+
 ## Iteration 1468 - February 17, 2026
 
 ### circt-sim: root-cause fix for dual-top config_db::set loss on X-vtable fallback
