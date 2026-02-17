@@ -194,6 +194,13 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
      and allocator corruption aborts in both interpret and compile modes.
    - strict-native convergence now explicitly depends on fixing parallel
      scheduler/runtime stability before multi-threaded parity gates can pass.
+9. Parallel safety gate mitigation landed:
+   - `--parallel` now defaults to stable sequential fallback with explicit
+     warning in `circt-sim`.
+   - experimental scheduler path remains available for hardening via:
+     `CIRCT_SIM_EXPERIMENTAL_PARALLEL=1`.
+   - added parallel-mode regression for resumable wait/yield process-result
+     thunk shape to keep CLI compatibility covered while hardening continues.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

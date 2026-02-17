@@ -640,6 +640,9 @@ LogicalResult SimulationContext::initialize(
         // Forward-propagate parent interface signal changes to child BFM copies.
         if (llhdInterpreter)
           llhdInterpreter->forwardPropagateOnSignalChange(signal, value);
+        // Fire VPI cbValueChange callbacks for cocotb RisingEdge/FallingEdge.
+        if (!vpiLibrary.empty())
+          VPIRuntime::getInstance().fireValueChangeCallbacks(signal);
       });
 
   // Collect all top modules to simulate
@@ -1052,6 +1055,27 @@ LogicalResult SimulationContext::setupProfiling() {
 }
 
 LogicalResult SimulationContext::setupParallelSimulation() {
+  auto isTruthyEnv = [](const char *value) {
+    if (!value)
+      return false;
+    llvm::StringRef v(value);
+    return v.equals_insensitive("1") || v.equals_insensitive("true") ||
+           v.equals_insensitive("yes") || v.equals_insensitive("on");
+  };
+
+  // The current parallel scheduler remains experimental and may deadlock on
+  // LLHD-heavy workloads. Keep --parallel CLI compatibility, but default to
+  // stable sequential execution unless explicitly opted in.
+  const bool enableExperimentalParallel =
+      isTruthyEnv(std::getenv("CIRCT_SIM_EXPERIMENTAL_PARALLEL"));
+  if (!enableExperimentalParallel) {
+    llvm::errs()
+        << "[circt-sim] Warning: parallel scheduler is temporarily disabled "
+           "by default due stability issues; running sequentially. Set "
+           "CIRCT_SIM_EXPERIMENTAL_PARALLEL=1 to force-enable.\n";
+    return success();
+  }
+
   ParallelScheduler::Config config;
   config.numThreads = numThreads;
   config.enableWorkStealing = enableWorkStealing;

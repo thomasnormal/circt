@@ -535,7 +535,8 @@ private:
   std::vector<std::unique_ptr<WorkStealingQueue<PartitionId>>> workQueues;
   std::unique_ptr<ThreadBarrier> barrier;
   std::atomic<bool> running;
-  std::atomic<bool> workAvailable;
+  /// Monotonic work-dispatch generation. Workers run at most once per epoch.
+  std::atomic<uint64_t> workEpoch;
   std::atomic<size_t> activeWorkers;
 
   // Synchronization
