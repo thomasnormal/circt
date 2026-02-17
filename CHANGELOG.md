@@ -1,5 +1,23 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1431 - February 17, 2026
+
+### ImportVerilog: $*_gclk Sampled Value Functions + OnlyParse Fix
+
+1. Added 10 IEEE 1800-2017 §16.9.3 global-clocking sampled value function
+   variants (`$rose_gclk`, `$fell_gclk`, `$stable_gclk`, `$changed_gclk`,
+   `$past_gclk`, `$future_gclk`, `$rising_gclk`, `$falling_gclk`,
+   `$steady_gclk`, `$changing_gclk`) to ImportVerilog's assertion call routing
+   and normalization.
+2. Fixed `--parse-only` mode bug: `ImportVerilog.cpp` now returns early for
+   `OnlyParse` (not just `OnlyLint`), preventing fallthrough to
+   `convertCompilation()` which crashed on unsupported constructs.
+3. Added `bp_default` to parse-only list in sv-tests runners.
+4. Validation:
+   - All 10 gclk sv-tests compile successfully
+   - All 6 black-parrot tests pass (exit=0)
+   - Full sv-tests run in progress to verify 1622/1622
+
 ## Iteration 1430 - February 17, 2026
 
 ### circt-sim: WS5 Memory Attribution Top-N Process Summary

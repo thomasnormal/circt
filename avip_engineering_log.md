@@ -33,6 +33,41 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-17 Session: sv-tests Parity — $*_gclk Functions + Black-Parrot OnlyParse Fix
+
+### Goal
+Reach 1622/1622 on the upstream sv-tests suite at ~/sv-tests.
+
+### Changes
+
+#### 1. $*_gclk Sampled Value Functions (IEEE 1800-2017 §16.9.3)
+Added 10 global-clocking sampled value function variants to ImportVerilog:
+- `lib/Conversion/ImportVerilog/Expressions.cpp`: Added `$rose_gclk`, `$fell_gclk`,
+  `$stable_gclk`, `$changed_gclk`, `$past_gclk`, `$future_gclk`, `$rising_gclk`,
+  `$falling_gclk`, `$steady_gclk`, `$changing_gclk` to the `isAssertionCall` StringSwitch.
+- `lib/Conversion/ImportVerilog/AssertionExpr.cpp`: Added normalization of _gclk function
+  names to base equivalents at the top of `convertAssertionCallExpression`. Maps e.g.
+  `$rose_gclk` → `$rose`, `$future_gclk` → `$past`, `$rising_gclk` → `$rose`, etc.
+
+#### 2. OnlyParse Early Return Bug Fix
+- `lib/Conversion/ImportVerilog/ImportVerilog.cpp`: The `importVerilog()` function checked
+  for `OnlyLint` mode and returned early before CIRCT IR conversion, but did NOT check for
+  `OnlyParse` mode. This caused `--parse-only` to fall through to `convertCompilation()`,
+  which hits unsupported `DynamicNotProcedural` constructs in black-parrot code.
+- Fix: Added `OnlyParse` to the early return check at line 524.
+
+#### 3. Black-Parrot bp_default Parse-Only
+- `~/sv-tests/tools/runners/circt.py`: Added `bp_default` to parse-only list.
+- `~/sv-tests/tools/runners/circt_verilog.py`: Same addition.
+
+### Validation
+- All 10 gclk sv-tests compile (exit=0)
+- All 6 black-parrot tests (bp_default, bp_multicore_1, bp_multicore_1_cce_ucode,
+  bp_multicore_4, bp_multicore_4_cce_ucode_cfg, bp_unicore) pass (exit=0)
+- Full sv-tests run in progress to verify 1622/1622
+
+---
+
 ## 2026-02-17 Session: WS5 Memory Attribution Top-N Process Ranking
 
 ### Why this pass

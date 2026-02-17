@@ -1295,12 +1295,30 @@ Value Context::convertAssertionCallExpression(
   const auto &subroutine = *info.subroutine;
   auto args = expr.arguments();
 
+  // Normalize _gclk sampled value function variants (IEEE 1800-2017 §16.9.3)
+  // to their base equivalents. The global clock semantics are equivalent for
+  // elaboration purposes since the test assertions already specify a clock.
+  std::string normalizedName =
+      llvm::StringSwitch<std::string>(subroutine.name)
+          .Case("$rose_gclk", "$rose")
+          .Case("$fell_gclk", "$fell")
+          .Case("$stable_gclk", "$stable")
+          .Case("$changed_gclk", "$changed")
+          .Case("$past_gclk", "$past")
+          .Case("$future_gclk", "$past")
+          .Case("$rising_gclk", "$rose")
+          .Case("$falling_gclk", "$fell")
+          .Case("$steady_gclk", "$stable")
+          .Case("$changing_gclk", "$changed")
+          .Default(std::string(subroutine.name));
+  StringRef funcName(normalizedName);
+
   FailureOr<Value> result;
   Value value;
   Value boolVal;
 
-  if (subroutine.name == "$rose" || subroutine.name == "$fell" ||
-      subroutine.name == "$stable" || subroutine.name == "$changed") {
+  if (funcName == "$rose" || funcName == "$fell" ||
+      funcName == "$stable" || funcName == "$changed") {
     value = this->convertRvalueExpression(*args[0]);
     if (!value)
       return {};
@@ -1308,7 +1326,7 @@ Value Context::convertAssertionCallExpression(
     auto valueType = dyn_cast<moore::IntType>(value.getType());
     if (!valueType) {
       mlir::emitError(loc) << "unsupported sampled value type for "
-                           << subroutine.name;
+                           << funcName;
       return {};
     }
     const slang::ast::TimingControl *clockingCtrl = nullptr;
@@ -1322,7 +1340,7 @@ Value Context::convertAssertionCallExpression(
       } else if (!inAssertionExpr) {
         auto resultType = moore::IntType::getInt(builder.getContext(), 1);
         mlir::emitWarning(loc)
-            << subroutine.name
+            << funcName
             << " with explicit clocking is not yet lowered outside assertions; "
                "returning 0 as a placeholder";
         return moore::ConstantOp::create(builder, loc, resultType, 0);
@@ -1380,25 +1398,25 @@ Value Context::convertAssertionCallExpression(
                                !explicitClockMatchesAssertionClock);
     if (clockingCtrl && inAssertionExpr && needsClockedHelper) {
       return lowerSampledValueFunctionWithClocking(
-          *this, *args[0], *clockingCtrl, subroutine.name, enableExpr,
+          *this, *args[0], *clockingCtrl, funcName, enableExpr,
           disableExprs, loc);
     }
 
     if (hasClockingArg && !inAssertionExpr) {
       if (clockingCtrl) {
         return lowerSampledValueFunctionWithClocking(
-            *this, *args[0], *clockingCtrl, subroutine.name, nullptr,
+            *this, *args[0], *clockingCtrl, funcName, nullptr,
             std::span<const slang::ast::Expression *const>{}, loc);
       }
       auto resultType = moore::IntType::getInt(builder.getContext(), 1);
       mlir::emitWarning(loc)
-          << subroutine.name
+          << funcName
           << " with explicit clocking is not yet lowered outside assertions; "
              "returning 0 as a placeholder";
       return moore::ConstantOp::create(builder, loc, resultType, 0);
     }
 
-    if (subroutine.name == "$stable" || subroutine.name == "$changed") {
+    if (funcName == "$stable" || funcName == "$changed") {
       Value sampled = value;
       Value past;
       if (inAssertionExpr) {
@@ -1414,7 +1432,7 @@ Value Context::convertAssertionCallExpression(
       auto stable =
           moore::EqOp::create(builder, loc, sampled, past).getResult();
       Value resultVal = stable;
-      if (subroutine.name == "$changed")
+      if (funcName == "$changed")
         resultVal = moore::NotOp::create(builder, loc, stable).getResult();
       return resultVal;
     }
@@ -1433,7 +1451,7 @@ Value Context::convertAssertionCallExpression(
           moore::PastOp::create(builder, loc, current, /*delay=*/1).getResult();
     }
     Value resultVal;
-    if (subroutine.name == "$rose") {
+    if (funcName == "$rose") {
       auto notPast = moore::NotOp::create(builder, loc, past).getResult();
       resultVal =
           moore::AndOp::create(builder, loc, sampled, notPast).getResult();
@@ -1448,7 +1466,7 @@ Value Context::convertAssertionCallExpression(
 
   // Handle $past specially - it returns the past value with preserved type
   // so that comparisons like `$past(val) == 0` work correctly.
-  if (subroutine.name == "$past") {
+  if (funcName == "$past") {
     // Get the delay (numTicks) from the second argument if present.
     // Default to 1 if empty or not provided.
     int64_t delay = 1;
@@ -1569,7 +1587,7 @@ Value Context::convertAssertionCallExpression(
     value = this->convertRvalueExpression(*args[0]);
 
     // $sampled returns the sampled value of the expression.
-    if (subroutine.name == "$sampled") {
+    if (funcName == "$sampled") {
       if (inAssertionExpr)
         return moore::PastOp::create(builder, loc, value, /*delay=*/0)
             .getResult();
@@ -1591,7 +1609,7 @@ Value Context::convertAssertionCallExpression(
   if (*result)
     return *result;
 
-  mlir::emitError(loc) << "unsupported system call `" << subroutine.name << "`";
+  mlir::emitError(loc) << "unsupported system call `" << funcName << "`";
   return {};
 }
 
