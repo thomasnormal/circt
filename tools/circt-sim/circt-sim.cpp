@@ -1601,9 +1601,11 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
     uint64_t processId;
     std::string processName;
     std::string reason;
+    std::string detail;
   };
   llvm::SmallVector<JitDeoptProcessEntry, 8> jitDeoptProcesses;
   if (interpreter) {
+    const auto &deoptDetails = interpreter->getJitDeoptDetailByProcess();
     uvmFastPathHitsTotal = interpreter->getUvmFastPathHitsTotal();
     uvmFastPathActionKeysTotal = interpreter->getUvmFastPathActionKeyCount();
     uvmJitPromotedActionsTotal = interpreter->getUvmJitPromotedActionCount();
@@ -1611,10 +1613,14 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
     uvmJitPromotionBudgetRemaining =
         interpreter->getUvmJitPromotionBudgetRemaining();
     for (const auto &entry : interpreter->getJitDeoptReasonByProcess()) {
+      std::string detail;
+      auto detailIt = deoptDetails.find(entry.first);
+      if (detailIt != deoptDetails.end())
+        detail = detailIt->second;
       jitDeoptProcesses.push_back({entry.first,
                                    interpreter->getJitDeoptProcessName(
                                        entry.first),
-                                   entry.second});
+                                   entry.second, std::move(detail)});
     }
     llvm::sort(jitDeoptProcesses, [](const auto &lhs, const auto &rhs) {
       return lhs.processId < rhs.processId;
@@ -1679,6 +1685,8 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
             jos.attribute("process_id", entry.processId);
             jos.attribute("process_name", entry.processName);
             jos.attribute("reason", entry.reason);
+            if (!entry.detail.empty())
+              jos.attribute("detail", entry.detail);
           });
         }
       });
@@ -2037,12 +2045,18 @@ static LogicalResult processInput(MLIRContext &context,
         uint64_t processId;
         std::string processName;
         std::string reason;
+        std::string detail;
       };
       llvm::SmallVector<StrictDeoptProcessEntry, 8> strictDeoptProcesses;
+      const auto &deoptDetails = interpreter->getJitDeoptDetailByProcess();
       for (const auto &entry : interpreter->getJitDeoptReasonByProcess()) {
+        std::string detail;
+        auto detailIt = deoptDetails.find(entry.first);
+        if (detailIt != deoptDetails.end())
+          detail = detailIt->second;
         strictDeoptProcesses.push_back(
             {entry.first, interpreter->getJitDeoptProcessName(entry.first),
-             entry.second});
+             entry.second, std::move(detail)});
       }
       llvm::sort(strictDeoptProcesses, [](const auto &lhs, const auto &rhs) {
         return lhs.processId < rhs.processId;
@@ -2058,7 +2072,10 @@ static LogicalResult processInput(MLIRContext &context,
                                       : llvm::StringRef(entry.processName);
         llvm::errs() << "[circt-sim] Strict JIT deopt process: id="
                      << entry.processId << " name=" << name
-                     << " reason=" << entry.reason << "\n";
+                     << " reason=" << entry.reason;
+        if (!entry.detail.empty())
+          llvm::errs() << " detail=" << entry.detail;
+        llvm::errs() << "\n";
       }
       if (strictDeoptProcesses.size() > kStrictDeoptLogLimit) {
         llvm::errs() << "[circt-sim] Strict JIT deopt process: omitted="

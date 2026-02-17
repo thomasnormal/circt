@@ -5567,7 +5567,8 @@ void LLHDProcessInterpreter::checkMemoryEventWaiters() {
 
 LLHDProcessInterpreter::ProcessThunkInstallResult
 LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
-                                               ProcessExecutionState &state) {
+                                               ProcessExecutionState &state,
+                                               std::string *deoptDetail) {
   if (!jitCompileManager)
     return ProcessThunkInstallResult::MissingThunk;
 
@@ -5579,8 +5580,11 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
       tryBuildPeriodicToggleClockThunkSpec(state, periodicSpec);
   bool isTrivialCandidate =
       !isPeriodicToggleClock && isTrivialNativeThunkCandidate(state);
-  if (!isPeriodicToggleClock && !isTrivialCandidate)
+  if (!isPeriodicToggleClock && !isTrivialCandidate) {
+    if (deoptDetail)
+      *deoptDetail = getUnsupportedThunkDeoptDetail(state);
     return ProcessThunkInstallResult::UnsupportedOperation;
+  }
 
   bool installed =
       jitCompileManager->installProcessThunk(procId, [this, procId](
@@ -5598,6 +5602,44 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
 
   jitCompileManager->noteCompile();
   return ProcessThunkInstallResult::Installed;
+}
+
+std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
+    const ProcessExecutionState &state) const {
+  if (auto processOp = state.getProcessOp()) {
+    Region &body = processOp.getBody();
+    if (!body.empty()) {
+      Block &entry = body.front();
+      if (!entry.empty()) {
+        auto waitIt = std::prev(entry.end());
+        if (auto waitOp = dyn_cast<llhd::WaitOp>(*waitIt)) {
+          (void)waitOp;
+          for (auto it = entry.begin(); it != waitIt; ++it) {
+            Operation *op = &*it;
+            if (!isPureResumableWaitPreludeOp(op))
+              return (Twine("prewait_impure:") +
+                      op->getName().getStringRef())
+                  .str();
+          }
+        }
+      }
+    }
+    for (Block &block : body) {
+      for (Operation &op : block)
+        return (Twine("first_op:") + op.getName().getStringRef()).str();
+    }
+    return "process_empty";
+  }
+
+  if (auto initialOp = state.getInitialOp()) {
+    Block *body = initialOp.getBodyBlock();
+    if (!body || body->empty())
+      return "initial_empty";
+    return (Twine("initial_first_op:") + body->front().getName().getStringRef())
+        .str();
+  }
+
+  return "unknown_shape";
 }
 
 bool LLHDProcessInterpreter::snapshotJITDeoptState(
@@ -6140,12 +6182,15 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   if (compileModeEnabled && jitCompileManager) {
     JITDeoptStateSnapshot deoptSnapshot;
     bool hasDeoptSnapshot = snapshotJITDeoptState(procId, deoptSnapshot);
-    auto noteProcessDeoptReason = [&](JITCompileManager::DeoptReason reason) {
+    auto noteProcessDeoptReason = [&](JITCompileManager::DeoptReason reason,
+                                      llvm::StringRef detail = llvm::StringRef()) {
       if (jitCompileManager)
         jitCompileManager->noteProcessDeoptOnce(procId, reason);
       if (!jitDeoptReasonByProcess.count(procId))
         jitDeoptReasonByProcess[procId] =
             JITCompileManager::getDeoptReasonName(reason).str();
+      if (!detail.empty() && !jitDeoptDetailByProcess.count(procId))
+        jitDeoptDetailByProcess[procId] = detail.str();
     };
     auto maybeInvalidateThunkForNoCachePolicy = [&]() {
       if (llvm::StringRef(jitCompileManager->getConfig().cachePolicy)
@@ -6165,8 +6210,9 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
         (void)restoreJITDeoptState(procId, deoptSnapshot);
       noteProcessDeoptReason(JITCompileManager::DeoptReason::GuardFailed);
     } else {
+      std::string installDeoptDetail;
       ProcessThunkInstallResult installResult =
-          tryInstallProcessThunk(procId, state);
+          tryInstallProcessThunk(procId, state, &installDeoptDetail);
       if (installResult == ProcessThunkInstallResult::Installed) {
         ProcessThunkExecutionState installedThunkState;
         installedThunkState.resumeToken = state.jitThunkResumeToken;
@@ -6189,7 +6235,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
             JITCompileManager::DeoptReason::MissingThunk;
         if (installResult == ProcessThunkInstallResult::UnsupportedOperation)
           reason = JITCompileManager::DeoptReason::UnsupportedOperation;
-        noteProcessDeoptReason(reason);
+        noteProcessDeoptReason(reason, installDeoptDetail);
       }
     }
   }
