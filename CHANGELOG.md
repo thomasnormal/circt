@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1444 - February 17, 2026
+
+### circt-sim: Add Process Names to JIT Deopt Telemetry
+
+1. Extended compile-mode JIT report deopt entries to include process names:
+   - `jit.jit_deopt_processes[]` now emits
+     `{process_id, process_name, reason}`.
+2. Added interpreter API to resolve scheduler process names for report export.
+3. Updated regression:
+   - `test/Tools/circt-sim/jit-report-deopt-processes.mlir`.
+4. Validation:
+   - targeted jit-report/cache-policy/parallel-thunk bundle PASS.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK`, sim bounded `TIMEOUT` (90s).
+
 ## Iteration 1443 - February 17, 2026
 
 ### circt-sim: Per-Process JIT Deopt Telemetry

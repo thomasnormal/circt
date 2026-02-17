@@ -578,6 +578,9 @@ public:
     return jitDeoptReasonByProcess;
   }
 
+  /// Resolve scheduler-registered process name for a process ID.
+  std::string getJitDeoptProcessName(ProcessId procId) const;
+
   friend class LLHDProcessInterpreterTest;
   friend struct ScopedInstanceContext;
   friend struct ScopedInputValueMap;

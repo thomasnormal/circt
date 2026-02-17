@@ -109,10 +109,10 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
 3. `jit_exec_hits_total`
 4. `jit_deopts_total`
 5. `jit_deopt_reason_*`
-6. `jit_deopt_processes[]` (`process_id`, `reason`)
-6. `jit_compile_wall_ms`
-7. `jit_exec_wall_ms`
-8. `jit_strict_violations_total`
+6. `jit_deopt_processes[]` (`process_id`, `process_name`, `reason`)
+7. `jit_compile_wall_ms`
+8. `jit_exec_wall_ms`
+9. `jit_strict_violations_total`
 
 ## Internal Runtime ABI
 1. Introduce explicit compiled thunk signature for process activation/resume.
@@ -198,8 +198,9 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
    - `--jit-cache-policy` now validates accepted values (`memory`/`none`) and
      honors `CIRCT_SIM_JIT_CACHE_POLICY` with warning+fallback on invalid input.
    - JIT report now includes per-process first deopt reasons in
-     `jit_deopt_processes`, enabling strict-mode triage to pinpoint which
-     processes are still leaving native coverage.
+     `jit_deopt_processes`, including both `process_id` and `process_name`,
+     enabling strict-mode triage to pinpoint which processes are still leaving
+     native coverage.
 5. Bounded integration parity smoke executed:
    - `AVIPS=jtag`, `SEEDS=1`, `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=120`.
    - mode-parity checker passed with one row per mode; both lanes hit the
