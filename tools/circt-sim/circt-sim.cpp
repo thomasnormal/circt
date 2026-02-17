@@ -99,6 +99,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 using namespace mlir;
 using namespace circt;
@@ -1596,6 +1597,7 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
   uint64_t uvmJitPromotedActionsTotal = 0;
   uint64_t uvmJitHotThreshold = 0;
   int64_t uvmJitPromotionBudgetRemaining = 0;
+  llvm::SmallVector<std::pair<uint64_t, std::string>, 8> jitDeoptProcesses;
   if (interpreter) {
     uvmFastPathHitsTotal = interpreter->getUvmFastPathHitsTotal();
     uvmFastPathActionKeysTotal = interpreter->getUvmFastPathActionKeyCount();
@@ -1603,6 +1605,11 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
     uvmJitHotThreshold = interpreter->getUvmJitHotThreshold();
     uvmJitPromotionBudgetRemaining =
         interpreter->getUvmJitPromotionBudgetRemaining();
+    for (const auto &entry : interpreter->getJitDeoptReasonByProcess())
+      jitDeoptProcesses.emplace_back(entry.first, entry.second);
+    llvm::sort(jitDeoptProcesses, [](const auto &lhs, const auto &rhs) {
+      return lhs.first < rhs.first;
+    });
   }
 
   auto jos = llvm::json::OStream(os, 2);
@@ -1657,6 +1664,14 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
       jos.attribute("jit_exec_wall_ms", jitStats.jitExecWallMs);
       jos.attribute("jit_strict_violations_total",
                     jitStats.jitStrictViolationsTotal);
+      jos.attributeArray("jit_deopt_processes", [&] {
+        for (const auto &entry : jitDeoptProcesses) {
+          jos.object([&] {
+            jos.attribute("process_id", entry.first);
+            jos.attribute("reason", entry.second);
+          });
+        }
+      });
     });
 
     jos.attributeObject("uvm_fast_path", [&] {
