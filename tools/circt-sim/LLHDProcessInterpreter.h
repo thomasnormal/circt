@@ -39,6 +39,7 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <unordered_map>
 
 // Forward declarations for SCF, Func, and LLVM dialects
 namespace mlir {
@@ -65,6 +66,9 @@ class GlobalOp;
 
 namespace circt {
 namespace sim {
+
+class JITCompileManager;
+struct ProcessThunkExecutionState;
 
 //===----------------------------------------------------------------------===//
 // InterpretedValue - Runtime value representation
@@ -405,6 +409,9 @@ struct ProcessExecutionState {
   /// defined within the fork body are local to the child.
   ProcessId parentProcessId = 0;
 
+  /// Native-thunk resume token used for resumable compiled process patterns.
+  uint64_t jitThunkResumeToken = 0;
+
   ProcessExecutionState() = default;
   explicit ProcessExecutionState(llhd::ProcessOp op)
       : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
@@ -539,6 +546,32 @@ public:
   /// Get the number of registered processes.
   size_t getNumProcesses() const { return processStates.size(); }
 
+  /// Get total UVM fast-path hits observed in this run.
+  uint64_t getUvmFastPathHitsTotal() const {
+    uint64_t total = 0;
+    for (const auto &entry : uvmFastPathHitCount)
+      total += entry.getValue();
+    return total;
+  }
+
+  /// Get the number of distinct UVM fast-path action keys seen.
+  size_t getUvmFastPathActionKeyCount() const {
+    return uvmFastPathHitCount.size();
+  }
+
+  /// Get the number of UVM fast-path actions promoted by hotness hooks.
+  size_t getUvmJitPromotedActionCount() const {
+    return uvmJitPromotedFastPaths.size();
+  }
+
+  /// Get the configured UVM JIT hotness threshold.
+  uint64_t getUvmJitHotThreshold() const { return uvmJitHotThreshold; }
+
+  /// Get the remaining UVM JIT promotion budget.
+  int64_t getUvmJitPromotionBudgetRemaining() const {
+    return uvmJitPromotionBudget;
+  }
+
   friend class LLHDProcessInterpreterTest;
   friend struct ScopedInstanceContext;
   friend struct ScopedInputValueMap;
@@ -557,6 +590,14 @@ public:
 
   /// Enable collection of operation execution statistics.
   void setCollectOpStats(bool enable) { collectOpStats = enable; }
+
+  /// Enable or disable compile-mode execution behavior.
+  void setCompileModeEnabled(bool enable) { compileModeEnabled = enable; }
+
+  /// Provide JIT compile manager for compile-mode thunk/deopt accounting.
+  void setJITCompileManager(JITCompileManager *manager) {
+    jitCompileManager = manager;
+  }
 
   /// Set a callback to be called when sim.terminate is executed.
   /// The callback receives (success, verbose) parameters.
@@ -743,6 +784,69 @@ private:
   /// Resume a process after a wait condition is satisfied.
   void resumeProcess(ProcessId procId);
 
+  /// Compile-mode process thunk installation outcome.
+  enum class ProcessThunkInstallResult {
+    Installed,
+    MissingThunk,
+    UnsupportedOperation,
+  };
+
+  struct PeriodicToggleClockThunkSpec {
+    bool hasInitialDrive = false;
+    llhd::DriveOp initialDriveOp;
+    mlir::Value intToTimeResult;
+    llhd::WaitOp waitOp;
+    mlir::Block *waitDestBlock = nullptr;
+    llhd::ProbeOp probeOp;
+    mlir::Operation *toggleOp = nullptr;
+    llhd::DriveOp toggleDriveOp;
+    uint64_t delayFs = 0;
+  };
+
+  /// Attempt to compile/install a native thunk for this process.
+  ProcessThunkInstallResult tryInstallProcessThunk(ProcessId procId,
+                                                   ProcessExecutionState &state);
+
+  /// Return true when this process is eligible for the initial native thunk.
+  bool isTrivialNativeThunkCandidate(const ProcessExecutionState &state) const;
+
+  /// Return true when the process matches
+  /// wait(delay|observed)->(optional print)->halt.
+  bool
+  isResumableWaitThenHaltNativeThunkCandidate(const ProcessExecutionState &state) const;
+
+  /// Execute the initial native thunk body for trivial terminating processes.
+  void executeTrivialNativeThunk(ProcessId procId,
+                                 ProcessThunkExecutionState &thunkState);
+
+  bool executeResumableWaitThenHaltNativeThunk(
+      ProcessId procId, ProcessExecutionState &state,
+      ProcessThunkExecutionState &thunkState);
+
+  bool tryBuildPeriodicToggleClockThunkSpec(
+      const ProcessExecutionState &state,
+      PeriodicToggleClockThunkSpec &spec) const;
+
+  bool executePeriodicToggleClockNativeThunk(
+      ProcessId procId, ProcessExecutionState &state,
+      ProcessThunkExecutionState &thunkState);
+
+  struct JITDeoptStateSnapshot {
+    mlir::Block *currentBlock = nullptr;
+    mlir::Block::iterator currentOp;
+    bool halted = false;
+    bool waiting = false;
+    mlir::Block *destBlock = nullptr;
+    bool resumeAtCurrentOp = false;
+    llvm::SmallVector<InterpretedValue, 4> destOperands;
+    llvm::SmallVector<CallStackFrame, 4> callStack;
+    uint64_t jitThunkResumeToken = 0;
+  };
+
+  bool snapshotJITDeoptState(ProcessId procId, JITDeoptStateSnapshot &snapshot);
+  bool restoreJITDeoptState(ProcessId procId,
+                            const JITDeoptStateSnapshot &snapshot);
+
   //===--------------------------------------------------------------------===//
   // Time Conversion
   //===--------------------------------------------------------------------===//
@@ -827,6 +931,14 @@ private:
   bool handleUvmWaitForSelfAndSiblingsToDrop(ProcessId procId,
                                              uint64_t phaseAddr,
                                              mlir::Operation *callOp);
+
+  /// Handle UVM-focused fast-paths at func body entry.
+  /// Returns true when handled; caller should skip normal function execution.
+  bool handleUvmFuncBodyFastPath(
+      ProcessId procId, mlir::func::FuncOp funcOp,
+      llvm::ArrayRef<InterpretedValue> args,
+      llvm::SmallVectorImpl<InterpretedValue> &results,
+      mlir::Operation *callOp);
 
   /// Interpret a function body.
   /// @param procId The process ID executing this function.
@@ -1047,6 +1159,16 @@ private:
   /// Active instance context for signal/process resolution.
   InstanceId activeInstanceId = 0;
 
+  /// Recursion depth counter for evaluateContinuousValue to prevent stack
+  /// overflow when instance hierarchies create deep recursive chains.
+  unsigned continuousEvalDepth = 0;
+
+  /// Set of signal IDs currently being evaluated through combSignalDriveMap
+  /// in the recursive evaluateContinuousValue chain. Used to detect cycles
+  /// (e.g., signal A drives signal B, signal B drives signal A) and break
+  /// them by falling back to reading the signal value from the scheduler.
+  llvm::DenseSet<SignalId> continuousEvalVisitedSignals;
+
   /// Next instance ID to allocate for a hw.instance.
   InstanceId nextInstanceId = 1;
 
@@ -1177,6 +1299,18 @@ private:
   };
   llvm::SmallVector<StaticModuleDrive, 4> staticModuleDrives;
 
+  /// Map from signal ID to its combinational drive expression.
+  /// Used by evaluateContinuousValue to trace through intermediate signals
+  /// whose values may be stale (epsilon delays not yet fired) instead of
+  /// reading stale signal values. Only populated for static drives with no
+  /// enable condition (pure combinational wires).
+  struct CombSignalDriveInfo {
+    mlir::Value driveValue;
+    InstanceId instanceId = 0;
+    InstanceInputMapping inputMap;
+  };
+  llvm::DenseMap<SignalId, CombSignalDriveInfo> combSignalDriveMap;
+
   /// Memory event waiter for polling-based event detection.
   /// Used for UVM events stored as boolean fields in class instances where
   /// no signal is available to wait on.
@@ -1227,6 +1361,19 @@ private:
   /// During this phase, sim.terminate should not halt the process to allow
   /// UVM initialization to complete (re-entrant calls set uvm_top properly).
   bool inGlobalInit = false;
+
+  /// True when simulation runs in compile mode.
+  bool compileModeEnabled = false;
+
+  /// Optional JIT manager used for thunk dispatch/deopt accounting.
+  JITCompileManager *jitCompileManager = nullptr;
+
+  /// Per-process metadata for periodic clock toggle native thunks.
+  llvm::DenseMap<ProcessId, PeriodicToggleClockThunkSpec>
+      periodicToggleClockThunkSpecs;
+
+  /// Test hook: force native thunks to request deopt after dispatch.
+  bool forceJitThunkDeoptRequests = false;
 
   /// Grace period for $finish with active forked children.
   /// When $finish(success=true) fires but forked children are still running
@@ -1540,6 +1687,14 @@ private:
   /// Must be per-process because multiple processes run phases concurrently.
   std::map<ProcessId, uint64_t> currentExecutingPhaseAddr;
 
+  /// Native backing queue for uvm_phase_hopper methods.
+  /// Key: phase hopper object pointer, value: queued phase pointers.
+  llvm::DenseMap<uint64_t, std::deque<uint64_t>> phaseHopperQueue;
+
+  /// Processes blocked in phase_hopper::get/peek waiting for queue data.
+  /// Key: phase hopper object pointer, value: waiter process IDs.
+  llvm::DenseMap<uint64_t, llvm::SmallVector<ProcessId, 4>> phaseHopperWaiters;
+
   /// Function phase IMP sequencing: tracks which function phase IMP nodes
   /// have completed their traversal. The UVM phase graph IMP nodes for
   /// function phases (build, connect, end_of_elaboration, start_of_simulation)
@@ -1620,6 +1775,18 @@ private:
   /// Populated by the fast-path factory.register interceptor (which calls
   /// get_type_name once instead of 7 times). Used by find_wrapper_by_name.
   llvm::StringMap<uint64_t> nativeFactoryTypeNames;
+
+  /// Tracks wrappers whose *_registry_*::initialize fast path has run.
+  /// Avoids repeated initialization work for the same wrapper object.
+  llvm::DenseSet<uint64_t> nativeFactoryInitializedWrappers;
+
+  /// Tracks deduplicated uvm_phase::add edges (hash of call arguments).
+  /// Used by a function-body fast path to elide duplicate add calls.
+  llvm::DenseSet<uint64_t> nativePhaseAddEdgeKeys;
+
+  /// Tracks deduplicated uvm_phase::add call sites (hash of call arguments).
+  /// Used by func.call fast path to skip duplicate calls before interpretation.
+  llvm::DenseSet<uint64_t> nativePhaseAddCallKeys;
 
   /// Native random seed table for uvm_create_random_seed fast-path.
   /// Maps inst_id → (type_id → (seed, count)).

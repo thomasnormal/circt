@@ -16,6 +16,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Debug.h"
+#include <cstring>
 
 #define DEBUG_TYPE "llhd-interpreter"
 
@@ -193,6 +194,342 @@ bool LLHDProcessInterpreter::handleUvmWaitForSelfAndSiblingsToDrop(
   return true;
 }
 
+bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
+    ProcessId procId, mlir::func::FuncOp funcOp,
+    llvm::ArrayRef<InterpretedValue> args,
+    llvm::SmallVectorImpl<InterpretedValue> &results, mlir::Operation *callOp) {
+  llvm::StringRef funcName = funcOp.getSymName();
+  auto matchesMethod = [&](llvm::StringRef method) {
+    return funcName.ends_with(method) || funcName.contains(method);
+  };
+
+  auto appendBoolResult = [&](bool value) {
+    if (funcOp.getNumResults() < 1)
+      return;
+    unsigned width = std::max(1u, getTypeWidth(funcOp.getResultTypes()[0]));
+    results.push_back(InterpretedValue(llvm::APInt(width, value ? 1 : 0)));
+    for (unsigned i = 1, e = funcOp.getNumResults(); i < e; ++i) {
+      unsigned extraWidth =
+          std::max(1u, getTypeWidth(funcOp.getResultTypes()[i]));
+      results.push_back(
+          InterpretedValue(llvm::APInt::getZero(extraWidth)));
+    }
+  };
+
+  auto writePointerToOutAddr = [&](const InterpretedValue &outAddrVal,
+                                   uint64_t ptrValue) {
+    if (outAddrVal.isX())
+      return;
+    uint64_t addr = outAddrVal.getUInt64();
+    if (!addr)
+      return;
+
+    uint64_t offset = 0;
+    MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
+    if (!block)
+      block = findBlockByAddress(addr, offset);
+    if (block && offset + 8 <= block->data.size()) {
+      for (unsigned i = 0; i < 8; ++i)
+        block->data[offset + i] =
+            static_cast<uint8_t>((ptrValue >> (i * 8)) & 0xFF);
+      block->initialized = true;
+      return;
+    }
+
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+        nativeOffset + 8 <= nativeSize)
+      std::memcpy(reinterpret_cast<void *>(addr), &ptrValue, 8);
+  };
+
+  auto waitOnHopperData = [&](uint64_t hopperAddr) -> bool {
+    if (!callOp)
+      return false;
+    auto &state = processStates[procId];
+    state.waiting = true;
+    state.sequencerGetRetryCallOp = callOp;
+    auto &waiters = phaseHopperWaiters[hopperAddr];
+    if (std::find(waiters.begin(), waiters.end(), procId) == waiters.end())
+      waiters.push_back(procId);
+    return true;
+  };
+
+  auto wakeHopperWaiters = [&](uint64_t hopperAddr) {
+    auto waitIt = phaseHopperWaiters.find(hopperAddr);
+    if (waitIt == phaseHopperWaiters.end())
+      return;
+    auto waiters = waitIt->second;
+    phaseHopperWaiters.erase(waitIt);
+    for (ProcessId waiterProc : waiters) {
+      auto stateIt = processStates.find(waiterProc);
+      if (stateIt == processStates.end())
+        continue;
+      if (!stateIt->second.waiting)
+        continue;
+      stateIt->second.waiting = false;
+      scheduler.scheduleProcess(waiterProc, SchedulingRegion::Active);
+    }
+  };
+
+  auto resolveVtableSlotFunc = [&](uint64_t objAddr, uint64_t slot,
+                                   mlir::func::FuncOp &outFunc) -> bool {
+    if (objAddr == 0)
+      return false;
+
+    uint64_t objOff = 0;
+    MemoryBlock *objBlk = findMemoryBlockByAddress(objAddr + 4, procId, &objOff);
+    if (!objBlk)
+      objBlk = findBlockByAddress(objAddr + 4, objOff);
+    if (!objBlk || !objBlk->initialized || objOff + 8 > objBlk->data.size())
+      return false;
+
+    uint64_t vtableAddr = 0;
+    for (unsigned i = 0; i < 8; ++i)
+      vtableAddr |= static_cast<uint64_t>(objBlk->data[objOff + i]) << (i * 8);
+    if (vtableAddr == 0)
+      return false;
+
+    uint64_t entryOff = 0;
+    MemoryBlock *entryBlk =
+        findMemoryBlockByAddress(vtableAddr + slot * 8, procId, &entryOff);
+    if (!entryBlk)
+      entryBlk = findBlockByAddress(vtableAddr + slot * 8, entryOff);
+    if (!entryBlk || !entryBlk->initialized ||
+        entryOff + 8 > entryBlk->data.size())
+      return false;
+
+    uint64_t funcAddr = 0;
+    for (unsigned i = 0; i < 8; ++i)
+      funcAddr |= static_cast<uint64_t>(entryBlk->data[entryOff + i]) << (i * 8);
+    auto addrIt = addressToFunction.find(funcAddr);
+    if (addrIt == addressToFunction.end())
+      return false;
+
+    outFunc = rootModule.lookupSymbol<mlir::func::FuncOp>(addrIt->second);
+    return static_cast<bool>(outFunc);
+  };
+
+  auto registerFactoryWrapper = [&](uint64_t wrapperAddr) -> bool {
+    mlir::func::FuncOp getTypeNameFunc;
+    if (!resolveVtableSlotFunc(wrapperAddr, /*slot=*/2, getTypeNameFunc))
+      return false;
+
+    llvm::SmallVector<InterpretedValue, 1> typeNameResults;
+    if (failed(interpretFuncBody(
+            procId, getTypeNameFunc, {InterpretedValue(wrapperAddr, 64)},
+            typeNameResults, nullptr)) ||
+        typeNameResults.empty() || typeNameResults.front().isX() ||
+        typeNameResults.front().getWidth() < 128)
+      return false;
+
+    llvm::APInt packed = typeNameResults.front().getAPInt();
+    uint64_t strPtr = packed.extractBits(64, 0).getZExtValue();
+    int64_t strLen = packed.extractBits(64, 64).getSExtValue();
+    std::string typeName;
+    if (strPtr == 0 || strLen <= 0 || strLen > 1024 ||
+        !tryReadStringKey(procId, strPtr, strLen, typeName) || typeName.empty())
+      return false;
+
+    nativeFactoryTypeNames[typeName] = wrapperAddr;
+    return true;
+  };
+
+  auto fastCreateComponentByName = [&](const InterpretedValue &typeNameArg,
+                                       const InterpretedValue &instNameArg,
+                                       const InterpretedValue &parentArg,
+                                       InterpretedValue &outValue) -> bool {
+    if (typeNameArg.isX() || typeNameArg.getWidth() < 128)
+      return false;
+
+    llvm::APInt packed = typeNameArg.getAPInt();
+    uint64_t strPtr = packed.extractBits(64, 0).getZExtValue();
+    int64_t strLen = packed.extractBits(64, 64).getSExtValue();
+    std::string typeName;
+    if (strPtr == 0 || strLen <= 0 || strLen > 1024 ||
+        !tryReadStringKey(procId, strPtr, strLen, typeName) || typeName.empty())
+      return false;
+
+    auto typeIt = nativeFactoryTypeNames.find(typeName);
+    if (typeIt == nativeFactoryTypeNames.end())
+      return false;
+    uint64_t wrapperAddr = typeIt->second;
+
+    mlir::func::FuncOp createComponentFunc;
+    if (!resolveVtableSlotFunc(wrapperAddr, /*slot=*/1, createComponentFunc))
+      return false;
+
+    llvm::SmallVector<InterpretedValue, 1> createResults;
+    if (failed(interpretFuncBody(
+            procId, createComponentFunc,
+            {InterpretedValue(wrapperAddr, 64), instNameArg, parentArg},
+            createResults, callOp)) ||
+        createResults.empty())
+      return false;
+
+    outValue = createResults.front();
+    return true;
+  };
+
+  auto hashPhaseAddArgs = [&](llvm::ArrayRef<InterpretedValue> values) -> uint64_t {
+    uint64_t hash = 0x517cc1b727220a95ULL;
+    for (const auto &value : values.take_front(7)) {
+      uint64_t bits = value.isX() ? 0xDEADBEEFDEADBEEFULL : value.getUInt64();
+      hash ^= bits + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+    }
+    return hash;
+  };
+
+  if ((funcName.contains("uvm_pkg::uvm_object_registry_") ||
+       funcName.contains("uvm_pkg::uvm_component_registry_") ||
+       funcName.contains("uvm_pkg::uvm_abstract_object_registry_")) &&
+      funcName.ends_with("::initialize") && !args.empty() && !args[0].isX()) {
+    uint64_t wrapperAddr = args[0].getUInt64();
+    if (wrapperAddr != 0 &&
+        nativeFactoryInitializedWrappers.contains(wrapperAddr)) {
+      noteUvmFastPathActionHit("func.body.registry.initialize_cached");
+      return true;
+    }
+    if (wrapperAddr != 0 && registerFactoryWrapper(wrapperAddr)) {
+      nativeFactoryInitializedWrappers.insert(wrapperAddr);
+      noteUvmFastPathActionHit("func.body.registry.initialize_register");
+      return true;
+    }
+  }
+
+  if ((matchesMethod("uvm_default_factory::create_component_by_name") ||
+       matchesMethod("uvm_factory::create_component_by_name")) &&
+      args.size() >= 5 && funcOp.getNumResults() >= 1) {
+    InterpretedValue createdValue;
+    if (fastCreateComponentByName(args[1], args[3], args[4], createdValue)) {
+      unsigned resultWidth =
+          std::max(1u, getTypeWidth(funcOp.getResultTypes().front()));
+      if (createdValue.isX()) {
+        results.push_back(InterpretedValue::makeX(resultWidth));
+      } else if (createdValue.getWidth() != resultWidth) {
+        results.push_back(InterpretedValue(
+            createdValue.getAPInt().zextOrTrunc(resultWidth)));
+      } else {
+        results.push_back(createdValue);
+      }
+      for (unsigned i = 1, e = funcOp.getNumResults(); i < e; ++i) {
+        unsigned extraWidth =
+            std::max(1u, getTypeWidth(funcOp.getResultTypes()[i]));
+        results.push_back(InterpretedValue(llvm::APInt::getZero(extraWidth)));
+      }
+      noteUvmFastPathActionHit("func.body.factory.create_component_by_name");
+      return true;
+    }
+  }
+
+  if (funcName.contains("uvm_pkg::uvm_phase::add") && args.size() >= 7) {
+    bool allOptionalNull = true;
+    for (unsigned i = 2; i < 7; ++i) {
+      if (args[i].isX() || args[i].getUInt64() != 0) {
+        allOptionalNull = false;
+        break;
+      }
+    }
+    if (allOptionalNull && !args[0].isX() && !args[1].isX() &&
+        args[0].getUInt64() != 0 && args[1].getUInt64() != 0) {
+      uint64_t edgeKey = hashPhaseAddArgs(args);
+      if (!nativePhaseAddEdgeKeys.insert(edgeKey).second) {
+        noteUvmFastPathActionHit("func.body.phase.add_duplicate");
+        return true;
+      }
+      noteUvmFastPathActionHit("func.body.phase.add_observed");
+    }
+  }
+
+  if (matchesMethod("uvm_phase_hopper::try_put") && args.size() >= 2) {
+    uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
+    uint64_t phaseAddr = args[1].isX() ? 0 : args[1].getUInt64();
+    phaseHopperQueue[hopperAddr].push_back(phaseAddr);
+    wakeHopperWaiters(hopperAddr);
+
+    if (hopperAddr != 0) {
+      auto it = phaseObjectionHandles.find(hopperAddr);
+      int64_t handle = 0;
+      if (it != phaseObjectionHandles.end()) {
+        handle = it->second;
+      } else {
+        std::string hopperName = "phase_hopper_" + std::to_string(hopperAddr);
+        handle = __moore_objection_create(
+            hopperName.c_str(), static_cast<int64_t>(hopperName.size()));
+        phaseObjectionHandles[hopperAddr] = handle;
+      }
+      __moore_objection_raise(handle, "", 0, "", 0, 1);
+    }
+
+    appendBoolResult(true);
+    noteUvmFastPathActionHit("func.body.phase_hopper.try_put");
+    return true;
+  }
+
+  if (matchesMethod("uvm_phase_hopper::try_get") && args.size() >= 2) {
+    uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
+    uint64_t phaseAddr = 0;
+    bool hasPhase = false;
+    auto it = phaseHopperQueue.find(hopperAddr);
+    if (it != phaseHopperQueue.end() && !it->second.empty()) {
+      phaseAddr = it->second.front();
+      it->second.pop_front();
+      hasPhase = true;
+    }
+    writePointerToOutAddr(args[1], phaseAddr);
+    appendBoolResult(hasPhase);
+    noteUvmFastPathActionHit("func.body.phase_hopper.try_get");
+    return true;
+  }
+
+  if (matchesMethod("uvm_phase_hopper::try_peek") && args.size() >= 2) {
+    uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
+    uint64_t phaseAddr = 0;
+    bool hasPhase = false;
+    auto it = phaseHopperQueue.find(hopperAddr);
+    if (it != phaseHopperQueue.end() && !it->second.empty()) {
+      phaseAddr = it->second.front();
+      hasPhase = true;
+    }
+    writePointerToOutAddr(args[1], phaseAddr);
+    appendBoolResult(hasPhase);
+    noteUvmFastPathActionHit("func.body.phase_hopper.try_peek");
+    return true;
+  }
+
+  if (matchesMethod("uvm_phase_hopper::peek") && args.size() >= 2) {
+    uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
+    auto it = phaseHopperQueue.find(hopperAddr);
+    if (it != phaseHopperQueue.end() && !it->second.empty()) {
+      writePointerToOutAddr(args[1], it->second.front());
+      noteUvmFastPathActionHit("func.body.phase_hopper.peek");
+      return true;
+    }
+    if (!waitOnHopperData(hopperAddr))
+      return false;
+    noteUvmFastPathActionHit("func.body.phase_hopper.peek_retry");
+    return true;
+  }
+
+  if (matchesMethod("uvm_phase_hopper::get") && args.size() >= 2) {
+    uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
+    auto it = phaseHopperQueue.find(hopperAddr);
+    if (it != phaseHopperQueue.end() && !it->second.empty()) {
+      uint64_t phaseAddr = it->second.front();
+      it->second.pop_front();
+      writePointerToOutAddr(args[1], phaseAddr);
+      noteUvmFastPathActionHit("func.body.phase_hopper.get");
+      return true;
+    }
+    if (!waitOnHopperData(hopperAddr))
+      return false;
+    noteUvmFastPathActionHit("func.body.phase_hopper.get_retry");
+    return true;
+  }
+
+  return false;
+}
+
 bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     ProcessId procId, mlir::func::CallIndirectOp callIndirectOp,
     llvm::StringRef calleeName) {
@@ -206,6 +543,267 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
       setValue(procId, result, InterpretedValue(llvm::APInt::getZero(width)));
     }
   };
+
+  auto setCallIndirectResultInt = [&](Value result, uint64_t value) {
+    unsigned width = std::max(1u, getTypeWidth(result.getType()));
+    setValue(procId, result, InterpretedValue(llvm::APInt(width, value)));
+  };
+
+  auto readU64AtAddr = [&](uint64_t addr, uint64_t &out) -> bool {
+    uint64_t offset = 0;
+    MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
+    if (!block)
+      block = findBlockByAddress(addr, offset);
+    if (block && block->initialized && offset + 8 <= block->data.size()) {
+      out = 0;
+      for (unsigned i = 0; i < 8; ++i)
+        out |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+      return true;
+    }
+
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+        nativeOffset + 8 <= nativeSize) {
+      std::memcpy(&out, reinterpret_cast<void *>(addr), 8);
+      return true;
+    }
+    return false;
+  };
+
+  auto writeStringStructToRef = [&](Value outRef, uint64_t strPtr,
+                                    int64_t strLen) -> bool {
+    InterpretedValue refAddrVal = getValue(procId, outRef);
+    if (refAddrVal.isX())
+      return false;
+    uint64_t addr = refAddrVal.getUInt64();
+    if (!addr)
+      return false;
+
+    uint64_t offset = 0;
+    MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
+    if (!block)
+      block = findBlockByAddress(addr, offset);
+    if (block && offset + 16 <= block->data.size()) {
+      std::memcpy(block->data.data() + offset, &strPtr, 8);
+      std::memcpy(block->data.data() + offset + 8, &strLen, 8);
+      block->initialized = true;
+      return true;
+    }
+
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+        nativeOffset + 16 <= nativeSize) {
+      std::memcpy(reinterpret_cast<void *>(addr), &strPtr, 8);
+      std::memcpy(reinterpret_cast<void *>(addr + 8), &strLen, 8);
+      return true;
+    }
+    return false;
+  };
+
+  auto readPackedStringParts = [&](const InterpretedValue &strVal,
+                                   uint64_t &strPtr,
+                                   int64_t &strLen) -> bool {
+    strPtr = 0;
+    strLen = 0;
+    if (strVal.isX() || strVal.getWidth() < 128)
+      return false;
+    llvm::APInt bits = strVal.getAPInt();
+    strPtr = bits.extractBits(64, 0).getZExtValue();
+    strLen = bits.extractBits(64, 64).getSExtValue();
+    if (strLen < 0 || strLen > 4096)
+      return false;
+    return true;
+  };
+
+  auto readRefStringParts = [&](Value refArg, uint64_t &strPtr,
+                                int64_t &strLen) -> bool {
+    strPtr = 0;
+    strLen = 0;
+    InterpretedValue refAddrVal = getValue(procId, refArg);
+    if (refAddrVal.isX())
+      return false;
+    uint64_t refAddr = refAddrVal.getUInt64();
+    if (!refAddr)
+      return true;
+    uint64_t strLenBits = 0;
+    if (!readU64AtAddr(refAddr, strPtr) ||
+        !readU64AtAddr(refAddr + 8, strLenBits))
+      return false;
+    strLen = static_cast<int64_t>(strLenBits);
+    return strLen >= 0 && strLen <= 4096;
+  };
+
+  auto getComponentChildrenAssocAddr = [&](uint64_t selfAddr,
+                                           uint64_t &assocAddr) -> bool {
+    assocAddr = 0;
+    if (selfAddr < 0x1000)
+      return false;
+    constexpr uint64_t kChildrenOff = 95;
+    if (!readU64AtAddr(selfAddr + kChildrenOff, assocAddr))
+      return false;
+    if (assocAddr == 0)
+      return true;
+    return validAssocArrayAddresses.contains(assocAddr);
+  };
+
+  if (calleeName.contains("uvm_component::get_num_children") &&
+      callIndirectOp.getArgOperands().size() >= 1 &&
+      callIndirectOp.getNumResults() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callIndirectOp.getArgOperands()[0]);
+    if (selfVal.isX())
+      return false;
+    uint64_t assocAddr = 0;
+    if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
+      return false;
+
+    uint64_t count = 0;
+    if (assocAddr != 0)
+      count = static_cast<uint64_t>(
+          std::max<int64_t>(0, __moore_assoc_size(reinterpret_cast<void *>(assocAddr))));
+    setCallIndirectResultInt(callIndirectOp.getResult(0), count);
+    recordFastPathHit("call_indirect.component.get_num_children");
+    return true;
+  }
+
+  if (calleeName.contains("uvm_component::has_child") &&
+      callIndirectOp.getArgOperands().size() >= 2 &&
+      callIndirectOp.getNumResults() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callIndirectOp.getArgOperands()[0]);
+    if (selfVal.isX())
+      return false;
+    uint64_t assocAddr = 0;
+    if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
+      return false;
+    uint64_t keyPtr = 0;
+    int64_t keyLen = 0;
+    if (!readPackedStringParts(getValue(procId, callIndirectOp.getArgOperands()[1]),
+                               keyPtr, keyLen))
+      return false;
+
+    std::string keyStorage;
+    if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
+      return false;
+
+    bool exists = false;
+    if (assocAddr != 0) {
+      MooreString key{const_cast<char *>(keyStorage.data()),
+                      static_cast<int64_t>(keyStorage.size())};
+      exists = __moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key) != 0;
+    }
+    setCallIndirectResultInt(callIndirectOp.getResult(0), exists ? 1 : 0);
+    recordFastPathHit("call_indirect.component.has_child");
+    return true;
+  }
+
+  if (calleeName.contains("uvm_component::get_child") &&
+      callIndirectOp.getArgOperands().size() >= 2 &&
+      callIndirectOp.getNumResults() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callIndirectOp.getArgOperands()[0]);
+    if (selfVal.isX())
+      return false;
+    uint64_t assocAddr = 0;
+    if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
+      return false;
+    uint64_t keyPtr = 0;
+    int64_t keyLen = 0;
+    if (!readPackedStringParts(getValue(procId, callIndirectOp.getArgOperands()[1]),
+                               keyPtr, keyLen))
+      return false;
+
+    std::string keyStorage;
+    if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
+      return false;
+
+    uint64_t childAddr = 0;
+    if (assocAddr != 0) {
+      MooreString key{const_cast<char *>(keyStorage.data()),
+                      static_cast<int64_t>(keyStorage.size())};
+      if (__moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key)) {
+        void *ref = __moore_assoc_get_ref(reinterpret_cast<void *>(assocAddr), &key,
+                                          /*value_size=*/8);
+        if (ref)
+          std::memcpy(&childAddr, ref, 8);
+      }
+    }
+    setCallIndirectResultInt(callIndirectOp.getResult(0), childAddr);
+    recordFastPathHit("call_indirect.component.get_child");
+    return true;
+  }
+
+  if (calleeName.contains("uvm_component::get_first_child") &&
+      callIndirectOp.getArgOperands().size() >= 2 &&
+      callIndirectOp.getNumResults() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callIndirectOp.getArgOperands()[0]);
+    if (selfVal.isX())
+      return false;
+    uint64_t assocAddr = 0;
+    if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
+      return false;
+    if (assocAddr == 0) {
+      setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
+      recordFastPathHit("call_indirect.component.get_first_child_empty");
+      return true;
+    }
+
+    MooreString keyOut{nullptr, 0};
+    bool ok = __moore_assoc_first(reinterpret_cast<void *>(assocAddr), &keyOut);
+    if (!ok) {
+      setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
+      recordFastPathHit("call_indirect.component.get_first_child_empty");
+      return true;
+    }
+    if (keyOut.data && keyOut.len > 0)
+      dynamicStrings[reinterpret_cast<uint64_t>(keyOut.data)] = {keyOut.data, keyOut.len};
+    if (!writeStringStructToRef(callIndirectOp.getArgOperands()[1],
+                                reinterpret_cast<uint64_t>(keyOut.data),
+                                keyOut.len))
+      return false;
+
+    setCallIndirectResultInt(callIndirectOp.getResult(0), 1);
+    recordFastPathHit("call_indirect.component.get_first_child");
+    return true;
+  }
+
+  if (calleeName.contains("uvm_component::get_next_child") &&
+      callIndirectOp.getArgOperands().size() >= 2 &&
+      callIndirectOp.getNumResults() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callIndirectOp.getArgOperands()[0]);
+    if (selfVal.isX())
+      return false;
+    uint64_t assocAddr = 0;
+    if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
+      return false;
+    if (assocAddr == 0) {
+      setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
+      recordFastPathHit("call_indirect.component.get_next_child_end");
+      return true;
+    }
+
+    uint64_t curPtr = 0;
+    int64_t curLen = 0;
+    if (!readRefStringParts(callIndirectOp.getArgOperands()[1], curPtr, curLen))
+      return false;
+
+    MooreString keyRef{reinterpret_cast<char *>(curPtr), curLen};
+    bool ok = __moore_assoc_next(reinterpret_cast<void *>(assocAddr), &keyRef);
+    if (!ok) {
+      setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
+      recordFastPathHit("call_indirect.component.get_next_child_end");
+      return true;
+    }
+    if (keyRef.data && keyRef.len > 0)
+      dynamicStrings[reinterpret_cast<uint64_t>(keyRef.data)] = {keyRef.data, keyRef.len};
+    if (!writeStringStructToRef(callIndirectOp.getArgOperands()[1],
+                                reinterpret_cast<uint64_t>(keyRef.data),
+                                keyRef.len))
+      return false;
+
+    setCallIndirectResultInt(callIndirectOp.getResult(0), 1);
+    recordFastPathHit("call_indirect.component.get_next_child");
+    return true;
+  }
 
   // First-tier registry dispatch keyed by (call form, exact symbol).
   switch (lookupUvmFastPath(UvmFastPathCallForm::CallIndirect, calleeName)) {
@@ -579,6 +1177,270 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
   auto recordFastPathHit = [&](llvm::StringRef key) {
     noteUvmFastPathActionHit(key);
   };
+
+  auto setCallResultInt = [&](Value result, uint64_t value) {
+    unsigned width = std::max(1u, getTypeWidth(result.getType()));
+    setValue(procId, result, InterpretedValue(llvm::APInt(width, value)));
+  };
+
+  auto readU64AtAddr = [&](uint64_t addr, uint64_t &out) -> bool {
+    uint64_t offset = 0;
+    MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
+    if (!block)
+      block = findBlockByAddress(addr, offset);
+    if (block && block->initialized && offset + 8 <= block->data.size()) {
+      out = 0;
+      for (unsigned i = 0; i < 8; ++i)
+        out |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+      return true;
+    }
+
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+        nativeOffset + 8 <= nativeSize) {
+      std::memcpy(&out, reinterpret_cast<void *>(addr), 8);
+      return true;
+    }
+    return false;
+  };
+
+  auto writeStringStructToRef = [&](Value outRef, uint64_t strPtr,
+                                    int64_t strLen) -> bool {
+    InterpretedValue refAddrVal = getValue(procId, outRef);
+    if (refAddrVal.isX())
+      return false;
+    uint64_t addr = refAddrVal.getUInt64();
+    if (!addr)
+      return false;
+
+    uint64_t offset = 0;
+    MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
+    if (!block)
+      block = findBlockByAddress(addr, offset);
+    if (block && offset + 16 <= block->data.size()) {
+      std::memcpy(block->data.data() + offset, &strPtr, 8);
+      std::memcpy(block->data.data() + offset + 8, &strLen, 8);
+      block->initialized = true;
+      return true;
+    }
+
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+        nativeOffset + 16 <= nativeSize) {
+      std::memcpy(reinterpret_cast<void *>(addr), &strPtr, 8);
+      std::memcpy(reinterpret_cast<void *>(addr + 8), &strLen, 8);
+      return true;
+    }
+    return false;
+  };
+
+  auto readPackedStringParts = [&](const InterpretedValue &strVal,
+                                   uint64_t &strPtr,
+                                   int64_t &strLen) -> bool {
+    strPtr = 0;
+    strLen = 0;
+    if (strVal.isX() || strVal.getWidth() < 128)
+      return false;
+    llvm::APInt bits = strVal.getAPInt();
+    strPtr = bits.extractBits(64, 0).getZExtValue();
+    strLen = bits.extractBits(64, 64).getSExtValue();
+    if (strLen < 0 || strLen > 4096)
+      return false;
+    return true;
+  };
+
+  auto readRefStringParts = [&](Value refArg, uint64_t &strPtr,
+                                int64_t &strLen) -> bool {
+    strPtr = 0;
+    strLen = 0;
+    InterpretedValue refAddrVal = getValue(procId, refArg);
+    if (refAddrVal.isX())
+      return false;
+    uint64_t refAddr = refAddrVal.getUInt64();
+    if (!refAddr)
+      return true;
+    uint64_t strLenBits = 0;
+    if (!readU64AtAddr(refAddr, strPtr) ||
+        !readU64AtAddr(refAddr + 8, strLenBits))
+      return false;
+    strLen = static_cast<int64_t>(strLenBits);
+    return strLen >= 0 && strLen <= 4096;
+  };
+
+  auto getComponentChildrenAssocAddr = [&](uint64_t selfAddr,
+                                           uint64_t &assocAddr) -> bool {
+    assocAddr = 0;
+    if (selfAddr < 0x1000)
+      return false;
+    // uvm_component::m_children (field[10]) in packed layout.
+    constexpr uint64_t kChildrenOff = 95;
+    if (!readU64AtAddr(selfAddr + kChildrenOff, assocAddr))
+      return false;
+    if (assocAddr == 0)
+      return true;
+    return validAssocArrayAddresses.contains(assocAddr);
+  };
+
+  if (calleeName.contains("uvm_component::get_num_children") &&
+      callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+    if (selfVal.isX())
+      return false;
+    uint64_t selfAddr = selfVal.getUInt64();
+    uint64_t assocAddr = 0;
+    if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
+      return false;
+
+    uint64_t count = 0;
+    if (assocAddr != 0)
+      count = static_cast<uint64_t>(
+          std::max<int64_t>(0, __moore_assoc_size(reinterpret_cast<void *>(assocAddr))));
+    setCallResultInt(callOp.getResult(0), count);
+    recordFastPathHit("func.call.component.get_num_children");
+    return true;
+  }
+
+  if (calleeName.contains("uvm_component::has_child") &&
+      callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+    if (selfVal.isX())
+      return false;
+    uint64_t selfAddr = selfVal.getUInt64();
+    uint64_t assocAddr = 0;
+    if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
+      return false;
+    uint64_t keyPtr = 0;
+    int64_t keyLen = 0;
+    if (!readPackedStringParts(getValue(procId, callOp.getOperand(1)), keyPtr,
+                               keyLen))
+      return false;
+
+    std::string keyStorage;
+    if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
+      return false;
+
+    bool exists = false;
+    if (assocAddr != 0) {
+      MooreString key{const_cast<char *>(keyStorage.data()),
+                      static_cast<int64_t>(keyStorage.size())};
+      exists = __moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key) != 0;
+    }
+    setCallResultInt(callOp.getResult(0), exists ? 1 : 0);
+    recordFastPathHit("func.call.component.has_child");
+    return true;
+  }
+
+  if (calleeName.contains("uvm_component::get_child") &&
+      callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+    if (selfVal.isX())
+      return false;
+    uint64_t selfAddr = selfVal.getUInt64();
+    uint64_t assocAddr = 0;
+    if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
+      return false;
+    uint64_t keyPtr = 0;
+    int64_t keyLen = 0;
+    if (!readPackedStringParts(getValue(procId, callOp.getOperand(1)), keyPtr,
+                               keyLen))
+      return false;
+
+    std::string keyStorage;
+    if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
+      return false;
+
+    uint64_t childAddr = 0;
+    if (assocAddr != 0) {
+      MooreString key{const_cast<char *>(keyStorage.data()),
+                      static_cast<int64_t>(keyStorage.size())};
+      if (__moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key)) {
+        void *ref = __moore_assoc_get_ref(reinterpret_cast<void *>(assocAddr), &key,
+                                          /*value_size=*/8);
+        if (ref)
+          std::memcpy(&childAddr, ref, 8);
+      }
+    }
+
+    setCallResultInt(callOp.getResult(0), childAddr);
+    recordFastPathHit("func.call.component.get_child");
+    return true;
+  }
+
+  if (calleeName.contains("uvm_component::get_first_child") &&
+      callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+    if (selfVal.isX())
+      return false;
+    uint64_t selfAddr = selfVal.getUInt64();
+    uint64_t assocAddr = 0;
+    if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
+      return false;
+
+    if (assocAddr == 0) {
+      setCallResultInt(callOp.getResult(0), 0);
+      recordFastPathHit("func.call.component.get_first_child_empty");
+      return true;
+    }
+
+    MooreString keyOut{nullptr, 0};
+    bool ok = __moore_assoc_first(reinterpret_cast<void *>(assocAddr), &keyOut);
+    if (!ok) {
+      setCallResultInt(callOp.getResult(0), 0);
+      recordFastPathHit("func.call.component.get_first_child_empty");
+      return true;
+    }
+    if (keyOut.data && keyOut.len > 0)
+      dynamicStrings[reinterpret_cast<uint64_t>(keyOut.data)] = {keyOut.data, keyOut.len};
+    if (!writeStringStructToRef(callOp.getOperand(1),
+                                reinterpret_cast<uint64_t>(keyOut.data),
+                                keyOut.len))
+      return false;
+
+    setCallResultInt(callOp.getResult(0), ok ? 1 : 0);
+    recordFastPathHit("func.call.component.get_first_child");
+    return true;
+  }
+
+  if (calleeName.contains("uvm_component::get_next_child") &&
+      callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+    if (selfVal.isX())
+      return false;
+    uint64_t selfAddr = selfVal.getUInt64();
+    uint64_t assocAddr = 0;
+    if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
+      return false;
+    if (assocAddr == 0) {
+      setCallResultInt(callOp.getResult(0), 0);
+      recordFastPathHit("func.call.component.get_next_child_end");
+      return true;
+    }
+
+    uint64_t curPtr = 0;
+    int64_t curLen = 0;
+    if (!readRefStringParts(callOp.getOperand(1), curPtr, curLen))
+      return false;
+
+    MooreString keyRef{reinterpret_cast<char *>(curPtr), curLen};
+    bool ok = __moore_assoc_next(reinterpret_cast<void *>(assocAddr), &keyRef);
+    if (!ok) {
+      setCallResultInt(callOp.getResult(0), 0);
+      recordFastPathHit("func.call.component.get_next_child_end");
+      return true;
+    }
+    if (keyRef.data && keyRef.len > 0)
+      dynamicStrings[reinterpret_cast<uint64_t>(keyRef.data)] = {keyRef.data, keyRef.len};
+    if (!writeStringStructToRef(callOp.getOperand(1),
+                                reinterpret_cast<uint64_t>(keyRef.data),
+                                keyRef.len))
+      return false;
+
+    setCallResultInt(callOp.getResult(0), ok ? 1 : 0);
+    recordFastPathHit("func.call.component.get_next_child");
+    return true;
+  }
 
   // First-tier registry dispatch keyed by (call form, exact symbol).
   switch (lookupUvmFastPath(UvmFastPathCallForm::FuncCall, calleeName)) {
