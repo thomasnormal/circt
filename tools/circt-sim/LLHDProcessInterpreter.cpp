@@ -79,6 +79,16 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
     return false;
   if (isa<sim::PrintFormattedProcOp>(op))
     return true;
+  if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
+    auto callee = callOp.getCallee();
+    if (!callee)
+      return false;
+    llvm::StringRef calleeName = *callee;
+    if (calleeName == "__moore_process_self" ||
+        calleeName == "__moore_packed_string_to_string")
+      return true;
+    return false;
+  }
   if (isa<LLVM::StoreOp>(op))
     return true;
   if (op->getNumResults() == 0)
@@ -94,6 +104,16 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
           mlir::cf::CondBranchOp>(op))
     return false;
   return mlir::isMemoryEffectFree(op);
+}
+
+static std::string formatUnsupportedProcessOpDetail(Operation &op) {
+  if (auto llvmCall = dyn_cast<LLVM::CallOp>(op)) {
+    if (auto callee = llvmCall.getCallee())
+      return (Twine("first_op:llvm.call:") + *callee).str();
+  }
+  if (auto funcCall = dyn_cast<mlir::func::CallOp>(op))
+    return (Twine("first_op:func.call:") + funcCall.getCallee()).str();
+  return (Twine("first_op:") + op.getName().getStringRef()).str();
 }
 
 static const Region *
@@ -6241,7 +6261,7 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
           for (auto it = singleBlock.begin(), e = std::prev(singleBlock.end());
                it != e; ++it) {
             if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
-              return (Twine("first_op:") + it->getName().getStringRef()).str();
+              return formatUnsupportedProcessOpDetail(*it);
           }
         }
       }
@@ -6262,7 +6282,7 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
     }
     for (Block &block : body) {
       for (Operation &op : block)
-        return (Twine("first_op:") + op.getName().getStringRef()).str();
+        return formatUnsupportedProcessOpDetail(op);
     }
     return "process_empty";
   }

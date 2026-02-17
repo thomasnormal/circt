@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1459 - February 17, 2026
+
+### circt-sim: Process-Self Call Coverage and Call-Targeted Deopt Detail
+
+1. Extended one-block terminating process/fork-child thunk prelude support with
+   a narrow non-suspending LLVM-call whitelist:
+   - `llvm.call @__moore_process_self`
+   - `llvm.call @__moore_packed_string_to_string`
+2. Refined unsupported-operation detail emission to include direct call targets:
+   - `llvm.call` details now emit as `first_op:llvm.call:<callee>`.
+   - `func.call` details now emit as `first_op:func.call:<callee>`.
+3. Added regression:
+   - `test/Tools/circt-sim/jit-process-thunk-llvm-call-process-self-halt.mlir`
+4. Updated strict unsupported regression to assert the new call-target detail:
+   - `jit-process-thunk-llvm-call-delay-unsupported` now expects
+     `first_op:llvm.call:__moore_delay`.
+5. Validation:
+   - `CCACHE_DISABLE=1 ninja -C build-test circt-sim -k 0` PASS
+   - targeted runline-equivalent bundle PASS:
+     - `jit-process-thunk-llvm-call-process-self-halt`
+     - `jit-process-thunk-alloca-gep-load-store-halt`
+     - `jit-process-thunk-fork-branch-alloca-gep-load-store-terminator`
+     - `jit-process-thunk-llvm-call-delay-unsupported`
+     - `jit-process-thunk-insertvalue-halt`
+     - `jit-process-thunk-fork-branch-insertvalue-terminator`
+   - bounded AVIP explicit-JIT profile:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=180 MAX_WALL_MS=180000 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=-1' utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-jit-report-explicit-20260217-h1`
+     - result: compile `OK` (27s), sim `OK` (80s).
+   - deopt triage shift after `__moore_process_self` coverage:
+     - previous dominant:
+       `unsupported_operation:first_op:llvm.call:__moore_process_self` = 79
+     - new dominant:
+       `unsupported_operation:first_op:func.call_indirect` = 90
+     - `first_op:llvm.getelementptr` remains 45.
+
 ## Iteration 1457 - February 17, 2026
 
 ### circt-sim: JIT Deopt Triage Precision + Safe LLVM Stack Prelude Coverage
