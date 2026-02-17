@@ -210,6 +210,154 @@ static unsigned writeConfigDbBytesToMemoryBlock(
   return maxWritable;
 }
 
+namespace {
+
+struct InterfaceTriStateStorePattern {
+  uint64_t condAddr = 0;
+  uint64_t srcAddr = 0;
+  unsigned condBitIndex = 0;
+  Value elseValue;
+};
+
+static bool hasSingleFieldIndex(ArrayRef<int64_t> pos, unsigned idx) {
+  return pos.size() == 1 && pos.front() == static_cast<int64_t>(idx);
+}
+
+template <typename ResolveAddrFn>
+static bool matchFourStateCopyStore(Value storeValue, ResolveAddrFn &&resolveAddr,
+                                    uint64_t &srcAddr) {
+  srcAddr = 0;
+
+  if (auto loadOp = storeValue.getDefiningOp<LLVM::LoadOp>()) {
+    srcAddr = resolveAddr(loadOp.getAddr());
+    return srcAddr != 0;
+  }
+
+  auto insertUnknown = storeValue.getDefiningOp<LLVM::InsertValueOp>();
+  if (!insertUnknown || !hasSingleFieldIndex(insertUnknown.getPosition(), 1))
+    return false;
+  auto insertValue =
+      insertUnknown.getContainer().getDefiningOp<LLVM::InsertValueOp>();
+  if (!insertValue || !hasSingleFieldIndex(insertValue.getPosition(), 0))
+    return false;
+
+  auto valueExtract = insertValue.getValue().getDefiningOp<LLVM::ExtractValueOp>();
+  auto unknownExtract =
+      insertUnknown.getValue().getDefiningOp<LLVM::ExtractValueOp>();
+  if (!valueExtract || !unknownExtract)
+    return false;
+  if (!hasSingleFieldIndex(valueExtract.getPosition(), 0) ||
+      !hasSingleFieldIndex(unknownExtract.getPosition(), 1))
+    return false;
+  if (valueExtract.getContainer() != unknownExtract.getContainer())
+    return false;
+
+  auto srcLoad = valueExtract.getContainer().getDefiningOp<LLVM::LoadOp>();
+  if (!srcLoad)
+    return false;
+  srcAddr = resolveAddr(srcLoad.getAddr());
+  return srcAddr != 0;
+}
+
+template <typename ResolveAddrFn>
+static bool matchFourStateStructCreateLoad(Value value,
+                                           ResolveAddrFn &&resolveAddr,
+                                           uint64_t &srcAddr) {
+  srcAddr = 0;
+  auto createOp = value.getDefiningOp<hw::StructCreateOp>();
+  if (!createOp || createOp.getNumOperands() != 2)
+    return false;
+
+  auto valueExtract =
+      createOp.getOperand(0).getDefiningOp<LLVM::ExtractValueOp>();
+  auto unknownExtract =
+      createOp.getOperand(1).getDefiningOp<LLVM::ExtractValueOp>();
+  if (!valueExtract || !unknownExtract)
+    return false;
+  if (!hasSingleFieldIndex(valueExtract.getPosition(), 0) ||
+      !hasSingleFieldIndex(unknownExtract.getPosition(), 1))
+    return false;
+  if (valueExtract.getContainer() != unknownExtract.getContainer())
+    return false;
+
+  auto srcLoad = valueExtract.getContainer().getDefiningOp<LLVM::LoadOp>();
+  if (!srcLoad)
+    return false;
+  srcAddr = resolveAddr(srcLoad.getAddr());
+  return srcAddr != 0;
+}
+
+template <typename ResolveAddrFn>
+static bool matchInterfaceTriStateStore(Value storeValue,
+                                        ResolveAddrFn &&resolveAddr,
+                                        InterfaceTriStateStorePattern &pattern) {
+  pattern = InterfaceTriStateStorePattern{};
+
+  auto insertUnknown = storeValue.getDefiningOp<LLVM::InsertValueOp>();
+  if (!insertUnknown || !hasSingleFieldIndex(insertUnknown.getPosition(), 1))
+    return false;
+  auto insertValue =
+      insertUnknown.getContainer().getDefiningOp<LLVM::InsertValueOp>();
+  if (!insertValue || !hasSingleFieldIndex(insertValue.getPosition(), 0))
+    return false;
+
+  auto valueExtract =
+      insertValue.getValue().getDefiningOp<hw::StructExtractOp>();
+  auto unknownExtract =
+      insertUnknown.getValue().getDefiningOp<hw::StructExtractOp>();
+  if (!valueExtract || !unknownExtract)
+    return false;
+  if (valueExtract.getFieldName() != "value" ||
+      unknownExtract.getFieldName() != "unknown")
+    return false;
+  if (valueExtract.getInput() != unknownExtract.getInput())
+    return false;
+
+  auto ifOp = valueExtract.getInput().getDefiningOp<scf::IfOp>();
+  if (!ifOp)
+    return false;
+
+  Value condValue = ifOp.getCondition();
+  if (auto condExtract = condValue.getDefiningOp<LLVM::ExtractValueOp>()) {
+    if (!hasSingleFieldIndex(condExtract.getPosition(), 0))
+      return false;
+    auto condLoad = condExtract.getContainer().getDefiningOp<LLVM::LoadOp>();
+    if (!condLoad)
+      return false;
+    pattern.condAddr = resolveAddr(condLoad.getAddr());
+    pattern.condBitIndex = 0;
+  } else if (auto condLoad = condValue.getDefiningOp<LLVM::LoadOp>()) {
+    pattern.condAddr = resolveAddr(condLoad.getAddr());
+    pattern.condBitIndex = 0;
+  } else {
+    return false;
+  }
+  if (pattern.condAddr == 0)
+    return false;
+
+  auto thenYield =
+      dyn_cast<scf::YieldOp>(ifOp.getThenRegion().front().getTerminator());
+  auto elseYield =
+      dyn_cast<scf::YieldOp>(ifOp.getElseRegion().front().getTerminator());
+  if (!thenYield || !elseYield || thenYield.getNumOperands() != 1 ||
+      elseYield.getNumOperands() != 1)
+    return false;
+
+  uint64_t srcAddr = 0;
+  if (!matchFourStateStructCreateLoad(thenYield.getOperand(0), resolveAddr,
+                                      srcAddr) &&
+      !matchFourStateCopyStore(thenYield.getOperand(0), resolveAddr, srcAddr))
+    return false;
+  if (srcAddr == 0)
+    return false;
+
+  pattern.srcAddr = srcAddr;
+  pattern.elseValue = elseYield.getOperand(0);
+  return true;
+}
+
+} // namespace
+
 // Compute a native UVM port connection count by traversing the interpreter's
 // port connection graph and counting terminal providers.
 static int32_t getNativeUvmPortSize(
@@ -297,6 +445,8 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
       envFlagEnabled("CIRCT_SIM_UVM_JIT_TRACE_PROMOTIONS");
   profileSummaryAtExitEnabled =
       std::getenv("CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT") != nullptr;
+  disableFuncResultCache =
+      envFlagEnabled("CIRCT_SIM_DISABLE_FUNC_RESULT_CACHE");
   forceJitThunkDeoptRequests =
       envFlagEnabled("CIRCT_SIM_JIT_FORCE_DEOPT_REQUEST");
   memorySampleIntervalSteps = envUint64Value(
@@ -582,6 +732,11 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
        << " steps=" << state.totalSteps;
     if (state.lastOp)
       os << " lastOp=" << state.lastOp->getName().getStringRef();
+    if (auto funcCall = dyn_cast_or_null<func::CallOp>(state.lastOp))
+      os << "(" << funcCall.getCallee() << ")";
+    if (auto llvmCall = dyn_cast_or_null<LLVM::CallOp>(state.lastOp))
+      if (auto callee = llvmCall.getCallee())
+        os << "(" << *callee << ")";
     if (!state.currentFuncName.empty())
       os << " func=" << state.currentFuncName;
     if (!state.callStack.empty()) {
@@ -606,6 +761,18 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
     });
     for (size_t i = 0; i < std::min(sorted.size(), (size_t)30); ++i)
       os << "  " << sorted[i].second << "x " << sorted[i].first << "\n";
+
+    auto dumpFuncCount = [&](llvm::StringRef name) {
+      auto it = funcCallProfile.find(name);
+      if (it != funcCallProfile.end())
+        os << "  [func-count] " << name << " = " << it->second << "\n";
+    };
+    dumpFuncCount("uvm_pkg::uvm_phase_hopper::run_phases");
+    dumpFuncCount("uvm_pkg::uvm_phase_hopper::schedule_phase");
+    dumpFuncCount("uvm_pkg::uvm_phase_hopper::try_put");
+    dumpFuncCount("uvm_pkg::uvm_phase_hopper::get");
+    dumpFuncCount("uvm_pkg::uvm_phase_hopper::wait_for_objection");
+    dumpFuncCount("uvm_pkg::uvm_phase_hopper::process_phase");
   }
 
   if (profilingEnabled && !uvmFastPathProfile.empty()) {
@@ -1584,7 +1751,8 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Signals that receive intra-interface links are tracked so that forward
   // propagation cascading is only applied to them (avoiding double-propagation
   // for normal BFM fields that already have reverse propagation handlers).
-  llvm::DenseSet<SignalId> intraLinkedSignals;
+  // NOTE: do NOT clear intraLinkedSignals here — this function may be called
+  // once per top module, and links from the first pass must persist.
   if (!childToParentFieldAddr.empty() && !interfaceFieldPropagation.empty()) {
     // Collect interface fields that are destinations of cross-block copies
     // but have no forward propagation children of their own.
@@ -1809,6 +1977,75 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
     if (intraLinks > 0 && traceInterfacePropagation) {
       llvm::errs() << "[circt-sim] Added " << intraLinks
                    << " intra-interface field propagation links\n";
+    }
+  }
+
+  // Resolve address-based tri-state candidates to signal-based runtime rules.
+  if (!interfaceTriStateCandidates.empty() && !interfaceFieldSignals.empty()) {
+    unsigned installed = 0;
+    unsigned unresolved = 0;
+    for (const auto &cand : interfaceTriStateCandidates) {
+      auto condIt = interfaceFieldSignals.find(cand.condAddr);
+      auto srcIt = interfaceFieldSignals.find(cand.srcAddr);
+      auto destIt = interfaceFieldSignals.find(cand.destAddr);
+      if (condIt == interfaceFieldSignals.end() ||
+          srcIt == interfaceFieldSignals.end() ||
+          destIt == interfaceFieldSignals.end()) {
+        ++unresolved;
+        continue;
+      }
+
+      InterfaceTriStateRule rule;
+      rule.condSigId = condIt->second;
+      rule.srcSigId = srcIt->second;
+      rule.destSigId = destIt->second;
+      rule.condBitIndex = cand.condBitIndex;
+      rule.elseValue = cand.elseValue;
+
+      bool duplicate = false;
+      for (const auto &existing : interfaceTriStateRules) {
+        bool elseMatch = false;
+        if (existing.elseValue.isX() && rule.elseValue.isX()) {
+          elseMatch = true;
+        } else if (!existing.elseValue.isX() && !rule.elseValue.isX() &&
+                   existing.elseValue.getAPInt() == rule.elseValue.getAPInt()) {
+          elseMatch = true;
+        }
+        if (existing.condSigId == rule.condSigId &&
+            existing.srcSigId == rule.srcSigId &&
+            existing.destSigId == rule.destSigId &&
+            existing.condBitIndex == rule.condBitIndex && elseMatch) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (duplicate)
+        continue;
+
+      unsigned ruleIndex = interfaceTriStateRules.size();
+      interfaceTriStateRules.push_back(rule);
+      interfaceTriStateRulesBySource[rule.srcSigId].push_back(ruleIndex);
+      if (rule.condSigId != rule.srcSigId)
+        interfaceTriStateRulesBySource[rule.condSigId].push_back(ruleIndex);
+      ++installed;
+
+      if (traceInterfacePropagation) {
+        llvm::errs()
+            << "[circt-sim] TriState rule: cond=" << rule.condSigId
+            << " src=" << rule.srcSigId << " dest=" << rule.destSigId
+            << " condBit=" << rule.condBitIndex << " else=0x"
+            << llvm::format_hex(rule.elseValue.isX() ? 0ULL
+                                                      : rule.elseValue.getUInt64(),
+                                10)
+            << "\n";
+      }
+    }
+    if (traceInterfacePropagation) {
+      llvm::errs() << "[circt-sim] TriState candidates: "
+                   << interfaceTriStateCandidates.size()
+                   << ", installed=" << installed
+                   << ", unresolved=" << unresolved
+                   << ", total_rules=" << interfaceTriStateRules.size() << "\n";
     }
   }
 
@@ -2512,6 +2749,29 @@ LogicalResult LLHDProcessInterpreter::registerSignals(
                                   << "' with ID " << sigId << " (width=" << width
                                   << ")\n");
         }
+      }
+    }
+  }
+
+  // Map non-ref-type port block arguments to pre-registered port signals.
+  // For modules compiled with four-state encoding, ports have types like
+  // !hw.struct<value: iN, unknown: iN> instead of !llhd.ref.  The simulation
+  // context registers these signals before calling initialize(), so we use
+  // the externally-provided name→SignalId map to populate valueToSignal.
+  if (externalPortSignals) {
+    auto &body = hwModule.getBody();
+    if (!body.empty()) {
+      for (auto portInfo : hwModule.getPortList()) {
+        if (isa<llhd::RefType>(portInfo.type))
+          continue; // Already handled above
+        auto it = externalPortSignals->find(portInfo.getName());
+        if (it == externalPortSignals->end())
+          continue;
+        Value arg = body.getArgument(portInfo.argNum);
+        valueToSignal[arg] = it->second;
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Mapped external port signal '" << portInfo.getName()
+                   << "' block arg to signal ID " << it->second << "\n");
       }
     }
   }
@@ -4362,6 +4622,77 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
       if (auto result = dyn_cast<OpResult>(current)) {
         if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
+          // Try inline combinational evaluation first. For processes that
+          // are purely combinational pass-throughs (probe → compute → yield),
+          // evaluate the yield expression using current signal values rather
+          // than reading the stale process valueMap. This is critical for
+          // modules like tlul_rsp_intg_gen where the process introduces a
+          // delta delay that prevents correct combinational evaluation.
+          //
+          // Skip if we're already evaluating this process (cycle detection).
+          if (!continuousEvalVisitedProcesses.count(
+                  processOp.getOperation())) {
+            unsigned resultIdx = result.getResultNumber();
+            // Use cached WaitOp lookup (avoid walking process body each time).
+            auto cacheIt =
+                processInlineYieldCache.find(processOp.getOperation());
+            llhd::WaitOp yieldWaitOp = nullptr;
+            if (cacheIt != processInlineYieldCache.end()) {
+              if (cacheIt->second)
+                yieldWaitOp = cast<llhd::WaitOp>(cacheIt->second);
+            } else {
+              processOp.walk([&](llhd::WaitOp op) {
+                if (!op.getYieldOperands().empty())
+                  yieldWaitOp = op;
+              });
+              processInlineYieldCache[processOp.getOperation()] =
+                  yieldWaitOp ? yieldWaitOp.getOperation() : nullptr;
+            }
+            if (yieldWaitOp &&
+                resultIdx < yieldWaitOp.getYieldOperands().size()) {
+              Value yieldValue = yieldWaitOp.getYieldOperands()[resultIdx];
+              Block *yieldBlock = yieldWaitOp->getBlock();
+              Block *reprobeBlock = yieldWaitOp.getDest();
+              if (yieldBlock && reprobeBlock &&
+                  yieldBlock->getNumArguments() > 0) {
+                auto *terminator = reprobeBlock->getTerminator();
+                auto brOp = dyn_cast<mlir::cf::BranchOp>(terminator);
+                if (brOp && brOp.getDest() == yieldBlock &&
+                    brOp.getDestOperands().size() ==
+                        yieldBlock->getNumArguments()) {
+                  // Map yield block args → reprobe block branch operands.
+                  llvm::DenseMap<Value, Value> savedInputMap;
+                  for (unsigned i = 0; i < yieldBlock->getNumArguments();
+                       ++i) {
+                    BlockArgument arg = yieldBlock->getArgument(i);
+                    Value reprobeVal = brOp.getDestOperands()[i];
+                    auto existing = inputValueMap.find(arg);
+                    if (existing != inputValueMap.end())
+                      savedInputMap[arg] = existing->second;
+                    inputValueMap[arg] = reprobeVal;
+                  }
+                  continuousEvalVisitedProcesses.insert(
+                      processOp.getOperation());
+                  auto cleanup = llvm::make_scope_exit([&]() {
+                    continuousEvalVisitedProcesses.erase(
+                        processOp.getOperation());
+                    for (unsigned i = 0; i < yieldBlock->getNumArguments();
+                         ++i) {
+                      BlockArgument arg = yieldBlock->getArgument(i);
+                      auto saved = savedInputMap.find(arg);
+                      if (saved != savedInputMap.end())
+                        inputValueMap[arg] = saved->second;
+                      else
+                        inputValueMap.erase(arg);
+                    }
+                  });
+                  finish(evaluateContinuousValue(yieldValue));
+                  continue;
+                }
+              }
+            }
+          }
+
           ProcessId procId = InvalidProcessId;
           if (activeInstanceId != 0) {
             auto ctxIt = instanceOpToProcessId.find(activeInstanceId);
@@ -5572,8 +5903,15 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
   if (!jitCompileManager)
     return ProcessThunkInstallResult::MissingThunk;
 
-  if (!jitCompileManager->shouldAttemptProcessCompile(procId))
+  auto compileAttempt =
+      jitCompileManager->classifyProcessCompileAttempt(procId);
+  if (compileAttempt != JITCompileManager::CompileAttemptDecision::Proceed) {
+    if (deoptDetail)
+      *deoptDetail =
+          JITCompileManager::getCompileAttemptDecisionName(compileAttempt)
+              .str();
     return ProcessThunkInstallResult::MissingThunk;
+  }
 
   PeriodicToggleClockThunkSpec periodicSpec;
   bool isPeriodicToggleClock =
@@ -5592,8 +5930,11 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
                                                              &thunkState) {
         executeTrivialNativeThunk(procId, thunkState);
       });
-  if (!installed)
+  if (!installed) {
+    if (deoptDetail)
+      *deoptDetail = "install_failed";
     return ProcessThunkInstallResult::MissingThunk;
+  }
 
   if (isPeriodicToggleClock)
     periodicToggleClockThunkSpecs[procId] = std::move(periodicSpec);
@@ -6917,6 +7258,111 @@ void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
         for (unsigned i = 0; i < storeSize; ++i)
           block->data[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
       }
+    }
+  }
+}
+
+void LLHDProcessInterpreter::applyInterfaceTriStateRules(SignalId triggerSigId) {
+  if (interfaceTriStateRulesBySource.empty())
+    return;
+
+  auto normalizeForSignal = [&](InterpretedValue value,
+                                SignalId sigId) -> InterpretedValue {
+    const SignalValue &current = scheduler.getSignalValue(sigId);
+    unsigned width = current.getWidth();
+    if (value.isX())
+      return InterpretedValue::makeX(width);
+    if (value.getWidth() == width)
+      return value;
+    APInt ap = value.getAPInt();
+    if (ap.getBitWidth() < width)
+      ap = ap.zext(width);
+    else if (ap.getBitWidth() > width)
+      ap = ap.trunc(width);
+    return InterpretedValue(ap);
+  };
+
+  auto getSignalValue = [&](SignalId sigId) -> InterpretedValue {
+    auto pendingIt = pendingEpsilonDrives.find(sigId);
+    if (pendingIt != pendingEpsilonDrives.end())
+      return pendingIt->second;
+    return InterpretedValue::fromSignalValue(scheduler.getSignalValue(sigId));
+  };
+
+  auto driveSignalAndMemory = [&](SignalId sigId,
+                                  InterpretedValue value) -> bool {
+    value = normalizeForSignal(value, sigId);
+    const SignalValue &current = scheduler.getSignalValue(sigId);
+    SignalValue newSig = value.toSignalValue();
+    if (current == newSig)
+      return false;
+
+    pendingEpsilonDrives[sigId] = value;
+    scheduler.updateSignal(sigId, newSig);
+
+    auto addrIt = fieldSignalToAddr.find(sigId);
+    if (addrIt != fieldSignalToAddr.end()) {
+      uint64_t addr = addrIt->second;
+      uint64_t off = 0;
+      MemoryBlock *block = findBlockByAddress(addr, off);
+      unsigned width = scheduler.getSignalValue(sigId).getWidth();
+      unsigned storeSize = (width + 7) / 8;
+      if (block && off + storeSize <= block->size) {
+        if (!value.isX()) {
+          APInt bits = value.getAPInt();
+          if (bits.getBitWidth() < storeSize * 8)
+            bits = bits.zext(storeSize * 8);
+          else if (bits.getBitWidth() > storeSize * 8)
+            bits = bits.trunc(storeSize * 8);
+          for (unsigned i = 0; i < storeSize; ++i)
+            block->data[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
+          block->initialized = true;
+        }
+      }
+    }
+    return true;
+  };
+
+  llvm::SmallVector<SignalId, 8> worklist;
+  llvm::DenseSet<SignalId> queued;
+  worklist.push_back(triggerSigId);
+  queued.insert(triggerSigId);
+
+  unsigned iterations = 0;
+  constexpr unsigned kMaxTriStateIterations = 64;
+  while (!worklist.empty() && iterations++ < kMaxTriStateIterations) {
+    SignalId sourceSig = worklist.pop_back_val();
+    auto ruleIt = interfaceTriStateRulesBySource.find(sourceSig);
+    if (ruleIt == interfaceTriStateRulesBySource.end())
+      continue;
+
+    for (unsigned ruleIndex : ruleIt->second) {
+      if (ruleIndex >= interfaceTriStateRules.size())
+        continue;
+      const InterfaceTriStateRule &rule = interfaceTriStateRules[ruleIndex];
+      InterpretedValue condVal = getSignalValue(rule.condSigId);
+      bool condTrue = false;
+      if (!condVal.isX() && rule.condBitIndex < condVal.getWidth()) {
+        APInt bits = condVal.getAPInt();
+        condTrue = bits[rule.condBitIndex];
+      }
+
+      InterpretedValue selectedVal =
+          condTrue ? getSignalValue(rule.srcSigId) : rule.elseValue;
+
+      if (!driveSignalAndMemory(rule.destSigId, selectedVal))
+        continue;
+
+      // Preserve existing copy propagation semantics for one-hop children.
+      auto propIt = interfaceFieldPropagation.find(rule.destSigId);
+      if (propIt != interfaceFieldPropagation.end()) {
+        InterpretedValue destVal = getSignalValue(rule.destSigId);
+        for (SignalId childSigId : propIt->second)
+          (void)driveSignalAndMemory(childSigId, destVal);
+      }
+
+      if (queued.insert(rule.destSigId).second)
+        worklist.push_back(rule.destSigId);
     }
   }
 }
@@ -9263,6 +9709,17 @@ arith_dispatch:
     if (profilingEnabled)
       ++funcCallProfile[calleeName];
 
+    if (calleeName.contains("uvm_component::set_domain")) {
+      auto &cacheState = processStates[procId];
+      if (!cacheState.funcResultCache.empty()) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  call_indirect: invalidating func result cache ("
+                   << cacheState.funcResultCache.size()
+                   << " functions cached) due to component::set_domain\n");
+        cacheState.funcResultCache.clear();
+      }
+    }
+
     // Runtime vtable override for the direct resolution path.
     // When the static function address maps to a base-class method, check
     // the self object's actual runtime vtable and resolve to the derived
@@ -9966,6 +10423,9 @@ arith_dispatch:
         phaseAddr = it->second.front();
         it->second.pop_front();
         hasPhase = true;
+        auto handleIt = phaseObjectionHandles.find(hopperAddr);
+        if (handleIt != phaseObjectionHandles.end())
+          dropPhaseObjection(handleIt->second, 1);
       }
       writePointerToOutRef(callIndirectOp.getArgOperands()[1], phaseAddr);
       unsigned width = getTypeWidth(callIndirectOp.getResult(0).getType());
@@ -10008,6 +10468,9 @@ arith_dispatch:
       if (it != phaseHopperQueue.end() && !it->second.empty()) {
         uint64_t phaseAddr = it->second.front();
         it->second.pop_front();
+        auto handleIt = phaseObjectionHandles.find(hopperAddr);
+        if (handleIt != phaseObjectionHandles.end())
+          dropPhaseObjection(handleIt->second, 1);
         writePointerToOutRef(callIndirectOp.getArgOperands()[1], phaseAddr);
         return success();
       }
@@ -15911,6 +16374,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       phaseAddr = it->second.front();
       it->second.pop_front();
       hasPhase = true;
+      auto handleIt = phaseObjectionHandles.find(hopperAddr);
+      if (handleIt != phaseObjectionHandles.end())
+        dropPhaseObjection(handleIt->second, 1);
     }
     writePointerToOutRef(callOp.getOperand(1), phaseAddr);
     unsigned width = getTypeWidth(callOp.getResult(0).getType());
@@ -15957,6 +16423,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     if (it != phaseHopperQueue.end() && !it->second.empty()) {
       uint64_t phaseAddr = it->second.front();
       it->second.pop_front();
+      auto handleIt = phaseObjectionHandles.find(hopperAddr);
+      if (handleIt != phaseObjectionHandles.end())
+        dropPhaseObjection(handleIt->second, 1);
       writePointerToOutRef(callOp.getOperand(1), phaseAddr);
       return success();
     }
@@ -16844,8 +17313,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // thousands of times with the same args during phase graph construction.
   // Caching their results avoids re-executing expensive DFS traversals.
   bool isCacheableFunc = false;
+  bool cacheOnlyNonZeroResult = false;
   uint64_t cacheArgHash = 0;
-  {
+  if (!disableFuncResultCache) {
     llvm::StringRef calleeName = callOp.getCallee();
     // Cache functions involved in UVM phase graph traversal.
     // These are called repeatedly with the same args during get_common_domain()
@@ -16862,6 +17332,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           calleeName.contains("m_find_predecessor_by_name")) {
         isCacheableFunc = true;
       }
+    }
+    if (calleeName == "get_0" || calleeName == "get_common_domain" ||
+        calleeName == "get_global_hopper" ||
+        calleeName == "m_uvm_get_root" ||
+        calleeName.contains("uvm_default_coreservice_t::get_phase_hopper") ||
+        calleeName.contains("uvm_default_coreservice_t::get_root") ||
+        calleeName.contains("uvm_component::get_domain")) {
+      isCacheableFunc = true;
+      // These singleton/domain getters can return null transiently during
+      // initialization. Avoid memoizing null and freezing later lookups.
+      cacheOnlyNonZeroResult = true;
     }
     if (isCacheableFunc) {
       // Compute hash of all argument values
@@ -16918,6 +17399,18 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                  << "  func.call: invalidating func result cache ("
                  << cacheState.funcResultCache.size()
                  << " functions cached) due to phase::add\n");
+      cacheState.funcResultCache.clear();
+    }
+  }
+
+  // Domain setters can invalidate getter memoization.
+  if (callOp.getCallee().contains("uvm_component::set_domain")) {
+    auto &cacheState = processStates[procId];
+    if (!cacheState.funcResultCache.empty()) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  func.call: invalidating func result cache ("
+                 << cacheState.funcResultCache.size()
+                 << " functions cached) due to component::set_domain\n");
       cacheState.funcResultCache.clear();
     }
   }
@@ -18053,6 +18546,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   // Store result in function cache for cacheable functions
   if (isCacheableFunc && !returnValues.empty()) {
+    if (cacheOnlyNonZeroResult) {
+      const InterpretedValue &lead = returnValues.front();
+      if (lead.isX() || lead.getUInt64() == 0)
+        return success();
+    }
     auto &cacheStore = processStates[procId];
     cacheStore.funcResultCache[funcOp.getOperation()][cacheArgHash] =
         llvm::SmallVector<InterpretedValue, 2>(returnValues.begin(),
@@ -18174,21 +18672,50 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   // process_phase is called from a sim.fork join_none child in run_phases,
   // so callOp is at the process (fork region) level. We can use the
   // currentOp-reset pattern to re-execute the call_indirect on wake-up.
+  auto getUvmPhaseImpOffset = [&]() -> unsigned {
+    static std::optional<unsigned> cachedImpOffset;
+    if (cachedImpOffset)
+      return *cachedImpOffset;
+
+    unsigned impOffset = 44;
+    if (auto getImpFunc =
+            rootModule.lookupSymbol<func::FuncOp>("uvm_pkg::uvm_phase::get_imp")) {
+      for (Block &block : getImpFunc.getBody()) {
+        for (Operation &op : block) {
+          auto gepOp = dyn_cast<LLVM::GEPOp>(&op);
+          if (!gepOp)
+            continue;
+          auto structTy = dyn_cast<LLVM::LLVMStructType>(gepOp.getElemType());
+          if (!structTy || !structTy.isIdentified() ||
+              !structTy.getName().contains("uvm_phase"))
+            continue;
+          impOffset = getLLVMStructFieldOffset(structTy, 3);
+          cachedImpOffset = impOffset;
+          return impOffset;
+        }
+      }
+    }
+
+    cachedImpOffset = impOffset;
+    return impOffset;
+  };
+
+  auto readUvmPhaseImpAddr = [&](uint64_t phaseAddr) -> uint64_t {
+    uint64_t impAddr = 0;
+    unsigned impOffset = getUvmPhaseImpOffset();
+    uint64_t impOff = 0;
+    MemoryBlock *impBlk = findBlockByAddress(phaseAddr + impOffset, impOff);
+    if (impBlk && impOff + 8 <= impBlk->data.size()) {
+      for (int i = 0; i < 8; ++i)
+        impAddr |= static_cast<uint64_t>(impBlk->data[impOff + i]) << (i * 8);
+    }
+    return impAddr;
+  };
+
   if (funcName == "uvm_pkg::uvm_phase_hopper::process_phase") {
     if (args.size() >= 2 && !args[1].isX() && callOp) {
       uint64_t phaseAddr = args[1].getUInt64();
-      // Read the IMP pointer from phase field [3] (m_imp) at offset 44
-      // Layout: uvm_object=32 + i32 m_phase_type=4 + ptr m_parent=8 = 44
-      uint64_t impAddr = 0;
-      {
-        uint64_t impOff = 0;
-        MemoryBlock *impBlk = findBlockByAddress(phaseAddr + 44, impOff);
-        if (impBlk && impOff + 8 <= impBlk->data.size()) {
-          for (int i = 0; i < 8; ++i)
-            impAddr |= static_cast<uint64_t>(impBlk->data[impOff + i])
-                       << (i * 8);
-        }
-      }
+      uint64_t impAddr = readUvmPhaseImpAddr(phaseAddr);
       auto impOrderIt = functionPhaseImpOrder.find(impAddr);
       if (impOrderIt != functionPhaseImpOrder.end()) {
         int myOrder = impOrderIt->second;
@@ -18231,17 +18758,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   if (funcName == "uvm_pkg::uvm_phase_hopper::finish_phase") {
     if (args.size() >= 2 && !args[1].isX()) {
       uint64_t phaseAddr = args[1].getUInt64();
-      // Read the IMP pointer from phase field [3] (m_imp) at offset 44
-      uint64_t impAddr = 0;
-      {
-        uint64_t impOff = 0;
-        MemoryBlock *impBlk = findBlockByAddress(phaseAddr + 44, impOff);
-        if (impBlk && impOff + 8 <= impBlk->data.size()) {
-          for (int i = 0; i < 8; ++i)
-            impAddr |= static_cast<uint64_t>(impBlk->data[impOff + i])
-                       << (i * 8);
-        }
-      }
+      uint64_t impAddr = readUvmPhaseImpAddr(phaseAddr);
       auto impOrderIt = functionPhaseImpOrder.find(impAddr);
       if (impOrderIt != functionPhaseImpOrder.end()) {
         functionPhaseImpCompleted[impAddr] = true;
@@ -21906,13 +22423,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
                     if (siblingId != fieldSigId)
                       propagateToSignal(siblingId);
                   }
-                  // Cascade: if any sibling that was just propagated has its
-                  // own forward children (from intra-interface links), also
-                  // propagate to those. This handles the bridge from internal
-                  // output fields (e.g., txSclkOutput) through public fields
-                  // (e.g., sclk) to child BFM fields (e.g., MonitorBFM.sclk).
+                  // Cascade for intra-linked siblings only.
                   for (SignalId siblingId : parentPropIt->second) {
                     if (siblingId == fieldSigId)
+                      continue;
+                    if (!intraLinkedSignals.count(siblingId))
                       continue;
                     auto sibPropIt =
                         interfaceFieldPropagation.find(siblingId);
@@ -21929,6 +22444,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
             }
           }
         }
+
+        // Re-evaluate synthetic tri-state field rules (e.g. scl/sda output
+        // enable muxing) that depend on the updated source signal.
+        applyInterfaceTriStateRules(fieldSigId);
       }
     }
   }
@@ -30655,6 +31174,60 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
     } else if (auto storeOp = dyn_cast<LLVM::StoreOp>(&op)) {
       (void)interpretLLVMStore(tempProcId, storeOp);
       ++opsExecuted;
+
+      InterpretedValue destAddr = getValue(tempProcId, storeOp.getAddr());
+      if (!destAddr.isX() && destAddr.getUInt64() != 0) {
+        uint64_t dest = destAddr.getUInt64();
+        auto resolveAddr = [&](Value v) -> uint64_t {
+          InterpretedValue val = getValue(tempProcId, v);
+          if (!val.isX() && val.getUInt64() != 0)
+            return val.getUInt64();
+          return 0;
+        };
+
+        uint64_t srcAddr = 0;
+        if (matchFourStateCopyStore(storeOp.getValue(), resolveAddr, srcAddr) &&
+            srcAddr != 0) {
+          auto pair = std::make_pair(srcAddr, dest);
+          if (std::find(childModuleCopyPairs.begin(), childModuleCopyPairs.end(),
+                        pair) == childModuleCopyPairs.end())
+            childModuleCopyPairs.push_back(pair);
+        }
+
+        InterfaceTriStateStorePattern triPattern;
+        if (matchInterfaceTriStateStore(storeOp.getValue(), resolveAddr,
+                                        triPattern) &&
+            triPattern.srcAddr != 0 && triPattern.condAddr != 0) {
+          InterpretedValue elseVal = getValue(tempProcId, triPattern.elseValue);
+          if (!elseVal.isX()) {
+            bool duplicate = false;
+            for (const auto &cand : interfaceTriStateCandidates) {
+              bool elseMatch = false;
+              if (cand.elseValue.isX() && elseVal.isX()) {
+                elseMatch = true;
+              } else if (!cand.elseValue.isX() && !elseVal.isX() &&
+                         cand.elseValue.getAPInt() == elseVal.getAPInt()) {
+                elseMatch = true;
+              }
+              if (cand.condAddr == triPattern.condAddr &&
+                  cand.srcAddr == triPattern.srcAddr && cand.destAddr == dest &&
+                  cand.condBitIndex == triPattern.condBitIndex && elseMatch) {
+                duplicate = true;
+                break;
+              }
+            }
+            if (!duplicate) {
+              InterfaceTriStateCandidate cand;
+              cand.condAddr = triPattern.condAddr;
+              cand.srcAddr = triPattern.srcAddr;
+              cand.destAddr = dest;
+              cand.condBitIndex = triPattern.condBitIndex;
+              cand.elseValue = elseVal;
+              interfaceTriStateCandidates.push_back(cand);
+            }
+          }
+        }
+      }
     } else if (auto callOp = dyn_cast<LLVM::CallOp>(&op)) {
       (void)interpretLLVMCall(tempProcId, callOp);
       ++opsExecuted;
@@ -30683,6 +31256,24 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
       ++opsExecuted;
     } else if (auto loadOp = dyn_cast<LLVM::LoadOp>(&op)) {
       (void)interpretLLVMLoad(tempProcId, loadOp);
+      ++opsExecuted;
+    } else if (auto probeOp = dyn_cast<llhd::ProbeOp>(&op)) {
+      // For module-level probes of llhd.sig pointers, prefer the current
+      // module-level value map (e.g. malloc results) over scheduler state.
+      // Scheduler signal values are updated only after this loop, so using
+      // them directly here can return stale zero pointers.
+      Value sig = probeOp.getSignal();
+      bool handled = false;
+      if (auto sigOp = sig.getDefiningOp<llhd::SignalOp>()) {
+        auto initIt = processStates[tempProcId].valueMap.find(sigOp.getInit());
+        if (initIt != processStates[tempProcId].valueMap.end() &&
+            !initIt->second.isX()) {
+          setValue(tempProcId, probeOp.getResult(), initIt->second);
+          handled = true;
+        }
+      }
+      if (!handled)
+        (void)interpretOperation(tempProcId, &op);
       ++opsExecuted;
     } else if (isa<LLVM::InsertValueOp>(&op)) {
       (void)interpretOperation(tempProcId, &op);
@@ -30830,8 +31421,50 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
                                     << llvm::format_hex(addrVal.isX() ? 0ULL : addrVal.getUInt64(), 10)
                                     << " isX=" << addrVal.isX() << "\n");
           }
-          if (srcAddr != 0)
-            childModuleCopyPairs.push_back({srcAddr, destAddr.getUInt64()});
+          if (srcAddr != 0) {
+            auto pair = std::make_pair(srcAddr, destAddr.getUInt64());
+            if (std::find(childModuleCopyPairs.begin(),
+                          childModuleCopyPairs.end(),
+                          pair) == childModuleCopyPairs.end())
+              childModuleCopyPairs.push_back(pair);
+          }
+
+          InterfaceTriStateStorePattern triPattern;
+          if (matchInterfaceTriStateStore(storeOp.getValue(),
+                                          getChildOrParentValue,
+                                          triPattern) &&
+              triPattern.srcAddr != 0 && triPattern.condAddr != 0) {
+            InterpretedValue elseVal =
+                getValue(childTempProcId, triPattern.elseValue);
+            if (!elseVal.isX()) {
+              bool duplicate = false;
+              for (const auto &cand : interfaceTriStateCandidates) {
+                bool elseMatch = false;
+                if (cand.elseValue.isX() && elseVal.isX()) {
+                  elseMatch = true;
+                } else if (!cand.elseValue.isX() && !elseVal.isX() &&
+                           cand.elseValue.getAPInt() == elseVal.getAPInt()) {
+                  elseMatch = true;
+                }
+                if (cand.condAddr == triPattern.condAddr &&
+                    cand.srcAddr == triPattern.srcAddr &&
+                    cand.destAddr == destAddr.getUInt64() &&
+                    cand.condBitIndex == triPattern.condBitIndex && elseMatch) {
+                  duplicate = true;
+                  break;
+                }
+              }
+              if (!duplicate) {
+                InterfaceTriStateCandidate cand;
+                cand.condAddr = triPattern.condAddr;
+                cand.srcAddr = triPattern.srcAddr;
+                cand.destAddr = destAddr.getUInt64();
+                cand.condBitIndex = triPattern.condBitIndex;
+                cand.elseValue = elseVal;
+                interfaceTriStateCandidates.push_back(cand);
+              }
+            }
+          }
         }
       } else if (auto callOp = dyn_cast<LLVM::CallOp>(&op)) {
         (void)interpretLLVMCall(childTempProcId, callOp);

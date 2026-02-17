@@ -603,6 +603,14 @@ public:
   /// Set the maximum number of operations a process can execute per activation.
   void setMaxProcessSteps(size_t maxSteps) { maxProcessSteps = maxSteps; }
 
+  /// Provide pre-registered port signal mappings (name → SignalId) from the
+  /// simulation context.  During initialize(), these are used to populate
+  /// valueToSignal for module block arguments that are non-ref-type ports
+  /// (e.g., four-state struct-encoded ports).
+  void setPortSignalMap(const llvm::StringMap<SignalId> &map) {
+    externalPortSignals = &map;
+  }
+
   /// Enable collection of operation execution statistics.
   void setCollectOpStats(bool enable) { collectOpStats = enable; }
 
@@ -952,6 +960,18 @@ private:
                                              uint64_t phaseAddr,
                                              mlir::Operation *callOp);
 
+  /// Raise/drop helpers used by UVM objection fast-paths.
+  /// `dropPhaseObjection` also wakes any process waiters that are blocked on
+  /// the handle reaching zero.
+  void raisePhaseObjection(int64_t handle, int64_t count);
+  void dropPhaseObjection(int64_t handle, int64_t count);
+
+  /// Register a process as waiting for an objection handle to reach zero.
+  void enqueueObjectionZeroWaiter(int64_t handle, ProcessId procId,
+                                  mlir::Operation *retryOp);
+  /// Wake zero-waiters if the objection count has reached zero.
+  void wakeObjectionZeroWaitersIfReady(int64_t handle);
+
   /// Handle UVM-focused fast-paths at func body entry.
   /// Returns true when handled; caller should skip normal function execution.
   bool handleUvmFuncBodyFastPath(
@@ -1054,6 +1074,10 @@ private:
   /// Interpret an llvm.store operation.
   mlir::LogicalResult interpretLLVMStore(ProcessId procId,
                                           mlir::LLVM::StoreOp storeOp);
+
+  /// Re-evaluate synthetic tri-state interface rules that depend on the
+  /// updated source field and drive affected destination fields.
+  void applyInterfaceTriStateRules(SignalId triggerSigId);
 
   /// Interpret an llvm.getelementptr operation.
   mlir::LogicalResult interpretLLVMGEP(ProcessId procId,
@@ -1188,6 +1212,15 @@ private:
   /// (e.g., signal A drives signal B, signal B drives signal A) and break
   /// them by falling back to reading the signal value from the scheduler.
   llvm::DenseSet<SignalId> continuousEvalVisitedSignals;
+
+  /// Cache of process → yield WaitOp for inline combinational evaluation.
+  /// Maps ProcessOp to its yield WaitOp (or nullptr if not applicable).
+  llvm::DenseMap<mlir::Operation *, mlir::Operation *>
+      processInlineYieldCache;
+
+  /// Set of process operations currently being inline-evaluated in the
+  /// recursive evaluateContinuousValue chain. Used to detect cycles.
+  llvm::DenseSet<mlir::Operation *> continuousEvalVisitedProcesses;
 
   /// Next instance ID to allocate for a hw.instance.
   InstanceId nextInstanceId = 1;
@@ -1394,6 +1427,10 @@ private:
   /// First observed JIT deopt detail for each process ID.
   llvm::DenseMap<uint64_t, std::string> jitDeoptDetailByProcess;
 
+  /// External port signal map provided by the simulation context.
+  /// Used to populate valueToSignal for non-ref-type module ports.
+  const llvm::StringMap<SignalId> *externalPortSignals = nullptr;
+
   /// Per-process metadata for periodic clock toggle native thunks.
   llvm::DenseMap<ProcessId, PeriodicToggleClockThunkSpec>
       periodicToggleClockThunkSpecs;
@@ -1506,6 +1543,10 @@ private:
 
   bool profilingEnabled = false;
 
+  /// Global kill-switch for function result memoization.
+  /// Enabled with CIRCT_SIM_DISABLE_FUNC_RESULT_CACHE=1.
+  bool disableFuncResultCache = false;
+
   /// Optional fast paths for high-volume UVM report traffic.
   /// These are opt-in via env vars to avoid changing default behavior.
   /// CIRCT_SIM_FASTPATH_UVM_REPORT_INFO=1
@@ -1600,6 +1641,37 @@ private:
   llvm::DenseMap<SignalId, llvm::SmallVector<SignalId, 2>>
       interfaceFieldPropagation;
 
+  /// Interface field signals that have synthetic intra-interface propagation
+  /// links (e.g. txSclkOutput -> sclk). Used to limit cascade propagation
+  /// in store handling and avoid double-propagation on normal BFM links.
+  llvm::DenseSet<SignalId> intraLinkedSignals;
+
+  /// Raw address-based tri-state candidates discovered from module-level
+  /// interface stores before shadow signals are created.
+  struct InterfaceTriStateCandidate {
+    uint64_t condAddr = 0;
+    uint64_t srcAddr = 0;
+    uint64_t destAddr = 0;
+    unsigned condBitIndex = 0;
+    InterpretedValue elseValue;
+  };
+  llvm::SmallVector<InterfaceTriStateCandidate, 8> interfaceTriStateCandidates;
+
+  /// Resolved signal-based tri-state rules:
+  ///   dest = cond[condBitIndex] ? src : elseValue
+  struct InterfaceTriStateRule {
+    SignalId condSigId = 0;
+    SignalId srcSigId = 0;
+    SignalId destSigId = 0;
+    unsigned condBitIndex = 0;
+    InterpretedValue elseValue;
+  };
+  llvm::SmallVector<InterfaceTriStateRule, 8> interfaceTriStateRules;
+
+  /// Reverse map to quickly find tri-state rules affected by a source update.
+  llvm::DenseMap<SignalId, llvm::SmallVector<unsigned, 2>>
+      interfaceTriStateRulesBySource;
+
   /// Reverse map: childFieldAddr → parentFieldAddr, for setting up propagation.
   llvm::DenseMap<uint64_t, uint64_t> childToParentFieldAddr;
 
@@ -1692,6 +1764,14 @@ private:
   /// bypass the interpreted get_objection() which fails on get_name() vtable
   /// dispatch during objection object creation.
   std::map<uint64_t, int64_t> phaseObjectionHandles;
+
+  /// Processes blocked waiting for an objection handle to drop to zero.
+  struct ObjectionWaiter {
+    ProcessId procId;
+    mlir::Operation *retryOp = nullptr;
+  };
+  llvm::DenseMap<int64_t, llvm::SmallVector<ObjectionWaiter, 4>>
+      objectionZeroWaiters;
 
   /// Per-process mapping of execute_phase's task phase address.
   /// When execute_phase is intercepted for a task phase, the phase address

@@ -1,5 +1,70 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1449 - February 17, 2026
+
+### circt-sim: Reactive Interface Tri-State Runtime Rules (I3C Blocker)
+
+1. Added runtime support for interface-internal tri-state assign patterns
+   discovered from module-level LLVM stores:
+   - records tri-state candidates during module/child-module init-store
+     execution.
+   - resolves candidates to signal-based runtime rules after interface field
+     shadow signals are created.
+   - reevaluates dependent rules on interface field stores and drives
+     destination shadow signals + backing memory reactively.
+2. Hardened module-level probe handling in `executeModuleLevelLLVMOps()`:
+   - module-level `llhd.prb` now prefers freshly computed module-init values
+     (e.g. malloc pointers) instead of stale scheduler state during init.
+   - this also fixes missing address resolution for interface init store
+     pattern extraction.
+3. Added regression:
+   - `test/Tools/circt-sim/interface-intra-tristate-propagation.sv`
+4. Validation:
+   - `ninja -C build-test circt-sim -k 0` PASS
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/interface-field-propagation.sv build-test/test/Tools/circt-sim/iface-field-reverse-propagation.mlir build-test/test/Tools/circt-sim/interface-intra-tristate-propagation.sv` PASS (`3/3`)
+   - bounded AVIP check:
+     - `AVIPS=i3c SEEDS=1 COMPILE_TIMEOUT=240 SIM_TIMEOUT=180 MAX_WALL_MS=180000 CIRCT_SIM_MODE=interpret utils/run_avip_circt_sim.sh`
+     - result: compile `OK` (~29s), sim bounded `TIMEOUT` (180s).
+   - trace-mode I3C evidence:
+     - `CIRCT_SIM_TRACE_SEQ=1` run shows installed tri-state rules for I3C
+       interface fields (`TriState candidates: 4, installed=4`).
+
+## Iteration 1448 - February 17, 2026
+
+### circt-sim: Classify Missing-Thunk Deopt Detail Causes
+
+1. Extended compile-governor classification for process-thunk install attempts:
+   - introduced explicit attempt decisions:
+     `below_hot_threshold`, `compile_budget_zero`,
+     `compile_budget_exhausted`.
+   - `missing_thunk` deopt detail now records these decision labels.
+   - thunk install miss now records `detail=install_failed`.
+2. Updated regressions:
+   - `test/Tools/circt-sim/jit-fail-on-deopt-env.mlir`
+   - `test/Tools/circt-sim/jit-report.mlir`
+   - `test/Tools/circt-sim/jit-report-deopt-processes-missing-thunk-budget-exhausted.mlir`.
+3. Validation:
+   - targeted runline-equivalent deopt detail bundle PASS.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK`, sim bounded `TIMEOUT` (90s).
+
+## Iteration 1447 - February 17, 2026
+
+### circt-sim: Add JIT Report Deopt Aggregation Utility
+
+1. Added `utils/summarize_circt_sim_jit_reports.py`:
+   - scans one or more JIT report files/directories.
+   - emits ranked deopt reason and reason+detail counters.
+   - supports TSV artifact output for reason, detail, and per-process rows.
+2. Added regression:
+   - `test/Tools/summarize-circt-sim-jit-reports.test`.
+3. Validation:
+   - runline-equivalent utility regression bundle PASS.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK`, sim bounded `TIMEOUT` (90s).
+
 ## Iteration 1446 - February 17, 2026
 
 ### circt-sim: Add Deopt Detail Hints for Burn-Down
@@ -68923,3 +68988,13 @@ See CHANGELOG.md on recent progress.
     - Updated regression coverage:
       - `test/Tools/circt-sim/profile-summary-memory-delta-window.mlir`
       - `test/Tools/circt-sim/profile-summary-memory-peak.mlir`.
+52. `circt-sim` UVM phase-hopper fast-path out-ref crash hardening
+    (February 17, 2026):
+    - Hardened `tools/circt-sim/UVMFastPaths.cpp` pointer out-arg write helper
+      used by `uvm_phase_hopper::{peek,get,try_peek,try_get}` function-body
+      fast paths.
+    - Removed raw native-pointer fallback writes in that helper and kept
+      interpreter-managed memory writes only.
+    - This fixes a host-side segmentation fault observed during AVIP init
+      (symbolized to `UVMFastPaths.cpp` in `handleUvmFuncBodyFastPath`) while
+      preserving fast-path behavior for managed memory.
