@@ -1221,3 +1221,61 @@ This establishes the dispatch architecture needed for the next plan steps:
 1. hotness counters attached to registry actions
 2. promotion from native fast-path action -> JIT thunk per action/symbol
 3. less growth pressure on `LLHDProcessInterpreter.cpp` by centralizing policy
+
+---
+
+## 2026-02-17 Session 12: WS5 Memory Delta-Window Attribution
+
+Continued per plan on memory/OOM observability, targeting deterministic growth
+attribution (not just point-in-time snapshots).
+
+### Implemented
+
+1. Added bounded memory sample-history tracking in
+   `tools/circt-sim/LLHDProcessInterpreter.*`:
+   - `MemoryStateSample { step, snapshot }`
+   - `memorySampleHistory` deque
+   - `memoryDeltaWindowSamples` config state
+2. Added new summary-mode env control:
+   - `CIRCT_SIM_PROFILE_MEMORY_DELTA_WINDOW_SAMPLES`
+   - default `16` when `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1`
+   - disabled when configured `< 2`
+3. Added new summary line:
+   - `[circt-sim] Memory delta window: ...`
+   - includes `samples`, `configured_window`, `start_step`, `end_step`, plus
+     signed deltas for:
+     - total tracked bytes
+     - malloc bytes
+     - native bytes
+     - process bytes
+     - dynamic string bytes
+     - config-db bytes
+     - analysis connection edges
+     - sequencer FIFO items
+
+### Regression coverage
+
+1. Added:
+   - `test/Tools/circt-sim/profile-summary-memory-delta-window.mlir`
+2. Updated:
+   - `test/Tools/circt-sim/profile-summary-memory-peak.mlir`
+
+### Validation
+
+1. Rebuilt `bin/circt-sim` in `build-test`.
+2. Focused lit slice passed (`5/5`):
+   - `profile-summary-memory-peak.mlir`
+   - `profile-summary-memory-state.mlir`
+   - `profile-summary-memory-delta-window.mlir`
+   - `finish-item-blocks-until-item-done.mlir`
+   - `uvm-sequencer-queue-cache-cap.mlir`
+3. Bounded AVIP pulse:
+   - run: `AVIPS=jtag,spi SEEDS=1 SIM_TIMEOUT=5`
+   - result: both compile `OK`; both sim entries reached expected short timeout.
+
+### Remaining WS5 gap
+
+1. Delta window is currently aggregate-only; next closure step is adding
+   low-overhead map-level delta attribution buckets (e.g. top growth sources
+   across config-db / analysis graph / sequencer internals) to tighten AHB OOM
+   root-cause prioritization.

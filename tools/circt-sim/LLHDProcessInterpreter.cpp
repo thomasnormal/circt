@@ -281,6 +281,11 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   memorySampleIntervalSteps = envUint64Value(
       "CIRCT_SIM_PROFILE_MEMORY_SAMPLE_INTERVAL",
       profileSummaryAtExitEnabled ? 65536 : 0);
+  memoryDeltaWindowSamples = envUint64Value(
+      "CIRCT_SIM_PROFILE_MEMORY_DELTA_WINDOW_SAMPLES",
+      profileSummaryAtExitEnabled ? 16 : 0);
+  if (memoryDeltaWindowSamples < 2)
+    memoryDeltaWindowSamples = 0;
   memorySummaryTopProcesses = envUint64Value(
       "CIRCT_SIM_PROFILE_MEMORY_TOP_PROCESSES",
       profileSummaryAtExitEnabled ? 3 : 0);
@@ -435,6 +440,12 @@ void LLHDProcessInterpreter::maybeSampleMemoryState(uint64_t totalSteps) {
       if (procIt != processStates.end())
         memoryPeakLargestProcessFunc = procIt->second.currentFuncName;
     }
+  }
+
+  if (memoryDeltaWindowSamples > 0) {
+    memorySampleHistory.push_back({totalSteps, snapshot});
+    while (memorySampleHistory.size() > memoryDeltaWindowSamples)
+      memorySampleHistory.pop_front();
   }
 
   while (memorySampleNextStep <= totalSteps) {
@@ -629,6 +640,42 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
          << " largest_process=" << peakSnapshot.largestProcessId
          << " largest_process_bytes=" << peakSnapshot.largestProcessBytes
          << " largest_process_func=" << peakLargestFunc << "\n";
+    }
+
+    if (memorySampleHistory.size() >= 2) {
+      const auto &start = memorySampleHistory.front();
+      const auto &end = memorySampleHistory.back();
+      auto delta = [](uint64_t from, uint64_t to) -> int64_t {
+        if (to >= from)
+          return static_cast<int64_t>(to - from);
+        return -static_cast<int64_t>(from - to);
+      };
+
+      os << "[circt-sim] Memory delta window: samples="
+         << memorySampleHistory.size()
+         << " configured_window=" << memoryDeltaWindowSamples
+         << " start_step=" << start.step
+         << " end_step=" << end.step
+         << " delta_total_bytes="
+         << delta(start.snapshot.totalTrackedBytes(),
+                  end.snapshot.totalTrackedBytes())
+         << " delta_malloc_bytes="
+         << delta(start.snapshot.mallocBytes, end.snapshot.mallocBytes)
+         << " delta_native_bytes="
+         << delta(start.snapshot.nativeBytes, end.snapshot.nativeBytes)
+         << " delta_process_bytes="
+         << delta(start.snapshot.processBytes, end.snapshot.processBytes)
+         << " delta_dynamic_string_bytes="
+         << delta(start.snapshot.dynamicStringBytes,
+                  end.snapshot.dynamicStringBytes)
+         << " delta_config_db_bytes="
+         << delta(start.snapshot.configDbBytes, end.snapshot.configDbBytes)
+         << " delta_analysis_conn_edges="
+         << delta(start.snapshot.analysisConnEdges,
+                  end.snapshot.analysisConnEdges)
+         << " delta_seq_fifo_items="
+         << delta(start.snapshot.seqFifoItems, end.snapshot.seqFifoItems)
+         << "\n";
     }
 
     if (memorySummaryTopProcesses > 0 && !processStates.empty()) {
