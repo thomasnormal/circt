@@ -74,6 +74,44 @@ static bool isPureResumableWaitPreludeOp(Operation *op) {
   return mlir::isMemoryEffectFree(op);
 }
 
+static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
+  if (!op)
+    return false;
+  if (isa<sim::PrintFormattedProcOp>(op))
+    return true;
+  if (op->getNumResults() == 0)
+    return false;
+  if (op->getNumRegions() != 0 || op->hasTrait<OpTrait::IsTerminator>())
+    return false;
+  if (isa<llhd::WaitOp, llhd::YieldOp, llhd::HaltOp, sim::SimForkOp,
+          sim::SimJoinOp, sim::SimJoinAnyOp, sim::SimWaitForkOp,
+          sim::SimDisableForkOp, sim::SimForkTerminatorOp, mlir::func::CallOp,
+          mlir::func::CallIndirectOp, LLVM::CallOp, mlir::cf::BranchOp,
+          mlir::cf::CondBranchOp>(op))
+    return false;
+  return mlir::isMemoryEffectFree(op);
+}
+
+static const Region *
+resolveNativeThunkProcessRegion(const ProcessExecutionState &state) {
+  auto processOp = state.getProcessOp();
+  if (!processOp)
+    return nullptr;
+  const Region *region = &processOp.getBody();
+  if (state.parentProcessId != InvalidProcessId && state.currentBlock) {
+    const Region *activeRegion = state.currentBlock->getParent();
+    if (activeRegion && activeRegion != region)
+      region = activeRegion;
+  }
+  return region;
+}
+
+static Region *resolveNativeThunkProcessRegion(ProcessExecutionState &state) {
+  return const_cast<Region *>(
+      resolveNativeThunkProcessRegion(static_cast<const ProcessExecutionState &>(
+          state)));
+}
+
 static Type unwrapSignalType(Type type) {
   if (auto refType = dyn_cast<llhd::RefType>(type))
     return refType.getNestedType();
@@ -6188,7 +6226,9 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
   }
 
   if (auto processOp = state.getProcessOp()) {
-    Region &body = processOp.getBody();
+    const Region *bodyRegion = resolveNativeThunkProcessRegion(state);
+    Region &body =
+        bodyRegion ? *const_cast<Region *>(bodyRegion) : processOp.getBody();
     if (!body.empty()) {
       Block &entry = body.front();
       if (!entry.empty()) {
@@ -6264,6 +6304,9 @@ bool LLHDProcessInterpreter::isTrivialNativeThunkCandidate(
   if (isCombinationalNativeThunkCandidate(state))
     return true;
 
+  if (isSingleBlockTerminatingNativeThunkCandidate(state))
+    return true;
+
   if (isResumableWaitThenHaltNativeThunkCandidate(state))
     return true;
 
@@ -6322,6 +6365,29 @@ bool LLHDProcessInterpreter::isTrivialNativeThunkCandidate(
   }
 
   return false;
+}
+
+bool LLHDProcessInterpreter::isSingleBlockTerminatingNativeThunkCandidate(
+    const ProcessExecutionState &state) const {
+  Region *bodyRegion =
+      resolveNativeThunkProcessRegion(const_cast<ProcessExecutionState &>(state));
+  if (!bodyRegion || !bodyRegion->hasOneBlock())
+    return false;
+
+  Block &body = bodyRegion->front();
+  if (body.empty())
+    return false;
+
+  Operation &terminator = body.back();
+  if (!isa<llhd::HaltOp, sim::SimForkTerminatorOp>(terminator))
+    return false;
+
+  for (auto it = body.begin(), e = std::prev(body.end()); it != e; ++it) {
+    Operation *op = &*it;
+    if (!isSafeSingleBlockTerminatingPreludeOp(op))
+      return false;
+  }
+  return true;
 }
 
 bool LLHDProcessInterpreter::isCombinationalNativeThunkCandidate(
@@ -6419,6 +6485,9 @@ void LLHDProcessInterpreter::executeTrivialNativeThunk(
   if (executePeriodicToggleClockNativeThunk(procId, it->second, thunkState))
     return;
 
+  if (executeSingleBlockTerminatingNativeThunk(procId, it->second, thunkState))
+    return;
+
   if (executeCombinationalNativeThunk(procId, it->second, thunkState))
     return;
 
@@ -6468,6 +6537,71 @@ void LLHDProcessInterpreter::executeTrivialNativeThunk(
     thunkState.halted = post->second.halted;
     thunkState.waiting = post->second.waiting;
   }
+}
+
+bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
+    ProcessId procId, ProcessExecutionState &state,
+    ProcessThunkExecutionState &thunkState) {
+  if (!isSingleBlockTerminatingNativeThunkCandidate(state))
+    return false;
+
+  Region *bodyRegion = resolveNativeThunkProcessRegion(state);
+  if (!bodyRegion || !bodyRegion->hasOneBlock() || bodyRegion->front().empty()) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+  Block &body = bodyRegion->front();
+
+  // This thunk is non-resumable and only valid on token 0.
+  if (thunkState.resumeToken != state.jitThunkResumeToken ||
+      state.jitThunkResumeToken != 0) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+  if (state.waiting || state.destBlock || state.resumeAtCurrentOp) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  state.currentBlock = &body;
+  state.currentOp = state.currentBlock->begin();
+
+  ProcessId savedActiveProcessId = activeProcessId;
+  ProcessExecutionState *savedActiveProcessState = activeProcessState;
+  activeProcessId = procId;
+  activeProcessState = &state;
+  auto restoreActive = llvm::make_scope_exit([&]() {
+    activeProcessId = savedActiveProcessId;
+    activeProcessState = savedActiveProcessState;
+  });
+
+  size_t maxSteps = std::max<size_t>(32, body.getOperations().size() * 8);
+  bool reachedStepLimit = true;
+  for (size_t steps = 0; steps < maxSteps; ++steps) {
+    if (!executeStep(procId)) {
+      reachedStepLimit = false;
+      break;
+    }
+  }
+  if (reachedStepLimit) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  auto post = processStates.find(procId);
+  if (post == processStates.end()) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+  if (!post->second.halted || post->second.waiting) {
+    thunkState.deoptRequested = true;
+    return true;
+  }
+
+  thunkState.halted = post->second.halted;
+  thunkState.waiting = post->second.waiting;
+  thunkState.resumeToken = post->second.jitThunkResumeToken;
+  return true;
 }
 
 bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(

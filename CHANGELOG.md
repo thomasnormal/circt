@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1455 - February 17, 2026
+
+### circt-sim: Native Thunks for Safe Single-Block Terminating Bodies
+
+1. Expanded compile-mode trivial thunk coverage with a new safe terminating
+   shape:
+   - supports one-block straight-line process bodies ending in `llhd.halt`.
+   - supports one-block `sim.fork` child branch bodies ending in
+     `sim.fork.terminator`.
+2. Added fork-child region-aware thunk/deopt shape analysis:
+   - for fork children, shape matching now uses the active branch region
+     instead of always matching against the parent process body.
+   - unsupported-shape detail emission now follows the same region selection.
+3. Safety constraints for the new shape:
+   - pre-terminator ops must be non-suspending and side-effect safe for this
+     thunk path (pure operations plus `sim.proc.print`).
+   - suspending/control-flow ops and call-family ops remain interpreter/deopt
+     paths for now.
+4. Added regressions:
+   - `test/Tools/circt-sim/jit-process-thunk-insertvalue-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-fork-branch-insertvalue-terminator.mlir`
+5. Validation:
+   - `CCACHE_DISABLE=1 ninja -C build-test circt-sim -k 0` PASS
+   - runline-equivalent targeted bundle PASS:
+     - `jit-process-thunk-insertvalue-halt`
+     - `jit-process-thunk-fork-branch-insertvalue-terminator`
+     - `jit-process-thunk-print-halt`
+     - `jit-process-thunk-wait-delay-halt`
+   - compile-mode parallel CLI compatibility smoke PASS:
+     - `jit-process-thunk-fork-branch-insertvalue-terminator` with
+       `--parallel=4` emitted expected sequential fallback warning and
+       preserved output parity.
+   - bounded AVIP explicit-JIT profile:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=180 MAX_WALL_MS=180000 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=-1' utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-jit-report-explicit-20260217-c1`
+     - result: compile `OK` (28s), sim `OK` (87s).
+   - deopt burn-down evidence (`utils/summarize_circt_sim_jit_reports.py`):
+     - `unsupported_operation:first_op:llvm.insertvalue` dropped from
+       `141` rows to `1` row on the same AVIP lane profile.
+     - new dominant tails are `first_op:llvm.alloca` (93) and
+       `first_op:llvm.getelementptr` (46), defining the next closure targets.
+
 ## Iteration 1454 - February 17, 2026
 
 ### circt-sim: Native Combinational Thunks for CF Multiblock Bodies
