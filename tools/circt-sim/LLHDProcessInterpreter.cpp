@@ -79,8 +79,12 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
     return false;
   if (isa<sim::PrintFormattedProcOp>(op))
     return true;
+  if (isa<LLVM::StoreOp>(op))
+    return true;
   if (op->getNumResults() == 0)
     return false;
+  if (isa<LLVM::AllocaOp, LLVM::GEPOp, LLVM::LoadOp>(op))
+    return true;
   if (op->getNumRegions() != 0 || op->hasTrait<OpTrait::IsTerminator>())
     return false;
   if (isa<llhd::WaitOp, llhd::YieldOp, llhd::HaltOp, sim::SimForkOp,
@@ -6230,6 +6234,17 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
     Region &body =
         bodyRegion ? *const_cast<Region *>(bodyRegion) : processOp.getBody();
     if (!body.empty()) {
+      if (body.hasOneBlock()) {
+        Block &singleBlock = body.front();
+        if (!singleBlock.empty() &&
+            isa<llhd::HaltOp, sim::SimForkTerminatorOp>(singleBlock.back())) {
+          for (auto it = singleBlock.begin(), e = std::prev(singleBlock.end());
+               it != e; ++it) {
+            if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
+              return (Twine("first_op:") + it->getName().getStringRef()).str();
+          }
+        }
+      }
       Block &entry = body.front();
       if (!entry.empty()) {
         auto waitIt = std::prev(entry.end());
