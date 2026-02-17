@@ -222,11 +222,20 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
        - `--fail-on-reason-detail=<reason>:<detail>`
      - added AVIP compile-lane wrapper:
        `utils/run_avip_circt_sim_jit_policy_gate.sh`
-       to run matrix + report aggregation + policy gate end-to-end.
-     - added regression:
-       `test/Tools/summarize-circt-sim-jit-reports.test`,
-       `test/Tools/summarize-circt-sim-jit-reports-policy.test`,
-       `test/Tools/run-avip-circt-sim-jit-policy-gate.test`.
+     to run matrix + report aggregation + policy gate end-to-end.
+   - added regression:
+     `test/Tools/summarize-circt-sim-jit-reports.test`,
+     `test/Tools/summarize-circt-sim-jit-reports-policy.test`,
+     `test/Tools/run-avip-circt-sim-jit-policy-gate.test`.
+   - closed the Phase C combinational registration gap baseline:
+     - `llhd.combinational` ops now register as scheduler processes in both
+       top-level and child-instance paths.
+     - combinational `llhd.yield` now suspends and re-arms inferred
+       sensitivity wakeups.
+     - value lookup paths now consume registered combinational results first
+       (with on-demand fallback retained for uncovered paths).
+     - compile-mode JIT dispatch now explicitly bypasses combinational process
+       states until dedicated native combinational thunks are implemented.
 5. Bounded integration parity smoke executed:
    - `AVIPS=jtag`, `SEEDS=1`, `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=120`.
    - mode-parity checker passed with one row per mode; both lanes hit the

@@ -416,6 +416,9 @@ struct ProcessExecutionState {
   explicit ProcessExecutionState(llhd::ProcessOp op)
       : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
         halted(false), waiting(false), isInitialBlock(false) {}
+  explicit ProcessExecutionState(llhd::CombinationalOp op)
+      : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
+        halted(false), waiting(false), isInitialBlock(false) {}
   explicit ProcessExecutionState(seq::InitialOp op)
       : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
         halted(false), waiting(false), isInitialBlock(true) {}
@@ -428,6 +431,11 @@ struct ProcessExecutionState {
   /// Helper to get the initial op (returns null if this is an llhd.process).
   seq::InitialOp getInitialOp() const {
     return mlir::dyn_cast_or_null<seq::InitialOp>(processOrInitialOp);
+  }
+
+  /// Helper to get the combinational op (returns null otherwise).
+  llhd::CombinationalOp getCombinationalOp() const {
+    return mlir::dyn_cast_or_null<llhd::CombinationalOp>(processOrInitialOp);
   }
 };
 
@@ -539,6 +547,12 @@ public:
   /// Forward-propagate a parent interface signal change to all child copies.
   void forwardPropagateOnSignalChange(SignalId signal,
                                        const SignalValue &value);
+
+  /// Re-evaluate module drives that depend on the given signal.
+  /// Called from the signal-change callback so that combinational logic
+  /// (continuous assignments) is re-computed when VPI or other external
+  /// writes change an input signal.
+  void executeModuleDrivesForSignal(SignalId sigId);
 
   /// Get the number of registered signals.
   size_t getNumSignals() const { return valueToSignal.size(); }
@@ -709,6 +723,9 @@ private:
   /// Register a single process from an llhd.process operation.
   ProcessId registerProcess(llhd::ProcessOp processOp);
 
+  /// Register a single combinational process from an llhd.combinational op.
+  ProcessId registerCombinational(llhd::CombinationalOp combinationalOp);
+
   /// Register a single initial block from a seq.initial operation.
   ProcessId registerInitialBlock(seq::InitialOp initialOp);
 
@@ -718,9 +735,6 @@ private:
 
   /// Execute module-level drives for a process after it yields.
   void executeModuleDrives(ProcessId procId);
-
-  /// Re-evaluate module drives that depend on the given signal.
-  void executeModuleDrivesForSignal(SignalId sigId);
 
   /// Execute instance output updates that depend on a process result.
   void executeInstanceOutputUpdates(ProcessId procId);
@@ -1045,6 +1059,10 @@ private:
   //===--------------------------------------------------------------------===//
   // Seq Dialect Operation Handlers
   //===--------------------------------------------------------------------===//
+
+  /// Interpret an llhd.yield operation for llhd.combinational processes.
+  mlir::LogicalResult interpretCombinationalYield(ProcessId procId,
+                                                  llhd::YieldOp yieldOp);
 
   /// Interpret a seq.yield operation (terminator for seq.initial).
   mlir::LogicalResult interpretSeqYield(ProcessId procId, seq::YieldOp yieldOp);
@@ -1563,6 +1581,9 @@ private:
   /// Cached env flag for analysis port tracing (CIRCT_SIM_TRACE_ANALYSIS).
   /// Read once at construction to avoid std::getenv on every port operation.
   bool traceAnalysisEnabled = false;
+
+  /// Cached env flag for fork/join diagnostics (CIRCT_SIM_TRACE_FORK_JOIN).
+  bool traceForkJoinEnabled = false;
 
   /// Track a UVM fast-path hit and evaluate hotness-gated promotion hooks.
   void noteUvmFastPathActionHit(llvm::StringRef actionKey);

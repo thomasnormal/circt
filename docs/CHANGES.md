@@ -173,6 +173,17 @@
     - `test/Tools/summarize-circt-sim-jit-reports.test`
     - `test/Tools/summarize-circt-sim-jit-reports-policy.test`
     - `test/Tools/run-avip-circt-sim-jit-policy-gate.test`
+  - closed the `llhd.combinational` registration gap baseline:
+    - combinational ops are now scheduler-registered processes (top-level and
+      child-instance paths) with inferred signal sensitivities.
+    - combinational `llhd.yield` now suspends and re-arms event wakeups.
+    - process value lookup now consumes registered combinational results first
+      (on-demand evaluation remains as fallback).
+    - compile-mode JIT dispatch now bypasses combinational process states until
+      dedicated native combinational thunks are added.
+  - added regressions:
+    - `test/Tools/circt-sim/llhd-combinational-triggered-print.mlir`
+    - `test/Tools/circt-sim/llhd-combinational-child-triggered-print.mlir`
 
 ### Why It Matters
 - Establishes deterministic artifact generation and machine-readable telemetry
