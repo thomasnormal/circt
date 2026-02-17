@@ -4948,12 +4948,17 @@ struct RvalueExprVisitor : public ExprVisitor {
                   const slang::ast::CallExpression::SystemCallInfo &info) {
     const auto &subroutine = *info.subroutine;
 
-    // $rose, $fell, $stable, $changed, $past, and $sampled are only valid in
-    // the context of properties and assertions. Those are treated in the
-    // LTLDialect; treat them there instead.
+    // $rose, $fell, $stable, $changed, $past, $sampled, and their _gclk
+    // variants are only valid in the context of properties and assertions.
+    // Those are treated in the LTLDialect; treat them there instead.
     bool isAssertionCall =
         llvm::StringSwitch<bool>(subroutine.name)
             .Cases({"$rose", "$fell", "$stable", "$changed", "$past", "$sampled"},
+                   true)
+            .Cases({"$rose_gclk", "$fell_gclk", "$stable_gclk",
+                    "$changed_gclk", "$past_gclk", "$future_gclk",
+                    "$rising_gclk", "$falling_gclk", "$steady_gclk",
+                    "$changing_gclk"},
                    true)
             .Default(false);
 

@@ -519,9 +519,11 @@ LogicalResult ImportDriver::importVerilog(ModuleOp module) {
 
   compileTimer.stop();
 
-  // If we were only supposed to lint the input, return here. This leaves the
-  // module empty, but any Slang linting messages got reported as diagnostics.
-  if (options.mode == ImportVerilogOptions::Mode::OnlyLint)
+  // If we were only supposed to lint or parse the input, return here. This
+  // leaves the module empty, but any Slang messages got reported as
+  // diagnostics.
+  if (options.mode == ImportVerilogOptions::Mode::OnlyLint ||
+      options.mode == ImportVerilogOptions::Mode::OnlyParse)
     return success();
 
   // Traverse the parsed Verilog AST and map it to the equivalent CIRCT ops.
