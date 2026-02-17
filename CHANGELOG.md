@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1456 - February 17, 2026
+
+### circt-sim: Pin JIT Default-Off Safety (Interpret-by-Default)
+
+1. Added default-mode safety regression for `circt-sim`:
+   - new test: `test/Tools/circt-sim/jit-default-mode-interpret.mlir`.
+   - proves default mode remains `interpret` even when JIT tuning flags are
+     passed (`--jit-hot-threshold`, `--jit-compile-budget`).
+   - verifies default-mode run avoids compile-mode JIT dispatch/deopt activity
+     (`jit_compiles_total=0`, `jit_exec_hits_total=0`, `jit_deopts_total=0`).
+2. Added AVIP wrapper default-mode regression:
+   - new test: `test/Tools/run-avip-circt-sim-default-mode-interpret.test`.
+   - validates `utils/run_avip_circt_sim.sh` keeps `CIRCT_SIM_MODE` defaulted
+     to `interpret` when unset and forwards `--mode=interpret` to simulator
+     invocations.
+3. Rollout policy remains unchanged:
+   - JIT is still non-default by design; default-on remains gated on broad
+     compile-mode parity/stability evidence.
+
 ## Iteration 1455 - February 17, 2026
 
 ### circt-sim: Native Thunks for Safe Single-Block Terminating Bodies

@@ -273,6 +273,14 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
    - added parallel-mode regression for derived-observed event-wait resumable
      process-result thunk shape to protect compile-mode coverage while the
      experimental parallel scheduler remains gated.
+10. Default-off rollout governance hardened:
+    - added `circt-sim` regression proving default mode remains `interpret`
+      even when JIT knobs are explicitly set.
+    - added AVIP wrapper regression proving
+      `utils/run_avip_circt_sim.sh` defaults to interpret mode when
+      `CIRCT_SIM_MODE` is unset.
+    - this pins non-default JIT activation until compile-mode parity gates are
+      broadly green.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
