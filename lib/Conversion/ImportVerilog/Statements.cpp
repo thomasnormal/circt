@@ -2503,7 +2503,8 @@ struct StmtVisitor {
     }
 
     // Assertion control tasks (IEEE 1800-2017 Section 20.12)
-    // These control assertion evaluation at runtime. Stub as no-ops.
+    // These control assertion evaluation at runtime. Not implemented —
+    // concurrent assertions are not evaluated during simulation.
     if (subroutine.name == "$assertcontrol" ||
         subroutine.name == "$asserton" ||
         subroutine.name == "$assertoff" ||
@@ -2514,20 +2515,24 @@ struct StmtVisitor {
         subroutine.name == "$assertfailoff" ||
         subroutine.name == "$assertnonvacuouson" ||
         subroutine.name == "$assertvacuousoff") {
+      mlir::emitRemark(loc) << "ignoring `" << subroutine.name
+                            << "` (assertion control not implemented)";
       return true;
     }
 
     // Checkpoint/restart tasks (legacy Verilog, IEEE 1800-2017 Section 21.8)
-    // These have no meaning in CIRCT's compilation flow. Stub as no-ops.
+    // These have no meaning in CIRCT's compilation flow.
     if (subroutine.name == "$save" ||
         subroutine.name == "$restart" ||
         subroutine.name == "$incsave" ||
         subroutine.name == "$reset") {
+      mlir::emitRemark(loc) << "ignoring `" << subroutine.name
+                            << "` (checkpoint/restart not supported)";
       return true;
     }
 
     // Debug/PLI tasks (IEEE 1800-2017 Sections 21.2, 21.9)
-    // These are interactive simulator commands. Stub as no-ops.
+    // These are interactive simulator commands, not applicable here.
     if (subroutine.name == "$stacktrace" ||
         subroutine.name == "$showscopes" ||
         subroutine.name == "$showvars" ||
@@ -2538,11 +2543,13 @@ struct StmtVisitor {
         subroutine.name == "$nolog" ||
         subroutine.name == "$scope" ||
         subroutine.name == "$list") {
+      mlir::emitRemark(loc) << "ignoring `" << subroutine.name
+                            << "` (interactive debug task not supported)";
       return true;
     }
 
     // PLD array tasks (IEEE 1800-2017 Section 21.7)
-    // Legacy gate-array modeling functions. Stub as no-ops.
+    // Legacy gate-array modeling functions, not applicable to modern designs.
     if (subroutine.name == "$async$and$array" ||
         subroutine.name == "$async$and$plane" ||
         subroutine.name == "$async$nand$array" ||
@@ -2559,20 +2566,26 @@ struct StmtVisitor {
         subroutine.name == "$sync$nor$plane" ||
         subroutine.name == "$sync$or$array" ||
         subroutine.name == "$sync$or$plane") {
+      mlir::emitRemark(loc) << "ignoring `" << subroutine.name
+                            << "` (PLD array task not supported)";
       return true;
     }
 
     // Stochastic queue tasks (IEEE 1800-2017 Section 21.6)
-    // Legacy abstract queue functions. Stub as no-ops.
+    // Legacy abstract queue functions, not applicable.
     if (subroutine.name == "$q_initialize" ||
         subroutine.name == "$q_add" ||
         subroutine.name == "$q_remove") {
+      mlir::emitRemark(loc) << "ignoring `" << subroutine.name
+                            << "` (stochastic queue task not supported)";
       return true;
     }
 
     // SDF annotation (IEEE 1800-2017 Section 30)
-    // Timing back-annotation. Stub as no-op.
+    // Timing back-annotation, not applicable.
     if (subroutine.name == "$sdf_annotate") {
+      mlir::emitRemark(loc) << "ignoring `" << subroutine.name
+                            << "` (SDF annotation not supported)";
       return true;
     }
 
