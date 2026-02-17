@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1441 - February 17, 2026
+
+### circt-sim: Pure Prelude Guard for Derived-Observed Wait Thunks
+
+1. Hardened derived-observed resumable wait-thunk matching:
+   - pre-wait prelude ops must now be side-effect-free (with `llhd.prb`
+     explicitly allowed for event setup).
+   - impure prelude ops are now classified as
+     `jit_deopt_reason_unsupported_operation` and remain on interpreter
+     fallback paths.
+2. Added regressions:
+   - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-impure-prewait-unsupported.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-impure-prewait-unsupported-strict.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-dest-operand-halt-yield-parallel.mlir`
+3. Validation:
+   - targeted derived-observed bundle PASS (normal/strict/parallel + impure-prelude negative cases).
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK` (25s), sim bounded `TIMEOUT` (90s).
+
 ## Iteration 1440 - February 17, 2026
 
 ### circt-sim: Derived-Observed Event-Wait Resumable Thunks
