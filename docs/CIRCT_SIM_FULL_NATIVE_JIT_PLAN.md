@@ -109,7 +109,8 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
 3. `jit_exec_hits_total`
 4. `jit_deopts_total`
 5. `jit_deopt_reason_*`
-6. `jit_deopt_processes[]` (`process_id`, `process_name`, `reason`)
+6. `jit_deopt_processes[]`
+   (`process_id`, `process_name`, `reason`, optional `detail`)
 7. `jit_compile_wall_ms`
 8. `jit_exec_wall_ms`
 9. `jit_strict_violations_total`
@@ -203,6 +204,9 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
      native coverage.
    - strict fail-on-deopt diagnostics now print per-process deopt details in
      stderr (`id`, `name`, `reason`) to reduce triage latency in strict lanes.
+   - deopt telemetry now also carries optional per-process detail hints
+     (`detail`) for unsupported-shape classification, and strict diagnostics
+     append that detail when available.
 5. Bounded integration parity smoke executed:
    - `AVIPS=jtag`, `SEEDS=1`, `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=120`.
    - mode-parity checker passed with one row per mode; both lanes hit the

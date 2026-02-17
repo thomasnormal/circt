@@ -578,6 +578,12 @@ public:
     return jitDeoptReasonByProcess;
   }
 
+  /// Per-process first deopt detail observed by compile-mode dispatch.
+  const llvm::DenseMap<uint64_t, std::string> &getJitDeoptDetailByProcess()
+      const {
+    return jitDeoptDetailByProcess;
+  }
+
   /// Resolve scheduler-registered process name for a process ID.
   std::string getJitDeoptProcessName(ProcessId procId) const;
 
@@ -814,7 +820,8 @@ private:
 
   /// Attempt to compile/install a native thunk for this process.
   ProcessThunkInstallResult tryInstallProcessThunk(ProcessId procId,
-                                                   ProcessExecutionState &state);
+                                                   ProcessExecutionState &state,
+                                                   std::string *deoptDetail);
 
   /// Return true when this process is eligible for the initial native thunk.
   bool isTrivialNativeThunkCandidate(const ProcessExecutionState &state) const;
@@ -839,6 +846,10 @@ private:
   bool executePeriodicToggleClockNativeThunk(
       ProcessId procId, ProcessExecutionState &state,
       ProcessThunkExecutionState &thunkState);
+
+  /// Emit a concise unsupported-shape detail for deopt telemetry.
+  std::string
+  getUnsupportedThunkDeoptDetail(const ProcessExecutionState &state) const;
 
   struct JITDeoptStateSnapshot {
     mlir::Block *currentBlock = nullptr;
@@ -1379,6 +1390,9 @@ private:
 
   /// First observed JIT deopt reason for each process ID.
   llvm::DenseMap<uint64_t, std::string> jitDeoptReasonByProcess;
+
+  /// First observed JIT deopt detail for each process ID.
+  llvm::DenseMap<uint64_t, std::string> jitDeoptDetailByProcess;
 
   /// Per-process metadata for periodic clock toggle native thunks.
   llvm::DenseMap<ProcessId, PeriodicToggleClockThunkSpec>

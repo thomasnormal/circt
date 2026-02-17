@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1446 - February 17, 2026
+
+### circt-sim: Add Deopt Detail Hints for Burn-Down
+
+1. Extended compile-mode deopt telemetry with per-process detail hints:
+   - `jit.jit_deopt_processes[]` now emits optional `detail` when available.
+   - unsupported-shape classification now records first-hint strings such as
+     `prewait_impure:sim.proc.print`.
+2. Strict fail-on-deopt diagnostics now append `detail=<...>` for each listed
+   deopt process when known.
+3. Updated regressions:
+   - `test/Tools/circt-sim/jit-report-deopt-processes.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-impure-prewait-unsupported-strict.mlir`.
+4. Validation:
+   - targeted strict/jit-report/cache-policy/parallel-thunk bundle PASS.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK`, sim bounded `TIMEOUT` (90s).
+
 ## Iteration 1445 - February 17, 2026
 
 ### circt-sim: Strict Deopt Process Diagnostics

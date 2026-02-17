@@ -14,6 +14,7 @@
 // JSON: "process_id": {{[1-9][0-9]*}}
 // JSON: "process_name": "llhd_process_{{[0-9]+}}"
 // JSON: "reason": "unsupported_operation"
+// JSON: "detail": "prewait_impure:sim.proc.print"
 
 hw.module @top() {
   %fmt = sim.fmt.literal "jit-report-deopt-processes\0A"

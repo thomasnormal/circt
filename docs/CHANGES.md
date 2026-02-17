@@ -140,6 +140,11 @@
     alongside `process_id` and `reason` for easier strict-mode triage.
   - strict compile-mode (`--jit-fail-on-deopt`) now logs per-process deopt
     details (`id`, `name`, `reason`) when a strict violation occurs.
+  - added per-process unsupported-shape deopt detail hints:
+    - `jit.jit_deopt_processes[].detail` now records first unsupported-shape
+      classifier text (for example,
+      `prewait_impure:sim.proc.print`) when available.
+    - strict fail-on-deopt logs now append `detail=<...>` when known.
   - added regression:
     - `test/Tools/circt-sim/jit-report-deopt-processes.mlir`
 
