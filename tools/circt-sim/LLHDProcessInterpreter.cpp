@@ -5689,22 +5689,28 @@ bool LLHDProcessInterpreter::isResumableWaitThenHaltNativeThunkCandidate(
   auto waitOp = dyn_cast<llhd::WaitOp>(*waitIt);
   if (!waitOp || (!waitOp.getDelay() && waitOp.getObserved().empty()))
     return false;
-  llvm::SmallVector<llhd::ProbeOp, 4> preWaitProbes;
+  llvm::SmallVector<Operation *, 8> preWaitOps;
+  llvm::SmallDenseSet<Value, 8> preWaitResults;
   for (auto it = entry.begin(); it != waitIt; ++it) {
-    auto probe = dyn_cast<llhd::ProbeOp>(*it);
-    if (!probe)
+    Operation *op = &*it;
+    if (isa<llhd::DriveOp, llhd::WaitOp, llhd::HaltOp, mlir::cf::BranchOp,
+            mlir::cf::CondBranchOp, mlir::func::CallOp,
+            mlir::func::CallIndirectOp, LLVM::CallOp,
+            sim::PrintFormattedProcOp>(op))
       return false;
-    preWaitProbes.push_back(probe);
+    if (op->getNumResults() == 0)
+      return false;
+    preWaitOps.push_back(op);
+    for (Value result : op->getResults())
+      preWaitResults.insert(result);
   }
   auto observed = waitOp.getObserved();
-  if (preWaitProbes.empty()) {
+  if (preWaitOps.empty()) {
     if (!observed.empty())
       return false;
   } else {
-    if (preWaitProbes.size() != observed.size())
-      return false;
-    for (size_t i = 0, e = preWaitProbes.size(); i != e; ++i) {
-      if (observed[i] != preWaitProbes[i].getResult())
+    for (Value obs : observed) {
+      if (!preWaitResults.contains(obs))
         return false;
     }
   }
@@ -5804,28 +5810,31 @@ bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
     thunkState.deoptRequested = true;
     return true;
   }
-  llvm::SmallVector<llhd::ProbeOp, 4> preWaitProbes;
+  llvm::SmallVector<Operation *, 8> preWaitOps;
+  llvm::SmallDenseSet<Value, 8> preWaitResults;
   for (auto it = entry.begin(); it != waitIt; ++it) {
-    auto probe = dyn_cast<llhd::ProbeOp>(*it);
-    if (!probe) {
+    Operation *op = &*it;
+    if (isa<llhd::DriveOp, llhd::WaitOp, llhd::HaltOp, mlir::cf::BranchOp,
+            mlir::cf::CondBranchOp, mlir::func::CallOp,
+            mlir::func::CallIndirectOp, LLVM::CallOp,
+            sim::PrintFormattedProcOp>(op) ||
+        op->getNumResults() == 0) {
       thunkState.deoptRequested = true;
       return true;
     }
-    preWaitProbes.push_back(probe);
+    preWaitOps.push_back(op);
+    for (Value result : op->getResults())
+      preWaitResults.insert(result);
   }
   auto observed = waitOp.getObserved();
-  if (preWaitProbes.empty()) {
+  if (preWaitOps.empty()) {
     if (!observed.empty()) {
       thunkState.deoptRequested = true;
       return true;
     }
   } else {
-    if (preWaitProbes.size() != observed.size()) {
-      thunkState.deoptRequested = true;
-      return true;
-    }
-    for (size_t i = 0, e = preWaitProbes.size(); i != e; ++i) {
-      if (observed[i] != preWaitProbes[i].getResult()) {
+    for (Value obs : observed) {
+      if (!preWaitResults.contains(obs)) {
         thunkState.deoptRequested = true;
         return true;
       }
@@ -5856,8 +5865,8 @@ bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
       thunkState.deoptRequested = true;
       return true;
     }
-    for (auto probe : preWaitProbes) {
-      if (failed(interpretProbe(procId, probe))) {
+    for (Operation *op : preWaitOps) {
+      if (failed(interpretOperation(procId, op))) {
         thunkState.deoptRequested = true;
         return true;
       }

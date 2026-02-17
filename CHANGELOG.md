@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1440 - February 17, 2026
+
+### circt-sim: Derived-Observed Event-Wait Resumable Thunks
+
+1. Extended resumable wait native thunk matching/execution to allow a pure
+   pre-wait computation prelude (not only direct probe-only observed lists):
+   - observed operands must now be values produced by pre-wait ops in the entry
+     block.
+   - token-0 native activation now executes the full pre-wait op prelude via
+     `interpretOperation(...)` before `llhd.wait`.
+   - side-effecting/control-flow/call-like pre-wait ops are still rejected by
+     matcher/dispatcher guards.
+2. Added regressions for derived observed-event process-result shapes:
+   - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-dest-operand-halt-yield.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-wait-event-derived-observed-dest-operand-halt-yield-guard-failed-env.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-wait-event-multi-derived-observed-dest-operand-halt-yield.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-wait-event-multi-derived-observed-dest-operand-halt-yield-guard-failed-env.mlir`
+3. Validation:
+   - `CCACHE_DISABLE=1 ninja -C build circt-sim` PASS
+   - targeted derived-event bundle PASS (new tests + existing event/dest tests).
+   - profile-summary sanity:
+     - `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1 build/bin/circt-sim test/Tools/circt-sim/profile-summary-memory-state.mlir`
+       emits `Memory state`, `Memory peak`, and `Memory process top`.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK` (26s), sim bounded `TIMEOUT` (90s).
+
 ## Iteration 1439 - February 17, 2026
 
 ### circt-sim: Event-Wait Process-Result Resumable Thunk Coverage
