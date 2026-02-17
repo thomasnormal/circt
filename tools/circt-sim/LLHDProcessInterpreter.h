@@ -860,6 +860,11 @@ private:
   /// Return true when this process is eligible for the initial native thunk.
   bool isTrivialNativeThunkCandidate(const ProcessExecutionState &state) const;
 
+  /// Return true when the process executes a one-block straight-line body
+  /// ending in `llhd.halt` or `sim.fork.terminator`.
+  bool isSingleBlockTerminatingNativeThunkCandidate(
+      const ProcessExecutionState &state) const;
+
   /// Return true when the process matches one-block combinational
   /// `... -> llhd.yield` execution that can be thunk-dispatched.
   bool isCombinationalNativeThunkCandidate(
@@ -875,6 +880,10 @@ private:
                                  ProcessThunkExecutionState &thunkState);
 
   bool executeResumableWaitThenHaltNativeThunk(
+      ProcessId procId, ProcessExecutionState &state,
+      ProcessThunkExecutionState &thunkState);
+
+  bool executeSingleBlockTerminatingNativeThunk(
       ProcessId procId, ProcessExecutionState &state,
       ProcessThunkExecutionState &thunkState);
 

@@ -238,6 +238,16 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
        `llhd.yield`-suspending bodies, including multiblock
        `cf.cond_br`/`cf.br` control-flow shapes; non-candidate combinational
        bodies still bypass compile dispatch to avoid strict-lane deopt noise.
+   - added native thunk coverage for safe one-block terminating bodies:
+     - supports one-block process bodies ending in `llhd.halt` with
+       non-suspending safe preludes (pure ops + `sim.proc.print`).
+     - supports one-block `sim.fork` child branch bodies ending in
+       `sim.fork.terminator` under the same safe-prelude policy.
+     - fork-child thunk/deopt shape matching now keys off the active branch
+       region instead of always using the parent process body.
+     - AVIP explicit-JIT deopt burn-down shifted dominant detail from
+       `first_op:llvm.insertvalue` to `first_op:llvm.alloca` and
+       `first_op:llvm.getelementptr`, defining the next closure queue.
 5. Bounded integration parity smoke executed:
    - `AVIPS=jtag`, `SEEDS=1`, `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=120`.
    - mode-parity checker passed with one row per mode; both lanes hit the
