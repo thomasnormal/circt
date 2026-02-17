@@ -68492,3 +68492,16 @@ See CHANGELOG.md on recent progress.
       integrated hit accounting with registry fast-path actions.
     - Added regression coverage:
       `test/Tools/circt-sim/uvm-fastpath-jit-promotion-hook.mlir`.
+50. `circt-sim` memory delta-window attribution for summary profiling
+    (February 17, 2026):
+    - Added bounded sampled-history tracking for memory snapshots and a new
+      summary env control:
+      `CIRCT_SIM_PROFILE_MEMORY_DELTA_WINDOW_SAMPLES`.
+    - Summary mode now emits:
+      `[circt-sim] Memory delta window: ...`
+      with start/end sample step and signed deltas for:
+      total tracked bytes, malloc/native/process bytes, dynamic string bytes,
+      config-db bytes, analysis-connection edges, and sequencer FIFO items.
+    - Added regression coverage:
+      - `test/Tools/circt-sim/profile-summary-memory-delta-window.mlir`
+      - updated `test/Tools/circt-sim/profile-summary-memory-peak.mlir`.

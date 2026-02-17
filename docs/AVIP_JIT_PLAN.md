@@ -260,3 +260,18 @@ Gate: default-on recommendation with rollback switch still available.
 9. Remaining WS5 gap after top-N landing:
    - ranking is point-in-time only; we still need time-window delta attribution
      and map-level growth buckets for deterministic OOM root cause closure.
+10. WS5 delta-window attribution landed in summary telemetry:
+    - added bounded sample history controlled by
+      `CIRCT_SIM_PROFILE_MEMORY_DELTA_WINDOW_SAMPLES`
+      (default `16` in summary mode; disabled when `<2`).
+    - summary now emits:
+      `[circt-sim] Memory delta window: samples=... configured_window=...`
+      with signed deltas for total, malloc/native/process, dynamic string,
+      config-db, analysis edges, and sequencer FIFO items.
+    - covered by:
+      - `test/Tools/circt-sim/profile-summary-memory-delta-window.mlir`
+      - updated `test/Tools/circt-sim/profile-summary-memory-peak.mlir`.
+11. Remaining WS5 closure work after delta-window landing:
+    - add map-level growth attribution buckets (and optional top-k deltas) so
+      AHB OOM triage can identify root-cause structures without manual log
+      correlation.
