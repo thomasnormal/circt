@@ -6450,8 +6450,7 @@ struct RvalueExprVisitor : public ExprVisitor {
 
     // Handle $dist_* distribution functions (IEEE 1800-2017 Section 20.15).
     // These have an inout seed as the first argument (bound as lvalue).
-    // The seed parameter is not currently used; we delegate to $urandom
-    // to produce random values instead of returning a constant 0.
+    // Currently stubbed to return 0 without updating the seed.
     if (subroutine.name == "$dist_chi_square" ||
         subroutine.name == "$dist_exponential" ||
         subroutine.name == "$dist_t" ||
@@ -6459,13 +6458,10 @@ struct RvalueExprVisitor : public ExprVisitor {
         subroutine.name == "$dist_uniform" ||
         subroutine.name == "$dist_normal" ||
         subroutine.name == "$dist_erlang") {
-      mlir::emitRemark(loc) << "`" << subroutine.name
-                            << "` uses $urandom fallback (distribution shape "
-                               "not modeled)";
-      // Generate a call to $urandom instead of returning constant 0.
-      // This produces random values even though the specific distribution
-      // shape is not modeled.
-      auto result = moore::UrandomBIOp::create(builder, loc, nullptr);
+      // The seed argument is an lvalue that would be updated, but we
+      // ignore it in the stub. Just return 0.
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      auto result = moore::ConstantOp::create(builder, loc, intTy, 0);
       auto ty = context.convertType(*expr.type);
       return context.materializeConversion(ty, result, expr.type->isSigned(),
                                            loc);
@@ -8927,18 +8923,14 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
           .Case("$timeunit",
                 [&]() -> Value {
                   // $timeunit with no args returns current time unit.
-                  // Slang should constant-fold; if we reach here, warn.
-                  mlir::emitWarning(loc)
-                      << "$timeunit not implemented, returning 0";
+                  // Stub: return 0 (will be coerced to real by slang).
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$timeprecision",
                 [&]() -> Value {
                   // $timeprecision with no args returns current precision.
-                  // Slang should constant-fold; if we reach here, warn.
-                  mlir::emitWarning(loc)
-                      << "$timeprecision not implemented, returning 0";
+                  // Stub: return 0.
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
@@ -9615,44 +9607,27 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   return failure();
                 })
           // $scale returns the input scaled to the time unit of another
-          // module (IEEE 1800-2017 Section 20.4.2). Returns input unchanged
-          // since we assume uniform timescales.
-          .Case("$scale",
-                [&]() -> Value {
-                  mlir::emitRemark(loc)
-                      << "`$scale` assumes uniform timescale, returning input";
-                  return value;
-                })
+          // module (IEEE 1800-2017 Section 20.4.2). Stub: return input.
+          .Case("$scale", [&]() { return value; })
           // Query functions that may reach here for dynamic types.
-          // For static types, slang constant-folds these. If we reach here,
-          // the type is dynamic and the result depends on runtime state.
+          // For static types, slang constant-folds these.
           .Case("$bits",
                 [&]() -> Value {
-                  mlir::emitWarning(loc)
-                      << "$bits on dynamic type not implemented, returning 0";
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$size",
                 [&]() -> Value {
-                  mlir::emitWarning(loc)
-                      << "$size on dynamic type not implemented, returning 0";
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$dimensions",
                 [&]() -> Value {
-                  mlir::emitWarning(loc)
-                      << "$dimensions on dynamic type not implemented, "
-                         "returning 0";
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$unpacked_dimensions",
                 [&]() -> Value {
-                  mlir::emitWarning(loc)
-                      << "$unpacked_dimensions on dynamic type not "
-                         "implemented, returning 0";
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
@@ -9662,32 +9637,26 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   return moore::ConstantOp::create(builder, loc, intTy, 1);
                 })
           // $timeunit/$timeprecision with one arg (hierarchical ref).
-          // Slang should constant-fold these; if we reach here, warn.
+          // Stub: return 0.
           .Case("$timeunit",
                 [&]() -> Value {
-                  mlir::emitWarning(loc)
-                      << "$timeunit not implemented, returning 0";
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$timeprecision",
                 [&]() -> Value {
-                  mlir::emitWarning(loc)
-                      << "$timeprecision not implemented, returning 0";
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
-          // $countdrivers (IEEE 1800-2017 Section 21.6). Legacy.
+          // $countdrivers (IEEE 1800-2017 Section 21.6). Legacy. Return 0.
           .Case("$countdrivers",
                 [&]() -> Value {
-                  mlir::emitRemark(loc) << "ignoring `$countdrivers` (legacy)";
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
-          // $getpattern (IEEE 1800-2017 Section 21.6). Legacy.
+          // $getpattern (IEEE 1800-2017 Section 21.6). Legacy. Return 0.
           .Case("$getpattern",
                 [&]() -> Value {
-                  mlir::emitRemark(loc) << "ignoring `$getpattern` (legacy)";
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
@@ -9797,47 +9766,45 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                                                    value2);
                 })
           // Distribution functions (IEEE 1800-2017 Section 20.15)
-          // Use $urandom fallback since distribution shapes are not modeled.
+          // These are stubs that return 0 for now.
           .Case("$dist_chi_square",
                 [&]() -> Value {
+                  // $dist_chi_square(seed, df) - chi-square distribution
                   (void)value1;
                   (void)value2;
-                  mlir::emitRemark(loc)
-                      << "`$dist_chi_square` uses $urandom fallback";
-                  return moore::UrandomBIOp::create(builder, loc, nullptr);
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$dist_exponential",
                 [&]() -> Value {
+                  // $dist_exponential(seed, mean) - exponential distribution
                   (void)value1;
                   (void)value2;
-                  mlir::emitRemark(loc)
-                      << "`$dist_exponential` uses $urandom fallback";
-                  return moore::UrandomBIOp::create(builder, loc, nullptr);
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$dist_t",
                 [&]() -> Value {
+                  // $dist_t(seed, df) - Student's t-distribution
                   (void)value1;
                   (void)value2;
-                  mlir::emitRemark(loc)
-                      << "`$dist_t` uses $urandom fallback";
-                  return moore::UrandomBIOp::create(builder, loc, nullptr);
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$dist_poisson",
                 [&]() -> Value {
+                  // $dist_poisson(seed, mean) - Poisson distribution
                   (void)value1;
                   (void)value2;
-                  mlir::emitRemark(loc)
-                      << "`$dist_poisson` uses $urandom fallback";
-                  return moore::UrandomBIOp::create(builder, loc, nullptr);
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           // Stochastic queue functions (IEEE 1800-2017 Section 21.6)
-          // Legacy: not implemented, return 0.
+          // Legacy: return 0.
           .Case("$q_exam",
                 [&]() -> Value {
                   (void)value1;
                   (void)value2;
-                  mlir::emitRemark(loc)
-                      << "ignoring `$q_exam` (legacy, not supported)";
                   auto intTy = moore::IntType::getInt(builder.getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
@@ -9845,8 +9812,6 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                 [&]() -> Value {
                   (void)value1;
                   (void)value2;
-                  mlir::emitRemark(loc)
-                      << "ignoring `$q_full` (legacy, not supported)";
                   auto intTy = moore::IntType::getInt(builder.getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
@@ -9871,16 +9836,15 @@ Context::convertSystemCallArity3(const slang::ast::SystemSubroutine &subroutine,
   auto systemCallRes =
       llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
           // Distribution functions (IEEE 1800-2017 Section 20.15)
-          // Use $urandom fallback since distribution shapes are not modeled.
+          // These are stubs that return 0 for now.
           .Case("$dist_uniform",
                 [&]() -> Value {
                   // $dist_uniform(seed, start, end) - uniform distribution
-                  // Use value2 (start) and value3 (end) as range for urandom.
-                  (void)value1; // seed not used
-                  mlir::emitRemark(loc)
-                      << "`$dist_uniform` uses $urandom_range fallback";
-                  return moore::UrandomRangeBIOp::create(builder, loc, value3,
-                                                          value2);
+                  (void)value1;
+                  (void)value2;
+                  (void)value3;
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$dist_normal",
                 [&]() -> Value {
@@ -9888,9 +9852,8 @@ Context::convertSystemCallArity3(const slang::ast::SystemSubroutine &subroutine,
                   (void)value1;
                   (void)value2;
                   (void)value3;
-                  mlir::emitRemark(loc)
-                      << "`$dist_normal` uses $urandom fallback";
-                  return moore::UrandomBIOp::create(builder, loc, nullptr);
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$dist_erlang",
                 [&]() -> Value {
@@ -9898,9 +9861,8 @@ Context::convertSystemCallArity3(const slang::ast::SystemSubroutine &subroutine,
                   (void)value1;
                   (void)value2;
                   (void)value3;
-                  mlir::emitRemark(loc)
-                      << "`$dist_erlang` uses $urandom fallback";
-                  return moore::UrandomBIOp::create(builder, loc, nullptr);
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Default([&]() -> FailureOr<Value> {
             mlir::emitError(loc) << "unsupported system call `"
