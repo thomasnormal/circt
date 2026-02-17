@@ -42,6 +42,7 @@ enum class UvmFastPathAction : uint8_t {
   GetReportAction,
   ReportHandlerGetVerbosityLevel,
   ReportHandlerGetAction,
+  ReportHandlerSetSeverityActionNoOp,
   ReportHandlerSetSeverityFileNoOp,
 };
 
@@ -108,6 +109,8 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportHandlerGetVerbosityLevel)
         .Case("uvm_pkg::uvm_report_handler::get_action",
               UvmFastPathAction::ReportHandlerGetAction)
+        .Case("uvm_pkg::uvm_report_handler::set_severity_action",
+              UvmFastPathAction::ReportHandlerSetSeverityActionNoOp)
         .Case("uvm_pkg::uvm_report_handler::set_severity_file",
               UvmFastPathAction::ReportHandlerSetSeverityFileNoOp)
         .Default(UvmFastPathAction::None);
@@ -129,6 +132,8 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportHandlerGetVerbosityLevel)
         .Case("uvm_pkg::uvm_report_handler::get_action",
               UvmFastPathAction::ReportHandlerGetAction)
+        .Case("uvm_pkg::uvm_report_handler::set_severity_action",
+              UvmFastPathAction::ReportHandlerSetSeverityActionNoOp)
         .Case("uvm_pkg::uvm_report_handler::set_severity_file",
               UvmFastPathAction::ReportHandlerSetSeverityFileNoOp)
         .Default(UvmFastPathAction::None);
@@ -176,11 +181,14 @@ bool LLHDProcessInterpreter::handleUvmWaitForSelfAndSiblingsToDrop(
   state.waiting = true;
 
   SimTime currentTime = scheduler.getCurrentTime();
-  constexpr uint32_t kMaxDeltaPolls = 1000;
-  constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
-  SimTime targetTime = currentTime.deltaStep < kMaxDeltaPolls
-                           ? currentTime.nextDelta()
-                           : currentTime.advanceTime(kFallbackPollDelayFs);
+  constexpr int64_t kObjectionPollDelayFs = 10000000; // 10 ps
+
+  // Polling every delta while objections are raised creates a large
+  // zero-time spin in real UVM workloads. Once objections are non-zero,
+  // poll on a small physical-time delay instead of delta-cycling.
+  SimTime targetTime =
+      count > 0 ? currentTime.advanceTime(kObjectionPollDelayFs)
+                : currentTime.nextDelta();
 
   auto callIt = mlir::Block::iterator(callOp);
   scheduler.getEventScheduler().schedule(
@@ -978,6 +986,14 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     recordFastPathHit("registry.call_indirect.report_handler_get_action");
     return true;
   }
+  case UvmFastPathAction::ReportHandlerSetSeverityActionNoOp:
+    LLVM_DEBUG(llvm::dbgs()
+               << "  call_indirect: registry report_handler::set_severity_action "
+                  "no-op: "
+               << calleeName << "\n");
+    recordFastPathHit(
+        "registry.call_indirect.report_handler_set_severity_action");
+    return true;
   case UvmFastPathAction::ReportHandlerSetSeverityFileNoOp:
     LLVM_DEBUG(llvm::dbgs()
                << "  call_indirect: registry report_handler::set_severity_file "
@@ -1526,6 +1542,13 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     // Fall through to existing generic report-handler logic below, which
     // preserves all current memory-backed behavior.
     break;
+  case UvmFastPathAction::ReportHandlerSetSeverityActionNoOp:
+    LLVM_DEBUG(llvm::dbgs()
+               << "  func.call: registry report_handler::set_severity_action "
+                  "no-op: "
+               << calleeName << "\n");
+    recordFastPathHit("registry.func.call.report_handler_set_severity_action");
+    return true;
   case UvmFastPathAction::ReportHandlerSetSeverityFileNoOp:
     LLVM_DEBUG(llvm::dbgs()
                << "  func.call: registry report_handler::set_severity_file "
@@ -1606,11 +1629,12 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     return true;
   }
 
-  // Intercept uvm_report_handler::set_severity_file which fails due to
-  // uninitialized associative array field[11] in the interpreter's memory
-  // model. This function maps severity levels to file handles only.
+  // Intercept report_handler severity-map mutators. These methods only affect
+  // report formatting/routing policy and are safely bypassed by our default
+  // report getter fast-path behavior.
   if (calleeName.contains("uvm_report_handler") &&
-      calleeName.contains("::set_severity_file")) {
+      (calleeName.contains("::set_severity_file") ||
+       calleeName.contains("::set_severity_action"))) {
     LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
                             << " intercepted (no-op)\n");
     return true;
