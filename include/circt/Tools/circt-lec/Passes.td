@@ -129,4 +129,36 @@ def LowerLLHDRefPorts
   ];
 }
 
+def ConstructSeqLEC : Pass<"construct-seq-lec", "::mlir::ModuleOp"> {
+  let summary = "Lower two sequential hw.modules to a verif.bmc equivalence miter";
+  let description = [{
+    Takes two `hw.module` operations (already processed by `ExternalizeRegisters`)
+    and constructs a `verif.bmc` operation that checks sequential trace
+    equivalence: for all input sequences of length `bound`, the two circuits
+    produce identical outputs at every cycle.
+
+    The pass reads `num_regs`, `initial_values`, and `bmc_reg_clocks` attributes
+    from each module to set up register state feedback in the BMC miter. Clock
+    inputs are shared between the two circuits (same toggle schedule), while
+    register states are kept separate.
+  }];
+
+  let options = [
+    Option<"firstModule", "first-module", "std::string",
+           /*default=*/"",
+           "Name of the first module to compare.">,
+    Option<"secondModule", "second-module", "std::string",
+           /*default=*/"",
+           "Name of the second module to compare.">,
+    Option<"bound", "bound", "unsigned",
+           /*default=*/"10",
+           "BMC unrolling bound (number of clock cycles).">,
+  ];
+
+  let dependentDialects = [
+    "verif::VerifDialect", "circt::hw::HWDialect",
+    "circt::comb::CombDialect", "circt::seq::SeqDialect"
+  ];
+}
+
 #endif // CIRCT_TOOLS_CIRCT_LEC_PASSES_TD

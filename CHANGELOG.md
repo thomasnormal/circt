@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1451 - February 17, 2026
+
+### circt-sim: Add AVIP End-to-End JIT Deopt Policy Gate Wrapper
+
+1. Added `utils/run_avip_circt_sim_jit_policy_gate.sh`:
+   - runs compile-mode AVIP matrix with JIT report emission enabled.
+   - aggregates `*.jit-report.json` telemetry via
+     `utils/summarize_circt_sim_jit_reports.py`.
+   - emits strict gate artifacts:
+     - `jit_deopt_reasons.tsv`
+     - `jit_deopt_reason_details.tsv`
+     - `jit_deopt_processes.tsv`
+     - `jit_deopt_summary.log`
+   - supports allowlist-aware strict gating flags for CI rollouts.
+2. Added regression:
+   - `test/Tools/run-avip-circt-sim-jit-policy-gate.test`.
+3. Validation:
+   - runline-equivalent wrapper regression bundle PASS.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK`, sim bounded `TIMEOUT` (90s).
+
 ## Iteration 1450 - February 17, 2026
 
 ### circt-sim: Add Allowlist-Aware Deopt Gate Policy Utility

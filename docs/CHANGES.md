@@ -161,6 +161,10 @@
       - `--fail-on-any-non-allowlisted-deopt`
       - `--fail-on-reason=<reason>`
       - `--fail-on-reason-detail=<reason>:<detail>`
+  - added AVIP compile-lane strict gate wrapper:
+    - `utils/run_avip_circt_sim_jit_policy_gate.sh` now runs compile-mode AVIP
+      matrix with JIT reports enabled, aggregates deopts, emits gate artifacts,
+      and enforces allowlist-aware policy in one command.
   - added regression:
     - `test/Tools/circt-sim/jit-fail-on-deopt-missing-thunk-budget-zero-detail.mlir`
     - `test/Tools/circt-sim/jit-report-deopt-processes-missing-thunk-hot-threshold.mlir`
@@ -168,6 +172,7 @@
     - `test/Tools/circt-sim/jit-report-deopt-processes.mlir`
     - `test/Tools/summarize-circt-sim-jit-reports.test`
     - `test/Tools/summarize-circt-sim-jit-reports-policy.test`
+    - `test/Tools/run-avip-circt-sim-jit-policy-gate.test`
 
 ### Why It Matters
 - Establishes deterministic artifact generation and machine-readable telemetry
@@ -178,6 +183,8 @@
   planning across AVIP-sized report bundles.
 - Adds a policy-enforceable strict convergence gate that can fail CI on
   selected deopt classes while allowlisting planned temporary gaps.
+- Adds a turnkey AVIP strict-lane wrapper suitable for CI rollout of that
+  policy without bespoke shell glue.
 
 ## February 17, 2026 - circt-sim Full Native JIT Plan Published
 
