@@ -519,6 +519,7 @@ void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
     hasUnknown = sv.isUnknown();
   }
 
+
   switch (value->format) {
   case vpiBinStrVal: {
     strBuffer.clear();
@@ -596,6 +597,7 @@ void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
 uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
                                struct t_vpi_time *time, int32_t flags) {
   stats.valueWrites++;
+
   auto *obj = findById(objectId);
   if (!obj || !obj->signalId || !scheduler || !value)
     return 0;
@@ -619,9 +621,12 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
     }
     break;
   }
-  case vpiIntVal:
-    valueBits = llvm::APInt(logicalWidth, value->value.integer);
+  case vpiIntVal: {
+    uint64_t masked = static_cast<uint64_t>(value->value.integer) &
+                      llvm::maskTrailingOnes<uint64_t>(logicalWidth);
+    valueBits = llvm::APInt(logicalWidth, masked);
     break;
+  }
   case vpiScalarVal:
     valueBits = llvm::APInt(logicalWidth, value->value.scalar == vpi1);
     break;
@@ -631,7 +636,9 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
     uint32_t numWords = (logicalWidth + 31) / 32;
     for (uint32_t i = 0; i < numWords; ++i) {
       uint32_t bitsThisWord = std::min(32u, logicalWidth - i * 32);
-      llvm::APInt word(logicalWidth, value->value.vector[i].aval);
+      uint64_t aval = static_cast<uint64_t>(value->value.vector[i].aval) &
+                      llvm::maskTrailingOnes<uint64_t>(logicalWidth);
+      llvm::APInt word(logicalWidth, aval);
       word <<= (i * 32);
       valueBits |= word;
       (void)bitsThisWord;
@@ -656,6 +663,13 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
 
   // Apply the value immediately (vpiNoDelay).
   scheduler->updateSignal(obj->signalId, newVal);
+
+  // Flush combinational logic: execute delta cycles so that downstream
+  // combinational processes see the updated value. This matches Verilog
+  // semantics where vpi_put_value(vpiNoDelay) causes immediate propagation
+  // through combinational logic before returning.
+  scheduler->executeCurrentTime();
+
   return objectId;
 }
 
@@ -671,10 +685,11 @@ void VPIRuntime::getTime(uint32_t /*objectId*/, struct t_vpi_time *time) {
     return;
   SimTime now = scheduler->getCurrentTime();
   if (time->type == vpiSimTime) {
-    // Return time in simulation units (femtoseconds).
-    uint64_t fs = now.realTime;
-    time->high = static_cast<PLI_UINT32>(fs >> 32);
-    time->low = static_cast<PLI_UINT32>(fs & 0xFFFFFFFF);
+    // Return time in VPI time precision units. We report timePrecision=-12
+    // (picoseconds). Internal time is in femtoseconds. 1 ps = 1000 fs.
+    uint64_t ps = now.realTime / 1000;
+    time->high = static_cast<PLI_UINT32>(ps >> 32);
+    time->low = static_cast<PLI_UINT32>(ps & 0xFFFFFFFF);
   } else if (time->type == vpiScaledRealTime) {
     time->real = static_cast<double>(now.realTime) * 1e-15; // fs to seconds.
   }
@@ -705,15 +720,18 @@ uint32_t VPIRuntime::registerCb(struct t_cb_data *cbData) {
 
   if (cbData->reason == cbAfterDelay && cbData->time && scheduler) {
     cb->oneShot = true;
-    uint64_t delay = 0;
+    uint64_t delayFs = 0;
     if (cbData->time->type == vpiSimTime) {
-      delay = (static_cast<uint64_t>(cbData->time->high) << 32) |
-              cbData->time->low;
+      // VPI time is in time precision units (ps for timePrecision=-12).
+      // Convert to internal femtoseconds: 1 ps = 1000 fs.
+      uint64_t delayPs = (static_cast<uint64_t>(cbData->time->high) << 32) |
+                          cbData->time->low;
+      delayFs = delayPs * 1000;
     } else if (cbData->time->type == vpiScaledRealTime) {
-      delay = static_cast<uint64_t>(cbData->time->real * 1e15);
+      delayFs = static_cast<uint64_t>(cbData->time->real * 1e15);
     }
     SimTime targetTime =
-        scheduler->getCurrentTime().advanceTime(delay);
+        scheduler->getCurrentTime().advanceTime(delayFs);
     // Schedule the callback at the target time.
     uint32_t capturedId = cbId;
     scheduler->getEventScheduler().schedule(
@@ -884,23 +902,62 @@ void VPIRuntime::fireValueChangeCallbacks(SignalId signalId) {
   if (sigIt == signalToObjectIds.end())
     return;
 
-  for (uint32_t objId : sigIt->second) {
+  // Copy object IDs to avoid iterator invalidation — callbacks may call
+  // vpi_register_cb/vpi_remove_cb which modify objectToCallbackIds.
+  llvm::SmallVector<uint32_t, 4> objIds(sigIt->second.begin(),
+                                        sigIt->second.end());
+
+  for (uint32_t objId : objIds) {
     auto cbIt = objectToCallbackIds.find(objId);
     if (cbIt == objectToCallbackIds.end())
       continue;
 
-    for (uint32_t cbId : cbIt->second) {
+    // Copy callback IDs for same reason.
+    llvm::SmallVector<uint32_t, 4> cbIds(cbIt->second.begin(),
+                                         cbIt->second.end());
+
+    for (uint32_t cbId : cbIds) {
       auto it = callbacks.find(cbId);
       if (it == callbacks.end() || !it->second->active)
         continue;
       if (it->second->reason != cbValueChange)
         continue;
 
+      // Capture fields before calling cbFunc (may invalidate iterators).
+      auto cbFunc = it->second->cbFunc;
+      void *userData = it->second->userData;
+
+      // Provide current signal value in the callback data. cocotb's GPI
+      // layer reads this to determine edge type (rising/falling/change).
+      auto *obj = findById(objId);
+      s_vpi_value cbValue = {};
+      cbValue.format = vpiIntVal;
+      if (obj && obj->signalId && scheduler) {
+        const SignalValue &sv = scheduler->getSignalValue(obj->signalId);
+        SignalEncoding enc = scheduler->getSignalEncoding(obj->signalId);
+        bool isFourState = (enc == SignalEncoding::FourStateStruct);
+        uint32_t width = obj->width;
+        if (isFourState) {
+          const llvm::APInt &raw = sv.getAPInt();
+          uint32_t physWidth = raw.getBitWidth();
+          if (physWidth >= width * 2) {
+            llvm::APInt valueBits = raw.extractBits(width, width);
+            cbValue.value.integer =
+                static_cast<PLI_INT32>(valueBits.getZExtValue());
+          }
+        } else {
+          cbValue.value.integer =
+              static_cast<PLI_INT32>(sv.getAPInt().zextOrTrunc(width)
+                                         .getZExtValue());
+        }
+      }
+
       t_cb_data data = {};
       data.reason = cbValueChange;
       data.obj = makeHandle(objId);
-      data.user_data = static_cast<PLI_BYTE8 *>(it->second->userData);
-      it->second->cbFunc(&data);
+      data.user_data = static_cast<PLI_BYTE8 *>(userData);
+      data.value = &cbValue;
+      cbFunc(&data);
       stats.callbacksFired++;
     }
   }

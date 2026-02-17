@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1464 - February 17, 2026
+
+### VPI/cocotb signal-change callback fix and time conversion
+
+1. **Signal-change callback ordering fix (CRITICAL)**: `finalizeInit()` in
+   `LLHDProcessInterpreter.cpp` was overwriting the combined signal-change
+   callback set in `circt-sim.cpp`. The combined callback includes VPI
+   `fireValueChangeCallbacks()`, VCD recording, VIF forward propagation,
+   and module drive re-evaluation. After `finalizeInit()` overwrote it, only
+   module drive re-evaluation remained — cocotb's `RisingEdge`/`FallingEdge`
+   triggers never fired.
+   - **Fix**: Moved `setSignalChangeCallback()` to AFTER `finalizeInit()` in
+     `circt-sim.cpp`, so the combined callback is the final one active.
+
+2. **VPI time conversion (fs ↔ ps)**: Internal simulation time is in
+   femtoseconds; VPI `timePrecision=-12` means picoseconds.
+   - `getTime()`: divide fs by 1000 to report ps
+   - `registerCb(cbAfterDelay)`: multiply ps delay by 1000 to schedule in fs
+   - Without this fix, cocotb Clock produced 1000× too-short delays.
+
+3. **Value in cbValueChange callback data**: `fireValueChangeCallbacks()` now
+   populates `cb_data.value` with the current signal value (handling both
+   two-state and four-state encodings). cocotb's GPI layer reads this to
+   determine edge type.
+
+4. **Combinational flush after `vpi_put_value`**: Added
+   `scheduler->executeCurrentTime()` after `updateSignal()` in `putValue()`,
+   so downstream combinational processes see the updated value before
+   `vpi_put_value` returns.
+
+5. **Iterator invalidation safety**: `fireValueChangeCallbacks()` now copies
+   object-ID and callback-ID lists before iterating, preventing crashes when
+   callbacks register or remove other callbacks.
+
+6. **`vpiIntVal`/`vpiVectorVal` masking**: `putValue()` now masks input values
+   to `logicalWidth` bits, preventing APInt assertion failures on wider inputs.
+
+7. **`updateSignalWithStrength` encoding lookup**: Hoisted `getSignalEncoding()`
+   call before `resolveDrivers()` so the encoding is available for the
+   resolution function.
+
+- **Result**: CVDP LFSR 8-bit benchmark runs end-to-end with cocotb 2.0.1:
+  clock toggles, edge detection works, signal reads/writes succeed.
+  Test 1/3 passes; tests 2-3 fail due to test/RTL polynomial mismatch
+  (Fibonacci vs Galois), not a simulator issue.
+
 ## Iteration 1463 - February 17, 2026
 
 ### circt-sim: Math dialect support and interpreter coverage audit
