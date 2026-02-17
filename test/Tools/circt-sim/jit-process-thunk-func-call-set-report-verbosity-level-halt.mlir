@@ -4,22 +4,29 @@
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 // RUN: FileCheck %s --check-prefix=JSON < %t/jit.json
 //
-// LOG: jit-process-thunk-llvm-call-delay-supported
+// LOG: set_report_verbosity_level_ok
 // LOG: [circt-sim] Simulation completed
 //
 // JSON: "mode": "compile"
 // JSON: "jit":
 // JSON: "jit_deopts_total": 0
+// JSON: "jit_deopt_reason_guard_failed": 0
+// JSON: "jit_deopt_reason_unsupported_operation": 0
+// JSON: "jit_deopt_reason_missing_thunk": 0
 
 module {
-  llvm.func @__moore_delay(i64)
+  func.func @"uvm_pkg::uvm_report_object::set_report_verbosity_level"(
+      %arg0: !llvm.ptr, %arg1: i32) {
+    return
+  }
 
   hw.module @top() {
-    %delay = hw.constant 1 : i64
-    %fmt = sim.fmt.literal "jit-process-thunk-llvm-call-delay-supported\0A"
+    %null = llvm.mlir.zero : !llvm.ptr
+    %level = hw.constant 42 : i32
+    %fmt = sim.fmt.literal "set_report_verbosity_level_ok\0A"
 
     llhd.process {
-      llvm.call @__moore_delay(%delay) : (i64) -> ()
+      func.call @"uvm_pkg::uvm_report_object::set_report_verbosity_level"(%null, %level) : (!llvm.ptr, i32) -> ()
       sim.proc.print %fmt
       llhd.halt
     }

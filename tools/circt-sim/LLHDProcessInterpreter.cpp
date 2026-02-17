@@ -16867,19 +16867,9 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
   // potentially stale scheduler signal values.
   {
     auto combIt = combSignalDriveMap.find(sigId);
-    {
-      static bool traceProbe = []() {
-        const char *env = std::getenv("CIRCT_SIM_TRACE_PROBE_COMB");
-        return env && env[0] != '\0' && env[0] != '0';
-      }();
-      if (traceProbe) {
-        llvm::StringRef sigName = getSignalName(sigId);
-        llvm::errs() << "[PROBE-COMB] sig=" << sigId << " name=" << sigName
-                     << " inCombMap="
-                     << (combIt != combSignalDriveMap.end() ? "YES" : "NO")
-                     << "\n";
-      }
-    }
+    fprintf(stderr, "[PROBE-COMB] sig=%u name=%s inCombMap=%s\n",
+            (unsigned)sigId, getSignalName(sigId).data(),
+            (combIt != combSignalDriveMap.end() ? "YES" : "NO"));
     if (combIt != combSignalDriveMap.end() &&
         !continuousEvalVisitedSignals.count(sigId)) {
       continuousEvalVisitedSignals.insert(sigId);

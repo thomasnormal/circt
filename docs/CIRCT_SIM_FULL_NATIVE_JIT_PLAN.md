@@ -302,6 +302,159 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - `first_op:func.call_indirect` (90)
       - `first_op:llvm.getelementptr` (45)
       - residual `first_op:llvm.alloca` (3)
+13. Forward-only multiblock terminating thunk closure for process control-flow:
+    - compile-mode native thunk matching/execution now supports multiblock
+      process/fork regions with safe preludes and forward-only
+      `cf.br`/`cf.cond_br` edges, ending in `llhd.halt` or
+      `sim.fork.terminator`.
+    - this closes strict deopts on static-target
+      `func.call_indirect -> cf.br -> halt` process shapes.
+    - updated regression
+      `test/Tools/circt-sim/jit-process-thunk-func-call-indirect-static-target-unsupported.mlir`
+      from strict expected-fail to strict pass (`jit_deopts_total=0`).
+    - added regression
+      `test/Tools/circt-sim/jit-process-thunk-multiblock-call-indirect-condbr-halt.mlir`
+      for `func.call_indirect` + `cf.cond_br` + block-argument merge.
+    - parallel compatibility smoke passed under `--parallel=4`
+      (sequential fallback warning expected while experimental parallel
+      scheduler remains gated).
+    - bounded AVIP compile-mode smoke refreshed:
+      `AVIPS=jtag`, `SEEDS=1`, `COMPILE_TIMEOUT=90`, `SIM_TIMEOUT=90`,
+      `CIRCT_SIM_MODE=compile`:
+      compile `OK`; bounded sim `TIMEOUT`.
+14. AVIP UVM prelude closure wave for one-block terminating process thunks:
+    - expanded non-suspending `func.call` prelude allowlist used by one-block
+      terminating process/fork native thunk matching:
+      - `uvm_pkg::uvm_get_report_object`
+      - `*::uvm_get_report_object`
+      - `uvm_pkg::run_test`
+      - `m_execute_scheduled_forks`
+      - `get_global_hopper` / `*::get_global_hopper`
+      - `*::get_report_verbosity_level`
+      - `*::get_report_action`
+      - config-db `set_<digits>` wrappers (signature-gated)
+    - expanded non-suspending LLVM-call prelude allowlist:
+      - `__moore_uvm_report_info`
+      - `__moore_queue_push_front`
+    - expanded one-block terminating safe prelude coverage to accept `llhd.prb`.
+    - added strict compile-mode regression coverage:
+      - `jit-process-thunk-func-call-uvm-prelude-closure-halt.mlir`
+      - `jit-process-thunk-func-call-get-report-verbosity-level-halt.mlir`
+      - `jit-process-thunk-func-call-get-report-action-halt.mlir`
+      - `jit-process-thunk-prb-prelude-halt.mlir`
+      - `jit-process-thunk-llvm-call-uvm-report-and-queue-halt.mlir`
+    - bounded AVIP compile-lane deopt burn-down (same harness, jtag seed-1,
+      `CIRCT_SIM=/home/thomas-ahle/circt/build/bin/circt-sim`,
+      `--jit-hot-threshold=1 --jit-compile-budget=100000`,
+      `SIM_TIMEOUT=180`, `MAX_WALL_MS=120000`) improved:
+      - `jit_deopts_total`: `18 -> 14`
+      - unsupported-operation rows: `12 -> 6`
+      - dominant remaining unsupported details:
+        - `multiblock_unsupported_terminator:llhd.wait` (3)
+        - `multiblock_unsupported_terminator:cf.br` (1)
+        - `multiblock_unsupported_terminator:cf.cond_br` (1)
+        - `first_op:scf.for` (1)
+15. Structured-control and fork prelude closure with resumable halt guards:
+    - expanded one-block safe prelude matching to accept:
+      - safe `scf.for`/`scf.if`/`scf.while` structured control regions
+        (region-local preludes must satisfy existing non-suspending policy),
+      - `sim.fork join_none` preludes with branch regions ending in
+        `sim.fork.terminator` (or in-region branch terminators),
+      - direct one-block `llvm.call @__moore_wait_condition` prelude calls.
+    - extended single-block terminating thunk execution to support two
+      resumable suspend classes without deopt:
+      - `wait_condition` polling suspends (`waiting` +
+        `waitConditionRestartBlock`),
+      - deferred-halt suspends when active fork children are present
+        (`waiting` + `destBlock` + `resumeAtCurrentOp` at `llhd.halt`).
+    - added env-gated guard diagnostics for guard-failed triage:
+      - `CIRCT_SIM_TRACE_JIT_THUNK_GUARDS=1`.
+    - added strict regressions:
+      - `jit-process-thunk-fork-join-none-halt.mlir`
+      - `jit-process-thunk-scf-for-halt.mlir`
+      - `jit-process-thunk-llvm-call-wait-condition-halt.mlir`
+    - refreshed bounded AVIP compile-lane run
+      (`/tmp/avip-circt-sim-20260217-225344`, `jtag`, seed-1) shows
+      unsupported-tail churn from previous queue:
+      - closed prior tails `first_op:sim.fork` and `first_op:scf.for`,
+      - remaining unsupported details now:
+        - `first_op:llvm.call:__moore_wait_condition` (1)
+        - `first_op:llvm.call:__moore_delay` (1)
+        - `multiblock_no_terminal` (1)
+      - guard-failed remains the dominant queue (`8` rows in this run).
+16. Multiblock wait-condition loop closure and AVIP unsupported-tail burn-down:
+    - resumable multiblock wait-thunk matching now accepts either:
+      - explicit `llhd.wait` terminators, or
+      - explicit `llvm.call @__moore_wait_condition` suspend points in block
+        preludes.
+    - resumable multiblock wait-thunk execution now supports
+      wait-condition polling restart state:
+      - ignores spurious wakeups while wait-condition poll state is armed
+        (`waiting + waitConditionRestartBlock`),
+      - resumes from `waitConditionRestartOp` with invalidation of
+        traced condition inputs.
+    - deopt detail classification for multiblock process bodies now aligns with
+      resumable wait matching (tracks wait-condition as a suspend source and
+      only emits `multiblock_no_terminal` when no terminal and no suspend
+      source are present).
+    - expanded one-block LLVM prelude allowlist with non-suspending runtime
+      queue helper:
+      - `__moore_queue_pop_front_ptr`.
+    - expanded one-block `func.call` prelude allowlist with:
+      - `m_process_guard` and `*::m_process_guard`.
+    - added strict regressions:
+      - `jit-process-thunk-multiblock-wait-condition-loop-halt.mlir`
+      - `jit-process-thunk-llvm-call-queue-pop-front-ptr-halt.mlir`
+      - `jit-process-thunk-func-call-m-process-guard-halt.mlir`
+    - bounded AVIP compile-lane burn-down progression (jtag seed-1):
+      - `/tmp/avip-circt-sim-20260217-230144`:
+        unsupported `__moore_wait_condition` closed; new tail
+        `__moore_queue_pop_front_ptr` appeared.
+      - `/tmp/avip-circt-sim-20260217-230458`:
+        `__moore_queue_pop_front_ptr` closed; new tail
+        `func.call:m_process_guard` appeared.
+      - `/tmp/avip-circt-sim-20260217-230749`:
+        `func.call:m_process_guard` closed.
+      - current unsupported tail reduced to:
+        - `first_op:llvm.call:__moore_delay` (1)
+        - `multiblock_no_terminal` (1)
+      - guard-failed remains dominant (`9` rows in latest run).
+17. Native `__moore_delay` suspend closure and AVIP compile-lane timeout burn-down:
+    - resumable multiblock wait-thunk matching now treats
+      `llvm.call @__moore_delay` as a recognized suspend source (alongside
+      `llhd.wait` and `llvm.call @__moore_wait_condition`).
+    - resumable multiblock wait-thunk execution now schedules pending
+      `__moore_delay` callback wakeups directly from native thunk dispatch
+      (`waiting && pendingDelayFs > 0`), preserving interpreter parity.
+    - expanded safe prelude allowlists for remaining AVIP tails:
+      - `func.call`: `uvm_pkg::uvm_root::find_all`,
+        `*::set_report_verbosity_level`
+      - `llvm.call`: `__moore_string_cmp`, `__moore_assoc_get_ref`
+    - added strict regressions:
+      - `jit-process-thunk-multiblock-llvm-call-delay-halt.mlir`
+      - `jit-process-thunk-func-call-uvm-root-find-all-halt.mlir`
+      - `jit-process-thunk-llvm-call-string-cmp-halt.mlir`
+      - `jit-process-thunk-llvm-call-assoc-get-ref-halt.mlir`
+      - `jit-process-thunk-func-call-set-report-verbosity-level-halt.mlir`
+      - updated `jit-process-thunk-llvm-call-delay-unsupported.mlir`
+        from strict expected-fail to strict pass.
+    - bounded AVIP compile-lane progression (`jtag`, seed-1):
+      - `/tmp/avip-circt-sim-20260217-232100`:
+        simulation now completes (`sim_status=OK`, `sim_sec=31s`);
+        unsupported tails:
+        `first_op:func.call:uvm_pkg::uvm_root::find_all`,
+        `multiblock_no_terminal`.
+      - `/tmp/avip-circt-sim-20260217-232403`:
+        `uvm_root::find_all` tail closed; new tail
+        `first_op:llvm.call:__moore_string_cmp`.
+      - `/tmp/avip-circt-sim-20260217-232923`:
+        `__moore_string_cmp` and `__moore_assoc_get_ref` tails closed;
+        new tail `first_op:func.call:uvm_pkg::uvm_report_object::set_report_verbosity_level`.
+      - `/tmp/avip-circt-sim-20260217-233506`:
+        `set_report_verbosity_level` tail closed; current unsupported tails:
+        - `first_op:func.call:uvm_pkg::uvm_report_object::set_report_id_verbosity` (1)
+        - `multiblock_no_terminal` (1)
+      - guard-failed remains dominant (`9` rows in latest run).
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
