@@ -14,6 +14,7 @@
    - invalid policy values now emit a warning and fall back to `memory`.
 3. Added regressions:
    - `test/Tools/circt-sim/jit-cache-policy-none.mlir`
+   - `test/Tools/circt-sim/jit-cache-policy-env-none.mlir`
    - `test/Tools/circt-sim/jit-cache-policy-invalid-env.mlir`
 4. Validation:
    - targeted cache-policy and derived-observed bundles PASS.
