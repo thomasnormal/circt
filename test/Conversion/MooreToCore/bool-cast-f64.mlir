@@ -13,10 +13,10 @@ moore.covergroup.decl @TestCG {
 // CHECK-LABEL: func @test_boolcast_f64
 // CHECK-SAME: -> i1
 func.func @test_boolcast_f64() -> !moore.i1 {
-  // CHECK-DAG: [[ZERO:%.+]] = arith.constant 0.000000e+00 : f64
   %cg = moore.covergroup.inst @TestCG : !moore.covergroup<@TestCG>
   // CHECK: [[COV:%.+]] = llvm.call @__moore_covergroup_get_coverage
   %cov = moore.covergroup.get_coverage %cg : !moore.covergroup<@TestCG> -> !moore.f64
+  // CHECK: [[ZERO:%.+]] = arith.constant 0.000000e+00 : f64
   // CHECK: [[RESULT:%.+]] = arith.cmpf une, [[COV]], [[ZERO]] : f64
   // CHECK: return [[RESULT]] : i1
   %result = moore.bool_cast %cov : !moore.f64 -> !moore.i1

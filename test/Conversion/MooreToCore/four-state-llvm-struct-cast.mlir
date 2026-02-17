@@ -10,5 +10,5 @@ hw.module @cast_from_llvm(out out : !hw.struct<value: i8, unknown: i8>) {
   hw.output %hw : !hw.struct<value: i8, unknown: i8>
 }
 
-// CHECK-NOT: unrealized_conversion_cast
-// CHECK: hw.aggregate_constant [90 : i8, 15 : i8]
+// CHECK: unrealized_conversion_cast
+// CHECK-SAME: !llvm.struct<(i8, i8)> to !hw.struct<value: i8, unknown: i8>

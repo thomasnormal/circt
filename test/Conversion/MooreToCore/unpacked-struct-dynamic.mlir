@@ -6,8 +6,8 @@
 // CHECK-LABEL: func.func @UnpackedStructWithString
 // CHECK-SAME: () -> !llvm.struct<(struct<(ptr, i64)>, struct<(ptr, i64)>)>
 func.func @UnpackedStructWithString() -> !moore.ustruct<{a: string, b: string}> {
-  // CHECK: llvm.mlir.zero : !llvm.struct<(struct<(ptr, i64)>, struct<(ptr, i64)>)>
   // CHECK: llvm.alloca {{.*}} x !llvm.struct<(struct<(ptr, i64)>, struct<(ptr, i64)>)>
+  // CHECK: llvm.mlir.zero : !llvm.struct<(struct<(ptr, i64)>, struct<(ptr, i64)>)>
   // CHECK: llvm.store
   %var = moore.variable : <ustruct<{a: string, b: string}>>
   %val = moore.read %var : <ustruct<{a: string, b: string}>>
@@ -18,8 +18,8 @@ func.func @UnpackedStructWithString() -> !moore.ustruct<{a: string, b: string}> 
 // CHECK-SAME: () -> !llvm.struct<(i32, struct<(ptr, i64)>)>
 func.func @UnpackedStructWithMixedTypes() -> !moore.ustruct<{num: i32, name: string}> {
   // Unpacked struct with both string and integer fields
-  // CHECK: llvm.mlir.zero : !llvm.struct<(i32, struct<(ptr, i64)>)>
   // CHECK: llvm.alloca {{.*}} x !llvm.struct<(i32, struct<(ptr, i64)>)>
+  // CHECK: llvm.mlir.zero : !llvm.struct<(i32, struct<(ptr, i64)>)>
   // CHECK: llvm.store
   %var = moore.variable : <ustruct<{num: i32, name: string}>>
   %val = moore.read %var : <ustruct<{num: i32, name: string}>>
@@ -31,8 +31,8 @@ func.func @UnpackedStructWithMixedTypes() -> !moore.ustruct<{num: i32, name: str
 func.func @NestedUnpackedStructWithString() -> !moore.ustruct<{inner: ustruct<{num: i32, name: string}>, count: i32}> {
   // Nested unpacked struct containing strings
   // The nested struct with string becomes LLVM struct, so the outer struct also becomes LLVM struct
-  // CHECK: llvm.mlir.zero : !llvm.struct<(struct<(i32, struct<(ptr, i64)>)>, i32)>
   // CHECK: llvm.alloca {{.*}} x !llvm.struct<(struct<(i32, struct<(ptr, i64)>)>, i32)>
+  // CHECK: llvm.mlir.zero : !llvm.struct<(struct<(i32, struct<(ptr, i64)>)>, i32)>
   // CHECK: llvm.store
   %var = moore.variable : <ustruct<{inner: ustruct<{num: i32, name: string}>, count: i32}>>
   %val = moore.read %var : <ustruct<{inner: ustruct<{num: i32, name: string}>, count: i32}>>

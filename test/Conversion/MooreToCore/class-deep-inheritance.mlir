@@ -35,14 +35,14 @@ moore.class.classdecl @Level4 extends @Level3 {
 
 // CHECK-LABEL: func.func @test_new_level2
 // CHECK:   [[MALLOC:%.+]] = llvm.call @malloc
-// CHECK:   llvm.getelementptr {{.*}}[0, 0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level2"
+// CHECK:   llvm.getelementptr {{.*}}[{{%.+}}, 0, 0] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level2"
 // CHECK:   llvm.store {{.*}} : i32, !llvm.ptr
-// CHECK:   llvm.getelementptr {{.*}}[0, 0, 0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level2"
+// CHECK:   llvm.getelementptr {{.*}}[{{%.+}}, 0, 0, 1] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level2"
 // CHECK:   llvm.store {{.*}} : !llvm.ptr, !llvm.ptr
 // queue1 should be at index 2, queue2 at index 4
-// CHECK:   llvm.getelementptr {{.*}}[0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level2"
+// CHECK:   llvm.getelementptr {{.*}}[{{%.+}}, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level2"
 // CHECK:   llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
-// CHECK:   llvm.getelementptr {{.*}}[0, 4] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level2"
+// CHECK:   llvm.getelementptr {{.*}}[{{%.+}}, 4] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level2"
 // CHECK:   llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
 // CHECK:   return
 func.func @test_new_level2() -> !moore.class<@Level2> {
@@ -57,12 +57,12 @@ func.func @test_new_level2() -> !moore.class<@Level2> {
 // queue3 path: [0, 2] (into Level3, index 2)
 // CHECK:   [[MALLOC:%.+]] = llvm.call @malloc
 // Verify we have GEP operations with correct indices (not out-of-bounds)
-// CHECK:   llvm.getelementptr {{.*}}[0, 0, 0, 0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level4"
-// CHECK:   llvm.getelementptr {{.*}}[0, 0, 0, 0, 0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level4"
+// CHECK:   llvm.getelementptr {{.*}}[{{%.+}}, 0, 0, 0, 0] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level4"
+// CHECK:   llvm.getelementptr {{.*}}[{{%.+}}, 0, 0, 0, 0, 1] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level4"
 // Queue initializations should use correct cached paths
-// CHECK:   llvm.getelementptr {{.*}}[0, 0, 0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level4"
-// CHECK:   llvm.getelementptr {{.*}}[0, 0, 0, 4] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level4"
-// CHECK:   llvm.getelementptr {{.*}}[0, 0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level4"
+// CHECK:   llvm.getelementptr {{.*}}[{{%.+}}, 0, 0, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level4"
+// CHECK:   llvm.getelementptr {{.*}}[{{%.+}}, 0, 0, 4] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level4"
+// CHECK:   llvm.getelementptr {{.*}}[{{%.+}}, 0, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level4"
 // CHECK:   return
 func.func @test_new_level4() -> !moore.class<@Level4> {
   %obj = moore.class.new : <@Level4>
@@ -71,8 +71,8 @@ func.func @test_new_level4() -> !moore.class<@Level4> {
 
 // Test property access to inherited queues
 // CHECK-LABEL: func.func @test_queue_access
-// CHECK:   llvm.getelementptr {{.*}}[0, 0, 0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level4"
-// CHECK:   llvm.getelementptr {{.*}}[0, 0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level4"
+// CHECK:   llvm.getelementptr {{.*}}[{{%.+}}, 0, 0, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level4"
+// CHECK:   llvm.getelementptr {{.*}}[{{%.+}}, 0, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level4"
 // CHECK:   return
 func.func @test_queue_access(%obj: !moore.class<@Level4>) -> (!moore.ref<queue<i32, 0>>, !moore.ref<queue<i32, 0>>) {
   %ref1 = moore.class.property_ref %obj[@queue1] : <@Level4> -> !moore.ref<queue<i32, 0>>

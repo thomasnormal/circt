@@ -1,11 +1,10 @@
 // RUN: circt-opt --convert-moore-to-core %s | FileCheck %s
 
 // CHECK-LABEL: func.func @FourStateSubNeg1Mask
-// CHECK: [[ONES:%.+]] = hw.constant -1 : i4
 // CHECK: [[AVAL:%.+]] = hw.struct_extract %arg0["value"]
 // CHECK: [[AUNK:%.+]] = hw.struct_extract %arg0["unknown"]
-// CHECK: [[NOTVAL:%.+]] = comb.xor [[AVAL]], [[ONES]] : i4
-// CHECK: [[KNOWN:%.+]] = comb.xor [[AUNK]], [[ONES]] : i4
+// CHECK: [[NOTVAL:%.+]] = comb.xor [[AVAL]], {{%.+}} : i4
+// CHECK: [[KNOWN:%.+]] = comb.xor [[AUNK]], {{%.+}} : i4
 // CHECK: [[MASKED:%.+]] = comb.and [[NOTVAL]], [[KNOWN]] : i4
 // CHECK: hw.struct_create ([[MASKED]], [[AUNK]])
 // CHECK-NOT: comb.icmp ne [[AUNK]]

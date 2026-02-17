@@ -23,8 +23,8 @@ moore.covergroup.decl @TestCG {
 
 // CHECK-LABEL: func @TestCovergroupInst
 func.func @TestCovergroupInst() -> !moore.covergroup<@TestCG> {
-  // CHECK: [[HANDLE_PTR:%.+]] = llvm.mlir.addressof @__cg_handle_TestCG : !llvm.ptr
   // CHECK: llvm.call @__cg_init_TestCG() : () -> ()
+  // CHECK: [[HANDLE_PTR:%.+]] = llvm.mlir.addressof @__cg_handle_TestCG : !llvm.ptr
   // CHECK: [[HANDLE:%.+]] = llvm.load [[HANDLE_PTR]] : !llvm.ptr -> !llvm.ptr
   // CHECK: return [[HANDLE]] : !llvm.ptr
   %cg = moore.covergroup.inst @TestCG : !moore.covergroup<@TestCG>
@@ -34,11 +34,11 @@ func.func @TestCovergroupInst() -> !moore.covergroup<@TestCG> {
 // CHECK-LABEL: func @TestCovergroupSample
 // CHECK-SAME: (%[[CG:.*]]: !llvm.ptr, %[[DATA:.*]]: i8, %[[ADDR:.*]]: i16)
 func.func @TestCovergroupSample(%cg: !moore.covergroup<@TestCG>, %data: !moore.i8, %addr: !moore.i16) {
-  // CHECK-DAG: %[[IDX0:.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-DAG: %[[IDX1:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK: %[[DATA_EXT:.*]] = arith.extui %[[DATA]] : i8 to i64
+  // CHECK: %[[IDX0:.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK: llvm.call @__moore_coverpoint_sample(%[[CG]], %[[IDX0]], %[[DATA_EXT]]) : (!llvm.ptr, i32, i64) -> ()
   // CHECK: %[[ADDR_EXT:.*]] = arith.extui %[[ADDR]] : i16 to i64
+  // CHECK: %[[IDX1:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK: llvm.call @__moore_coverpoint_sample(%[[CG]], %[[IDX1]], %[[ADDR_EXT]]) : (!llvm.ptr, i32, i64) -> ()
   moore.covergroup.sample %cg(%data, %addr) : !moore.covergroup<@TestCG> (!moore.i8, !moore.i16)
   return

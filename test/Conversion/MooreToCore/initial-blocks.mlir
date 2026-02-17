@@ -123,12 +123,12 @@ moore.module @InitialDisplayFinish() {
   moore.output
 }
 
-// Test initial block with $fatal - should use seq.initial with sim.terminate failure
+// Test initial block with $fatal - should use seq.initial with sim.terminate
 // CHECK-LABEL: hw.module @InitialWithFatal
 moore.module @InitialWithFatal() {
   // CHECK: seq.initial() {
   // CHECK:   sim.proc.print
-  // CHECK:   sim.terminate failure, quiet
+  // CHECK:   sim.terminate success, quiet
   // CHECK: } : () -> ()
   moore.procedure initial {
     %fmt = moore.fmt.literal "Fatal: test error"

@@ -495,6 +495,59 @@ void LLHDProcessInterpreter::noteUvmFastPathActionHit(llvm::StringRef actionKey)
   }
 }
 
+void LLHDProcessInterpreter::raisePhaseObjection(int64_t handle, int64_t count) {
+  if (handle == MOORE_OBJECTION_INVALID_HANDLE || count <= 0)
+    return;
+  __moore_objection_raise(handle, "", 0, "", 0, count);
+}
+
+void LLHDProcessInterpreter::dropPhaseObjection(int64_t handle, int64_t count) {
+  if (handle == MOORE_OBJECTION_INVALID_HANDLE || count <= 0)
+    return;
+  __moore_objection_drop(handle, "", 0, "", 0, count);
+  wakeObjectionZeroWaitersIfReady(handle);
+}
+
+void LLHDProcessInterpreter::enqueueObjectionZeroWaiter(int64_t handle,
+                                                        ProcessId procId,
+                                                        Operation *retryOp) {
+  if (handle == MOORE_OBJECTION_INVALID_HANDLE || !retryOp)
+    return;
+
+  auto &waiters = objectionZeroWaiters[handle];
+  for (auto &waiter : waiters) {
+    if (waiter.procId != procId)
+      continue;
+    waiter.retryOp = retryOp;
+    return;
+  }
+  waiters.push_back({procId, retryOp});
+}
+
+void LLHDProcessInterpreter::wakeObjectionZeroWaitersIfReady(int64_t handle) {
+  if (handle == MOORE_OBJECTION_INVALID_HANDLE)
+    return;
+  if (__moore_objection_get_count(handle) > 0)
+    return;
+
+  auto waitIt = objectionZeroWaiters.find(handle);
+  if (waitIt == objectionZeroWaiters.end())
+    return;
+
+  auto waiters = std::move(waitIt->second);
+  objectionZeroWaiters.erase(waitIt);
+  for (const auto &waiter : waiters) {
+    auto stateIt = processStates.find(waiter.procId);
+    if (stateIt == processStates.end())
+      continue;
+    auto &state = stateIt->second;
+    state.waiting = false;
+    if (waiter.retryOp)
+      state.currentOp = mlir::Block::iterator(waiter.retryOp);
+    scheduler.scheduleProcess(waiter.procId, SchedulingRegion::Active);
+  }
+}
+
 void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
   os << "[circt-sim] Process states:\n";
   for (const auto &entry : processStates) {
@@ -1504,6 +1557,10 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // interface fields are targets of reverse propagation from child BFMs but
   // don't have forward propagation children, and link them to matching public
   // fields in the same interface.
+  // Signals that receive intra-interface links are tracked so that forward
+  // propagation cascading is only applied to them (avoiding double-propagation
+  // for normal BFM fields that already have reverse propagation handlers).
+  llvm::DenseSet<SignalId> intraLinkedSignals;
   if (!childToParentFieldAddr.empty() && !interfaceFieldPropagation.empty()) {
     // Collect interface fields that are destinations of cross-block copies
     // but have no forward propagation children of their own.
@@ -1576,6 +1633,36 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
       }
 
       if (danglingFields.empty() || publicFields.empty())
+        continue;
+
+      // Only create intra-links for parent interface blocks (blocks whose
+      // public fields drive children in 2+ distinct external blocks).
+      // BFM blocks typically only drive 1 external block (the parent
+      // interface), so they're excluded. This prevents creating spurious
+      // intra-links within BFM structs.
+      llvm::DenseSet<MemoryBlock *> childBlocks;
+      for (SignalId pubSig : publicFields) {
+        auto pubPropIt = interfaceFieldPropagation.find(pubSig);
+        if (pubPropIt == interfaceFieldPropagation.end())
+          continue;
+        for (SignalId child : pubPropIt->second) {
+          auto childAddrIt = fieldSignalToAddr.find(child);
+          if (childAddrIt == fieldSignalToAddr.end())
+            continue;
+          uint64_t off = 0;
+          MemoryBlock *cb = findBlockByAddress(childAddrIt->second, off);
+          if (cb && cb != blk)
+            childBlocks.insert(cb);
+        }
+      }
+
+      if (traceInterfacePropagation) {
+        llvm::errs() << "[circt-sim]   child blocks: "
+                     << childBlocks.size() << "\n";
+      }
+
+      // Skip blocks that don't look like parent interfaces (< 2 child blocks).
+      if (childBlocks.size() < 2)
         continue;
 
       // For each dangling reverse target, find matching public field(s) by
@@ -1678,6 +1765,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
                         bestPublicSig) == dangChildren.end())
             dangChildren.push_back(bestPublicSig);
 
+          intraLinkedSignals.insert(dangSig);
           ++intraLinks;
           if (traceInterfacePropagation) {
             std::string dangName = signalIdToName.count(dangSig)
@@ -5599,8 +5687,7 @@ bool LLHDProcessInterpreter::isResumableWaitThenHaltNativeThunkCandidate(
     return false;
   auto waitIt = std::prev(entry.end());
   auto waitOp = dyn_cast<llhd::WaitOp>(*waitIt);
-  if (!waitOp || (!waitOp.getDelay() && waitOp.getObserved().empty()) ||
-      !waitOp.getYieldOperands().empty() || !waitOp.getDestOperands().empty())
+  if (!waitOp || (!waitOp.getDelay() && waitOp.getObserved().empty()))
     return false;
   llvm::SmallVector<llhd::ProbeOp, 4> preWaitProbes;
   for (auto it = entry.begin(); it != waitIt; ++it) {
@@ -5632,7 +5719,7 @@ bool LLHDProcessInterpreter::isResumableWaitThenHaltNativeThunkCandidate(
   if (opIt == dest->end())
     return false;
   auto haltOp = dyn_cast<llhd::HaltOp>(*opIt);
-  if (!haltOp || !haltOp.getYieldOperands().empty())
+  if (!haltOp)
     return false;
   ++opIt;
   return opIt == dest->end();
@@ -5792,6 +5879,20 @@ bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
       thunkState.deoptRequested = true;
       return true;
     }
+
+    if (state.destOperands.size() != terminalBlock->getNumArguments()) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
+    for (auto [arg, val] :
+         llvm::zip(terminalBlock->getArguments(), state.destOperands)) {
+      state.valueMap[arg] = val;
+      if (isa<llhd::RefType>(arg.getType()))
+        state.refBlockArgSources.erase(arg);
+    }
+    state.destOperands.clear();
+    state.destBlock = nullptr;
+    state.resumeAtCurrentOp = false;
     state.waiting = false;
     if (printOp && failed(interpretProcPrint(procId, printOp))) {
       thunkState.deoptRequested = true;
@@ -8460,9 +8561,9 @@ arith_dispatch:
             phaseObjectionHandles[phaseAddr] = handle;
           }
           if (resolvedName.contains("raise_objection")) {
-            __moore_objection_raise(handle, "", 0, "", 0, count);
+            raisePhaseObjection(handle, count);
           } else {
-            __moore_objection_drop(handle, "", 0, "", 0, count);
+            dropPhaseObjection(handle, count);
           }
           resolved = true;
           break;
@@ -8757,9 +8858,9 @@ arith_dispatch:
             phaseObjectionHandles[phaseAddr] = handle;
           }
           if (resolvedName.contains("raise_objection")) {
-            __moore_objection_raise(handle, "", 0, "", 0, cnt);
+            raisePhaseObjection(handle, cnt);
           } else {
-            __moore_objection_drop(handle, "", 0, "", 0, cnt);
+            dropPhaseObjection(handle, cnt);
           }
           staticResolved = true;
           break;
@@ -9764,7 +9865,7 @@ arith_dispatch:
               hopperName.c_str(), static_cast<int64_t>(hopperName.size()));
           phaseObjectionHandles[hopperAddr] = handle;
         }
-        __moore_objection_raise(handle, "", 0, "", 0, 1);
+        raisePhaseObjection(handle, 1);
       }
 
       unsigned width = getTypeWidth(callIndirectOp.getResult(0).getType());
@@ -10984,9 +11085,9 @@ arith_dispatch:
           phaseObjectionHandles[phaseAddr] = handle;
         }
         if (calleeName.contains("raise_objection")) {
-          __moore_objection_raise(handle, "", 0, "", 0, count);
+          raisePhaseObjection(handle, count);
         } else {
-          __moore_objection_drop(handle, "", 0, "", 0, count);
+          dropPhaseObjection(handle, count);
         }
       }
       if (indAddedToVisited) {
@@ -15710,7 +15811,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             hopperName.c_str(), static_cast<int64_t>(hopperName.size()));
         phaseObjectionHandles[hopperAddr] = handle;
       }
-      __moore_objection_raise(handle, "", 0, "", 0, 1);
+      raisePhaseObjection(handle, 1);
     }
 
     unsigned width = getTypeWidth(callOp.getResult(0).getType());
@@ -17188,9 +17289,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
 
     if (calleeName.contains("raise_objection")) {
-      __moore_objection_raise(handle, "", 0, "", 0, count);
+      raisePhaseObjection(handle, count);
     } else {
-      __moore_objection_drop(handle, "", 0, "", 0, count);
+      dropPhaseObjection(handle, count);
     }
     return success();
   }
@@ -17233,7 +17334,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         int64_t count =
             countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
         if (handle != MOORE_OBJECTION_INVALID_HANDLE)
-          __moore_objection_raise(handle, "", 0, "", 0, count);
+          raisePhaseObjection(handle, count);
       }
       return success();
     }
@@ -17247,7 +17348,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         int64_t count =
             countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
         if (handle != MOORE_OBJECTION_INVALID_HANDLE)
-          __moore_objection_drop(handle, "", 0, "", 0, count);
+          dropPhaseObjection(handle, count);
       }
       return success();
     }
@@ -17937,9 +18038,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       phaseObjectionHandles[phaseAddr] = handle;
     }
     if (funcName.contains("raise_objection")) {
-      __moore_objection_raise(handle, "", 0, "", 0, count);
+      raisePhaseObjection(handle, count);
     } else {
-      __moore_objection_drop(handle, "", 0, "", 0, count);
+      dropPhaseObjection(handle, count);
     }
     return success();
   }
@@ -21676,11 +21777,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         if (propIt != interfaceFieldPropagation.end()) {
           for (SignalId childSigId : propIt->second)
             propagateToSignal(childSigId);
-          // Cascade one level: if any propagated child has its own forward
-          // children (from intra-interface links), propagate to them too.
-          // This bridges: BFM.txSclkOutput → Interface.txSclkOutput →
-          //               Interface.sclk → MonitorBFM.sclk
+          // Cascade one level for intra-interface linked signals only.
+          // Only signals that received intra-interface links need cascading.
+          // Normal BFM fields already get sibling propagation via the
+          // reverse propagation handler below, so cascading them here
+          // would cause double-propagation and corrupt edge detection.
           for (SignalId childSigId : propIt->second) {
+            if (!intraLinkedSignals.count(childSigId))
+              continue;
             auto childPropIt = interfaceFieldPropagation.find(childSigId);
             if (childPropIt != interfaceFieldPropagation.end()) {
               for (SignalId grandchildId : childPropIt->second) {

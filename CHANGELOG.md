@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1437 - February 17, 2026
+
+### circt-sim: Resumable Wait/Halt-Yield Process-Result Thunks + Parallel Runtime Findings
+
+1. Extended resumable wait native thunk eligibility/execution to support
+   process-result shapes with terminal block arguments and halt yields:
+   - matcher no longer rejects `llhd.wait` yield operands.
+   - token-1 resume path now maps `state.destOperands` to terminal block
+     arguments before optional `sim.proc.print` and terminal `llhd.halt`.
+   - terminal block argument mapping now clears stale ref-arg sources and
+     resets resume destination state before halt execution.
+2. Added/updated regressions for this process-result wait/halt-yield shape:
+   - `test/Tools/circt-sim/jit-process-thunk-wait-delay-dest-operand-halt-yield.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-wait-delay-dest-operand-halt-yield-guard-failed-env.mlir`
+3. Validation:
+   - `CCACHE_DISABLE=1 ninja -C build circt-sim` PASS
+   - targeted runline-equivalent manual JIT checks PASS:
+     - new wait-dest/halt-yield tests
+     - existing wait-event (single + multi-observed), periodic-toggle, and
+       strict/deopt JIT tests.
+   - profile-summary sanity:
+     - `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1 build/bin/circt-sim test/Tools/circt-sim/profile-summary-memory-state.mlir`
+       emits `Memory state`, `Memory peak`, and `Memory process top`.
+   - bounded AVIP compile-mode smoke:
+     - `AVIPS=jtag SEEDS=1 COMPILE_TIMEOUT=120 SIM_TIMEOUT=90 MAX_WALL_MS=90000 CIRCT_SIM_MODE=compile utils/run_avip_circt_sim.sh`
+     - result: compile `OK` (39s), sim bounded `TIMEOUT` (90s).
+4. Parallel simulation findings (new tracked limitation):
+   - minimal LLHD process tests under `--parallel=4` currently show runtime
+     instability in both interpret and compile modes (hangs and allocator
+     aborts, e.g. `double free or corruption` with crash diag at `comb.xor`).
+   - this blocks declaring native-thunk parity under multi-threaded simulation
+     and is now an explicit hardening item in the full-native-JIT plan.
+
 ## Iteration 1436 - February 17, 2026
 
 ### circt-sim: Multi-Observed Event-Wait Native Thunks

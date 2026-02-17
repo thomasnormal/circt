@@ -43,6 +43,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
     probe (`llhd.wait (observed ...)`) for print/halt terminal bodies.
   - event-sensitive resumable wait thunks now also support multi-observed wait
     lists with matching pre-wait probe sequences.
+  - resumable wait thunks now also support process-result terminal shapes with
+    `llhd.wait yield (...)` + destination block operands and terminal
+    `llhd.halt` yield operands.
   - deopt reasons are now split between `missing_thunk` and
     `unsupported_operation` when compile is attempted on unsupported bodies.
   - bounded AVIP mode-parity smoke remains green on `jtag`/seed `1`
@@ -51,6 +54,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
     bounds both timed out before graceful profile-summary emission.
   - refreshed bounded AVIP compile-mode smoke (jtag/seed=1, 90s) remains:
     compile `OK`, bounded sim `TIMEOUT`.
+  - parallel-runtime hardening gap identified:
+    minimal LLHD process tests under `--parallel=4` currently hang or abort in
+    both interpret and compile modes (allocator corruption crashes observed),
+    so multi-threaded parity remains blocked pending scheduler/runtime fixes.
 
 ### Current Status
 - **sv-tests simulation**: 1172 pass + 321 xfail = 1493/1493 (100%), 0 fail (Feb 17)

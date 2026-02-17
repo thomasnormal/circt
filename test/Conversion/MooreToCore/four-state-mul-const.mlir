@@ -10,7 +10,8 @@ func.func @FourStateMulByOne(%a: !moore.l4) -> !moore.l4 {
 }
 
 // CHECK-LABEL: func.func @FourStateMulByZero
-// CHECK: hw.aggregate_constant [0 : i4, 0 : i4]
+// CHECK: hw.struct_create
+// CHECK-SAME: !hw.struct<value: i4, unknown: i4>
 // CHECK-NOT: comb.mul
 func.func @FourStateMulByZero(%a: !moore.l4) -> !moore.l4 {
   %b = moore.constant b0000 : l4

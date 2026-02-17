@@ -114,7 +114,7 @@ moore.class.classdecl @F extends @C {
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i32> {
 // G extends C (derived), so layout is {base_C, d, e, f}. Accessing d at index 1.
 // First index 0 dereferences the pointer, second index 1 accesses field d.
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"G"
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[{{%.+}}, 1] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"G"
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i32>
 // CHECK:   return [[CONV]] : !llhd.ref<i32>
 
@@ -136,7 +136,8 @@ moore.class.classdecl @G extends @C {
 // CHECK-LABEL: func.func private @test_dyn_cast
 // CHECK-SAME: (%arg0: !llvm.ptr) -> (!llvm.ptr, i1) {
 // CHECK-DAG:   [[ZERO:%.+]] = llvm.mlir.zero : !llvm.ptr
-// CHECK:   [[RTTI:%.+]] = llvm.load %arg0 : !llvm.ptr -> i32
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[{{%.+}}] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"BaseClass"
+// CHECK:   [[RTTI:%.+]] = llvm.load [[GEP]] : !llvm.ptr -> i32
 // CHECK:   [[CALL:%.+]] = llvm.call @__moore_dyn_cast_check({{.*}}) : (i32, i32, i32) -> i1
 // CHECK:   [[NOTNULL:%.+]] = llvm.icmp "ne" %arg0, [[ZERO]] : !llvm.ptr
 // CHECK:   [[SUCCESS:%.+]] = llvm.and [[NOTNULL]], [[CALL]] : i1

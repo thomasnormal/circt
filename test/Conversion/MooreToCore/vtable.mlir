@@ -49,7 +49,7 @@ func.func private @"testClass::testSubroutine"(%arg0: !moore.class<@testClass>) 
 
 // CHECK-LABEL: func.func @test_vtable_load_method
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr) -> ((!llvm.ptr) -> ())
-// CHECK:         %[[VTABLE_PTR_PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 1]
+// CHECK:         %[[VTABLE_PTR_PTR:.*]] = llvm.getelementptr %[[OBJ]][{{%.+}}, 1]
 // CHECK:         %[[VTABLE_PTR:.*]] = llvm.load %[[VTABLE_PTR_PTR]]
 // CHECK:         %[[FUNC_PTR_PTR:.*]] = llvm.getelementptr %[[VTABLE_PTR]][0, 0]
 // CHECK:         %[[FUNC_PTR:.*]] = llvm.load %[[FUNC_PTR_PTR]]
@@ -64,7 +64,7 @@ func.func @test_vtable_load_method(%obj: !moore.class<@testClass>) -> ((!moore.c
 
 // CHECK-LABEL: func.func @test_vtable_load_method_nested
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr) -> ((!llvm.ptr) -> ())
-// CHECK:         %[[VTABLE_PTR_PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 1]
+// CHECK:         %[[VTABLE_PTR_PTR:.*]] = llvm.getelementptr %[[OBJ]][{{%.+}}, 1]
 // CHECK:         %[[VTABLE_PTR:.*]] = llvm.load %[[VTABLE_PTR_PTR]]
 // CHECK:         %[[FUNC_PTR_PTR:.*]] = llvm.getelementptr %[[VTABLE_PTR]][0, 0]
 // CHECK:         %[[FUNC_PTR:.*]] = llvm.load %[[FUNC_PTR_PTR]]

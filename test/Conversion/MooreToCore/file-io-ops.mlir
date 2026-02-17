@@ -27,9 +27,9 @@ moore.module @test_fopen(in %filename: !moore.string, in %mode: !moore.string, o
 
 // CHECK-LABEL: hw.module @test_fopen_no_mode
 moore.module @test_fopen_no_mode(in %filename: !moore.string, out fd: !moore.i32) {
-  // CHECK: llvm.mlir.zero : !llvm.ptr
   // CHECK: llvm.alloca
   // CHECK: llvm.store
+  // CHECK: llvm.mlir.zero : !llvm.ptr
   // CHECK: %[[RESULT:.*]] = llvm.call @__moore_fopen
   %fd = moore.builtin.fopen %filename
   moore.output %fd : !moore.i32

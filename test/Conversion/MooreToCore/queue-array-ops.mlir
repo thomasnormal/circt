@@ -196,11 +196,11 @@ func.func @test_assoc_delete_key() {
 moore.global_variable @testStringQueue : !moore.queue<!moore.string, 0>
 
 // CHECK-LABEL: func @test_stream_concat_string_queue
-// CHECK-DAG: [[FALSE:%.+]] = llvm.mlir.constant(false) : i1
 // CHECK: llvm.mlir.addressof @testStringQueue : !llvm.ptr
 // CHECK: llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
 // CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
 // CHECK: llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
+// CHECK: [[FALSE:%.+]] = llvm.mlir.constant(false) : i1
 // CHECK: llvm.call @__moore_stream_concat_strings({{.*}}, [[FALSE]]) : (!llvm.ptr, i1) -> !llvm.struct<(ptr, i64)>
 func.func @test_stream_concat_string_queue() -> !moore.string {
   %queue_ref = moore.get_global_variable @testStringQueue : !moore.ref<queue<!moore.string, 0>>
@@ -210,7 +210,7 @@ func.func @test_stream_concat_string_queue() -> !moore.string {
 }
 
 // CHECK-LABEL: func @test_stream_concat_string_queue_rtl
-// CHECK-DAG: [[TRUE:%.+]] = llvm.mlir.constant(true) : i1
+// CHECK: [[TRUE:%.+]] = llvm.mlir.constant(true) : i1
 // CHECK: llvm.call @__moore_stream_concat_strings({{.*}}, [[TRUE]]) : (!llvm.ptr, i1) -> !llvm.struct<(ptr, i64)>
 func.func @test_stream_concat_string_queue_rtl() -> !moore.string {
   %queue_ref = moore.get_global_variable @testStringQueue : !moore.ref<queue<!moore.string, 0>>
@@ -220,10 +220,10 @@ func.func @test_stream_concat_string_queue_rtl() -> !moore.string {
 }
 
 // CHECK-LABEL: func @test_stream_concat_int_queue
-// CHECK-DAG: [[WIDTH:%.+]] = llvm.mlir.constant(32 : i32) : i32
-// CHECK-DAG: [[FALSE:%.+]] = llvm.mlir.constant(false) : i1
 // CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
 // CHECK: llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
+// CHECK: [[FALSE:%.+]] = llvm.mlir.constant(false) : i1
+// CHECK: [[WIDTH:%.+]] = llvm.mlir.constant(32 : i32) : i32
 // CHECK: [[RESULT:%.+]] = llvm.call @__moore_stream_concat_bits({{.*}}, [[WIDTH]], [[FALSE]]) : (!llvm.ptr, i32, i1) -> i64
 // CHECK: arith.trunci [[RESULT]] : i64 to i32
 func.func @test_stream_concat_int_queue() -> !moore.i32 {
@@ -234,8 +234,8 @@ func.func @test_stream_concat_int_queue() -> !moore.i32 {
 }
 
 // CHECK-LABEL: func @test_stream_concat_int_queue_rtl
-// CHECK-DAG: [[WIDTH:%.+]] = llvm.mlir.constant(32 : i32) : i32
-// CHECK-DAG: [[TRUE:%.+]] = llvm.mlir.constant(true) : i1
+// CHECK: [[TRUE:%.+]] = llvm.mlir.constant(true) : i1
+// CHECK: [[WIDTH:%.+]] = llvm.mlir.constant(32 : i32) : i32
 // CHECK: llvm.call @__moore_stream_concat_bits({{.*}}, [[WIDTH]], [[TRUE]]) : (!llvm.ptr, i32, i1) -> i64
 func.func @test_stream_concat_int_queue_rtl() -> !moore.i32 {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
@@ -249,10 +249,10 @@ func.func @test_stream_concat_int_queue_rtl() -> !moore.i32 {
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func @test_queue_push_back
-// CHECK-DAG: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
 // CHECK: [[QPTR:%.+]] = llvm.mlir.addressof @testQueue : !llvm.ptr
 // CHECK: [[ELEMALLOCA:%.+]] = llvm.alloca {{.*}} x i32
 // CHECK: llvm.store {{.*}} : i32, !llvm.ptr
+// CHECK: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
 // CHECK: llvm.call @__moore_queue_push_back([[QPTR]], [[ELEMALLOCA]], [[SIZE]]) : (!llvm.ptr, !llvm.ptr, i64) -> ()
 func.func @test_queue_push_back() {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
@@ -273,8 +273,8 @@ func.func @test_queue_push_front() {
 }
 
 // CHECK-LABEL: func @test_queue_insert
-// CHECK-DAG: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
 // CHECK: [[QPTR:%.+]] = llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
 // CHECK: llvm.call @__moore_queue_insert([[QPTR]], {{.*}}, {{.*}}, [[SIZE]]) : (!llvm.ptr, i32, !llvm.ptr, i64) -> ()
 func.func @test_queue_insert() {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
@@ -285,8 +285,8 @@ func.func @test_queue_insert() {
 }
 
 // CHECK-LABEL: func @test_queue_pop_back
-// CHECK-DAG: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
-// CHECK-DAG: [[QPTR:%.+]] = llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: [[QPTR:%.+]] = llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
 // CHECK: [[RESULT:%.+]] = llvm.call @__moore_queue_pop_back([[QPTR]], [[SIZE]]) : (!llvm.ptr, i64) -> i64
 // CHECK: arith.trunci [[RESULT]] : i64 to i32
 func.func @test_queue_pop_back() -> !moore.i32 {
@@ -325,13 +325,13 @@ func.func @test_array_locator_find_string_eq(%target: !moore.string) -> !moore.q
 }
 
 // CHECK-LABEL: func @test_array_locator_find_all_eq
-// CHECK-DAG: [[INDICES:%.+]] = llvm.mlir.constant(false) : i1
-// CHECK-DAG: [[MODE:%.+]] = llvm.mlir.constant(0 : i32) : i32
-// CHECK-DAG: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
 // CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
 // CHECK: llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
 // CHECK: llvm.alloca {{.*}} x i32
 // CHECK: llvm.store {{.*}} : i32, !llvm.ptr
+// CHECK: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
+// CHECK: [[MODE:%.+]] = llvm.mlir.constant(0 : i32) : i32
+// CHECK: [[INDICES:%.+]] = llvm.mlir.constant(false) : i1
 // CHECK: llvm.call @__moore_array_find_eq({{.*}}, [[SIZE]], {{.*}}, [[MODE]], [[INDICES]]) : (!llvm.ptr, i64, !llvm.ptr, i32, i1) -> !llvm.struct<(ptr, i64)>
 func.func @test_array_locator_find_all_eq() -> !moore.queue<!moore.i32, 0> {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
@@ -346,8 +346,8 @@ func.func @test_array_locator_find_all_eq() -> !moore.queue<!moore.i32, 0> {
 }
 
 // CHECK-LABEL: func @test_array_locator_find_first_index_eq
-// CHECK-DAG: [[INDICES:%.+]] = llvm.mlir.constant(true) : i1
-// CHECK-DAG: [[MODE:%.+]] = llvm.mlir.constant(1 : i32) : i32
+// CHECK: [[MODE:%.+]] = llvm.mlir.constant(1 : i32) : i32
+// CHECK: [[INDICES:%.+]] = llvm.mlir.constant(true) : i1
 // CHECK: llvm.call @__moore_array_find_eq({{.*}}, {{.*}}, {{.*}}, [[MODE]], [[INDICES]]) : (!llvm.ptr, i64, !llvm.ptr, i32, i1) -> !llvm.struct<(ptr, i64)>
 func.func @test_array_locator_find_first_index_eq() -> !moore.queue<!moore.i32, 0> {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
@@ -362,8 +362,8 @@ func.func @test_array_locator_find_first_index_eq() -> !moore.queue<!moore.i32, 
 }
 
 // CHECK-LABEL: func @test_array_locator_find_last_eq
-// CHECK-DAG: [[INDICES:%.+]] = llvm.mlir.constant(false) : i1
-// CHECK-DAG: [[MODE:%.+]] = llvm.mlir.constant(2 : i32) : i32
+// CHECK: [[MODE:%.+]] = llvm.mlir.constant(2 : i32) : i32
+// CHECK: [[INDICES:%.+]] = llvm.mlir.constant(false) : i1
 // CHECK: llvm.call @__moore_array_find_eq({{.*}}, {{.*}}, {{.*}}, [[MODE]], [[INDICES]]) : (!llvm.ptr, i64, !llvm.ptr, i32, i1) -> !llvm.struct<(ptr, i64)>
 func.func @test_array_locator_find_last_eq() -> !moore.queue<!moore.i32, 0> {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
@@ -479,7 +479,8 @@ func.func @test_array_locator_find_sgt_swapped() -> !moore.queue<!moore.i32, 0> 
 // CHECK: llvm.mlir.addressof @testQueue : !llvm.ptr
 // CHECK: [[QUEUE:%.+]] = llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
 // CHECK: [[PTR:%.+]] = llvm.extractvalue [[QUEUE]][0] : !llvm.struct<(ptr, i64)>
-// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][2] : (!llvm.ptr) -> !llvm.ptr, i32
+// CHECK: [[IDX:%.+]] = arith.extui {{.*}} : i32 to i64
+// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][[[IDX]]] : (!llvm.ptr, i64) -> !llvm.ptr, i32
 // CHECK: llvm.load [[ELEM_PTR]] : !llvm.ptr -> i32
 func.func @test_queue_dyn_extract() -> !moore.i32 {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
@@ -493,7 +494,8 @@ func.func @test_queue_dyn_extract() -> !moore.i32 {
 // CHECK: llvm.mlir.addressof @testQueue : !llvm.ptr
 // CHECK: [[QUEUE:%.+]] = llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
 // CHECK: [[PTR:%.+]] = llvm.extractvalue [[QUEUE]][0] : !llvm.struct<(ptr, i64)>
-// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][2] : (!llvm.ptr) -> !llvm.ptr, i32
+// CHECK: [[IDX:%.+]] = arith.extui {{.*}} : i32 to i64
+// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][[[IDX]]] : (!llvm.ptr, i64) -> !llvm.ptr, i32
 func.func @test_queue_dyn_extract_ref() -> !moore.i32 {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
   %idx = moore.constant 2 : i32
@@ -506,7 +508,8 @@ func.func @test_queue_dyn_extract_ref() -> !moore.i32 {
 // CHECK: llvm.mlir.addressof @testDynArray : !llvm.ptr
 // CHECK: [[ARR:%.+]] = llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
 // CHECK: [[PTR:%.+]] = llvm.extractvalue [[ARR]][0] : !llvm.struct<(ptr, i64)>
-// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][3] : (!llvm.ptr) -> !llvm.ptr, i32
+// CHECK: [[IDX:%.+]] = arith.extui {{.*}} : i32 to i64
+// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][[[IDX]]] : (!llvm.ptr, i64) -> !llvm.ptr, i32
 // CHECK: llvm.load [[ELEM_PTR]] : !llvm.ptr -> i32
 func.func @test_dyn_array_dyn_extract() -> !moore.i32 {
   %arr_ref = moore.get_global_variable @testDynArray : !moore.ref<open_uarray<!moore.i32>>
@@ -520,7 +523,8 @@ func.func @test_dyn_array_dyn_extract() -> !moore.i32 {
 // CHECK: llvm.mlir.addressof @testDynArray : !llvm.ptr
 // CHECK: [[ARR:%.+]] = llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
 // CHECK: [[PTR:%.+]] = llvm.extractvalue [[ARR]][0] : !llvm.struct<(ptr, i64)>
-// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][3] : (!llvm.ptr) -> !llvm.ptr, i32
+// CHECK: [[IDX:%.+]] = arith.extui {{.*}} : i32 to i64
+// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][[[IDX]]] : (!llvm.ptr, i64) -> !llvm.ptr, i32
 func.func @test_dyn_array_dyn_extract_ref() -> !moore.i32 {
   %arr_ref = moore.get_global_variable @testDynArray : !moore.ref<open_uarray<!moore.i32>>
   %idx = moore.constant 3 : i32

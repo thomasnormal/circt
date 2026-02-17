@@ -18,7 +18,7 @@ moore.module @ForkForeverEntryBranch() {
   moore.procedure initial {
     // CHECK:       sim.fork join_type "join_none" {
     //   Entry block: has sim.proc.print (anti-elision), branch to loop header.
-    // CHECK-NEXT:    sim.proc.print
+    // CHECK:         sim.proc.print
     // CHECK-NEXT:    cf.br ^[[LOOP:bb[0-9]+]]
     //   Loop header block has the back-edge to itself (2 preds: entry + self).
     // CHECK-NEXT:  ^[[LOOP]]:

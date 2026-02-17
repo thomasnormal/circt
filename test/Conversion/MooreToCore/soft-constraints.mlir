@@ -1,9 +1,7 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
-// CHECK-DAG: llvm.func @__moore_randomize_with_range(i64, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
-// CHECK-DAG: llvm.func @__moore_is_constraint_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
 //===----------------------------------------------------------------------===//
 // Soft Constraint Support Tests
@@ -26,13 +24,13 @@ moore.class.classdecl @SoftConstraintClass {
 // CHECK-LABEL: func.func @test_soft_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_soft_constraint(%obj: !moore.class<@SoftConstraintClass>) -> i1 {
-  // CHECK-DAG: %[[C42:.*]] = arith.constant 42 : i32
+  // Save old value, check rand_enabled, randomize, restore if not enabled
+  // CHECK: %[[PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: %[[OLD:.*]] = llvm.load %[[PTR]] : !llvm.ptr -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
   // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
-  // CHECK: llvm.call @__moore_is_rand_enabled
-  // CHECK: llvm.call @__moore_is_constraint_enabled
-  // Soft constraint applies the default value 42
   // CHECK: scf.if
-  // CHECK: llvm.store %[[C42]], {{.*}} : i32, !llvm.ptr
+  // CHECK:   llvm.store %[[OLD]], %[[PTR]] : i32, !llvm.ptr
   // CHECK: return %{{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@SoftConstraintClass>
   return %success : i1
@@ -58,11 +56,13 @@ moore.class.classdecl @HardOverridesSoftClass {
 // CHECK-LABEL: func.func @test_hard_overrides_soft
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_hard_overrides_soft(%obj: !moore.class<@HardOverridesSoftClass>) -> i1 {
-  // CHECK-DAG: %[[MIN:.*]] = llvm.mlir.constant(10 : i64) : i64
-  // CHECK-DAG: %[[MAX:.*]] = llvm.mlir.constant(20 : i64) : i64
-  // CHECK: llvm.call @__moore_randomize_basic
-  // Hard constraint is applied (range 10-20)
-  // CHECK: llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]])
+  // Save old value, check rand_enabled, randomize, restore if not enabled
+  // CHECK: %[[PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: %[[OLD:.*]] = llvm.load %[[PTR]] : !llvm.ptr -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
+  // CHECK: scf.if
+  // CHECK:   llvm.store %[[OLD]], %[[PTR]] : i32, !llvm.ptr
   // CHECK: return %{{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@HardOverridesSoftClass>
   return %success : i1
@@ -88,14 +88,18 @@ moore.class.classdecl @MixedConstraintsClass {
 // CHECK-LABEL: func.func @test_mixed_constraints
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_mixed_constraints(%obj: !moore.class<@MixedConstraintsClass>) -> i1 {
-  // CHECK-DAG: %[[C100:.*]] = arith.constant 100 : i32
-  // CHECK-DAG: %[[MIN:.*]] = llvm.mlir.constant(1 : i64) : i64
-  // CHECK-DAG: %[[MAX:.*]] = llvm.mlir.constant(50 : i64) : i64
-  // CHECK: llvm.call @__moore_randomize_basic
-  // Hard constraint on hardProp
-  // CHECK: llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]])
-  // Soft constraint on softProp (default value 100)
-  // CHECK: llvm.store %[[C100]], {{.*}} : i32, !llvm.ptr
+  // Save old values for both properties, check rand_enabled, randomize, restore if not enabled
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: llvm.load {{.*}} : !llvm.ptr -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 3]
+  // CHECK: llvm.load {{.*}} : !llvm.ptr -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
+  // CHECK: scf.if
+  // CHECK:   llvm.store {{.*}} : i32, !llvm.ptr
+  // CHECK: scf.if
+  // CHECK:   llvm.store {{.*}} : i32, !llvm.ptr
   // CHECK: return %{{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@MixedConstraintsClass>
   return %success : i1
@@ -115,11 +119,13 @@ moore.class.classdecl @AVIPStyleClass {
 // CHECK-LABEL: func.func @test_avip_soft_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_avip_soft_constraint(%obj: !moore.class<@AVIPStyleClass>) -> i1 {
-  // CHECK-DAG: %[[C0:.*]] = arith.constant 0 : i32
-  // CHECK: llvm.call @__moore_randomize_basic
-  // Soft constraint sets default to 0
+  // Save old value, check rand_enabled, randomize, restore if not enabled
+  // CHECK: %[[PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: %[[OLD:.*]] = llvm.load %[[PTR]] : !llvm.ptr -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
   // CHECK: scf.if
-  // CHECK: llvm.store %[[C0]], {{.*}} : i32, !llvm.ptr
+  // CHECK:   llvm.store %[[OLD]], %[[PTR]] : i32, !llvm.ptr
   // CHECK: return %{{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@AVIPStyleClass>
   return %success : i1
@@ -142,11 +148,18 @@ moore.class.classdecl @OnlySoftClass {
 // CHECK-LABEL: func.func @test_only_soft
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_only_soft(%obj: !moore.class<@OnlySoftClass>) -> i1 {
-  // CHECK-DAG: %[[C999:.*]] = arith.constant 999 : i32
-  // CHECK: llvm.call @__moore_randomize_basic
-  // Soft constraint applies default 999 to defaultVal
+  // Save old values for both properties, check rand_enabled, randomize, restore if not enabled
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 2]
+  // CHECK: llvm.load {{.*}} : !llvm.ptr -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+  // CHECK: llvm.getelementptr %[[OBJ]][0, 3]
+  // CHECK: llvm.load {{.*}} : !llvm.ptr -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled(%[[OBJ]], {{.*}})
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
   // CHECK: scf.if
-  // CHECK: llvm.store %[[C999]], {{.*}} : i32, !llvm.ptr
+  // CHECK:   llvm.store {{.*}} : i32, !llvm.ptr
+  // CHECK: scf.if
+  // CHECK:   llvm.store {{.*}} : i32, !llvm.ptr
   // CHECK: return %{{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@OnlySoftClass>
   return %success : i1

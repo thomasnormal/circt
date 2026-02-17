@@ -195,7 +195,7 @@ func.func @test_multilevel_inheritance(%obj: !moore.class<@GoldenRetriever>) {
 
 // CHECK-LABEL: func.func @test_load_and_call_method
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[VTABLE_PTR_PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 1]
+// CHECK:         %[[VTABLE_PTR_PTR:.*]] = llvm.getelementptr %[[OBJ]][{{%.+}}, 1]
 // CHECK:         %[[VTABLE_PTR:.*]] = llvm.load %[[VTABLE_PTR_PTR]]
 // CHECK:         %[[FUNC_PTR_PTR:.*]] = llvm.getelementptr %[[VTABLE_PTR]][0, 0]
 // CHECK:         %[[FUNC_PTR:.*]] = llvm.load %[[FUNC_PTR_PTR]]
@@ -215,7 +215,7 @@ func.func @test_load_and_call_method(%obj: !moore.class<@Dog>) {
 
 // CHECK-LABEL: func.func @test_load_call_use_result
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr) -> i32
-// CHECK:         %[[VTABLE_PTR_PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 1]
+// CHECK:         %[[VTABLE_PTR_PTR:.*]] = llvm.getelementptr %[[OBJ]][{{%.+}}, 1]
 // CHECK:         %[[VTABLE_PTR:.*]] = llvm.load %[[VTABLE_PTR_PTR]]
 // CHECK:         %[[FUNC_PTR_PTR:.*]] = llvm.getelementptr %[[VTABLE_PTR]][0, 1]
 // CHECK:         %[[FUNC_PTR:.*]] = llvm.load %[[FUNC_PTR_PTR]]
