@@ -1,0 +1,24 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nout="${1:?out_dir required}"\nmkdir -p "$out/apb"\nif [[ "${CIRCT_SIM_MODE:-}" != "compile" ]]; then\n  echo "bad_mode=${CIRCT_SIM_MODE:-}" >&2\n  exit 41\nfi\nif [[ "${CIRCT_SIM_WRITE_JIT_REPORT:-0}" == "0" ]]; then\n  echo "bad_write_jit_report=${CIRCT_SIM_WRITE_JIT_REPORT:-}" >&2\n  exit 42\nfi\ncat > "$out/matrix.tsv" <<"MATRIX"\navip\tseed\tcompile_status\tcompile_sec\tsim_status\tsim_exit\tsim_sec\tsim_time_fs\tuvm_fatal\tuvm_error\tcov_1_pct\tcov_2_pct\tpeak_rss_kb\tcompile_log\tsim_log\napb\t1\tOK\t1\tOK\t0\t2\t200\t0\t0\t100\t100\t123\t/tmp/c.log\t/tmp/s.log\nMATRIX\ncat > "$out/apb/sim_seed_1.jit-report.json" <<"JSON"\n{\n  "jit": {\n    "jit_deopt_processes": [\n      {"process_id": 1, "process_name": "llhd_process_1", "reason": "unsupported_operation", "detail": "first_op:llvm.call"},\n      {"process_id": 2, "process_name": "llhd_process_2", "reason": "missing_thunk", "detail": "compile_budget_zero"}\n    ]\n  }\n}\nJSON\n' > %t/fake-run-avip-circt-sim.sh
+// RUN: chmod +x %t/fake-run-avip-circt-sim.sh
+// RUN: printf 'exact:reason:unsupported_operation\n' > %t/allowlist.txt
+// RUN: env RUN_MATRIX=%t/fake-run-avip-circt-sim.sh SUMMARIZE_JIT_REPORTS=%S/../../utils/summarize_circt_sim_jit_reports.py JIT_POLICY_ALLOWLIST_FILE=%t/allowlist.txt JIT_POLICY_FAIL_ON_ANY_NON_ALLOWLISTED_DEOPT=0 JIT_POLICY_FAIL_ON_REASON=unsupported_operation %S/../../utils/run_avip_circt_sim_jit_policy_gate.sh %t/pass > %t/pass.log 2>&1
+// RUN: FileCheck %s --check-prefix=PASSLOG < %t/pass.log
+// RUN: FileCheck %s --check-prefix=REASON < %t/pass/jit_deopt_reasons.tsv
+// RUN: not env RUN_MATRIX=%t/fake-run-avip-circt-sim.sh SUMMARIZE_JIT_REPORTS=%S/../../utils/summarize_circt_sim_jit_reports.py JIT_POLICY_FAIL_ON_ANY_NON_ALLOWLISTED_DEOPT=0 JIT_POLICY_FAIL_ON_REASON=unsupported_operation %S/../../utils/run_avip_circt_sim_jit_policy_gate.sh %t/fail > %t/fail.log 2>&1
+// RUN: FileCheck %s --check-prefix=FAILLOG < %t/fail.log
+//
+// PASSLOG: [avip-circt-sim-jit-policy] running compile matrix
+// PASSLOG: reports_scanned=1
+// PASSLOG: deopt_process_rows=2
+// PASSLOG: deopt_process_rows_non_allowlisted=1
+// PASSLOG: [avip-circt-sim-jit-policy] reason_tsv=
+//
+// REASON: rank{{[[:space:]]+}}reason{{[[:space:]]+}}count
+// REASON: 1{{[[:space:]]+}}missing_thunk{{[[:space:]]+}}1
+// REASON: 2{{[[:space:]]+}}unsupported_operation{{[[:space:]]+}}1
+//
+// FAILLOG: reports_scanned=1
+// FAILLOG: top_non_allowlisted_reason{{\[[12]\]}} reason=unsupported_operation count=1
+// FAILLOG: blocked reason matched: reason=unsupported_operation count=1

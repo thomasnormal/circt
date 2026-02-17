@@ -227,6 +227,13 @@ static cl::opt<bool>
                              "Only supported with --run-smtlib."),
                     cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<unsigned>
+    seqBound("bound",
+             cl::desc("Enable sequential LEC with BMC unrolling bound (number "
+                      "of clock cycles). When specified, uses verif.bmc "
+                      "instead of verif.lec for sequential trace equivalence."),
+             cl::value_desc("N"), cl::init(0), cl::cat(mainCategory));
+
 static cl::opt<std::string>
     z3PathOpt("z3-path",
               cl::desc("Path to the z3 binary for --run-smtlib"),
@@ -732,7 +739,14 @@ static LogicalResult executeLEC(MLIRContext &context) {
   pm.addPass(createExternalizeRegisters(externalizeOptions));
   pm.nest<hw::HWModuleOp>().addPass(hw::createHWAggregateToComb());
   pm.addPass(hw::createHWConvertBitcasts());
-  {
+  if (seqBound > 0) {
+    // Sequential LEC: build a verif.bmc miter instead of verif.lec.
+    ConstructSeqLECOptions seqOpts;
+    seqOpts.firstModule = firstModuleName;
+    seqOpts.secondModule = secondModuleName;
+    seqOpts.bound = seqBound;
+    pm.addPass(createConstructSeqLEC(seqOpts));
+  } else {
     ConstructLECOptions opts;
     opts.firstModule = firstModuleName;
     opts.secondModule = secondModuleName;
