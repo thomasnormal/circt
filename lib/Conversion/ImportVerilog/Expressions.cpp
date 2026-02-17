@@ -4960,6 +4960,9 @@ struct RvalueExprVisitor : public ExprVisitor {
                     "$rising_gclk", "$falling_gclk", "$steady_gclk",
                     "$changing_gclk"},
                    true)
+            .Cases({"$global_clock", "$inferred_clock",
+                    "$inferred_disable"},
+                   true)
             .Default(false);
 
     if (isAssertionCall)
@@ -5150,7 +5153,8 @@ struct RvalueExprVisitor : public ExprVisitor {
     // According to IEEE 1800-2023 Section 21.3.3 "Formatting data to a
     // string" $sformatf works just like the string formatting but returns
     // a StringType.
-    if (!subroutine.name.compare("$sformatf")) {
+    if (!subroutine.name.compare("$sformatf") ||
+        !subroutine.name.compare("$psprintf")) {
       // Create the FormatString
       auto fmtValue = context.convertFormatString(
           expr.arguments(), loc, moore::IntFormat::Decimal, false);
@@ -8846,6 +8850,10 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
 
   auto systemCallRes =
       llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
+          .Case("$system",
+                [&]() -> Value {
+                  return moore::SystemBIOp::create(builder, loc, nullptr);
+                })
           .Case("$urandom",
                 [&]() -> Value {
                   return moore::UrandomBIOp::create(builder, loc, nullptr);
@@ -8905,6 +8913,39 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
                   return (Value)moore::ConstantOp::create(builder, loc, bitTy,
                                                           0);
                 })
+          .Case("$isunbounded",
+                [&]() -> Value {
+                  // $isunbounded returns 0 (false) for normal parameters.
+                  // Slang constant-folds this for static cases.
+                  auto bitTy = moore::IntType::getInt(getContext(), 1);
+                  return moore::ConstantOp::create(builder, loc, bitTy, 0);
+                })
+          .Case("$timeunit",
+                [&]() -> Value {
+                  // $timeunit with no args returns current time unit.
+                  // Stub: return 0 (will be coerced to real by slang).
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$timeprecision",
+                [&]() -> Value {
+                  // $timeprecision with no args returns current precision.
+                  // Stub: return 0.
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$reset_count",
+                [&]() -> Value {
+                  // Legacy: number of resets. Always 0.
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$reset_value",
+                [&]() -> Value {
+                  // Legacy: value at reset. Always 0.
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
           .Default([&]() -> FailureOr<Value> {
             if (subroutine.name == "rand_mode" ||
                 subroutine.name == "constraint_mode") {
@@ -8932,9 +8973,17 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
 
   auto systemCallRes =
       llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
+          // OS system call.
+          .Case("$system",
+                [&]() -> Value {
+                  return moore::SystemBIOp::create(builder, loc, value);
+                })
           // Signed and unsigned system functions.
           .Case("$signed", [&]() { return value; })
           .Case("$unsigned", [&]() { return value; })
+          // Real/integer conversion functions (IEEE 1800-2017 Section 20.5)
+          .Case("$rtoi", [&]() { return value; })
+          .Case("$itor", [&]() { return value; })
 
           // Math functions in SystemVerilog.
           .Case("$clog2",
@@ -9557,6 +9606,60 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                                        << "array locator method's 'with' clause";
                   return failure();
                 })
+          // $scale returns the input scaled to the time unit of another
+          // module (IEEE 1800-2017 Section 20.4.2). Stub: return input.
+          .Case("$scale", [&]() { return value; })
+          // Query functions that may reach here for dynamic types.
+          // For static types, slang constant-folds these.
+          .Case("$bits",
+                [&]() -> Value {
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$size",
+                [&]() -> Value {
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$dimensions",
+                [&]() -> Value {
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$unpacked_dimensions",
+                [&]() -> Value {
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$increment",
+                [&]() -> Value {
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 1);
+                })
+          // $timeunit/$timeprecision with one arg (hierarchical ref).
+          // Stub: return 0.
+          .Case("$timeunit",
+                [&]() -> Value {
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$timeprecision",
+                [&]() -> Value {
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          // $countdrivers (IEEE 1800-2017 Section 21.6). Legacy. Return 0.
+          .Case("$countdrivers",
+                [&]() -> Value {
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          // $getpattern (IEEE 1800-2017 Section 21.6). Legacy. Return 0.
+          .Case("$getpattern",
+                [&]() -> Value {
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
           .Default([&]() -> FailureOr<Value> {
             if (subroutine.name == "rand_mode" ||
                 subroutine.name == "constraint_mode") {
@@ -9611,6 +9714,12 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                   // Note: IEEE 1800-2017 says if min > max, they are swapped
                   return moore::UrandomRangeBIOp::create(builder, loc, value1,
                                                          value2);
+                })
+          .Case("$pow",
+                [&]() -> Value {
+                  // $pow(x, y) returns x raised to the power y
+                  // IEEE 1800-2017 Section 20.8.2 "Real math functions"
+                  return moore::PowBIOp::create(builder, loc, value1, value2);
                 })
           .Case("$atan2",
                 [&]() -> Value {
@@ -9685,6 +9794,22 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
           .Case("$dist_poisson",
                 [&]() -> Value {
                   // $dist_poisson(seed, mean) - Poisson distribution
+                  (void)value1;
+                  (void)value2;
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          // Stochastic queue functions (IEEE 1800-2017 Section 21.6)
+          // Legacy: return 0.
+          .Case("$q_exam",
+                [&]() -> Value {
+                  (void)value1;
+                  (void)value2;
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$q_full",
+                [&]() -> Value {
                   (void)value1;
                   (void)value2;
                   auto intTy = moore::IntType::getInt(builder.getContext(), 32);

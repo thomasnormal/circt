@@ -3077,6 +3077,18 @@ def HypotBIOp : Builtin<"hypot", [SameOperandsAndResultType]> {
   let assemblyFormat = "$x `,` $y attr-dict `:` type($result)";
 }
 
+def PowBIOp : Builtin<"pow", [SameOperandsAndResultType]> {
+  let summary = "Power function";
+  let description = [{
+    The `$pow(x, y)` system function returns x raised to the power y.
+
+    See IEEE 1800-2017 section 20.8.2 "Real math functions".
+  }];
+  let arguments = (ins RealF64:$x, RealF64:$y);
+  let results = (outs RealF64:$result);
+  let assemblyFormat = "$x `,` $y attr-dict `:` type($result)";
+}
+
 //===----------------------------------------------------------------------===//
 // Bit Vector System Functions
 //===----------------------------------------------------------------------===//
@@ -3519,6 +3531,31 @@ def ReadMemHBIOp : Builtin<"readmemh"> {
   }];
   let arguments = (ins StringType:$filename, RefType:$mem);
   let assemblyFormat = "$filename `,` $mem attr-dict `:` type($mem)";
+}
+
+//===----------------------------------------------------------------------===//
+// OS System Functions
+//===----------------------------------------------------------------------===//
+
+def SystemBIOp : Builtin<"system"> {
+  let summary = "Execute an OS command via the system shell";
+  let description = [{
+    Corresponds to the `$system` system function (IEEE 1800-2017 Section 20.18.1).
+    Passes the command string to the host OS command interpreter (equivalent to
+    the C `system()` function).
+
+    Returns the exit status of the command as a 32-bit integer. When called
+    without arguments, the behavior is implementation-defined.
+
+    Example:
+    ```
+    int result = $system("echo hello");
+    $system("ls -la");
+    ```
+  }];
+  let arguments = (ins Optional<StringType>:$command);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "($command^)? attr-dict";
 }
 
 //===----------------------------------------------------------------------===//
