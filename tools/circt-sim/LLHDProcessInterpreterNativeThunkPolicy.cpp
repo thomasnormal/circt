@@ -52,6 +52,15 @@ static bool isConfigDbSetWrapperName(StringRef calleeName) {
   return true;
 }
 
+static bool hasNumericSuffixName(StringRef name, StringRef prefix) {
+  if (!name.starts_with(prefix) || name.size() <= prefix.size())
+    return false;
+  for (char c : name.drop_front(prefix.size()))
+    if (!std::isdigit(static_cast<unsigned char>(c)))
+      return false;
+  return true;
+}
+
 static bool isConfigDbSetWrapperCallPrelude(mlir::func::CallOp callOp) {
   if (callOp.getNumResults() != 0 || callOp.getNumOperands() != 4)
     return false;
@@ -59,6 +68,25 @@ static bool isConfigDbSetWrapperCallPrelude(mlir::func::CallOp callOp) {
       !isa<LLVM::LLVMPointerType>(callOp.getOperand(3).getType()))
     return false;
   return isConfigDbSetWrapperName(callOp.getCallee());
+}
+
+static bool isClassBridgeWrapperName(StringRef calleeName) {
+  return hasNumericSuffixName(calleeName, "from_write_class_") ||
+         hasNumericSuffixName(calleeName, "from_read_class_") ||
+         hasNumericSuffixName(calleeName, "to_write_class_") ||
+         hasNumericSuffixName(calleeName, "to_read_class_");
+}
+
+static bool isClassBridgeWrapperCallPrelude(mlir::func::CallOp callOp) {
+  if (callOp.getNumResults() != 0 || callOp.getNumOperands() != 2)
+    return false;
+  if (!isa<LLVM::LLVMPointerType>(callOp.getOperand(0).getType()))
+    return false;
+  Type secondOperandType = callOp.getOperand(1).getType();
+  if (!isa<LLVM::LLVMPointerType>(secondOperandType) &&
+      !isa<llhd::RefType>(secondOperandType))
+    return false;
+  return isClassBridgeWrapperName(callOp.getCallee());
 }
 
 static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp) {
@@ -84,6 +112,8 @@ static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp)
     return true;
 
   if (isConfigDbSetWrapperCallPrelude(callOp))
+    return true;
+  if (isClassBridgeWrapperCallPrelude(callOp))
     return true;
 
   return false;
@@ -225,6 +255,7 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
         calleeName == "__moore_assoc_size" ||
         calleeName == "__moore_assoc_get_ref" ||
         calleeName == "__moore_uvm_report_info" ||
+        calleeName == "__moore_queue_push_back" ||
         calleeName == "__moore_queue_push_front" ||
         calleeName == "__moore_queue_pop_front_ptr")
       return true;
