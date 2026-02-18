@@ -169,6 +169,7 @@ isManuallyInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp) {
   if (calleeName == "m_execute_scheduled_forks" ||
       calleeName == "m_process_guard" ||
       calleeName == "uvm_pkg::run_test" ||
+      calleeName == "uvm_pkg::uvm_sequence_base::create_item" ||
       calleeName == "uvm_pkg::uvm_create_random_seed" ||
       calleeName == "uvm_pkg::uvm_get_report_object" ||
       calleeName == "uvm_pkg::uvm_is_match" ||
@@ -177,6 +178,7 @@ isManuallyInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp) {
       calleeName.ends_with("::m_safe_raise_starting_phase") ||
       calleeName.ends_with("::m_safe_drop_starting_phase") ||
       calleeName.ends_with("::m_killed") ||
+      calleeName.ends_with("::setConfig") ||
       calleeName.ends_with("::set_report_id_verbosity") ||
       calleeName.ends_with("::get_report_action") ||
       calleeName.ends_with("::get_report_verbosity_level") ||
