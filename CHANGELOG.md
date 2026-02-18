@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1507 - February 18, 2026
+
+### circt-sim: revert regressing `uvm_get_report_object` shortcut experiment and revalidate all9 compile lane
+
+1. **Regression triage and rollback**:
+   - triaged a speculative `uvm_get_report_object` fast-path experiment in
+     `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+     - early `func.call_indirect` shortcut before runtime override probing
+     - direct `func.call`/no-arg global helper shortcut to
+       `__moore_uvm_get_root_inst()`
+     - global-helper `func.call_indirect` no-arg shortcut.
+   - bounded AVIP `jtag` A/B reproduced the regression under the experiment:
+     - `/tmp/avip-circt-sim-jtag-ab-cur-20260218-182042/matrix.tsv`:
+       `sim_status=TIMEOUT` (`120s`)
+     - `/tmp/avip-circt-sim-jtag-ab-cur2-20260218-182314/matrix.tsv`:
+       `sim_status=TIMEOUT` (`120s`).
+   - dropped the speculative shortcuts and kept the prior stable behavior.
+
+2. **Post-rollback confirmation**:
+   - repeated bounded `jtag` compile-mode checks:
+     - `/tmp/avip-circt-sim-jtag-ab-nofast-20260218-182911/matrix.tsv`:
+       `sim_status=OK` (`39s`)
+     - `/tmp/avip-circt-sim-jtag-ab-nofast2-20260218-183130/matrix.tsv`:
+       `sim_status=OK` (`41s`).
+
+3. **Focused regression coverage**:
+   - ran targeted `circt-sim` lit tests after rollback:
+     - `uvm-report-getters-fast-path.mlir`
+     - `jit-process-thunk-func-call-local-helper-nonsuspending-halt.mlir`
+     - `func-tail-wrapper-generic-resume-fast-path.mlir`
+     - `execute-phase-monitor-fork-objection-waiter.mlir`
+   - result: PASS (`4/4`).
+
+4. **Full all9 compile-mode refresh**:
+   - ran bounded matrix:
+     - `AVIP_SET=all9`, `SEEDS=1`, `CIRCT_SIM_MODE=compile`
+     - `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=120`, `MAX_WALL_MS=120000`
+     - output:
+       `/tmp/avip-circt-sim-all9-post-uvmexpdrop-20260218-183242/matrix.tsv`
+   - result:
+     - compile: `OK` on `9/9`
+     - sim: `OK` on `7/9`, `TIMEOUT` on `2/9` (`axi4`, `uart`)
+     - `jtag` is back to `OK`.
+
+5. **Next closure target**:
+   - keep the rollback in place and continue long-tail compile-mode closure on
+     `axi4` and `uart` (no default-on behavior changes from this experiment).
+
 ## Iteration 1506 - February 18, 2026
 
 ### circt-sim: all9 compile-mode rerun after profile-guard + subref closures
