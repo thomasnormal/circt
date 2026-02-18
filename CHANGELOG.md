@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1470 - February 17, 2026
+
+### circt-sim JIT: eliminate AVIP unsupported-operation tails; converge to guard-failed only
+
+1. **Closed remaining AVIP UVM call tail** in one-block safe prelude matching:
+   - `func.call` allowlist now includes
+     `*::set_report_id_verbosity` in
+     `tools/circt-sim/LLHDProcessInterpreter.cpp`.
+2. **Added env-gated unsupported-shape tracer** for strict burn-down:
+   - `CIRCT_SIM_TRACE_JIT_UNSUPPORTED_SHAPES=1` now emits per-process
+     block/operation skeleton when thunk install returns
+     `unsupported_operation`.
+   - This was used to root-cause the remaining
+     `multiblock_no_terminal` process shape.
+3. **Closed `multiblock_no_terminal` tail classification gap** for fork-loop
+   shapes:
+   - resumable multiblock suspend-source recognition now treats `sim.fork`
+     preludes as suspend-capable in candidate/detail classification, so this
+     shape is no longer classified as unsupported.
+4. **Added strict regression coverage**:
+   - `test/Tools/circt-sim/jit-process-thunk-func-call-set-report-id-verbosity-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-multiblock-fork-loop-guard-failed.mlir`
+     (ensures the loop shape classifies as `guard_failed` and not
+     `unsupported_operation:multiblock_no_terminal`).
+5. **Validation**:
+   - all new/related strict regressions pass in compile mode.
+   - parallel compatibility smokes (`--parallel=4`, expected sequential
+     fallback warning) pass for the new regressions.
+   - bounded AVIP compile-lane (`jtag`, seed-1):
+     - baseline `/tmp/avip-circt-sim-20260217-235254`:
+       `guard_failed=9`, `unsupported_operation=1` (`multiblock_no_terminal`)
+     - updated `/tmp/avip-circt-sim-20260217-235838`:
+       `guard_failed=8`, `unsupported_operation=0`
+   - net: AVIP unsupported-operation queue is now eliminated on this lane;
+     remaining strict queue is guard-failed only.
+
 ## Iteration 1469 - February 17, 2026
 
 ### circt-sim JIT: native `__moore_delay` suspend closure + AVIP timeout burn-down
