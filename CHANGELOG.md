@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1506 - February 18, 2026
+
+### circt-sim: all9 compile-mode rerun after profile-guard + subref closures
+
+1. **Matrix rerun**:
+   - ran full all9 AVIP matrix in compile mode with bounded wall guards:
+     - `AVIP_SET=all9`, `SEEDS=1`
+     - `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=120`, `MAX_WALL_MS=120000`
+     - output: `/tmp/avip-circt-sim-all9-profileguard-20260218-164640/matrix.tsv`
+   - results:
+     - compile: `OK` on `9/9`
+     - sim: `OK` on `6/9`, `TIMEOUT` on `3/9`
+       - timeouts: `axi4`, `jtag`, `uart`.
+
+2. **Targeted timeout follow-up**:
+   - reran `jtag` with an extended bound:
+     - `/tmp/avip-circt-sim-jtag-profileguard-20260218-170318/matrix.tsv`
+     - `SIM_TIMEOUT=180`
+     - result remained `TIMEOUT`.
+
+3. **Comparison vs prior all9 snapshot**:
+   - prior baseline:
+     - `/tmp/avip-circt-sim-all9-rerun-20260218-103206/matrix.tsv`
+     - `sim OK=7/9`, `TIMEOUT=2/9` (`axi4`, `uart`).
+   - current rerun:
+     - `sim OK=6/9`, `TIMEOUT=3/9` (`axi4`, `jtag`, `uart`).
+
+4. **Next closure focus**:
+   - `jtag`: profile reset-state churn lane and tighten wait/wake progress.
+   - `axi4`: continue long-tail loop closure under bounded compile-mode runs.
+   - `uart`: continue Rx progression closure (`UartRxCovergroup` remains 0%
+     when bounded timeout paths terminate early).
+
 ## Iteration 1505 - February 18, 2026
 
 ### circt-sim: profile-guided `func.call_indirect` suspend analysis + guard wiring for broader native-thunk installs
