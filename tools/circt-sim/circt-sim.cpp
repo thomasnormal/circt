@@ -363,12 +363,12 @@ static llvm::cl::opt<std::string> jitReportPath(
 static llvm::cl::opt<uint64_t> jitHotThreshold(
     "jit-hot-threshold",
     llvm::cl::desc("Hotness threshold used by compile-mode JIT governor"),
-    llvm::cl::init(0), llvm::cl::cat(mainCategory));
+    llvm::cl::init(1), llvm::cl::cat(mainCategory));
 
 static llvm::cl::opt<int64_t> jitCompileBudget(
     "jit-compile-budget",
     llvm::cl::desc("Maximum compile promotions allowed (0 = disabled)"),
-    llvm::cl::init(0), llvm::cl::cat(mainCategory));
+    llvm::cl::init(100000), llvm::cl::cat(mainCategory));
 
 static llvm::cl::opt<std::string> jitCachePolicy(
     "jit-cache-policy",
