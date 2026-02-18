@@ -2484,11 +2484,66 @@ struct StmtVisitor {
     }
 
     // Time formatting task (IEEE 1800-2017 Section 20.4.3)
-    // $timeformat sets the display format for %t in $display/$write.
-    // This is purely a display formatting function, stub as no-op.
+    // $timeformat(units, precision, suffix, min_width)
     if (subroutine.name == "$timeformat") {
-      mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
-                            << "`";
+      auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+      Value units, precision, minWidth;
+      std::string suffixStr;
+
+      if (args.size() >= 1) {
+        units = context.convertRvalueExpression(*args[0]);
+        if (!units)
+          return failure();
+      }
+      if (!units)
+        units = moore::ConstantOp::create(
+            builder, loc, intTy,
+            APInt(32, static_cast<uint64_t>(-9), /*isSigned=*/true));
+
+      if (args.size() >= 2) {
+        precision = context.convertRvalueExpression(*args[1]);
+        if (!precision)
+          return failure();
+      }
+      if (!precision)
+        precision = moore::ConstantOp::create(builder, loc, intTy, 0);
+
+      if (args.size() >= 3) {
+        // Extract the suffix as a compile-time constant string.
+        const auto *suffArg = args[2];
+        // Unwrap any implicit conversion.
+        while (auto *conv =
+                   suffArg->as_if<slang::ast::ConversionExpression>())
+          suffArg = &conv->operand();
+        if (auto *lit = suffArg->as_if<slang::ast::StringLiteral>())
+          suffixStr = lit->getValue();
+        else {
+          // Try evaluating as a compile-time constant string.
+          auto cv = context.evaluateConstant(*args[2]);
+          if (cv && cv.isString())
+            suffixStr = cv.str();
+        }
+      }
+
+      if (args.size() >= 4) {
+        minWidth = context.convertRvalueExpression(*args[3]);
+        if (!minWidth)
+          return failure();
+      }
+      if (!minWidth)
+        minWidth = moore::ConstantOp::create(builder, loc, intTy, 20);
+
+      if (units.getType() != intTy)
+        units = moore::ConversionOp::create(builder, loc, intTy, units);
+      if (precision.getType() != intTy)
+        precision =
+            moore::ConversionOp::create(builder, loc, intTy, precision);
+      if (minWidth.getType() != intTy)
+        minWidth =
+            moore::ConversionOp::create(builder, loc, intTy, minWidth);
+
+      moore::TimeFormatBIOp::create(builder, loc, units, precision,
+                                    suffixStr, minWidth);
       return true;
     }
 
