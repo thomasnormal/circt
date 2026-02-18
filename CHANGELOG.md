@@ -70399,3 +70399,23 @@ See CHANGELOG.md on recent progress.
     - Next closure focus is now explicit: reduce AXI4 timeout pressure by
       adding native-thunk coverage/guards for these remaining unsupported
       first-op classes.
+57. `circt-sim` `__moore_assoc_size` native prelude closure for AXI4 strict
+    burn-down
+    (February 18, 2026):
+    - Added `llvm.call @__moore_assoc_size` to the non-suspending LLVM prelude
+      allowlist used by single-block terminating process/fork native thunks.
+    - Added strict regression coverage:
+      `test/Tools/circt-sim/jit-process-thunk-llvm-call-assoc-size-halt.mlir`.
+    - Validation:
+      - targeted strict regressions pass:
+        - `jit-process-thunk-llvm-call-assoc-size-halt.mlir`
+        - `jit-process-thunk-llvm-call-assoc-get-ref-halt.mlir`
+      - AXI4 TERM-bounded queue sample after closure
+        (`/tmp/axi4-term120-after-assoc-size.jit-report.json`) shows
+        `jit_deopts_total=7` with tail shift:
+        - removed: `first_op:llvm.call:__moore_assoc_size`
+        - remaining queue:
+          - `first_op:scf.for` (2)
+          - `first_op:llvm.call:__moore_semaphore_get` (3)
+          - `first_op:func.call:from_write_class_6984` (1)
+          - `first_op:func.call:from_read_class_6987` (1).
