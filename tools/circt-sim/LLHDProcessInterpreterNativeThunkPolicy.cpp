@@ -73,12 +73,35 @@ static bool isConfigDbSetWrapperCallPrelude(mlir::func::CallOp callOp) {
 static bool isClassBridgeWrapperName(StringRef calleeName) {
   return hasNumericSuffixName(calleeName, "from_write_class_") ||
          hasNumericSuffixName(calleeName, "from_read_class_") ||
+         hasNumericSuffixName(calleeName, "from_class_") ||
          hasNumericSuffixName(calleeName, "to_write_class_") ||
-         hasNumericSuffixName(calleeName, "to_read_class_");
+         hasNumericSuffixName(calleeName, "to_read_class_") ||
+         hasNumericSuffixName(calleeName, "to_class_");
 }
 
 static bool isClassBridgeWrapperCallPrelude(mlir::func::CallOp callOp) {
   if (callOp.getNumResults() != 0 || callOp.getNumOperands() != 2)
+    return false;
+  Type secondOperandType = callOp.getOperand(1).getType();
+  if (!isa<LLVM::LLVMPointerType>(secondOperandType) &&
+      !isa<llhd::RefType>(secondOperandType))
+    return false;
+  return isClassBridgeWrapperName(callOp.getCallee());
+}
+
+static bool isDriverBfmPhaseCallName(StringRef calleeName) {
+  if (!calleeName.ends_with("_phase"))
+    return false;
+  size_t scopePos = calleeName.rfind("::");
+  if (scopePos == StringRef::npos || scopePos == 0)
+    return false;
+  StringRef className = calleeName.take_front(scopePos);
+  return className.ends_with("_driver_bfm");
+}
+
+static bool isDriverBfmPhaseCallPrelude(mlir::func::CallOp callOp) {
+  if (callOp.getNumResults() != 0 || callOp.getNumOperands() < 2 ||
+      callOp.getNumOperands() > 8)
     return false;
   if (!isa<LLVM::LLVMPointerType>(callOp.getOperand(0).getType()))
     return false;
@@ -86,7 +109,22 @@ static bool isClassBridgeWrapperCallPrelude(mlir::func::CallOp callOp) {
   if (!isa<LLVM::LLVMPointerType>(secondOperandType) &&
       !isa<llhd::RefType>(secondOperandType))
     return false;
-  return isClassBridgeWrapperName(callOp.getCallee());
+  return isDriverBfmPhaseCallName(callOp.getCallee());
+}
+
+static bool isTxPacketHelperCallPrelude(mlir::func::CallOp callOp) {
+  StringRef calleeName = callOp.getCallee();
+  if (!calleeName.starts_with("tx_") || !calleeName.ends_with("_packet"))
+    return false;
+  if (callOp.getNumResults() != 0 || callOp.getNumOperands() < 3 ||
+      callOp.getNumOperands() > 5)
+    return false;
+  for (Value operand : callOp.getOperands()) {
+    Type ty = operand.getType();
+    if (!isa<LLVM::LLVMPointerType>(ty) && !isa<llhd::RefType>(ty))
+      return false;
+  }
+  return true;
 }
 
 static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp) {
@@ -96,6 +134,7 @@ static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp)
       calleeName == "uvm_pkg::run_test" ||
       calleeName == "uvm_pkg::uvm_create_random_seed" ||
       calleeName == "uvm_pkg::uvm_get_report_object" ||
+      calleeName == "uvm_pkg::uvm_is_match" ||
       calleeName == "uvm_pkg::uvm_root::find_all" ||
       calleeName.ends_with("::get_automatic_phase_objection") ||
       calleeName.ends_with("::m_safe_raise_starting_phase") ||
@@ -104,6 +143,9 @@ static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp)
       calleeName.ends_with("::set_report_id_verbosity") ||
       calleeName.ends_with("::get_report_action") ||
       calleeName.ends_with("::get_report_verbosity_level") ||
+      calleeName.ends_with("::get_minimum_transactions") ||
+      calleeName.ends_with("::sprint") ||
+      calleeName.ends_with("::uvm_is_match") ||
       calleeName.ends_with("::set_report_verbosity_level") ||
       calleeName.ends_with("::uvm_get_report_object") ||
       calleeName.ends_with("::m_process_guard") ||
@@ -114,6 +156,10 @@ static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp)
   if (isConfigDbSetWrapperCallPrelude(callOp))
     return true;
   if (isClassBridgeWrapperCallPrelude(callOp))
+    return true;
+  if (isDriverBfmPhaseCallPrelude(callOp))
+    return true;
+  if (isTxPacketHelperCallPrelude(callOp))
     return true;
 
   return false;
@@ -224,6 +270,10 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
     return true;
   if (isa<llhd::ProbeOp>(op))
     return true;
+  if (isa<llhd::SignalOp>(op))
+    return true;
+  if (isa<llhd::DriveOp>(op))
+    return true;
   if (isa<sim::SimDisableForkOp>(op))
     return true;
   if (auto forkOp = dyn_cast<sim::SimForkOp>(op))
@@ -244,6 +294,7 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
         calleeName == "__moore_process_srandom" ||
         calleeName == "__moore_is_rand_enabled" ||
         calleeName == "__moore_int_to_string" ||
+        calleeName.starts_with("__moore_string_") ||
         calleeName == "__moore_string_itoa" ||
         calleeName == "__moore_string_concat" ||
         calleeName == "__moore_randomize_basic" ||
@@ -252,9 +303,16 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
         calleeName == "__moore_randomize_with_dist" ||
         calleeName == "__moore_packed_string_to_string" ||
         calleeName == "__moore_string_cmp" ||
+        calleeName == "__moore_semaphore_create" ||
+        calleeName == "__moore_semaphore_get" ||
+        calleeName == "__moore_semaphore_put" ||
+        calleeName == "__moore_semaphore_try_get" ||
         calleeName == "__moore_assoc_size" ||
         calleeName == "__moore_assoc_get_ref" ||
+        calleeName.starts_with("__moore_assoc_") ||
         calleeName == "__moore_uvm_report_info" ||
+        calleeName.starts_with("__moore_queue_") ||
+        calleeName.starts_with("__moore_dyn_array_") ||
         calleeName == "__moore_queue_push_back" ||
         calleeName == "__moore_queue_push_front" ||
         calleeName == "__moore_queue_pop_front_ptr")
