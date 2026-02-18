@@ -154,6 +154,10 @@ static std::atomic<bool> interruptRequested(false);
 static std::atomic<bool> simulationStarted(false);
 static void signalHandler(int) { interruptRequested.store(true); }
 
+/// Verilog plusargs (+key, +key=value) extracted from the command line.
+/// These are passed through to vpi_get_vlog_info() for cocotb/VPI use.
+std::vector<std::string> vlogPlusargs;
+
 static llvm::cl::OptionCategory mainCategory("circt-sim Options");
 static llvm::cl::OptionCategory simCategory("Simulation Options");
 static llvm::cl::OptionCategory waveCategory("Waveform Options");
@@ -833,26 +837,69 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       scheduler.setSignalLogicalWidth(signalId, logicalWidth);
 
     // Detect unpacked array types and record array info for VPI.
+    // Only create array info when the signal has unpacked dimensions
+    // (listed in vpi.array_bounds).  Fully-packed multi-dimensional arrays
+    // (e.g., logic [2:0][2:0]) should appear as flat Reg signals in VPI,
+    // not as ArrayObjects.
     if (auto arrayType = dyn_cast<hw::ArrayType>(portInfo.type)) {
-      uint32_t numElems = arrayType.getNumElements();
-      mlir::Type elemType = arrayType.getElementType();
-      uint32_t elemPhysW =
-          LLHDProcessInterpreter::getTypeWidth(elemType);
-      uint32_t elemLogW =
-          LLHDProcessInterpreter::getLogicalWidth(elemType);
-      ProcessScheduler::SignalArrayInfo info{numElems, elemPhysW, elemLogW};
-      // Check for SV array bounds from vpi.array_bounds attribute.
-      if (auto boundsDict =
-              hwModule->getAttrOfType<DictionaryAttr>("vpi.array_bounds")) {
-        if (auto sigBounds = boundsDict.getAs<DictionaryAttr>(
-                portInfo.getName())) {
-          if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
-            info.leftBound = leftAttr.getInt();
-          if (auto rightAttr = sigBounds.getAs<IntegerAttr>("right"))
-            info.rightBound = rightAttr.getInt();
+      auto boundsDict =
+          hwModule->getAttrOfType<DictionaryAttr>("vpi.array_bounds");
+      auto sigBounds = boundsDict
+          ? boundsDict.getAs<DictionaryAttr>(portInfo.getName())
+          : DictionaryAttr();
+      if (sigBounds) {
+        uint32_t numElems = arrayType.getNumElements();
+        mlir::Type elemType = arrayType.getElementType();
+        uint32_t elemPhysW =
+            LLHDProcessInterpreter::getTypeWidth(elemType);
+        uint32_t elemLogW =
+            LLHDProcessInterpreter::getLogicalWidth(elemType);
+        ProcessScheduler::SignalArrayInfo info{numElems, elemPhysW, elemLogW};
+        if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
+          info.leftBound = leftAttr.getInt();
+        if (auto rightAttr = sigBounds.getAs<IntegerAttr>("right"))
+          info.rightBound = rightAttr.getInt();
+
+        // Check for nested unpacked dimensions (e.g., logic x [3][3]).
+        // If the element type is also hw::ArrayType and the signal has
+        // unpacked depth >= 2, recursively create inner array info.
+        auto depthDict =
+            hwModule->getAttrOfType<DictionaryAttr>("vpi.unpacked_depth");
+        int unpackedDepth = 1;
+        if (depthDict) {
+          if (auto depthAttr =
+                  depthDict.getAs<IntegerAttr>(portInfo.getName()))
+            unpackedDepth = depthAttr.getInt();
         }
+        if (unpackedDepth >= 2) {
+          // Build nested inner array info by peeling hw::ArrayType layers.
+          auto buildInner =
+              [](mlir::Type type, int depth,
+                 auto &self) -> std::shared_ptr<ProcessScheduler::SignalArrayInfo> {
+            if (depth <= 0)
+              return nullptr;
+            auto innerArray = dyn_cast<hw::ArrayType>(type);
+            if (!innerArray)
+              return nullptr;
+            auto inner = std::make_shared<ProcessScheduler::SignalArrayInfo>();
+            inner->numElements = innerArray.getNumElements();
+            mlir::Type innerElem = innerArray.getElementType();
+            inner->elementPhysWidth =
+                LLHDProcessInterpreter::getTypeWidth(innerElem);
+            inner->elementLogicalWidth =
+                LLHDProcessInterpreter::getLogicalWidth(innerElem);
+            inner->leftBound = 0;
+            inner->rightBound =
+                static_cast<int32_t>(inner->numElements - 1);
+            inner->innerArrayInfo = self(innerElem, depth - 1, self);
+            return inner;
+          };
+          info.innerArrayInfo =
+              buildInner(elemType, unpackedDepth - 1, buildInner);
+        }
+
+        scheduler.setSignalArrayInfo(signalId, info);
       }
-      scheduler.setSignalArrayInfo(signalId, info);
     }
 
     // Detect unpacked struct types and record struct field info for VPI.
@@ -1400,7 +1447,44 @@ LogicalResult SimulationContext::run() {
   if (!vpiLibrary.empty()) {
     auto &vpiRuntime = VPIRuntime::getInstance();
     vpiRuntime.setScheduler(&scheduler);
+    vpiRuntime.setSimulationControl(&control);
     vpiRuntime.setTopModuleNames(topModuleNames);
+
+    // Pass command-line args (including plusargs) to VPI for vpi_get_vlog_info.
+    {
+      std::vector<std::string> vlogArgs;
+      vlogArgs.push_back("circt-sim");
+      for (const auto &pa : vlogPlusargs)
+        vlogArgs.push_back(pa);
+      vpiRuntime.setVlogArgs(vlogArgs);
+    }
+
+    // Populate signal type metadata (integer/string/real) from hw.module attrs.
+    // These must be set before buildHierarchy() so that signal type
+    // classification is available during VPI object creation.
+    for (auto hwMod : topHWModules) {
+      if (!hwMod)
+        continue;
+      if (auto intVars = hwMod->getAttrOfType<mlir::ArrayAttr>(
+              "vpi.integer_vars")) {
+        for (auto attr : intVars)
+          if (auto strAttr = mlir::dyn_cast<mlir::StringAttr>(attr))
+            vpiRuntime.addIntegerVar(strAttr.getValue().str());
+      }
+      if (auto strVars = hwMod->getAttrOfType<mlir::ArrayAttr>(
+              "vpi.string_vars")) {
+        for (auto attr : strVars)
+          if (auto strAttr = mlir::dyn_cast<mlir::StringAttr>(attr))
+            vpiRuntime.addStringVar(strAttr.getValue().str());
+      }
+      if (auto realVars = hwMod->getAttrOfType<mlir::ArrayAttr>(
+              "vpi.real_vars")) {
+        for (auto attr : realVars)
+          if (auto strAttr = mlir::dyn_cast<mlir::StringAttr>(attr))
+            vpiRuntime.addRealVar(strAttr.getValue().str());
+      }
+    }
+
     vpiRuntime.buildHierarchy();
 
     // Register module parameters from hw.module ops so that cocotb can
@@ -1697,6 +1781,13 @@ LogicalResult SimulationContext::run() {
                        << " iter=" << loopIterations << "\n";
         }
       });
+
+      // Fire VPI cbNextSimTime callbacks when simulation time advances.
+      // cocotb's NextTimeStep trigger registers a cbNextSimTime callback.
+      if (!vpiLibrary.empty() &&
+          scheduler.getCurrentTime().realTime != preAdvTime) {
+        VPIRuntime::getInstance().fireCallbacks(cbNextSimTime);
+      }
 
       // Check if the $finish grace period has expired. When UVM calls
       // $finish(success) with active forked children (phase hopper), we
@@ -2482,9 +2573,24 @@ int main(int argc, char **argv) {
   llvm::cl::AddExtraVersionPrinter(
       [](llvm::raw_ostream &os) { os << getCirctVersion() << '\n'; });
 
-  // Parse command line
+  // Extract Verilog plusargs (+key, +key=value) from argv before LLVM parsing.
+  // LLVM's option parser rejects unknown arguments, so we pre-filter them.
+  // These are stored and returned via vpi_get_vlog_info().
+  extern std::vector<std::string> vlogPlusargs;
+  std::vector<char *> filteredArgv;
+  for (int i = 0; i < argc; ++i) {
+    if (argv[i][0] == '+') {
+      vlogPlusargs.push_back(argv[i]);
+    } else {
+      filteredArgv.push_back(argv[i]);
+    }
+  }
+  int filteredArgc = static_cast<int>(filteredArgv.size());
+  char **filteredArgvPtr = filteredArgv.data();
+
+  // Parse command line (with plusargs filtered out)
   llvm::cl::ParseCommandLineOptions(
-      argc, argv,
+      filteredArgc, filteredArgvPtr,
       "CIRCT Event-Driven Simulation Tool\n\n"
       "This tool simulates hardware designs using CIRCT's event-driven\n"
       "simulation infrastructure with IEEE 1800 scheduling semantics.\n");
