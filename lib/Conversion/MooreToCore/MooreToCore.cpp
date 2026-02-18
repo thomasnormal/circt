@@ -28116,7 +28116,6 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FEofBIOpConversion,
     FFlushBIOpConversion,
     FTellBIOpConversion,
-    TimeFormatBIOpConversion,
 
     // Patterns for queue and dynamic array operations.
     QueueMaxOpConversion,
