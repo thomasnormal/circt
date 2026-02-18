@@ -13935,8 +13935,12 @@ static LogicalResult lowerReadMemOp(Operation *op, Value adaptedFilename,
   Value origMem;
   if (auto readB = dyn_cast<ReadMemBBIOp>(op))
     origMem = readB.getMem();
+  else if (auto readH = dyn_cast<ReadMemHBIOp>(op))
+    origMem = readH.getMem();
+  else if (auto writeB = dyn_cast<WriteMemBBIOp>(op))
+    origMem = writeB.getMem();
   else
-    origMem = cast<ReadMemHBIOp>(op).getMem();
+    origMem = cast<WriteMemHBIOp>(op).getMem();
 
   auto refType = cast<moore::RefType>(origMem.getType());
   auto arrayType = dyn_cast<moore::UnpackedArrayType>(refType.getNestedType());
@@ -14014,6 +14018,32 @@ struct ReadMemHBIOpConversion : public OpConversionPattern<ReadMemHBIOp> {
                   ConversionPatternRewriter &rewriter) const override {
     return lowerReadMemOp(op, adaptor.getFilename(), adaptor.getMem(),
                           "__moore_readmemh", rewriter, typeConverter);
+  }
+};
+
+/// Conversion for moore.builtin.writememb -> __moore_writememb runtime call
+/// $writememb writes memory to binary file
+struct WriteMemBBIOpConversion : public OpConversionPattern<WriteMemBBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(WriteMemBBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    return lowerReadMemOp(op, adaptor.getFilename(), adaptor.getMem(),
+                          "__moore_writememb", rewriter, typeConverter);
+  }
+};
+
+/// Conversion for moore.builtin.writememh -> __moore_writememh runtime call
+/// $writememh writes memory to hex file
+struct WriteMemHBIOpConversion : public OpConversionPattern<WriteMemHBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(WriteMemHBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    return lowerReadMemOp(op, adaptor.getFilename(), adaptor.getMem(),
+                          "__moore_writememh", rewriter, typeConverter);
   }
 };
 
@@ -14513,6 +14543,139 @@ struct TimeFormatBIOpConversion : public OpConversionPattern<TimeFormatBIOp> {
                                     minWidth});
 
     rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.dist -> runtime function call.
+/// Lowers $dist_* to __moore_dist_*(seed_ptr, ...).
+/// The seed argument is an inout ref; we allocate a temp for signals
+/// and pass the pointer directly for alloca-backed locals.
+struct DistBIOpConversion : public OpConversionPattern<DistBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(DistBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    // Determine the runtime function name from the dist_name attribute.
+    StringRef distName = op.getDistName();
+    std::string rtName = "__moore_" + distName.drop_front(1).str();
+    // e.g., "$dist_uniform" -> "__moore_dist_uniform"
+
+    // Build the function type: i32(ptr, i32, ...) — ptr for seed, then params.
+    SmallVector<Type> argTypes;
+    argTypes.push_back(ptrTy); // seed pointer
+    for (size_t i = 0; i < adaptor.getParams().size(); ++i)
+      argTypes.push_back(i32Ty);
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, argTypes);
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, rtName, fnTy);
+
+    // Handle the seed ref: need a pointer the runtime can read/write.
+    Value seedRef = adaptor.getSeed();
+    Value seedPtr;
+    bool isSignal = isa<llhd::RefType>(seedRef.getType());
+
+    if (isSignal) {
+      // Signal ref: probe current value, store to a temp alloca, call runtime,
+      // load updated value, drive back.
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                           rewriter.getI64IntegerAttr(1));
+      seedPtr = LLVM::AllocaOp::create(rewriter, loc, ptrTy, i32Ty, one);
+      // Probe current seed value.
+      auto sigTy = cast<llhd::RefType>(seedRef.getType());
+      auto targetTy = sigTy.getNestedType();
+      Value probed = llhd::ProbeOp::create(rewriter, loc, seedRef);
+      Value seedVal;
+      if (isFourStateStructType(targetTy)) {
+        // Extract the value field from the 4-state struct.
+        auto structType = cast<hw::StructType>(targetTy);
+        auto valTy = structType.getElements()[0].type;
+        seedVal = hw::StructExtractOp::create(rewriter, loc, probed, "value");
+        if (valTy != i32Ty)
+          seedVal = arith::TruncIOp::create(rewriter, loc, i32Ty, seedVal);
+      } else {
+        seedVal = probed;
+        if (seedVal.getType() != i32Ty)
+          seedVal = arith::TruncIOp::create(rewriter, loc, i32Ty, seedVal);
+      }
+      LLVM::StoreOp::create(rewriter, loc, seedVal, seedPtr);
+    } else {
+      // Alloca-backed ref (!llvm.ptr): pass directly.
+      seedPtr = seedRef;
+    }
+
+    // Build call arguments: seedPtr, then parameter values.
+    SmallVector<Value> callArgs;
+    callArgs.push_back(seedPtr);
+    for (auto param : adaptor.getParams()) {
+      Value p = param;
+      if (p.getType() != i32Ty) {
+        // Convert 4-state struct to plain i32.
+        if (isFourStateStructType(p.getType())) {
+          p = hw::StructExtractOp::create(rewriter, loc, p, "value");
+        }
+        if (p.getType() != i32Ty)
+          p = arith::TruncIOp::create(rewriter, loc, i32Ty, p);
+      }
+      callArgs.push_back(p);
+    }
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(fn), callArgs);
+
+    // If signal, write updated seed back.
+    if (isSignal) {
+      Value updatedSeed =
+          LLVM::LoadOp::create(rewriter, loc, i32Ty, seedPtr);
+      auto sigTy = cast<llhd::RefType>(seedRef.getType());
+      auto targetTy = sigTy.getNestedType();
+      Value valueToWrite;
+      if (isFourStateStructType(targetTy)) {
+        auto structType = cast<hw::StructType>(targetTy);
+        auto valTy = structType.getElements()[0].type;
+        Value ext = updatedSeed;
+        if (valTy != i32Ty)
+          ext = arith::ExtSIOp::create(rewriter, loc, valTy, updatedSeed);
+        Value zero = hw::ConstantOp::create(rewriter, loc, valTy, 0);
+        valueToWrite = createFourStateStruct(rewriter, loc, ext, zero);
+      } else {
+        valueToWrite = updatedSeed;
+        if (targetTy != i32Ty)
+          valueToWrite =
+              arith::ExtSIOp::create(rewriter, loc, targetTy, updatedSeed);
+      }
+      auto timeAttr =
+          llhd::TimeAttr::get(ctx, 0U, llvm::StringRef("ns"), 0, 1);
+      auto time = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
+      llhd::DriveOp::create(rewriter, loc, seedRef, valueToWrite, time,
+                            Value{});
+    }
+
+    // Convert the i32 result to the expected output type.
+    Value result = call.getResult();
+    Type resultTy = getTypeConverter()->convertType(op.getResult().getType());
+    if (resultTy && resultTy != i32Ty) {
+      if (isFourStateStructType(resultTy)) {
+        auto structType = cast<hw::StructType>(resultTy);
+        auto valTy = structType.getElements()[0].type;
+        Value ext = result;
+        if (valTy != i32Ty)
+          ext = arith::ExtSIOp::create(rewriter, loc, valTy, result);
+        Value zero = hw::ConstantOp::create(rewriter, loc, valTy, 0);
+        result = createFourStateStruct(rewriter, loc, ext, zero);
+      } else if (resultTy != i32Ty) {
+        result = arith::ExtSIOp::create(rewriter, loc, resultTy, result);
+      }
+    }
+
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -28098,6 +28261,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     MonitorOffBIOpConversion,
     PrintTimescaleBIOpConversion,
     TimeFormatBIOpConversion,
+    DistBIOpConversion,
     FErrorBIOpConversion,
     UngetCBIOpConversion,
     FSeekBIOpConversion,
@@ -28105,6 +28269,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FReadBIOpConversion,
     ReadMemBBIOpConversion,
     ReadMemHBIOpConversion,
+    WriteMemBBIOpConversion,
+    WriteMemHBIOpConversion,
 
     // Patterns for file I/O operations.
     FOpenBIOpConversion,

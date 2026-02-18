@@ -21,12 +21,14 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cinttypes>
 #include <chrono>
 #include <climits>
 #include <condition_variable>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <ctime>
 #include <functional>
@@ -18525,4 +18527,173 @@ MooreString __moore_format_time(int64_t time_fs) {
   ms.data = result;
   ms.len = total;
   return ms;
+}
+
+// ---------------------------------------------------------------------------
+// $writememb / $writememh (IEEE 1800-2017 Section 21.4)
+// ---------------------------------------------------------------------------
+
+/// Helper to write memory contents to a file.
+/// @param filename Stack-allocated {ptr, i64} string struct
+/// @param mem Pointer to the memory array data
+/// @param elem_width Logical bit width of each element
+/// @param num_elems Number of elements in the array
+/// @param isHex true for hex format, false for binary format
+static void writeMemImpl(const void *filename, const void *mem,
+                         int32_t elem_width, int32_t num_elems, bool isHex) {
+  // Decode the filename from {ptr, i64} struct.
+  struct StringStruct {
+    const char *ptr;
+    int64_t len;
+  };
+  const auto *ss = static_cast<const StringStruct *>(filename);
+  if (!ss || !ss->ptr || ss->len <= 0)
+    return;
+  std::string fname(ss->ptr, ss->len);
+
+  std::FILE *fp = std::fopen(fname.c_str(), "w");
+  if (!fp) {
+    std::fprintf(stderr, "Warning: $writemem%c: cannot open file \"%s\"\n",
+                 isHex ? 'h' : 'b', fname.c_str());
+    return;
+  }
+
+  const auto *bytes = static_cast<const uint8_t *>(mem);
+  unsigned elemBytes = (elem_width + 7) / 8;
+
+  for (int32_t i = 0; i < num_elems; ++i) {
+    // Read element value from memory (little-endian byte order)
+    uint64_t val = 0;
+    for (unsigned b = 0; b < elemBytes && b < 8; ++b)
+      val |= static_cast<uint64_t>(bytes[i * elemBytes + b]) << (b * 8);
+
+    if (isHex) {
+      unsigned hexDigits = (elem_width + 3) / 4;
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%0*" PRIx64, hexDigits, val);
+      std::fprintf(fp, "%s\n", buf);
+    } else {
+      // Binary format
+      for (int bit = elem_width - 1; bit >= 0; --bit)
+        std::fputc((val >> bit) & 1 ? '1' : '0', fp);
+      std::fputc('\n', fp);
+    }
+  }
+  std::fclose(fp);
+}
+
+void __moore_writememb(const void *filename, const void *mem,
+                       int32_t elem_width, int32_t num_elems) {
+  writeMemImpl(filename, mem, elem_width, num_elems, /*isHex=*/false);
+}
+
+void __moore_writememh(const void *filename, const void *mem,
+                       int32_t elem_width, int32_t num_elems) {
+  writeMemImpl(filename, mem, elem_width, num_elems, /*isHex=*/true);
+}
+
+// ---------------------------------------------------------------------------
+// Distribution functions (IEEE 1800-2017 Section 20.15)
+// ---------------------------------------------------------------------------
+// Helper: advance the seed using a simple linear congruential generator.
+// Returns the raw next value and updates *seed in place.
+static uint32_t distNextRaw(int32_t *seed) {
+  // LCG parameters from Numerical Recipes (same as many Verilog simulators).
+  uint32_t s = static_cast<uint32_t>(*seed);
+  s = s * 1103515245u + 12345u;
+  *seed = static_cast<int32_t>(s);
+  return s;
+}
+
+// Helper: uniform random double in [0, 1).
+static double distUniformDouble(int32_t *seed) {
+  uint32_t raw = distNextRaw(seed);
+  return static_cast<double>(raw) / 4294967296.0;
+}
+
+int32_t __moore_dist_uniform(int32_t *seed, int32_t start, int32_t end) {
+  if (start >= end)
+    return start;
+  uint32_t range = static_cast<uint32_t>(end - start) + 1u;
+  uint32_t raw = distNextRaw(seed);
+  return start + static_cast<int32_t>(raw % range);
+}
+
+int32_t __moore_dist_normal(int32_t *seed, int32_t mean, int32_t std_dev) {
+  // Box-Muller transform.
+  double u1 = distUniformDouble(seed);
+  double u2 = distUniformDouble(seed);
+  if (u1 < 1e-15)
+    u1 = 1e-15;
+  double z = std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * M_PI * u2);
+  return static_cast<int32_t>(mean + z * std_dev);
+}
+
+int32_t __moore_dist_exponential(int32_t *seed, int32_t mean) {
+  double u = distUniformDouble(seed);
+  if (u < 1e-15)
+    u = 1e-15;
+  double result = -static_cast<double>(mean) * std::log(u);
+  return static_cast<int32_t>(result);
+}
+
+int32_t __moore_dist_poisson(int32_t *seed, int32_t mean) {
+  // Knuth's algorithm for small mean values.
+  double L = std::exp(-static_cast<double>(mean));
+  int32_t k = 0;
+  double p = 1.0;
+  do {
+    ++k;
+    p *= distUniformDouble(seed);
+  } while (p > L && k < 1000); // Guard against infinite loop.
+  return k - 1;
+}
+
+int32_t __moore_dist_chi_square(int32_t *seed, int32_t df) {
+  // Sum of df squared standard normals.
+  double sum = 0.0;
+  for (int32_t i = 0; i < df; ++i) {
+    double u1 = distUniformDouble(seed);
+    double u2 = distUniformDouble(seed);
+    if (u1 < 1e-15)
+      u1 = 1e-15;
+    double z = std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * M_PI * u2);
+    sum += z * z;
+  }
+  return static_cast<int32_t>(sum);
+}
+
+int32_t __moore_dist_t(int32_t *seed, int32_t df) {
+  // Student's t = Z / sqrt(chi2/df) where Z ~ N(0,1), chi2 ~ chi_square(df).
+  double u1 = distUniformDouble(seed);
+  double u2 = distUniformDouble(seed);
+  if (u1 < 1e-15)
+    u1 = 1e-15;
+  double z = std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * M_PI * u2);
+  double chi2 = 0.0;
+  for (int32_t i = 0; i < df; ++i) {
+    double v1 = distUniformDouble(seed);
+    double v2 = distUniformDouble(seed);
+    if (v1 < 1e-15)
+      v1 = 1e-15;
+    double w = std::sqrt(-2.0 * std::log(v1)) * std::cos(2.0 * M_PI * v2);
+    chi2 += w * w;
+  }
+  double denom = std::sqrt(chi2 / df);
+  if (denom < 1e-15)
+    denom = 1e-15;
+  return static_cast<int32_t>(z / denom);
+}
+
+int32_t __moore_dist_erlang(int32_t *seed, int32_t k, int32_t mean) {
+  // Erlang(k, mean/k) = sum of k exponential(mean/k) samples.
+  double lambda = static_cast<double>(mean) / k;
+  double sum = 0.0;
+  for (int32_t i = 0; i < k; ++i) {
+    double u = distUniformDouble(seed);
+    if (u < 1e-15)
+      u = 1e-15;
+    sum += -lambda * std::log(u);
+  }
+  return static_cast<int32_t>(sum);
 }
