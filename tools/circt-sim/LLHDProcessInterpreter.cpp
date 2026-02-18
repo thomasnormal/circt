@@ -563,6 +563,38 @@ static bool matchFourStateStructCreateLoad(Value value,
   return srcAddr != 0;
 }
 
+template <typename ResolveSignalFn>
+static bool matchFourStateProbeCopyStore(Value storeValue,
+                                         ResolveSignalFn &&resolveSignal,
+                                         SignalId &srcSignalId) {
+  srcSignalId = 0;
+
+  auto insertUnknown = storeValue.getDefiningOp<LLVM::InsertValueOp>();
+  if (!insertUnknown || !hasSingleFieldIndex(insertUnknown.getPosition(), 1))
+    return false;
+  auto insertValue =
+      insertUnknown.getContainer().getDefiningOp<LLVM::InsertValueOp>();
+  if (!insertValue || !hasSingleFieldIndex(insertValue.getPosition(), 0))
+    return false;
+
+  auto valueExtract = insertValue.getValue().getDefiningOp<hw::StructExtractOp>();
+  auto unknownExtract =
+      insertUnknown.getValue().getDefiningOp<hw::StructExtractOp>();
+  if (!valueExtract || !unknownExtract)
+    return false;
+  if (valueExtract.getFieldName() != "value" ||
+      unknownExtract.getFieldName() != "unknown")
+    return false;
+  if (valueExtract.getInput() != unknownExtract.getInput())
+    return false;
+
+  auto probeOp = valueExtract.getInput().getDefiningOp<llhd::ProbeOp>();
+  if (!probeOp)
+    return false;
+  srcSignalId = resolveSignal(probeOp.getSignal());
+  return srcSignalId != 0;
+}
+
 template <typename ResolveAddrFn>
 static bool matchInterfaceTriStateStore(Value storeValue,
                                         ResolveAddrFn &&resolveAddr,
@@ -2445,6 +2477,41 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
                    << childToParentFieldAddr.size() << " entries, "
                    << "interfaceFieldPropagation has "
                    << interfaceFieldPropagation.size() << " entries\n";
+    }
+  }
+
+  // Resolve stores that copy a probed LLHD signal value into interface fields.
+  // This links source signal IDs (e.g. shared inout wire) directly to all
+  // copied interface field shadow signals so runtime signal updates stay in sync.
+  if (!interfaceSignalCopyPairs.empty() && !interfaceFieldSignals.empty()) {
+    unsigned resolvedPairs = 0;
+    unsigned unresolvedDest = 0;
+    for (auto &[srcSigId, destAddr] : interfaceSignalCopyPairs) {
+      auto destIt = interfaceFieldSignals.find(destAddr);
+      if (destIt == interfaceFieldSignals.end()) {
+        ++unresolvedDest;
+        continue;
+      }
+      SignalId destSigId = destIt->second;
+      if (srcSigId == 0 || srcSigId == destSigId)
+        continue;
+      auto &children = interfaceFieldPropagation[srcSigId];
+      if (std::find(children.begin(), children.end(), destSigId) !=
+          children.end())
+        continue;
+      children.push_back(destSigId);
+      ++resolvedPairs;
+      if (traceInterfacePropagation) {
+        llvm::errs() << "[circt-sim] SignalCopy link: signal " << srcSigId
+                     << " -> field signal " << destSigId << " (0x"
+                     << llvm::format_hex(destAddr, 16) << ")\n";
+      }
+    }
+    if (traceInterfacePropagation) {
+      llvm::errs() << "[circt-sim] interfaceSignalCopyPairs: "
+                   << interfaceSignalCopyPairs.size() << " total, "
+                   << resolvedPairs << " resolved, " << unresolvedDest
+                   << " unresolved-dest\n";
     }
   }
 
@@ -8231,20 +8298,54 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     return true;
   }
   Block &body = bodyRegion->front();
-  bool containsWaitConditionCall = hasMooreWaitConditionCall(*bodyRegion);
   static bool traceThunkGuards = []() {
     const char *env = std::getenv("CIRCT_SIM_TRACE_JIT_THUNK_GUARDS");
     return env && env[0] != '\0' && env[0] != '0';
   }();
   auto requestDeopt = [&](StringRef reason, bool restoreSnapshot) {
     if (traceThunkGuards) {
-      llvm::errs() << "[JIT-THUNK-GUARD] proc=" << procId
-                   << " shape=single_block_terminating"
-                   << " reason=" << reason << "\n";
+      llvm::errs() << "[JIT-THUNK-GUARD] proc=" << procId;
+      if (auto *proc = scheduler.getProcess(procId))
+        llvm::errs() << " name=" << proc->getName();
+      llvm::errs() << " shape=single_block_terminating"
+                   << " reason=" << reason;
+      llvm::errs() << " state{halted=" << (state.halted ? 1 : 0)
+                   << " waiting=" << (state.waiting ? 1 : 0)
+                   << " resume_token=" << state.jitThunkResumeToken
+                   << " call_stack=" << state.callStack.size()
+                   << " seq_retry=" << (state.sequencerGetRetryCallOp ? 1 : 0)
+                   << " resume_at_current_op="
+                   << (state.resumeAtCurrentOp ? 1 : 0)
+                   << " parent=" << state.parentProcessId;
+      if (state.currentBlock) {
+        llvm::errs()
+            << " current_block_ops=" << state.currentBlock->getOperations().size();
+        if (state.currentOp == state.currentBlock->end())
+          llvm::errs() << " current_op=<end>";
+        else
+          llvm::errs() << " current_op=" << state.currentOp->getName().getStringRef();
+      } else {
+        llvm::errs() << " current_block=<null>";
+      }
+      if (state.destBlock) {
+        llvm::errs() << " dest_block_ops=" << state.destBlock->getOperations().size()
+                     << " dest_args=" << state.destOperands.size();
+      } else {
+        llvm::errs() << " dest_block=<null>";
+      }
+      llvm::errs() << " body_term=" << body.back().getName().getStringRef()
+                   << "}\n";
+      if (reason == "post_exec_not_halted_or_waiting") {
+        llvm::errs() << "  [JIT-THUNK-GUARD] body:";
+        for (Operation &op : body)
+          llvm::errs() << " " << op.getName().getStringRef();
+        llvm::errs() << "\n";
+      }
     }
     thunkState.deoptRequested = true;
     thunkState.restoreSnapshotOnDeopt = restoreSnapshot;
-    thunkState.deoptDetail = reason.str();
+    thunkState.deoptDetail =
+        (Twine("single_block_terminating:") + reason).str();
   };
   auto isDeferredHaltState = [&](const ProcessExecutionState &s) {
     if (!s.destBlock || s.destBlock != &body || !s.resumeAtCurrentOp)
@@ -8260,10 +8361,6 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
   if (thunkState.resumeToken != state.jitThunkResumeToken ||
       state.jitThunkResumeToken != 0) {
     requestDeopt("resume_token_mismatch", /*restoreSnapshot=*/true);
-    return true;
-  }
-  if (!state.callStack.empty()) {
-    requestDeopt("non_empty_call_stack", /*restoreSnapshot=*/true);
     return true;
   }
   if (state.destBlock || state.resumeAtCurrentOp) {
@@ -8285,44 +8382,117 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     state.resumeAtCurrentOp = false;
   }
   if (state.waiting) {
-    if (containsWaitConditionCall && state.waitConditionRestartBlock &&
-        !state.halted) {
+    if (state.waitConditionRestartBlock && !state.halted) {
       // Ignore spurious wakeups while wait_condition polling remains armed.
       thunkState.halted = state.halted;
       thunkState.waiting = state.waiting;
       thunkState.resumeToken = state.jitThunkResumeToken;
       return true;
     }
-    if (!isDeferredHaltState(state)) {
+    if (isDeferredHaltState(state)) {
+      resumingDeferredHalt = true;
+      state.currentBlock = state.destBlock;
+      for (auto [arg, val] :
+           llvm::zip(state.currentBlock->getArguments(), state.destOperands)) {
+        state.valueMap[arg] = val;
+        if (isa<llhd::RefType>(arg.getType()))
+          state.refBlockArgSources.erase(arg);
+      }
+      state.waiting = false;
+      state.destBlock = nullptr;
+      state.destOperands.clear();
+      state.resumeAtCurrentOp = false;
+    } else if (!state.callStack.empty()) {
+      // Some suspension paths can schedule the process with waiting still set.
+      // Normalize this to the active execution path before call-stack resume.
+      state.waiting = false;
+    } else if (state.sequencerGetRetryCallOp) {
+      // Process-level sequencer retries are resumed by rewinding to the
+      // recorded call op on the next activation.
+      state.waiting = false;
+    } else {
       requestDeopt("unexpected_waiting_state", /*restoreSnapshot=*/true);
       return true;
     }
-    resumingDeferredHalt = true;
-    state.currentBlock = state.destBlock;
-    for (auto [arg, val] :
-         llvm::zip(state.currentBlock->getArguments(), state.destOperands)) {
-      state.valueMap[arg] = val;
-      if (isa<llhd::RefType>(arg.getType()))
-        state.refBlockArgSources.erase(arg);
-    }
-    state.waiting = false;
-    state.destBlock = nullptr;
-    state.destOperands.clear();
-    state.resumeAtCurrentOp = false;
   }
   if (state.halted) {
     requestDeopt("unexpected_resume_state", /*restoreSnapshot=*/true);
     return true;
   }
 
-  if (containsWaitConditionCall && state.waitConditionRestartBlock) {
+  if (state.waitConditionRestartBlock) {
+    if (!state.waitConditionSavedBlock) {
+      if (!state.callStack.empty()) {
+        auto &outermostFrame = state.callStack.back();
+        if (outermostFrame.callOp) {
+          state.waitConditionSavedBlock = outermostFrame.callOp->getBlock();
+          state.waitConditionSavedOp =
+              std::next(outermostFrame.callOp->getIterator());
+        } else {
+          state.waitConditionSavedBlock = state.currentBlock;
+          state.waitConditionSavedOp = state.currentOp;
+        }
+      } else {
+        state.waitConditionSavedBlock = state.currentBlock;
+        state.waitConditionSavedOp = state.currentOp;
+      }
+    }
     state.currentBlock = state.waitConditionRestartBlock;
     state.currentOp = state.waitConditionRestartOp;
     for (Value value : state.waitConditionValuesToInvalidate)
       state.valueMap.erase(value);
-  } else if (!resumingDeferredHalt) {
+    if (!state.callStack.empty()) {
+      auto &innermostFrame = state.callStack.front();
+      innermostFrame.resumeOp = state.waitConditionRestartOp;
+      innermostFrame.resumeBlock = state.waitConditionRestartBlock;
+    }
+  } else if (!resumingDeferredHalt &&
+             (!state.currentBlock || state.currentBlock->getParent() != bodyRegion ||
+              state.currentOp == state.currentBlock->end())) {
     state.currentBlock = &body;
     state.currentOp = state.currentBlock->begin();
+  }
+
+  if (state.sequencerGetRetryCallOp && !state.callStack.empty()) {
+    auto &innermostFrame = state.callStack.front();
+    innermostFrame.resumeOp = state.sequencerGetRetryCallOp->getIterator();
+    innermostFrame.resumeBlock = state.sequencerGetRetryCallOp->getBlock();
+    state.sequencerGetRetryCallOp = nullptr;
+  } else if (state.sequencerGetRetryCallOp && state.callStack.empty()) {
+    state.currentOp = state.sequencerGetRetryCallOp->getIterator();
+    state.currentBlock = state.sequencerGetRetryCallOp->getBlock();
+    state.sequencerGetRetryCallOp = nullptr;
+  }
+
+  CallStackResumeResult callStackResume =
+      resumeSavedCallStackFrames(procId, state);
+  if (callStackResume == CallStackResumeResult::Failed) {
+    if (state.halted) {
+      thunkState.halted = true;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
+    }
+    requestDeopt("call_stack_resume_failed", /*restoreSnapshot=*/false);
+    return true;
+  }
+  if (callStackResume == CallStackResumeResult::Suspended) {
+    thunkState.halted = state.halted;
+    thunkState.waiting = state.waiting;
+    thunkState.resumeToken = state.jitThunkResumeToken;
+    return true;
+  }
+
+  if (!resumingDeferredHalt && callStackResume == CallStackResumeResult::Completed &&
+      (!state.currentBlock || state.currentBlock->getParent() != bodyRegion ||
+       state.currentOp == state.currentBlock->end())) {
+    state.currentBlock = &body;
+    state.currentOp = state.currentBlock->begin();
+  }
+
+  if (!state.currentBlock || state.currentOp == state.currentBlock->end()) {
+    requestDeopt("invalid_current_op_state", /*restoreSnapshot=*/true);
+    return true;
   }
 
   ProcessId savedActiveProcessId = activeProcessId;
@@ -8354,21 +8524,29 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     requestDeopt("process_state_missing_post_exec", /*restoreSnapshot=*/false);
     return true;
   }
-  bool waitingOnWaitCondition = containsWaitConditionCall &&
-                                post->second.waiting &&
+  bool waitingOnWaitCondition = post->second.waiting &&
                                 post->second.waitConditionRestartBlock &&
                                 !post->second.halted;
   bool waitingOnDeferredHalt =
       post->second.waiting && isDeferredHaltState(post->second) &&
       !post->second.halted;
+  bool waitingOnSequencerRetry =
+      post->second.waiting && post->second.sequencerGetRetryCallOp &&
+      !post->second.halted;
+  bool waitingOnSavedCallStack =
+      post->second.waiting && !post->second.callStack.empty() &&
+      !post->second.halted;
   if (!post->second.halted && !waitingOnWaitCondition &&
-      !waitingOnDeferredHalt) {
+      !waitingOnDeferredHalt && !waitingOnSequencerRetry &&
+      !waitingOnSavedCallStack) {
     requestDeopt("post_exec_not_halted_or_waiting", /*restoreSnapshot=*/false);
     return true;
   }
   if (post->second.waiting && !waitingOnWaitCondition &&
-      !waitingOnDeferredHalt) {
-    requestDeopt("post_exec_waiting_without_wait_condition", /*restoreSnapshot=*/false);
+      !waitingOnDeferredHalt && !waitingOnSequencerRetry &&
+      !waitingOnSavedCallStack) {
+    requestDeopt("post_exec_waiting_without_wait_condition",
+                 /*restoreSnapshot=*/false);
     return true;
   }
 
@@ -9115,6 +9293,127 @@ bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(
   return true;
 }
 
+LLHDProcessInterpreter::CallStackResumeResult
+LLHDProcessInterpreter::resumeSavedCallStackFrames(
+    ProcessId procId, ProcessExecutionState &state) {
+  if (state.callStack.empty())
+    return CallStackResumeResult::NoFrames;
+
+  LLVM_DEBUG(llvm::dbgs()
+             << "  Process has " << state.callStack.size()
+             << " saved call stack frame(s), resuming from innermost\n");
+
+  // Preserve the outermost call site for restoring process-level position
+  // once all nested frames have completed.
+  Operation *outermostCallOp = state.callStack.back().callOp;
+  while (!state.callStack.empty()) {
+    CallStackFrame frame = std::move(state.callStack.front());
+    state.callStack.erase(state.callStack.begin());
+
+    // Remaining old outer frames before resuming this frame.
+    size_t oldFrameCount = state.callStack.size();
+
+    llvm::StringRef frameName =
+        frame.isLLVM() ? frame.llvmFuncOp.getName() : frame.funcOp.getName();
+    LLVM_DEBUG(llvm::dbgs()
+               << "    Resuming " << (frame.isLLVM() ? "LLVM " : "")
+               << "function '" << frameName << "' (remaining old frames: "
+               << oldFrameCount << ")\n");
+
+    llvm::SmallVector<InterpretedValue, 4> results;
+    ++state.callDepth;
+    LogicalResult funcResult =
+        frame.isLLVM()
+            ? interpretLLVMFuncBody(procId, frame.llvmFuncOp, frame.args,
+                                    results, frame.callOperands, frame.callOp,
+                                    frame.resumeBlock, frame.resumeOp)
+            : interpretFuncBody(procId, frame.funcOp, frame.args, results,
+                                frame.callOp, frame.resumeBlock, frame.resumeOp);
+    --state.callDepth;
+
+    if (failed(funcResult)) {
+      LLVM_DEBUG(llvm::dbgs() << "    Function '" << frameName
+                              << "' failed during resume\n");
+      finalizeProcess(procId, /*killed=*/false);
+      return CallStackResumeResult::Failed;
+    }
+
+    // Function suspended again: rotate newly created inner frames to front so
+    // the next resume continues innermost-first.
+    if (state.waiting) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "    Function '" << frameName
+                 << "' suspended again during resume, "
+                 << "callStack size=" << state.callStack.size()
+                 << " (old outer: " << oldFrameCount << ")\n");
+      if (oldFrameCount > 0 && state.callStack.size() > oldFrameCount) {
+        std::rotate(state.callStack.begin(),
+                    state.callStack.begin() + oldFrameCount,
+                    state.callStack.end());
+        LLVM_DEBUG(llvm::dbgs()
+                   << "    Rotated stack: moved " << oldFrameCount
+                   << " old frames after "
+                   << (state.callStack.size() - oldFrameCount)
+                   << " new frames\n");
+      }
+
+      if (state.pendingDelayFs > 0) {
+        SimTime currentTime = scheduler.getCurrentTime();
+        SimTime targetTime = currentTime.advanceTime(state.pendingDelayFs);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "    Scheduling delay " << state.pendingDelayFs
+                   << " fs from function suspend\n");
+        state.pendingDelayFs = 0;
+        scheduler.getEventScheduler().schedule(
+            targetTime, SchedulingRegion::Active,
+            Event([this, procId]() { resumeProcess(procId); }));
+      }
+      return CallStackResumeResult::Suspended;
+    }
+
+    // Function completed: write return values to the call operation results.
+    if (frame.callOp) {
+      if (auto callIndirectOp = dyn_cast<mlir::func::CallIndirectOp>(frame.callOp)) {
+        for (auto [result, retVal] : llvm::zip(callIndirectOp.getResults(), results))
+          setValue(procId, result, retVal);
+      } else if (auto callOp = dyn_cast<mlir::func::CallOp>(frame.callOp)) {
+        for (auto [result, retVal] : llvm::zip(callOp.getResults(), results))
+          setValue(procId, result, retVal);
+      } else if (auto llvmCallOp = dyn_cast<LLVM::CallOp>(frame.callOp)) {
+        for (auto [result, retVal] : llvm::zip(llvmCallOp.getResults(), results))
+          setValue(procId, result, retVal);
+      }
+    }
+
+    LLVM_DEBUG(llvm::dbgs()
+               << "    Function '" << frameName
+               << "' completed, continuing to next frame\n");
+
+    // Drop stale frames added during the completed frame's execution.
+    if (state.callStack.size() > oldFrameCount) {
+      size_t newFrames = state.callStack.size() - oldFrameCount;
+      LLVM_DEBUG(llvm::dbgs()
+                 << "    Removing " << newFrames
+                 << " stale frames added by completed function\n");
+      state.callStack.resize(oldFrameCount);
+    }
+  }
+
+  if (state.waitConditionSavedBlock) {
+    state.currentBlock = state.waitConditionSavedBlock;
+    state.currentOp = state.waitConditionSavedOp;
+    state.waitConditionSavedBlock = nullptr;
+  } else if (outermostCallOp) {
+    state.currentBlock = outermostCallOp->getBlock();
+    state.currentOp = std::next(outermostCallOp->getIterator());
+  }
+  state.waitConditionRestartBlock = nullptr;
+
+  LLVM_DEBUG(llvm::dbgs()
+             << "  Call stack frames exhausted, continuing process\n");
+  return CallStackResumeResult::Completed;
+}
+
 void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   auto it = processStates.find(procId);
   if (it == processStates.end()) {
@@ -9448,191 +9747,11 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     state.sequencerGetRetryCallOp = nullptr;
   }
 
-  // Handle call stack frames: if we have saved call frames from a wait inside
-  // a function, we need to resume execution inside those functions instead of
-  // continuing at the process level.
-  if (!state.callStack.empty()) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "  Process has " << state.callStack.size()
-               << " saved call stack frame(s), resuming from innermost\n");
-
-    // Process call stack frames from INNERMOST to OUTERMOST.
-    // Frames are stored [innermost, ..., outermost] in the vector (deepest
-    // callee pushed first, each caller pushed after).  We pop from FRONT
-    // (innermost first).
-    //
-    // Example: process_phase → sync_phase → wait_for_state suspends.
-    // callStack = [wait_for_state, sync_phase, process_phase]
-    //   1. Resume wait_for_state (innermost): condition true → returns results
-    //   2. Set results on wait_for_state's callOp (call_indirect in sync_phase)
-    //   3. Resume sync_phase: continues checking predecessors → completes
-    //   4. Set results on sync_phase's callOp (call_indirect in process_phase)
-    //   5. Resume process_phase: continues from after sync_phase → start→...
-    //
-    // This ensures nested functions complete before their callers continue,
-    // which is critical for sync_phase to finish predecessor checking before
-    // process_phase proceeds to start_phase.
-    //
-    // Save the outermost frame's call site for process-body position
-    // restoration after all frames complete.  The outermost frame's callOp
-    // is the call_indirect/call in the process body that originally started
-    // the function call chain.  After all frames return, we resume from the
-    // operation AFTER that call.
-    Operation *outermostCallOp = state.callStack.back().callOp;
-    while (!state.callStack.empty()) {
-      CallStackFrame frame = std::move(state.callStack.front());
-      state.callStack.erase(state.callStack.begin());
-
-      // Track how many old (outer) frames remain before resuming.
-      // If the function re-suspends, new frames are pushed to the back.
-      // We need to distinguish old outer frames from new inner frames.
-      size_t oldFrameCount = state.callStack.size();
-
-      llvm::StringRef frameName =
-          frame.isLLVM() ? frame.llvmFuncOp.getName()
-                         : frame.funcOp.getName();
-      LLVM_DEBUG(llvm::dbgs()
-                 << "    Resuming " << (frame.isLLVM() ? "LLVM " : "")
-                 << "function '" << frameName << "' (remaining old frames: "
-                 << oldFrameCount << ")\n");
-
-      // Resume the function from its saved position
-      llvm::SmallVector<InterpretedValue, 4> results;
-      ++state.callDepth;
-      LogicalResult funcResult =
-          frame.isLLVM()
-              ? interpretLLVMFuncBody(procId, frame.llvmFuncOp, frame.args,
-                                      results, frame.callOperands,
-                                      frame.callOp, frame.resumeBlock,
-                                      frame.resumeOp)
-              : interpretFuncBody(procId, frame.funcOp, frame.args, results,
-                                  frame.callOp, frame.resumeBlock,
-                                  frame.resumeOp);
-      --state.callDepth;
-
-      if (failed(funcResult)) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "    Function '" << frameName
-                   << "' failed during resume\n");
-        finalizeProcess(procId, /*killed=*/false);
-        return;
-      }
-
-      // Check if the function suspended again
-      if (state.waiting) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "    Function '" << frameName
-                   << "' suspended again during resume, "
-                   << "callStack size=" << state.callStack.size()
-                   << " (old outer: " << oldFrameCount << ")\n");
-
-        // The function re-suspended.  New frames were pushed to the back
-        // of callStack.  Old outer frames are still at the front (indices
-        // 0..oldFrameCount-1).  The new inner frames are at the back
-        // (indices oldFrameCount..).
-        //
-        // For next resume, we need innermost-first ordering:
-        //   [new_inner_frames..., old_outer_frames...]
-        // Currently the stack is:
-        //   [old_outer_frames..., new_inner_frames...]
-        // Rotate so new inner frames come first.
-        if (oldFrameCount > 0 && state.callStack.size() > oldFrameCount) {
-          std::rotate(state.callStack.begin(),
-                      state.callStack.begin() + oldFrameCount,
-                      state.callStack.end());
-          LLVM_DEBUG(llvm::dbgs()
-                     << "    Rotated stack: moved " << oldFrameCount
-                     << " old frames after "
-                     << (state.callStack.size() - oldFrameCount)
-                     << " new frames\n");
-        }
-
-        // Schedule pending delay if any before returning
-        if (state.pendingDelayFs > 0) {
-          SimTime currentTime = scheduler.getCurrentTime();
-          SimTime targetTime = currentTime.advanceTime(state.pendingDelayFs);
-          LLVM_DEBUG(llvm::dbgs()
-                     << "    Scheduling delay " << state.pendingDelayFs
-                     << " fs from function suspend\n");
-          state.pendingDelayFs = 0;
-          scheduler.getEventScheduler().schedule(
-              targetTime, SchedulingRegion::Active,
-              Event([this, procId]() { resumeProcess(procId); }));
-        }
-        return;
-      }
-
-      // Function completed - set its results on the call operation
-      if (frame.callOp) {
-        if (auto callIndirectOp =
-                dyn_cast<mlir::func::CallIndirectOp>(frame.callOp)) {
-          for (auto [result, retVal] :
-               llvm::zip(callIndirectOp.getResults(), results)) {
-            setValue(procId, result, retVal);
-          }
-        } else if (auto callOp = dyn_cast<mlir::func::CallOp>(frame.callOp)) {
-          for (auto [result, retVal] :
-               llvm::zip(callOp.getResults(), results)) {
-            setValue(procId, result, retVal);
-          }
-        } else if (auto llvmCallOp =
-                       dyn_cast<LLVM::CallOp>(frame.callOp)) {
-          for (auto [result, retVal] :
-               llvm::zip(llvmCallOp.getResults(), results)) {
-            setValue(procId, result, retVal);
-          }
-        }
-      }
-
-      LLVM_DEBUG(llvm::dbgs()
-                 << "    Function '" << frameName
-                 << "' completed, continuing to next frame\n");
-
-      // If the completed frame's execution added new frames (from a
-      // different call path than the original suspension), those new
-      // frames belong to the completed function's call chain and are
-      // now stale (the function already returned past them).  Remove
-      // any frames that were added during this iteration.
-      if (state.callStack.size() > oldFrameCount) {
-        size_t newFrames = state.callStack.size() - oldFrameCount;
-        LLVM_DEBUG(llvm::dbgs()
-                   << "    Removing " << newFrames
-                   << " stale frames added by completed function\n");
-        // New frames are at the back (pushed during execution)
-        state.callStack.resize(oldFrameCount);
-      }
-    }
-
-    // All call stack frames processed — restore process body position.
-    //
-    // When functions are called from the process body's main loop (via
-    // call_indirect, func.call, etc.) and they suspend, interpretFuncBody
-    // overwrites state.currentBlock/currentOp with function-body positions.
-    // After all frames complete, we MUST restore the process body position
-    // so the main loop continues from the right place.
-    //
-    // Two sources for the correct position:
-    // 1. waitConditionSavedBlock (set during wait_condition handling above)
-    // 2. outermostCallOp (the call in the process body that started the chain)
-    //
-    // Use waitConditionSavedBlock if available (it was saved before the
-    // restart block override). Otherwise, derive from outermostCallOp.
-    if (state.waitConditionSavedBlock) {
-      state.currentBlock = state.waitConditionSavedBlock;
-      state.currentOp = state.waitConditionSavedOp;
-      state.waitConditionSavedBlock = nullptr;
-    } else if (outermostCallOp) {
-      // Derive from the outermost frame's call operation in the process body.
-      // Resume at the operation AFTER the call.
-      state.currentBlock = outermostCallOp->getBlock();
-      state.currentOp = std::next(outermostCallOp->getIterator());
-    }
-    // Clear any leftover wait_condition state.
-    state.waitConditionRestartBlock = nullptr;
-
-    LLVM_DEBUG(llvm::dbgs()
-               << "  Call stack frames exhausted, continuing process\n");
-  }
+  CallStackResumeResult callStackResume =
+      resumeSavedCallStackFrames(procId, state);
+  if (callStackResume == CallStackResumeResult::Failed ||
+      callStackResume == CallStackResumeResult::Suspended)
+    return;
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Executing process "
                           << procId << "\n");
@@ -22977,6 +23096,58 @@ SignalEncoding LLHDProcessInterpreter::getSignalEncoding(Type type) {
   return SignalEncoding::TwoState;
 }
 
+unsigned LLHDProcessInterpreter::getLogicalWidth(Type type) {
+  // For integer types, the logical width IS the physical width.
+  if (auto intType = dyn_cast<IntegerType>(type))
+    return intType.getWidth();
+
+  // For hw::StructType, check if it's a direct FourStateStruct (value/unknown).
+  if (auto structType = dyn_cast<hw::StructType>(type)) {
+    auto elements = structType.getElements();
+    if (elements.size() == 2 &&
+        elements[0].name.getValue() == "value" &&
+        elements[1].name.getValue() == "unknown") {
+      // Direct 4-state: logical width = width of the "value" field.
+      return getLogicalWidth(elements[0].type);
+    }
+    // Nested struct (e.g., packed SV struct with 4-state fields):
+    // sum the logical widths of each field.
+    unsigned total = 0;
+    for (auto field : elements)
+      total += getLogicalWidth(field.type);
+    return total;
+  }
+
+  // For hw::ArrayType, multiply element logical width by count.
+  if (auto arrayType = dyn_cast<hw::ArrayType>(type))
+    return getLogicalWidth(arrayType.getElementType()) *
+           arrayType.getNumElements();
+
+  // For LLVM struct types (same pattern as hw struct).
+  if (auto llvmStructType = dyn_cast<LLVM::LLVMStructType>(type)) {
+    auto body = llvmStructType.getBody();
+    if (body.size() == 2) {
+      auto valueTy = dyn_cast<IntegerType>(body[0]);
+      auto unknownTy = dyn_cast<IntegerType>(body[1]);
+      if (valueTy && unknownTy &&
+          valueTy.getWidth() == unknownTy.getWidth())
+        return valueTy.getWidth();
+    }
+    unsigned total = 0;
+    for (Type elemType : body)
+      total += getLogicalWidth(elemType);
+    return total;
+  }
+
+  // For LLVM array types.
+  if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(type))
+    return getLogicalWidth(llvmArrayType.getElementType()) *
+           llvmArrayType.getNumElements();
+
+  // Default: same as physical width.
+  return getTypeWidth(type);
+}
+
 //===----------------------------------------------------------------------===//
 // Sim Dialect Operation Handlers
 //===----------------------------------------------------------------------===//
@@ -25728,11 +25899,49 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
   // within a known interface struct, also drive the corresponding shadow
   // signal so that processes sensitive to the interface field wake up.
   if (!ptrVal.isX() && !interfaceFieldSignals.empty()) {
+    static bool traceInterfaceStore = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_IFACE_STORE");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
     uint64_t storeAddr = ptrVal.getUInt64();
     auto fieldIt = interfaceFieldSignals.find(storeAddr);
     if (fieldIt != interfaceFieldSignals.end()) {
       SignalId fieldSigId = fieldIt->second;
+      bool addedDynamicCopyLink = false;
+      SignalId copySrcSigId = 0;
+      auto resolveSignal = [&](Value signalRef) -> SignalId {
+        if (SignalId sigId = resolveSignalId(signalRef))
+          return sigId;
+        return getSignalId(signalRef);
+      };
+      if (matchFourStateProbeCopyStore(storeOp.getValue(), resolveSignal,
+                                       copySrcSigId) &&
+          copySrcSigId != 0 && copySrcSigId != fieldSigId) {
+        auto &children = interfaceFieldPropagation[copySrcSigId];
+        if (std::find(children.begin(), children.end(), fieldSigId) ==
+            children.end()) {
+          children.push_back(fieldSigId);
+          addedDynamicCopyLink = true;
+        }
+      }
+
       Type storeLLVMType = storeOp.getValue().getType();
+      if (traceInterfaceStore) {
+        llvm::StringRef sigName = "<unknown>";
+        auto nameIt = signalIdToName.find(fieldSigId);
+        if (nameIt != signalIdToName.end())
+          sigName = nameIt->second;
+        llvm::errs() << "[IFACE-STORE] proc=" << procId << " addr=0x"
+                     << llvm::format_hex(storeAddr, 16) << " sig=" << fieldSigId
+                     << " (" << sigName << ") rawWidth="
+                     << getTypeWidth(storeLLVMType);
+        if (copySrcSigId != 0) {
+          llvm::errs() << " copySrc=" << copySrcSigId;
+          if (addedDynamicCopyLink)
+            llvm::errs() << " linked=1";
+        }
+        llvm::errs() << "\n";
+      }
 
       auto normalizeInterfaceStoreValue = [&](SignalId targetSigId,
                                               InterpretedValue rawVal)
@@ -25799,6 +26008,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
       // in always_comb processes that copy interface fields bidirectionally.
       SignalValue newSigVal = driveVal.toSignalValue();
       if (current == newSigVal) {
+        if (traceInterfaceStore) {
+          llvm::StringRef sigName = "<unknown>";
+          auto nameIt = signalIdToName.find(fieldSigId);
+          if (nameIt != signalIdToName.end())
+            sigName = nameIt->second;
+          llvm::errs() << "[IFACE-STORE] unchanged sig=" << fieldSigId << " ("
+                       << sigName << ")\n";
+        }
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.store: shadow signal " << fieldSigId
                    << " unchanged, skipping drive\n");
@@ -34667,6 +34884,9 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
             return val.getUInt64();
           return 0;
         };
+        auto resolveSignal = [&](Value v) -> SignalId {
+          return getSignalId(v);
+        };
 
         uint64_t srcAddr = 0;
         if (matchFourStateCopyStore(storeOp.getValue(), resolveAddr, srcAddr) &&
@@ -34675,6 +34895,17 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
           if (std::find(childModuleCopyPairs.begin(), childModuleCopyPairs.end(),
                         pair) == childModuleCopyPairs.end())
             childModuleCopyPairs.push_back(pair);
+        }
+
+        SignalId srcSignalId = 0;
+        if (matchFourStateProbeCopyStore(storeOp.getValue(), resolveSignal,
+                                         srcSignalId) &&
+            srcSignalId != 0) {
+          auto pair = std::make_pair(srcSignalId, dest);
+          if (std::find(interfaceSignalCopyPairs.begin(),
+                        interfaceSignalCopyPairs.end(),
+                        pair) == interfaceSignalCopyPairs.end())
+            interfaceSignalCopyPairs.push_back(pair);
         }
 
         InterfaceTriStateStorePattern triPattern;
@@ -34881,6 +35112,9 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
               return it->second.getUInt64();
             return 0;
           };
+          auto resolveSignal = [&](Value v) -> SignalId {
+            return getSignalId(v);
+          };
           std::function<uint64_t(Value)> traceSrcLoadAddr =
               [&](Value v) -> uint64_t {
             if (auto *defOp = v.getDefiningOp()) {
@@ -34941,6 +35175,17 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
                           childModuleCopyPairs.end(),
                           pair) == childModuleCopyPairs.end())
               childModuleCopyPairs.push_back(pair);
+          }
+
+          SignalId srcSignalId = 0;
+          if (matchFourStateProbeCopyStore(storeOp.getValue(), resolveSignal,
+                                           srcSignalId) &&
+              srcSignalId != 0) {
+            auto pair = std::make_pair(srcSignalId, destAddr.getUInt64());
+            if (std::find(interfaceSignalCopyPairs.begin(),
+                          interfaceSignalCopyPairs.end(),
+                          pair) == interfaceSignalCopyPairs.end())
+              interfaceSignalCopyPairs.push_back(pair);
           }
 
           InterfaceTriStateStorePattern triPattern;
@@ -35139,3 +35384,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAddressOf(
 
   return success();
 }
+
+// interpretMooreWaitConditionCall is defined in
+// LLHDProcessInterpreterWaitCondition.cpp

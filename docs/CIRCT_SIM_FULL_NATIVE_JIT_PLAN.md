@@ -496,6 +496,35 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - deopt queue now fully detail-qualified:
         - `guard_failed:post_exec_not_halted_or_waiting` (9)
       - unsupported-operation remains `0` on this lane.
+20. Single-block terminating call-stack resume closure (targeted):
+    - extracted shared call-stack resume helper:
+      - added `resumeSavedCallStackFrames(...)` and
+        `CallStackResumeResult` in `LLHDProcessInterpreter`.
+      - `executeProcess` now uses the helper (behavior-preserving refactor).
+    - upgraded `single_block_terminating` thunk execution to support resumable
+      suspension states without broad guard relaxation:
+      - call-stack-backed suspensions now resume natively instead of immediate
+        deopt on non-empty call stack.
+      - process-level sequencer retry waits
+        (`sequencerGetRetryCallOp`) are treated as resumable waiting states.
+      - wait-condition restart and call-stack frame rewrites are aligned with
+        interpreter resume logic.
+      - guard details are now shape-qualified
+        (`single_block_terminating:<reason>`) with richer guard tracing.
+    - added strict regression:
+      - `jit-process-thunk-single-block-call-indirect-fork-callstack-halt.mlir`
+        (vtable/call_indirect + blocking fork in callee, strict no-deopt).
+    - bounded AVIP compile-lane validation (`jtag`, seed-1):
+      - `/tmp/avip-circt-sim-singleblock-callstack-v2-20260218-012809`:
+        - `sim_status=OK`, `sim_sec=35s`
+        - `guard_failed=7`
+        - queue is now entirely
+          `single_block_terminating:post_exec_not_halted_or_waiting`.
+    - remaining limitation:
+      - the residual queue is one-block fork-branch shapes with
+        `waiting=1, call_stack=0` around `func.call_indirect` + terminal
+        `sim.fork.terminator`; this needs a dedicated resumable terminal
+        suspend closure (next step), not generic waiting relaxation.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

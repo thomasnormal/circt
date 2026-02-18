@@ -705,6 +705,12 @@ public:
   /// Determine signal encoding based on the type.
   static SignalEncoding getSignalEncoding(mlir::Type type);
 
+  /// Get the logical (VPI-visible) width of a type, stripping 4-state overhead.
+  /// For a hw::StructType with value/unknown fields, returns the value width.
+  /// For nested structs (e.g., packed SV structs with 4-state leaf fields),
+  /// recursively strips the 4-state encoding from each leaf field.
+  static unsigned getLogicalWidth(mlir::Type type);
+
   /// Evaluate a value for continuous assignments by reading from signal state.
   /// Made public so circt-sim can re-evaluate hw.output operands when VPI
   /// changes input port signals.
@@ -919,6 +925,18 @@ private:
   /// wait(delay|observed)->(optional print)->halt.
   bool
   isResumableWaitThenHaltNativeThunkCandidate(const ProcessExecutionState &state) const;
+
+  enum class CallStackResumeResult {
+    NoFrames,
+    Completed,
+    Suspended,
+    Failed,
+  };
+
+  /// Resume saved function call frames for processes that suspended inside
+  /// nested calls. Returns the resume outcome for caller-side dispatch.
+  CallStackResumeResult resumeSavedCallStackFrames(
+      ProcessId procId, ProcessExecutionState &state);
 
   /// Execute the initial native thunk body for trivial terminating processes.
   void executeTrivialNativeThunk(ProcessId procId,
@@ -1882,6 +1900,13 @@ private:
   /// Populated in executeChildModuleLevelOps(), consumed after
   /// createInterfaceFieldShadowSignals() to create propagation links.
   llvm::SmallVector<std::pair<uint64_t, uint64_t>> childModuleCopyPairs;
+
+  /// Records (srcSignalId, destAddr) pairs when module-level stores copy a
+  /// probed LLHD signal value into an interface field (e.g. wire -> iface field).
+  /// These are resolved after interface shadow signals are created so runtime
+  /// signal changes can directly refresh all mirrored interface fields.
+  llvm::SmallVector<std::pair<SignalId, uint64_t>, 8>
+      interfaceSignalCopyPairs;
 
   /// Deferred child module-level ops: saved during initializeChildInstances(),
   /// executed after executeModuleLevelLLVMOps() so parent signal values are
