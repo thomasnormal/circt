@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1511 - February 18, 2026
+
+### circt-sim: close UART strict tails for `create_item` and `setConfig`
+
+1. **Policy closure**:
+   - extended manual non-suspending `func.call` prelude allowlist in
+     `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp` with:
+     - `uvm_pkg::uvm_sequence_base::create_item`
+     - `*::setConfig`.
+   - this targets UART strict tails previously reported as:
+     - `first_op:func.call:uvm_pkg::uvm_sequence_base::create_item`
+     - `first_op:func.call:UartTxSequencePkg::UartTxTransmitterSequence::setConfig`.
+
+2. **Regression coverage**:
+   - added strict compile-mode regressions:
+     - `test/Tools/circt-sim/jit-process-thunk-func-call-create-item-halt.mlir`
+     - `test/Tools/circt-sim/jit-process-thunk-func-call-set-config-halt.mlir`
+   - both assert zero strict deopts for terminating prelude shapes.
+
+3. **Validation**:
+   - focused lit: PASS
+     - new create-item and set-config regressions
+     - plus previously added
+       `jit-process-thunk-func-call-configdb-set-byvalue-halt.mlir`
+       and `jit-process-thunk-llvm-call-dyn-cast-check-halt.mlir`.
+   - bounded UART profile lane (`UartBaudRate4800Test`, compile mode, 120s):
+     - `/tmp/uart-profile-createitem-setconfig-20260218-193140/jit.json`
+       - `jit_deopts_total=2` (down from `4` in item-1510 and `7` baseline)
+       - `final_time_fs=436112900000`
+       - remaining detail:
+         `first_op:func.call:uvm_pkg::uvm_sequence_item::set_item_context`.
+   - bounded AVIP `jtag` compile-lane guard:
+     - `/tmp/avip-circt-sim-jtag-createitem-setconfig-20260218-193345/matrix.tsv`
+     - `compile_status=OK`, `sim_status=OK` (`39s`).
+
+4. **Remaining UART strict queue**:
+   - `first_op:func.call:uvm_pkg::uvm_sequence_item::set_item_context`
+     (2 processes in bounded lane).
+
 ## Iteration 1510 - February 18, 2026
 
 ### circt-sim: close UART `set_<digits>` by-value config-db strict tails
