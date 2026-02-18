@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1499 - February 18, 2026
+
+### circt-sim: back off queue-backed wait(condition) fallback polling
+
+1. **Runtime stabilization** (`tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp`):
+   - widened queue-backed wait(condition) fallback poll interval from `100ns` to
+     `1us` when queue waiters are registered via `enqueueQueueNotEmptyWaiter`.
+   - keeps queue-not-empty waiters as the primary wake mechanism; timed polling
+     remains a watchdog path.
+
+2. **Regression coverage added** (`test/Tools/circt-sim/`):
+   - `wait-condition-queue-fallback-backoff.mlir`
+   - locks queue-backed wait_condition trace behavior:
+     - `queueWait=0x...`
+     - `targetTimeFs=1000000000`.
+
+3. **Validation**:
+   - builds:
+     - `ninja -C build -j4 circt-sim`: PASS.
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+   - focused regressions:
+     - `wait-condition-queue-fallback-backoff.mlir`: PASS.
+     - `wait-condition-execute-phase-objection-fallback-backoff.mlir`: PASS.
+     - `wait-queue-size.sv`: PASS.
+     - `wait-condition-spurious-trigger.mlir`: PASS.
+   - direct UART wait-condition trace sample (compile mode, 20s bound):
+     - baseline: `/tmp/uart-objwait-backoff-waitcond20.log`
+     - updated: `/tmp/uart-queuebackoff-waitcond20.log`
+     - queue-backed `m_init_process_guards` wait-condition trace volume dropped
+       from `322` to `75`; proc `fork_2_branch_0` steps dropped from `1982` to
+       `500`; bounded sim-time progressed from `31971000000 fs` to
+       `72938500000 fs`.
+   - bounded AVIP UART compile lane (`--timeout=60`, compile mode):
+     - `/tmp/avip-circt-sim-uart-queuebackoff-20260218-145002/matrix.tsv`
+       (`compile_status=OK`, `sim_status=OK`).
+     - `/tmp/avip-circt-sim-uart-queuebackoff-20260218-145002/uart/sim_seed_1.log`
+       reached `497007600000 fs` with `fork_18_branch_0` still `steps=1`;
+       coverage split remains `UartTxCovergroup=100%`,
+       `UartRxCovergroup=0%`.
+
 ## Iteration 1498 - February 18, 2026
 
 ### circt-sim: back off execute-phase wait(condition) fallback polling when objection waiter is active
