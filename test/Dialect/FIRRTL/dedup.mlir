@@ -985,7 +985,6 @@ firrtl.circuit "InstanceChoice" {
     firrtl.connect %y, %inst2_out : !firrtl.uint<8>, !firrtl.uint<8>
   }
 }
-
 // When we skip deduplicating two modules only because they are both public,
 // we need to make sure that they are recorded in the dedup map. This test
 // should not deduplicate Bar_1 and Bar2, as well the NLA should
