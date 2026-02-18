@@ -28,6 +28,9 @@ using namespace circt::sim;
 static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op);
 static bool isBranchTerminatorInRegion(Operation &terminator,
                                        Region &bodyRegion);
+static Value stripCallIndirectCalleeCasts(Value value);
+static std::string
+getStaticCallIndirectTargetSymbol(mlir::func::CallIndirectOp callOp);
 
 static bool isPureResumableWaitPreludeOp(Operation *op) {
   if (!op || op->getNumResults() == 0)
@@ -178,11 +181,18 @@ isKnownSuspendingRuntimeCalleeNameForNativeThunkPolicy(StringRef calleeName) {
          calleeName == "__moore_wait_event";
 }
 
-static mlir::func::FuncOp lookupLocalFuncCallee(mlir::func::CallOp callOp) {
-  ModuleOp module = callOp->getParentOfType<ModuleOp>();
+static mlir::func::FuncOp lookupLocalFuncCallee(Operation *scopeOp,
+                                                 StringRef calleeName) {
+  if (!scopeOp)
+    return {};
+  ModuleOp module = scopeOp->getParentOfType<ModuleOp>();
   if (!module)
     return {};
-  return module.lookupSymbol<mlir::func::FuncOp>(callOp.getCallee());
+  return module.lookupSymbol<mlir::func::FuncOp>(calleeName);
+}
+
+static mlir::func::FuncOp lookupLocalFuncCallee(mlir::func::CallOp callOp) {
+  return lookupLocalFuncCallee(callOp.getOperation(), callOp.getCallee());
 }
 
 static bool
@@ -195,12 +205,21 @@ static bool opMaySuspendInFuncBody(
     return true;
   if (isa<llhd::WaitOp, llhd::YieldOp, llhd::HaltOp, sim::SimForkOp,
           sim::SimJoinOp, sim::SimJoinAnyOp, sim::SimWaitForkOp,
-          sim::SimDisableForkOp, mlir::func::CallIndirectOp>(op))
+          sim::SimDisableForkOp>(op))
     return true;
   if (auto callOp = dyn_cast<mlir::func::CallOp>(op)) {
     if (isManuallyInterceptedNonSuspendingFuncCallPrelude(callOp))
       return false;
     auto calleeFunc = lookupLocalFuncCallee(callOp);
+    if (!calleeFunc)
+      return true;
+    return funcBodyMaySuspend(calleeFunc, cache);
+  }
+  if (auto callIndirectOp = dyn_cast<mlir::func::CallIndirectOp>(op)) {
+    std::string calleeName = getStaticCallIndirectTargetSymbol(callIndirectOp);
+    if (calleeName.empty())
+      return true;
+    auto calleeFunc = lookupLocalFuncCallee(op, calleeName);
     if (!calleeFunc)
       return true;
     return funcBodyMaySuspend(calleeFunc, cache);
@@ -483,11 +502,61 @@ static Value stripCallIndirectCalleeCasts(Value value) {
 }
 
 static std::string
+getVtableEntryCalleeSymbol(LLVM::GlobalOp vtableGlobal, int64_t entryIndex) {
+  if (!vtableGlobal || entryIndex < 0)
+    return {};
+  auto vtableEntriesAttr =
+      dyn_cast_or_null<ArrayAttr>(vtableGlobal->getAttr("circt.vtable_entries"));
+  if (!vtableEntriesAttr)
+    return {};
+  for (Attribute entryAttr : vtableEntriesAttr) {
+    auto entryArray = dyn_cast<ArrayAttr>(entryAttr);
+    if (!entryArray || entryArray.size() < 2)
+      continue;
+    auto indexAttr = dyn_cast<IntegerAttr>(entryArray[0]);
+    auto symbolAttr = dyn_cast<FlatSymbolRefAttr>(entryArray[1]);
+    if (!indexAttr || !symbolAttr)
+      continue;
+    if (indexAttr.getInt() == entryIndex)
+      return symbolAttr.getValue().str();
+  }
+  return {};
+}
+
+static std::string
 getStaticCallIndirectTargetSymbol(mlir::func::CallIndirectOp callOp) {
   Value callee = stripCallIndirectCalleeCasts(callOp.getCallee());
   if (auto constOp = callee.getDefiningOp<mlir::func::ConstantOp>())
     return constOp.getValue().str();
-  return {};
+
+  auto loadOp = callee.getDefiningOp<LLVM::LoadOp>();
+  if (!loadOp)
+    return {};
+  auto gepOp = loadOp.getAddr().getDefiningOp<LLVM::GEPOp>();
+  if (!gepOp || !gepOp.getDynamicIndices().empty())
+    return {};
+
+  auto rawIndices = gepOp.getRawConstantIndices();
+  if (rawIndices.size() < 2)
+    return {};
+  int64_t entryIndex = rawIndices.back();
+  if (entryIndex == LLVM::GEPOp::kDynamicIndex || entryIndex < 0)
+    return {};
+  for (int32_t rawIndex : rawIndices)
+    if (rawIndex == LLVM::GEPOp::kDynamicIndex)
+      return {};
+
+  auto addrOfOp = gepOp.getBase().getDefiningOp<LLVM::AddressOfOp>();
+  if (!addrOfOp)
+    return {};
+  ModuleOp module = callOp->getParentOfType<ModuleOp>();
+  if (!module)
+    return {};
+  auto vtableGlobal =
+      module.lookupSymbol<LLVM::GlobalOp>(addrOfOp.getGlobalNameAttr().getValue());
+  if (!vtableGlobal)
+    return {};
+  return getVtableEntryCalleeSymbol(vtableGlobal, entryIndex);
 }
 
 static std::string formatUnsupportedProcessOpDetail(Operation &op) {
