@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1484 - February 18, 2026
+
+### circt-sim AVIP follow-up: `axi4` blocker is sim-timeout path (not immediate compile failure)
+
+1. **Ran bounded `axi4` compile-mode validation with raised compile timeout**:
+   - command profile:
+     - `AVIPS=axi4`, `SEEDS=1`, `CIRCT_SIM_MODE=compile`
+     - `COMPILE_TIMEOUT=360`, `SIM_TIMEOUT=120`, `MAX_WALL_MS=120000`
+     - `CIRCT_SIM=build/bin/circt-sim`
+     - `CIRCT_VERILOG=build-test/bin/circt-verilog`
+     - `CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=100000'`
+   - output bundle:
+     - `/tmp/avip-circt-sim-jit-axi4-buildbin-20260218-055956`
+2. **Result**:
+   - compile is now `OK` in `85s` (the prior core8 `180s` compile timeout was
+     budget-sensitive, not a hard compile crash).
+   - simulation still `TIMEOUT` at `120s` (`exit=137`), and no JIT report is
+     emitted on timeout kill.
+3. **Observed runtime signal in timed-out sim log**:
+   - internal warning path before timeout:
+     - `Failed in func body for process ...`
+     - function `tx_read_packet`
+     - operation `llhd.drv`
+     - followed by absorbed warning:
+       `[circt-sim] WARNING: func.call to 'tx_read_packet' failed internally (absorbing)`
+4. **Updated blocker framing**:
+   - remaining `axi4` gap is now a simulation-time stability/progress issue
+     under bounded timeout, not just compile-time budget.
+
 ## Iteration 1483 - February 18, 2026
 
 ### circt-sim JIT: close `i2s` `first_op:sim.terminate` tail with narrow wait->terminate->halt native support

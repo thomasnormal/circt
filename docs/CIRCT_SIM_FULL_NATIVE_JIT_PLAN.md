@@ -756,8 +756,12 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - updated bounded core8 status after this wave:
       - strict-native deopt closure: `apb`, `ahb`, `axi4Lite`, `i2s`,
         `i3c`, `jtag`, `spi` at `jit_deopts_total=0` (bounded sample lane).
-      - remaining blocker in core8 matrix: `axi4` compile timeout
-        (`COMPILE_TIMEOUT=180`, sim skipped).
+      - remaining blocker in core8 matrix: `axi4` bounded-lane instability.
+        follow-up run with raised compile timeout
+        (`/tmp/avip-circt-sim-jit-axi4-buildbin-20260218-055956`,
+        `COMPILE_TIMEOUT=360`) compiles in `85s`, but sim still times out
+        at `120s` and logs absorbed internal `tx_read_packet` `llhd.drv`
+        failure warnings before timeout.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
