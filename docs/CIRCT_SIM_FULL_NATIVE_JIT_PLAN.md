@@ -635,6 +635,54 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         (`seed=1`) in this wave; wider closure still requires periodic
         full-lane sweeps across `~/mbit/*avip*`, `~/sv-tests/`,
         `~/verilator-verification/`, `~/yosys/tests/`, and `~/opentitan/`.
+27. APB strict burn-down wave: close LLVM-call and bare-wait tails; queue down
+    to two process-level deopts:
+    - expanded safe LLVM-call prelude coverage for single-block/multiblock
+      thunk candidates:
+      - `__moore_is_rand_enabled`
+      - `__moore_int_to_string` / `__moore_string_itoa`
+      - `__moore_string_concat`
+      - `__moore_randomize_basic`
+      - `__moore_randomize_with_range`
+      - `__moore_randomize_with_ranges`
+      - `__moore_randomize_with_dist`
+    - expanded resumable multiblock wait candidate policy to accept
+      `llhd.wait` terminators with no delay/observed list when destination
+      block/operand mapping is valid.
+    - enriched unsupported-shape tracing for `scf.if` by dumping nested then/else
+      region block skeletons and nested call ops under
+      `CIRCT_SIM_TRACE_JIT_UNSUPPORTED_SHAPES=1`.
+    - strict regression coverage added:
+      - `jit-process-thunk-llvm-call-is-rand-enabled-halt.mlir`
+      - `jit-process-thunk-llvm-call-int-to-string-halt.mlir`
+      - `jit-process-thunk-llvm-call-randomize-basic-halt.mlir`
+      - `jit-process-thunk-llvm-call-randomize-with-range-halt.mlir`
+      - `jit-process-thunk-llvm-call-string-concat-halt.mlir`
+      - `jit-process-thunk-multiblock-scf-if-randomize-range-halt.mlir`
+      - `jit-process-thunk-multiblock-bare-wait-no-trigger.mlir`
+      - `jit-process-thunk-multiblock-call-indirect-process-await-halt.mlir`
+    - validation:
+      - targeted strict checks pass for the new regressions.
+      - targeted `--parallel=4` smoke on
+        `jit-process-thunk-multiblock-scf-if-randomize-range-halt.mlir` passes
+        with zero deopts.
+      - bounded APB compile-lane burn-down (`AVIPS=apb`, `SEEDS=1`,
+        `CIRCT_SIM=build/bin/circt-sim`):
+        - baseline sample:
+          `/tmp/avip-circt-sim-jit-apb-buildbin-20260218-042511`
+          with `jit_deopts_total=4`.
+        - after closures:
+          `/tmp/avip-circt-sim-jit-apb-buildbin-20260218-044313`
+          and
+          `/tmp/avip-circt-sim-jit-apb-buildbin-20260218-050046`
+          with `jit_deopts_total=2`.
+    - controlled rollback note:
+      - a broad multiblock saved-call-stack wait-acceptance attempt caused
+        APB timeout regression (`SIM_TIMEOUT=180`); reverted to keep
+        queue-backed waits only.
+    - remaining ranked APB queue:
+      - `unsupported_operation:multiblock_no_terminal` (proc `fork_96_branch_0`)
+      - `guard_failed:post_exec_not_halted` (proc `fork_97_branch_0`)
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

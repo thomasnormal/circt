@@ -103,18 +103,23 @@ static bool isSafeStructuredControlPreludeRegion(Region &region) {
   if (region.empty())
     return false;
 
+  bool sawStructuredTerminator = false;
   for (Block &block : region) {
     if (block.empty())
       return false;
     Operation &terminator = block.back();
-    if (!isa<mlir::scf::YieldOp, mlir::scf::ConditionOp>(terminator))
+    bool isStructuredTerminator =
+        isa<mlir::scf::YieldOp, mlir::scf::ConditionOp>(terminator);
+    bool isBranch = isBranchTerminatorInRegion(terminator, region);
+    if (!isStructuredTerminator && !isBranch)
       return false;
+    sawStructuredTerminator |= isStructuredTerminator;
     for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
       if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
         return false;
     }
   }
-  return true;
+  return sawStructuredTerminator;
 }
 
 static bool isSafeStructuredControlPreludeOp(Operation *op) {
@@ -191,6 +196,14 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
     if (calleeName == "__moore_process_self" ||
         calleeName == "__moore_process_await" ||
         calleeName == "__moore_process_srandom" ||
+        calleeName == "__moore_is_rand_enabled" ||
+        calleeName == "__moore_int_to_string" ||
+        calleeName == "__moore_string_itoa" ||
+        calleeName == "__moore_string_concat" ||
+        calleeName == "__moore_randomize_basic" ||
+        calleeName == "__moore_randomize_with_range" ||
+        calleeName == "__moore_randomize_with_ranges" ||
+        calleeName == "__moore_randomize_with_dist" ||
         calleeName == "__moore_packed_string_to_string" ||
         calleeName == "__moore_string_cmp" ||
         calleeName == "__moore_assoc_get_ref" ||
@@ -384,6 +397,34 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
               }
             }
           }
+        } else if (auto ifOp = dyn_cast<mlir::scf::IfOp>(op)) {
+          auto dumpIfRegion = [&](StringRef tag, Region &region) {
+            llvm::errs() << "\n      [scf.if " << tag
+                         << "] blocks="
+                         << static_cast<unsigned>(region.getBlocks().size());
+            for (auto [nestedBlockIdx, nestedBlock] : llvm::enumerate(region)) {
+              if (nestedBlock.empty()) {
+                llvm::errs() << "\n        [block " << nestedBlockIdx
+                             << "] <empty>";
+                continue;
+              }
+              llvm::errs() << "\n        [block " << nestedBlockIdx
+                           << "] terminator="
+                           << nestedBlock.back().getName().getStringRef();
+              for (Operation &nestedOp : nestedBlock) {
+                llvm::errs() << "\n          op="
+                             << nestedOp.getName().getStringRef();
+                if (auto nestedFuncCall = dyn_cast<mlir::func::CallOp>(nestedOp))
+                  llvm::errs() << " callee=" << nestedFuncCall.getCallee();
+                else if (auto nestedLLVMCall = dyn_cast<LLVM::CallOp>(nestedOp))
+                  if (auto nestedCallee = nestedLLVMCall.getCallee())
+                    llvm::errs() << " callee=" << *nestedCallee;
+              }
+            }
+          };
+          dumpIfRegion("then", ifOp.getThenRegion());
+          if (!ifOp.getElseRegion().empty())
+            dumpIfRegion("else", ifOp.getElseRegion());
         }
         llvm::errs() << "\n";
       }
@@ -490,8 +531,7 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
             return "multiblock_empty_block";
           Operation &terminator = block.back();
           if (auto waitOp = dyn_cast<llhd::WaitOp>(terminator)) {
-            if ((!waitOp.getDelay() && waitOp.getObserved().empty()) ||
-                !waitOp.getDest() || waitOp.getDest()->getParent() != &body ||
+            if (!waitOp.getDest() || waitOp.getDest()->getParent() != &body ||
                 waitOp.getDestOperands().size() !=
                     waitOp.getDest()->getNumArguments()) {
               return (Twine("multiblock_unsupported_terminator:") +
@@ -801,8 +841,7 @@ bool LLHDProcessInterpreter::isResumableMultiblockWaitNativeThunkCandidate(
 
     Operation &terminator = block.back();
     if (auto waitOp = dyn_cast<llhd::WaitOp>(terminator)) {
-      if ((!waitOp.getDelay() && waitOp.getObserved().empty()) ||
-          !waitOp.getDest() || waitOp.getDest()->getParent() != bodyRegion)
+      if (!waitOp.getDest() || waitOp.getDest()->getParent() != bodyRegion)
         return false;
       if (waitOp.getDestOperands().size() != waitOp.getDest()->getNumArguments())
         return false;
