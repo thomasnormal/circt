@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1475 - February 18, 2026
+
+### circt-sim: split global lifecycle code from LLHDProcessInterpreter.cpp
+
+1. **Added `tools/circt-sim/LLHDProcessInterpreterGlobals.cpp`** and moved
+   global-lifecycle methods out of `LLHDProcessInterpreter.cpp`:
+   - `finalizeInit`
+   - `discoverGlobalOpsIteratively`
+   - `loadRTTIParentTable`
+   - `checkRTTICast`
+   - `initializeGlobals`
+   - `executeGlobalConstructors`
+   - `interpretLLVMAddressOf`
+2. **Build system update**:
+   - registered `LLHDProcessInterpreterGlobals.cpp` in
+     `tools/circt-sim/CMakeLists.txt`.
+3. **Validation**:
+   - `ninja -C build circt-sim` passes.
+   - targeted regressions pass:
+     - `global-ctor-runtime-signals.mlir`
+     - `global-ctor-isolation.sv`
+     - `vtable-dispatch-global-ctor.mlir`
+     - `uvm-root-reentrant.mlir`
+     - `jit-process-thunk-single-block-call-indirect-fork-callstack-halt.mlir`
+     - `jit-process-thunk-func-call-set-report-id-verbosity-halt.mlir`
+     - `jit-process-thunk-multiblock-fork-loop-guard-failed.mlir`
+     - `jit-process-thunk-wait-event-derived-observed-dest-operand-halt-yield-parallel.mlir`
+     - `jit-process-thunk-wait-delay-dest-operand-halt-yield-parallel.mlir`
+
 ## Iteration 1474 - February 18, 2026
 
 ### circt-sim: split native-thunk candidate/policy logic from LLHDProcessInterpreter.cpp
