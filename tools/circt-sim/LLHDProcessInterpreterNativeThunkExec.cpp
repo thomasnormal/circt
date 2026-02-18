@@ -38,6 +38,32 @@ static bool isPureResumableWaitPreludeOp(Operation *op) {
   return mlir::isMemoryEffectFree(op);
 }
 
+static bool isDirectResumableWaitSelfLoopPreludeOp(Operation *op) {
+  if (!op)
+    return false;
+
+  if (isa<llhd::ProbeOp, llhd::DriveOp, LLVM::StoreOp>(op))
+    return true;
+
+  if (isa<llhd::WaitOp, llhd::YieldOp, llhd::HaltOp, mlir::cf::BranchOp,
+          mlir::cf::CondBranchOp, mlir::func::CallOp,
+          mlir::func::CallIndirectOp, LLVM::CallOp, sim::PrintFormattedProcOp,
+          sim::SimForkOp, sim::SimJoinOp, sim::SimJoinAnyOp,
+          sim::SimWaitForkOp, sim::SimDisableForkOp,
+          sim::SimForkTerminatorOp>(op))
+    return false;
+
+  if (op->getNumRegions() != 0 || op->hasTrait<OpTrait::IsTerminator>())
+    return false;
+
+  if (isa<LLVM::AllocaOp, LLVM::GEPOp, LLVM::LoadOp, LLVM::AddressOfOp>(op))
+    return true;
+
+  if (op->getNumResults() == 0)
+    return false;
+  return mlir::isMemoryEffectFree(op);
+}
+
 static bool isMooreWaitConditionCall(LLVM::CallOp callOp) {
   auto callee = callOp.getCallee();
   return callee && *callee == "__moore_wait_condition";
@@ -961,8 +987,12 @@ bool LLHDProcessInterpreter::executeResumableWaitSelfLoopNativeThunk(
     loopBlock = &bodyRegion.front();
   } else {
     Block &entry = bodyRegion.front();
+    if (!llvm::hasSingleElement(entry)) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
     auto entryBranch = dyn_cast<mlir::cf::BranchOp>(entry.back());
-    if (!entryBranch) {
+    if (!entryBranch || !entryBranch.getDestOperands().empty()) {
       thunkState.deoptRequested = true;
       return true;
     }
@@ -973,7 +1003,9 @@ bool LLHDProcessInterpreter::executeResumableWaitSelfLoopNativeThunk(
     return true;
   }
   auto waitOp = dyn_cast<llhd::WaitOp>(loopBlock->back());
-  if (!waitOp || waitOp.getDest() != loopBlock) {
+  if (!waitOp || waitOp.getDest() != loopBlock ||
+      waitOp.getDestOperands().size() != loopBlock->getNumArguments() ||
+      !waitOp.getYieldOperands().empty()) {
     thunkState.deoptRequested = true;
     return true;
   }
@@ -1026,6 +1058,72 @@ bool LLHDProcessInterpreter::executeResumableWaitSelfLoopNativeThunk(
     activeProcessId = savedActiveProcessId;
     activeProcessState = savedActiveProcessState;
   });
+
+  // Common hot path: one loop block with non-suspending prelude ops ending in
+  // a self-looping llhd.wait. Execute directly without executeStep() per-op
+  // dispatch to reduce overhead in edge-triggered mirror loops.
+  bool canExecuteDirectLinearLoop = true;
+  for (auto it = loopBlock->begin(), e = std::prev(loopBlock->end()); it != e;
+       ++it) {
+    if (!isDirectResumableWaitSelfLoopPreludeOp(&*it)) {
+      canExecuteDirectLinearLoop = false;
+      break;
+    }
+  }
+
+  if (canExecuteDirectLinearLoop) {
+    state.currentBlock = loopBlock;
+    for (auto it = loopBlock->begin(), e = std::prev(loopBlock->end()); it != e;
+         ++it) {
+      state.currentOp = it;
+      state.lastOp = &*it;
+      if (failed(interpretOperation(procId, &*it))) {
+        thunkState.deoptRequested = true;
+        thunkState.restoreSnapshotOnDeopt = false;
+        return true;
+      }
+    }
+
+    state.currentOp = std::prev(loopBlock->end());
+    state.lastOp = &*state.currentOp;
+    if (failed(interpretWait(procId, waitOp))) {
+      thunkState.deoptRequested = true;
+      thunkState.restoreSnapshotOnDeopt = false;
+      return true;
+    }
+
+    auto post = processStates.find(procId);
+    if (post == processStates.end()) {
+      thunkState.deoptRequested = true;
+      thunkState.restoreSnapshotOnDeopt = false;
+      return true;
+    }
+    if (!post->second.halted && !post->second.waiting) {
+      thunkState.deoptRequested = true;
+      thunkState.restoreSnapshotOnDeopt = false;
+      return true;
+    }
+
+    if (post->second.waiting && post->second.pendingDelayFs > 0) {
+      SimTime currentTime = scheduler.getCurrentTime();
+      SimTime targetTime = currentTime.advanceTime(post->second.pendingDelayFs);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Scheduling __moore_delay resumption (native thunk): "
+                 << post->second.pendingDelayFs << " fs from time "
+                 << currentTime.realTime << " to " << targetTime.realTime
+                 << "\n");
+      post->second.pendingDelayFs = 0;
+      scheduler.getEventScheduler().schedule(
+          targetTime, SchedulingRegion::Active,
+          Event([this, procId]() { resumeProcess(procId); }));
+    }
+
+    post->second.jitThunkResumeToken = 0;
+    thunkState.halted = post->second.halted;
+    thunkState.waiting = post->second.waiting;
+    thunkState.resumeToken = post->second.jitThunkResumeToken;
+    return true;
+  }
 
   size_t maxSteps =
       std::max<size_t>(8192, countRegionOps(bodyRegion) * 256);
