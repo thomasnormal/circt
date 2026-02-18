@@ -2057,10 +2057,68 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - `finish-item-blocks-until-item-done.mlir` (`XFAIL`, unchanged).
       - bounded AVIP compile-mode smoke on this dirty tree:
         - `/tmp/avip-circt-sim-jtag-callindirect-split-20260218-204023/matrix.tsv`
-        - `/tmp/avip-circt-sim-jtag-callindirect-split120-20260218-204155/matrix.tsv`
+      - `/tmp/avip-circt-sim-jtag-callindirect-split120-20260218-204155/matrix.tsv`
         - both reruns compile `OK`, sim `TIMEOUT` in reset-state loop
           (no new crash signature; status currently treated as unresolved
           dirty-tree performance/functional noise).
+
+63. `sim.proc.print` flush policy hardening for print-heavy compile lanes
+    (February 18, 2026):
+    - runtime policy closure:
+      - added cached env knob
+        `CIRCT_SIM_FLUSH_PROC_PRINT=1` in:
+        - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+        - `tools/circt-sim/LLHDProcessInterpreter.h`
+      - default behavior no longer flushes stdout on every `sim.proc.print`;
+        forced-per-print flush remains opt-in for interactive debug.
+    - regression coverage:
+      - added `test/Tools/circt-sim/proc-print-flush-env.mlir`
+        to lock default + env-enabled output behavior.
+    - validation:
+      - build: `ninja -C build-test -j4 circt-sim` PASS.
+      - focused checks PASS:
+        - `proc-print-flush-env.mlir`
+        - `call-indirect-runtime-override-site-cache.mlir`
+        - `vtable-dispatch*.mlir` cluster.
+
+64. Global-init `max-process-steps` false-overflow guard banding
+    (February 18, 2026):
+    - runtime closure:
+      - added effective step-limit helper in
+        `tools/circt-sim/LLHDProcessInterpreter.cpp/.h`:
+        `getEffectiveMaxProcessSteps(ProcessId)`.
+      - temp global-init processes (`procId >= 1<<60`) now get a widened
+        guard band while `inGlobalInit` is active
+        (scaled `max-process-steps`, minimum 1,000,000) to avoid false
+        `PROCESS_STEP_OVERFLOW` on finite module/global init call chains.
+      - all three global step-limit checks now use the effective limit:
+        - top-level `executeProcess`
+        - `interpretFuncBody`
+        - `interpretLLVMFuncBody`.
+    - regression coverage:
+      - added
+        `test/Tools/circt-sim/max-process-steps-global-init-relax.mlir`.
+      - test enforces `--max-process-steps=50` with finite module-level init
+        work and verifies no overflow diagnostics.
+    - validation:
+      - build: `ninja -C build-test -j4 circt-sim` PASS.
+      - focused regression checks PASS:
+        - `max-process-steps-global-init-relax.mlir`
+        - `jit-process-fast-path-budget-zero.mlir`
+        - `proc-print-flush-env.mlir`.
+      - bounded AVIP compile lane guard:
+        - `/tmp/avip-circt-sim-jtag-globalinitlimit-20260218-211230/matrix.tsv`
+        - `compile_status=OK` (`26s`), `sim_status=OK` (`44s`).
+      - bounded cross-suite smokes:
+        - sv-tests sim (`11.10.1--string_concat`): PASS
+          (`/tmp/sv-tests-circt-sim-globalinitlimit-20260218-211404.txt`)
+        - yosys SVA BMC (`basic00`): PASS
+          (`/tmp/yosys-sva-bmc-globalinitlimit-20260218-211432.tsv`)
+        - OpenTitan sim (`prim_count`): PASS
+          (`/tmp/opentitan-circt-sim-globalinitlimit-20260218-211441.log`)
+        - verilator-verification BMC (`assert_changed`): FAIL (unchanged
+          known smoke instability on this dirty tree)
+          (`/tmp/verilator-bmc-globalinitlimit-20260218-211426.tsv`).
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
