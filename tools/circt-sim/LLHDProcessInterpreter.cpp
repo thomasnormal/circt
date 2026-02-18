@@ -18270,9 +18270,9 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
 
   if (fastState.primed) {
     if (pendingDelayedEdges) {
+      bool parityAdjusted = false;
       bool guardOk = fastState.useDelayBatching && fastState.edgeIntervalFs > 0 &&
-                     fastState.lastEdgeTimeFs >= 0 && haveClockSample &&
-                     fastState.clockSampleValid;
+                     fastState.lastEdgeTimeFs >= 0;
       if (guardOk) {
         uint64_t edgeInterval = static_cast<uint64_t>(fastState.edgeIntervalFs);
         uint64_t elapsedFs =
@@ -18283,15 +18283,37 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
           guardOk = false;
         } else {
           uint64_t expectedDelayFs = edgeInterval * pendingDelayedEdges;
-          bool expectedClock = fastState.lastClockSample;
-          if (pendingDelayedEdges & 1)
-            expectedClock = !expectedClock;
-          guardOk = elapsedFs == expectedDelayFs && clockSample == expectedClock;
+          if (elapsedFs == expectedDelayFs) {
+            if (haveClockSample && fastState.clockSampleValid) {
+              bool expectedClock = fastState.lastClockSample;
+              if (pendingDelayedEdges & 1)
+                expectedClock = !expectedClock;
+              if (clockSample != expectedClock) {
+                if (pendingDelayedEdges < UINT64_MAX) {
+                  ++pendingDelayedEdges;
+                  parityAdjusted = true;
+                } else {
+                  guardOk = false;
+                }
+              }
+            }
+          } else {
+            guardOk = false;
+          }
         }
       }
 
       if (guardOk) {
         edgesToProcess = pendingDelayedEdges;
+        if (parityAdjusted && traceBaudFastPath) {
+          static unsigned batchParityAdjustCount = 0;
+          if (batchParityAdjustCount < 50) {
+            ++batchParityAdjustCount;
+            llvm::errs() << "[BAUD-FP] batch-parity-adjust proc=" << procId
+                         << " callee=" << calleeName
+                         << " adjustedEdges=" << pendingDelayedEdges << "\n";
+          }
+        }
       } else {
         delayBatchGuardFailed = true;
         fastState.useDelayBatching = false;
@@ -18316,28 +18338,19 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
       }
     } else {
       edgesToProcess = 1;
-      if (haveClockSample) {
-        if (fastState.clockSampleValid && fastState.lastEdgeTimeFs >= 0 &&
-            clockSample != fastState.lastClockSample &&
-            nowFsSigned >= fastState.lastEdgeTimeFs) {
-          uint64_t observedDeltaFs =
-              static_cast<uint64_t>(nowFsSigned - fastState.lastEdgeTimeFs);
-          if (observedDeltaFs > 0 &&
-              observedDeltaFs <= static_cast<uint64_t>(INT64_MAX)) {
-            int64_t observedDeltaSigned = static_cast<int64_t>(observedDeltaFs);
-            if (fastState.edgeIntervalFs == observedDeltaSigned) {
-              ++fastState.stableEdgeIntervals;
-            } else {
-              fastState.edgeIntervalFs = observedDeltaSigned;
-              fastState.stableEdgeIntervals = 1;
-            }
+      if (fastState.lastEdgeTimeFs >= 0 && nowFsSigned >= fastState.lastEdgeTimeFs) {
+        uint64_t observedDeltaFs =
+            static_cast<uint64_t>(nowFsSigned - fastState.lastEdgeTimeFs);
+        if (observedDeltaFs > 0 &&
+            observedDeltaFs <= static_cast<uint64_t>(INT64_MAX)) {
+          int64_t observedDeltaSigned = static_cast<int64_t>(observedDeltaFs);
+          if (fastState.edgeIntervalFs == observedDeltaSigned) {
+            ++fastState.stableEdgeIntervals;
           } else {
-            fastState.stableEdgeIntervals = 0;
-            fastState.edgeIntervalFs = 0;
-            fastState.useDelayBatching = false;
+            fastState.edgeIntervalFs = observedDeltaSigned;
+            fastState.stableEdgeIntervals = 1;
           }
-        } else if (fastState.clockSampleValid &&
-                   clockSample == fastState.lastClockSample) {
+        } else {
           fastState.stableEdgeIntervals = 0;
           fastState.edgeIntervalFs = 0;
           fastState.useDelayBatching = false;
@@ -18410,7 +18423,6 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
 
   bool scheduledDelayBatch = false;
   if (enableDelayBatching && fastState.countLocalOnly &&
-      fastState.clockSampleValid &&
       fastState.stableEdgeIntervals >= minStableDelayBatchEdges &&
       fastState.edgeIntervalFs > 0 && fastState.divider > 1 &&
       fastState.localCount >= 0 && fastState.localCount < fastState.divider) {
