@@ -1,5 +1,94 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1480 - February 18, 2026
+
+### circt-sim JIT: close resumable multiblock call-stack deopts; AVIP `jtag` reaches zero-deopt
+
+1. **Closed resumable multiblock call-stack guard gap** in
+   `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`:
+   - `executeResumableMultiblockWaitNativeThunk` no longer immediately deopts
+     on non-empty call stack.
+   - path now uses `resumeSavedCallStackFrames(...)` and handles
+     `Completed` / `Suspended` / `Failed` outcomes with guarded fallback.
+2. **Expanded native waiting-state closure for terminating thunk paths**:
+   - single-block and multiblock terminating thunks now preserve native
+     suspension for:
+     - fork-join active-child waits.
+     - process-await queue waits (`processAwaiters`).
+   - multiblock terminating thunks additionally recognize objection wait
+     polling state (`objectionWaitForStateByProc`).
+3. **Broadened safe single-block fork prelude policy** in
+   `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`:
+   - accepts `sim.fork` join types `join`, `join_any`, and `join_none`.
+   - accepts `sim.disable_fork` in safe prelude.
+   - upgraded unsupported-shape tracing for nested fork branch structure.
+4. **Regression coverage updates**:
+   - new strict tests:
+     - `test/Tools/circt-sim/jit-process-thunk-fork-join-disable-fork-terminator.mlir`
+     - `test/Tools/circt-sim/jit-process-thunk-multiblock-llvm-call-process-await-halt.mlir`
+   - updated strict no-deopt expectations:
+     - `test/Tools/circt-sim/jit-process-thunk-fork-branch-alloca-gep-load-store-terminator.mlir`
+     - `test/Tools/circt-sim/jit-process-thunk-fork-branch-insertvalue-terminator.mlir`
+5. **Validation**:
+   - `ninja -C build circt-sim` passes.
+   - targeted strict compile-mode checks pass (new + updated regressions).
+   - targeted parallel compile-mode smokes pass with `--parallel=4` on:
+     - `jit-process-thunk-fork-join-disable-fork-terminator.mlir`
+     - `jit-process-thunk-multiblock-llvm-call-process-await-halt.mlir`
+   - bounded AVIP compile-lane burn-down:
+     - `AVIPS=jtag`, `SEEDS=1`, `CIRCT_SIM_MODE=compile`,
+       `COMPILE_TIMEOUT=120`, `SIM_TIMEOUT=180`, `MAX_WALL_MS=180000`,
+       `CIRCT_SIM_WRITE_JIT_REPORT=1`,
+       `CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=-1'`
+       with output `/tmp/avip-circt-sim-jit-jtag-20260218-041130`.
+     - result: compile `OK` (`25s`), sim `OK` (`90s`),
+       `jit_deopts_total=0`, no per-process deopt rows.
+
+## Iteration 1479 - February 18, 2026
+
+### circt-sim: fix `uvm_objection::wait_for` handle-state leakage and honor drain time
+
+1. **Fixed per-process state leakage across objection handles** in
+   `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+   - replaced local static `wait_for` state with interpreter-owned
+     `objectionWaitForStateByProc` (`tools/circt-sim/LLHDProcessInterpreter.h`).
+   - state now resets when the waiting process switches to a different
+     objection handle.
+2. **Implemented native `uvm_objection` drain-time plumbing**:
+   - added intercepts for:
+     - `uvm_objection::set_drain_time`
+     - `uvm_objection::get_drain_time`
+   - `wait_for` now consults drain time and waits in simulation time
+     (`SimTime`) until the drain deadline elapses.
+3. **Added targeted regression coverage**:
+   - new test:
+     - `test/Tools/circt-sim/uvm-objection-wait-for-handle-scope-drain.mlir`
+   - validates both:
+     - sequential waits on different objection handles in one process.
+     - drain-time delayed completion.
+4. **Validation**:
+   - `ninja -C build circt-sim` passes.
+   - direct `circt-sim` + `FileCheck` checks pass:
+     - `test/Tools/circt-sim/phase-hopper-objection.mlir`
+     - `test/Tools/circt-sim/uvm-objection-wait-for-handle-scope-drain.mlir`
+     - `test/Tools/circt-sim/uvm-wait-for-self-siblings-objection-delay-fast-path.mlir`
+   - bounded AVIP compile-lane checks:
+     - `AVIPS=i3c`, `SEEDS=1`, `CIRCT_SIM_MODE=compile`,
+       `COMPILE_TIMEOUT=180`, `SIM_TIMEOUT=240`
+       (`/tmp/avip-circt-sim-20260218-035126/matrix.tsv`):
+       compile `OK` (32s), sim `OK` (55s), coverage `100/100`.
+       log still contains scoreboard `UVM_ERROR` at
+       `i3c_scoreboard.sv(162)`.
+     - `AVIPS=i2s`, `SEEDS=1`, `CIRCT_SIM_MODE=compile`,
+       `COMPILE_TIMEOUT=180`, `SIM_TIMEOUT=240`
+       (`/tmp/avip-circt-sim-20260218-035314/matrix.tsv`):
+       compile `OK` (40s), sim `OK` (72s), coverage `100/100`.
+   - xcelium reference cross-check:
+     - `AVIPS=i3c`, `SEEDS=1`
+       (`/tmp/avip-xcelium-reference-20260218-035552/matrix.tsv`):
+       sim `OK` (2s), sim time `3970ns`, `UVM_ERROR=0`, coverage `35.19/35.19`.
+       circt-sim still diverges here (scoreboard mismatch + max-time exit).
+
 ## Iteration 1478 - February 18, 2026
 
 ### MooreToCore: fix inline `array.size()==N` and `inside {array}` randomize constraints

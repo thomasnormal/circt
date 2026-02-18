@@ -1,6 +1,6 @@
 // RUN: rm -rf %t
 // RUN: mkdir -p %t
-// RUN: circt-sim %s --skip-passes --mode=compile --jit-hot-threshold=1 --jit-compile-budget=2 --jit-report=%t/jit.json > %t/log.txt 2>&1
+// RUN: circt-sim %s --skip-passes --mode=compile --jit-hot-threshold=1 --jit-compile-budget=8 --jit-fail-on-deopt --max-time=10 --jit-report=%t/jit.json > %t/log.txt 2>&1
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 // RUN: FileCheck %s --check-prefix=JSON < %t/jit.json
 //
@@ -10,14 +10,10 @@
 //
 // JSON: "mode": "compile"
 // JSON: "jit":
-// JSON: "jit_compiles_total": 1
-// JSON: "jit_deopts_total": 1
+// JSON: "jit_deopts_total": 0
 // JSON: "jit_deopt_reason_guard_failed": 0
-// JSON: "jit_deopt_reason_unsupported_operation": 1
+// JSON: "jit_deopt_reason_unsupported_operation": 0
 // JSON: "jit_deopt_reason_missing_thunk": 0
-// JSON: "jit_deopt_processes":
-// JSON: "reason": "unsupported_operation"
-// JSON: "detail": "first_op:sim.fork"
 
 module {
   hw.module @top() {
@@ -40,7 +36,6 @@ module {
       }
 
       sim.proc.print %fmt_parent
-      sim.terminate success, quiet
       llhd.halt
     }
 

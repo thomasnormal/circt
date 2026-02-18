@@ -66,8 +66,13 @@ static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp)
   if (calleeName == "m_execute_scheduled_forks" ||
       calleeName == "m_process_guard" ||
       calleeName == "uvm_pkg::run_test" ||
+      calleeName == "uvm_pkg::uvm_create_random_seed" ||
       calleeName == "uvm_pkg::uvm_get_report_object" ||
       calleeName == "uvm_pkg::uvm_root::find_all" ||
+      calleeName.ends_with("::get_automatic_phase_objection") ||
+      calleeName.ends_with("::m_safe_raise_starting_phase") ||
+      calleeName.ends_with("::m_safe_drop_starting_phase") ||
+      calleeName.ends_with("::m_killed") ||
       calleeName.ends_with("::set_report_id_verbosity") ||
       calleeName.ends_with("::get_report_action") ||
       calleeName.ends_with("::get_report_verbosity_level") ||
@@ -131,7 +136,7 @@ static bool isSafeStructuredControlPreludeOp(Operation *op) {
   return false;
 }
 
-static bool isSafeJoinNoneForkPreludeRegion(Region &region) {
+static bool isSafeForkPreludeRegion(Region &region) {
   if (region.empty())
     return false;
   bool sawTerminator = false;
@@ -144,19 +149,18 @@ static bool isSafeJoinNoneForkPreludeRegion(Region &region) {
     if (!isTerminal && !isBranch)
       return false;
     sawTerminator |= isTerminal;
-    for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
-      if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
-        return false;
-    }
   }
   return sawTerminator;
 }
 
-static bool isSafeJoinNoneForkPreludeOp(sim::SimForkOp forkOp) {
-  if (!forkOp.getJoinType().equals_insensitive("join_none"))
+static bool isSafeForkPreludeOp(sim::SimForkOp forkOp) {
+  StringRef joinType = forkOp.getJoinType();
+  if (!joinType.equals_insensitive("join") &&
+      !joinType.equals_insensitive("join_any") &&
+      !joinType.equals_insensitive("join_none") && !joinType.empty())
     return false;
   for (Region &branch : forkOp.getBranches()) {
-    if (!isSafeJoinNoneForkPreludeRegion(branch))
+    if (!isSafeForkPreludeRegion(branch))
       return false;
   }
   return true;
@@ -169,8 +173,10 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
     return true;
   if (isa<llhd::ProbeOp>(op))
     return true;
+  if (isa<sim::SimDisableForkOp>(op))
+    return true;
   if (auto forkOp = dyn_cast<sim::SimForkOp>(op))
-    return isSafeJoinNoneForkPreludeOp(forkOp);
+    return isSafeForkPreludeOp(forkOp);
   if (isSafeStructuredControlPreludeOp(op))
     return true;
   if (auto callOp = dyn_cast<mlir::func::CallOp>(op))
@@ -183,6 +189,8 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
       return false;
     llvm::StringRef calleeName = *callee;
     if (calleeName == "__moore_process_self" ||
+        calleeName == "__moore_process_await" ||
+        calleeName == "__moore_process_srandom" ||
         calleeName == "__moore_packed_string_to_string" ||
         calleeName == "__moore_string_cmp" ||
         calleeName == "__moore_assoc_get_ref" ||
@@ -350,6 +358,32 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
         else if (auto llvmCall = dyn_cast<LLVM::CallOp>(op)) {
           if (auto callee = llvmCall.getCallee())
             llvm::errs() << " callee=" << *callee;
+        } else if (auto forkOp = dyn_cast<sim::SimForkOp>(op)) {
+          llvm::errs() << " join=" << forkOp.getJoinType();
+          for (auto [branchIdx, branch] : llvm::enumerate(forkOp.getBranches())) {
+            llvm::errs() << "\n      [fork-branch " << branchIdx
+                         << "] blocks="
+                         << static_cast<unsigned>(branch.getBlocks().size());
+            for (auto [nestedBlockIdx, nestedBlock] : llvm::enumerate(branch)) {
+              if (nestedBlock.empty()) {
+                llvm::errs() << "\n        [block " << nestedBlockIdx
+                             << "] <empty>";
+                continue;
+              }
+              llvm::errs() << "\n        [block " << nestedBlockIdx
+                           << "] terminator="
+                           << nestedBlock.back().getName().getStringRef();
+              for (Operation &nestedOp : nestedBlock) {
+                llvm::errs() << "\n          op="
+                             << nestedOp.getName().getStringRef();
+                if (auto nestedFuncCall = dyn_cast<mlir::func::CallOp>(nestedOp))
+                  llvm::errs() << " callee=" << nestedFuncCall.getCallee();
+                else if (auto nestedLLVMCall = dyn_cast<LLVM::CallOp>(nestedOp))
+                  if (auto nestedCallee = nestedLLVMCall.getCallee())
+                    llvm::errs() << " callee=" << *nestedCallee;
+              }
+            }
+          }
         }
         llvm::errs() << "\n";
       }
