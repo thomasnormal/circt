@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1498 - February 18, 2026
+
+### circt-sim: back off execute-phase wait(condition) fallback polling when objection waiter is active
+
+1. **Runtime stabilization** (`tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp`):
+   - adjusted execute-phase wait(condition) objection fallback timed poll from
+     `10ns` to `1us` when objection-zero waiter mode is armed.
+   - keeps objection-zero waiter as the primary wakeup mechanism and uses timed
+     polling only as a sparse watchdog.
+
+2. **Regression coverage added** (`test/Tools/circt-sim/`):
+   - `wait-condition-execute-phase-objection-fallback-backoff.mlir`
+   - locks execute-phase wait(condition) trace behavior:
+     - `func=uvm_pkg::uvm_phase_hopper::execute_phase`
+     - non-invalid `objectionWaitHandle`
+     - `targetTimeFs=1000000000`.
+
+3. **Validation**:
+   - builds:
+     - `ninja -C build -j4 circt-sim`: PASS.
+   - focused regressions:
+     - `wait-condition-execute-phase-objection-fallback-backoff.mlir`: PASS.
+     - `execute-phase-monitor-fork-objection-waiter.mlir`: PASS.
+     - `func-generate-baud-clk-resume-fast-path.mlir`: PASS.
+     - `func-baud-clk-generator-fast-path-delay-batch.mlir`: PASS.
+     - `jit-process-fast-path-store-wait-self-loop.mlir`: PASS.
+   - bounded AVIP UART compile lane (`--timeout=60`, compile mode):
+     - `/tmp/avip-circt-sim-uart-objwait-backoff-20260218-144031/matrix.tsv`
+       (`compile_status=OK`, `sim_status=OK`).
+     - `/tmp/avip-circt-sim-uart-objwait-backoff-20260218-144031/uart/sim_seed_1.log`
+       reached `505859300000 fs` with persisted coverage split
+       (`UartTxCovergroup=100%`, `UartRxCovergroup=0%`), confirming remaining
+       closure priority is Rx functional progression rather than execute-phase
+       wait-condition poll churn.
+
 ## Iteration 1497 - February 18, 2026
 
 ### circt-sim: execute-phase monitor fork objection-waiter stabilization + regression lock
