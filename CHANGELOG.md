@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1492 - February 18, 2026
+
+### MooreToCore/circt-sim: unblock UVM `$sscanf("%d,%s", time, string)` and restore all-AVIP compile lane
+
+1. **MooreToCore scanf lowering fix** (`lib/Conversion/MooreToCore/MooreToCore.cpp`):
+   - fixed `writeScanfResultToRef` to support string destinations for
+     `$sscanf/$fscanf` by converting packed runtime results through
+     `__moore_packed_string_to_string` before store.
+   - fixed invalid `arith.extsi` generation for 64-bit destinations
+     (`i64 -> i64`) when scanning into `time`/wide integer refs.
+   - threaded `ModuleOp` through scanf writeback helper to materialize runtime
+     helper calls cleanly in conversion patterns.
+
+2. **Regression coverage added**:
+   - `test/Conversion/MooreToCore/sscanf-time-string.mlir`
+   - locks mixed time+string lowering to runtime calls:
+     `__moore_sscanf` + `__moore_packed_string_to_string`.
+
+3. **Validation**:
+   - build:
+     - `ninja -C build-test -j2 circt-opt circt-verilog`: PASS.
+   - focused tests:
+     - `test/Conversion/MooreToCore/sscanf-time-string.mlir`: PASS.
+     - `test/Tools/circt-sim/syscall-sscanf.sv`: PASS.
+   - AVIP matrix reruns (compile mode):
+     - full all9:
+       `/tmp/avip-circt-sim-all9-rerun-20260218-103206/matrix.tsv`
+       - compile: `9/9 OK`
+       - sim: `7/9 OK` (`axi4`, `uart` timeout at `240s`).
+     - extended timeout follow-up (`axi4`,`uart`):
+       `/tmp/avip-circt-sim-axi4-uart-long-20260218-105251/matrix.tsv`
+       - both still timeout at `600s`.
+   - conclusion:
+     - previous all-AVIP compile blocker (`moore.builtin.sscanf` legalization
+       failure in UVM) is resolved; remaining gap is runtime convergence on
+       specific long-tail AVIPs (`axi4`, `uart`).
+
 ## Iteration 1491 - February 18, 2026
 
 ### circt-sim: command-line plusarg propagation to Moore runtime/UVM
@@ -25,10 +62,18 @@
      - `ninja -C build-test circt-sim`: PASS.
    - focused regression:
      - `syscall-plusargs-command-line.sv`: PASS.
-   - AVIP I3C repro sanity:
+   - AVIP repro sanity:
      - command-line `+UVM_TESTNAME=i3c_writeOperationWith8bitsData_test`
        is now honored in both interpret/compile mode; target proxy activity and
        `controller/target Agent Coverage = 100%` restored in bounded repro.
+   - bounded AVIP matrix lanes (`utils/run_avip_circt_sim.sh`, compile mode):
+     - `i3c` seed-1:
+       `/tmp/avip-circt-sim-i3c-plusargfix-rerun-20260218-111236/matrix.tsv`
+       (`compile_status=OK`, `sim_status=OK`, `cov_1_pct=100`, `cov_2_pct=100`).
+     - `i2s` seed-1:
+       `/tmp/avip-circt-sim-i2s-plusargfix-rerun-20260218-111419/matrix.tsv`
+       (`compile_status=OK`, `sim_status=OK`, `cov_1_pct=100`,
+       `cov_2_pct=72.433`).
 
 ## Iteration 1490 - February 18, 2026
 
