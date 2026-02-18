@@ -1061,6 +1061,41 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - extend static suspension classification beyond direct local
         `func.call`s (notably static-target `call_indirect`) while keeping
         strict-no-deopt safety invariants.
+39. Static-target `call_indirect` suspension classification closure
+    (February 18, 2026):
+    - native thunk policy closures:
+      - extended local-callee suspension summary to classify
+        `func.call_indirect` using static target extraction.
+      - static target extraction now supports:
+        - `func.constant @callee` form
+        - vtable-style static chain:
+          `unrealized_cast(load(gep(addressof @vtable,...)))`
+          with `circt.vtable_entries` lookup by slot index.
+      - unresolved/dynamic `call_indirect` targets remain conservatively
+        suspending.
+    - regression coverage:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-call-indirect-static-nonsuspending-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-call-indirect-static-suspending-unsupported-strict.mlir`
+    - validation:
+      - targeted strict/parallel regressions: PASS (10 focused tests including
+        existing `call_indirect` single/multiblock coverage).
+      - bounded integration smokes: PASS
+        - AVIP compile lane (`jtag`, seed 1):
+          `/tmp/avip-circt-sim-static-indirect-rerun-20260218-090314/matrix.tsv`
+          (`compile_status=OK` `28s`, `sim_status=OK` `42s`).
+        - `sv-tests`: `11.10.1--string_concat` PASS
+          (`/tmp/sv-tests-circt-sim-static-indirect-20260218-090005.txt`).
+        - `verilator-verification` BMC smoke:
+          `assert_changed` PASS
+          (`/tmp/verilator-bmc-static-indirect-20260218-090005.tsv`).
+        - `yosys/tests/sva` BMC smoke: `basic00` PASS
+          (`/tmp/yosys-sva-bmc-static-indirect-20260218-090005.tsv`).
+        - OpenTitan sim smoke: `prim_count` PASS
+          (`/tmp/opentitan-circt-sim-static-indirect-20260218-090005/run.log`).
+    - next closure target:
+      - push static classification deeper into frequent unresolved
+        `call_indirect` cases by introducing guarded runtime profile-based
+        specialization (target set/version guards) before strict default-on.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

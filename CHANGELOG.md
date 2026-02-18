@@ -70584,3 +70584,36 @@ See CHANGELOG.md on recent progress.
           (`/tmp/yosys-sva-bmc-local-helper-20260218-085422.tsv`).
         - OpenTitan sim smoke (`prim_count`): PASS
           (`/tmp/opentitan-circt-sim-local-helper-20260218-085427/run.log`).
+60. `circt-sim` static-target `call_indirect` classification in local
+    non-suspending callee summary
+    (February 18, 2026):
+    - extended
+      `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`
+      local-callee suspension analysis to classify `func.call_indirect` when a
+      static target can be proven.
+    - static call-indirect target resolution now supports:
+      - `func.constant @callee` form.
+      - vtable-style chain used by Moore lowering:
+        `unrealized_cast(load(gep(addressof @vtable,...)))`
+        via `circt.vtable_entries` slot lookup.
+    - unresolved/dynamic indirect calls stay conservatively marked as
+      potentially suspending.
+    - added strict regression coverage:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-call-indirect-static-nonsuspending-halt.mlir`
+        (includes `--parallel=4 --work-stealing --auto-partition` lane).
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-call-indirect-static-suspending-unsupported-strict.mlir`.
+    - validation:
+      - targeted `circt-sim` strict/parallel focused regressions: PASS
+        (10 tests including existing single/multiblock `call_indirect` paths).
+      - bounded integration smokes:
+        - AVIP compile lane (`jtag`, seed 1): PASS
+          (`/tmp/avip-circt-sim-static-indirect-rerun-20260218-090314/matrix.tsv`,
+          compile `28s`, sim `42s`).
+        - sv-tests smoke (`11.10.1--string_concat`): PASS
+          (`/tmp/sv-tests-circt-sim-static-indirect-20260218-090005.txt`).
+        - verilator-verification BMC smoke (`assert_changed`): PASS
+          (`/tmp/verilator-bmc-static-indirect-20260218-090005.tsv`).
+        - yosys SVA BMC smoke (`basic00`): PASS
+          (`/tmp/yosys-sva-bmc-static-indirect-20260218-090005.tsv`).
+        - OpenTitan sim smoke (`prim_count`): PASS
+          (`/tmp/opentitan-circt-sim-static-indirect-20260218-090005/run.log`).
