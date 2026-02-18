@@ -70617,3 +70617,36 @@ See CHANGELOG.md on recent progress.
           (`/tmp/yosys-sva-bmc-static-indirect-20260218-090005.tsv`).
         - OpenTitan sim smoke (`prim_count`): PASS
           (`/tmp/opentitan-circt-sim-static-indirect-20260218-090005/run.log`).
+61. `circt-sim` unresolved vtable-slot `call_indirect` conservative
+    non-suspending classification
+    (February 18, 2026):
+    - extended
+      `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`
+      local suspension summary with slot-set candidate classification for
+      unresolved `func.call_indirect` chains where a static slot index is
+      available.
+    - added conservative rule:
+      unresolved indirect call is admitted as non-suspending only when all
+      candidate callees found at that slot in module `circt.vtable_entries`
+      are local and recursively non-suspending.
+    - dynamic/unknown slot forms remain conservatively suspending.
+    - added strict regression coverage:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-call-indirect-vtable-slot-nonsuspending-halt.mlir`
+        (includes `--parallel=4 --work-stealing --auto-partition` lane).
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-call-indirect-vtable-slot-suspending-unsupported-strict.mlir`.
+    - validation:
+      - targeted `circt-sim` strict/parallel focused regressions: PASS
+        (10 tests covering local helper and existing single/multiblock
+        call-indirect paths).
+      - bounded integration smokes:
+        - AVIP compile lane (`jtag`, seed 1): PASS
+          (`/tmp/avip-circt-sim-vtable-slot-20260218-090917/matrix.tsv`,
+          compile `26s`, sim `41s`).
+        - sv-tests smoke (`11.10.1--string_concat`): PASS
+          (`/tmp/sv-tests-circt-sim-vtable-slot-20260218-090917.txt`).
+        - verilator-verification BMC smoke (`assert_changed`): PASS
+          (`/tmp/verilator-bmc-vtable-slot-20260218-090917.tsv`).
+        - yosys SVA BMC smoke (`basic00`): PASS
+          (`/tmp/yosys-sva-bmc-vtable-slot-20260218-090918.tsv`).
+        - OpenTitan sim smoke (`prim_count`): PASS
+          (`/tmp/opentitan-circt-sim-vtable-slot-20260218-090918/run.log`).

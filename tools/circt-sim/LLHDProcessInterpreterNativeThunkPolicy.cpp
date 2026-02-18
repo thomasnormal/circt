@@ -18,6 +18,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
 
 #define DEBUG_TYPE "llhd-interpreter"
 
@@ -31,6 +32,10 @@ static bool isBranchTerminatorInRegion(Operation &terminator,
 static Value stripCallIndirectCalleeCasts(Value value);
 static std::string
 getStaticCallIndirectTargetSymbol(mlir::func::CallIndirectOp callOp);
+static std::optional<int64_t>
+getStaticCallIndirectVtableEntryIndex(mlir::func::CallIndirectOp callOp);
+static std::string
+getVtableEntryCalleeSymbol(LLVM::GlobalOp vtableGlobal, int64_t entryIndex);
 
 static bool isPureResumableWaitPreludeOp(Operation *op) {
   if (!op || op->getNumResults() == 0)
@@ -199,6 +204,32 @@ static bool
 funcBodyMaySuspend(mlir::func::FuncOp funcOp,
                    llvm::DenseMap<Operation *, FuncSuspendSummary> &cache);
 
+static bool collectStaticVtableEntryCandidateCallees(
+    Operation *scopeOp, int64_t entryIndex,
+    SmallVectorImpl<mlir::func::FuncOp> &callees) {
+  if (!scopeOp || entryIndex < 0)
+    return false;
+  ModuleOp module = scopeOp->getParentOfType<ModuleOp>();
+  if (!module)
+    return false;
+
+  bool sawAny = false;
+  llvm::DenseMap<Operation *, bool> seen;
+  for (auto global : module.getOps<LLVM::GlobalOp>()) {
+    std::string calleeName = getVtableEntryCalleeSymbol(global, entryIndex);
+    if (calleeName.empty())
+      continue;
+    sawAny = true;
+    auto calleeFunc = module.lookupSymbol<mlir::func::FuncOp>(calleeName);
+    if (!calleeFunc)
+      return false;
+    Operation *key = calleeFunc.getOperation();
+    if (seen.try_emplace(key, true).second)
+      callees.push_back(calleeFunc);
+  }
+  return sawAny;
+}
+
 static bool opMaySuspendInFuncBody(
     Operation *op, llvm::DenseMap<Operation *, FuncSuspendSummary> &cache) {
   if (!op)
@@ -217,12 +248,25 @@ static bool opMaySuspendInFuncBody(
   }
   if (auto callIndirectOp = dyn_cast<mlir::func::CallIndirectOp>(op)) {
     std::string calleeName = getStaticCallIndirectTargetSymbol(callIndirectOp);
-    if (calleeName.empty())
+    if (!calleeName.empty()) {
+      auto calleeFunc = lookupLocalFuncCallee(op, calleeName);
+      if (!calleeFunc)
+        return true;
+      return funcBodyMaySuspend(calleeFunc, cache);
+    }
+
+    auto vtableEntryIndex =
+        getStaticCallIndirectVtableEntryIndex(callIndirectOp);
+    if (!vtableEntryIndex)
       return true;
-    auto calleeFunc = lookupLocalFuncCallee(op, calleeName);
-    if (!calleeFunc)
+    SmallVector<mlir::func::FuncOp, 8> candidateCallees;
+    if (!collectStaticVtableEntryCandidateCallees(op, *vtableEntryIndex,
+                                                  candidateCallees))
       return true;
-    return funcBodyMaySuspend(calleeFunc, cache);
+    for (auto calleeFunc : candidateCallees)
+      if (funcBodyMaySuspend(calleeFunc, cache))
+        return true;
+    return false;
   }
   if (auto llvmCall = dyn_cast<LLVM::CallOp>(op)) {
     auto callee = llvmCall.getCallee();
@@ -501,6 +545,28 @@ static Value stripCallIndirectCalleeCasts(Value value) {
   return value;
 }
 
+static std::optional<int64_t>
+getStaticCallIndirectVtableEntryIndex(mlir::func::CallIndirectOp callOp) {
+  Value callee = stripCallIndirectCalleeCasts(callOp.getCallee());
+  auto loadOp = callee.getDefiningOp<LLVM::LoadOp>();
+  if (!loadOp)
+    return std::nullopt;
+  auto gepOp = loadOp.getAddr().getDefiningOp<LLVM::GEPOp>();
+  if (!gepOp || !gepOp.getDynamicIndices().empty())
+    return std::nullopt;
+
+  auto rawIndices = gepOp.getRawConstantIndices();
+  if (rawIndices.size() < 2)
+    return std::nullopt;
+  int64_t entryIndex = rawIndices.back();
+  if (entryIndex == LLVM::GEPOp::kDynamicIndex || entryIndex < 0)
+    return std::nullopt;
+  for (int32_t rawIndex : rawIndices)
+    if (rawIndex == LLVM::GEPOp::kDynamicIndex)
+      return std::nullopt;
+  return entryIndex;
+}
+
 static std::string
 getVtableEntryCalleeSymbol(LLVM::GlobalOp vtableGlobal, int64_t entryIndex) {
   if (!vtableGlobal || entryIndex < 0)
@@ -536,15 +602,9 @@ getStaticCallIndirectTargetSymbol(mlir::func::CallIndirectOp callOp) {
   if (!gepOp || !gepOp.getDynamicIndices().empty())
     return {};
 
-  auto rawIndices = gepOp.getRawConstantIndices();
-  if (rawIndices.size() < 2)
+  auto entryIndex = getStaticCallIndirectVtableEntryIndex(callOp);
+  if (!entryIndex)
     return {};
-  int64_t entryIndex = rawIndices.back();
-  if (entryIndex == LLVM::GEPOp::kDynamicIndex || entryIndex < 0)
-    return {};
-  for (int32_t rawIndex : rawIndices)
-    if (rawIndex == LLVM::GEPOp::kDynamicIndex)
-      return {};
 
   auto addrOfOp = gepOp.getBase().getDefiningOp<LLVM::AddressOfOp>();
   if (!addrOfOp)
@@ -556,7 +616,7 @@ getStaticCallIndirectTargetSymbol(mlir::func::CallIndirectOp callOp) {
       module.lookupSymbol<LLVM::GlobalOp>(addrOfOp.getGlobalNameAttr().getValue());
   if (!vtableGlobal)
     return {};
-  return getVtableEntryCalleeSymbol(vtableGlobal, entryIndex);
+  return getVtableEntryCalleeSymbol(vtableGlobal, *entryIndex);
 }
 
 static std::string formatUnsupportedProcessOpDetail(Operation &op) {
