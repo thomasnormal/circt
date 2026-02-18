@@ -1681,11 +1681,6 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
       signalIdToName[fieldSigId] = fieldSigName;
       signalIdToType[fieldSigId] = fieldType;
 
-      // Don't initialize shadow signals from memory here. Leave them as
-      // unknown (X) so that the first reconciliation pass creates proper
-      // X→value transitions visible to processes waiting for edges.
-      // This matches IEEE 1800 semantics where signals start at X.
-
       uint64_t fieldAddr = mallocAddr + fieldOffset;
       interfaceFieldSignals[fieldAddr] = fieldSigId;
       fieldSignalToAddr[fieldSigId] = fieldAddr;
@@ -1763,8 +1758,6 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
             fieldSigName, fieldBitWidth, getSignalEncoding(fieldType));
         signalIdToName[fieldSigId] = fieldSigName;
         signalIdToType[fieldSigId] = fieldType;
-
-        // Don't initialize - leave as unknown for reconciliation pass.
 
         uint64_t fieldAddr = mallocAddr + fieldOffset;
         // Diagnostic: detect overwrite of interfaceFieldSignals entries
@@ -1955,6 +1948,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
                           << hwModule.getName() << "'\n");
 
   ++topModuleCount;
+  const size_t staticDriveBaseline = staticModuleDrives.size();
 
   // Store the module name for hierarchical path construction
   moduleName = hwModule.getName().str();
@@ -2054,7 +2048,8 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Some module drives (notably interface tri-state wiring) depend on values
   // written by module-level llvm.store ops; their earlier initialization-time
   // evaluation can observe stale defaults.
-  for (const auto &entry : staticModuleDrives) {
+  for (size_t i = staticDriveBaseline; i < staticModuleDrives.size(); ++i) {
+    const auto &entry = staticModuleDrives[i];
     ScopedInstanceContext instScope(*this, entry.instanceId);
     ScopedInputValueMap inputScope(*this, entry.inputMap);
     executeContinuousAssignment(entry.driveOp);
@@ -7583,6 +7578,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     state.destBlock = nullptr;
     state.destOperands.clear();
     state.resumeAtCurrentOp = false;
+    state.pendingSemaphoreGetId = 0;
   } else if (state.waiting) {
     // Handle the case where a process was triggered by an event (via
     // triggerSensitiveProcesses) rather than by the delay callback
@@ -8030,6 +8026,29 @@ void LLHDProcessInterpreter::applyInterfaceTriStateRules(SignalId triggerSigId) 
     return InterpretedValue(ap);
   };
 
+  auto isExplicitHighZForSignal = [&](SignalId sigId,
+                                      InterpretedValue value) -> bool {
+    if (value.isX())
+      return false;
+    if (scheduler.getSignalEncoding(sigId) != SignalEncoding::FourStateStruct)
+      return false;
+
+    const SignalValue &current = scheduler.getSignalValue(sigId);
+    unsigned width = current.getWidth();
+    if (width < 2 || (width % 2) != 0)
+      return false;
+
+    value = normalizeForSignal(value, sigId);
+    if (value.isX())
+      return false;
+
+    APInt bits = value.getAPInt();
+    unsigned logicalWidth = width / 2;
+    APInt unknownBits = bits.extractBits(logicalWidth, 0);
+    APInt valueBits = bits.extractBits(logicalWidth, logicalWidth);
+    return unknownBits.isAllOnes() && valueBits.isAllOnes();
+  };
+
   auto getSignalValue = [&](SignalId sigId) -> InterpretedValue {
     auto pendingIt = pendingEpsilonDrives.find(sigId);
     if (pendingIt != pendingEpsilonDrives.end())
@@ -8103,6 +8122,10 @@ void LLHDProcessInterpreter::applyInterfaceTriStateRules(SignalId triggerSigId) 
 
       InterpretedValue selectedVal =
           condTrue ? getSignalValue(rule.srcSigId) : rule.elseValue;
+      InterpretedValue normalizedSelected =
+          normalizeForSignal(selectedVal, rule.destSigId);
+      bool selectedIsExplicitHighZ =
+          isExplicitHighZForSignal(rule.destSigId, normalizedSelected);
 
       if (traceTriState) {
         InterpretedValue srcVal = getSignalValue(rule.srcSigId);
@@ -8118,18 +8141,25 @@ void LLHDProcessInterpreter::applyInterfaceTriStateRules(SignalId triggerSigId) 
                      << formatValue(srcVal) << " dest=" << rule.destSigId
                      << "(" << signalName(rule.destSigId) << ") before="
                      << formatValue(destBefore) << " sel="
-                     << formatValue(selectedVal) << "\n";
+                     << formatValue(normalizedSelected)
+                     << " selHighZ=" << (selectedIsExplicitHighZ ? 1 : 0)
+                     << "\n";
       }
 
-      if (!driveSignalAndMemory(rule.destSigId, selectedVal))
+      if (!driveSignalAndMemory(rule.destSigId, normalizedSelected))
         continue;
 
-      // Preserve existing copy propagation semantics for one-hop children.
-      auto propIt = interfaceFieldPropagation.find(rule.destSigId);
-      if (propIt != interfaceFieldPropagation.end()) {
-        InterpretedValue destVal = getSignalValue(rule.destSigId);
-        for (SignalId childSigId : propIt->second)
-          (void)driveSignalAndMemory(childSigId, destVal);
+      // Don't forward explicit high-Z tri-state drive values to mirrored
+      // interface fields. Mirrors should observe the resolved net value via
+      // probe-copy propagation (e.g. assign s_i = S), not the unresolved Z
+      // drive expression.
+      if (!selectedIsExplicitHighZ) {
+        auto propIt = interfaceFieldPropagation.find(rule.destSigId);
+        if (propIt != interfaceFieldPropagation.end()) {
+          InterpretedValue destVal = getSignalValue(rule.destSigId);
+          for (SignalId childSigId : propIt->second)
+            (void)driveSignalAndMemory(childSigId, destVal);
+        }
       }
 
       if (queued.insert(rule.destSigId).second)
@@ -24415,10 +24445,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         auto nameIt = signalIdToName.find(fieldSigId);
         if (nameIt != signalIdToName.end())
           sigName = nameIt->second;
+        llvm::SmallString<64> rawBits;
+        if (storeVal.isX())
+          rawBits = "X";
+        else
+          storeVal.getAPInt().toString(rawBits, /*Radix=*/2, /*Signed=*/false);
         llvm::errs() << "[IFACE-STORE] proc=" << procId << " addr=0x"
                      << llvm::format_hex(storeAddr, 16) << " sig=" << fieldSigId
                      << " (" << sigName << ") rawWidth="
-                     << getTypeWidth(storeLLVMType);
+                     << getTypeWidth(storeLLVMType) << " raw=" << rawBits;
         if (copySrcSigId != 0) {
           llvm::errs() << " copySrc=" << copySrcSigId;
           if (addedDynamicCopyLink)
@@ -24506,8 +24541,29 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
 
       InterpretedValue driveVal =
           normalizeInterfaceStoreValue(fieldSigId, storeVal);
-      if (suppressTriStateMirrorStoreForField)
+      if (suppressTriStateMirrorStoreForField) {
         driveVal = InterpretedValue::fromSignalValue(current);
+        // Mirror-feedback suppression keeps tri-state destination fields from
+        // being overwritten by probed bus values. If the shadow signal is
+        // still X (first mirrored store), recover the initialized drive
+        // expression from backing memory instead of latching X indefinitely.
+        if (driveVal.isX() && block) {
+          unsigned targetWidth = current.getWidth();
+          unsigned numBytes = (targetWidth + 7) / 8;
+          if (numBytes > 0 && offset + numBytes <= block->size) {
+            APInt bits(targetWidth, 0);
+            for (unsigned i = 0; i < numBytes; ++i) {
+              unsigned bitOffset = i * 8;
+              if (bitOffset >= targetWidth)
+                break;
+              APInt byteBits(targetWidth,
+                             static_cast<uint64_t>(block->data[offset + i]));
+              bits |= byteBits.shl(bitOffset);
+            }
+            driveVal = InterpretedValue(bits);
+          }
+        }
+      }
 
       // Only drive if the value actually changed — prevents zero-delta loops
       // in always_comb processes that copy interface fields bidirectionally.
@@ -24518,13 +24574,47 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           auto nameIt = signalIdToName.find(fieldSigId);
           if (nameIt != signalIdToName.end())
             sigName = nameIt->second;
+          llvm::SmallString<64> curBits;
+          llvm::SmallString<64> normBits;
+          InterpretedValue curVal = InterpretedValue::fromSignalValue(current);
+          if (curVal.isX())
+            curBits = "X";
+          else
+            curVal.getAPInt().toString(curBits, /*Radix=*/2, /*Signed=*/false);
+          if (driveVal.isX())
+            normBits = "X";
+          else
+            driveVal.getAPInt().toString(normBits, /*Radix=*/2,
+                                         /*Signed=*/false);
           llvm::errs() << "[IFACE-STORE] unchanged sig=" << fieldSigId << " ("
-                       << sigName << ")\n";
+                       << sigName << ") cur=" << curBits
+                       << " norm=" << normBits << "\n";
         }
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.store: shadow signal " << fieldSigId
                    << " unchanged, skipping drive\n");
       } else {
+        if (traceInterfaceStore) {
+          llvm::StringRef sigName = "<unknown>";
+          auto nameIt = signalIdToName.find(fieldSigId);
+          if (nameIt != signalIdToName.end())
+            sigName = nameIt->second;
+          llvm::SmallString<64> curBits;
+          llvm::SmallString<64> normBits;
+          InterpretedValue curVal = InterpretedValue::fromSignalValue(current);
+          if (curVal.isX())
+            curBits = "X";
+          else
+            curVal.getAPInt().toString(curBits, /*Radix=*/2, /*Signed=*/false);
+          if (driveVal.isX())
+            normBits = "X";
+          else
+            driveVal.getAPInt().toString(normBits, /*Radix=*/2,
+                                         /*Signed=*/false);
+          llvm::errs() << "[IFACE-STORE] update sig=" << fieldSigId << " ("
+                       << sigName << ") cur=" << curBits
+                       << " norm=" << normBits << "\n";
+        }
         pendingEpsilonDrives[fieldSigId] = driveVal;
         scheduler.updateSignal(fieldSigId, newSigVal);
         LLVM_DEBUG(llvm::dbgs()
@@ -27408,6 +27498,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                      << "  llvm.call: __moore_semaphore_get(0x"
                      << llvm::format_hex(semAddr, 16) << ", " << keyCount
                      << ") - acquired immediately\n");
+
+          // Clear any stale pending semaphore marker from prior waits.
+          processStates[procId].pendingSemaphoreGetId = 0;
 
           // After acquiring, try to wake other waiting processes
           // (semaphorePut handles this, but get doesn't release keys)

@@ -269,64 +269,88 @@ void VPIRuntime::buildHierarchy() {
     std::string qualifiedName = modulePath + "." + signalName;
     const auto *arrayInfo = scheduler->getSignalArrayInfo(sigId);
     if (arrayInfo && arrayInfo->numElements > 1) {
-      // Create an Array parent object.
+      // Helper: recursively create array children.  When innerArrayInfo
+      // is set on an element, that element becomes a nested Array with
+      // its own sub-children (for multi-dimensional unpacked arrays).
+      std::function<void(uint32_t parentArrayId,
+                         const ProcessScheduler::SignalArrayInfo &info,
+                         const std::string &baseName,
+                         const std::string &baseQName,
+                         SignalId parentSigId, uint32_t baseBitOffset)>
+          createArrayChildren;
+      createArrayChildren = [&](uint32_t parentArrayId,
+                                const ProcessScheduler::SignalArrayInfo &info,
+                                const std::string &baseName,
+                                const std::string &baseQName,
+                                SignalId parentSigId,
+                                uint32_t baseBitOffset) {
+        uint32_t elemPhysW = info.elementPhysWidth;
+        uint32_t elemLogW = info.elementLogicalWidth;
+        int32_t leftBound = info.leftBound;
+        int32_t rightBound = info.rightBound;
+        bool hasBounds = (rightBound != -1);
+        int32_t step = (hasBounds && leftBound > rightBound) ? -1 : 1;
+        auto *parentObj = findById(parentArrayId);
+        if (parentObj) {
+          parentObj->leftBound = hasBounds ? leftBound : 0;
+          parentObj->rightBound =
+              hasBounds ? rightBound
+                        : static_cast<int32_t>(info.numElements - 1);
+        }
+        for (uint32_t i = 0; i < info.numElements; ++i) {
+          int32_t svIndex = hasBounds ? (leftBound + step * (int32_t)i)
+                                      : (int32_t)i;
+          std::string elemName =
+              baseName + "[" + std::to_string(svIndex) + "]";
+          std::string elemQName =
+              baseQName + "[" + std::to_string(svIndex) + "]";
+          uint32_t bitOff =
+              baseBitOffset + (info.numElements - 1 - i) * elemPhysW;
+
+          bool isNestedArray = info.innerArrayInfo != nullptr;
+          uint32_t elemId = nextObjectId();
+          auto elemObj = std::make_unique<VPIObject>();
+          elemObj->id = elemId;
+          elemObj->type = isNestedArray ? VPIObjectType::Array
+                                        : VPIObjectType::Reg;
+          elemObj->name = elemName;
+          elemObj->fullName = elemQName;
+          elemObj->signalId = parentSigId;
+          elemObj->width = elemLogW;
+          elemObj->physWidth = elemPhysW;
+          elemObj->bitOffset = bitOff;
+          elemObj->parentId = parentArrayId;
+          if (parentObj)
+            parentObj->children.push_back(elemId);
+          nameToId[elemQName] = elemId;
+          if (nameToId.find(elemName) == nameToId.end())
+            nameToId[elemName] = elemId;
+          objects[elemId] = std::move(elemObj);
+          stats.objectsCreated++;
+
+          if (isNestedArray) {
+            createArrayChildren(elemId, *info.innerArrayInfo, elemName,
+                                elemQName, parentSigId, bitOff);
+          }
+        }
+      };
+
+      // Create the top-level Array parent object.
       uint32_t arrayObjId =
           registerSignal(signalName, qualifiedName, sigId, width,
                          VPIObjectType::Array, moduleId);
       if (nameToId.find(signalName) == nameToId.end())
         nameToId[signalName] = arrayObjId;
 
-      // Create child Reg objects for each array element.
-      uint32_t elemPhysW = arrayInfo->elementPhysWidth;
-      uint32_t elemLogW = arrayInfo->elementLogicalWidth;
-      // Determine the SV index range.  If bounds are available (from
-      // vpi.array_bounds), use them; otherwise fall back to 0-based.
-      int32_t leftBound = arrayInfo->leftBound;
-      int32_t rightBound = arrayInfo->rightBound;
-      bool hasBounds = (rightBound != -1);
-      // Direction: downto if left > right, ascending if left < right.
-      int32_t step = (hasBounds && leftBound > rightBound) ? -1 : 1;
-      // Store bounds on the array parent for range queries.
-      auto *arrayParent = findById(arrayObjId);
-      if (arrayParent) {
-        arrayParent->leftBound = hasBounds ? leftBound : 0;
-        arrayParent->rightBound =
-            hasBounds ? rightBound
-                      : static_cast<int32_t>(arrayInfo->numElements - 1);
-      }
-      for (uint32_t i = 0; i < arrayInfo->numElements; ++i) {
-        int32_t svIndex = hasBounds ? (leftBound + step * (int32_t)i)
-                                    : (int32_t)i;
-        std::string elemName =
-            signalName + "[" + std::to_string(svIndex) + "]";
-        std::string elemQName =
-            qualifiedName + "[" + std::to_string(svIndex) + "]";
-        uint32_t elemId = nextObjectId();
-        auto elemObj = std::make_unique<VPIObject>();
-        elemObj->id = elemId;
-        elemObj->type = VPIObjectType::Reg;
-        elemObj->name = elemName;
-        elemObj->fullName = elemQName;
-        elemObj->signalId = sigId;
-        elemObj->width = elemLogW;
-        // HW convention: element 0 is in the highest bits (field order
-        // high-to-low). Bit offset = (N-1-i) * elemPhysWidth.
-        elemObj->bitOffset =
-            (arrayInfo->numElements - 1 - i) * elemPhysW;
-        elemObj->parentId = arrayObjId;
-        if (arrayParent)
-          arrayParent->children.push_back(elemId);
-        nameToId[elemQName] = elemId;
-        if (nameToId.find(elemName) == nameToId.end())
-          nameToId[elemName] = elemId;
-        objects[elemId] = std::move(elemObj);
-        stats.objectsCreated++;
-      }
+      createArrayChildren(arrayObjId, *arrayInfo, signalName, qualifiedName,
+                          sigId, 0);
 
       LLVM_DEBUG(llvm::dbgs()
                  << "  Created array '" << qualifiedName << "' id="
                  << arrayObjId << " sigId=" << sigId << " elements="
-                 << arrayInfo->numElements << " elemWidth=" << elemLogW
+                 << arrayInfo->numElements
+                 << " elemWidth=" << arrayInfo->elementLogicalWidth
+                 << (arrayInfo->innerArrayInfo ? " (nested)" : "")
                  << "\n");
     } else if (const auto *structFields =
                    scheduler->getSignalStructFields(sigId)) {
@@ -370,10 +394,17 @@ void VPIRuntime::buildHierarchy() {
                  << structObjId << " sigId=" << sigId << " fields="
                  << structFields->size() << "\n");
     } else {
-      // Register as a regular signal.
+      // Register as a regular signal, or integer/string/real if marked.
+      VPIObjectType sigType = VPIObjectType::Reg;
+      if (integerVarNames.count(signalName))
+        sigType = VPIObjectType::Integer;
+      // Note: StringVar and RealVar type marking is intentionally disabled
+      // because cocotb's GPI layer doesn't handle these types correctly
+      // during recursive discovery (causes IndexError with garbage indices).
+      // String and real signals are reported as Reg with their bit widths.
       uint32_t sigObjId =
           registerSignal(signalName, qualifiedName, sigId, width,
-                         VPIObjectType::Reg, moduleId);
+                         sigType, moduleId);
       if (nameToId.find(signalName) == nameToId.end())
         nameToId[signalName] = sigObjId;
       LLVM_DEBUG(llvm::dbgs() << "  Created signal '" << qualifiedName
@@ -891,13 +922,18 @@ uint32_t VPIRuntime::iterate(int32_t type, uint32_t refId) {
         if (child && child->type == VPIObjectType::StructVar)
           elements.push_back(childId);
       }
-    } else if (type == vpiNet || type == vpiReg) {
-      // Return child signals (including arrays, but NOT structs).
+    } else if (type == vpiNet || type == vpiReg || type == vpiIntegerVar ||
+               type == vpiStringVar || type == vpiRealVar) {
+      // Return child signals (including arrays, integers, strings, reals,
+      // but NOT structs).
       for (uint32_t childId : obj->children) {
         auto *child = findById(childId);
         if (child && (child->type == VPIObjectType::Net ||
                       child->type == VPIObjectType::Reg ||
-                      child->type == VPIObjectType::Array))
+                      child->type == VPIObjectType::Array ||
+                      child->type == VPIObjectType::Integer ||
+                      child->type == VPIObjectType::StringVar ||
+                      child->type == VPIObjectType::RealVar))
           elements.push_back(childId);
       }
     } else if (type == vpiMember) {
@@ -987,6 +1023,12 @@ int32_t VPIRuntime::getProperty(int32_t property, uint32_t objectId) {
       return vpiGenScopeArray;
     case VPIObjectType::StructVar:
       return vpiStructVar;
+    case VPIObjectType::Integer:
+      return vpiIntegerVar;
+    case VPIObjectType::StringVar:
+      return vpiStringVar;
+    case VPIObjectType::RealVar:
+      return vpiRealVar;
     default:
       return vpiUndefined;
     }
@@ -994,6 +1036,9 @@ int32_t VPIRuntime::getProperty(int32_t property, uint32_t objectId) {
     if (obj->type == VPIObjectType::Array ||
         obj->type == VPIObjectType::GenScopeArray)
       return static_cast<int32_t>(obj->children.size());
+    // Real variables report size=1 (single value, not bit vector).
+    if (obj->type == VPIObjectType::RealVar)
+      return 1;
     return static_cast<int32_t>(obj->width);
   case vpiLeftRange:
     if (obj->type == VPIObjectType::GenScopeArray ||
@@ -1008,11 +1053,19 @@ int32_t VPIRuntime::getProperty(int32_t property, uint32_t objectId) {
   case vpiDirection:
     return obj->direction;
   case vpiVector:
+    // Real and string variables are never vectors.
+    if (obj->type == VPIObjectType::RealVar ||
+        obj->type == VPIObjectType::StringVar)
+      return 0;
     return obj->width > 1 ? 1 : 0;
   case vpiScalar:
+    if (obj->type == VPIObjectType::RealVar ||
+        obj->type == VPIObjectType::StringVar)
+      return 0;
     return obj->width == 1 ? 1 : 0;
   case vpiSigned:
-    return 0; // Unsigned by default.
+    // Integer types are signed per IEEE 1800-2017.
+    return (obj->type == VPIObjectType::Integer) ? 1 : 0;
   case vpiPacked:
     return 0; // Unpacked structs only; packed structs stay as plain Reg.
   case vpiTopModule:
@@ -1061,6 +1114,15 @@ const char *VPIRuntime::getStrProperty(int32_t property, uint32_t objectId) {
       break;
     case VPIObjectType::StructVar:
       strBuffer = "vpiStructVar";
+      break;
+    case VPIObjectType::Integer:
+      strBuffer = "vpiIntegerVar";
+      break;
+    case VPIObjectType::StringVar:
+      strBuffer = "vpiStringVar";
+      break;
+    case VPIObjectType::RealVar:
+      strBuffer = "vpiRealVar";
       break;
     default:
       strBuffer = "vpiUndefined";
@@ -1136,12 +1198,19 @@ void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
   llvm::APInt unknownBits(width, 0);
   bool hasUnknown = false;
 
-  // Check if this is an array element (not the array parent itself).
+  // Check if this is an array element or nested array with a bitOffset.
+  // Use obj->physWidth (set during hierarchy build) for the correct
+  // physical width, falling back to arrayInfo->elementPhysWidth.
   const auto *arrayInfo = scheduler->getSignalArrayInfo(obj->signalId);
-  if (arrayInfo && obj->type != VPIObjectType::Array) {
-    // Array element: extract element bits from the parent signal.
+  bool isArrayElement = (arrayInfo && obj->physWidth > 0 &&
+                         obj->type != VPIObjectType::Array);
+  bool isNestedArrayWithOffset = (obj->type == VPIObjectType::Array &&
+                                  obj->physWidth > 0 && obj->bitOffset > 0);
+  if (isArrayElement || isNestedArrayWithOffset) {
+    // Array element or nested array sub-range: extract bits from parent.
     {
-      uint32_t elemPhysW = arrayInfo->elementPhysWidth;
+      uint32_t elemPhysW = obj->physWidth > 0
+          ? obj->physWidth : arrayInfo->elementPhysWidth;
       const llvm::APInt &raw = sv.getAPInt();
       if (obj->bitOffset + elemPhysW <= raw.getBitWidth()) {
         llvm::APInt elemBits = raw.extractBits(elemPhysW, obj->bitOffset);
@@ -1266,6 +1335,12 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
   if (!obj || !obj->signalId || !scheduler || !value)
     return 0;
 
+  // Clear any VPI ownership on this signal so that our own updateSignal call
+  // isn't blocked. (VPI ownership prevents non-VPI sources from overwriting,
+  // but VPI itself must be able to write — especially for successive array
+  // element writes that share the same parent signal.)
+  scheduler->clearVpiOwned(obj->signalId);
+
   static bool traceVPI = []() {
     const char *env = std::getenv("CIRCT_VPI_TRACE");
     return env && env[0] != '\0' && env[0] != '0';
@@ -1327,11 +1402,16 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
   // For array element sub-signals, do a read-modify-write on the parent signal.
   SignalValue writtenValue(llvm::APInt(physWidth, 0));
   const auto *arrayInfoPut = scheduler->getSignalArrayInfo(obj->signalId);
-  if (arrayInfoPut && obj->type != VPIObjectType::Array) {
+  bool isArrayElemPut = (arrayInfoPut && obj->physWidth > 0 &&
+                         obj->type != VPIObjectType::Array);
+  bool isNestedArrayPut = (obj->type == VPIObjectType::Array &&
+                           obj->physWidth > 0 && obj->bitOffset > 0);
+  if (isArrayElemPut || isNestedArrayPut) {
     // Array element write: read parent, modify element slice, write back.
     const SignalValue &parentSv = scheduler->getSignalValue(obj->signalId);
     llvm::APInt parentBits = parentSv.getAPInt();
-    uint32_t elemPhysW = arrayInfoPut->elementPhysWidth;
+    uint32_t elemPhysW = obj->physWidth > 0
+        ? obj->physWidth : arrayInfoPut->elementPhysWidth;
 
     // Build the element's physical bits.
     llvm::APInt elemPhysBits(elemPhysW, 0);
@@ -1372,6 +1452,9 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
   // (e.g., port "mode_in" and llhd.sig name "mode_in"). Without this,
   // VPI writes to the port signal don't reach the internal signal that
   // combinational logic reads from.
+  // Mark signal as VPI-owned to protect from stale drives during
+  // executeCurrentTime(). Also propagate to sibling signals.
+  scheduler->markVpiOwned(obj->signalId);
   auto nameIt = scheduler->getSignalNames().find(obj->signalId);
   if (nameIt != scheduler->getSignalNames().end()) {
     llvm::StringRef sigName = nameIt->second;
@@ -1385,51 +1468,19 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
         if (sibId == obj->signalId)
           continue;
         const SignalValue &sibVal = scheduler->getSignalValue(sibId);
-        if (sibVal.getWidth() == writtenValue.getWidth())
+        if (sibVal.getWidth() == writtenValue.getWidth()) {
+          scheduler->clearVpiOwned(sibId);
           scheduler->updateSignal(sibId, writtenValue);
-      }
-    }
-  }
-
-  // Flush combinational logic: execute delta cycles so that downstream
-  // combinational processes see the updated value. This matches Verilog
-  // semantics where vpi_put_value(vpiNoDelay) causes immediate propagation
-  // through combinational logic before returning.
-  //
-  // Track the VPI-written signal (and its siblings) so we can restore their
-  // values if executeCurrentTime() fires stale scheduled drives that
-  // overwrite them.
-  vpiDrivenSignals[obj->signalId] = writtenValue;
-  auto nameIt2 = scheduler->getSignalNames().find(obj->signalId);
-  if (nameIt2 != scheduler->getSignalNames().end()) {
-    llvm::StringRef sigName2 = nameIt2->second;
-    auto dotPos2 = sigName2.rfind('.');
-    std::string baseName2 =
-        dotPos2 != llvm::StringRef::npos ? sigName2.substr(dotPos2 + 1).str()
-                                         : sigName2.str();
-    auto sibIt2 = nameToSiblingSignals.find(baseName2);
-    if (sibIt2 != nameToSiblingSignals.end()) {
-      for (SignalId sibId : sibIt2->second) {
-        if (sibId != obj->signalId) {
-          const SignalValue &sibVal = scheduler->getSignalValue(sibId);
-          if (sibVal.getWidth() == writtenValue.getWidth())
-            vpiDrivenSignals[sibId] = writtenValue;
+          scheduler->markVpiOwned(sibId);
         }
       }
     }
   }
 
+  // Flush combinational logic: execute delta cycles so that downstream
+  // combinational processes see the updated value. VPI-owned signals are
+  // protected from stale drives during this execution.
   scheduler->executeCurrentTime();
-
-  // Re-assert VPI-driven values that were overwritten by stale scheduled
-  // drives during executeCurrentTime(). This ensures VPI writes have
-  // highest priority — testbench-driven values always win.
-  for (auto &[sigId, expectedVal] : vpiDrivenSignals) {
-    const SignalValue &currentVal = scheduler->getSignalValue(sigId);
-    if (!(currentVal == expectedVal)) {
-      scheduler->updateSignal(sigId, expectedVal);
-    }
-  }
 
   return objectId;
 }
@@ -1501,6 +1552,11 @@ uint32_t VPIRuntime::registerCb(struct t_cb_data *cbData) {
           auto it = callbacks.find(capturedId);
           if (it == callbacks.end() || !it->second->active)
             return;
+          // Clear VPI signal ownership at the start of each cbAfterDelay
+          // cycle. putValue() will re-establish ownership for any signals
+          // written during this tick.
+          if (scheduler)
+            scheduler->clearVpiOwnership();
           // Capture fields before calling cbFunc, which may modify callbacks
           // DenseMap (via vpi_register_cb/vpi_remove_cb) and invalidate `it`.
           auto cbFunc = it->second->cbFunc;
@@ -1537,7 +1593,8 @@ uint32_t VPIRuntime::registerCb(struct t_cb_data *cbData) {
         }));
   }
 
-  if (cbData->reason == cbReadWriteSynch || cbData->reason == cbReadOnlySynch) {
+  if (cbData->reason == cbReadWriteSynch || cbData->reason == cbReadOnlySynch ||
+      cbData->reason == cbNextSimTime) {
     cb->oneShot = true;
   }
 
@@ -1588,11 +1645,21 @@ int32_t VPIRuntime::getVlogInfo(struct t_vpi_vlog_info *info) {
     return 0;
   static const char *product = "circt-sim";
   static const char *version = "1.0";
-  static char *argv0 = const_cast<char *>("circt-sim");
-  info->argc = 1;
-  info->argv = &argv0;
   info->product = const_cast<PLI_BYTE8 *>(product);
   info->version = const_cast<PLI_BYTE8 *>(version);
+
+  // Build the argv array from stored vlogArgs (includes plusargs).
+  if (vlogArgs.empty()) {
+    static char *argv0 = const_cast<char *>("circt-sim");
+    info->argc = 1;
+    info->argv = &argv0;
+  } else {
+    vlogArgvPtrs.clear();
+    for (auto &arg : vlogArgs)
+      vlogArgvPtrs.push_back(const_cast<char *>(arg.c_str()));
+    info->argc = static_cast<PLI_INT32>(vlogArgvPtrs.size());
+    info->argv = vlogArgvPtrs.data();
+  }
   return 1;
 }
 
@@ -1612,9 +1679,9 @@ int32_t VPIRuntime::control(int32_t operation) {
     LLVM_DEBUG(llvm::dbgs() << "VPIRuntime: vpi_control("
                             << (operation == vpiStop ? "vpiStop" : "vpiFinish")
                             << ")\n");
-    // Note: VPIRuntime doesn't own SimulationControl. The main loop's
-    // shouldContinue() will eventually detect simulation completion.
     llvm::errs() << "[VPI] vpi_control: simulation stop requested\n";
+    if (simControl)
+      simControl->finish(0);
     return 1;
   }
   return 0;
@@ -1644,8 +1711,21 @@ void VPIRuntime::fireCallbacks(int32_t reason) {
     auto cbFunc = cbIt->second->cbFunc;
     void *userData = cbIt->second->userData;
 
+    // Provide current simulation time — cocotb's GPI layer may
+    // dereference data.time in any callback (e.g. cbReadWriteSynch,
+    // cbReadOnlySynch, cbNextSimTime).
+    s_vpi_time cbTime = {};
+    cbTime.type = vpiSimTime;
+    if (scheduler) {
+      SimTime now = scheduler->getCurrentTime();
+      uint64_t ps = now.realTime / 1000;
+      cbTime.high = static_cast<PLI_UINT32>(ps >> 32);
+      cbTime.low = static_cast<PLI_UINT32>(ps & 0xFFFFFFFF);
+    }
+
     t_cb_data data = {};
     data.reason = reason;
+    data.time = &cbTime;
     data.user_data = static_cast<PLI_BYTE8 *>(userData);
     cbFunc(&data);
     stats.callbacksFired++;

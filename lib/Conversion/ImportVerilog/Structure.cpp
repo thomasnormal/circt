@@ -3014,6 +3014,62 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
                            builder.getDictionaryAttr(boundsEntries));
   }
 
+  // Count unpacked array nesting depth for signals with nested unpacked
+  // dimensions (e.g., logic x [3][3] has depth 2).  Attach as
+  // vpi.unpacked_depth so that VPI can create nested Array objects.
+  {
+    auto countUnpackedDepth = [](const slang::ast::Type &type) -> int {
+      int depth = 0;
+      const slang::ast::Type *t = &type.getCanonicalType();
+      while (t->kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+        depth++;
+        t = &t->as<slang::ast::FixedSizeUnpackedArrayType>()
+                 .elementType.getCanonicalType();
+      }
+      return depth;
+    };
+    SmallVector<NamedAttribute> depthEntries;
+    auto i32Ty = builder.getIntegerType(32);
+    for (auto &member : module->members()) {
+      const slang::ast::Type *memberType = nullptr;
+      std::string_view memberName;
+      if (auto *varSym = member.as_if<slang::ast::VariableSymbol>()) {
+        memberType = &varSym->getType();
+        memberName = varSym->name;
+      } else if (auto *netSym = member.as_if<slang::ast::NetSymbol>()) {
+        memberType = &netSym->getType();
+        memberName = netSym->name;
+      }
+      if (!memberType || memberName.empty())
+        continue;
+      int depth = countUnpackedDepth(*memberType);
+      if (depth >= 2)
+        depthEntries.push_back(builder.getNamedAttr(
+            llvm::StringRef(memberName.data(), memberName.size()),
+            builder.getIntegerAttr(i32Ty, depth)));
+    }
+    for (auto *portSym : module->getPortList()) {
+      if (!portSym)
+        continue;
+      auto *port = portSym->as_if<slang::ast::PortSymbol>();
+      if (!port)
+        continue;
+      int depth = countUnpackedDepth(port->getType());
+      if (depth >= 2) {
+        std::string portName(port->name);
+        bool found = false;
+        for (auto &e : depthEntries)
+          if (e.getName().strref() == portName) { found = true; break; }
+        if (!found)
+          depthEntries.push_back(builder.getNamedAttr(
+              portName, builder.getIntegerAttr(i32Ty, depth)));
+      }
+    }
+    if (!depthEntries.empty())
+      lowering.op->setAttr("vpi.unpacked_depth",
+                           builder.getDictionaryAttr(depthEntries));
+  }
+
   // Collect unpacked struct field info and attach as vpi.struct_fields so that
   // VPI can expose struct members as hierarchical children to cocotb.
   {
@@ -3068,6 +3124,53 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
     if (!structEntries.empty())
       lowering.op->setAttr("vpi.struct_fields",
                            builder.getDictionaryAttr(structEntries));
+  }
+
+  // Collect integer/string/real-typed variables and ports for VPI type
+  // reporting. VPI needs to report these as vpiIntegerVar/vpiStringVar/
+  // vpiRealVar (not vpiReg) so cocotb creates the correct handle types.
+  {
+    SmallVector<mlir::Attribute> intNames;
+    SmallVector<mlir::Attribute> strNames;
+    SmallVector<mlir::Attribute> realNames;
+    auto checkVarType = [&](std::string_view name,
+                            const slang::ast::Type &type) {
+      auto &ct = type.getCanonicalType();
+      if (ct.isString()) {
+        strNames.push_back(builder.getStringAttr(
+            llvm::StringRef(name.data(), name.size())));
+      } else if (ct.isFloating()) {
+        realNames.push_back(builder.getStringAttr(
+            llvm::StringRef(name.data(), name.size())));
+      } else if (ct.isIntegral() && ct.getBitWidth() == 32 &&
+                 ct.isSigned() &&
+                 ct.kind != slang::ast::SymbolKind::EnumType) {
+        // 32-bit signed integral that isn't an enum → integer type.
+        intNames.push_back(builder.getStringAttr(
+            llvm::StringRef(name.data(), name.size())));
+      }
+    };
+    for (auto &member : module->members()) {
+      if (auto *varSym = member.as_if<slang::ast::VariableSymbol>())
+        checkVarType(varSym->name, varSym->getType());
+      else if (auto *netSym = member.as_if<slang::ast::NetSymbol>())
+        checkVarType(netSym->name, netSym->getType());
+    }
+    for (auto *portSym : module->getPortList()) {
+      if (!portSym)
+        continue;
+      if (auto *port = portSym->as_if<slang::ast::PortSymbol>())
+        checkVarType(port->name, port->getType());
+    }
+    if (!intNames.empty())
+      lowering.op->setAttr("vpi.integer_vars",
+                           builder.getArrayAttr(intNames));
+    if (!strNames.empty())
+      lowering.op->setAttr("vpi.string_vars",
+                           builder.getArrayAttr(strNames));
+    if (!realNames.empty())
+      lowering.op->setAttr("vpi.real_vars",
+                           builder.getArrayAttr(realNames));
   }
 
   moore::OutputOp::create(builder, lowering.op.getLoc(), outputs);

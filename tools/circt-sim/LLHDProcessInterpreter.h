@@ -1381,6 +1381,13 @@ private:
   /// recursive evaluateContinuousValue chain. Used to detect cycles.
   llvm::DenseSet<mlir::Operation *> continuousEvalVisitedProcesses;
 
+  /// Set of (procId, waitOp) pairs that have already been through the
+  /// empty-sensitivity "always @(*)" fallback delta-resume path at least once.
+  /// Used to prevent infinite delta cycles for processes that have no
+  /// detectable LLHD signal dependencies (e.g., string-type always blocks).
+  llvm::DenseSet<std::pair<ProcessId, mlir::Operation *>>
+      emptySensitivityFallbackExecuted;
+
   /// Next instance ID to allocate for a hw.instance.
   InstanceId nextInstanceId = 1;
 
@@ -1472,6 +1479,17 @@ private:
   /// `auto &state = processStates[procId]`).  std::map provides stable
   /// references across inserts and erases.
   std::map<ProcessId, ProcessExecutionState> processStates;
+
+  /// Shared function result cache across all processes for pure, high-frequency
+  /// UVM/domain getters. This complements per-process funcResultCache to avoid
+  /// repeating identical graph/singleton queries in sibling processes.
+  llvm::DenseMap<mlir::Operation *,
+                 llvm::DenseMap<uint64_t,
+                                llvm::SmallVector<InterpretedValue, 2>>>
+      sharedFuncResultCache;
+
+  /// Number of shared function result cache hits (for diagnostics).
+  uint64_t sharedFuncCacheHits = 0;
 
   /// Cached active process state for the currently-executing process.
   /// Set by executeProcess() to avoid repeated std::map lookups in

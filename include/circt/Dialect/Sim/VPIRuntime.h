@@ -22,6 +22,7 @@
 
 #include "circt/Dialect/Sim/EventQueue.h"
 #include "circt/Dialect/Sim/ProcessScheduler.h"
+#include "circt/Dialect/Sim/SimulationControl.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -217,6 +218,12 @@ typedef struct t_cb_data *p_cb_data;
 #ifndef vpiRegArray
 #define vpiRegArray 116
 #endif
+#ifndef vpiStringVar
+#define vpiStringVar 612
+#endif
+#ifndef vpiRealVar
+#define vpiRealVar 29
+#endif
 #ifndef vpiStructVar
 #define vpiStructVar 618
 #endif
@@ -301,6 +308,9 @@ typedef struct t_cb_data *p_cb_data;
 #ifndef cbReadOnlySynch
 #define cbReadOnlySynch 7
 #endif
+#ifndef cbNextSimTime
+#define cbNextSimTime 8
+#endif
 #ifndef cbAfterDelay
 #define cbAfterDelay 9
 #endif
@@ -349,6 +359,8 @@ enum class VPIObjectType : uint8_t {
   GenScope = 8,
   GenScopeArray = 9,
   StructVar = 10,
+  StringVar = 12,
+  RealVar = 13,
 };
 
 //===----------------------------------------------------------------------===//
@@ -374,8 +386,13 @@ struct VPIObject {
   /// For signals: the ProcessScheduler signal ID.
   SignalId signalId = 0;
 
-  /// For signals: bit width.
+  /// For signals: logical bit width (user-visible).
   uint32_t width = 0;
+
+  /// For array elements: physical bit width (including 4-state overhead).
+  /// Used for correct extraction from the parent signal's APInt.
+  /// 0 means not set (use arrayInfo->elementPhysWidth instead).
+  uint32_t physWidth = 0;
 
   /// For ports: direction (1=input, 2=output, 3=inout).
   int32_t direction = 0;
@@ -451,6 +468,21 @@ public:
 
   /// Mark a signal name as having integer type (for vpiIntegerVar reporting).
   void addIntegerVar(const std::string &name) { integerVarNames.insert(name); }
+
+  /// Mark a signal name as having string type (for vpiStringVar reporting).
+  void addStringVar(const std::string &name) { stringVarNames.insert(name); }
+
+  /// Mark a signal name as having real type (for vpiRealVar reporting).
+  void addRealVar(const std::string &name) { realVarNames.insert(name); }
+
+  /// Set the command-line arguments for vpi_get_vlog_info.
+  /// This should include plusargs (+key=value) extracted from the CLI.
+  void setVlogArgs(const std::vector<std::string> &args) {
+    vlogArgs = args;
+  }
+
+  /// Set the simulation control interface (for vpi_control finish/stop).
+  void setSimulationControl(SimulationControl *ctrl) { simControl = ctrl; }
 
   /// Build the VPI object hierarchy from the ProcessScheduler's signals.
   /// Call this after all signals are registered in the scheduler.
@@ -651,6 +683,15 @@ private:
   /// Signal names that should be reported as vpiIntegerVar.
   llvm::StringSet<> integerVarNames;
 
+  /// Signal names that should be reported as vpiStringVar.
+  llvm::StringSet<> stringVarNames;
+
+  /// Signal names that should be reported as vpiRealVar.
+  llvm::StringSet<> realVarNames;
+
+  /// Simulation control interface (for vpi_control finish/stop).
+  SimulationControl *simControl = nullptr;
+
   /// ID counters.
   uint32_t nextObjId = 1;
   uint32_t nextCbId = 1;
@@ -670,6 +711,11 @@ private:
 
   /// Loaded VPI libraries.
   std::vector<llvm::sys::DynamicLibrary> loadedLibraries;
+
+  /// Command-line arguments for vpi_get_vlog_info (includes plusargs).
+  std::vector<std::string> vlogArgs;
+  /// C-string pointers for vpi_get_vlog_info (kept in sync with vlogArgs).
+  mutable std::vector<char *> vlogArgvPtrs;
 };
 
 } // namespace sim

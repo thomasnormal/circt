@@ -1950,6 +1950,15 @@ struct SVModuleOpConversion : public OpConversionPattern<SVModuleOp> {
     if (auto vpiStructFields =
             op->getAttrOfType<DictionaryAttr>("vpi.struct_fields"))
       hwModuleOp->setAttr("vpi.struct_fields", vpiStructFields);
+    if (auto vpiUnpackedDepth =
+            op->getAttrOfType<DictionaryAttr>("vpi.unpacked_depth"))
+      hwModuleOp->setAttr("vpi.unpacked_depth", vpiUnpackedDepth);
+    if (auto vpiIntVars = op->getAttrOfType<ArrayAttr>("vpi.integer_vars"))
+      hwModuleOp->setAttr("vpi.integer_vars", vpiIntVars);
+    if (auto vpiStrVars = op->getAttrOfType<ArrayAttr>("vpi.string_vars"))
+      hwModuleOp->setAttr("vpi.string_vars", vpiStrVars);
+    if (auto vpiRealVars = op->getAttrOfType<ArrayAttr>("vpi.real_vars"))
+      hwModuleOp->setAttr("vpi.real_vars", vpiRealVars);
     // Make hw.module have the same visibility as the moore.module.
     // The entry/top level module is public, otherwise is private.
     SymbolTable::setSymbolVisibility(hwModuleOp,
