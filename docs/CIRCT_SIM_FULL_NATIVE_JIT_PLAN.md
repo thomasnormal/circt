@@ -762,6 +762,40 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         `COMPILE_TIMEOUT=360`) compiles in `85s`, but sim still times out
         at `120s` and logs absorbed internal `tx_read_packet` `llhd.drv`
         failure warnings before timeout.
+30. AXI4 blocker closure wave: guard memory-backed `sig.extract` drives against
+    hard-fail on unresolved native pointers
+    (February 18, 2026):
+    - root cause confirmed in bounded AXI4 compile lane:
+      `tx_read_packet` hit `llhd.drv` on `llhd.sig.extract` of a
+      memory-backed `!llhd.ref<i64>` and failed with unresolved memory lookup
+      (`memory_not_found`), causing absorbed internal function failure.
+    - implementation updates in `interpretDrive` (`llhd.sig.extract` path):
+      - treat unresolved memory-backed cast targets as guarded no-op success
+        (aligning with existing non-fatal pointer-store behavior instead of
+        hard-failing process execution),
+      - keep out-of-range extract windows as no-op,
+      - switch memory-backed bit-slice writes from full-parent-width
+        read/modify/write to touched-byte-window updates, avoiding spurious
+        boundary failures on narrow sub-reference writes.
+    - regression coverage added:
+      - `test/Tools/circt-sim/llhd-drv-sig-extract-oob-noop.mlir`
+    - validation:
+      - targeted regressions pass:
+        - `llhd-drv-sig-extract-oob-noop.mlir`
+        - `llhd-drv-memory-backed-struct-array-func-arg.mlir`
+        - `llhd-ref-cast-array-subfield-store-func-arg.mlir`
+      - bounded AXI4 compile lane rerun
+        (`/tmp/avip-circt-sim-20260218-064614`):
+        compile `OK` (`85s`), sim `TIMEOUT` (`180s`), and the previous
+        absorbed `tx_read_packet` `llhd.drv` failure signature is no longer
+        present in `sim_seed_1.log`.
+      - repeat bounded AXI4 rerun
+        (`/tmp/avip-circt-sim-20260218-065533`) also has no
+        `tx_read_packet` absorbed-failure signature and advances beyond the
+        previous 90fs failure point before hitting the same 180s timeout cap.
+      - bounded JTAG compile lane regression check
+        (`/tmp/avip-circt-sim-20260218-065058`):
+        compile `OK` (`28s`), sim `OK` (`40s`), `jit_deopts_total=0`.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

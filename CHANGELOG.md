@@ -70342,8 +70342,42 @@ See CHANGELOG.md on recent progress.
       - targeted `--parallel=4` compile-mode smokes: PASS
         (sequential fallback warning expected while experimental parallel mode
         remains gated)
-      - bounded AVIP compile-lane burn-down (`AVIPS=jtag`, `SEEDS=1`,
-        `CIRCT_SIM=/home/thomas-ahle/circt/build/bin/circt-sim`,
-        `SIM_TIMEOUT=180`, `MAX_WALL_MS=120000`,
-        `--jit-hot-threshold=1 --jit-compile-budget=100000`):
-        `jit_deopts_total` improved `18 -> 14`.
+    - bounded AVIP compile-lane burn-down (`AVIPS=jtag`, `SEEDS=1`,
+      `CIRCT_SIM=/home/thomas-ahle/circt/build/bin/circt-sim`,
+      `SIM_TIMEOUT=180`, `MAX_WALL_MS=120000`,
+      `--jit-hot-threshold=1 --jit-compile-budget=100000`):
+      `jit_deopts_total` improved `18 -> 14`.
+55. `circt-sim` memory-backed `llhd.sig.extract` drive hard-fail guard for AXI4
+    stability
+    (February 18, 2026):
+    - Root cause triage on bounded AXI4 compile lane found absorbed internal
+      function failure in `tx_read_packet` on:
+      `llhd.drv (!llhd.ref<i8>, i8, !llhd.time)` where the destination ref is
+      produced by `llhd.sig.extract` from a memory-backed `!llhd.ref<i64>`.
+    - Updated `interpretDrive` `llhd.sig.extract` memory-backed paths:
+      - unresolved memory-backed cast targets now degrade to guarded no-op
+        (non-fatal) instead of hard failure,
+      - out-of-range extract windows remain guarded no-op,
+      - sub-reference updates now read/modify/write only the touched byte
+        window instead of requiring full parent-width window coverage.
+    - Added regression coverage:
+      - `test/Tools/circt-sim/llhd-drv-sig-extract-oob-noop.mlir`.
+    - Validation:
+      - targeted regressions pass:
+        - `llhd-drv-sig-extract-oob-noop.mlir`
+        - `llhd-drv-memory-backed-struct-array-func-arg.mlir`
+        - `llhd-ref-cast-array-subfield-store-func-arg.mlir`
+      - bounded AXI4 compile lane rerun:
+        `/tmp/avip-circt-sim-20260218-064614`
+        (`compile_status=OK`, `compile_sec=85`, `sim_status=TIMEOUT`,
+        `sim_sec=180`) no longer logs the previous absorbed
+        `tx_read_packet` `Failed in func body` signature.
+      - repeat bounded AXI4 rerun:
+        `/tmp/avip-circt-sim-20260218-065533`
+        also has no absorbed `tx_read_packet` failure signature and advances
+        beyond the previous 90fs failure point before the same 180s timeout
+        cap.
+      - bounded JTAG compile lane regression check:
+        `/tmp/avip-circt-sim-20260218-065058`
+        (`compile_status=OK`, `compile_sec=28`, `sim_status=OK`,
+        `sim_sec=40`, `jit_deopts_total=0`).
