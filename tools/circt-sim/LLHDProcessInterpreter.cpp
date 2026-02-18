@@ -1227,18 +1227,27 @@ void LLHDProcessInterpreter::wakeObjectionZeroWaitersIfReady(int64_t handle) {
     auto stateIt = processStates.find(waiter.procId);
     if (stateIt == processStates.end())
       continue;
+
+    // If this waiter belongs to execute_phase monitor interception, resume via
+    // the poll path so drop-grace logic runs before the phase is completed.
     auto phasePollIt = executePhaseMonitorPollPhase.find(waiter.procId);
-    if (phasePollIt != executePhaseMonitorPollPhase.end()) {
+    auto phaseTokenIt = executePhaseMonitorPollToken.find(waiter.procId);
+    if (phasePollIt != executePhaseMonitorPollPhase.end() &&
+        phaseTokenIt != executePhaseMonitorPollToken.end()) {
       uint64_t phaseAddr = phasePollIt->second;
-      auto childIt = masterPhaseProcessChild.find(phaseAddr);
-      if (childIt != masterPhaseProcessChild.end()) {
-        killProcessTree(childIt->second);
-        masterPhaseProcessChild.erase(childIt);
-      }
+      uint64_t pollToken = phaseTokenIt->second;
+      scheduler.getEventScheduler().schedule(
+          scheduler.getCurrentTime().nextDelta(), SchedulingRegion::Active,
+          Event([this, procId = waiter.procId, phaseAddr, pollToken]() {
+            pollExecutePhaseMonitorFork(procId, phaseAddr, pollToken);
+          }));
+      continue;
     }
+
     executePhaseMonitorPollPhase.erase(waiter.procId);
     executePhaseMonitorPollToken.erase(waiter.procId);
     executePhaseYieldCounts.erase(waiter.procId);
+    executePhaseSawPositiveObjection.erase(waiter.procId);
     auto &state = stateIt->second;
     state.waiting = false;
     if (waiter.retryOp)
@@ -8534,16 +8543,57 @@ void LLHDProcessInterpreter::applyInterfaceTriStateRules(SignalId triggerSigId) 
 }
 
 void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
+  static bool traceFinalize = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_FINALIZE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto stateToString = [](ProcessState state) -> const char * {
+    switch (state) {
+    case ProcessState::Uninitialized:
+      return "Uninitialized";
+    case ProcessState::Ready:
+      return "Ready";
+    case ProcessState::Running:
+      return "Running";
+    case ProcessState::Waiting:
+      return "Waiting";
+    case ProcessState::Suspended:
+      return "Suspended";
+    case ProcessState::Terminated:
+      return "Terminated";
+    }
+    return "Unknown";
+  };
+  auto procStateItForTrace = processStates.find(procId);
+  if (traceFinalize) {
+    auto *traceProc = scheduler.getProcess(procId);
+    std::string procName = traceProc ? traceProc->getName() : "<null>";
+    const char *schedState =
+        traceProc ? stateToString(traceProc->getState()) : "<none>";
+    llvm::StringRef curFunc =
+        procStateItForTrace != processStates.end()
+            ? procStateItForTrace->second.currentFuncName
+            : llvm::StringRef("-");
+    llvm::errs() << "[PROC-FINALIZE] proc=" << procId << " name=" << procName
+                 << " killed=" << (killed ? 1 : 0)
+                 << " sched_state=" << schedState << " func=" << curFunc
+                 << "\n";
+  }
+
   if (auto *proc = scheduler.getProcess(procId)) {
     if (proc->getState() == ProcessState::Terminated) {
       removeObjectionZeroWaiter(procId);
       removeQueueNotEmptyWaiter(procId);
       memoryEventWaiters.erase(procId);
       executePhaseYieldCounts.erase(procId);
+      executePhaseSawPositiveObjection.erase(procId);
       executePhaseMonitorPollPhase.erase(procId);
       executePhaseMonitorPollToken.erase(procId);
       executePhaseBlockingPhaseMap.erase(procId);
       currentExecutingPhaseAddr.erase(procId);
+      joinNoneDisableForkResumeFork.erase(procId);
+      joinNoneDisableForkResumeToken.erase(procId);
+      joinNoneDisableForkResumePollCount.erase(procId);
       notifyProcessAwaiters(procId);
       return;
     }
@@ -8556,10 +8606,14 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     removeObjectionZeroWaiter(procId);
     memoryEventWaiters.erase(procId);
     executePhaseYieldCounts.erase(procId);
+    executePhaseSawPositiveObjection.erase(procId);
     executePhaseMonitorPollPhase.erase(procId);
     executePhaseMonitorPollToken.erase(procId);
     executePhaseBlockingPhaseMap.erase(procId);
     currentExecutingPhaseAddr.erase(procId);
+    joinNoneDisableForkResumeFork.erase(procId);
+    joinNoneDisableForkResumeToken.erase(procId);
+    joinNoneDisableForkResumePollCount.erase(procId);
     if (it->second.waitConditionQueueAddr != 0) {
       removeQueueNotEmptyWaiter(procId);
       it->second.waitConditionQueueAddr = 0;
@@ -16648,6 +16702,39 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               }
               block->initialized = !driveVal.isX();
 
+              static bool traceI3CFieldDrivesMemStructScalar = []() {
+                const char *env =
+                    std::getenv("CIRCT_SIM_TRACE_I3C_FIELD_DRIVES");
+                return env && env[0] != '\0' && env[0] != '0';
+              }();
+              if (traceI3CFieldDrivesMemStructScalar && !extractChain.empty()) {
+                StringRef field = extractChain.front().getField();
+                if (field == "writeData" || field == "readData" ||
+                    field == "writeDataStatus" || field == "readDataStatus" ||
+                    field == "no_of_i3c_bits_transfer") {
+                  llvm::SmallString<64> bits;
+                  if (driveVal.isX())
+                    bits = "X";
+                  else
+                    driveVal.getAPInt().toString(bits, 16, false);
+                  llvm::StringRef procName = "<unknown>";
+                  if (const Process *p = scheduler.getProcess(procId))
+                    procName = p->getName();
+                  llvm::StringRef funcName = "<unknown>";
+                  if (auto f = driveOp->getParentOfType<func::FuncOp>())
+                    funcName = f.getSymName();
+                  llvm::errs() << "[I3C-FIELD-DRV-MEM-STRUCT] proc=" << procId
+                               << " name='" << procName << "'"
+                               << " func='" << funcName << "'"
+                               << " field=" << field
+                               << " bitOffset=" << bitOffset
+                               << " width=" << fieldWidth << " val=0x"
+                               << bits << " t="
+                               << scheduler.getCurrentTime().realTime << " d="
+                               << scheduler.getCurrentTime().deltaStep << "\n";
+                }
+              }
+
               LLVM_DEBUG(llvm::dbgs()
                          << "  Drive to struct field in alloca at offset "
                          << bitOffset << " width " << fieldWidth << "\n");
@@ -16740,6 +16827,39 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 }
               }
               block->initialized = !driveVal.isX();
+
+              static bool traceI3CFieldDrivesMemStructScalar = []() {
+                const char *env =
+                    std::getenv("CIRCT_SIM_TRACE_I3C_FIELD_DRIVES");
+                return env && env[0] != '\0' && env[0] != '0';
+              }();
+              if (traceI3CFieldDrivesMemStructScalar && !extractChain.empty()) {
+                StringRef field = extractChain.front().getField();
+                if (field == "writeData" || field == "readData" ||
+                    field == "writeDataStatus" || field == "readDataStatus" ||
+                    field == "no_of_i3c_bits_transfer") {
+                  llvm::SmallString<64> bits;
+                  if (driveVal.isX())
+                    bits = "X";
+                  else
+                    driveVal.getAPInt().toString(bits, 16, false);
+                  llvm::StringRef procName = "<unknown>";
+                  if (const Process *p = scheduler.getProcess(procId))
+                    procName = p->getName();
+                  llvm::StringRef funcName = "<unknown>";
+                  if (auto f = driveOp->getParentOfType<func::FuncOp>())
+                    funcName = f.getSymName();
+                  llvm::errs() << "[I3C-FIELD-DRV-MEM-STRUCT] proc=" << procId
+                               << " name='" << procName << "'"
+                               << " func='" << funcName << "'"
+                               << " field=" << field
+                               << " bitOffset=" << bitOffset
+                               << " width=" << fieldWidth << " val=0x"
+                               << bits << " t="
+                               << scheduler.getCurrentTime().realTime << " d="
+                               << scheduler.getCurrentTime().deltaStep << "\n";
+                }
+              }
 
               LLVM_DEBUG(llvm::dbgs()
                          << "  Drive to struct field in memory-backed ref at "
@@ -16939,6 +17059,34 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                   }
                   block->initialized = !driveVal.isX();
 
+                  static bool traceI3CFieldDrivesMem = []() {
+                    const char *env =
+                        std::getenv("CIRCT_SIM_TRACE_I3C_FIELD_DRIVES");
+                    return env && env[0] != '\0' && env[0] != '0';
+                  }();
+                  if (traceI3CFieldDrivesMem) {
+                    llvm::SmallString<64> bits;
+                    if (driveVal.isX())
+                      bits = "X";
+                    else
+                      driveVal.getAPInt().toString(bits, 16, false);
+                    llvm::StringRef procName = "<unknown>";
+                    if (const Process *p = scheduler.getProcess(procId))
+                      procName = p->getName();
+                    llvm::StringRef funcName = "<unknown>";
+                    if (auto f = driveOp->getParentOfType<func::FuncOp>())
+                      funcName = f.getSymName();
+                    llvm::errs() << "[I3C-FIELD-DRV-MEM] proc=" << procId
+                                 << " name='" << procName << "'"
+                                 << " func='" << funcName << "'"
+                                 << " idx=" << index
+                                 << " elemOffset=" << elementOffset
+                                 << " val=0x" << bits << " t="
+                                 << scheduler.getCurrentTime().realTime
+                                 << " d=" << scheduler.getCurrentTime().deltaStep
+                                 << "\n";
+                  }
+
                   LLVM_DEBUG(llvm::dbgs()
                              << "  Drive to memory-backed array[" << index
                              << "] at offset " << elementOffset
@@ -17063,6 +17211,42 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                     }
                     block->initialized = !driveVal.isX();
 
+                    static bool traceI3CFieldDrivesMemStruct = []() {
+                      const char *env =
+                          std::getenv("CIRCT_SIM_TRACE_I3C_FIELD_DRIVES");
+                      return env && env[0] != '\0' && env[0] != '0';
+                    }();
+                    if (traceI3CFieldDrivesMemStruct &&
+                        !structExtractChain.empty()) {
+                      StringRef field = structExtractChain.front().getField();
+                      if (field == "writeData" || field == "readData" ||
+                          field == "writeDataStatus" ||
+                          field == "readDataStatus") {
+                        llvm::SmallString<64> bits;
+                        if (driveVal.isX())
+                          bits = "X";
+                        else
+                          driveVal.getAPInt().toString(bits, 16, false);
+                        llvm::StringRef procName = "<unknown>";
+                        if (const Process *p = scheduler.getProcess(procId))
+                          procName = p->getName();
+                        llvm::StringRef funcName = "<unknown>";
+                        if (auto f = driveOp->getParentOfType<func::FuncOp>())
+                          funcName = f.getSymName();
+                        llvm::errs() << "[I3C-FIELD-DRV-MEM-STRUCT] proc="
+                                     << procId << " name='" << procName << "'"
+                                     << " func='" << funcName << "'"
+                                     << " field=" << field
+                                     << " idx=" << idx
+                                     << " bitOffset=" << totalBitOffset
+                                     << " val=0x" << bits << " t="
+                                     << scheduler.getCurrentTime().realTime
+                                     << " d="
+                                     << scheduler.getCurrentTime().deltaStep
+                                     << "\n";
+                      }
+                    }
+
                     LLVM_DEBUG(
                         llvm::dbgs()
                         << "  Drive to array[" << idx
@@ -17182,7 +17366,15 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               bits = "X";
             else
               driveVal.getAPInt().toString(bits, 16, false);
+            llvm::StringRef procName = "<unknown>";
+            if (const Process *p = scheduler.getProcess(procId))
+              procName = p->getName();
+            llvm::StringRef funcName = "<unknown>";
+            if (auto f = driveOp->getParentOfType<func::FuncOp>())
+              funcName = f.getSymName();
             llvm::errs() << "[I3C-FIELD-DRV] proc=" << procId
+                         << " name='" << procName << "'"
+                         << " func='" << funcName << "'"
                          << " field=" << field << " idx=" << index
                          << " bitOffset=" << bitOffset << " val=0x" << bits
                          << " t=" << scheduler.getCurrentTime().realTime
@@ -22145,6 +22337,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       if (haltCheckState->halted || haltCheckState->waiting) {
         LLVM_DEBUG(llvm::dbgs() << "  Process halted/waiting during function body '"
                                 << funcOp.getName() << "' - saving call stack frame\n");
+        static bool traceI3CCallStackSave = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_CALLSTACK");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
 
         // If waiting (not halted), save the call stack frame so we can resume
         // from the NEXT operation after the one that caused the wait.
@@ -22215,6 +22411,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
               CallStackFrame frame(funcOp, currentBlock, nextOpIt, callOp);
               frame.args.assign(args.begin(), args.end());
               haltCheckState->callStack.push_back(std::move(frame));
+              if (traceI3CCallStackSave &&
+                  (funcOp.getName().contains("i3c_target_monitor_bfm::") ||
+                   funcOp.getName().contains("i3c_target_driver_bfm::") ||
+                   funcOp.getName().contains("i3c_controller_monitor_bfm::") ||
+                   funcOp.getName().contains("i3c_controller_driver_bfm::"))) {
+                llvm::errs() << "[I3C-CS-SAVE] proc=" << procId
+                             << " func=" << funcOp.getName()
+                             << " block_ops=" << currentBlock->getOperations().size()
+                             << " saved_frames="
+                             << haltCheckState->callStack.size() << "\n";
+              }
               LLVM_DEBUG(llvm::dbgs()
                          << "    Saved call frame for function '"
                          << funcOp.getName() << "' with " << args.size()
@@ -23495,6 +23702,7 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
     executePhaseMonitorPollPhase.erase(procId);
     executePhaseMonitorPollToken.erase(procId);
     executePhaseYieldCounts.erase(procId);
+    executePhaseSawPositiveObjection.erase(procId);
     return;
   }
   auto tokenIt = executePhaseMonitorPollToken.find(procId);
@@ -23508,6 +23716,7 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
     executePhaseMonitorPollPhase.erase(procId);
     executePhaseMonitorPollToken.erase(procId);
     executePhaseYieldCounts.erase(procId);
+    executePhaseSawPositiveObjection.erase(procId);
     return;
   }
 
@@ -23529,25 +23738,38 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
   }
 
   auto &yieldCount = executePhaseYieldCounts[procId];
+  auto &sawPositiveObjection = executePhaseSawPositiveObjection[procId];
+
+  if (count > 0) {
+    sawPositiveObjection = true;
+    yieldCount = 0;
+    scheduleExecutePhaseMonitorForkPoll(procId, phaseAddr, pollToken, count);
+    return;
+  }
+
+  // Keep polling while the master child is alive. Before any objection raise,
+  // use a long startup grace to avoid premature completion races. After at
+  // least one positive objection count has been observed, switch to a short
+  // drop grace and then complete even if monitor threads keep running.
+  constexpr int kObjectionStartupGrace = 5000;
   constexpr int kObjectionDropGrace = 100;
-  bool shouldKeepPolling = (count > 0) ||
-                           (count <= 0 && masterChildAlive &&
-                            yieldCount < kObjectionDropGrace) ||
-                           (count <= 0 && yieldCount < 10);
+  constexpr int kNoChildTailGrace = 10;
+  int graceLimit = sawPositiveObjection ? kObjectionDropGrace
+                                        : kObjectionStartupGrace;
+  bool shouldKeepPolling =
+      masterChildAlive ? (yieldCount < graceLimit) : (yieldCount < kNoChildTailGrace);
   if (shouldKeepPolling) {
-    if (count > 0)
-      yieldCount = 0;
-    else
-      ++yieldCount;
+    ++yieldCount;
     scheduleExecutePhaseMonitorForkPoll(procId, phaseAddr, pollToken, count);
     return;
   }
 
   yieldCount = 0;
+  executePhaseSawPositiveObjection.erase(procId);
   executePhaseMonitorPollPhase.erase(procId);
   executePhaseMonitorPollToken.erase(procId);
 
-  // Objections are at 0 and master child is done — phase is complete.
+  // Objection polling grace is exhausted — consider the phase complete.
   // Kill all processes spawned during this phase (monitors with forever
   // loops, scoreboards waiting on events, etc.). Without this cleanup,
   // these tasks would run indefinitely and block subsequent phases.
@@ -23561,6 +23783,108 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
   auto &state = stateIt->second;
   state.waiting = false;
   scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+}
+
+void LLHDProcessInterpreter::pollJoinNoneDisableForkResume(
+    ProcessId procId, ForkId forkId, uint64_t token) {
+  auto procStateToString = [](ProcessState state) -> const char * {
+    switch (state) {
+    case ProcessState::Uninitialized:
+      return "Uninitialized";
+    case ProcessState::Ready:
+      return "Ready";
+    case ProcessState::Running:
+      return "Running";
+    case ProcessState::Waiting:
+      return "Waiting";
+    case ProcessState::Suspended:
+      return "Suspended";
+    case ProcessState::Terminated:
+      return "Terminated";
+    }
+    return "Unknown";
+  };
+  auto tokenIt = joinNoneDisableForkResumeToken.find(procId);
+  auto forkIt = joinNoneDisableForkResumeFork.find(procId);
+  if (tokenIt == joinNoneDisableForkResumeToken.end() ||
+      forkIt == joinNoneDisableForkResumeFork.end())
+    return;
+  if (tokenIt->second != token || forkIt->second != forkId)
+    return;
+
+  auto stateIt = processStates.find(procId);
+  if (stateIt == processStates.end() || stateIt->second.halted) {
+    joinNoneDisableForkResumeFork.erase(procId);
+    joinNoneDisableForkResumeToken.erase(procId);
+    joinNoneDisableForkResumePollCount.erase(procId);
+    return;
+  }
+
+  auto &pollCount = joinNoneDisableForkResumePollCount[procId];
+  bool waitingForChildReady = false;
+  ProcessId pendingChildId = InvalidProcessId;
+  if (const auto *group = forkJoinManager.getForkGroup(forkId)) {
+    for (ProcessId childId : group->childProcesses) {
+      auto childStateIt = processStates.find(childId);
+      if (childStateIt == processStates.end())
+        continue;
+      if (childStateIt->second.halted)
+        continue;
+      Process *childProc = scheduler.getProcess(childId);
+      if (traceForkJoinEnabled && pollCount == 0) {
+        llvm::errs() << "[JOIN-NONE-CHECK] parent=" << procId
+                     << " fork=" << forkId << " child=" << childId
+                     << " sched="
+                     << (childProc ? procStateToString(childProc->getState())
+                                   : "<none>")
+                     << " waiting=" << (childStateIt->second.waiting ? 1 : 0)
+                     << " halted=" << (childStateIt->second.halted ? 1 : 0)
+                     << " steps=" << childStateIt->second.totalSteps << "\n";
+      }
+      if (childProc) {
+        if (childProc->getState() == ProcessState::Ready) {
+          waitingForChildReady = true;
+          pendingChildId = childId;
+          break;
+        }
+      }
+      if (!childStateIt->second.waiting && childStateIt->second.totalSteps == 0) {
+        waitingForChildReady = true;
+        pendingChildId = childId;
+        break;
+      }
+    }
+  }
+
+  constexpr unsigned kMaxJoinNoneDisableForkResumePolls = 64;
+  if (waitingForChildReady && pollCount < kMaxJoinNoneDisableForkResumePolls) {
+    ++pollCount;
+    if (traceForkJoinEnabled && pollCount <= 4)
+      llvm::errs() << "[JOIN-NONE-WAIT] parent=" << procId
+                   << " fork=" << forkId << " poll=" << pollCount
+                   << " child=" << pendingChildId << "\n";
+    scheduler.getEventScheduler().schedule(
+        scheduler.getCurrentTime().nextDelta(), SchedulingRegion::Active,
+        Event([this, procId, forkId, token]() {
+          pollJoinNoneDisableForkResume(procId, forkId, token);
+        }));
+    return;
+  }
+
+  if (traceForkJoinEnabled) {
+    llvm::errs() << "[JOIN-NONE-RESUME] parent=" << procId
+                 << " fork=" << forkId << " polls=" << pollCount
+                 << " waitingForChildReady=" << (waitingForChildReady ? 1 : 0)
+                 << "\n";
+  }
+
+  joinNoneDisableForkResumeFork.erase(procId);
+  joinNoneDisableForkResumeToken.erase(procId);
+  joinNoneDisableForkResumePollCount.erase(procId);
+
+  auto &state = stateIt->second;
+  state.waiting = false;
+  scheduler.resumeProcess(procId);
 }
 
 //===----------------------------------------------------------------------===//
@@ -23724,25 +24048,36 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
       if (childIt != masterPhaseProcessChild.end()) {
         ProcessId childProcId = childIt->second;
         auto childStateIt = processStates.find(childProcId);
-        if (childStateIt != processStates.end()) {
-          // Child is alive if it's not halted
+        if (childStateIt != processStates.end())
+          // Child is alive if it's not halted.
           masterChildAlive = !childStateIt->second.halted;
-        }
       }
 
       auto &yieldCount = executePhaseYieldCounts[procId];
-      // After objection count drops to 0, give a grace period (100 yields)
-      // for any last-moment objections, then consider the phase done even if
-      // the master child is still alive (it has forever loops in monitors).
+      auto &sawPositiveObjection = executePhaseSawPositiveObjection[procId];
+
+      // Keep polling while the master child is alive. Before the first
+      // observed objection raise, use a longer startup grace to avoid
+      // premature completion races. After objections have gone positive once,
+      // use a short drop grace and then complete.
+      constexpr int kObjectionStartupGrace = 5000;
       constexpr int kObjectionDropGrace = 100;
-      bool shouldKeepPolling = (count > 0) ||
-                               (count <= 0 && masterChildAlive &&
-                                yieldCount < kObjectionDropGrace) ||
-                               (count <= 0 && yieldCount < 10);
+      constexpr int kNoChildTailGrace = 10;
+
+      bool shouldKeepPolling = false;
+      if (count > 0) {
+        sawPositiveObjection = true;
+        yieldCount = 0;
+        shouldKeepPolling = true;
+      } else {
+        int graceLimit = sawPositiveObjection ? kObjectionDropGrace
+                                              : kObjectionStartupGrace;
+        shouldKeepPolling = masterChildAlive
+                                ? (yieldCount < graceLimit)
+                                : (yieldCount < kNoChildTailGrace);
+      }
       if (shouldKeepPolling) {
-        if (count > 0)
-          yieldCount = 0;
-        else
+        if (count <= 0)
           ++yieldCount;
 
         auto &state = processStates[procId];
@@ -23784,11 +24119,12 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
         return success();
       }
 
-      // Objections are at 0 and master child is done — phase is complete.
+      // Objection polling grace is exhausted — consider the phase complete.
       // Kill all processes spawned during this phase (monitors with forever
       // loops, scoreboards waiting on events, etc.). Without this cleanup,
       // these tasks would run indefinitely and block subsequent phases.
       yieldCount = 0;
+      executePhaseSawPositiveObjection.erase(procId);
       auto childIt2 = masterPhaseProcessChild.find(phaseAddr);
       if (childIt2 != masterPhaseProcessChild.end()) {
         ProcessId masterChildId = childIt2->second;
@@ -23810,12 +24146,18 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
     auto curPhaseIt = currentExecutingPhaseAddr.find(procId);
     if (curPhaseIt != currentExecutingPhaseAddr.end())
       curPhaseAddr = curPhaseIt->second;
+    llvm::StringRef parentFunc = "-";
+    auto parentStateIt = processStates.find(procId);
+    if (parentStateIt != processStates.end() &&
+        !parentStateIt->second.currentFuncName.empty())
+      parentFunc = parentStateIt->second.currentFuncName;
     auto nameAttr = forkOp->getAttrOfType<mlir::StringAttr>("name");
     llvm::errs() << "[FORK-CREATE] parent=" << procId << " fork=" << forkId
                  << " join=" << joinTypeToString(joinType)
                  << " branches=" << forkOp.getBranches().size()
                  << " phase=0x" << llvm::format_hex(curPhaseAddr, 16)
-                 << " shapeExec=" << (isExecutePhaseMonitorForkShape ? 1 : 0);
+                 << " shapeExec=" << (isExecutePhaseMonitorForkShape ? 1 : 0)
+                 << " func=" << parentFunc;
     if (nameAttr && !nameAttr.getValue().empty())
       llvm::errs() << " name=\"" << nameAttr.getValue() << "\"";
     llvm::errs() << "\n";
@@ -23921,9 +24263,49 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
                             << " for branch " << idx << "\n");
   }
   // Handle different join types
+  bool hasNearbyDisableFork = false;
+  {
+    auto it = mlir::Block::iterator(forkOp.getOperation());
+    auto end = forkOp->getBlock()->end();
+    for (int lookahead = 0; lookahead < 4 && it != end; ++lookahead) {
+      ++it;
+      if (it == end)
+        break;
+      if (isa<sim::SimDisableForkOp>(*it)) {
+        hasNearbyDisableFork = true;
+        break;
+      }
+    }
+  }
+
   switch (joinType) {
   case ForkJoinType::JoinNone:
-    // Parent continues immediately - no waiting
+    // Parent continues immediately, but for the common
+    // fork ... join_none ; ... ; disable fork pattern we defer parent resume
+    // until newly spawned children have started (or a bounded guard expires).
+    if (hasNearbyDisableFork) {
+      auto &state = processStates[procId];
+      state.waiting = true;
+      if (Process *parentProc = scheduler.getProcess(procId))
+        parentProc->setState(ProcessState::Waiting);
+      joinNoneDisableForkResumeFork[procId] = forkId;
+      uint64_t token = ++joinNoneDisableForkResumeToken[procId];
+      joinNoneDisableForkResumePollCount[procId] = 0;
+      if (traceForkJoinEnabled)
+        llvm::errs() << "[JOIN-NONE-YIELD] parent=" << procId
+                     << " fork=" << forkId
+                     << " mode=wait-child-start\n";
+      scheduler.getEventScheduler().schedule(
+          scheduler.getCurrentTime().nextDelta(), SchedulingRegion::Active,
+          Event([this, procId, forkId, token]() {
+            pollJoinNoneDisableForkResume(procId, forkId, token);
+          }));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "    join_none: deferred parent until child start before "
+                    "disable_fork path\n");
+      return success();
+    }
+    // Default join_none: parent continues immediately.
     LLVM_DEBUG(llvm::dbgs() << "    join_none: parent continues immediately\n");
     return success();
 
@@ -24111,14 +24493,62 @@ LogicalResult LLHDProcessInterpreter::interpretSimWaitFork(
 LogicalResult LLHDProcessInterpreter::interpretSimDisableFork(
     ProcessId procId, sim::SimDisableForkOp disableForkOp) {
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.disable_fork\n");
+  static bool traceDisableFork = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_DISABLE_FORK");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto stateToString = [](ProcessState state) -> const char * {
+    switch (state) {
+    case ProcessState::Uninitialized:
+      return "Uninitialized";
+    case ProcessState::Ready:
+      return "Ready";
+    case ProcessState::Running:
+      return "Running";
+    case ProcessState::Waiting:
+      return "Waiting";
+    case ProcessState::Suspended:
+      return "Suspended";
+    case ProcessState::Terminated:
+      return "Terminated";
+    }
+    return "Unknown";
+  };
 
   auto forkIds = forkJoinManager.getForksForParent(procId);
+  if (traceDisableFork)
+    llvm::errs() << "[DISABLE-FORK] parent=" << procId
+                 << " fork_count=" << forkIds.size() << "\n";
 
   // Disable all fork groups created by this process
   for (ForkId forkId : forkIds) {
     if (auto *group = forkJoinManager.getForkGroup(forkId)) {
-      for (ProcessId childId : group->childProcesses)
+      for (ProcessId childId : group->childProcesses) {
+        if (traceDisableFork) {
+          auto *childProc = scheduler.getProcess(childId);
+          auto childStateIt = processStates.find(childId);
+          llvm::StringRef childFunc = childStateIt != processStates.end()
+                                          ? childStateIt->second.currentFuncName
+                                          : llvm::StringRef("-");
+          bool halted =
+              childStateIt != processStates.end() && childStateIt->second.halted;
+          bool waiting =
+              childStateIt != processStates.end() && childStateIt->second.waiting;
+          uint64_t steps = childStateIt != processStates.end()
+                               ? childStateIt->second.totalSteps
+                               : 0;
+          llvm::errs() << "  [DISABLE-FORK-CHILD] parent=" << procId
+                       << " fork=" << forkId << " child=" << childId
+                       << " state="
+                       << (childProc ? stateToString(childProc->getState())
+                                     : "<none>")
+                       << " waiting=" << (waiting ? 1 : 0)
+                       << " halted=" << (halted ? 1 : 0)
+                       << " steps=" << steps
+                       << " func=" << childFunc << "\n";
+        }
         finalizeProcess(childId, /*killed=*/true);
+      }
     }
   }
 
@@ -24181,6 +24611,35 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     const char *env = std::getenv("CIRCT_SIM_TRACE_WAIT_EVENT_CACHE");
     return env && env[0] != '\0' && env[0] != '0';
   }();
+  static bool traceWaitEventNoop = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_WAIT_EVENT_NOOP");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto formatWaitListForTrace = [&](const SensitivityList &list) {
+    llvm::SmallString<256> out;
+    out += "[";
+    unsigned count = 0;
+    for (const auto &entry : list.getEntries()) {
+      if (count)
+        out += ",";
+      ++count;
+      out += "sig=";
+      out += llvm::utostr(entry.signalId);
+      out += ":";
+      out += getEdgeTypeName(entry.edge);
+      auto nameIt = signalIdToName.find(entry.signalId);
+      if (nameIt != signalIdToName.end()) {
+        out += ":";
+        out += nameIt->second;
+      }
+      if (count >= 4 && list.size() > count) {
+        out += ",...";
+        break;
+      }
+    }
+    out += "]";
+    return out;
+  };
 
   // Reuse cached signal sensitivity for hot wait_event loops.
   // This avoids repeatedly walking the detect_event body and tracing dynamic
@@ -24201,6 +24660,8 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
                      << llvm::format_hex(reinterpret_cast<uintptr_t>(
                                              waitEventOp.getOperation()),
                                          18)
+                     << " list="
+                     << formatWaitListForTrace(cachedWaitList)
                      << "\n";
       }
       return success();
@@ -24514,6 +24975,19 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 
   // If we found signals to wait on, suspend the process
   if (!waitList.empty()) {
+    if (!interfaceFieldPropagation.empty()) {
+      SensitivityList expanded;
+      for (const auto &entry : waitList.getEntries()) {
+        expanded.addEdge(entry.signalId, entry.edge);
+        auto propIt = interfaceFieldPropagation.find(entry.signalId);
+        if (propIt != interfaceFieldPropagation.end()) {
+          for (SignalId propagatedSigId : propIt->second)
+            expanded.addEdge(propagatedSigId, entry.edge);
+        }
+      }
+      waitList = std::move(expanded);
+    }
+
     bool insertedWaitCache = false;
     if (cacheIt == state.waitSensitivityCache.end()) {
       auto inserted = state.waitSensitivityCache.try_emplace(
@@ -24534,6 +25008,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
                    << llvm::format_hex(
                           reinterpret_cast<uintptr_t>(waitEventOp.getOperation()),
                           18)
+                   << " list=" << formatWaitListForTrace(waitList)
                    << "\n";
     }
     // [WAIT-DIAG] diagnostic removed
@@ -24731,6 +25206,18 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
       // llvm.store writes to memory, and will wake this process if needed
     } else {
       // No signals and no memory events found - single delta cycle wait
+      if (traceWaitEventNoop) {
+        auto *proc = scheduler.getProcess(procId);
+        llvm::errs() << "[WAIT-EVENT-NOOP] proc=" << procId;
+        if (proc)
+          llvm::errs() << " name=" << proc->getName();
+        llvm::errs() << " func=" << state.currentFuncName
+                     << " op=0x"
+                     << llvm::format_hex(reinterpret_cast<uintptr_t>(
+                                             waitEventOp.getOperation()),
+                                         18)
+                     << "\n";
+      }
       LLVM_DEBUG({
         StringRef funcName4 = state.currentFuncName;
         if (funcName4.contains("_bfm::") || funcName4.contains("Bfm::")) {
@@ -25336,6 +25823,33 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
 
 LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
                                                          LLVM::LoadOp loadOp) {
+  auto isAllocaDerivedPtr = [&](Value ptr) {
+    llvm::SmallVector<Value, 8> worklist;
+    llvm::SmallDenseSet<Value, 8> visited;
+    worklist.push_back(ptr);
+    while (!worklist.empty()) {
+      Value current = worklist.pop_back_val();
+      if (!visited.insert(current).second)
+        continue;
+      if (current.getDefiningOp<LLVM::AllocaOp>())
+        return true;
+      if (auto gepOp = current.getDefiningOp<LLVM::GEPOp>()) {
+        worklist.push_back(gepOp.getBase());
+        continue;
+      }
+      if (auto bitcastOp = current.getDefiningOp<LLVM::BitcastOp>()) {
+        worklist.push_back(bitcastOp.getArg());
+        continue;
+      }
+      if (auto castOp =
+              current.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+        for (Value input : castOp.getInputs())
+          worklist.push_back(input);
+      }
+    }
+    return false;
+  };
+
   auto convertFourStateToLLVMStructLayout =
       [&](InterpretedValue signalVal, SignalId sourceSigId,
           Type targetLLVMType) -> InterpretedValue {
@@ -25436,12 +25950,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
   Type resultType = loadOp.getType();
   unsigned bitWidth = getTypeWidth(resultType);
   unsigned loadSize = getLLVMTypeSize(resultType);
+  bool addrIsAllocaDerived = isAllocaDerivedPtr(loadOp.getAddr());
 
   // Check if this load targets an interface field that has a shadow signal.
   // BFM tasks read interface ports via llvm.load on the struct, but the
   // signal value is driven by the DUT and only exists in the signal domain.
   // Return the signal value directly so BFMs see live hardware values.
-  if (!ptrVal.isX() && !interfaceFieldSignals.empty()) {
+  if (!ptrVal.isX() && !interfaceFieldSignals.empty() &&
+      !addrIsAllocaDerived) {
     uint64_t loadAddr = ptrVal.getUInt64();
     auto fieldIt = interfaceFieldSignals.find(loadAddr);
     if (fieldIt != interfaceFieldSignals.end()) {
@@ -25748,6 +26264,33 @@ normal_memory_load:
 
 LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     ProcessId procId, LLVM::StoreOp storeOp) {
+  auto isAllocaDerivedPtr = [&](Value ptr) {
+    llvm::SmallVector<Value, 8> worklist;
+    llvm::SmallDenseSet<Value, 8> visited;
+    worklist.push_back(ptr);
+    while (!worklist.empty()) {
+      Value current = worklist.pop_back_val();
+      if (!visited.insert(current).second)
+        continue;
+      if (current.getDefiningOp<LLVM::AllocaOp>())
+        return true;
+      if (auto gepOp = current.getDefiningOp<LLVM::GEPOp>()) {
+        worklist.push_back(gepOp.getBase());
+        continue;
+      }
+      if (auto bitcastOp = current.getDefiningOp<LLVM::BitcastOp>()) {
+        worklist.push_back(bitcastOp.getArg());
+        continue;
+      }
+      if (auto castOp =
+              current.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+        for (Value input : castOp.getInputs())
+          worklist.push_back(input);
+      }
+    }
+    return false;
+  };
+
   // If this is a store to an llhd.ref converted to an LLVM pointer,
   // treat it as a signal drive instead of a memory write.
   if (SignalId sigId = resolveSignalId(storeOp.getAddr())) {
@@ -25797,6 +26340,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
   // Signal not resolved - going to memory
   // Get the pointer value first
   InterpretedValue ptrVal = getValue(procId, storeOp.getAddr());
+  bool addrIsAllocaDerived = isAllocaDerivedPtr(storeOp.getAddr());
 
   // Find the memory block for this pointer
   MemoryBlock *block = findMemoryBlock(procId, storeOp.getAddr());
@@ -25869,7 +26413,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
   bool suppressTriStateMirrorStoreWrite = false;
   SignalId triStateMirrorFieldSigId = 0;
   SignalId triStateMirrorSrcSigId = 0;
-  if (!ptrVal.isX() && !interfaceFieldSignals.empty()) {
+  if (!ptrVal.isX() && !interfaceFieldSignals.empty() &&
+      !addrIsAllocaDerived) {
     uint64_t storeAddr = ptrVal.getUInt64();
     auto fieldIt = interfaceFieldSignals.find(storeAddr);
     if (fieldIt != interfaceFieldSignals.end()) {
@@ -26059,7 +26604,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
   // Drive interface field shadow signals. When a store targets an address
   // within a known interface struct, also drive the corresponding shadow
   // signal so that processes sensitive to the interface field wake up.
-  if (!ptrVal.isX() && !interfaceFieldSignals.empty()) {
+  if (!ptrVal.isX() && !interfaceFieldSignals.empty() &&
+      !addrIsAllocaDerived) {
     static bool traceInterfaceStore = []() {
       const char *env = std::getenv("CIRCT_SIM_TRACE_IFACE_STORE");
       return env && env[0] != '\0' && env[0] != '0';

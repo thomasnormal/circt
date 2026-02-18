@@ -1261,6 +1261,8 @@ private:
                                            uint64_t phaseAddr,
                                            uint64_t pollToken,
                                            int64_t objectionCount);
+  void pollJoinNoneDisableForkResume(ProcessId procId, ForkId forkId,
+                                     uint64_t token);
 
   /// Interpret a sim.fork operation.
   /// Creates child processes for each branch region and schedules them.
@@ -2206,10 +2208,18 @@ private:
 
   /// Per-process yield counter for execute_phase objection polling grace period.
   std::map<ProcessId, int> executePhaseYieldCounts;
+  /// Tracks whether a process has observed a positive objection count for
+  /// the currently monitored execute_phase.
+  std::map<ProcessId, bool> executePhaseSawPositiveObjection;
 
   /// Active execute_phase monitor-fork poll state keyed by process.
   std::map<ProcessId, uint64_t> executePhaseMonitorPollPhase;
   std::map<ProcessId, uint64_t> executePhaseMonitorPollToken;
+
+  /// join_none + nearby disable_fork parent-resume gate state.
+  std::map<ProcessId, ForkId> joinNoneDisableForkResumeFork;
+  std::map<ProcessId, uint64_t> joinNoneDisableForkResumeToken;
+  std::map<ProcessId, unsigned> joinNoneDisableForkResumePollCount;
 
   /// Per-process phase address currently being executed by the phase hopper.
   /// Set when execute_phase is entered, used by raise/drop_objection

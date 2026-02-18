@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1508 - February 18, 2026
+
+### circt-sim: stabilize execute-phase objection completion semantics, keep I3C mismatch diagnosis moving
+
+1. **Execute-phase monitor lifecycle fix** (`tools/circt-sim/LLHDProcessInterpreter.cpp/.h`):
+   - replaced descendant-progress based completion with explicit objection
+     lifecycle tracking:
+     - startup grace before first positive objection
+     - short drop grace after objections were observed.
+   - introduced per-process `executePhaseSawPositiveObjection`.
+   - removed the earlier aggregate descendant-step polling dependency.
+
+2. **Objection-zero wake behavior correction**:
+   - `wakeObjectionZeroWaitersIfReady` now routes execute-phase waiters back
+     through `pollExecutePhaseMonitorFork` instead of forcing immediate phase
+     completion/child-tree kill on zero.
+
+3. **I3C diagnostics strengthened**:
+   - fork trace now prints parent function context.
+   - I3C callstack trace widened to include controller-side BFM frames
+     (in addition to target-side).
+   - disable-fork child trace now includes `waiting` and `steps`.
+
+4. **Validation**:
+   - build: `ninja -C build-test circt-sim` PASS.
+   - focused lit:
+     - `fork-execute-phase-monitor-intercept-single-shot`
+     - `execute-phase-monitor-fork-objection-waiter`
+     - `wait-condition-execute-phase-objection-fallback-backoff`
+     - `disable-fork-halt`, `fork-join-basic`, `fork-halt-waits-children`,
+       `jit-process-thunk-fork-*-disable-fork-terminator`
+     - all PASS in focused runs.
+   - I3C bounded run (`AVIPS=i3c`, seed 1): sim now consistently completes
+     (no timeout regression) in ~67-69s, but still reports scoreboard mismatch:
+     `i3c_scoreboard.sv(162)` at `713 ns`.
+
+5. **Current status**:
+   - timeout regression is closed for this lane.
+   - functional I3C controller/target write-data mismatch remains open.
+
 ## Iteration 1507 - February 18, 2026
 
 ### circt-sim: revert regressing `uvm_get_report_object` shortcut experiment and revalidate all9 compile lane
