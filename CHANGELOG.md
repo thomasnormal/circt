@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1518 - February 18, 2026
+
+### circt-sim: emit JIT report on run-failure paths for compile-mode telemetry continuity
+
+1. **Failure-path JIT report emission** (`tools/circt-sim/circt-sim.cpp`):
+   - `processInput` now captures `simContext.run()` status and still writes the
+     JIT JSON report before returning failure when run execution fails.
+   - `run_wall_ms`/`total_wall_ms` accounting is preserved for both success and
+     failure paths.
+   - this closes the telemetry gap where run failures exited before
+     `emitJitReport(...)`.
+
+2. **Regression coverage**:
+   - added `test/Tools/circt-sim/jit-report-run-failure-vpi.mlir`.
+   - test forces deterministic run failure using a missing `--vpi` shared object
+     and verifies both:
+     - failure diagnostic in log,
+     - emitted JIT report with compile-mode schema/counters.
+
+3. **Validation**:
+   - build:
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+   - focused lit:
+     - `python3 llvm/llvm/utils/lit/lit.py -sv --filter "jit-report-run-failure-vpi|jit-fail-on-deopt-missing-thunk-budget-zero-detail" build-test/test/Tools/circt-sim`: PASS (`2/2`).
+   - full sim tools suite:
+     - `ninja -C build-test -j4 check-circt-tools-circt-sim`: PASS.
+       - `Total=504`, `Passed=458`, `XFAIL=46`, `Failed=0`, `XPASS=0`.
+
+4. **Remaining limitation**:
+   - externally hard-killed simulator processes (for example wrapper-enforced
+     wall-clock kill/`SIGKILL`) still cannot emit a terminal JIT report; this
+     requires periodic/streaming report flushing or signal-safe snapshot hooks.
+
 ## Iteration 1517 - February 18, 2026
 
 ### circt-sim: deopt trivial-thunk fallback on active call-stack, and harden shape side-effects

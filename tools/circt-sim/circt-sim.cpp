@@ -2507,9 +2507,7 @@ static LogicalResult processInput(MLIRContext &context,
   // Run the simulation
   reportStage("run");
   auto runStartTime = std::chrono::steady_clock::now();
-  if (failed(simContext.run())) {
-    return failure();
-  }
+  LogicalResult runResult = simContext.run();
   uint64_t runWallMs = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - runStartTime)
@@ -2517,15 +2515,21 @@ static LogicalResult processInput(MLIRContext &context,
   if (runMode == RunMode::Compile)
     jitCompileManager.addExecWallMs(runWallMs);
 
-  // Print statistics if requested
-  if (printStats) {
-    simContext.printStatistics(llvm::outs());
-  }
-
   uint64_t totalWallMs = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - startTime)
           .count());
+  if (failed(runResult)) {
+    if (failed(
+            emitJitReport(simContext, jitCompileManager, runWallMs, totalWallMs)))
+      return failure();
+    return failure();
+  }
+
+  // Print statistics if requested
+  if (printStats) {
+    simContext.printStatistics(llvm::outs());
+  }
   if (failed(
           emitJitReport(simContext, jitCompileManager, runWallMs, totalWallMs)))
     return failure();
