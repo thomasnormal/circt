@@ -95,6 +95,7 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstring>
 #include <sys/resource.h>
 #include <cstdlib>
 #include <fstream>
@@ -1536,13 +1537,24 @@ LogicalResult SimulationContext::run() {
           mlir::Attribute valueAttr = namedAttr.getValue();
           int64_t paramValue = 0;
           uint32_t paramWidth = 32;
+          bool isRealParam = false;
           if (auto intAttr = dyn_cast<mlir::IntegerAttr>(valueAttr)) {
             paramValue = intAttr.getValue().getSExtValue();
             paramWidth = intAttr.getValue().getBitWidth();
+          } else if (auto floatAttr = dyn_cast<mlir::FloatAttr>(valueAttr)) {
+            double dval = floatAttr.getValueAsDouble();
+            std::memcpy(&paramValue, &dval, sizeof(double));
+            paramWidth = 64;
+            isRealParam = true;
           }
           std::string qualifiedName = modName + "." + paramName.str();
-          vpiRuntime.registerParameter(paramName.str(), qualifiedName,
-                                       paramValue, paramWidth, modId);
+          uint32_t paramId = vpiRuntime.registerParameter(
+              paramName.str(), qualifiedName, paramValue, paramWidth, modId);
+          if (isRealParam) {
+            auto *paramObj = vpiRuntime.findById(paramId);
+            if (paramObj)
+              paramObj->paramConstType = 2; // vpiRealConst
+          }
           // Also register under unqualified name for vpi_handle_by_name.
           auto *existingUnqual = vpiRuntime.findByName(paramName.str());
           if (!existingUnqual) {
@@ -1581,6 +1593,25 @@ LogicalResult SimulationContext::run() {
             if (paramObj)
               vpiRuntime.addNameMapping(paramName.str(), paramObj->id);
           }
+        }
+      }
+
+      // Register synthetic string variables from vpi.string_var_values.
+      // These are string-typed SV variables that don't have backing signals
+      // but need to be discoverable via VPI for cocotb.
+      if (auto strVarVals = hwMod->getAttrOfType<mlir::DictionaryAttr>(
+              "vpi.string_var_values")) {
+        for (auto namedAttr : strVarVals) {
+          llvm::StringRef varName = namedAttr.getName().getValue();
+          std::string qualifiedName = modName + "." + varName.str();
+          // Skip if already registered as a signal-backed string var.
+          if (vpiRuntime.findByName(qualifiedName))
+            continue;
+          std::string initVal;
+          if (auto strAttr = dyn_cast<mlir::StringAttr>(namedAttr.getValue()))
+            initVal = strAttr.getValue().str();
+          vpiRuntime.registerStringVariable(
+              varName.str(), qualifiedName, initVal, modId);
         }
       }
     }
@@ -2657,6 +2688,25 @@ int main(int argc, char **argv) {
   }
   int filteredArgc = static_cast<int>(filteredArgv.size());
   char **filteredArgvPtr = filteredArgv.data();
+
+  // Moore runtime helpers ($test$plusargs/$value$plusargs and UVM run_test
+  // command-line test selection) read arguments from CIRCT_UVM_ARGS/UVM_ARGS.
+  // Merge command-line plusargs into CIRCT_UVM_ARGS so filtered '+' arguments
+  // remain visible after LLVM option parsing.
+  if (!vlogPlusargs.empty()) {
+    std::string mergedUvmArgs;
+    if (const char *envArgs = std::getenv("CIRCT_UVM_ARGS")) {
+      mergedUvmArgs = envArgs;
+    } else if (const char *legacyArgs = std::getenv("UVM_ARGS")) {
+      mergedUvmArgs = legacyArgs;
+    }
+    for (const std::string &plusarg : vlogPlusargs) {
+      if (!mergedUvmArgs.empty())
+        mergedUvmArgs.push_back(' ');
+      mergedUvmArgs.append(plusarg);
+    }
+    ::setenv("CIRCT_UVM_ARGS", mergedUvmArgs.c_str(), /*overwrite=*/1);
+  }
 
   // Parse command line (with plusargs filtered out)
   llvm::cl::ParseCommandLineOptions(
