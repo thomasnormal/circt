@@ -1934,6 +1934,55 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - profile and close `jtag` reset-state hot loop regression under compile
         mode, then rerun all9 with matched timeout budgets while continuing
         `uart` Rx progression closure and `axi4` long-tail convergence.
+60. compile-mode default JIT governor activation + all9 convergence rerun
+    (February 18, 2026):
+    - runtime/default policy closure:
+      - updated `tools/circt-sim/circt-sim.cpp` compile-mode JIT defaults:
+        - `--jit-hot-threshold` default: `0 -> 1`
+        - `--jit-compile-budget` default: `0 -> 100000`
+      - default run mode remains `interpret`; only `--mode=compile` behavior
+        changes to enable native-thunk promotion without extra flags.
+    - regression coverage:
+      - added:
+        - `test/Tools/circt-sim/jit-default-mode-compile.mlir`
+      - asserts compile-mode JSON telemetry default config:
+        - `"hot_threshold": 1`
+        - `"compile_budget": 100000`
+    - validation:
+      - build + targeted lit: PASS
+        - `jit-default-mode-compile.mlir`
+        - `jit-default-mode-interpret.mlir`
+        - parallel smoke:
+          `jit-process-thunk-func-call-local-helper-nonsuspending-halt.mlir`.
+      - full tools suite: PASS
+        - `ninja -C build-test -j4 check-circt-tools-circt-sim`
+          (`Total=492`, `Passed=446`, `XFAIL=46`, `Failed=0`).
+      - bounded AVIP `jtag` compile mode (`CIRCT_SIM_EXTRA_ARGS=<none>`):
+        - `/tmp/avip-circt-sim-jtag-defaultjit-20260218-171945/matrix.tsv`
+          (`compile_status=OK`, `sim_status=OK`, `sim_sec=40`).
+        - JIT telemetry confirms defaults active:
+          - `/tmp/avip-circt-sim-jtag-defaultjit-20260218-171945/jtag/sim_seed_1.jit-report.json`
+          - `hot_threshold=1`, `compile_budget=100000`,
+            `jit_compiles_total=148`, `jit_deopts_total=0`.
+      - bounded AVIP all9 compile rerun (`CIRCT_SIM_EXTRA_ARGS=<none>`):
+        - `/tmp/avip-circt-sim-all9-defaultjit-20260218-172105/matrix.tsv`
+        - compile `OK=9/9`, sim `OK=7/9`, sim `TIMEOUT=2/9` (`axi4`,`uart`).
+      - bounded cross-suite integration smokes: PASS
+        - sv-tests sim:
+          `/tmp/sv-tests-circt-sim-defaultjit-20260218-173617.txt`
+          (`11.10.1--string_concat`).
+        - verilator-verification BMC:
+          `/tmp/verilator-bmc-defaultjit-20260218-173617.tsv`
+          (`assert_changed`).
+        - yosys SVA BMC:
+          `/tmp/yosys-sva-bmc-defaultjit-20260218-173617.tsv`
+          (`basic00`).
+        - OpenTitan sim:
+          `/tmp/opentitan-circt-sim-defaultjit-20260218-173617/run.log`
+          (`prim_count`).
+    - next closure target:
+      - continue compile-mode long-tail closure on `axi4` and `uart` while
+        keeping compile-mode default JIT governor enabled.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

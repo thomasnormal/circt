@@ -71527,3 +71527,41 @@ See CHANGELOG.md on recent progress.
           `/tmp/uart-timeout120-post-batchguard-20260218-135534.log`
           reaches `569765800000 fs` with coverage
           `Rx=0.00%`, `Tx=100.00%`.
+65. `circt-sim` enable practical compile-mode default JIT governor and
+    close `jtag` all9 timeout regression
+    (February 18, 2026):
+    - changed compile-mode JIT defaults in
+      `tools/circt-sim/circt-sim.cpp`:
+      - `--jit-hot-threshold`: `0 -> 1`
+      - `--jit-compile-budget`: `0 -> 100000`
+    - default simulator mode remains `interpret`; only compile-mode default
+      governor behavior changes.
+    - added default-policy regression:
+      - `test/Tools/circt-sim/jit-default-mode-compile.mlir`
+      - verifies compile-mode JIT JSON defaults.
+    - validation:
+      - focused lit: PASS
+        - `jit-default-mode-compile.mlir`
+        - `jit-default-mode-interpret.mlir`
+      - parallel regression smoke: PASS
+        - `jit-process-thunk-func-call-local-helper-nonsuspending-halt.mlir`.
+      - full tools suite: PASS
+        - `ninja -C build-test -j4 check-circt-tools-circt-sim`
+          (`Total=492`, `Passed=446`, `XFAIL=46`, `Failed=0`).
+      - AVIP compile-mode reruns with `CIRCT_SIM_EXTRA_ARGS=<none>`:
+        - `jtag`:
+          `/tmp/avip-circt-sim-jtag-defaultjit-20260218-171945/matrix.tsv`
+          (`compile=OK`, `sim=OK`, `sim_sec=40`).
+        - all9:
+          `/tmp/avip-circt-sim-all9-defaultjit-20260218-172105/matrix.tsv`
+          (`compile OK=9/9`, `sim OK=7/9`, `TIMEOUT=2/9`:
+          `axi4`,`uart`).
+      - bounded cross-suite smokes: PASS
+        - sv-tests:
+          `/tmp/sv-tests-circt-sim-defaultjit-20260218-173617.txt`
+        - verilator-verification:
+          `/tmp/verilator-bmc-defaultjit-20260218-173617.tsv`
+        - yosys:
+          `/tmp/yosys-sva-bmc-defaultjit-20260218-173617.tsv`
+        - OpenTitan:
+          `/tmp/opentitan-circt-sim-defaultjit-20260218-173617/run.log`.
