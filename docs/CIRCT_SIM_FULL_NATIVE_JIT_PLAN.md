@@ -35,6 +35,16 @@ This plan is decision-complete and implementation-ready.
 4. Immediate next step remains plan-aligned:
    - run expanded strict/compile AVIP matrix coverage with JIT reports
      enabled, then prioritize deopt burn-down from collected telemetry.
+5. JIT telemetry now persists on simulator run failures:
+   - `circt-sim` now emits `--jit-report` / `CIRCT_SIM_JIT_REPORT_PATH` output
+     even when `SimulationContext::run()` returns failure (for example, VPI load
+     failure paths), so failed compile-mode lanes still produce machine-readable
+     diagnostics.
+   - new regression coverage:
+     `test/Tools/circt-sim/jit-report-run-failure-vpi.mlir`.
+   - current remaining limitation: externally killed runs (for example,
+     harness-enforced hard wall-time kills) still cannot flush a terminal report
+     because process termination bypasses normal shutdown paths.
 
 ---
 
