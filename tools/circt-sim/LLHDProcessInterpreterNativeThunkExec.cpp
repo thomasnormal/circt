@@ -885,13 +885,52 @@ bool LLHDProcessInterpreter::executeResumableMultiblockWaitNativeThunk(
   if (!isResumableMultiblockWaitNativeThunkCandidate(state))
     return false;
 
+  static bool traceThunkGuards = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_JIT_THUNK_GUARDS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+
   auto requestDeopt = [&](StringRef reason, bool restoreSnapshot) {
+    if (traceThunkGuards) {
+      llvm::errs() << "[JIT-THUNK-GUARD] proc=" << procId;
+      if (auto *proc = scheduler.getProcess(procId))
+        llvm::errs() << " name=" << proc->getName();
+      llvm::errs() << " shape=resumable_multiblock_wait"
+                   << " reason=" << reason;
+      llvm::errs() << " state{halted=" << (state.halted ? 1 : 0)
+                   << " waiting=" << (state.waiting ? 1 : 0)
+                   << " resume_token=" << state.jitThunkResumeToken
+                   << " call_stack=" << state.callStack.size()
+                   << " resume_at_current_op="
+                   << (state.resumeAtCurrentOp ? 1 : 0)
+                   << " parent=" << state.parentProcessId;
+      if (state.currentBlock) {
+        llvm::errs()
+            << " current_block_ops=" << state.currentBlock->getOperations().size();
+        if (state.currentOp == state.currentBlock->end())
+          llvm::errs() << " current_op=<end>";
+        else
+          llvm::errs() << " current_op="
+                       << state.currentOp->getName().getStringRef();
+      } else {
+        llvm::errs() << " current_block=<null>";
+      }
+      if (state.destBlock) {
+        llvm::errs() << " dest_block_ops=" << state.destBlock->getOperations().size()
+                     << " dest_args=" << state.destOperands.size();
+      } else {
+        llvm::errs() << " dest_block=<null>";
+      }
+      llvm::errs() << "}\n";
+    }
     thunkState.deoptRequested = true;
     thunkState.restoreSnapshotOnDeopt = restoreSnapshot;
     thunkState.deoptDetail = reason.str();
   };
 
-  Region *bodyRegion = resolveNativeThunkProcessRegion(state);
+  Region *bodyRegion = state.destBlock ? state.destBlock->getParent() : nullptr;
+  if (!bodyRegion)
+    bodyRegion = resolveNativeThunkProcessRegion(state);
   if (!bodyRegion || bodyRegion->empty()) {
     requestDeopt("empty_body_region", /*restoreSnapshot=*/true);
     return true;
@@ -906,11 +945,6 @@ bool LLHDProcessInterpreter::executeResumableMultiblockWaitNativeThunk(
   bool containsWaitConditionCall = hasMooreWaitConditionCall(*bodyRegion);
 
   if (state.destBlock) {
-    if (state.destBlock->getParent() != bodyRegion ||
-        state.destOperands.size() != state.destBlock->getNumArguments()) {
-      requestDeopt("invalid_dest_block_state", /*restoreSnapshot=*/true);
-      return true;
-    }
     state.currentBlock = state.destBlock;
     if (!state.resumeAtCurrentOp)
       state.currentOp = state.currentBlock->begin();

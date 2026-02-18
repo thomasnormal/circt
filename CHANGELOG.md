@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1482 - February 18, 2026
+
+### circt-sim JIT: close final APB `invalid_dest_block_state` tail and reach zero-deopt in bounded compile lane
+
+1. **Expanded resumable multiblock suspend-shape policy** in
+   `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`:
+   - introduced `isPotentialResumableMultiblockSuspendOp(...)`.
+   - classify the following as resumable suspend sources for multiblock wait
+     candidates/detailing:
+     - `sim.fork`
+     - `func.call_indirect`
+     - LLVM calls:
+       `__moore_wait_condition`, `__moore_delay`, `__moore_process_await`
+2. **Aligned resumable multiblock dest-block resume semantics with the
+   interpreter** in
+   `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`:
+   - added `CIRCT_SIM_TRACE_JIT_THUNK_GUARDS=1` guard tracing for
+     `shape=resumable_multiblock_wait`.
+   - selected body region from `state.destBlock->getParent()` when resuming
+     with a destination block.
+   - removed strict destination-operand arity deopt in this thunk path, matching
+     interpreter resume behavior (zip-transfer of available operands).
+3. **Added strict regression coverage**:
+   - `test/Tools/circt-sim/jit-process-thunk-multiblock-call-indirect-delay-halt.mlir`
+     (call-indirect to a callee that performs `llvm.call @__moore_delay`).
+4. **Validation**:
+   - `ninja -C build circt-sim`: PASS.
+   - targeted strict regressions (6 tests): PASS:
+     - `jit-process-thunk-multiblock-call-indirect-delay-halt.mlir`
+     - `jit-process-thunk-multiblock-call-indirect-process-await-halt.mlir`
+     - `jit-process-thunk-multiblock-llvm-call-process-await-halt.mlir`
+     - `jit-process-thunk-multiblock-bare-wait-no-trigger.mlir`
+     - `jit-process-thunk-multiblock-scf-if-randomize-range-halt.mlir`
+     - `jit-process-thunk-fork-join-disable-fork-terminator.mlir`
+   - bounded APB compile-lane reruns (`AVIPS=apb`, `SEEDS=1`,
+     `CIRCT_SIM=build/bin/circt-sim`,
+     `CIRCT_VERILOG=build-test/bin/circt-verilog`,
+     `CIRCT_SIM_MODE=compile`,
+     `CIRCT_SIM_WRITE_JIT_REPORT=1`,
+     `CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=100000'`):
+     - `/tmp/avip-circt-sim-jit-apb-buildbin-20260218-051931`
+       -> `jit_deopts_total=1` (`guard_failed:invalid_dest_block_state`)
+     - `/tmp/avip-circt-sim-jit-apb-buildbin-20260218-052243`
+       -> `jit_deopts_total=0`
+   - bounded JTAG parallel smoke (`AVIPS=jtag`, `SEEDS=1`,
+     `CIRCT_SIM_EXTRA_ARGS='--parallel=4 --jit-hot-threshold=1 --jit-compile-budget=100000'`):
+     - `/tmp/avip-circt-sim-jit-jtag-p4-20260218-052357`
+       -> compile `OK`, sim `OK`, `jit_deopts_total=0`
+       (expected warning: experimental parallel mode still defaults to
+       sequential fallback unless force-enabled).
+
 ## Iteration 1481 - February 18, 2026
 
 ### circt-sim JIT: APB deopt burn-down from 5 to 2 with strict regressions and wait-shape closure
