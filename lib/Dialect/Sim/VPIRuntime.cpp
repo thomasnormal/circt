@@ -161,6 +161,31 @@ uint32_t VPIRuntime::registerParameter(const std::string &name,
   return id;
 }
 
+uint32_t VPIRuntime::registerStringVariable(const std::string &name,
+                                             const std::string &fullName,
+                                             const std::string &initialValue,
+                                             uint32_t parentModuleId) {
+  uint32_t id = nextObjectId();
+  auto obj = std::make_unique<VPIObject>();
+  obj->id = id;
+  obj->type = VPIObjectType::StringVar;
+  obj->name = name;
+  obj->fullName = fullName;
+  obj->signalId = 0; // No backing signal.
+  obj->width = 0;
+  obj->stringValue = initialValue;
+  obj->parentId = parentModuleId;
+  if (parentModuleId != 0) {
+    auto *parent = findById(parentModuleId);
+    if (parent)
+      parent->children.push_back(id);
+  }
+  nameToId[fullName] = id;
+  objects[id] = std::move(obj);
+  stats.objectsCreated++;
+  return id;
+}
+
 VPIObject *VPIRuntime::findByName(const std::string &fullName) {
   auto it = nameToId.find(fullName);
   if (it == nameToId.end())
@@ -398,10 +423,10 @@ void VPIRuntime::buildHierarchy() {
       VPIObjectType sigType = VPIObjectType::Reg;
       if (integerVarNames.count(signalName))
         sigType = VPIObjectType::Integer;
-      // Note: StringVar and RealVar type marking is intentionally disabled
-      // because cocotb's GPI layer doesn't handle these types correctly
-      // during recursive discovery (causes IndexError with garbage indices).
-      // String and real signals are reported as Reg with their bit widths.
+      else if (realVarNames.count(signalName))
+        sigType = VPIObjectType::RealVar;
+      else if (stringVarNames.count(signalName))
+        sigType = VPIObjectType::StringVar;
       uint32_t sigObjId =
           registerSignal(signalName, qualifiedName, sigId, width,
                          sigType, moduleId);
@@ -924,16 +949,36 @@ uint32_t VPIRuntime::iterate(int32_t type, uint32_t refId) {
       }
     } else if (type == vpiNet || type == vpiReg || type == vpiIntegerVar ||
                type == vpiStringVar || type == vpiRealVar) {
-      // Return child signals (including arrays, integers, strings, reals,
-      // but NOT structs).
+      // Return child signals filtered by requested type.
+      // cocotb iterates each type separately and creates type-specific handle
+      // objects (e.g., RealObject for vpiRealVar, LogicArrayObject for vpiReg).
+      // Returning all types for any request causes wrong handle creation.
       for (uint32_t childId : obj->children) {
         auto *child = findById(childId);
-        if (child && (child->type == VPIObjectType::Net ||
-                      child->type == VPIObjectType::Reg ||
-                      child->type == VPIObjectType::Array ||
-                      child->type == VPIObjectType::Integer ||
-                      child->type == VPIObjectType::StringVar ||
-                      child->type == VPIObjectType::RealVar))
+        if (!child)
+          continue;
+        bool match = false;
+        switch (type) {
+        case vpiNet:
+          match = (child->type == VPIObjectType::Net);
+          break;
+        case vpiReg:
+          match = (child->type == VPIObjectType::Reg ||
+                   child->type == VPIObjectType::Array);
+          break;
+        case vpiIntegerVar:
+          match = (child->type == VPIObjectType::Integer);
+          break;
+        case vpiStringVar:
+          match = (child->type == VPIObjectType::StringVar);
+          break;
+        case vpiRealVar:
+          match = (child->type == VPIObjectType::RealVar);
+          break;
+        default:
+          break;
+        }
+        if (match)
           elements.push_back(childId);
       }
     } else if (type == vpiMember) {
@@ -1003,35 +1048,38 @@ int32_t VPIRuntime::getProperty(int32_t property, uint32_t objectId) {
     return vpiUndefined;
 
   switch (property) {
-  case vpiType:
+  case vpiType: {
+    int32_t result;
     switch (obj->type) {
     case VPIObjectType::Module:
-      return vpiModule;
+      result = vpiModule; break;
     case VPIObjectType::Net:
-      return vpiNet;
+      result = vpiNet; break;
     case VPIObjectType::Reg:
-      return vpiReg;
+      result = vpiReg; break;
     case VPIObjectType::Port:
-      return vpiPort;
+      result = vpiPort; break;
     case VPIObjectType::Parameter:
-      return vpiParameter;
+      result = vpiParameter; break;
     case VPIObjectType::Array:
-      return vpiRegArray;
+      result = vpiRegArray; break;
     case VPIObjectType::GenScope:
-      return vpiGenScope;
+      result = vpiGenScope; break;
     case VPIObjectType::GenScopeArray:
-      return vpiGenScopeArray;
+      result = vpiGenScopeArray; break;
     case VPIObjectType::StructVar:
-      return vpiStructVar;
+      result = vpiStructVar; break;
     case VPIObjectType::Integer:
-      return vpiIntegerVar;
+      result = vpiIntegerVar; break;
     case VPIObjectType::StringVar:
-      return vpiStringVar;
+      result = vpiStringVar; break;
     case VPIObjectType::RealVar:
-      return vpiRealVar;
+      result = vpiRealVar; break;
     default:
-      return vpiUndefined;
+      result = vpiUndefined; break;
     }
+    return result;
+  }
   case vpiSize:
     if (obj->type == VPIObjectType::Array ||
         obj->type == VPIObjectType::GenScopeArray)
@@ -1070,6 +1118,10 @@ int32_t VPIRuntime::getProperty(int32_t property, uint32_t objectId) {
     return 0; // Unpacked structs only; packed structs stay as plain Reg.
   case vpiTopModule:
     return obj->parentId == 0 ? 1 : 0;
+  case vpiConstType:
+    if (obj->type == VPIObjectType::Parameter)
+      return obj->paramConstType;
+    return vpiUndefined;
   default:
     return vpiUndefined;
   }
@@ -1149,8 +1201,55 @@ void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
     return env && env[0] != '\0' && env[0] != '0';
   }();
 
+  // Handle string variables: return the stored string value.
+  // Works for both signal-backed (signalId != 0) and synthetic (signalId == 0)
+  // string vars.  For signal-backed strings, if no VPI-written value exists,
+  // try to read the string from the backing signal's struct<(ptr, i64)>.
+  if (obj->type == VPIObjectType::StringVar) {
+    // First try VPI-written value, then try backing signal.
+    std::string result;
+    if (!obj->stringValue.empty()) {
+      result = obj->stringValue;
+    } else if (obj->signalId && scheduler) {
+      const SignalValue &sv = scheduler->getSignalValue(obj->signalId);
+      const llvm::APInt &raw = sv.getAPInt();
+      // String is struct<(ptr, i64)> = 128 bits: lower 64 = ptr, upper 64 = len
+      if (raw.getBitWidth() >= 128) {
+        uint64_t ptr = raw.extractBitsAsZExtValue(64, 0);
+        uint64_t len = raw.extractBitsAsZExtValue(64, 64);
+        if (ptr && len > 0 && len < 1048576) {
+          result.assign(reinterpret_cast<const char *>(ptr), len);
+        }
+      }
+    }
+    if (value->format == vpiStringVal) {
+      strBuffer = result;
+      value->value.str = const_cast<PLI_BYTE8 *>(strBuffer.c_str());
+    } else if (value->format == vpiIntVal) {
+      value->value.integer = 0;
+      if (!result.empty())
+        value->value.integer = std::atoi(result.c_str());
+    } else {
+      strBuffer = result;
+      value->value.str = const_cast<PLI_BYTE8 *>(strBuffer.c_str());
+    }
+    return;
+  }
+
   // Handle parameters: return the elaborated constant value.
   if (obj->type == VPIObjectType::Parameter) {
+    // Real constant parameters: raw double bits stored in paramValue.
+    if (obj->paramConstType == vpiRealConst) {
+      double realVal;
+      std::memcpy(&realVal, &obj->paramValue, sizeof(double));
+      if (value->format == vpiRealVal) {
+        value->value.real = realVal;
+      } else {
+        // Convert real to integer for integer-format requests.
+        value->value.integer = static_cast<PLI_INT32>(realVal);
+      }
+      return;
+    }
     switch (value->format) {
     case vpiIntVal:
       value->value.integer = static_cast<PLI_INT32>(obj->paramValue);
@@ -1186,6 +1285,17 @@ void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
 
   if (!obj->signalId || !scheduler)
     return;
+
+  // Handle real-valued signals: f64 stored directly in the signal's 64 bits.
+  if (obj->type == VPIObjectType::RealVar &&
+      value->format == vpiRealVal) {
+    const SignalValue &sv = scheduler->getSignalValue(obj->signalId);
+    uint64_t rawBits = sv.getAPInt().zextOrTrunc(64).getZExtValue();
+    double realVal;
+    std::memcpy(&realVal, &rawBits, sizeof(double));
+    value->value.real = realVal;
+    return;
+  }
 
   const SignalValue &sv = scheduler->getSignalValue(obj->signalId);
   uint32_t width = obj->width; // Logical width (already halved for 4-state).
@@ -1247,7 +1357,7 @@ void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
     strBuffer.reserve(width);
     for (int i = static_cast<int>(width) - 1; i >= 0; --i) {
       if (isFourState && unknownBits[i])
-        strBuffer.push_back('x');
+        strBuffer.push_back(valueBits[i] ? 'x' : 'z');
       else if (!isFourState && hasUnknown)
         strBuffer.push_back('x');
       else
@@ -1288,7 +1398,9 @@ void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
           static_cast<PLI_INT32>(valueBits.getZExtValue());
     break;
   case vpiScalarVal:
-    if (hasUnknown)
+    if (isFourState && unknownBits.getBoolValue())
+      value->value.scalar = valueBits.getBoolValue() ? vpiX : vpiZ;
+    else if (hasUnknown)
       value->value.scalar = vpiX;
     else
       value->value.scalar = valueBits.getBoolValue() ? vpi1 : vpi0;
@@ -1332,8 +1444,55 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
   stats.valueWrites++;
 
   auto *obj = findById(objectId);
-  if (!obj || !obj->signalId || !scheduler || !value)
+  if (!obj || !value)
     return 0;
+
+  // Handle string variables (both signal-backed and synthetic).
+  if (obj->type == VPIObjectType::StringVar) {
+    if (value->format == vpiStringVal && value->value.str) {
+      obj->stringValue = value->value.str;
+      // For signal-backed strings, also update the backing signal so
+      // HDL reads pick up the new value.
+      if (obj->signalId && scheduler) {
+        size_t len = std::strlen(value->value.str);
+        char *buf = static_cast<char *>(std::malloc(len + 1));
+        std::memcpy(buf, value->value.str, len + 1);
+        // struct<(ptr, i64)>: lower 64 bits = ptr, upper 64 bits = len
+        llvm::APInt sigVal(128, 0);
+        sigVal.insertBits(llvm::APInt(64, reinterpret_cast<uint64_t>(buf)), 0);
+        sigVal.insertBits(llvm::APInt(64, len), 64);
+        scheduler->updateSignal(obj->signalId, SignalValue(sigVal));
+      }
+    }
+    return objectId;
+  }
+
+  if (!obj->signalId || !scheduler)
+    return 0;
+
+  // Handle vpiReleaseFlag: release a previously forced signal.
+  // No value is written; the signal becomes controlled by its HDL drivers.
+  if (flags == vpiReleaseFlag) {
+    forcedSignals.erase(obj->signalId);
+    scheduler->clearVpiOwned(obj->signalId);
+    // Also release sibling signals.
+    auto nameIt = scheduler->getSignalNames().find(obj->signalId);
+    if (nameIt != scheduler->getSignalNames().end()) {
+      llvm::StringRef sigName = nameIt->second;
+      auto dotPos = sigName.rfind('.');
+      std::string baseName = dotPos != llvm::StringRef::npos
+          ? sigName.substr(dotPos + 1).str() : sigName.str();
+      auto sibIt = nameToSiblingSignals.find(baseName);
+      if (sibIt != nameToSiblingSignals.end()) {
+        for (SignalId sibId : sibIt->second) {
+          if (sibId == obj->signalId) continue;
+          forcedSignals.erase(sibId);
+          scheduler->clearVpiOwned(sibId);
+        }
+      }
+    }
+    return objectId;
+  }
 
   // Clear any VPI ownership on this signal so that our own updateSignal call
   // isn't blocked. (VPI ownership prevents non-VPI sources from overwriting,
@@ -1351,12 +1510,70 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
                  << " t=" << scheduler->getCurrentTime().realTime << "\n";
   }
 
+  // Handle real-valued signals: f64 stored directly in the signal's 64 bits.
+  // Falls through to the sibling propagation and executeCurrentTime below.
+  if (obj->type == VPIObjectType::RealVar &&
+      value->format == vpiRealVal) {
+    double realVal = value->value.real;
+    uint64_t rawBits;
+    std::memcpy(&rawBits, &realVal, sizeof(uint64_t));
+    SignalValue newVal(llvm::APInt(64, rawBits));
+    scheduler->updateSignal(obj->signalId, newVal);
+    // Mark VPI-owned, propagate to siblings, then executeCurrentTime below.
+    scheduler->markVpiOwned(obj->signalId);
+    auto nameIt = scheduler->getSignalNames().find(obj->signalId);
+    if (nameIt != scheduler->getSignalNames().end()) {
+      llvm::StringRef sigName = nameIt->second;
+      auto dotPos = sigName.rfind('.');
+      std::string baseName =
+          dotPos != llvm::StringRef::npos ? sigName.substr(dotPos + 1).str()
+                                          : sigName.str();
+      auto sibIt = nameToSiblingSignals.find(baseName);
+      if (sibIt != nameToSiblingSignals.end()) {
+        for (SignalId sibId : sibIt->second) {
+          if (sibId == obj->signalId)
+            continue;
+          const SignalValue &sibVal = scheduler->getSignalValue(sibId);
+          if (sibVal.getWidth() == newVal.getWidth()) {
+            scheduler->clearVpiOwned(sibId);
+            scheduler->updateSignal(sibId, newVal);
+            scheduler->markVpiOwned(sibId);
+          }
+        }
+      }
+    }
+    scheduler->executeCurrentTime();
+    // For vpiForceFlag: persist forced value across time steps.
+    if (flags == vpiForceFlag) {
+      forcedSignals[obj->signalId] = newVal;
+      if (nameIt != scheduler->getSignalNames().end()) {
+        llvm::StringRef forceSigName = nameIt->second;
+        auto forceDotPos = forceSigName.rfind('.');
+        std::string forceBaseName =
+            forceDotPos != llvm::StringRef::npos
+                ? forceSigName.substr(forceDotPos + 1).str()
+                : forceSigName.str();
+        auto sibIt2 = nameToSiblingSignals.find(forceBaseName);
+        if (sibIt2 != nameToSiblingSignals.end()) {
+          for (SignalId sibId : sibIt2->second) {
+            if (sibId == obj->signalId) continue;
+            const SignalValue &sibVal = scheduler->getSignalValue(sibId);
+            if (sibVal.getWidth() == newVal.getWidth())
+              forcedSignals[sibId] = newVal;
+          }
+        }
+      }
+    }
+    return objectId;
+  }
+
   uint32_t logicalWidth = obj->width;
   SignalEncoding enc = scheduler->getSignalEncoding(obj->signalId);
   bool isFourState = (enc == SignalEncoding::FourStateStruct);
   uint32_t physWidth = isFourState ? logicalWidth * 2 : logicalWidth;
 
   llvm::APInt valueBits(logicalWidth, 0);
+  llvm::APInt unknownBitsWrite(logicalWidth, 0);
 
   switch (value->format) {
   case vpiBinStrVal: {
@@ -1365,8 +1582,15 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
       return 0;
     size_t len = strlen(str);
     for (size_t i = 0; i < len && i < logicalWidth; ++i) {
-      if (str[len - 1 - i] == '1')
+      char c = str[len - 1 - i];
+      if (c == '1')
         valueBits.setBit(i);
+      else if (c == 'x' || c == 'X') {
+        unknownBitsWrite.setBit(i);
+        valueBits.setBit(i); // X: value=1, unknown=1
+      } else if (c == 'z' || c == 'Z') {
+        unknownBitsWrite.setBit(i); // Z: value=0, unknown=1
+      }
     }
     break;
   }
@@ -1377,20 +1601,30 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
     break;
   }
   case vpiScalarVal:
-    valueBits = llvm::APInt(logicalWidth, value->value.scalar == vpi1);
+    if (value->value.scalar == vpi1)
+      valueBits.setBit(0);
+    if (value->value.scalar == vpiX) {
+      unknownBitsWrite.setBit(0);
+      valueBits.setBit(0); // X: value=1, unknown=1
+    } else if (value->value.scalar == vpiZ) {
+      unknownBitsWrite.setBit(0); // Z: value=0, unknown=1
+    }
     break;
   case vpiVectorVal: {
     if (!value->value.vector)
       return 0;
     uint32_t numWords = (logicalWidth + 31) / 32;
     for (uint32_t i = 0; i < numWords; ++i) {
-      uint32_t bitsThisWord = std::min(32u, logicalWidth - i * 32);
-      uint64_t aval = static_cast<uint64_t>(value->value.vector[i].aval) &
-                      llvm::maskTrailingOnes<uint64_t>(logicalWidth);
-      llvm::APInt word(logicalWidth, aval);
-      word <<= (i * 32);
-      valueBits |= word;
-      (void)bitsThisWord;
+      uint64_t mask = llvm::maskTrailingOnes<uint64_t>(
+          std::min(32u, logicalWidth - i * 32));
+      uint64_t aval = static_cast<uint64_t>(value->value.vector[i].aval) & mask;
+      uint64_t bval = static_cast<uint64_t>(value->value.vector[i].bval) & mask;
+      llvm::APInt aWord(logicalWidth, aval);
+      llvm::APInt bWord(logicalWidth, bval);
+      aWord <<= (i * 32);
+      bWord <<= (i * 32);
+      valueBits |= aWord;
+      unknownBitsWrite |= bWord;
     }
     break;
   }
@@ -1416,8 +1650,9 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
     // Build the element's physical bits.
     llvm::APInt elemPhysBits(elemPhysW, 0);
     if (elemPhysW == logicalWidth * 2) {
-      // 4-state element: [value | 0_unknown]
+      // 4-state element: [value | unknown]
       elemPhysBits |= valueBits.zext(elemPhysW) << logicalWidth;
+      elemPhysBits |= unknownBitsWrite.zext(elemPhysW);
     } else {
       elemPhysBits = valueBits.zextOrTrunc(elemPhysW);
     }
@@ -1433,13 +1668,16 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
   } else {
     SignalValue newVal(llvm::APInt(physWidth, 0));
     if (isFourState) {
-      // Pack: [value_bits | zero_unknown_bits]
+      // Pack: [value_bits | unknown_bits]
       llvm::APInt physBits(physWidth, 0);
       physBits |= valueBits.zext(physWidth) << logicalWidth;
-      // Unknown bits = 0 (all known).
+      physBits |= unknownBitsWrite.zext(physWidth);
       newVal = SignalValue(physBits);
     } else {
-      newVal = SignalValue(valueBits);
+      // 2-state signal: X/Z should map to 0 per IEEE 1800-2017.
+      // Mask out value bits where unknown bits are set.
+      llvm::APInt maskedValue = valueBits & ~unknownBitsWrite;
+      newVal = SignalValue(maskedValue);
     }
 
     // Apply the value immediately (vpiNoDelay).
@@ -1481,6 +1719,28 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
   // combinational processes see the updated value. VPI-owned signals are
   // protected from stale drives during this execution.
   scheduler->executeCurrentTime();
+
+  // For vpiForceFlag: persist forced value across time steps.
+  if (flags == vpiForceFlag) {
+    forcedSignals[obj->signalId] = writtenValue;
+    // Also record forced value for siblings.
+    auto nameIt2 = scheduler->getSignalNames().find(obj->signalId);
+    if (nameIt2 != scheduler->getSignalNames().end()) {
+      llvm::StringRef sigName2 = nameIt2->second;
+      auto dotPos2 = sigName2.rfind('.');
+      std::string baseName2 = dotPos2 != llvm::StringRef::npos
+          ? sigName2.substr(dotPos2 + 1).str() : sigName2.str();
+      auto sibIt2 = nameToSiblingSignals.find(baseName2);
+      if (sibIt2 != nameToSiblingSignals.end()) {
+        for (SignalId sibId : sibIt2->second) {
+          if (sibId == obj->signalId) continue;
+          const SignalValue &sibVal = scheduler->getSignalValue(sibId);
+          if (sibVal.getWidth() == writtenValue.getWidth())
+            forcedSignals[sibId] = writtenValue;
+        }
+      }
+    }
+  }
 
   return objectId;
 }
@@ -1557,14 +1817,26 @@ uint32_t VPIRuntime::registerCb(struct t_cb_data *cbData) {
           // written during this tick.
           if (scheduler)
             scheduler->clearVpiOwnership();
+          // Re-assert forced signals after clearing ownership. Forced values
+          // persist until explicitly released via vpiReleaseFlag.
+          reAssertForcedSignals();
           // Capture fields before calling cbFunc, which may modify callbacks
           // DenseMap (via vpi_register_cb/vpi_remove_cb) and invalidate `it`.
           auto cbFunc = it->second->cbFunc;
           void *userData = it->second->userData;
           int32_t reason = it->second->reason;
           bool isOneShot = it->second->oneShot;
+          s_vpi_time delayTime = {};
+          delayTime.type = vpiSimTime;
+          if (scheduler) {
+            SimTime now = scheduler->getCurrentTime();
+            uint64_t ps = now.realTime / 1000;
+            delayTime.high = static_cast<PLI_UINT32>(ps >> 32);
+            delayTime.low = static_cast<PLI_UINT32>(ps & 0xFFFFFFFF);
+          }
           t_cb_data data = {};
           data.reason = reason;
+          data.time = &delayTime;
           data.user_data = static_cast<PLI_BYTE8 *>(userData);
           cbFunc(&data);
           stats.callbacksFired++;
@@ -1578,11 +1850,25 @@ uint32_t VPIRuntime::registerCb(struct t_cb_data *cbData) {
           // cocotb reads signal values for assertions).
           // Note: putValue() calls executeCurrentTime() internally, so
           // combinational propagation happens within each write.
+          //
+          // Defer value-change callbacks during the ReadWrite phase to
+          // prevent re-entrant firing. Real simulators fire cbValueChange
+          // after the ReadWrite phase, not during vpi_put_value calls.
           for (int rwIter = 0; rwIter < 100; ++rwIter) {
+            beginDeferValueChanges();
             fireCallbacks(cbReadWriteSynch);
+            flushDeferredValueChanges();
             if (!hasActiveCallbacks(cbReadWriteSynch))
               break;
           }
+          // Run the post-callback hook to propagate firreg changes to
+          // hw.output port signals BEFORE ReadOnlySynch.  Cocotb reads
+          // ports in ReadOnlySynch, so ports must reflect the newly-
+          // captured firreg values by that point.  Reads done earlier
+          // (e.g. immediately after RisingEdge via cbValueChange) still
+          // see the OLD port value because this hook hasn't run yet.
+          if (postCallbackHook)
+            postCallbackHook();
           fireCallbacks(cbReadOnlySynch);
           if (isOneShot) {
             // Re-find after potential DenseMap rehash.
@@ -1758,7 +2044,34 @@ bool VPIRuntime::hasActiveCallbacks(int32_t reason) const {
   return false;
 }
 
+void VPIRuntime::flushDeferredValueChanges() {
+  deferringValueChanges = false;
+  // Process queued signals. New signals may be added during processing,
+  // so use index-based loop.
+  for (size_t i = 0; i < deferredValueChangeSignals.size(); ++i) {
+    fireValueChangeCallbacks(deferredValueChangeSignals[i]);
+  }
+  deferredValueChangeSignals.clear();
+}
+
+void VPIRuntime::reAssertForcedSignals() {
+  if (!scheduler || forcedSignals.empty())
+    return;
+  for (auto &[sigId, forcedVal] : forcedSignals) {
+    scheduler->updateSignal(sigId, forcedVal);
+    scheduler->markVpiOwned(sigId);
+  }
+}
+
 void VPIRuntime::fireValueChangeCallbacks(SignalId signalId) {
+  // If we're inside a cbReadWriteSynch callback, defer value-change
+  // callbacks to prevent re-entrant callback firing. Real simulators
+  // fire cbValueChange after the ReadWrite phase completes.
+  if (deferringValueChanges) {
+    deferredValueChangeSignals.push_back(signalId);
+    return;
+  }
+
   auto sigIt = signalToObjectIds.find(signalId);
   if (sigIt == signalToObjectIds.end())
     return;
@@ -1813,9 +2126,18 @@ void VPIRuntime::fireValueChangeCallbacks(SignalId signalId) {
         }
       }
 
+      s_vpi_time vcTime = {};
+      vcTime.type = vpiSimTime;
+      if (scheduler) {
+        SimTime now = scheduler->getCurrentTime();
+        uint64_t ps = now.realTime / 1000;
+        vcTime.high = static_cast<PLI_UINT32>(ps >> 32);
+        vcTime.low = static_cast<PLI_UINT32>(ps & 0xFFFFFFFF);
+      }
       t_cb_data data = {};
       data.reason = cbValueChange;
       data.obj = makeHandle(objId);
+      data.time = &vcTime;
       data.user_data = static_cast<PLI_BYTE8 *>(userData);
       data.value = &cbValue;
       cbFunc(&data);
@@ -1965,8 +2287,8 @@ vpiHandle vpi_handle_by_index(vpiHandle object, PLI_INT32 indx) {
   auto &vpi = VPIRuntime::getInstance();
   if (!vpi.isActive())
     return nullptr;
-  uint32_t id =
-      vpi.handleByIndex(VPIRuntime::getHandleId(object), indx);
+  uint32_t objId = VPIRuntime::getHandleId(object);
+  uint32_t id = vpi.handleByIndex(objId, indx);
   return id ? VPIRuntime::makeHandle(id) : nullptr;
 }
 

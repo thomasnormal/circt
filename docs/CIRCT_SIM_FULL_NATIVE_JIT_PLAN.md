@@ -1302,6 +1302,41 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - remove edge-by-edge wakeup pressure in hot UART clock-divider loops
         (GenerateBaudClk/BaudClkGenerator path) with guarded native scheduling
         that preserves parity under period/guard mismatch fallback.
+45. Compile-budget-zero direct process fast-path dispatch for hot LLHD loops
+    (February 18, 2026):
+    - runtime closure:
+      - added direct process fast-path dispatch at `executeProcess()` entry for
+        top-level `llhd.process` bodies:
+        - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - implemented cached fast-path classification and execution in:
+        - `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+      - supported direct fast-path kinds:
+        - periodic toggle clock loops
+        - resumable wait self-loops
+      - direct dispatch reuses existing native-thunk executors but bypasses
+        compile-budgeted thunk installation, eliminating repeated
+        `missing_thunk/compile_budget_zero` noise for these shapes.
+      - added lifecycle cleanup for per-process direct fast-path/periodic-spec
+        caches in `finalizeProcess`.
+    - regression coverage:
+      - added `test/Tools/circt-sim/jit-process-fast-path-budget-zero.mlir`
+        to lock compile-mode behavior at `--jit-compile-budget=0`:
+        - `jit_compiles_total = 0`
+        - `jit_deopts_total = 0`
+        - `jit_deopt_reason_missing_thunk = 0`
+    - validation:
+      - build:
+        - `ninja -C build-test circt-sim`: PASS.
+      - focused regression:
+        - manual RUN + FileCheck sequence for the new test: PASS
+          (`/tmp/jit-fastpath-budget0/{log.txt,jit.json}`).
+    - current blocker (separate in-flight issue):
+      - bounded UART rerun on this tree currently crashes during module-level
+        init (`executeModuleLevelLLVMOps`), so updated UART runtime delta is
+        blocked pending that fix.
+    - next closure target:
+      - resolve module-level init crash, then rerun bounded UART and AVIP lanes
+        to quantify timeout/cov improvements from direct loop fast paths.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

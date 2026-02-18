@@ -70886,3 +70886,34 @@ See CHANGELOG.md on recent progress.
           (`/tmp/yosys-sva-bmc-vtable-slot-20260218-090918.tsv`).
         - OpenTitan sim smoke (`prim_count`): PASS
           (`/tmp/opentitan-circt-sim-vtable-slot-20260218-090918/run.log`).
+62. `circt-sim` direct process fast-path dispatch for compile-budget-zero
+    hot LLHD loops
+    (February 18, 2026):
+    - implemented direct process fast-path dispatch at `executeProcess()`
+      entry:
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - `tools/circt-sim/LLHDProcessInterpreter.h`
+      - `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+    - direct dispatch is cached per-process and currently covers:
+      - periodic toggle clock loops
+      - resumable wait self-loops
+    - direct path reuses existing native-thunk executors but bypasses
+      compile-budgeted thunk install, avoiding repeated
+      `missing_thunk/compile_budget_zero` deopt accounting for these shapes.
+    - cleanup:
+      - clears direct fast-path and periodic-thunk metadata in
+        `finalizeProcess`.
+    - added regression:
+      - `test/Tools/circt-sim/jit-process-fast-path-budget-zero.mlir`
+      - asserts compile-mode (`--jit-compile-budget=0`) JSON telemetry:
+        - `jit_compiles_total = 0`
+        - `jit_deopts_total = 0`
+        - `jit_deopt_reason_missing_thunk = 0`
+    - validation:
+      - `ninja -C build-test circt-sim`: PASS.
+      - manual RUN/FileCheck for new test: PASS.
+        - artifacts: `/tmp/jit-fastpath-budget0/log.txt`,
+          `/tmp/jit-fastpath-budget0/jit.json`.
+    - note:
+      - bounded UART rerun on this current tree is blocked by a separate
+        in-flight crash in module-level init (`executeModuleLevelLLVMOps`).

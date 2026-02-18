@@ -1727,3 +1727,47 @@ Checks:
 - Full bounded `i3c` AVIP rerun still remains resource-heavy in this lane (run
   hit timeout/OOM before producing a new final parity snapshot), so parity
   closure still requires another bounded run once resource pressure is reduced.
+
+---
+
+## 2026-02-18 Session: Direct Process Fast Paths for Compile-Budget-Zero Hot Loops
+
+### Problem
+
+Compile-mode runs with `--jit-compile-budget=0` were still accumulating
+`missing_thunk/compile_budget_zero` deopts for top-level hot LLHD process loops
+(notably periodic clock togglers and mirror wait self-loops), adding overhead in
+long AVIP timeout lanes.
+
+### Change
+
+- Added direct process fast-path dispatch at `executeProcess()` entry:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+- Added cached per-process classification and execution support:
+  - `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+  - `tools/circt-sim/LLHDProcessInterpreter.h`
+- Directly supported loop shapes:
+  - periodic toggle clock loops
+  - resumable wait self-loops
+- Added metadata cleanup in `finalizeProcess` for direct-path caches.
+
+### New Regression
+
+- Added `test/Tools/circt-sim/jit-process-fast-path-budget-zero.mlir`.
+- Locks compile-mode behavior with `--jit-compile-budget=0`:
+  - `jit_compiles_total = 0`
+  - `jit_deopts_total = 0`
+  - `jit_deopt_reason_missing_thunk = 0`
+
+### Validation
+
+- `ninja -C build-test circt-sim` ✅
+- Manual RUN + FileCheck for new test ✅
+  - `/tmp/jit-fastpath-budget0/log.txt`
+  - `/tmp/jit-fastpath-budget0/jit.json`
+
+### Current blocker
+
+- Bounded UART rerun on this current tree crashed in module-level init
+  (`executeModuleLevelLLVMOps` stack). This appears separate from the direct
+  process fast-path change and currently blocks fresh UART lane perf numbers.
