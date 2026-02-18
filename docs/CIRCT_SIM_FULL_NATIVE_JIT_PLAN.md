@@ -26,10 +26,15 @@ This plan is decision-complete and implementation-ready.
      `jit-process-thunk-multiblock-call-indirect-process-await-halt`,
      `jit-process-thunk-single-block-call-indirect-fork-callstack-halt`).
    - focused unit set: `*TrivialThunk*` `2/2 PASS`.
-3. Current broad-suite status on this dirty tree:
-   - full `check-circt-tools-circt-sim` run still has unrelated instability
-     (`2 FAIL`, `1 XPASS`), so immediate next work remains stabilization and
-     cleanup before promoting additional default-on JIT behavior.
+3. Broad-suite stabilization landed:
+   - process-result module-drive propagation regressions were fixed by
+     restoring NBA-scheduled module-drive updates in
+     `LLHDProcessInterpreter::executeModuleDrives`.
+   - full `check-circt-tools-circt-sim` now passes again on this tree:
+     - `Passed=456`, `XFAIL=46`, `Failed=0`, `XPASS=0`.
+4. Immediate next step remains plan-aligned:
+   - run expanded strict/compile AVIP matrix coverage with JIT reports
+     enabled, then prioritize deopt burn-down from collected telemetry.
 
 ---
 

@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1517 - February 18, 2026
+
+### circt-sim: deopt trivial-thunk fallback on active call-stack, and harden shape side-effects
+
+1. **Fixed compile-mode premature finalize path in trivial thunk fallback**:
+   - updated `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`:
+     - `executeTrivialNativeThunk` now requests deopt (`trivial_thunk:*`) instead
+       of calling `finalizeProcess` when no native shape executes.
+     - added explicit guard/deopt when fallback would run with an active saved
+       call-stack (after resumable thunk dispatch attempts).
+     - tightened `llhd.process`/`seq.initial` fallback execution to only run
+       print/halt and print/yield side-effects for validated shapes; unexpected
+       shapes now deopt.
+2. **Stability guard for fork-child region selection during call-stack resume**:
+   - updated `resolveNativeThunkProcessRegion` to avoid switching to
+     `currentBlock` parent region while a saved call-stack is active.
+3. **Regression and unit coverage**:
+   - `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`:
+     - `LLHDProcessInterpreterToolTest.TrivialThunkDeoptsWithSavedCallStack`
+       passes and locks the deopt bridge behavior.
+4. **Validation**:
+   - build:
+     - `ninja -C build CIRCTSimToolTests` PASS
+     - `ninja -C build circt-sim` PASS
+   - unit:
+     - `build/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter=LLHDProcessInterpreterToolTest.TrivialThunkDeoptsWithSavedCallStack` PASS
+   - focused sim tests:
+     - `jit-process-thunk-wait-event-print-halt.mlir` PASS
+     - `jit-process-thunk-func-call-driver-bfm-phase-halt.mlir` PASS
+     - `jit-process-thunk-wait-event-print-halt-guard-failed-env.mlir` PASS
+   - I3C AVIP compile-mode probe (`AVIPS=i3c`, seed 1):
+     - run completes with `sim_status=OK` under extended timeout,
+       but `UVM_ERROR ... i3c_scoreboard.sv(162)` remains.
+
 ## Iteration 1516 - February 18, 2026
 
 ### circt-sim: cache runtime `call_indirect` vtable slots and stabilize compile-mode regressions
@@ -72055,3 +72089,26 @@ See CHANGELOG.md on recent progress.
         - xpass observed:
           - `self-driven-module-drive-filter.mlir`
         - treated as pre-existing dirty-tree instability pending cleanup.
+68. `circt-sim` restore module-drive NBA ordering for process-result
+    propagation and clear full-suite regressions
+    (February 18, 2026):
+    - root cause:
+      - module-level process-connected drives were being applied directly
+        (outside the event queue) on zero-time paths in
+        `executeModuleDrives`, which could violate NBA ordering against
+        same-time init drives and leave stale resolved values.
+    - fix:
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - keep module-level drives scheduled through
+        `EventScheduler`/`SchedulingRegion::NBA` to preserve deterministic
+        same-time ordering.
+    - validation:
+      - focused repros: PASS
+        - `module-drive-process-result-comb.mlir` (`drive_from_proc=1`)
+        - `llhd-process-result-instance-input.mlir` (`proc_in=1`)
+      - expected-fail behavior restored:
+        - `self-driven-module-drive-filter.mlir` now fails with
+          `ERROR(DELTA_OVERFLOW)` under `--max-deltas=5` (matches `XFAIL`).
+      - full tools suite: PASS
+        - `ninja -C build-test -j4 check-circt-tools-circt-sim`
+        - totals: `Passed=456`, `XFAIL=46`, `Failed=0`, `XPASS=0`.
