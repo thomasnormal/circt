@@ -33,6 +33,66 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-18 Session: Execute-Phase Monitor Wake Cleanup + 10us Wait-Condition Watchdog Backoff
+
+### Why this pass
+Two follow-ups were still open in the runtime path:
+1. execute-phase monitor interception needed explicit child-tree cleanup parity
+   when objection-zero waiters resumed.
+2. queue/execute-phase wait(condition) fallback polls were still frequent enough
+   to add avoidable watchdog churn in bounded UART runs.
+
+### Changes
+1. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - in `wakeObjectionZeroWaitersIfReady`, when resuming a process with active
+     execute-phase monitor poll state, now kill + erase the tracked
+     `masterPhaseProcessChild` tree before rescheduling the waiter.
+2. `tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp`
+   - widened sparse watchdog polls from `1us` to `10us` for:
+     - queue-backed wait(condition) fallback (`queueWait != 0`)
+     - execute-phase objection-backed wait(condition) fallback
+3. `tools/circt-sim/LLHDProcessInterpreter.h`
+   - synchronized execute-phase monitor poll helper declarations/state members
+     used by the interception path.
+4. Regression coverage:
+   - added:
+     - `test/Tools/circt-sim/fork-execute-phase-monitor-intercept-single-shot.mlir`
+   - updated:
+     - `test/Tools/circt-sim/wait-condition-execute-phase-objection-fallback-backoff.mlir`
+     - `test/Tools/circt-sim/wait-condition-queue-fallback-backoff.mlir`
+     (both now lock `targetTimeFs=10000000000`).
+
+### Validation
+1. Build:
+   - `ninja -C build-test -j4 circt-sim` PASS
+2. Focused lit:
+   - `fork-execute-phase-monitor-intercept-single-shot.mlir` PASS
+   - `execute-phase-monitor-fork-objection-waiter.mlir` PASS
+   - `wait-condition-execute-phase-objection-fallback-backoff.mlir` PASS
+   - `wait-condition-queue-fallback-backoff.mlir` PASS
+   - `func-baud-clk-generator-fast-path-delay-batch.mlir` PASS
+3. UART bounded comparison (`max-time=70000000000 fs`, compile mode):
+   - baseline:
+     - `/tmp/uart-maxtime70e9-post-forkpollv2-20260218.log`
+   - updated:
+     - `/tmp/uart-maxtime70e9-backoff10us-procstatsopt-20260218.log`
+   - observed:
+     - queue wait loop `fork_2_branch_0` steps reduced `4262 -> 104`
+     - process executions remained near-flat `1433758 -> 1433002`
+     - coverage remained `UartRxCovergroup=0%`, `UartTxCovergroup=0%`
+       at this short bound.
+4. Longer timeout-bounded UART lane:
+   - `/tmp/uart-maxtime353e9-backoff10us-20260218.log`
+   - reached `278776700000 fs` before timeout, with coverage still `0% / 0%`.
+
+### Remaining limitation
+This pass reduces watchdog churn but does not close UART Rx functional
+progression. Remaining closure work is still in monitor/driver call-indirect
+stacks and Rx-side transaction visibility, not in queue/execute-phase fallback
+poll frequency alone.
+
+---
+
 ## 2026-02-18 Session: Shared UVM Getter Cache Telemetry + I3C Bounded Reprofile
 
 ### Why this pass

@@ -304,13 +304,13 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
     constexpr uint32_t kMaxDeltaPolls = 1000;
     constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ns
     // Queue-backed waits register explicit queue-not-empty wakeups; use a
-    // sparse timed poll only as a watchdog for missed wake edge cases.
-    constexpr int64_t kQueueFallbackPollDelayFs = 1000000000; // 1 us
+    // very sparse timed poll only as a watchdog for missed wake edge cases.
+    constexpr int64_t kQueueFallbackPollDelayFs = 10000000000; // 10 us
     // execute_phase wait(condition) loops already register objection-zero
-    // waiters. Use a sparse timed poll only as a safety fallback to avoid
+    // waiters. Keep timed polling as a very sparse safety fallback to avoid
     // high-frequency churn while objections remain raised.
     constexpr int64_t kExecutePhaseObjectionFallbackPollDelayFs =
-        1000000000; // 1 us
+        10000000000; // 10 us
     constexpr uint32_t kMemoryMaxDeltaPolls = 32;
     constexpr int64_t kMemoryFallbackPollDelayFs = 1000000000; // 1 us
     SimTime targetTime;

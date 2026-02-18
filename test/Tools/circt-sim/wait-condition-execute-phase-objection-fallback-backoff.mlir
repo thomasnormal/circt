@@ -2,12 +2,12 @@
 //
 // Verify execute_phase wait(condition) uses sparse objection fallback polling.
 // The primary wakeup path is objection-zero waiters; timed polling is only
-// a watchdog and should be scheduled at 1 us intervals.
+// a watchdog and should be scheduled at 10 us intervals.
 //
 // CHECK: [WAITCOND]
 // CHECK-SAME: func=uvm_pkg::uvm_phase_hopper::execute_phase
 // CHECK-SAME: objectionWaitHandle=
-// CHECK-SAME: targetTimeFs=1000000000
+// CHECK-SAME: targetTimeFs=10000000000
 
 module {
   llvm.func @__moore_wait_condition(i32)

@@ -1608,6 +1608,54 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - address the remaining Rx-progress bottleneck in monitor/driver call
         stacks (notably `fork_82_branch_1` `StartMonitoring` and related
         `func.call_indirect` chains), then re-run full all9 compile lanes.
+53. Execute-phase monitor wake cleanup parity + sparse wait(condition)
+    watchdog broadening (February 18, 2026):
+    - runtime closure:
+      - in `tools/circt-sim/LLHDProcessInterpreter.cpp`, objection-zero waiter
+        wake now restores monitor-fork cleanup symmetry by killing/erasing the
+        tracked phase child process tree before resuming execute-phase monitor
+        waiters.
+      - in `tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp`,
+        widened sparse watchdog polls from `1us` to `10us` for:
+        - queue-backed wait(condition) (`queueWait != 0`)
+        - execute_phase objection-backed wait(condition)
+      - synchronized execute-phase monitor poll helper declarations/state maps
+        in `tools/circt-sim/LLHDProcessInterpreter.h`.
+    - regression coverage:
+      - added
+        `test/Tools/circt-sim/fork-execute-phase-monitor-intercept-single-shot.mlir`
+        to lock single-shot interception behavior for monitor `sim.fork`.
+      - updated
+        `test/Tools/circt-sim/wait-condition-execute-phase-objection-fallback-backoff.mlir`
+        to lock `targetTimeFs=10000000000`.
+      - updated
+        `test/Tools/circt-sim/wait-condition-queue-fallback-backoff.mlir`
+        to lock `targetTimeFs=10000000000`.
+    - validation:
+      - build:
+        - `ninja -C build-test -j4 circt-sim`: PASS.
+      - focused regressions: PASS
+        - `fork-execute-phase-monitor-intercept-single-shot.mlir`
+        - `execute-phase-monitor-fork-objection-waiter.mlir`
+        - `wait-condition-execute-phase-objection-fallback-backoff.mlir`
+        - `wait-condition-queue-fallback-backoff.mlir`
+        - `func-baud-clk-generator-fast-path-delay-batch.mlir`
+      - direct UART bounded sample (`max-time=70000000000 fs`, compile mode):
+        - baseline:
+          `/tmp/uart-maxtime70e9-post-forkpollv2-20260218.log`
+        - updated:
+          `/tmp/uart-maxtime70e9-backoff10us-procstatsopt-20260218.log`
+        - queue-backed wait loop `fork_2_branch_0` reduced from `4262` to
+          `104` steps; global execution count stayed near-flat
+          (`1433758 -> 1433002`) and bounded coverage remained `Rx=0%`,
+          `Tx=0%` at this short horizon.
+      - longer bounded UART timeout lane:
+        - `/tmp/uart-maxtime353e9-backoff10us-20260218.log`
+        - reached `278776700000 fs` before timeout;
+          coverage remained `UartRxCovergroup=0%`, `UartTxCovergroup=0%`.
+    - next closure target:
+      - continue root-cause closure on UART Rx functional progression while
+        reducing remaining monitor/driver call-indirect wait stacks.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

@@ -1173,6 +1173,15 @@ void LLHDProcessInterpreter::wakeObjectionZeroWaitersIfReady(int64_t handle) {
     auto stateIt = processStates.find(waiter.procId);
     if (stateIt == processStates.end())
       continue;
+    auto phasePollIt = executePhaseMonitorPollPhase.find(waiter.procId);
+    if (phasePollIt != executePhaseMonitorPollPhase.end()) {
+      uint64_t phaseAddr = phasePollIt->second;
+      auto childIt = masterPhaseProcessChild.find(phaseAddr);
+      if (childIt != masterPhaseProcessChild.end()) {
+        killProcessTree(childIt->second);
+        masterPhaseProcessChild.erase(childIt);
+      }
+    }
     executePhaseMonitorPollPhase.erase(waiter.procId);
     executePhaseMonitorPollToken.erase(waiter.procId);
     executePhaseYieldCounts.erase(waiter.procId);

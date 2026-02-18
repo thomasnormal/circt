@@ -1247,6 +1247,14 @@ private:
   mlir::LogicalResult interpretTerminate(ProcessId procId,
                                           sim::TerminateOp terminateOp);
 
+  /// Poll execute_phase monitor-fork completion without re-executing sim.fork.
+  void pollExecutePhaseMonitorFork(ProcessId procId, uint64_t phaseAddr,
+                                   uint64_t pollToken);
+  void scheduleExecutePhaseMonitorForkPoll(ProcessId procId,
+                                           uint64_t phaseAddr,
+                                           uint64_t pollToken,
+                                           int64_t objectionCount);
+
   /// Interpret a sim.fork operation.
   /// Creates child processes for each branch region and schedules them.
   mlir::LogicalResult interpretSimFork(ProcessId procId, sim::SimForkOp forkOp);
@@ -2191,6 +2199,10 @@ private:
 
   /// Per-process yield counter for execute_phase objection polling grace period.
   std::map<ProcessId, int> executePhaseYieldCounts;
+
+  /// Active execute_phase monitor-fork poll state keyed by process.
+  std::map<ProcessId, uint64_t> executePhaseMonitorPollPhase;
+  std::map<ProcessId, uint64_t> executePhaseMonitorPollToken;
 
   /// Per-process phase address currently being executed by the phase hopper.
   /// Set when execute_phase is entered, used by raise/drop_objection
