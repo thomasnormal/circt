@@ -3,6 +3,7 @@
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
 // CHECK-DAG: llvm.func @__moore_randomize_with_range(i64, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_randomize_with_ranges(!llvm.ptr, i64) -> i64
+// CHECK-DAG: llvm.func @__moore_dyn_array_new(i32) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
 // CHECK-DAG: llvm.func @__moore_is_constraint_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
@@ -238,6 +239,45 @@ func.func @test_inline_eq_constraint(%obj: !moore.class<@InlineTestClass>) -> i1
     %val = moore.constant 42 : i32
     %cmp = moore.eq %1, %val : i32 -> i1
     moore.constraint.expr %cmp : i1
+  }
+  return %success : i1
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Inline array constraints from ConstraintExprOp
+//===----------------------------------------------------------------------===//
+// Covers:
+//   1) writeData.size() == 1
+//   2) targetAddress inside {allowed}
+// where `inside {allowed}` is represented as moore.array.contains(allowed, x).
+
+moore.class.classdecl @InlineArrayConstraintClass {
+  moore.class.propertydecl @targetAddress : !moore.i7 rand_mode rand
+  moore.class.propertydecl @writeData : !moore.open_uarray<!moore.i8> rand_mode rand
+}
+
+// CHECK-LABEL: func.func @test_inline_array_constraint_exprs
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr, %[[ALLOWED:.*]]: !llvm.struct<(ptr, i64)>)
+func.func @test_inline_array_constraint_exprs(%obj: !moore.class<@InlineArrayConstraintClass>,
+                                              %allowed: !moore.open_uarray<!moore.i7>) -> i1 {
+  %one = moore.constant 1 : i32
+
+  // CHECK: llvm.call @__moore_randomize_basic
+  // CHECK: llvm.call @__moore_dyn_array_new
+  // CHECK: llvm.insertvalue
+  // CHECK: llvm.extractvalue %[[ALLOWED]][1]
+  // CHECK: llvm.call @__moore_randomize_with_range
+  %success = moore.randomize %obj : !moore.class<@InlineArrayConstraintClass> {
+    %write_ref = moore.class.property_ref %obj[@writeData] : !moore.class<@InlineArrayConstraintClass> -> !moore.ref<open_uarray<i8>>
+    %write_val = moore.read %write_ref : <open_uarray<i8>>
+    %write_size = moore.array.size %write_val : !moore.open_uarray<!moore.i8>
+    %size_eq = moore.eq %write_size, %one : i32 -> i1
+    moore.constraint.expr %size_eq : i1
+
+    %addr_ref = moore.class.property_ref %obj[@targetAddress] : !moore.class<@InlineArrayConstraintClass> -> !moore.ref<i7>
+    %addr_val = moore.read %addr_ref : <i7>
+    %contains = moore.array.contains %allowed, %addr_val : open_uarray<i7>, i7
+    moore.constraint.expr %contains : i1
   }
   return %success : i1
 }

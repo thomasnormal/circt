@@ -1942,6 +1942,8 @@ struct SVModuleOpConversion : public OpConversionPattern<SVModuleOp> {
     if (auto eventSources = hwModuleOp->getAttrOfType<ArrayAttr>(
             "moore.event_sources"))
       hwModuleOp->setAttr("moore.mixed_event_sources", eventSources);
+    if (auto vpiParams = op->getAttrOfType<DictionaryAttr>("vpi.parameters"))
+      hwModuleOp->setAttr("vpi.parameters", vpiParams);
     // Make hw.module have the same visibility as the moore.module.
     // The entry/top level module is public, otherwise is private.
     SymbolTable::setSymbolVisibility(hwModuleOp,
@@ -24366,6 +24368,20 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       bool isSoft;
     };
     SmallVector<DynFixup> dynFixups;
+    struct DynArraySizeFixup {
+      StringRef prop;
+      int32_t size;
+      bool isSoft;
+    };
+    SmallVector<DynArraySizeFixup> dynArraySizeFixups;
+    struct ArrayContainsFixup {
+      StringRef prop;
+      Value arrayValue;
+      Type arrayType;
+      unsigned bitWidth;
+      bool isSoft;
+    };
+    SmallVector<ArrayContainsFixup> arrayContainsFixups;
 
     Region &inlineRegion = op.getInlineConstraints();
     if (!inlineRegion.empty()) {
@@ -24419,6 +24435,183 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         return v.getDefiningOp<ConstantOp>() != nullptr;
       };
 
+      // Convert a Moore inline value to a lowered value. This supports
+      // references into the inline region and values defined outside.
+      DenseMap<Value, Value> mooreToConverted;
+      std::function<Value(Value)> convertMooreValue = [&](Value v) -> Value {
+        auto cacheIt = mooreToConverted.find(v);
+        if (cacheIt != mooreToConverted.end())
+          return cacheIt->second;
+
+        Value result;
+
+        // Look through zext/sext/trunc
+        if (auto zextOp = v.getDefiningOp<ZExtOp>()) {
+          Value inner = convertMooreValue(zextOp.getInput());
+          if (inner) {
+            Type resTy = typeConverter->convertType(v.getType());
+            if (resTy && isa<IntegerType>(resTy))
+              result = arith::ExtUIOp::create(rewriter, loc, resTy, inner);
+          }
+        } else if (auto sextOp = v.getDefiningOp<SExtOp>()) {
+          Value inner = convertMooreValue(sextOp.getInput());
+          if (inner) {
+            Type resTy = typeConverter->convertType(v.getType());
+            if (resTy && isa<IntegerType>(resTy))
+              result = arith::ExtSIOp::create(rewriter, loc, resTy, inner);
+          }
+        } else if (auto truncOp = v.getDefiningOp<TruncOp>()) {
+          Value inner = convertMooreValue(truncOp.getInput());
+          if (inner) {
+            Type resTy = typeConverter->convertType(v.getType());
+            if (resTy && isa<IntegerType>(resTy))
+              result = arith::TruncIOp::create(rewriter, loc, resTy, inner);
+          }
+        }
+        // moore.read %ref -> load from converted ref
+        else if (auto readOp = v.getDefiningOp<ReadOp>()) {
+          Value ref = readOp.getInput();
+          Value convertedRef;
+
+          bool refIsOutside = false;
+          if (mlir::isa<BlockArgument>(ref)) {
+            refIsOutside = true;
+          } else if (auto *refDefOp = ref.getDefiningOp()) {
+            refIsOutside = refDefOp->getParentRegion() != &inlineRegion;
+          }
+          if (refIsOutside) {
+            if (auto refBlockArg = mlir::dyn_cast<BlockArgument>(ref)) {
+              auto funcOp = op->getParentOfType<func::FuncOp>();
+              if (funcOp) {
+                Block *entryBlock = &funcOp.getBody().front();
+                unsigned argIdx = refBlockArg.getArgNumber();
+                if (argIdx < entryBlock->getNumArguments())
+                  convertedRef = entryBlock->getArgument(argIdx);
+              }
+            } else {
+              convertedRef = rewriter.getRemappedValue(ref);
+            }
+          }
+
+          // If that fails, try class property refs in inline region.
+          if (!convertedRef) {
+            if (auto propRefOp = ref.getDefiningOp<ClassPropertyRefOp>()) {
+              Value classObj = propRefOp.getInstance();
+              StringRef propName = propRefOp.getProperty();
+              Value convertedClassPtr;
+              if (auto classBlockArg = mlir::dyn_cast<BlockArgument>(classObj)) {
+                auto funcOp = op->getParentOfType<func::FuncOp>();
+                if (funcOp) {
+                  Block *entryBlock = &funcOp.getBody().front();
+                  unsigned argIdx = classBlockArg.getArgNumber();
+                  if (argIdx < entryBlock->getNumArguments())
+                    convertedClassPtr = entryBlock->getArgument(argIdx);
+                }
+              } else {
+                convertedClassPtr = convertMooreValue(classObj);
+              }
+              if (convertedClassPtr) {
+                if (auto castOp = convertedClassPtr
+                        .getDefiningOp<UnrealizedConversionCastOp>())
+                  if (castOp.getInputs().size() == 1)
+                    convertedClassPtr = castOp.getInputs()[0];
+                auto handleTy = dyn_cast<ClassHandleType>(classObj.getType());
+                if (handleTy) {
+                  auto refClassSym = handleTy.getClassSym();
+                  auto refStructInfo = cache.getStructInfo(refClassSym);
+                  if (refStructInfo) {
+                    auto pathIt = refStructInfo->propertyPath.find(propName);
+                    if (pathIt != refStructInfo->propertyPath.end()) {
+                      SmallVector<LLVM::GEPArg> gepIdx;
+                      gepIdx.push_back(0);
+                      for (unsigned idx : pathIt->second)
+                        gepIdx.push_back(static_cast<int32_t>(idx));
+                      convertedRef = LLVM::GEPOp::create(
+                          rewriter, loc, ptrTy, refStructInfo->classBody,
+                          convertedClassPtr, gepIdx);
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          if (convertedRef) {
+            if (auto castOp =
+                    convertedRef.getDefiningOp<UnrealizedConversionCastOp>())
+              if (castOp.getInputs().size() == 1)
+                convertedRef = castOp.getInputs()[0];
+            Type valTy = typeConverter->convertType(v.getType());
+            if (valTy && isa<LLVM::LLVMPointerType>(convertedRef.getType()))
+              result = LLVM::LoadOp::create(rewriter, loc, valTy, convertedRef);
+            else if (valTy)
+              result = convertedRef;
+          }
+        }
+        // moore.constant -> arith.constant
+        else if (auto constOp = v.getDefiningOp<ConstantOp>()) {
+          Type resTy = typeConverter->convertType(v.getType());
+          if (resTy && isa<IntegerType>(resTy)) {
+            auto intTy = cast<IntegerType>(resTy);
+            APInt val = constOp.getValue().getRawValue();
+            if (val.getBitWidth() != intTy.getWidth())
+              val = val.sextOrTrunc(intTy.getWidth());
+            result = arith::ConstantOp::create(
+                rewriter, loc, intTy, rewriter.getIntegerAttr(intTy, val));
+          }
+        }
+        // moore.add -> arith.addi
+        else if (v.getDefiningOp() && isa<AddOp>(v.getDefiningOp())) {
+          auto addOp = cast<AddOp>(v.getDefiningOp());
+          Value lhsC = convertMooreValue(addOp.getLhs());
+          Value rhsC = convertMooreValue(addOp.getRhs());
+          if (lhsC && rhsC)
+            result = arith::AddIOp::create(rewriter, loc, lhsC, rhsC);
+        }
+        // moore.sub -> arith.subi
+        else if (v.getDefiningOp() && isa<SubOp>(v.getDefiningOp())) {
+          auto subOp = cast<SubOp>(v.getDefiningOp());
+          Value lhsC = convertMooreValue(subOp.getLhs());
+          Value rhsC = convertMooreValue(subOp.getRhs());
+          if (lhsC && rhsC)
+            result = arith::SubIOp::create(rewriter, loc, lhsC, rhsC);
+        }
+        // moore.mul -> arith.muli
+        else if (v.getDefiningOp() && isa<MulOp>(v.getDefiningOp())) {
+          auto mulOp = cast<MulOp>(v.getDefiningOp());
+          Value lhsC = convertMooreValue(mulOp.getLhs());
+          Value rhsC = convertMooreValue(mulOp.getRhs());
+          if (lhsC && rhsC)
+            result = arith::MulIOp::create(rewriter, loc, lhsC, rhsC);
+        }
+        // Block argument: use converted entry block argument directly.
+        else if (auto blockArg = mlir::dyn_cast<BlockArgument>(v)) {
+          auto funcOp = op->getParentOfType<func::FuncOp>();
+          if (funcOp) {
+            Block *entryBlock = &funcOp.getBody().front();
+            unsigned argIdx = blockArg.getArgNumber();
+            if (argIdx < entryBlock->getNumArguments())
+              result = entryBlock->getArgument(argIdx);
+          }
+        }
+        // Value defined outside inline region.
+        else if (v.getDefiningOp() &&
+                 v.getDefiningOp()->getParentRegion() != &inlineRegion) {
+          Value remapped = rewriter.getRemappedValue(v);
+          if (remapped) {
+            if (auto castOp =
+                    remapped.getDefiningOp<UnrealizedConversionCastOp>())
+              if (castOp.getInputs().size() == 1)
+                remapped = castOp.getInputs()[0];
+            result = remapped;
+          }
+        }
+
+        if (result)
+          mooreToConverted[v] = result;
+        return result;
+      };
+
       for (auto &inlineOp : inlineRegion.front().getOperations()) {
         auto exprOp = dyn_cast<ConstraintExprOp>(inlineOp);
         if (!exprOp)
@@ -24428,6 +24621,60 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         Operation *defOp = cond.getDefiningOp();
         if (!defOp)
           continue;
+
+        // Extract `x inside {arr}` represented as moore.array.contains(arr, x).
+        if (auto containsOp = dyn_cast<ArrayContainsOp>(defOp)) {
+          StringRef propName = getInlinePropName(containsOp.getValue());
+          if (propName.empty())
+            continue;
+          auto propPathIt = structInfo->propertyPath.find(propName);
+          if (propPathIt == structInfo->propertyPath.end())
+            continue;
+          Type fieldTy = resolveStructFieldType(structTy, propPathIt->second);
+          auto fIntTy = dyn_cast_or_null<IntegerType>(fieldTy);
+          if (!fIntTy)
+            continue;
+
+          Value convertedArray = convertMooreValue(containsOp.getArray());
+          if (!convertedArray)
+            continue;
+
+          ArrayContainsFixup fixup;
+          fixup.prop = propName;
+          fixup.arrayValue = convertedArray;
+          fixup.arrayType = containsOp.getArray().getType();
+          fixup.bitWidth = fIntTy.getWidth();
+          fixup.isSoft = exprOp.getIsSoft();
+          arrayContainsFixups.push_back(fixup);
+          continue;
+        }
+
+        // Extract `arr.size() == N` for class dynamic/queue properties.
+        if (auto eqOp = dyn_cast<EqOp>(defOp)) {
+          auto tryExtractArraySizeFixup = [&](Value lhs, Value rhs) -> bool {
+            auto sizeOp = lhs.getDefiningOp<ArraySizeOp>();
+            auto constOp = rhs.getDefiningOp<ConstantOp>();
+            if (!sizeOp || !constOp)
+              return false;
+            StringRef propName = traceToPropertyName(sizeOp.getArray());
+            if (propName.empty())
+              return false;
+            FVInt sizeFV = constOp.getValue();
+            if (sizeFV.hasUnknown())
+              return false;
+            int64_t sizeVal = sizeFV.getRawValue().getSExtValue();
+            if (sizeVal < 0)
+              sizeVal = 0;
+            if (sizeVal > INT32_MAX)
+              sizeVal = INT32_MAX;
+            dynArraySizeFixups.push_back(
+                {propName, static_cast<int32_t>(sizeVal), exprOp.getIsSoft()});
+            return true;
+          };
+          if (tryExtractArraySizeFixup(eqOp.getLhs(), eqOp.getRhs()) ||
+              tryExtractArraySizeFixup(eqOp.getRhs(), eqOp.getLhs()))
+            continue;
+        }
 
         // Must be a Moore comparison op with 2 operands
         if (defOp->getNumOperands() != 2)
@@ -24497,200 +24744,6 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         if (!fIntTy)
           continue;
         unsigned bitWidth = fIntTy.getWidth();
-
-        // The bound value is a Moore-typed SSA value. It could be:
-        // 1. `moore.read %ref` where %ref is a variable/property outside
-        // 2. A block argument (function parameter)
-        // 3. An expression (moore.add, etc.) whose leaf operands are from
-        //    outside the inline region
-        // We recursively convert the Moore expression tree to target ops.
-        DenseMap<Value, Value> mooreToConverted;
-        std::function<Value(Value)> convertMooreValue =
-            [&](Value v) -> Value {
-          // Check cache
-          auto cacheIt = mooreToConverted.find(v);
-          if (cacheIt != mooreToConverted.end())
-            return cacheIt->second;
-
-          Value result;
-
-          // Look through zext/sext/trunc
-          if (auto zextOp = v.getDefiningOp<ZExtOp>()) {
-            Value inner = convertMooreValue(zextOp.getInput());
-            if (inner) {
-              Type resTy = typeConverter->convertType(v.getType());
-              if (resTy && isa<IntegerType>(resTy))
-                result = arith::ExtUIOp::create(rewriter, loc, resTy, inner);
-            }
-          } else if (auto sextOp = v.getDefiningOp<SExtOp>()) {
-            Value inner = convertMooreValue(sextOp.getInput());
-            if (inner) {
-              Type resTy = typeConverter->convertType(v.getType());
-              if (resTy && isa<IntegerType>(resTy))
-                result = arith::ExtSIOp::create(rewriter, loc, resTy, inner);
-            }
-          } else if (auto truncOp = v.getDefiningOp<TruncOp>()) {
-            Value inner = convertMooreValue(truncOp.getInput());
-            if (inner) {
-              Type resTy = typeConverter->convertType(v.getType());
-              if (resTy && isa<IntegerType>(resTy))
-                result = arith::TruncIOp::create(rewriter, loc, resTy, inner);
-            }
-          }
-          // moore.read %ref → load from converted ref
-          else if (auto readOp = v.getDefiningOp<ReadOp>()) {
-            Value ref = readOp.getInput();
-            Value convertedRef;
-
-            // First try direct remapping (for refs defined outside).
-            // Only call getRemappedValue for values outside the inline
-            // region to avoid triggering materializations.
-            bool refIsOutside = false;
-            if (mlir::isa<BlockArgument>(ref)) {
-              refIsOutside = true;
-            } else if (auto *refDefOp = ref.getDefiningOp()) {
-              refIsOutside = refDefOp->getParentRegion() != &inlineRegion;
-            }
-            if (refIsOutside) {
-              // For block arguments, look up directly from entry block
-              if (auto refBlockArg = mlir::dyn_cast<BlockArgument>(ref)) {
-                auto funcOp = op->getParentOfType<func::FuncOp>();
-                if (funcOp) {
-                  Block *entryBlock = &funcOp.getBody().front();
-                  unsigned argIdx = refBlockArg.getArgNumber();
-                  if (argIdx < entryBlock->getNumArguments())
-                    convertedRef = entryBlock->getArgument(argIdx);
-                }
-              } else {
-                convertedRef = rewriter.getRemappedValue(ref);
-              }
-            }
-
-            // If that fails, check if ref is a ClassPropertyRefOp inside
-            // the inline region. Convert it by GEP-ing the class pointer.
-            if (!convertedRef) {
-              if (auto propRefOp = ref.getDefiningOp<ClassPropertyRefOp>()) {
-                Value classObj = propRefOp.getInstance();
-                StringRef propName = propRefOp.getProperty();
-                // Get the converted class pointer
-                Value convertedClassPtr;
-                if (auto classBlockArg = mlir::dyn_cast<BlockArgument>(classObj)) {
-                  auto funcOp = op->getParentOfType<func::FuncOp>();
-                  if (funcOp) {
-                    Block *entryBlock = &funcOp.getBody().front();
-                    unsigned argIdx = classBlockArg.getArgNumber();
-                    if (argIdx < entryBlock->getNumArguments())
-                      convertedClassPtr = entryBlock->getArgument(argIdx);
-                  }
-                } else {
-                  convertedClassPtr = convertMooreValue(classObj);
-                }
-                if (convertedClassPtr) {
-                  if (auto castOp = convertedClassPtr
-                          .getDefiningOp<UnrealizedConversionCastOp>())
-                    if (castOp.getInputs().size() == 1)
-                      convertedClassPtr = castOp.getInputs()[0];
-                  // Look up the class struct type and field path
-                  auto handleTy = dyn_cast<ClassHandleType>(classObj.getType());
-                  if (handleTy) {
-                    auto refClassSym = handleTy.getClassSym();
-                    auto refStructInfo = cache.getStructInfo(refClassSym);
-                    if (refStructInfo) {
-                      auto pathIt = refStructInfo->propertyPath.find(propName);
-                      if (pathIt != refStructInfo->propertyPath.end()) {
-                        SmallVector<LLVM::GEPArg> gepIdx;
-                        gepIdx.push_back(0);
-                        for (unsigned idx : pathIt->second)
-                          gepIdx.push_back(static_cast<int32_t>(idx));
-                        convertedRef = LLVM::GEPOp::create(
-                            rewriter, loc, ptrTy, refStructInfo->classBody,
-                            convertedClassPtr, gepIdx);
-                      }
-                    }
-                  }
-                }
-              }
-            }
-
-            if (convertedRef) {
-              if (auto castOp =
-                      convertedRef.getDefiningOp<UnrealizedConversionCastOp>())
-                if (castOp.getInputs().size() == 1)
-                  convertedRef = castOp.getInputs()[0];
-              Type valTy = typeConverter->convertType(v.getType());
-              if (valTy && isa<LLVM::LLVMPointerType>(convertedRef.getType()))
-                result = LLVM::LoadOp::create(rewriter, loc, valTy,
-                                               convertedRef);
-              else if (valTy)
-                result = convertedRef;
-            }
-          }
-          // moore.constant → arith.constant
-          else if (auto constOp = v.getDefiningOp<ConstantOp>()) {
-            Type resTy = typeConverter->convertType(v.getType());
-            if (resTy && isa<IntegerType>(resTy)) {
-              auto intTy = cast<IntegerType>(resTy);
-              APInt val = constOp.getValue().getRawValue();
-              if (val.getBitWidth() != intTy.getWidth())
-                val = val.sextOrTrunc(intTy.getWidth());
-              result = arith::ConstantOp::create(rewriter, loc, intTy,
-                  rewriter.getIntegerAttr(intTy, val));
-            }
-          }
-          // moore.add → arith.addi
-          else if (v.getDefiningOp() && isa<AddOp>(v.getDefiningOp())) {
-            auto addOp = cast<AddOp>(v.getDefiningOp());
-            Value lhsC = convertMooreValue(addOp.getLhs());
-            Value rhsC = convertMooreValue(addOp.getRhs());
-            if (lhsC && rhsC)
-              result = arith::AddIOp::create(rewriter, loc, lhsC, rhsC);
-          }
-          // moore.sub → arith.subi
-          else if (v.getDefiningOp() && isa<SubOp>(v.getDefiningOp())) {
-            auto subOp = cast<SubOp>(v.getDefiningOp());
-            Value lhsC = convertMooreValue(subOp.getLhs());
-            Value rhsC = convertMooreValue(subOp.getRhs());
-            if (lhsC && rhsC)
-              result = arith::SubIOp::create(rewriter, loc, lhsC, rhsC);
-          }
-          // moore.mul → arith.muli
-          else if (v.getDefiningOp() && isa<MulOp>(v.getDefiningOp())) {
-            auto mulOp = cast<MulOp>(v.getDefiningOp());
-            Value lhsC = convertMooreValue(mulOp.getLhs());
-            Value rhsC = convertMooreValue(mulOp.getRhs());
-            if (lhsC && rhsC)
-              result = arith::MulIOp::create(rewriter, loc, lhsC, rhsC);
-          }
-          // Block argument: look up the converted argument directly
-          // from the function's entry block (avoid getRemappedValue which
-          // may trigger materializations that prevent inline region erasure)
-          else if (auto blockArg = mlir::dyn_cast<BlockArgument>(v)) {
-            auto funcOp = op->getParentOfType<func::FuncOp>();
-            if (funcOp) {
-              Block *entryBlock = &funcOp.getBody().front();
-              unsigned argIdx = blockArg.getArgNumber();
-              if (argIdx < entryBlock->getNumArguments()) {
-                result = entryBlock->getArgument(argIdx);
-              }
-            }
-          }
-          // Value defined outside the inline region
-          else if (v.getDefiningOp() &&
-                   v.getDefiningOp()->getParentRegion() != &inlineRegion) {
-            Value remapped = rewriter.getRemappedValue(v);
-            if (remapped) {
-              if (auto castOp =
-                      remapped.getDefiningOp<UnrealizedConversionCastOp>())
-                if (castOp.getInputs().size() == 1)
-                  remapped = castOp.getInputs()[0];
-              result = remapped;
-            }
-          }
-
-          if (result)
-            mooreToConverted[v] = result;
-          return result;
-        };
 
         Value convertedBound = convertMooreValue(dynBound);
         if (!convertedBound)
@@ -24880,6 +24933,15 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         hardConstrainedProps.insert(constraint.propertyName);
       }
     }
+    // Inline array-size and contains constraints are hard unless marked soft.
+    for (const auto &sizeFixup : dynArraySizeFixups) {
+      if (!sizeFixup.isSoft)
+        hardConstrainedProps.insert(sizeFixup.prop);
+    }
+    for (const auto &containsFixup : arrayContainsFixups) {
+      if (!containsFixup.isSoft)
+        hardConstrainedProps.insert(containsFixup.prop);
+    }
 
     // IEEE 1800-2017 §18.5.14.1: Soft constraint priority rules:
     // 1. Within the same class, the LAST soft constraint per property wins
@@ -25029,6 +25091,10 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         allConstrainedProps.insert(c.propertyName);
       for (const auto &c : distConstraints)
         allConstrainedProps.insert(c.propertyName);
+      for (const auto &sizeFixup : dynArraySizeFixups)
+        allConstrainedProps.insert(sizeFixup.prop);
+      for (const auto &containsFixup : arrayContainsFixups)
+        allConstrainedProps.insert(containsFixup.prop);
 
       // Compute solve order (priority values for each property)
       auto solveOrder = computeSolveOrder(solveBeforeOrdering, allConstrainedProps);
@@ -25245,7 +25311,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     if (!hardConstraints.empty() || !effectiveSoftConstraints.empty() ||
         !softRangeConstraints.empty() ||
         !distConstraints.empty() || !conditionalConstraints.empty() ||
-        !dynamicConstraints.empty()) {
+        !dynamicConstraints.empty() || !dynArraySizeFixups.empty() ||
+        !arrayContainsFixups.empty()) {
       // First, do basic randomization for the whole class
       auto classSizeConst = LLVM::ConstantOp::create(
           rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteSize));
@@ -25312,6 +25379,108 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
                     return dynFixedProps.contains(c.propertyName);
                   }),
               hardConstraints.end());
+        }
+      }
+
+      // Apply dynamic array/queue size constraints from inline expressions
+      // such as `arr.size() == N`.
+      if (!dynArraySizeFixups.empty()) {
+        auto dynArrayTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+        auto dynNewFnTy = LLVM::LLVMFunctionType::get(dynArrayTy, {i32Ty});
+        auto dynNewFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_dyn_array_new", dynNewFnTy);
+
+        auto lookupPropertyType = [&](StringRef propName) -> Type {
+          if (!classDecl)
+            return {};
+          ClassDeclOp decl = classDecl;
+          while (true) {
+            for (auto propDecl : decl.getBody().getOps<ClassPropertyDeclOp>())
+              if (propDecl.getSymName() == propName)
+                return propDecl.getPropertyType();
+            auto baseAttr = decl.getBaseAttr();
+            if (!baseAttr)
+              break;
+            auto *baseSym = mod.lookupSymbol(baseAttr);
+            auto baseDecl = dyn_cast_or_null<ClassDeclOp>(baseSym);
+            if (!baseDecl)
+              break;
+            decl = baseDecl;
+          }
+          return {};
+        };
+
+        for (const auto &sizeFixup : dynArraySizeFixups) {
+          if (sizeFixup.isSoft)
+            continue;
+          auto pathIt = structInfo->propertyPath.find(sizeFixup.prop);
+          if (pathIt == structInfo->propertyPath.end())
+            continue;
+          auto propTy = lookupPropertyType(sizeFixup.prop);
+          Type elemMooreTy;
+          if (auto openTy = dyn_cast<OpenUnpackedArrayType>(propTy))
+            elemMooreTy = openTy.getElementType();
+          else if (auto queueTy = dyn_cast<QueueType>(propTy))
+            elemMooreTy = queueTy.getElementType();
+          else
+            continue;
+          Type elemLLVMTy = typeConverter->convertType(elemMooreTy);
+          if (!elemLLVMTy)
+            continue;
+          uint64_t elemByteSize = getTypeSizeSafe(elemLLVMTy, mod);
+          if (elemByteSize == 0)
+            elemByteSize = 1;
+
+          OpBuilder::InsertionGuard guard(rewriter);
+          Value randEnabled = createRandEnabledCheck(sizeFixup.prop);
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, randEnabled,
+                                        /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
+          Value requestedElems = LLVM::ConstantOp::create(
+              rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(sizeFixup.size));
+          Value allocBytes = requestedElems;
+          if (elemByteSize > 1) {
+            Value elemSizeVal = LLVM::ConstantOp::create(
+                rewriter, loc, i32Ty,
+                rewriter.getI32IntegerAttr(static_cast<int32_t>(elemByteSize)));
+            allocBytes =
+                LLVM::MulOp::create(rewriter, loc, i32Ty, requestedElems,
+                                    elemSizeVal);
+          }
+          auto dynArrayVal = LLVM::CallOp::create(
+              rewriter, loc, TypeRange{dynArrayTy}, SymbolRefAttr::get(dynNewFn),
+              ValueRange{allocBytes});
+          // Keep array element randomization semantics by randomizing the
+          // newly allocated array payload bytes (not just setting len).
+          Value arrayDataPtr = LLVM::ExtractValueOp::create(
+              rewriter, loc, ptrTy, dynArrayVal.getResult(),
+              ArrayRef<int64_t>{0});
+          Value allocBytesI64 =
+              arith::ExtSIOp::create(rewriter, loc, i64Ty, allocBytes);
+          LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                               SymbolRefAttr::get(basicFn),
+                               ValueRange{arrayDataPtr, allocBytesI64});
+          Value elemCount64 =
+              arith::ExtSIOp::create(rewriter, loc, i64Ty, requestedElems);
+          Value patchedLen = LLVM::InsertValueOp::create(
+              rewriter, loc, dynArrayVal.getResult(), elemCount64,
+              ArrayRef<int64_t>{1});
+
+          Type fieldTy = resolveStructFieldType(structTy, pathIt->second);
+          Value valueToStore = patchedLen;
+          if (fieldTy && valueToStore.getType() != fieldTy)
+            valueToStore = UnrealizedConversionCastOp::create(
+                               rewriter, loc, fieldTy, valueToStore)
+                               .getResult(0);
+
+          SmallVector<LLVM::GEPArg> gepIndices;
+          gepIndices.push_back(0);
+          for (unsigned idx : pathIt->second)
+            gepIndices.push_back(static_cast<int32_t>(idx));
+          auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                              classPtr, gepIndices);
+          LLVM::StoreOp::create(rewriter, loc, valueToStore, fieldPtr);
         }
       }
 
@@ -25980,6 +26149,120 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
                                                  gepIndices);
             LLVM::StoreOp::create(rewriter, loc, truncatedVal, fieldPtr);
           }
+        }
+      }
+
+      // Apply inline contains constraints (`x inside {array}`), which are
+      // represented as `moore.array.contains(array, x)` in inline expressions.
+      // Keep this late in the sequence so later fixup phases don't overwrite it.
+      if (!arrayContainsFixups.empty()) {
+        auto rangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
+        auto rangeFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                              "__moore_randomize_with_range",
+                                              rangeFnTy);
+        auto one64 = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                              rewriter.getI64IntegerAttr(1));
+        auto zero64 = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                               rewriter.getI64IntegerAttr(0));
+        auto i8Ty = IntegerType::get(ctx, 8);
+
+        for (const auto &containsFixup : arrayContainsFixups) {
+          if (containsFixup.isSoft)
+            continue;
+          auto pathIt = structInfo->propertyPath.find(containsFixup.prop);
+          if (pathIt == structInfo->propertyPath.end())
+            continue;
+          Type fieldTy = resolveStructFieldType(structTy, pathIt->second);
+          auto fieldIntTy = dyn_cast_or_null<IntegerType>(fieldTy);
+          if (!fieldIntTy)
+            continue;
+
+          Type elemMooreTy;
+          if (auto openTy =
+                  dyn_cast<OpenUnpackedArrayType>(containsFixup.arrayType))
+            elemMooreTy = openTy.getElementType();
+          else if (auto queueTy = dyn_cast<QueueType>(containsFixup.arrayType))
+            elemMooreTy = queueTy.getElementType();
+          else
+            continue;
+          Type elemLLVMTy = typeConverter->convertType(elemMooreTy);
+          auto elemIntTy = dyn_cast_or_null<IntegerType>(elemLLVMTy);
+          if (!elemIntTy)
+            continue;
+
+          uint64_t elemByteSize = getTypeSizeSafe(elemLLVMTy, mod);
+          if (elemByteSize == 0)
+            elemByteSize = 1;
+
+          OpBuilder::InsertionGuard guard(rewriter);
+          Value randEnabled = createRandEnabledCheck(containsFixup.prop);
+          auto ifRand = scf::IfOp::create(rewriter, loc, TypeRange{}, randEnabled,
+                                          /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifRand.getThenRegion().front());
+
+          Value arrayVal = containsFixup.arrayValue;
+          if (auto castOp = arrayVal.getDefiningOp<UnrealizedConversionCastOp>())
+            if (castOp.getInputs().size() == 1)
+              arrayVal = castOp.getInputs()[0];
+          auto dynArrayTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+          if (isa<LLVM::LLVMPointerType>(arrayVal.getType()))
+            arrayVal = LLVM::LoadOp::create(rewriter, loc, dynArrayTy, arrayVal);
+          if (!isa<LLVM::LLVMStructType>(arrayVal.getType()))
+            arrayVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, dynArrayTy, arrayVal)
+                           .getResult(0);
+          auto arrayStructTy = dyn_cast<LLVM::LLVMStructType>(arrayVal.getType());
+          if (!arrayStructTy || arrayStructTy.getBody().size() < 2)
+            continue;
+          Value dataPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy,
+                                                       arrayVal,
+                                                       ArrayRef<int64_t>{0});
+          Value numElems = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty,
+                                                        arrayVal,
+                                                        ArrayRef<int64_t>{1});
+          Value hasElems = arith::CmpIOp::create(rewriter, loc,
+                                                 arith::CmpIPredicate::sgt,
+                                                 numElems, zero64);
+          auto ifNonEmpty = scf::IfOp::create(rewriter, loc, TypeRange{},
+                                              hasElems,
+                                              /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifNonEmpty.getThenRegion().front());
+
+          Value maxIdx = arith::SubIOp::create(rewriter, loc, numElems, one64);
+          Value randomIdx = LLVM::CallOp::create(
+              rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangeFn),
+              ValueRange{zero64, maxIdx}).getResult();
+
+          Value elemSizeVal = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(static_cast<int64_t>(elemByteSize)));
+          Value byteOffset =
+              arith::MulIOp::create(rewriter, loc, randomIdx, elemSizeVal);
+          Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i8Ty,
+                                              dataPtr, ValueRange{byteOffset});
+          Value elemVal =
+              LLVM::LoadOp::create(rewriter, loc, elemLLVMTy, elemPtr);
+
+          Value selectedVal = elemVal;
+          if (elemIntTy.getWidth() > fieldIntTy.getWidth()) {
+            selectedVal =
+                arith::TruncIOp::create(rewriter, loc, fieldIntTy, selectedVal);
+          } else if (elemIntTy.getWidth() < fieldIntTy.getWidth()) {
+            selectedVal =
+                arith::ExtUIOp::create(rewriter, loc, fieldIntTy, selectedVal);
+          } else if (selectedVal.getType() != fieldIntTy) {
+            selectedVal = UnrealizedConversionCastOp::create(
+                              rewriter, loc, fieldIntTy, selectedVal)
+                              .getResult(0);
+          }
+
+          SmallVector<LLVM::GEPArg> gepIndices;
+          gepIndices.push_back(0);
+          for (unsigned idx : pathIt->second)
+            gepIndices.push_back(static_cast<int32_t>(idx));
+          auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                              classPtr, gepIndices);
+          LLVM::StoreOp::create(rewriter, loc, selectedVal, fieldPtr);
         }
       }
 
