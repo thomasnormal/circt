@@ -1096,6 +1096,42 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - push static classification deeper into frequent unresolved
         `call_indirect` cases by introducing guarded runtime profile-based
         specialization (target set/version guards) before strict default-on.
+40. Unresolved-vtable-slot `call_indirect` conservative slot-set closure
+    (February 18, 2026):
+    - native thunk policy closures:
+      - extended local-callee suspension summary with conservative
+        vtable-slot candidate analysis for `func.call_indirect` when the
+        direct callee symbol is unresolved but a static slot index is known.
+      - for such calls, the policy now:
+        - extracts the static vtable slot index from
+          `load(gep(..., slot))` callee chains.
+        - collects all `circt.vtable_entries` candidates at that slot across
+          module vtables.
+        - classifies the call as non-suspending only if every candidate callee
+          is local and recursively non-suspending.
+      - dynamic/unknown slot forms remain conservatively suspending.
+    - regression coverage:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-call-indirect-vtable-slot-nonsuspending-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-call-indirect-vtable-slot-suspending-unsupported-strict.mlir`
+    - validation:
+      - targeted strict/parallel regressions: PASS (10 focused tests).
+      - bounded integration smokes: PASS
+        - AVIP compile lane (`jtag`, seed 1): PASS
+          (`/tmp/avip-circt-sim-vtable-slot-20260218-090917/matrix.tsv`,
+          compile `26s`, sim `41s`).
+        - `sv-tests`: `11.10.1--string_concat` PASS
+          (`/tmp/sv-tests-circt-sim-vtable-slot-20260218-090917.txt`).
+        - `verilator-verification` BMC smoke:
+          `assert_changed` PASS
+          (`/tmp/verilator-bmc-vtable-slot-20260218-090917.tsv`).
+        - `yosys/tests/sva` BMC smoke: `basic00` PASS
+          (`/tmp/yosys-sva-bmc-vtable-slot-20260218-090918.tsv`).
+        - OpenTitan sim smoke: `prim_count` PASS
+          (`/tmp/opentitan-circt-sim-vtable-slot-20260218-090918/run.log`).
+    - next closure target:
+      - add guarded runtime indirect-target-set profiling and specialization
+        for hot unresolved `call_indirect` sites (target-set hash/version
+        guards + strict deopt fallback) to close remaining strict tails.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
