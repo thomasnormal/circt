@@ -8980,17 +8980,40 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
                 })
           .Case("$timeunit",
                 [&]() -> Value {
-                  // $timeunit with no args returns current time unit.
-                  // Stub: return 0 (will be coerced to real by slang).
+                  // $timeunit with no args returns current scope's time unit
+                  // as the exponent of 10 (e.g., 1ns -> -9, 10ns -> -8).
                   auto intTy = moore::IntType::getInt(getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                  int exponent =
+                      -3 * static_cast<int>(timeScale.base.unit);
+                  auto mag = static_cast<int>(
+                      timeScale.base.magnitude);
+                  if (mag >= 100)
+                    exponent += 2;
+                  else if (mag >= 10)
+                    exponent += 1;
+                  return moore::ConstantOp::create(
+                      builder, loc, intTy,
+                      APInt(32, static_cast<uint64_t>(exponent),
+                            /*isSigned=*/true));
                 })
           .Case("$timeprecision",
                 [&]() -> Value {
-                  // $timeprecision with no args returns current precision.
-                  // Stub: return 0.
+                  // $timeprecision with no args returns current scope's
+                  // precision as the exponent of 10 (e.g., 1ps -> -12).
                   auto intTy = moore::IntType::getInt(getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                  int exponent =
+                      -3 * static_cast<int>(
+                               timeScale.precision.unit);
+                  auto mag = static_cast<int>(
+                      timeScale.precision.magnitude);
+                  if (mag >= 100)
+                    exponent += 2;
+                  else if (mag >= 10)
+                    exponent += 1;
+                  return moore::ConstantOp::create(
+                      builder, loc, intTy,
+                      APInt(32, static_cast<uint64_t>(exponent),
+                            /*isSigned=*/true));
                 })
           .Case("$reset_count",
                 [&]() -> Value {
@@ -9695,16 +9718,40 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   return moore::ConstantOp::create(builder, loc, intTy, 1);
                 })
           // $timeunit/$timeprecision with one arg (hierarchical ref).
-          // Stub: return 0.
+          // Use current scope's timescale (slang resolves the referenced
+          // module's timescale at the call site for static cases).
           .Case("$timeunit",
                 [&]() -> Value {
                   auto intTy = moore::IntType::getInt(getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                  int exponent =
+                      -3 * static_cast<int>(timeScale.base.unit);
+                  auto mag = static_cast<int>(
+                      timeScale.base.magnitude);
+                  if (mag >= 100)
+                    exponent += 2;
+                  else if (mag >= 10)
+                    exponent += 1;
+                  return moore::ConstantOp::create(
+                      builder, loc, intTy,
+                      APInt(32, static_cast<uint64_t>(exponent),
+                            /*isSigned=*/true));
                 })
           .Case("$timeprecision",
                 [&]() -> Value {
                   auto intTy = moore::IntType::getInt(getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                  int exponent =
+                      -3 * static_cast<int>(
+                               timeScale.precision.unit);
+                  auto mag = static_cast<int>(
+                      timeScale.precision.magnitude);
+                  if (mag >= 100)
+                    exponent += 2;
+                  else if (mag >= 10)
+                    exponent += 1;
+                  return moore::ConstantOp::create(
+                      builder, loc, intTy,
+                      APInt(32, static_cast<uint64_t>(exponent),
+                            /*isSigned=*/true));
                 })
           // $countdrivers (IEEE 1800-2017 Section 21.6). Legacy. Return 0.
           .Case("$countdrivers",
