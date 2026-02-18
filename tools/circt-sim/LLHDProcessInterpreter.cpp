@@ -17936,14 +17936,37 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
     return reject("bad-args");
 
   uint64_t selfAddr = args[0].getUInt64();
-  if (selfAddr == 0)
-    return reject("null-self");
 
   int64_t dividerRaw = args[1].isX() ? 1 : args[1].getAPInt().getSExtValue();
   if (dividerRaw <= 0)
     dividerRaw = 1;
   if (dividerRaw > 0x7fffffff)
     dividerRaw = 0x7fffffff;
+
+  auto &state = processStates[procId];
+  if (selfAddr == 0) {
+    // Null-handle BaudClk helpers can degrade into no-op wait_event spin loops
+    // (no resolved sensitivity, immediate re-schedule). Keep them suspended
+    // behind a non-resolving memory waiter so they do not consume unbounded
+    // steps in timeout-bounded AVIP lanes.
+    state.waiting = true;
+    state.sequencerGetRetryCallOp = callOp.getOperation();
+    MemoryEventWaiter waiter;
+    waiter.address = ~static_cast<uint64_t>(0);
+    waiter.lastValue = 0;
+    waiter.valueSize = 1;
+    waiter.waitForRisingEdge = false;
+    memoryEventWaiters[procId] = waiter;
+    if (traceBaudFastPath) {
+      static unsigned nullSelfStallCount = 0;
+      if (nullSelfStallCount < 50) {
+        ++nullSelfStallCount;
+        llvm::errs() << "[BAUD-FP] null-self-stall proc=" << procId
+                     << " callee=" << calleeName << "\n";
+      }
+    }
+    return true;
+  }
 
   auto readI32AtAddr = [&](uint64_t addr, int32_t &out) -> bool {
     out = 0;
@@ -18036,7 +18059,6 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
     return false;
   };
 
-  auto &state = processStates[procId];
   auto &fastState = state.baudClkGeneratorFastPathByCall[callOp.getOperation()];
   if (!fastState.initialized) {
     uint64_t clockFieldOffset = 0;
@@ -18056,50 +18078,45 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
       return value;
     };
 
-    for (Block &block : funcOp.getBody()) {
-      for (Operation &op : block) {
-        auto gepOp = dyn_cast<LLVM::GEPOp>(&op);
-        if (!gepOp)
-          continue;
-        ++gepSeen;
-        bool baseMatches = stripSingleInputCasts(gepOp.getBase()) == selfArg;
-        if (traceBaudFastPath && gepSeen <= 20) {
-          llvm::errs() << "[BAUD-FP] gep callee=" << calleeName
-                       << " baseMatches=" << (baseMatches ? 1 : 0)
-                       << " dynIdx=" << gepOp.getDynamicIndices().size();
-          auto raw = gepOp.getRawConstantIndices();
-          llvm::errs() << " rawIdx=[";
-          for (size_t i = 0; i < raw.size(); ++i) {
-            if (i)
-              llvm::errs() << ",";
-            llvm::errs() << raw[i];
-          }
-          llvm::errs() << "]\n";
+    funcOp.walk([&](LLVM::GEPOp gepOp) {
+      ++gepSeen;
+      bool baseMatches = stripSingleInputCasts(gepOp.getBase()) == selfArg;
+      if (traceBaudFastPath && gepSeen <= 20) {
+        llvm::errs() << "[BAUD-FP] gep callee=" << calleeName
+                     << " baseMatches=" << (baseMatches ? 1 : 0)
+                     << " dynIdx=" << gepOp.getDynamicIndices().size();
+        auto raw = gepOp.getRawConstantIndices();
+        llvm::errs() << " rawIdx=[";
+        for (size_t i = 0; i < raw.size(); ++i) {
+          if (i)
+            llvm::errs() << ",";
+          llvm::errs() << raw[i];
         }
-        if (stripSingleInputCasts(gepOp.getBase()) != selfArg)
-          continue;
-        auto structType = dyn_cast<LLVM::LLVMStructType>(gepOp.getElemType());
-        if (!structType)
-          continue;
-        if (!gepOp.getDynamicIndices().empty())
-          continue;
-        auto rawIndices = gepOp.getRawConstantIndices();
-        if (rawIndices.size() != 2)
-          continue;
-        if (rawIndices[0] == LLVM::GEPOp::kDynamicIndex ||
-            rawIndices[1] == LLVM::GEPOp::kDynamicIndex)
-          continue;
-        if (rawIndices[0] != 0)
-          continue;
-        if (rawIndices[1] == 0) {
-          clockFieldOffset = getLLVMStructFieldOffset(structType, 0);
-          sawClockField = true;
-        } else if (rawIndices[1] == 4) {
-          outputFieldOffset = getLLVMStructFieldOffset(structType, 4);
-          sawOutputField = true;
-        }
+        llvm::errs() << "]\n";
       }
-    }
+      if (!baseMatches)
+        return;
+      auto structType = dyn_cast<LLVM::LLVMStructType>(gepOp.getElemType());
+      if (!structType)
+        return;
+      if (!gepOp.getDynamicIndices().empty())
+        return;
+      auto rawIndices = gepOp.getRawConstantIndices();
+      if (rawIndices.size() != 2)
+        return;
+      if (rawIndices[0] == LLVM::GEPOp::kDynamicIndex ||
+          rawIndices[1] == LLVM::GEPOp::kDynamicIndex)
+        return;
+      if (rawIndices[0] != 0)
+        return;
+      if (rawIndices[1] == 0) {
+        clockFieldOffset = getLLVMStructFieldOffset(structType, 0);
+        sawClockField = true;
+      } else if (rawIndices[1] == 4) {
+        outputFieldOffset = getLLVMStructFieldOffset(structType, 4);
+        sawOutputField = true;
+      }
+    });
 
     if (!sawClockField || !sawOutputField) {
       if (traceBaudFastPath)
@@ -30358,23 +30375,25 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
       MooreString result = __moore_format_time(timeFs);
 
-      // Store the result string in native memory and return {ptr, len}.
+      // Store the result string in interpreter persistent storage and register
+      // in dynamicStrings so that __moore_string_concat and
+      // extractMooreStringFromPtr can find it.
       if (callOp.getNumResults() >= 1) {
-        uint64_t ptrVal = 0;
+        std::string str;
         if (result.data && result.len > 0) {
-          // Allocate in native memory.
-          char *copy = static_cast<char *>(std::malloc(result.len + 1));
-          std::memcpy(copy, result.data, result.len);
-          copy[result.len] = '\0';
-          ptrVal = reinterpret_cast<uint64_t>(copy);
+          str = std::string(result.data, result.len);
           std::free(const_cast<char *>(result.data));
         }
-        // Pack {ptr, len} into the struct.
+        interpreterStrings.push_back(std::move(str));
+        const std::string &stored = interpreterStrings.back();
+        int64_t ptrVal = reinterpret_cast<int64_t>(stored.data());
+        int64_t lenVal = static_cast<int64_t>(stored.size());
+        dynamicStrings[ptrVal] = {stored.data(), lenVal};
+
         APInt packed(128, 0);
-        packed.insertBits(APInt(64, ptrVal), 0);
-        packed.insertBits(APInt(64, result.len), 64);
-        setValue(procId, callOp.getResult(),
-                 InterpretedValue(packed));
+        safeInsertBits(packed, APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+        safeInsertBits(packed, APInt(64, static_cast<uint64_t>(lenVal)), 64);
+        setValue(procId, callOp.getResult(), InterpretedValue(packed));
       }
       LLVM_DEBUG(llvm::dbgs()
                  << "  llvm.call: __moore_format_time(" << timeFs
@@ -30824,6 +30843,21 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                  InterpretedValue(APInt(64, bits)));
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_atoreal(\"" << str
                                 << "\") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_chartoa ----
+    // Signature: (value: i64) -> struct{ptr, i64}
+    if (calleeName == "__moore_string_chartoa") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        InterpretedValue arg = getValue(procId, callOp.getOperand(0));
+        char ch = static_cast<char>(arg.isX() ? 0 : (arg.getUInt64() & 0xFF));
+        std::string result(1, ch);
+        setValue(procId, callOp.getResult(), storeStringResult(result));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_chartoa("
+                                << static_cast<int>(ch) << ") = \""
+                                << result << "\"\n");
       }
       return success();
     }

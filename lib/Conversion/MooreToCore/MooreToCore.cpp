@@ -14207,6 +14207,12 @@ struct FormatStringToStringOpConversion
       return callStringFromI64("__moore_string_bintoa", intI64);
     }
 
+    // Case 6b: Formatted character.
+    if (auto charOp = dyn_cast<sim::FormatCharOp>(defOp)) {
+      Value intI64 = convertIntToI64(charOp.getValue(), /*isSigned=*/false);
+      return callStringFromI64("__moore_string_chartoa", intI64);
+    }
+
     // Case 7: Formatted real value.
     if (auto realOp = dyn_cast<sim::FormatFloatOp>(defOp)) {
       Value realVal = realOp.getValue();

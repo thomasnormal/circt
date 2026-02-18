@@ -438,6 +438,11 @@ MooreString __moore_string_octtoa(int64_t value);
 /// @return A new string containing the binary representation
 MooreString __moore_string_bintoa(int64_t value);
 
+/// Convert a character value to a single-character string.
+/// @param value The character value (lowest 8 bits used)
+/// @return A new string containing the single character
+MooreString __moore_string_chartoa(int64_t value);
+
 /// Convert a real number to string representation.
 /// @param value The real value to convert
 /// @return A new string containing the real representation
