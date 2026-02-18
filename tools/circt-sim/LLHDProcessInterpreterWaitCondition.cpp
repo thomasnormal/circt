@@ -303,7 +303,9 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
     SimTime currentTime = scheduler.getCurrentTime();
     constexpr uint32_t kMaxDeltaPolls = 1000;
     constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ns
-    constexpr int64_t kQueueFallbackPollDelayFs = 100000000; // 100 ns
+    // Queue-backed waits register explicit queue-not-empty wakeups; use a
+    // sparse timed poll only as a watchdog for missed wake edge cases.
+    constexpr int64_t kQueueFallbackPollDelayFs = 1000000000; // 1 us
     // execute_phase wait(condition) loops already register objection-zero
     // waiters. Use a sparse timed poll only as a safety fallback to avoid
     // high-frequency churn while objections remain raised.

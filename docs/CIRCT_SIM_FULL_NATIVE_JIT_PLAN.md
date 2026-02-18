@@ -1568,6 +1568,46 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - unblock UART Rx progression by reducing dominant Rx-side monitoring and
         call-indirect wait stacks (for example, `fork_82_branch_1`,
         `fork_80_branch_1`) and then re-run full all9 compile lanes.
+52. Queue-backed `wait(condition)` fallback poll backoff
+    (February 18, 2026):
+    - runtime closure:
+      - in `tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp`, widened
+        queue-backed wait_condition fallback poll interval from
+        `100000000 fs` to `1000000000 fs` (100ns -> 1us).
+      - queue-not-empty waiters remain the primary wake path; timed polling is
+        retained as watchdog fallback.
+    - regression coverage:
+      - added `test/Tools/circt-sim/wait-condition-queue-fallback-backoff.mlir`
+        to lock:
+        - queue-backed wait detection (`queueWait=0x...`)
+        - sparse fallback schedule (`targetTimeFs=1000000000`).
+    - validation:
+      - builds:
+        - `ninja -C build -j4 circt-sim`: PASS
+        - `ninja -C build-test -j4 circt-sim`: PASS
+      - focused regressions: PASS
+        - `wait-condition-queue-fallback-backoff.mlir`
+        - `wait-condition-execute-phase-objection-fallback-backoff.mlir`
+        - `wait-queue-size.sv`
+        - `wait-condition-spurious-trigger.mlir`
+      - direct UART wait-condition trace (compile mode, 20s bound):
+        - baseline: `/tmp/uart-objwait-backoff-waitcond20.log`
+        - updated: `/tmp/uart-queuebackoff-waitcond20.log`
+        - queue-backed `m_init_process_guards` wait-condition traces:
+          `322 -> 75`
+        - `fork_2_branch_0` steps: `1982 -> 500`
+        - bounded sim-time progression:
+          `31971000000 fs -> 72938500000 fs`
+      - bounded AVIP UART compile lane (`--timeout=60`, compile mode):
+        - `/tmp/avip-circt-sim-uart-queuebackoff-20260218-145002/matrix.tsv`
+          (`compile_status=OK`, `sim_status=OK`)
+        - `/tmp/avip-circt-sim-uart-queuebackoff-20260218-145002/uart/sim_seed_1.log`
+          reached `497007600000 fs`, with `fork_18_branch_0 steps=1`,
+          `UartTxCovergroup=100%`, `UartRxCovergroup=0%`.
+    - next closure target:
+      - address the remaining Rx-progress bottleneck in monitor/driver call
+        stacks (notably `fork_82_branch_1` `StartMonitoring` and related
+        `func.call_indirect` chains), then re-run full all9 compile lanes.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
