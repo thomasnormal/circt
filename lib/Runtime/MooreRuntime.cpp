@@ -1499,6 +1499,13 @@ extern "C" MooreString __moore_string_bintoa(int64_t value) {
   return result;
 }
 
+// str.chartoa(value) - convert character value to single-character string
+extern "C" MooreString __moore_string_chartoa(int64_t value) {
+  MooreString result = allocateString(1);
+  result.data[0] = static_cast<char>(value & 0xFF);
+  return result;
+}
+
 // str.realtoa(value) - convert real to string
 extern "C" MooreString __moore_string_realtoa(double value) {
   char buffer[64];
