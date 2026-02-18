@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1503 - February 18, 2026
+
+### circt-sim: generic tail-wrapper collapse for resumable call-stack frames
+
+1. **Runtime updates** (`tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`):
+   - generalized resume-time wrapper collapse in `resumeSavedCallStackFrames`
+     from suffix-pair matching to a shape guard:
+     - outer frame resumes at `func.return` with zero operands
+     - previous op is a `func.call` with zero results
+     - call target matches the active inner frame symbol.
+   - this keeps existing behavior for:
+     - `StartMonitoring -> Deserializer`
+     - `DriveToBfm -> SampleData`
+     while also enabling additional pure tail wrappers without adding new
+     hardcoded suffix pairs.
+   - preserved existing trace markers:
+     - `CIRCT_SIM_TRACE_MONITOR_DESERIALIZER_FASTPATH=1` ->
+       `[MON-DESER-FP] ...`
+     - `CIRCT_SIM_TRACE_DRIVE_SAMPLE_FASTPATH=1` ->
+       `[DRV-SAMPLE-FP] ...`
+   - added generic trace marker:
+     - `CIRCT_SIM_TRACE_TAIL_WRAPPER_FASTPATH=1` ->
+       `[TAIL-WRAP-FP] ...`
+
+2. **Regression coverage**:
+   - added:
+     - `test/Tools/circt-sim/func-tail-wrapper-generic-resume-fast-path.mlir`
+   - locks generic shape-driven collapse in default + parallel lanes.
+
+3. **Validation**:
+   - build:
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+   - focused lit (filtered): PASS
+     - `func-tail-wrapper-generic-resume-fast-path.mlir`
+     - `func-drive-to-bfm-resume-fast-path.mlir`
+     - `func-start-monitoring-resume-fast-path.mlir`
+     - `func-generate-baud-clk-resume-fast-path.mlir`
+     - `func-baud-clk-generator-fast-path-delay-batch.mlir`
+     - `execute-phase-monitor-fork-objection-waiter.mlir`
+   - bounded AVIP UART compile lane (`SIM_TIMEOUT=60`):
+     - `/tmp/avip-circt-sim-uart-tail-wrapper-generic-20260218-154800/matrix.tsv`
+       (`compile_status=OK`, `sim_status=TIMEOUT`)
+     - UART log shows generic fast-path hits:
+       - `[TAIL-WRAP-FP] ... wrapper=UartTxDriverBfm::DriveToBfm ...`
+       - `[TAIL-WRAP-FP] ... wrapper=UartTxMonitorBfm::StartMonitoring ...`
+
 ## Iteration 1502 - February 18, 2026
 
 ### circt-sim: extend tail-wrapper resume collapse to `DriveToBfm -> SampleData`

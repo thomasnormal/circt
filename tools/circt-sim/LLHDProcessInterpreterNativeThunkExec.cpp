@@ -1812,6 +1812,10 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
     const char *env = std::getenv("CIRCT_SIM_TRACE_DRIVE_SAMPLE_FASTPATH");
     return env && env[0] != '\0' && env[0] != '0';
   }();
+  static bool traceTailWrapperFastPath = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_TAIL_WRAPPER_FASTPATH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
   auto tryResumeGenerateBaudClkFrameFastPath =
       [&](CallStackFrame &frame,
           size_t oldFrameCount) -> FastResumeAction {
@@ -1884,18 +1888,12 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
     return FastResumeAction::Suspended;
   };
   auto collapseTailWrapperFrame = [&](CallStackFrame &frame,
-                                      size_t &oldFrameCount,
-                                      llvm::StringRef wrapperNameSuffix,
-                                      llvm::StringRef calleeNameSuffix,
-                                      bool traceEnabled,
-                                      llvm::StringRef traceTag) {
+                                      size_t &oldFrameCount) {
     if (frame.isLLVM() || !frame.funcOp || state.callStack.empty())
       return;
 
     CallStackFrame &outerFrame = state.callStack.front();
     if (outerFrame.isLLVM() || !outerFrame.funcOp || !outerFrame.resumeBlock)
-      return;
-    if (!outerFrame.funcOp.getName().ends_with(wrapperNameSuffix))
       return;
     if (outerFrame.resumeOp == outerFrame.resumeBlock->end())
       return;
@@ -1908,23 +1906,42 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
 
     auto callInWrapperIt = std::prev(outerFrame.resumeOp);
     auto wrapperCallOp = dyn_cast<mlir::func::CallOp>(*callInWrapperIt);
-    if (!wrapperCallOp || !wrapperCallOp.getCallee().ends_with(calleeNameSuffix))
+    if (!wrapperCallOp || wrapperCallOp.getNumResults() != 0)
       return;
     if (wrapperCallOp.getCallee() != frame.funcOp.getName())
       return;
 
     // Tail call-through wrappers can be dropped once execution has suspended in
     // the callee. Keep resume work pinned on the hot inner frame.
-    std::string outerFrameName = outerFrame.funcOp.getName().str();
+    llvm::StringRef outerFrameNameRef = outerFrame.funcOp.getName();
+    llvm::StringRef calleeNameRef = wrapperCallOp.getCallee();
+    std::string outerFrameName = outerFrameNameRef.str();
+    std::string calleeName = calleeNameRef.str();
     state.callStack.erase(state.callStack.begin());
     --oldFrameCount;
 
-    if (traceEnabled) {
+    bool emitMonitorDeserializerTrace =
+        traceMonitorDeserializerFastPath &&
+        outerFrameNameRef.ends_with("::StartMonitoring") &&
+        calleeNameRef.ends_with("::Deserializer");
+    bool emitDriveSampleTrace = traceDriveSampleFastPath &&
+                                outerFrameNameRef.ends_with("::DriveToBfm") &&
+                                calleeNameRef.ends_with("::SampleData");
+
+    if (emitMonitorDeserializerTrace || emitDriveSampleTrace ||
+        traceTailWrapperFastPath) {
       static unsigned tailWrapperResumeFastPathHits = 0;
       if (tailWrapperResumeFastPathHits < 100) {
         ++tailWrapperResumeFastPathHits;
-        llvm::errs() << traceTag << " resume-hit proc=" << procId
-                     << " callee=" << outerFrameName << "\n";
+        if (emitMonitorDeserializerTrace)
+          llvm::errs() << "[MON-DESER-FP]";
+        else if (emitDriveSampleTrace)
+          llvm::errs() << "[DRV-SAMPLE-FP]";
+        else
+          llvm::errs() << "[TAIL-WRAP-FP]";
+        llvm::errs() << " resume-hit proc=" << procId
+                     << " wrapper=" << outerFrameName
+                     << " callee=" << calleeName << "\n";
       }
     }
   };
@@ -1943,13 +1960,7 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
                << "function '" << frameName << "' (remaining old frames: "
                << oldFrameCount << ")\n");
 
-    collapseTailWrapperFrame(frame, oldFrameCount, "::StartMonitoring",
-                             "::Deserializer",
-                             traceMonitorDeserializerFastPath,
-                             "[MON-DESER-FP]");
-    collapseTailWrapperFrame(frame, oldFrameCount, "::DriveToBfm",
-                             "::SampleData", traceDriveSampleFastPath,
-                             "[DRV-SAMPLE-FP]");
+    collapseTailWrapperFrame(frame, oldFrameCount);
 
     FastResumeAction fastResumeAction =
         tryResumeGenerateBaudClkFrameFastPath(frame, oldFrameCount);
