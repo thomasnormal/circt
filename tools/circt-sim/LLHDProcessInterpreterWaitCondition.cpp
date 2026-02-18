@@ -302,12 +302,15 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
     // but fall back to real time after many delta steps to avoid infinite loops.
     SimTime currentTime = scheduler.getCurrentTime();
     constexpr uint32_t kMaxDeltaPolls = 1000;
-    constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
-    constexpr int64_t kQueueFallbackPollDelayFs = 100000000; // 100 ps
+    constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ns
+    constexpr int64_t kQueueFallbackPollDelayFs = 100000000; // 100 ns
+    // execute_phase wait(condition) loops already register objection-zero
+    // waiters. Use a sparse timed poll only as a safety fallback to avoid
+    // high-frequency churn while objections remain raised.
     constexpr int64_t kExecutePhaseObjectionFallbackPollDelayFs =
-        10000000; // 10 ps
+        1000000000; // 1 us
     constexpr uint32_t kMemoryMaxDeltaPolls = 32;
-    constexpr int64_t kMemoryFallbackPollDelayFs = 1000000000; // 1 ns
+    constexpr int64_t kMemoryFallbackPollDelayFs = 1000000000; // 1 us
     SimTime targetTime;
     uint64_t memoryWaitAddr = 0;
     int64_t objectionWaitHandle = MOORE_OBJECTION_INVALID_HANDLE;

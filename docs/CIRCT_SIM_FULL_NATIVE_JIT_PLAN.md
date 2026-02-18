@@ -1533,6 +1533,41 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - convert reduced monitor-fork churn into end-to-end UART lane
         completion by unblocking Rx functional progression
         (`UartRxCovergroup` remains `0%`) and rerun full all9 compile lanes.
+51. Execute-phase `wait(condition)` objection fallback poll backoff
+    (February 18, 2026):
+    - runtime closure:
+      - in `tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp`, widened
+        execute-phase wait(condition) objection fallback poll interval from
+        `10000000 fs` to `1000000000 fs` (10ns -> 1us) when
+        `objectionWaitHandle` is active.
+      - preserves objection-zero waiter registration as the primary wake path;
+        timed polling remains a sparse safety net.
+    - regression coverage:
+      - added
+        `test/Tools/circt-sim/wait-condition-execute-phase-objection-fallback-backoff.mlir`
+        to lock:
+        - `func=uvm_pkg::uvm_phase_hopper::execute_phase`
+        - non-invalid `objectionWaitHandle`
+        - `targetTimeFs=1000000000`.
+    - validation:
+      - build:
+        - `ninja -C build -j4 circt-sim`: PASS.
+      - focused regressions: PASS
+        - `wait-condition-execute-phase-objection-fallback-backoff.mlir`
+        - `execute-phase-monitor-fork-objection-waiter.mlir`
+        - `func-generate-baud-clk-resume-fast-path.mlir`
+        - `func-baud-clk-generator-fast-path-delay-batch.mlir`
+        - `jit-process-fast-path-store-wait-self-loop.mlir`
+      - bounded AVIP UART compile lane (`--timeout=60`, compile mode):
+        - `/tmp/avip-circt-sim-uart-objwait-backoff-20260218-144031/matrix.tsv`
+          (`compile_status=OK`, `sim_status=OK`)
+        - `/tmp/avip-circt-sim-uart-objwait-backoff-20260218-144031/uart/sim_seed_1.log`
+          reached `505859300000 fs` with `UartTxCovergroup=100%`,
+          `UartRxCovergroup=0%`.
+    - next closure target:
+      - unblock UART Rx progression by reducing dominant Rx-side monitoring and
+        call-indirect wait stacks (for example, `fork_82_branch_1`,
+        `fork_80_branch_1`) and then re-run full all9 compile lanes.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
