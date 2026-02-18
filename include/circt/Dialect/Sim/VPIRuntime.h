@@ -26,6 +26,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
@@ -140,6 +141,9 @@ typedef struct t_cb_data *p_cb_data;
 #endif
 #ifndef vpiReg
 #define vpiReg 48
+#endif
+#ifndef vpiIntegerVar
+#define vpiIntegerVar 25
 #endif
 #ifndef vpiPort
 #define vpiPort 44
@@ -336,6 +340,7 @@ enum class VPIObjectType : uint8_t {
   Module = 0,
   Net = 1,
   Reg = 2,
+  Integer = 11,
   Port = 3,
   Parameter = 4,
   Iterator = 5,
@@ -443,6 +448,9 @@ public:
   void setTopModuleNames(const llvm::SmallVector<std::string, 4> &names) {
     topModuleNames = names;
   }
+
+  /// Mark a signal name as having integer type (for vpiIntegerVar reporting).
+  void addIntegerVar(const std::string &name) { integerVarNames.insert(name); }
 
   /// Build the VPI object hierarchy from the ProcessScheduler's signals.
   /// Call this after all signals are registered in the scheduler.
@@ -639,6 +647,9 @@ private:
 
   /// Top module names from --top CLI flags.
   llvm::SmallVector<std::string, 4> topModuleNames;
+
+  /// Signal names that should be reported as vpiIntegerVar.
+  llvm::StringSet<> integerVarNames;
 
   /// ID counters.
   uint32_t nextObjId = 1;

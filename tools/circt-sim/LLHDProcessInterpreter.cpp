@@ -321,6 +321,47 @@ static int32_t getNativeUvmPortSize(
   return static_cast<int32_t>(seedIt->second.size());
 }
 
+static uint64_t hashInterpretedArgs(llvm::ArrayRef<InterpretedValue> args) {
+  uint64_t hash = 0x517cc1b727220a95ULL;
+  for (const auto &arg : args) {
+    uint64_t bits = arg.isX() ? 0xDEADBEEFULL : arg.getUInt64();
+    hash = hash * 0x9e3779b97f4a7c15ULL + bits;
+  }
+  return hash;
+}
+
+static bool isUvmFuncResultCacheable(llvm::StringRef calleeName,
+                                     bool &cacheOnlyNonZeroResult) {
+  cacheOnlyNonZeroResult = false;
+  bool isCacheableFunc = false;
+
+  if (calleeName.contains("uvm_phase::")) {
+    if (calleeName.contains("get_schedule") ||
+        calleeName.contains("get_domain") ||
+        calleeName.contains("get_phase_type") ||
+        calleeName.contains("::find") ||
+        calleeName.contains("m_find_successor") ||
+        calleeName.contains("m_find_predecessor") ||
+        calleeName.contains("m_find_successor_by_name") ||
+        calleeName.contains("m_find_predecessor_by_name")) {
+      isCacheableFunc = true;
+    }
+  }
+
+  if (calleeName == "get_0" || calleeName == "get_common_domain" ||
+      calleeName == "get_global_hopper" || calleeName == "m_uvm_get_root" ||
+      calleeName.contains("uvm_default_coreservice_t::get_phase_hopper") ||
+      calleeName.contains("uvm_default_coreservice_t::get_root") ||
+      calleeName.contains("uvm_component::get_domain")) {
+    isCacheableFunc = true;
+    // These singleton/domain getters can return null transiently during
+    // initialization. Avoid memoizing null and freezing later lookups.
+    cacheOnlyNonZeroResult = true;
+  }
+
+  return isCacheableFunc;
+}
+
 //===----------------------------------------------------------------------===//
 // LLHDProcessInterpreter Implementation
 //===----------------------------------------------------------------------===//
@@ -1188,6 +1229,25 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
     });
     for (size_t i = 0; i < std::min(sorted.size(), (size_t)20); ++i)
       os << "  " << sorted[i].second << "x " << sorted[i].first << "\n";
+  }
+
+  if (profilingEnabled) {
+    uint64_t localFuncCacheHits = 0;
+    uint64_t localFuncCacheEntries = 0;
+    for (const auto &entry : processStates) {
+      localFuncCacheHits += entry.second.funcCacheHits;
+      for (const auto &funcEntry : entry.second.funcResultCache)
+        localFuncCacheEntries += funcEntry.second.size();
+    }
+
+    uint64_t sharedFuncCacheEntries = 0;
+    for (const auto &funcEntry : sharedFuncResultCache)
+      sharedFuncCacheEntries += funcEntry.second.size();
+
+    os << "[circt-sim] UVM function-result cache: local_hits="
+       << localFuncCacheHits << " shared_hits=" << sharedFuncCacheHits
+       << " local_entries=" << localFuncCacheEntries
+       << " shared_entries=" << sharedFuncCacheEntries << "\n";
   }
 
   if (!uvmJitPromotedFastPaths.empty()) {
@@ -10964,14 +11024,22 @@ arith_dispatch:
     if (profilingEnabled)
       ++funcCallProfile[calleeName];
 
-    if (calleeName.contains("uvm_component::set_domain")) {
+    if (calleeName.contains("uvm_component::set_domain") ||
+        calleeName.contains("uvm_phase::add")) {
       auto &cacheState = processStates[procId];
       if (!cacheState.funcResultCache.empty()) {
         LLVM_DEBUG(llvm::dbgs()
                    << "  call_indirect: invalidating func result cache ("
                    << cacheState.funcResultCache.size()
-                   << " functions cached) due to component::set_domain\n");
+                   << " functions cached) due to " << calleeName << "\n");
         cacheState.funcResultCache.clear();
+      }
+      if (!sharedFuncResultCache.empty()) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  call_indirect: invalidating shared func result cache ("
+                   << sharedFuncResultCache.size()
+                   << " functions cached) due to " << calleeName << "\n");
+        sharedFuncResultCache.clear();
       }
     }
 
@@ -16979,16 +17047,30 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
                  << waitList.size() << " probe signal(s)\n");
       cacheWaitState(state, scheduler, &waitList, hadDelay);
     } else {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Wait with no delay and no signals - scheduling "
-                    "immediate delta-step resumption (always @(*) fallback)\n");
+      // Guard against infinite delta cycles: if this process+wait has already
+      // been through the empty-sensitivity fallback at least once, halt the
+      // process instead of re-scheduling.  This prevents processes that read
+      // from allocas (e.g. string-type always blocks) from spinning forever.
+      auto fallbackKey = std::make_pair(procId, waitOp.getOperation());
+      if (emptySensitivityFallbackExecuted.count(fallbackKey)) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Wait with no delay and no signals - already "
+                      "executed via fallback, halting process\n");
+        cacheWaitState(state, scheduler, nullptr, hadDelay);
+      } else {
+        emptySensitivityFallbackExecuted.insert(fallbackKey);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Wait with no delay and no signals - scheduling "
+                      "one-shot delta-step resumption (always @(*) "
+                      "fallback)\n");
 
-      // Schedule the process to resume on the next delta cycle.
-      // This ensures the process doesn't hang when no signals are detected.
-      scheduler.getEventScheduler().scheduleNextDelta(
-          SchedulingRegion::Active,
-          Event([this, procId]() { resumeProcess(procId); }));
-      cacheWaitState(state, scheduler, nullptr, hadDelay);
+        // Schedule the process to resume on the next delta cycle.
+        // Only does this once; subsequent hits will halt the process.
+        scheduler.getEventScheduler().scheduleNextDelta(
+            SchedulingRegion::Active,
+            Event([this, procId]() { resumeProcess(procId); }));
+        cacheWaitState(state, scheduler, nullptr, hadDelay);
+      }
     }
   }
 
@@ -18511,41 +18593,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   uint64_t cacheArgHash = 0;
   if (!disableFuncResultCache) {
     llvm::StringRef calleeName = callOp.getCallee();
-    // Cache functions involved in UVM phase graph traversal.
-    // These are called repeatedly with the same args during get_common_domain()
-    // and uvm_component::new, and their results only change when add() modifies
-    // the graph. Invalidation happens in the add() handler below.
-    if (calleeName.contains("uvm_phase::")) {
-      if (calleeName.contains("get_schedule") ||
-          calleeName.contains("get_domain") ||
-          calleeName.contains("get_phase_type") ||
-          calleeName.contains("::find") ||
-          calleeName.contains("m_find_successor") ||
-          calleeName.contains("m_find_predecessor") ||
-          calleeName.contains("m_find_successor_by_name") ||
-          calleeName.contains("m_find_predecessor_by_name")) {
-        isCacheableFunc = true;
-      }
-    }
-    if (calleeName == "get_0" || calleeName == "get_common_domain" ||
-        calleeName == "get_global_hopper" ||
-        calleeName == "m_uvm_get_root" ||
-        calleeName.contains("uvm_default_coreservice_t::get_phase_hopper") ||
-        calleeName.contains("uvm_default_coreservice_t::get_root") ||
-        calleeName.contains("uvm_component::get_domain")) {
-      isCacheableFunc = true;
-      // These singleton/domain getters can return null transiently during
-      // initialization. Avoid memoizing null and freezing later lookups.
-      cacheOnlyNonZeroResult = true;
-    }
+    isCacheableFunc =
+        isUvmFuncResultCacheable(calleeName, cacheOnlyNonZeroResult);
     if (isCacheableFunc) {
-      // Compute hash of all argument values
-      cacheArgHash = 0x517cc1b727220a95ULL; // seed
-      for (const auto &arg : args) {
-        uint64_t v = arg.isX() ? 0xDEADBEEFULL : arg.getUInt64();
-        cacheArgHash = cacheArgHash * 0x9e3779b97f4a7c15ULL + v;
-      }
-      // Check cache
+      cacheArgHash = hashInterpretedArgs(args);
       auto &cacheState = processStates[procId];
       auto funcIt = cacheState.funcResultCache.find(funcOp.getOperation());
       if (funcIt != cacheState.funcResultCache.end()) {
@@ -18561,6 +18612,31 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           LLVM_DEBUG(llvm::dbgs()
                      << "  func.call: cache hit for '" << calleeName
                      << "' (hits=" << cacheState.funcCacheHits << ")\n");
+          return success();
+        }
+      }
+
+      auto sharedFuncIt = sharedFuncResultCache.find(funcOp.getOperation());
+      if (sharedFuncIt != sharedFuncResultCache.end()) {
+        auto sharedArgIt = sharedFuncIt->second.find(cacheArgHash);
+        if (sharedArgIt != sharedFuncIt->second.end()) {
+          const auto &cachedResults = sharedArgIt->second;
+          auto results = callOp.getResults();
+          for (auto [result, cached] : llvm::zip(results, cachedResults))
+            setValue(procId, result, cached);
+          ++sharedFuncCacheHits;
+          static bool traceSharedFuncCache = []() {
+            const char *env = std::getenv("CIRCT_SIM_TRACE_FUNC_CACHE");
+            return env && env[0] != '\0' && env[0] != '0';
+          }();
+          if (traceSharedFuncCache) {
+            llvm::errs() << "[FUNC-CACHE] shared hit func=" << calleeName
+                         << " arg_hash="
+                         << llvm::format_hex(cacheArgHash, 16) << "\n";
+          }
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  func.call: shared cache hit for '" << calleeName
+                     << "' (hits=" << sharedFuncCacheHits << ")\n");
           return success();
         }
       }
@@ -18610,6 +18686,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                  << " functions cached) due to phase::add\n");
       cacheState.funcResultCache.clear();
     }
+    if (!sharedFuncResultCache.empty()) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  func.call: invalidating shared func result cache ("
+                 << sharedFuncResultCache.size()
+                 << " functions cached) due to phase::add\n");
+      sharedFuncResultCache.clear();
+    }
   }
 
   // Domain setters can invalidate getter memoization.
@@ -18621,6 +18704,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                  << cacheState.funcResultCache.size()
                  << " functions cached) due to component::set_domain\n");
       cacheState.funcResultCache.clear();
+    }
+    if (!sharedFuncResultCache.empty()) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  func.call: invalidating shared func result cache ("
+                 << sharedFuncResultCache.size()
+                 << " functions cached) due to component::set_domain\n");
+      sharedFuncResultCache.clear();
     }
   }
 
@@ -19732,6 +19822,18 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     cacheStore.funcResultCache[funcOp.getOperation()][cacheArgHash] =
         llvm::SmallVector<InterpretedValue, 2>(returnValues.begin(),
                                                 returnValues.end());
+    sharedFuncResultCache[funcOp.getOperation()][cacheArgHash] =
+        llvm::SmallVector<InterpretedValue, 2>(returnValues.begin(),
+                                               returnValues.end());
+    static bool traceSharedFuncCache = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_FUNC_CACHE");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+    if (traceSharedFuncCache) {
+      llvm::errs() << "[FUNC-CACHE] shared store func=" << callOp.getCallee()
+                   << " arg_hash=" << llvm::format_hex(cacheArgHash, 16)
+                   << "\n";
+    }
     LLVM_DEBUG(llvm::dbgs()
                << "  func.call: cached result for '" << callOp.getCallee()
                << "' (argHash=0x" << llvm::format_hex(cacheArgHash, 16)
@@ -19766,6 +19868,33 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   // fallback call_indirect dispatch paths that bypass call-site interceptors.
   if (handleUvmFuncBodyFastPath(procId, funcOp, args, results, callOp))
     return success();
+
+  bool useSharedFuncResultCache = false;
+  bool sharedCacheOnlyNonZeroResult = false;
+  uint64_t sharedCacheArgHash = 0;
+  if (!disableFuncResultCache &&
+      isUvmFuncResultCacheable(funcName, sharedCacheOnlyNonZeroResult)) {
+    useSharedFuncResultCache = true;
+    sharedCacheArgHash = hashInterpretedArgs(args);
+    auto funcIt = sharedFuncResultCache.find(funcOp.getOperation());
+    if (funcIt != sharedFuncResultCache.end()) {
+      auto argIt = funcIt->second.find(sharedCacheArgHash);
+      if (argIt != funcIt->second.end()) {
+        results.assign(argIt->second.begin(), argIt->second.end());
+        ++sharedFuncCacheHits;
+        static bool traceSharedFuncCache = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_FUNC_CACHE");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
+        if (traceSharedFuncCache) {
+          llvm::errs() << "[FUNC-CACHE] shared hit func=" << funcName
+                       << " arg_hash="
+                       << llvm::format_hex(sharedCacheArgHash, 16) << "\n";
+        }
+        return success();
+      }
+    }
+  }
 
   if ((funcName.contains("raise_objection") ||
        funcName.contains("drop_objection")) &&
@@ -20482,6 +20611,28 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         // Gather return values
         for (Value operand : returnOp.getOperands()) {
           results.push_back(getValue(procId, operand));
+        }
+        if (useSharedFuncResultCache && !results.empty()) {
+          bool cacheThisResult = true;
+          if (sharedCacheOnlyNonZeroResult) {
+            const InterpretedValue &lead = results.front();
+            cacheThisResult = !lead.isX() && lead.getUInt64() != 0;
+          }
+          if (cacheThisResult) {
+            sharedFuncResultCache[funcOp.getOperation()][sharedCacheArgHash] =
+                llvm::SmallVector<InterpretedValue, 2>(results.begin(),
+                                                       results.end());
+            static bool traceSharedFuncCache = []() {
+              const char *env = std::getenv("CIRCT_SIM_TRACE_FUNC_CACHE");
+              return env && env[0] != '\0' && env[0] != '0';
+            }();
+            if (traceSharedFuncCache) {
+              llvm::errs()
+                  << "[FUNC-CACHE] shared store func=" << funcName
+                  << " arg_hash=" << llvm::format_hex(sharedCacheArgHash, 16)
+                  << "\n";
+            }
+          }
         }
         cleanupTempMappings();
         return success();

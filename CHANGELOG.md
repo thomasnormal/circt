@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1487 - February 18, 2026
+
+### circt-sim JIT: shared UVM getter cache hardening + cache telemetry for I3C triage
+
+1. **Shared cache trace + diagnostics cleanup** (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - fixed shared-cache trace hash formatting (`arg_hash=0x...`, no duplicate `0x`).
+   - added explicit shared-cache store trace lines under `CIRCT_SIM_TRACE_FUNC_CACHE=1`
+     for both direct call caching and function-body return caching.
+2. **Runtime cache observability added** (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - profile summary now reports:
+     - `local_hits`
+     - `shared_hits`
+     - `local_entries`
+     - `shared_entries`
+   - emitted as:
+     `[circt-sim] UVM function-result cache: ...`
+3. **Regression hardening** (`test/Tools/circt-sim/uvm-shared-func-result-cache-get-common-domain.mlir`):
+   - stabilized run mode to `--mode=interpret` to deterministically exercise
+     interpreter cache behavior.
+   - updated checks to match cache-trace behavior robustly.
+4. **Bounded I3C compile-mode profiling update**:
+   - command (seed 1, timeout 55s) run on `/tmp/i3c-jit-debug/i3c.mlir`.
+   - result:
+     - sim reached `451490000000 fs`
+     - cache telemetry:
+       `local_hits=310 shared_hits=5742 local_entries=0 shared_entries=176`
+     - coverage remains `0.00% / 0.00%` (functional closure still pending).
+5. **Build-unblock fix for current VPI header/impl drift** (`include/circt/Dialect/Sim/VPIRuntime.h`):
+   - restored missing integer-var declarations used by `VPIRuntime.cpp`:
+     - `llvm/ADT/StringSet.h` include
+     - `vpiIntegerVar` constant define
+     - `VPIObjectType::Integer`
+     - `addIntegerVar(...)`
+     - `integerVarNames` member
+
 ## Iteration 1486 - February 18, 2026
 
 ### VPI: parameter, array bounds, struct field, and signal alias support for cocotb

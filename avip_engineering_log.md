@@ -33,6 +33,59 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-18 Session: Shared UVM Getter Cache Telemetry + I3C Bounded Reprofile
+
+### Why this pass
+I3C was still timing out in bounded compile-mode runs with 0% coverage. We
+needed direct evidence of whether cross-process shared getter caching was
+actually helping runtime hot paths, not just implemented in code.
+
+### Changes
+1. Hardened shared cache trace formatting in
+   `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+   - fixed `arg_hash` print from `0x0x...` to `0x...`.
+2. Added shared cache **store** trace hooks (`CIRCT_SIM_TRACE_FUNC_CACHE=1`)
+   for:
+   - direct-call result cache stores
+   - function-body return cache stores
+3. Added profile-summary cache counters:
+   - `local_hits`, `shared_hits`, `local_entries`, `shared_entries`
+   - emitted as:
+     `[circt-sim] UVM function-result cache: ...`
+4. Stabilized shared-cache regression mode:
+   - `test/Tools/circt-sim/uvm-shared-func-result-cache-get-common-domain.mlir`
+     now runs with `--mode=interpret` for deterministic interpreter-path checks.
+
+### Validation
+1. Build:
+   - `ninja -C build circt-sim` PASS
+2. Focused lit:
+   - `llvm/build/bin/llvm-lit -sv build/test/Tools/circt-sim --filter=uvm-shared-func-result-cache-get-common-domain.mlir` PASS
+   - `llvm/build/bin/llvm-lit -sv build/test/Tools/circt-sim --filter=jit-process-thunk-func-call-get-automatic-phase-objection-halt.mlir` PASS
+   - `llvm/build/bin/llvm-lit -sv build/test/Tools/circt-sim --filter=interface-inout-tristate-propagation.sv` PASS
+3. Bounded I3C compile-mode repro (same 55s cap, seed=1):
+   - command:
+     - `build/bin/circt-sim /tmp/i3c-jit-debug/i3c.mlir --top hdl_top --top hvl_top --mode=compile --jit-hot-threshold=1 --jit-compile-budget=100000 --timeout=55 --max-time=7940000000000`
+   - env:
+     - `CIRCT_SIM_PROFILE_FUNCS=1`
+     - `CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1`
+     - `CIRCT_UVM_ARGS='+UVM_TESTNAME=i3c_writeOperationWith8bitsData_test +ntb_random_seed=1 +UVM_VERBOSITY=UVM_LOW'`
+   - output: `/tmp/i3c-jit-debug/i3c-compile-profile-shared-cache-v2.log`
+   - result:
+     - wall: `55s`
+     - sim time reached: `451490000000 fs`
+     - cache telemetry:
+       `local_hits=310 shared_hits=5742 local_entries=0 shared_entries=176`
+     - coverage: still `0.00% / 0.00%`
+
+### Remaining limitation
+Shared getter cache is active and heavily used in bounded I3C runs, but this
+alone does not close functional coverage. The dominant remaining blocker is
+I3C functional progression/coverage sampling (still zero hits) rather than
+getter-call overhead alone.
+
+---
+
 ## 2026-02-17 Session: wait(condition) Queue Wakeup Fast Path (I3C Throughput Work)
 
 ### Why this pass
@@ -1591,3 +1644,86 @@ Ran `I2S` and `I3C` in parallel (separate lanes, same start timestamp):
 - Parallel bounded simulation path is working (both lanes complete, no segfault).
 - `I2S` is back to full coverage in this run.
 - `I3C` remains the primary functional/coverage gap (still 0%).
+
+---
+
+## 2026-02-18 Session: I3C ACK/WriteData Root-Cause Reproducer + Tri-State Mirror Feedback Fix
+
+### Problem Reframing
+
+`i3c` still showed `writeData = 0` / 0% coverage in circt-sim despite earlier
+array/memory fixes. Direct trace comparison against Xcelium showed the
+transaction was not reaching the expected data path (`Driving writeData` absent).
+
+### Root-Cause Reproducer
+
+Created a focused two-interface shared-wire reproducer (same topology class as
+I3C):
+
+- two interface instances share one pullup wire,
+- each interface has tri-state drive (`S = s_oe ? s_o : 'z`) and mirror input
+  (`s_i = S`),
+- each side alternately drives/release.
+
+Observed pre-fix failure:
+
+- one direction worked, reverse direction failed,
+- shared wire could self-latch low due feedback,
+- mirror field updates became stale relative to resolved bus state.
+
+### Root Cause
+
+In `interpretLLVMStore`, stores that mirror a probed shared net back into an
+interface tri-state destination field were treated like normal writes. That
+allowed observed bus values to be written into the same field later re-driven
+onto the bus, creating a feedback loop for open-drain style nets.
+
+### Fix Implemented
+
+File: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+1. Added suppression for tri-state mirror feedback stores:
+   - detect `probe-copy` stores targeting tri-state destination fields,
+   - suppress writeback into that tri-state destination memory/signal.
+2. Preserve observation semantics by linking source signal to mirror children:
+   - for suppressed stores, dynamic propagation links are created from source
+     signal to the destination field's mirror children (e.g. `s_i`), not back to
+     the tri-state drive field itself.
+3. (Also landed in this pass) distinct-driver ID helper for strength-resolved
+   continuous assignments now includes instance context via
+   `getDistinctContinuousDriverId(...)`.
+
+### New Regression
+
+Added:
+
+- `test/Tools/circt-sim/interface-inout-shared-wire-bidirectional.sv`
+
+Checks:
+
+- `B_SEES_A_LOW_OK`
+- `A_SEES_B_LOW_OK`
+- `BOTH_RELEASE_HIGH_OK`
+
+### Validation
+
+- `ninja -C build-test circt-sim` ✅
+- lit slice ✅
+  - `interface-inout-shared-wire-bidirectional.sv`
+  - `interface-inout-tristate-propagation.sv`
+  - `interface-intra-tristate-propagation.sv`
+  - `interface-field-propagation.sv`
+- Regression carryover checks ✅
+  - `llhd-drv-memory-backed-struct-array-func-arg.mlir`
+  - `llhd-ref-cast-array-subfield-store-func-arg.mlir`
+  - `llhd-ref-cast-subfield-store-func-arg.mlir`
+  - `llhd-sig-struct-extract-func-arg.mlir`
+  - `llhd-drv-struct-alloca.mlir`
+  - `llhd-drv-ref-blockarg-array-get.mlir`
+
+### Current I3C status after this pass
+
+- Focused semantics bug is fixed and regression-covered.
+- Full bounded `i3c` AVIP rerun still remains resource-heavy in this lane (run
+  hit timeout/OOM before producing a new final parity snapshot), so parity
+  closure still requires another bounded run once resource pressure is reduced.

@@ -11,6 +11,23 @@ This plan is decision-complete and implementation-ready.
 
 ---
 
+## Latest Program Update (February 18, 2026)
+1. Shared UVM getter cache instrumentation was hardened:
+   - shared-hit trace formatting fixed
+   - shared-store tracing added
+   - profile summary now emits
+     `UVM function-result cache: local_hits/shared_hits/local_entries/shared_entries`.
+2. Bounded I3C compile-mode repro (55s cap, seed 1) now confirms heavy shared-cache
+   activity in real workload conditions:
+   - `shared_hits=5742`, `shared_entries=176`
+   - sim-time progress reached `451490000000 fs` in bounded window.
+3. Functional closure remains the primary blocker for I3C:
+   - coverage still `0.00% / 0.00%` despite runtime cache gains.
+   - next work should target functional progression/coverage sampling root cause,
+     not only getter hot-path overhead.
+
+---
+
 ## Scope and Success Criteria
 
 ### In Scope
