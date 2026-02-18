@@ -14,6 +14,7 @@
 #   MBIT_DIR=/home/.../mbit
 #   COMPILE_TIMEOUT=240        seconds
 #   SIM_TIMEOUT=240            seconds
+#   SIM_TIMEOUT_GRACE=30       extra seconds before external hard-kill
 #   MEMORY_LIMIT_GB=20
 #   MAX_WALL_MS=240000
 #   CIRCT_SIM_MODE=interpret|compile   (default: interpret)
@@ -42,7 +43,11 @@ CIRCT_SIM_WRITE_JIT_REPORT="${CIRCT_SIM_WRITE_JIT_REPORT:-0}"
 MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-20}"
 COMPILE_TIMEOUT="${COMPILE_TIMEOUT:-240}"
 SIM_TIMEOUT="${SIM_TIMEOUT:-240}"
-MAX_WALL_MS="${MAX_WALL_MS:-$((SIM_TIMEOUT * 1000))}"
+SIM_TIMEOUT_GRACE="${SIM_TIMEOUT_GRACE:-30}"
+SIM_TIMEOUT_HARD=$((SIM_TIMEOUT + SIM_TIMEOUT_GRACE))
+if [[ -z "${MAX_WALL_MS+x}" ]]; then
+  MAX_WALL_MS="$((SIM_TIMEOUT_HARD * 1000))"
+fi
 MEMORY_LIMIT_KB=$((MEMORY_LIMIT_GB * 1024 * 1024))
 
 TIME_TOOL=""
@@ -210,6 +215,8 @@ meta="$OUT_DIR/meta.txt"
   echo "memory_limit_gb=$MEMORY_LIMIT_GB"
   echo "compile_timeout=$COMPILE_TIMEOUT"
   echo "sim_timeout=$SIM_TIMEOUT"
+  echo "sim_timeout_grace=$SIM_TIMEOUT_GRACE"
+  echo "sim_timeout_hard=$SIM_TIMEOUT_HARD"
   echo "max_wall_ms=$MAX_WALL_MS"
   echo "circt_sim_mode=$CIRCT_SIM_MODE"
   echo "circt_sim_extra_args=${CIRCT_SIM_EXTRA_ARGS:-<none>}"
@@ -291,7 +298,7 @@ for row in "${selected_avips[@]}"; do
       start_sim=$(date +%s)
       set +e
       if [[ -n "$TIME_TOOL" ]]; then
-        run_limited "$SIM_TIMEOUT" \
+        run_limited "$SIM_TIMEOUT_HARD" \
           "$TIME_TOOL" -f "%M" -o "$rss_log" \
           env CIRCT_UVM_ARGS="$uvm_args" \
           "$CIRCT_SIM" "$mlir_file" \
@@ -299,17 +306,19 @@ for row in "${selected_avips[@]}"; do
           "${mode_flags[@]}" \
           "${sim_extra_args[@]}" \
           "${jit_report_flags[@]}" \
+          --timeout="$SIM_TIMEOUT" \
           --max-time="$max_sim_fs" \
           --max-wall-ms="$MAX_WALL_MS" \
           > "$sim_log" 2>&1
       else
-        run_limited "$SIM_TIMEOUT" \
+        run_limited "$SIM_TIMEOUT_HARD" \
           env CIRCT_UVM_ARGS="$uvm_args" \
           "$CIRCT_SIM" "$mlir_file" \
           "${top_flags[@]}" \
           "${mode_flags[@]}" \
           "${sim_extra_args[@]}" \
           "${jit_report_flags[@]}" \
+          --timeout="$SIM_TIMEOUT" \
           --max-time="$max_sim_fs" \
           --max-wall-ms="$MAX_WALL_MS" \
           > "$sim_log" 2>&1

@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1519 - February 18, 2026
+
+### avip runner: align timeout policy to preserve JIT reports on bounded compile lanes
+
+1. **AVIP timeout policy hardening** (`utils/run_avip_circt_sim.sh`):
+   - added `SIM_TIMEOUT_GRACE` (default `30` seconds).
+   - simulation now runs under:
+     - internal timeout: `--timeout=$SIM_TIMEOUT` (graceful `circt-sim` stop path),
+     - external hard timeout: `SIM_TIMEOUT + SIM_TIMEOUT_GRACE`.
+   - when `MAX_WALL_MS` is not explicitly set, default now aligns to hard
+     timeout (`sim_timeout_hard * 1000`) instead of `sim_timeout * 1000`.
+   - this reduces premature resource-guard aborts that bypass terminal report
+     emission.
+
+2. **Regression coverage**:
+   - added `test/Tools/run-avip-circt-sim-timeout-grace.test`:
+     - verifies `--timeout` forwarding,
+     - verifies timeout-grace metadata (`sim_timeout_grace`, `sim_timeout_hard`),
+     - verifies lane remains `sim_status=OK` when work completes within grace.
+   - fixed `%` escaping in
+     `test/Tools/run-avip-circt-sim-default-mode-interpret.test` to keep
+     runner tests robust under lit `%` substitution + shell `printf`.
+
+3. **Validation**:
+   - tools lit:
+     - `python3 llvm/llvm/utils/lit/lit.py -sv --filter "run-avip-circt-sim-(default-mode-interpret|timeout-grace)|run-avip-circt-sim-jit-policy-gate" build-test/test/Tools`: PASS (`3/3`).
+   - bounded real AVIP probe:
+     - `/tmp/avip-circt-sim-apb-timeoutgrace2-20260218-232822/matrix.tsv`
+       - `compile_status=OK` (`53s`)
+       - `sim_status=OK` (`30s`)
+       - JIT report now present:
+         `/tmp/avip-circt-sim-apb-timeoutgrace2-20260218-232822/apb/sim_seed_1.jit-report.json`.
+   - report sanity:
+     - `python3 utils/summarize_circt_sim_jit_reports.py .../sim_seed_1.jit-report.json`: PASS (`reports_scanned=1`).
+
 ## Iteration 1518 - February 18, 2026
 
 ### circt-sim: emit JIT report on run-failure paths for compile-mode telemetry continuity

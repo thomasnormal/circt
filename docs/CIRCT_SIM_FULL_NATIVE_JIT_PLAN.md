@@ -45,6 +45,17 @@ This plan is decision-complete and implementation-ready.
    - current remaining limitation: externally killed runs (for example,
      harness-enforced hard wall-time kills) still cannot flush a terminal report
      because process termination bypasses normal shutdown paths.
+6. AVIP wrapper timeout behavior is now aligned for graceful report emission:
+   - `utils/run_avip_circt_sim.sh` now forwards `--timeout=<SIM_TIMEOUT>` to
+     `circt-sim`.
+   - it also introduces `SIM_TIMEOUT_GRACE` (default `30s`) and uses a larger
+     hard timeout (`SIM_TIMEOUT + SIM_TIMEOUT_GRACE`) for external `timeout(1)`
+     kill protection.
+   - default `MAX_WALL_MS` now matches that hard timeout window when not
+     explicitly set, reducing premature resource-guard aborts that bypass report
+     emission.
+   - runner regression coverage:
+     `test/Tools/run-avip-circt-sim-timeout-grace.test`.
 
 ---
 
