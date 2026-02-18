@@ -525,6 +525,23 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         `waiting=1, call_stack=0` around `func.call_indirect` + terminal
         `sim.fork.terminator`; this needs a dedicated resumable terminal
         suspend closure (next step), not generic waiting relaxation.
+21. Maintainability split for long-term JIT development velocity:
+    - extracted native-thunk execution methods from
+      `LLHDProcessInterpreter.cpp` into
+      `LLHDProcessInterpreterNativeThunkExec.cpp`.
+    - keeps JIT thunk execution/refinement work isolated from core
+      interpreter dispatch and reduces edit-conflict pressure during
+      strict-native burn-down.
+    - no intended behavior change; validation covered existing strict JIT
+      thunk regressions.
+22. Maintainability split (phase-2): native-thunk policy/candidate isolation:
+    - extracted compile-path native-thunk policy and shape classification from
+      `LLHDProcessInterpreter.cpp` into
+      `LLHDProcessInterpreterNativeThunkPolicy.cpp`.
+    - moved install/deopt snapshot/unsupported-detail paths and all
+      candidate-classifier implementations into the new unit.
+    - no intended behavior change; validated with strict JIT thunk
+      regressions after rebuild.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
