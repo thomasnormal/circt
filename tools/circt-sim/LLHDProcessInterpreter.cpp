@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLHDProcessInterpreter.h"
+#include "LLHDProcessInterpreterStorePatterns.h"
 #include "JITCompileManager.h"
 
 // Global crash diagnostic — last LLVM callee name
@@ -198,186 +199,6 @@ static unsigned writeConfigDbBytesToMemoryBlock(
     block->initialized = true;
   return maxWritable;
 }
-
-namespace {
-
-struct InterfaceTriStateStorePattern {
-  uint64_t condAddr = 0;
-  uint64_t srcAddr = 0;
-  unsigned condBitIndex = 0;
-  Value elseValue;
-};
-
-static bool hasSingleFieldIndex(ArrayRef<int64_t> pos, unsigned idx) {
-  return pos.size() == 1 && pos.front() == static_cast<int64_t>(idx);
-}
-
-template <typename ResolveAddrFn>
-static bool matchFourStateCopyStore(Value storeValue, ResolveAddrFn &&resolveAddr,
-                                    uint64_t &srcAddr) {
-  srcAddr = 0;
-
-  if (auto loadOp = storeValue.getDefiningOp<LLVM::LoadOp>()) {
-    srcAddr = resolveAddr(loadOp.getAddr());
-    return srcAddr != 0;
-  }
-
-  auto insertUnknown = storeValue.getDefiningOp<LLVM::InsertValueOp>();
-  if (!insertUnknown || !hasSingleFieldIndex(insertUnknown.getPosition(), 1))
-    return false;
-  auto insertValue =
-      insertUnknown.getContainer().getDefiningOp<LLVM::InsertValueOp>();
-  if (!insertValue || !hasSingleFieldIndex(insertValue.getPosition(), 0))
-    return false;
-
-  auto valueExtract = insertValue.getValue().getDefiningOp<LLVM::ExtractValueOp>();
-  auto unknownExtract =
-      insertUnknown.getValue().getDefiningOp<LLVM::ExtractValueOp>();
-  if (!valueExtract || !unknownExtract)
-    return false;
-  if (!hasSingleFieldIndex(valueExtract.getPosition(), 0) ||
-      !hasSingleFieldIndex(unknownExtract.getPosition(), 1))
-    return false;
-  if (valueExtract.getContainer() != unknownExtract.getContainer())
-    return false;
-
-  auto srcLoad = valueExtract.getContainer().getDefiningOp<LLVM::LoadOp>();
-  if (!srcLoad)
-    return false;
-  srcAddr = resolveAddr(srcLoad.getAddr());
-  return srcAddr != 0;
-}
-
-template <typename ResolveAddrFn>
-static bool matchFourStateStructCreateLoad(Value value,
-                                           ResolveAddrFn &&resolveAddr,
-                                           uint64_t &srcAddr) {
-  srcAddr = 0;
-  auto createOp = value.getDefiningOp<hw::StructCreateOp>();
-  if (!createOp || createOp.getNumOperands() != 2)
-    return false;
-
-  auto valueExtract =
-      createOp.getOperand(0).getDefiningOp<LLVM::ExtractValueOp>();
-  auto unknownExtract =
-      createOp.getOperand(1).getDefiningOp<LLVM::ExtractValueOp>();
-  if (!valueExtract || !unknownExtract)
-    return false;
-  if (!hasSingleFieldIndex(valueExtract.getPosition(), 0) ||
-      !hasSingleFieldIndex(unknownExtract.getPosition(), 1))
-    return false;
-  if (valueExtract.getContainer() != unknownExtract.getContainer())
-    return false;
-
-  auto srcLoad = valueExtract.getContainer().getDefiningOp<LLVM::LoadOp>();
-  if (!srcLoad)
-    return false;
-  srcAddr = resolveAddr(srcLoad.getAddr());
-  return srcAddr != 0;
-}
-
-template <typename ResolveSignalFn>
-static bool matchFourStateProbeCopyStore(Value storeValue,
-                                         ResolveSignalFn &&resolveSignal,
-                                         SignalId &srcSignalId) {
-  srcSignalId = 0;
-
-  auto insertUnknown = storeValue.getDefiningOp<LLVM::InsertValueOp>();
-  if (!insertUnknown || !hasSingleFieldIndex(insertUnknown.getPosition(), 1))
-    return false;
-  auto insertValue =
-      insertUnknown.getContainer().getDefiningOp<LLVM::InsertValueOp>();
-  if (!insertValue || !hasSingleFieldIndex(insertValue.getPosition(), 0))
-    return false;
-
-  auto valueExtract = insertValue.getValue().getDefiningOp<hw::StructExtractOp>();
-  auto unknownExtract =
-      insertUnknown.getValue().getDefiningOp<hw::StructExtractOp>();
-  if (!valueExtract || !unknownExtract)
-    return false;
-  if (valueExtract.getFieldName() != "value" ||
-      unknownExtract.getFieldName() != "unknown")
-    return false;
-  if (valueExtract.getInput() != unknownExtract.getInput())
-    return false;
-
-  auto probeOp = valueExtract.getInput().getDefiningOp<llhd::ProbeOp>();
-  if (!probeOp)
-    return false;
-  srcSignalId = resolveSignal(probeOp.getSignal());
-  return srcSignalId != 0;
-}
-
-template <typename ResolveAddrFn>
-static bool matchInterfaceTriStateStore(Value storeValue,
-                                        ResolveAddrFn &&resolveAddr,
-                                        InterfaceTriStateStorePattern &pattern) {
-  pattern = InterfaceTriStateStorePattern{};
-
-  auto insertUnknown = storeValue.getDefiningOp<LLVM::InsertValueOp>();
-  if (!insertUnknown || !hasSingleFieldIndex(insertUnknown.getPosition(), 1))
-    return false;
-  auto insertValue =
-      insertUnknown.getContainer().getDefiningOp<LLVM::InsertValueOp>();
-  if (!insertValue || !hasSingleFieldIndex(insertValue.getPosition(), 0))
-    return false;
-
-  auto valueExtract =
-      insertValue.getValue().getDefiningOp<hw::StructExtractOp>();
-  auto unknownExtract =
-      insertUnknown.getValue().getDefiningOp<hw::StructExtractOp>();
-  if (!valueExtract || !unknownExtract)
-    return false;
-  if (valueExtract.getFieldName() != "value" ||
-      unknownExtract.getFieldName() != "unknown")
-    return false;
-  if (valueExtract.getInput() != unknownExtract.getInput())
-    return false;
-
-  auto ifOp = valueExtract.getInput().getDefiningOp<scf::IfOp>();
-  if (!ifOp)
-    return false;
-
-  Value condValue = ifOp.getCondition();
-  if (auto condExtract = condValue.getDefiningOp<LLVM::ExtractValueOp>()) {
-    if (!hasSingleFieldIndex(condExtract.getPosition(), 0))
-      return false;
-    auto condLoad = condExtract.getContainer().getDefiningOp<LLVM::LoadOp>();
-    if (!condLoad)
-      return false;
-    pattern.condAddr = resolveAddr(condLoad.getAddr());
-    pattern.condBitIndex = 0;
-  } else if (auto condLoad = condValue.getDefiningOp<LLVM::LoadOp>()) {
-    pattern.condAddr = resolveAddr(condLoad.getAddr());
-    pattern.condBitIndex = 0;
-  } else {
-    return false;
-  }
-  if (pattern.condAddr == 0)
-    return false;
-
-  auto thenYield =
-      dyn_cast<scf::YieldOp>(ifOp.getThenRegion().front().getTerminator());
-  auto elseYield =
-      dyn_cast<scf::YieldOp>(ifOp.getElseRegion().front().getTerminator());
-  if (!thenYield || !elseYield || thenYield.getNumOperands() != 1 ||
-      elseYield.getNumOperands() != 1)
-    return false;
-
-  uint64_t srcAddr = 0;
-  if (!matchFourStateStructCreateLoad(thenYield.getOperand(0), resolveAddr,
-                                      srcAddr) &&
-      !matchFourStateCopyStore(thenYield.getOperand(0), resolveAddr, srcAddr))
-    return false;
-  if (srcAddr == 0)
-    return false;
-
-  pattern.srcAddr = srcAddr;
-  pattern.elseValue = elseYield.getOperand(0);
-  return true;
-}
-
-} // namespace
 
 // Compute a native UVM port connection count by traversing the interpreter's
 // port connection graph and counting terminal providers.
@@ -8438,8 +8259,18 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     auto *statePtr = (procId == activeProcessId && activeProcessState)
                          ? activeProcessState : &processStates[procId];
     InterpretedValue cond = getValue(procId, condBranchOp.getCondition());
+    static bool traceCondBranch = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_CONDBR");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
 
     if (!cond.isX() && cond.getUInt64() != 0) {
+      if (traceCondBranch) {
+        llvm::errs() << "[CONDBR] proc=" << procId;
+        if (const Process *proc = scheduler.getProcess(procId))
+          llvm::errs() << " name='" << proc->getName() << "'";
+        llvm::errs() << " cond=1 dest=true\n";
+      }
       // True branch
       statePtr->currentBlock = condBranchOp.getTrueDest();
       statePtr->currentOp = statePtr->currentBlock->begin();
@@ -8459,6 +8290,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
         }
       }
     } else {
+      if (traceCondBranch) {
+        llvm::errs() << "[CONDBR] proc=" << procId;
+        if (const Process *proc = scheduler.getProcess(procId))
+          llvm::errs() << " name='" << proc->getName() << "'";
+        if (cond.isX())
+          llvm::errs() << " cond=X";
+        else
+          llvm::errs() << " cond=0";
+        llvm::errs() << " dest=false\n";
+      }
       // False branch (or X treated as false)
       statePtr->currentBlock = condBranchOp.getFalseDest();
       statePtr->currentOp = statePtr->currentBlock->begin();
@@ -16382,6 +16223,26 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
                                                      llhd::WaitOp waitOp) {
   auto &state = processStates[procId];
+  static bool traceWaitSensitivity = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_WAIT_SENS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto dumpWaitList = [&](llvm::StringRef tag, const SensitivityList &waitList) {
+    if (!traceWaitSensitivity)
+      return;
+    llvm::errs() << "[WAIT-SENS] proc=" << procId;
+    if (const Process *proc = scheduler.getProcess(procId))
+      llvm::errs() << " name='" << proc->getName() << "'";
+    llvm::errs() << " tag=" << tag << " entries=" << waitList.size() << "\n";
+    for (const auto &entry : waitList.getEntries()) {
+      llvm::StringRef sigName = "<unknown>";
+      auto nameIt = signalIdToName.find(entry.signalId);
+      if (nameIt != signalIdToName.end())
+        sigName = nameIt->second;
+      llvm::errs() << "[WAIT-SENS]   sig=" << entry.signalId << " (" << sigName
+                   << ") edge=" << getEdgeTypeName(entry.edge) << "\n";
+    }
+  };
 
   // Handle yield operands - these become the process result values
   // The yield values are immediately available to the llhd.drv operations
@@ -16664,6 +16525,7 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
     }
 
     if (!waitList.empty()) {
+      dumpWaitList("observed", waitList);
       if (cacheIt == state.waitSensitivityCache.end())
         state.waitSensitivityCache.try_emplace(waitOp.getOperation(),
                                                waitList.getEntries());
@@ -16756,6 +16618,7 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
     }
 
     if (!waitList.empty()) {
+      dumpWaitList("inferred", waitList);
       scheduler.suspendProcessForEvents(procId, waitList);
       LLVM_DEBUG(llvm::dbgs()
                  << "  Wait with no delay/no signals - derived "
@@ -23192,6 +23055,37 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
 
 LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
                                                          LLVM::LoadOp loadOp) {
+  auto convertFourStateToLLVMStructLayout =
+      [&](InterpretedValue signalVal, SignalId sourceSigId,
+          Type targetLLVMType) -> InterpretedValue {
+    if (signalVal.isX())
+      return signalVal;
+    if (scheduler.getSignalEncoding(sourceSigId) != SignalEncoding::FourStateStruct)
+      return signalVal;
+
+    auto llvmStructTy = dyn_cast<LLVM::LLVMStructType>(targetLLVMType);
+    if (!llvmStructTy)
+      return signalVal;
+    auto body = llvmStructTy.getBody();
+    if (body.size() != 2)
+      return signalVal;
+
+    unsigned valueWidth = getTypeWidth(body[0]);
+    unsigned unknownWidth = getTypeWidth(body[1]);
+    if (valueWidth == 0 || valueWidth != unknownWidth)
+      return signalVal;
+    if (valueWidth + unknownWidth != signalVal.getWidth())
+      return signalVal;
+
+    APInt bits = signalVal.getAPInt();
+    APInt unknownBits = bits.extractBits(unknownWidth, 0);
+    APInt valueBits = bits.extractBits(valueWidth, unknownWidth);
+    APInt llvmBits = APInt::getZero(valueWidth + unknownWidth);
+    safeInsertBits(llvmBits, valueBits, 0);
+    safeInsertBits(llvmBits, unknownBits, valueWidth);
+    return InterpretedValue(llvmBits);
+  };
+
   // If this is a load from an llhd.ref converted to an LLVM pointer,
   // treat it as a signal probe instead of a memory read.
   if (SignalId sigId = resolveSignalId(loadOp.getAddr())) {
@@ -23217,6 +23111,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
       }
     }
     Type llvmType = loadOp.getType();
+    signalVal = convertFourStateToLLVMStructLayout(signalVal, sigId, llvmType);
     if (!signalVal.isX() && signalType &&
         (isa<hw::StructType, hw::ArrayType>(signalType)) &&
         (isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(llvmType))) {
@@ -23273,6 +23168,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
       auto pendingIt = pendingEpsilonDrives.find(fieldSigId);
       if (pendingIt != pendingEpsilonDrives.end())
         signalVal = pendingIt->second;
+
+      signalVal =
+          convertFourStateToLLVMStructLayout(signalVal, fieldSigId, resultType);
 
       // If this signal is a struct pointer with known field signals,
       // reconstruct the struct value from individual field signal values.
@@ -32551,231 +32449,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
 
   // If no return was encountered, return nothing
   cleanupTempMappings();
-  return success();
-}
-
-LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
-    hw::HWModuleOp hwModule) {
-  LLVM_DEBUG(llvm::dbgs()
-             << "LLHDProcessInterpreter: Executing module-level LLVM ops\n");
-
-  // Create a temporary process state for executing module-level ops.
-  // Must use a non-zero ID because InvalidProcessId == 0 and
-  // findMemoryBlockByAddress's walk loop skips process ID 0.
-  ProcessExecutionState tempState;
-  ProcessId tempProcId = nextTempProcId++;
-  while (processStates.count(tempProcId) || tempProcId == InvalidProcessId)
-    tempProcId = nextTempProcId++;
-  processStates[tempProcId] = std::move(tempState);
-
-  unsigned opsExecuted = 0;
-
-  // Walk the module body (but not inside processes) and execute LLVM ops
-  // We need to execute them in order, so iterate through the block directly.
-  for (Operation &op : hwModule.getBody().front()) {
-    // Skip llhd.process and seq.initial - those have their own execution
-    if (isa<llhd::ProcessOp, seq::InitialOp, llhd::CombinationalOp,
-            llhd::SignalOp, hw::InstanceOp, hw::OutputOp>(&op))
-      continue;
-
-    // Execute LLVM operations that need initialization
-    if (auto allocaOp = dyn_cast<LLVM::AllocaOp>(&op)) {
-      (void)interpretLLVMAlloca(tempProcId, allocaOp);
-      ++opsExecuted;
-    } else if (auto storeOp = dyn_cast<LLVM::StoreOp>(&op)) {
-      (void)interpretLLVMStore(tempProcId, storeOp);
-      ++opsExecuted;
-
-      InterpretedValue destAddr = getValue(tempProcId, storeOp.getAddr());
-      if (!destAddr.isX() && destAddr.getUInt64() != 0) {
-        uint64_t dest = destAddr.getUInt64();
-        auto resolveAddr = [&](Value v) -> uint64_t {
-          InterpretedValue val = getValue(tempProcId, v);
-          if (!val.isX() && val.getUInt64() != 0)
-            return val.getUInt64();
-          return 0;
-        };
-        auto resolveSignal = [&](Value v) -> SignalId {
-          return getSignalId(v);
-        };
-
-        uint64_t srcAddr = 0;
-        if (matchFourStateCopyStore(storeOp.getValue(), resolveAddr, srcAddr) &&
-            srcAddr != 0) {
-          auto pair = std::make_pair(srcAddr, dest);
-          if (std::find(childModuleCopyPairs.begin(), childModuleCopyPairs.end(),
-                        pair) == childModuleCopyPairs.end())
-            childModuleCopyPairs.push_back(pair);
-        }
-
-        SignalId srcSignalId = 0;
-        if (matchFourStateProbeCopyStore(storeOp.getValue(), resolveSignal,
-                                         srcSignalId) &&
-            srcSignalId != 0) {
-          auto pair = std::make_pair(srcSignalId, dest);
-          if (std::find(interfaceSignalCopyPairs.begin(),
-                        interfaceSignalCopyPairs.end(),
-                        pair) == interfaceSignalCopyPairs.end())
-            interfaceSignalCopyPairs.push_back(pair);
-        }
-
-        InterfaceTriStateStorePattern triPattern;
-        if (matchInterfaceTriStateStore(storeOp.getValue(), resolveAddr,
-                                        triPattern) &&
-            triPattern.srcAddr != 0 && triPattern.condAddr != 0) {
-          InterpretedValue elseVal = getValue(tempProcId, triPattern.elseValue);
-          if (!elseVal.isX()) {
-            bool duplicate = false;
-            for (const auto &cand : interfaceTriStateCandidates) {
-              bool elseMatch = false;
-              if (cand.elseValue.isX() && elseVal.isX()) {
-                elseMatch = true;
-              } else if (!cand.elseValue.isX() && !elseVal.isX() &&
-                         cand.elseValue.getAPInt() == elseVal.getAPInt()) {
-                elseMatch = true;
-              }
-              if (cand.condAddr == triPattern.condAddr &&
-                  cand.srcAddr == triPattern.srcAddr && cand.destAddr == dest &&
-                  cand.condBitIndex == triPattern.condBitIndex && elseMatch) {
-                duplicate = true;
-                break;
-              }
-            }
-            if (!duplicate) {
-              InterfaceTriStateCandidate cand;
-              cand.condAddr = triPattern.condAddr;
-              cand.srcAddr = triPattern.srcAddr;
-              cand.destAddr = dest;
-              cand.condBitIndex = triPattern.condBitIndex;
-              cand.elseValue = elseVal;
-              interfaceTriStateCandidates.push_back(cand);
-            }
-          }
-        }
-      }
-    } else if (auto callOp = dyn_cast<LLVM::CallOp>(&op)) {
-      (void)interpretLLVMCall(tempProcId, callOp);
-      ++opsExecuted;
-    } else if (auto constOp = dyn_cast<LLVM::ConstantOp>(&op)) {
-      // Evaluate LLVM constants so they're in the value map
-      if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
-        setValue(tempProcId, constOp.getResult(),
-                 InterpretedValue(intAttr.getValue()));
-        ++opsExecuted;
-      }
-    } else if (auto hwConstOp = dyn_cast<hw::ConstantOp>(&op)) {
-      // Evaluate HW constants (used as arguments to LLVM calls)
-      setValue(tempProcId, hwConstOp.getResult(),
-               InterpretedValue(hwConstOp.getValue()));
-      ++opsExecuted;
-    } else if (auto undefOp = dyn_cast<LLVM::UndefOp>(&op)) {
-      unsigned width = getTypeWidth(undefOp.getType());
-      setValue(tempProcId, undefOp.getResult(),
-               InterpretedValue(APInt::getZero(width)));
-      ++opsExecuted;
-    } else if (auto zeroOp = dyn_cast<LLVM::ZeroOp>(&op)) {
-      setValue(tempProcId, zeroOp.getResult(), InterpretedValue(0, 64));
-      ++opsExecuted;
-    } else if (auto addrOfOp = dyn_cast<LLVM::AddressOfOp>(&op)) {
-      (void)interpretLLVMAddressOf(tempProcId, addrOfOp);
-      ++opsExecuted;
-    } else if (auto loadOp = dyn_cast<LLVM::LoadOp>(&op)) {
-      (void)interpretLLVMLoad(tempProcId, loadOp);
-      ++opsExecuted;
-    } else if (auto probeOp = dyn_cast<llhd::ProbeOp>(&op)) {
-      // For module-level probes of llhd.sig pointers, prefer the current
-      // module-level value map (e.g. malloc results) over scheduler state.
-      // Scheduler signal values are updated only after this loop, so using
-      // them directly here can return stale zero pointers.
-      Value sig = probeOp.getSignal();
-      bool handled = false;
-      if (auto sigOp = sig.getDefiningOp<llhd::SignalOp>()) {
-        auto initIt = processStates[tempProcId].valueMap.find(sigOp.getInit());
-        if (initIt != processStates[tempProcId].valueMap.end() &&
-            !initIt->second.isX()) {
-          setValue(tempProcId, probeOp.getResult(), initIt->second);
-          handled = true;
-        }
-      }
-      if (!handled)
-        (void)interpretOperation(tempProcId, &op);
-      ++opsExecuted;
-    } else if (isa<LLVM::InsertValueOp, LLVM::ExtractValueOp>(&op)) {
-      (void)interpretOperation(tempProcId, &op);
-      ++opsExecuted;
-    } else if (isa<LLVM::GEPOp>(&op)) {
-      (void)interpretOperation(tempProcId, &op);
-      ++opsExecuted;
-    } else if (succeeded(interpretOperation(tempProcId, &op))) {
-      ++opsExecuted;
-    }
-  }
-
-  // Update signal initial values for llhd.sig ops whose init was computed
-  // by module-level LLVM ops (e.g., covergroup handles loaded from globals).
-  // registerSignals runs before this function, so signals whose init value
-  // comes from an llvm.load or llvm.call result still have their default
-  // value (0). Now that the LLVM ops have executed, we can update them.
-  for (Operation &op : hwModule.getBody().front()) {
-    auto sigOp = dyn_cast<llhd::SignalOp>(&op);
-    if (!sigOp)
-      continue;
-    auto it = processStates[tempProcId].valueMap.find(sigOp.getInit());
-    if (it == processStates[tempProcId].valueMap.end())
-      continue;
-    InterpretedValue initVal = it->second;
-    if (initVal.isX() || initVal.getUInt64() == 0)
-      continue;
-    SignalId sigId = valueToSignal.lookup(sigOp.getResult());
-    if (sigId == 0)
-      continue;
-    scheduler.updateSignal(sigId, initVal.toSignalValue());
-    LLVM_DEBUG(llvm::dbgs()
-               << "  Updated signal " << sigId << " initial value from "
-               << "module-level LLVM op result\n");
-  }
-
-  // Backfill pointer-valued signal init SSA entries from the scheduler when
-  // they are missing or stale in the temporary map. This avoids later on-demand
-  // recomputation of module-level values and keeps dual-top init state stable.
-  for (Operation &op : hwModule.getBody().front()) {
-    auto sigOp = dyn_cast<llhd::SignalOp>(&op);
-    if (!sigOp || !isa<LLVM::LLVMPointerType>(sigOp.getInit().getType()))
-      continue;
-    SignalId sigId = valueToSignal.lookup(sigOp.getResult());
-    if (sigId == 0)
-      continue;
-    const SignalValue &sigVal = scheduler.getSignalValue(sigId);
-    if (sigVal.isUnknown() || sigVal.getWidth() < 64 || sigVal.getValue() == 0)
-      continue;
-
-    auto &tmpMap = processStates[tempProcId].valueMap;
-    auto it = tmpMap.find(sigOp.getInit());
-    if (it == tmpMap.end() || it->second.isX() || it->second.getUInt64() == 0)
-      tmpMap[sigOp.getInit()] = InterpretedValue(sigVal.getValue(), 64);
-  }
-
-  // Merge this module's computed values into the shared top-module init map.
-  // We overwrite duplicate keys so re-initializing the same module body keeps
-  // the latest value, while preserving values from previously initialized tops.
-  for (auto &[val, intVal] : processStates[tempProcId].valueMap)
-    moduleInitValueMap[val] = intVal;
-
-  // Copy module-level memory blocks too
-  for (auto &[value, block] : processStates[tempProcId].memoryBlocks) {
-    auto addrIt = processStates[tempProcId].valueMap.find(value);
-    if (addrIt != processStates[tempProcId].valueMap.end() &&
-        !addrIt->second.isX())
-      moduleLevelAllocaBaseAddr[value] = addrIt->second.getUInt64();
-    moduleLevelAllocas[value] = std::move(block);
-  }
-
-  // Clean up the temporary process state
-  processStates.erase(tempProcId);
-
-  LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Executed " << opsExecuted
-                          << " module-level LLVM ops\n");
-
   return success();
 }
 

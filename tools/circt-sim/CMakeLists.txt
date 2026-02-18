@@ -40,6 +40,7 @@ add_circt_tool(circt-sim
   JITCompileManager.cpp
   LLHDProcessInterpreter.cpp
   LLHDProcessInterpreterGlobals.cpp
+  LLHDProcessInterpreterModuleLevelInit.cpp
   LLHDProcessInterpreterNativeThunkExec.cpp
   LLHDProcessInterpreterNativeThunkPolicy.cpp
   LLHDProcessInterpreterWaitCondition.cpp

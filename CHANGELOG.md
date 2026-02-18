@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1476 - February 18, 2026
+
+### circt-sim: split module-level LLVM init dispatch from LLHDProcessInterpreter.cpp
+
+1. **Added `tools/circt-sim/LLHDProcessInterpreterModuleLevelInit.cpp`**
+   and moved `executeModuleLevelLLVMOps(...)` out of
+   `LLHDProcessInterpreter.cpp`.
+2. **Added internal shared matcher header**
+   `tools/circt-sim/LLHDProcessInterpreterStorePatterns.h` so store-pattern
+   classification helpers are available across compilation units without
+   behavior drift:
+   - `matchFourStateCopyStore`
+   - `matchFourStateStructCreateLoad`
+   - `matchFourStateProbeCopyStore`
+   - `matchInterfaceTriStateStore`
+   - `InterfaceTriStateStorePattern`
+3. **Build system update**:
+   - registered `LLHDProcessInterpreterModuleLevelInit.cpp` in
+     `tools/circt-sim/CMakeLists.txt`.
+4. **Validation**:
+   - `ninja -C build circt-sim` passes.
+   - targeted global-init/JIT regressions pass:
+     - `global-ctor-runtime-signals.mlir`
+     - `global-ctor-isolation.sv`
+     - `vtable-dispatch-global-ctor.mlir`
+     - `uvm-root-reentrant.mlir`
+     - `jit-process-thunk-single-block-call-indirect-fork-callstack-halt.mlir`
+     - `jit-process-thunk-func-call-set-report-id-verbosity-halt.mlir`
+     - `jit-process-thunk-multiblock-fork-loop-guard-failed.mlir`
+     - `jit-process-thunk-wait-event-derived-observed-dest-operand-halt-yield-parallel.mlir`
+     - `jit-process-thunk-wait-delay-dest-operand-halt-yield-parallel.mlir`
+   - additional spot checks:
+     - `vtable-indirect-call.mlir` and `config-db.sv` pass
+     - `static-class-variable.sv` remains `UNSUPPORTED` in this environment.
+
 ## Iteration 1475 - February 18, 2026
 
 ### circt-sim: split global lifecycle code from LLHDProcessInterpreter.cpp
