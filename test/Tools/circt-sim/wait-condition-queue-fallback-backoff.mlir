@@ -2,11 +2,11 @@
 //
 // Verify queue-backed wait(condition) uses sparse fallback polling.
 // Queue mutation wakeups are the primary mechanism; timed polling is only
-// a watchdog and should schedule at 1 us intervals.
+// a watchdog and should schedule at 10 us intervals.
 //
 // CHECK: [WAITCOND]
 // CHECK-SAME: queueWait=0x
-// CHECK-SAME: targetTimeFs=1000000000
+// CHECK-SAME: targetTimeFs=10000000000
 
 module {
   llvm.func @__moore_wait_condition(i32)

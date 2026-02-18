@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1500 - February 18, 2026
+
+### circt-sim: execute-phase monitor wake cleanup parity + 10us wait(condition) watchdog backoff
+
+1. **Runtime updates**:
+   - `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+     - objection-zero waiter wake now kills/erases tracked
+       `masterPhaseProcessChild` trees for execute-phase monitor waiters before
+       rescheduling, restoring monitor-fork cleanup symmetry.
+   - `tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp`:
+     - widened sparse wait(condition) watchdog polls from `1us` to `10us` for:
+       - queue-backed waits (`queueWait != 0`)
+       - execute-phase objection-backed waits
+   - `tools/circt-sim/LLHDProcessInterpreter.h`:
+     - synchronized execute-phase monitor poll helper declarations/state.
+
+2. **Regression coverage**:
+   - Added:
+     - `test/Tools/circt-sim/fork-execute-phase-monitor-intercept-single-shot.mlir`
+   - Updated:
+     - `test/Tools/circt-sim/wait-condition-execute-phase-objection-fallback-backoff.mlir`
+     - `test/Tools/circt-sim/wait-condition-queue-fallback-backoff.mlir`
+   - Both wait-condition regressions now lock `targetTimeFs=10000000000`.
+
+3. **Validation**:
+   - build:
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+   - focused regressions:
+     - `fork-execute-phase-monitor-intercept-single-shot.mlir`: PASS.
+     - `execute-phase-monitor-fork-objection-waiter.mlir`: PASS.
+     - `wait-condition-execute-phase-objection-fallback-backoff.mlir`: PASS.
+     - `wait-condition-queue-fallback-backoff.mlir`: PASS.
+     - `func-baud-clk-generator-fast-path-delay-batch.mlir`: PASS.
+   - direct UART bounded comparison (`max-time=70000000000 fs`, compile mode):
+     - baseline:
+       `/tmp/uart-maxtime70e9-post-forkpollv2-20260218.log`
+     - updated:
+       `/tmp/uart-maxtime70e9-backoff10us-procstatsopt-20260218.log`
+     - queue wait loop `fork_2_branch_0` steps reduced `4262 -> 104`,
+       while total process executions were near-flat
+       (`1433758 -> 1433002`) and bounded coverage remained `Rx=0%`, `Tx=0%`.
+   - longer timeout-bounded UART lane:
+     - `/tmp/uart-maxtime353e9-backoff10us-20260218.log`
+     - reached `278776700000 fs` before timeout with coverage still `0% / 0%`.
+
 ## Iteration 1499 - February 18, 2026
 
 ### circt-sim: back off queue-backed wait(condition) fallback polling
