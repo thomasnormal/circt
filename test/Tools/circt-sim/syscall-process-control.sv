@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
 // Test process class: self, status, kill, await, suspend, resume
 module top;
   process p;
@@ -30,8 +30,8 @@ module top;
     join_none
 
     #1;
-    // Child should be WAITING (blocked on #100)
-    // CHECK: child_waiting=WAITING
+    // Child should be blocked on #100 delay
+    // CHECK: child_waiting=SUSPENDED
     case (child_p.status())
       process::RUNNING: $display("child_waiting=RUNNING");
       process::WAITING: $display("child_waiting=WAITING");

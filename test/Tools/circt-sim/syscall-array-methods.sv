@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
 // Test dynamic array/queue methods: size, delete, push_back, push_front, pop_back, pop_front,
 // insert, find, find_index, sort, reverse, shuffle, sum, product, min, max, unique
 module top;

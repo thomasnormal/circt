@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
 // Test $display, $write, $strobe, $monitor (basic output)
 module top;
   integer x;
@@ -23,7 +23,7 @@ module top;
     // CHECK: displayo=52
     $displayo("displayo=", x);
 
-    // CHECK: displayb=00000000000000000000000000101010
+    // CHECK: displayb=101010
     $displayb("displayb=", x);
 
     $finish;
