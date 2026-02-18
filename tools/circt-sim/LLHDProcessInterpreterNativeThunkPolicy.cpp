@@ -530,6 +530,7 @@ static bool isSafeSingleBlockTerminatingPreludeOp(
         calleeName == "__moore_process_await" ||
         calleeName == "__moore_process_srandom" ||
         calleeName == "__moore_is_rand_enabled" ||
+        calleeName == "__moore_dyn_cast_check" ||
         calleeName == "__moore_int_to_string" ||
         calleeName.starts_with("__moore_string_") ||
         calleeName == "__moore_string_itoa" ||

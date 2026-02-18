@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1509 - February 18, 2026
+
+### circt-sim: native-thunk prelude closure for `__moore_dyn_cast_check` in UART compile lane
+
+1. **Policy closure**:
+   - extended native-thunk single-block prelude allowlist in
+     `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp` to treat
+     `llvm.call @__moore_dyn_cast_check` as non-suspending/safe.
+   - this targets an active UART strict deopt tail:
+     `unsupported_operation:first_op:llvm.call:__moore_dyn_cast_check`.
+
+2. **Regression coverage**:
+   - added strict compile-mode regression:
+     - `test/Tools/circt-sim/jit-process-thunk-llvm-call-dyn-cast-check-halt.mlir`
+   - verifies `jit_deopts_total=0` under strict compile mode for a terminating
+     process prelude containing `__moore_dyn_cast_check`.
+
+3. **Validation**:
+   - focused lit: PASS
+     - `jit-process-thunk-llvm-call-dyn-cast-check-halt.mlir`
+     - `jit-process-thunk-llvm-call-assoc-get-ref-halt.mlir`
+     - `uvm-report-getters-fast-path.mlir`
+     - `execute-phase-monitor-fork-objection-waiter.mlir`
+   - bounded UART profile lane (`UartBaudRate4800Test`, compile mode, 120s):
+     - baseline:
+       `/tmp/uart-profile-bounded-20260218-190831/jit.json`
+       - `final_time_fs=438065600000`
+       - `jit_deopts_total=7`
+       - included `first_op:llvm.call:__moore_dyn_cast_check`.
+     - after closure:
+       `/tmp/uart-profile-dyncast-20260218-191508/jit.json`
+       - `final_time_fs=444832000000`
+       - `jit_deopts_total=6`
+       - `__moore_dyn_cast_check` tail removed.
+   - bounded AVIP `jtag` compile-lane guard:
+     - `/tmp/avip-circt-sim-jtag-dyncast-20260218-191730/matrix.tsv`
+     - `compile_status=OK`, `sim_status=OK` (`41s`).
+
+4. **Remaining UART strict queue (top details)**:
+   - `first_op:func.call:set_7359`
+   - `first_op:func.call:uvm_pkg::uvm_sequence_base::create_item`
+   - `first_op:func.call:UartTxSequencePkg::UartTxTransmitterSequence::setConfig`
+
 ## Iteration 1508 - February 18, 2026
 
 ### circt-sim: stabilize execute-phase objection completion semantics, keep I3C mismatch diagnosis moving
