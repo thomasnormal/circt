@@ -3558,6 +3558,31 @@ def ReadMemHBIOp : Builtin<"readmemh"> {
   let assemblyFormat = "$filename `,` $mem attr-dict `:` type($mem)";
 }
 
+def WriteMemBBIOp : Builtin<"writememb"> {
+  let summary = "Write memory to file in binary format";
+  let description = [{
+    Corresponds to the `$writememb` system task. Writes the contents of
+    a memory array to the specified file in binary format, one value per line.
+
+    See IEEE 1800-2017 Section 21.4 "Loading memory array data from a file".
+  }];
+  let arguments = (ins StringType:$filename, RefType:$mem);
+  let assemblyFormat = "$filename `,` $mem attr-dict `:` type($mem)";
+}
+
+def WriteMemHBIOp : Builtin<"writememh"> {
+  let summary = "Write memory to file in hexadecimal format";
+  let description = [{
+    Corresponds to the `$writememh` system task. Writes the contents of
+    a memory array to the specified file in hexadecimal format, one value
+    per line.
+
+    See IEEE 1800-2017 Section 21.4 "Loading memory array data from a file".
+  }];
+  let arguments = (ins StringType:$filename, RefType:$mem);
+  let assemblyFormat = "$filename `,` $mem attr-dict `:` type($mem)";
+}
+
 //===----------------------------------------------------------------------===//
 // OS System Functions
 //===----------------------------------------------------------------------===//

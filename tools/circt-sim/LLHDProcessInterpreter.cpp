@@ -17681,6 +17681,241 @@ LogicalResult LLHDProcessInterpreter::interpretRegion(
 // Func Dialect Operation Interpreters
 //===----------------------------------------------------------------------===//
 
+bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
+    ProcessId procId, mlir::func::CallOp callOp, mlir::func::FuncOp funcOp,
+    llvm::ArrayRef<InterpretedValue> args, llvm::StringRef calleeName) {
+  if (!calleeName.ends_with("::BaudClkGenerator"))
+    return false;
+  if (callOp.getNumOperands() < 2 || callOp.getNumResults() != 0)
+    return false;
+  if (funcOp.getNumArguments() < 2 || funcOp.getBody().empty())
+    return false;
+  if (args.size() < 2 || args[0].isX() || args[1].isX())
+    return false;
+
+  uint64_t selfAddr = args[0].getUInt64();
+  if (selfAddr == 0)
+    return false;
+
+  int64_t dividerRaw = args[1].getAPInt().getSExtValue();
+  if (dividerRaw <= 0)
+    dividerRaw = 1;
+  if (dividerRaw > 0x7fffffff)
+    dividerRaw = 0x7fffffff;
+
+  auto readI32AtAddr = [&](uint64_t addr, int32_t &out) -> bool {
+    out = 0;
+    uint64_t offset = 0;
+    MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
+    if (!block)
+      block = findBlockByAddress(addr, offset);
+    if (block && offset + 4 <= block->data.size()) {
+      std::memcpy(&out, block->data.data() + offset, 4);
+      return true;
+    }
+
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+        nativeOffset + 4 <= nativeSize) {
+      std::memcpy(&out, reinterpret_cast<void *>(addr), 4);
+      return true;
+    }
+    return false;
+  };
+
+  auto writeI32AtAddr = [&](uint64_t addr, int32_t value) -> bool {
+    uint64_t offset = 0;
+    MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
+    if (!block)
+      block = findBlockByAddress(addr, offset);
+    if (block && offset + 4 <= block->data.size()) {
+      std::memcpy(block->data.data() + offset, &value, 4);
+      block->initialized = true;
+      return true;
+    }
+
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+        nativeOffset + 4 <= nativeSize) {
+      std::memcpy(reinterpret_cast<void *>(addr), &value, 4);
+      return true;
+    }
+    return false;
+  };
+
+  auto readI1AtAddr = [&](uint64_t addr, bool &value) -> bool {
+    value = false;
+    uint64_t offset = 0;
+    MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
+    if (!block)
+      block = findBlockByAddress(addr, offset);
+    if (block && offset + 1 <= block->data.size()) {
+      value = (block->data[offset] & 0x1) != 0;
+      return true;
+    }
+
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+        nativeOffset + 1 <= nativeSize) {
+      uint8_t byte = *reinterpret_cast<uint8_t *>(addr);
+      value = (byte & 0x1) != 0;
+      return true;
+    }
+    return false;
+  };
+
+  auto writeI1AtAddr = [&](uint64_t addr, bool value) -> bool {
+    uint8_t byte = value ? 1 : 0;
+    uint64_t offset = 0;
+    MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
+    if (!block)
+      block = findBlockByAddress(addr, offset);
+    if (block && offset + 1 <= block->data.size()) {
+      block->data[offset] = byte;
+      block->initialized = true;
+      uint64_t baseAddr = addr - offset;
+      auto &byteInit = interfaceMemoryByteInitMask[baseAddr];
+      if (byteInit.size() != block->size)
+        byteInit.assign(block->size, 0);
+      byteInit[offset] = 1;
+      return true;
+    }
+
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+        nativeOffset + 1 <= nativeSize) {
+      *reinterpret_cast<uint8_t *>(addr) = byte;
+      return true;
+    }
+    return false;
+  };
+
+  auto &state = processStates[procId];
+  auto &fastState = state.baudClkGeneratorFastPathByCall[callOp.getOperation()];
+  if (!fastState.initialized) {
+    uint64_t clockFieldOffset = 0;
+    uint64_t outputFieldOffset = 0;
+    bool sawClockField = false;
+    bool sawOutputField = false;
+    Value selfArg = funcOp.getArgument(0);
+
+    for (Block &block : funcOp.getBody()) {
+      for (Operation &op : block) {
+        auto gepOp = dyn_cast<LLVM::GEPOp>(&op);
+        if (!gepOp || gepOp.getBase() != selfArg)
+          continue;
+        auto structType = dyn_cast<LLVM::LLVMStructType>(gepOp.getElemType());
+        if (!structType)
+          continue;
+        auto indices = gepOp.getIndices();
+        if (indices.size() != 2)
+          continue;
+        auto idx0 = llvm::dyn_cast_if_present<IntegerAttr>(indices[0]);
+        auto idx1 = llvm::dyn_cast_if_present<IntegerAttr>(indices[1]);
+        if (!idx0 || !idx1 || idx0.getInt() != 0)
+          continue;
+        if (idx1.getInt() == 0) {
+          clockFieldOffset = getLLVMStructFieldOffset(structType, 0);
+          sawClockField = true;
+        } else if (idx1.getInt() == 4) {
+          outputFieldOffset = getLLVMStructFieldOffset(structType, 4);
+          sawOutputField = true;
+        }
+      }
+    }
+
+    if (!sawClockField || !sawOutputField)
+      return false;
+
+    std::string countSymbol = (calleeName + "::count").str();
+    auto countIt = globalAddresses.find(countSymbol);
+    if (countIt == globalAddresses.end())
+      return false;
+
+    fastState.initialized = true;
+    fastState.primed = false;
+    fastState.countAddr = countIt->second;
+    fastState.clockFieldOffset = clockFieldOffset;
+    fastState.outputFieldOffset = outputFieldOffset;
+  }
+
+  fastState.divider = static_cast<int32_t>(dividerRaw);
+
+  // If the object pointer changes for the same callsite, refresh signal IDs
+  // from the new interface field addresses.
+  uint64_t clockAddr = selfAddr + fastState.clockFieldOffset;
+  uint64_t outputAddr = selfAddr + fastState.outputFieldOffset;
+  if (auto clockIt = interfaceFieldSignals.find(clockAddr);
+      clockIt != interfaceFieldSignals.end())
+    fastState.clockSignalId = clockIt->second;
+  if (auto outputIt = interfaceFieldSignals.find(outputAddr);
+      outputIt != interfaceFieldSignals.end())
+    fastState.outputSignalId = outputIt->second;
+
+  if (fastState.primed) {
+    int32_t count = 0;
+    if (!readI32AtAddr(fastState.countAddr, count))
+      return false;
+
+    bool toggleClock = count == (fastState.divider - 1);
+    if (toggleClock) {
+      if (!writeI32AtAddr(fastState.countAddr, 0))
+        return false;
+
+      bool currentOut = false;
+      if (fastState.outputSignalId != 0) {
+        InterpretedValue curSigVal = InterpretedValue::fromSignalValue(
+            scheduler.getSignalValue(fastState.outputSignalId));
+        if (!curSigVal.isX())
+          currentOut = (curSigVal.getUInt64() & 0x1) != 0;
+      }
+      (void)readI1AtAddr(outputAddr, currentOut);
+      bool nextOut = !currentOut;
+      (void)writeI1AtAddr(outputAddr, nextOut);
+
+      if (fastState.outputSignalId != 0) {
+        const SignalValue &currentSig =
+            scheduler.getSignalValue(fastState.outputSignalId);
+        unsigned sigWidth = std::max(1u, currentSig.getWidth());
+        InterpretedValue nextOutVal(
+            llvm::APInt(sigWidth, nextOut ? 1u : 0u, false));
+        SignalValue nextSig = nextOutVal.toSignalValue();
+        pendingEpsilonDrives[fastState.outputSignalId] = nextOutVal;
+        scheduler.updateSignal(fastState.outputSignalId, nextSig);
+        forwardPropagateOnSignalChange(fastState.outputSignalId, nextSig);
+      }
+    } else {
+      if (!writeI32AtAddr(fastState.countAddr, count + 1))
+        return false;
+    }
+  }
+  fastState.primed = true;
+
+  state.waiting = true;
+  state.sequencerGetRetryCallOp = callOp.getOperation();
+  if (fastState.clockSignalId != 0) {
+    memoryEventWaiters.erase(procId);
+    SensitivityList waitList;
+    waitList.addEdge(fastState.clockSignalId, EdgeType::AnyEdge);
+    scheduler.suspendProcessForEvents(procId, waitList);
+  } else {
+    bool clockSample = false;
+    if (!readI1AtAddr(clockAddr, clockSample))
+      return false;
+    MemoryEventWaiter waiter;
+    waiter.address = clockAddr;
+    waiter.lastValue = clockSample ? 1 : 0;
+    waiter.valueSize = 1;
+    waiter.waitForRisingEdge = false;
+    memoryEventWaiters[procId] = waiter;
+  }
+  return true;
+}
+
 LogicalResult
 LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                                            mlir::func::CallOp callOp) {
@@ -18873,6 +19108,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   for (Value operand : callOp.getOperands()) {
     args.push_back(getValue(procId, operand));
   }
+
+  if (handleBaudClkGeneratorFastPath(procId, callOp, funcOp, args, calleeName))
+    return success();
 
   // Function result caching for hot UVM phase traversal functions.
   // These functions are pure (no side effects on global state) and called
@@ -20964,7 +21202,114 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         tookBranch = true;
         break;
       }
-      if (failed(interpretOperation(procId, &op))) {
+
+      auto runFastFuncLoopOp = [&](Operation &curOp) -> std::optional<LogicalResult> {
+        if (auto waitEventOp = dyn_cast<moore::WaitEventOp>(&curOp))
+          return interpretMooreWaitEvent(procId, waitEventOp);
+        if (auto loadOp = dyn_cast<LLVM::LoadOp>(&curOp))
+          return interpretLLVMLoad(procId, loadOp);
+        if (auto storeOp = dyn_cast<LLVM::StoreOp>(&curOp))
+          return interpretLLVMStore(procId, storeOp);
+
+        if (auto addOp = dyn_cast<comb::AddOp>(&curOp)) {
+          unsigned targetWidth = getTypeWidth(addOp.getType());
+          APInt result = APInt::getZero(targetWidth);
+          for (Value operand : addOp.getOperands()) {
+            InterpretedValue val = getValue(procId, operand);
+            if (val.isX()) {
+              setValue(procId, addOp.getResult(),
+                       InterpretedValue::makeX(targetWidth));
+              return success();
+            }
+            APInt v = val.getAPInt();
+            if (v.getBitWidth() != targetWidth)
+              v = v.zextOrTrunc(targetWidth);
+            result += v;
+          }
+          setValue(procId, addOp.getResult(), InterpretedValue(result));
+          return success();
+        }
+
+        if (auto icmpOp = dyn_cast<comb::ICmpOp>(&curOp)) {
+          InterpretedValue lhs = getValue(procId, icmpOp.getLhs());
+          InterpretedValue rhs = getValue(procId, icmpOp.getRhs());
+          if (lhs.isX() || rhs.isX()) {
+            setValue(procId, icmpOp.getResult(),
+                     InterpretedValue::makeX(getTypeWidth(icmpOp.getType())));
+            return success();
+          }
+
+          bool result = false;
+          APInt lhsVal = lhs.getAPInt();
+          APInt rhsVal = rhs.getAPInt();
+          unsigned compareWidth = std::max(lhsVal.getBitWidth(),
+                                           rhsVal.getBitWidth());
+          normalizeWidths(lhsVal, rhsVal, compareWidth);
+          switch (icmpOp.getPredicate()) {
+          case comb::ICmpPredicate::eq:
+          case comb::ICmpPredicate::ceq:
+          case comb::ICmpPredicate::weq:
+            result = lhsVal == rhsVal;
+            break;
+          case comb::ICmpPredicate::ne:
+          case comb::ICmpPredicate::cne:
+          case comb::ICmpPredicate::wne:
+            result = lhsVal != rhsVal;
+            break;
+          case comb::ICmpPredicate::slt:
+            result = lhsVal.slt(rhsVal);
+            break;
+          case comb::ICmpPredicate::sle:
+            result = lhsVal.sle(rhsVal);
+            break;
+          case comb::ICmpPredicate::sgt:
+            result = lhsVal.sgt(rhsVal);
+            break;
+          case comb::ICmpPredicate::sge:
+            result = lhsVal.sge(rhsVal);
+            break;
+          case comb::ICmpPredicate::ult:
+            result = lhsVal.ult(rhsVal);
+            break;
+          case comb::ICmpPredicate::ule:
+            result = lhsVal.ule(rhsVal);
+            break;
+          case comb::ICmpPredicate::ugt:
+            result = lhsVal.ugt(rhsVal);
+            break;
+          case comb::ICmpPredicate::uge:
+            result = lhsVal.uge(rhsVal);
+            break;
+          }
+          setValue(procId, icmpOp.getResult(), InterpretedValue(result ? 1 : 0, 1));
+          return success();
+        }
+
+        if (auto xorOp = dyn_cast<comb::XorOp>(&curOp)) {
+          unsigned targetWidth = getTypeWidth(xorOp.getType());
+          APInt result = APInt::getZero(targetWidth);
+          for (Value operand : xorOp.getOperands()) {
+            InterpretedValue value = getValue(procId, operand);
+            if (value.isX()) {
+              setValue(procId, xorOp.getResult(),
+                       InterpretedValue::makeX(targetWidth));
+              return success();
+            }
+            APInt operandVal = value.getAPInt();
+            if (operandVal.getBitWidth() != targetWidth)
+              operandVal = operandVal.zextOrTrunc(targetWidth);
+            result ^= operandVal;
+          }
+          setValue(procId, xorOp.getResult(), InterpretedValue(result));
+          return success();
+        }
+
+        return std::nullopt;
+      };
+
+      std::optional<LogicalResult> fastOpResult = runFastFuncLoopOp(op);
+      if (fastOpResult ? failed(*fastOpResult)
+                       : failed(interpretOperation(procId, &op))) {
         llvm::errs() << "circt-sim: Failed in func body for process " << procId
                      << "\n";
         llvm::errs() << "  Function: " << funcOp.getName() << "\n";
@@ -28529,6 +28874,159 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Handle __moore_writememh / __moore_writememb - write memory to file
+    // Signature: void(filename_ptr, mem_ptr, elem_width_i32, num_elems_i32)
+    if (calleeName == "__moore_writememh" ||
+        calleeName == "__moore_writememb") {
+      bool isHex = (calleeName == "__moore_writememh");
+      if (callOp.getNumOperands() >= 4) {
+        // Extract filename (same logic as readmem)
+        InterpretedValue filenamePtrVal = getValue(procId, callOp.getOperand(0));
+        std::string filename;
+        if (!filenamePtrVal.isX()) {
+          uint64_t structAddr = filenamePtrVal.getUInt64();
+          uint64_t structOffset = 0;
+          auto *block = findMemoryBlockByAddress(structAddr, procId, &structOffset);
+          if (block && block->initialized && structOffset + 16 <= block->data.size()) {
+            uint64_t strPtr = 0;
+            int64_t strLen = 0;
+            for (int i = 0; i < 8; ++i) {
+              strPtr |= static_cast<uint64_t>(block->data[structOffset + i]) << (i * 8);
+              strLen |= static_cast<int64_t>(block->data[structOffset + 8 + i]) << (i * 8);
+            }
+            if (strPtr != 0 && strLen > 0) {
+              auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+              if (dynIt != dynamicStrings.end() && dynIt->second.first) {
+                filename = std::string(dynIt->second.first,
+                    std::min(static_cast<size_t>(strLen),
+                             static_cast<size_t>(dynIt->second.second)));
+              } else {
+                uint64_t strOffset = 0;
+                auto *strBlock = findMemoryBlockByAddress(strPtr, procId, &strOffset);
+                if (strBlock && strBlock->initialized &&
+                    strOffset + strLen <= strBlock->data.size()) {
+                  filename = std::string(
+                      reinterpret_cast<const char *>(strBlock->data.data() + strOffset),
+                      strLen);
+                }
+              }
+            }
+          }
+        }
+
+        InterpretedValue elemWidthVal = getValue(procId, callOp.getOperand(2));
+        InterpretedValue numElemsVal = getValue(procId, callOp.getOperand(3));
+        unsigned elemBitWidth = elemWidthVal.isX() ? 0 : static_cast<unsigned>(elemWidthVal.getUInt64());
+        unsigned numElems = numElemsVal.isX() ? 0 : static_cast<unsigned>(numElemsVal.getUInt64());
+
+        if (filename.empty() || elemBitWidth == 0 || numElems == 0) {
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: " << calleeName
+                                  << " - invalid args\n");
+          return success();
+        }
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: " << calleeName
+                                << "(\"" << filename << "\", elemWidth="
+                                << elemBitWidth << ", numElems=" << numElems
+                                << ")\n");
+
+        // Open output file
+        std::ofstream outFile(filename);
+        if (!outFile.is_open()) {
+          llvm::errs() << "Warning: " << (isHex ? "$writememh" : "$writememb")
+                       << ": cannot open file \"" << filename << "\"\n";
+          return success();
+        }
+
+        // Read memory values and write to file
+        Value memOperand = callOp.getOperand(1);
+        SignalId sigId = resolveSignalId(memOperand);
+
+        if (sigId != 0) {
+          // Signal-backed memory
+          const SignalValue &currentSV = scheduler.getSignalValue(sigId);
+          unsigned totalWidth = currentSV.getWidth();
+          APInt arrayBits = currentSV.isUnknown()
+                                ? APInt(totalWidth, 0)
+                                : currentSV.getAPInt();
+          unsigned totalElemWidth = totalWidth / numElems;
+
+          for (unsigned i = 0; i < numElems; ++i) {
+            // MooreToCore maps SV index i to hw.array index (N-1-i)
+            unsigned hwIdx = numElems - 1 - i;
+            unsigned elemBase = hwIdx * totalElemWidth;
+
+            APInt elemVal;
+            if (totalElemWidth == 2 * elemBitWidth) {
+              // 4-state: extract value bits (upper half of element)
+              elemVal = arrayBits.extractBits(elemBitWidth, elemBase + elemBitWidth);
+            } else {
+              elemVal = arrayBits.extractBits(totalElemWidth, elemBase);
+              if (elemVal.getBitWidth() > elemBitWidth)
+                elemVal = elemVal.trunc(elemBitWidth);
+            }
+
+            if (isHex) {
+              unsigned hexDigits = (elemBitWidth + 3) / 4;
+              SmallString<32> hexStr;
+              elemVal.toString(hexStr, 16, /*Signed=*/false);
+              // Pad with leading zeros
+              while (hexStr.size() < hexDigits)
+                hexStr.insert(hexStr.begin(), '0');
+              outFile << hexStr.c_str() << "\n";
+            } else {
+              SmallString<64> binStr;
+              elemVal.toString(binStr, 2, /*Signed=*/false);
+              while (binStr.size() < static_cast<unsigned>(elemBitWidth))
+                binStr.insert(binStr.begin(), '0');
+              outFile << binStr.c_str() << "\n";
+            }
+          }
+        } else {
+          // Alloca-backed memory
+          InterpretedValue memPtrVal = getValue(procId, memOperand);
+          if (!memPtrVal.isX()) {
+            uint64_t memAddr = memPtrVal.getUInt64();
+            uint64_t memOffset = 0;
+            auto *memBlock = findMemoryBlockByAddress(memAddr, procId, &memOffset);
+            if (memBlock && memBlock->initialized) {
+              unsigned totalElemWidth = (memBlock->data.size() - memOffset) * 8 / numElems;
+              unsigned elemBytes = totalElemWidth / 8;
+
+              for (unsigned i = 0; i < numElems; ++i) {
+                unsigned byteBase = memOffset + i * elemBytes;
+                unsigned valueBytes = (elemBitWidth + 7) / 8;
+
+                // Read value from memory (little-endian)
+                uint64_t val = 0;
+                for (unsigned b = 0; b < valueBytes && byteBase + b < memBlock->data.size(); ++b) {
+                  val |= static_cast<uint64_t>(memBlock->data[byteBase + b]) << (b * 8);
+                }
+                APInt elemVal(elemBitWidth, val);
+
+                if (isHex) {
+                  unsigned hexDigits = (elemBitWidth + 3) / 4;
+                  SmallString<32> hexStr;
+                  elemVal.toString(hexStr, 16, /*Signed=*/false);
+                  while (hexStr.size() < hexDigits)
+                    hexStr.insert(hexStr.begin(), '0');
+                  outFile << hexStr.c_str() << "\n";
+                } else {
+                  SmallString<64> binStr;
+                  elemVal.toString(binStr, 2, /*Signed=*/false);
+                  while (binStr.size() < static_cast<unsigned>(elemBitWidth))
+                    binStr.insert(binStr.begin(), '0');
+                  outFile << binStr.c_str() << "\n";
+                }
+              }
+            }
+          }
+        }
+        outFile.close();
+      }
+      return success();
+    }
+
     // Handle __moore_string_concat - concatenate two string structs
     // Signature: (lhs_ptr: ptr, rhs_ptr: ptr) -> struct{ptr, i64}
     // lhs_ptr and rhs_ptr point to stack-allocated {ptr, i64} structs
@@ -28732,6 +29230,55 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                  << "  llvm.call: __moore_random_seeded(" << seed
                  << ") = " << result
                  << " [per-process RNG, pid=" << procId << "]\n");
+      return success();
+    }
+
+    // ---- __moore_dist_* distribution functions ----
+    // IEEE 1800-2017 Section 20.15. All take a seed pointer (operand 0)
+    // and distribution-specific parameters. Call the native runtime directly.
+    if (calleeName.starts_with("__moore_dist_")) {
+      // Operand 0: ptr to seed (alloca address).
+      uint64_t seedAddr =
+          getValue(procId, callOp.getOperand(0)).getUInt64();
+      // Read current seed from interpreter memory.
+      int32_t seed = 0;
+      uint64_t off = 0;
+      MemoryBlock *block = findMemoryBlockByAddress(seedAddr, procId, &off);
+      if (!block)
+        block = findBlockByAddress(seedAddr, off);
+      if (block && block->initialized && off + 4 <= block->data.size()) {
+        std::memcpy(&seed, block->data.data() + off, 4);
+      }
+      // Gather integer parameters (operands 1+).
+      SmallVector<int32_t, 3> params;
+      for (unsigned i = 1; i < callOp.getNumOperands(); ++i)
+        params.push_back(static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(i)).getUInt64()));
+      // Dispatch to native runtime.
+      int32_t result = 0;
+      if (calleeName == "__moore_dist_uniform" && params.size() >= 2)
+        result = __moore_dist_uniform(&seed, params[0], params[1]);
+      else if (calleeName == "__moore_dist_normal" && params.size() >= 2)
+        result = __moore_dist_normal(&seed, params[0], params[1]);
+      else if (calleeName == "__moore_dist_exponential" && params.size() >= 1)
+        result = __moore_dist_exponential(&seed, params[0]);
+      else if (calleeName == "__moore_dist_poisson" && params.size() >= 1)
+        result = __moore_dist_poisson(&seed, params[0]);
+      else if (calleeName == "__moore_dist_chi_square" && params.size() >= 1)
+        result = __moore_dist_chi_square(&seed, params[0]);
+      else if (calleeName == "__moore_dist_t" && params.size() >= 1)
+        result = __moore_dist_t(&seed, params[0]);
+      else if (calleeName == "__moore_dist_erlang" && params.size() >= 2)
+        result = __moore_dist_erlang(&seed, params[0], params[1]);
+      // Write updated seed back to memory.
+      if (block && off + 4 <= block->data.size()) {
+        std::memcpy(block->data.data() + off, &seed, 4);
+      }
+      setValue(procId, callOp.getResult(),
+               InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: " << calleeName << "(...) = " << result
+                 << " seed=" << seed << "\n");
       return success();
     }
 

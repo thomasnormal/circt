@@ -2636,13 +2636,67 @@ struct StmtVisitor {
       return true;
     }
 
-    // $writememb/$writememh - write memory contents to file
+    // $writememb - write memory contents to binary file
     // IEEE 1800-2017 Section 21.4
-    // Stub as no-ops for now.
-    if (subroutine.name == "$writememb" ||
-        subroutine.name == "$writememh") {
-      mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
-                            << "`";
+    if (subroutine.name == "$writememb") {
+      if (args.size() < 2) {
+        mlir::emitError(loc) << "$writememb expects at least two arguments";
+        return failure();
+      }
+      auto filename = context.convertRvalueExpression(*args[0]);
+      if (!filename)
+        return failure();
+      if (!isa<moore::StringType>(filename.getType())) {
+        if (isa<moore::IntType>(filename.getType()))
+          filename =
+              moore::IntToStringOp::create(builder, loc, filename).getResult();
+        else {
+          mlir::emitError(loc) << "$writememb filename must be a string";
+          return failure();
+        }
+      }
+      Value mem;
+      if (auto *assignExpr =
+              args[1]->as_if<slang::ast::AssignmentExpression>())
+        mem = context.convertLvalueExpression(assignExpr->left());
+      else
+        mem = context.convertLvalueExpression(*args[1]);
+      if (!mem)
+        return failure();
+      context.captureRef(mem);
+      moore::WriteMemBBIOp::create(builder, loc, filename, mem);
+      return true;
+    }
+
+    // $writememh - write memory contents to hex file
+    // IEEE 1800-2017 Section 21.4
+    if (subroutine.name == "$writememh") {
+      if (args.size() < 2) {
+        mlir::emitError(loc) << "$writememh expects at least two arguments";
+        return failure();
+      }
+      auto filename = context.convertRvalueExpression(*args[0]);
+      if (!filename)
+        return failure();
+      if (!isa<moore::StringType>(filename.getType())) {
+        if (isa<moore::IntType>(filename.getType()))
+          filename =
+              moore::IntToStringOp::create(builder, loc, filename).getResult();
+        else {
+          mlir::emitError(loc) << "$writememh filename must be a string";
+          return failure();
+        }
+      }
+      Value mem;
+      if (auto *assignExpr =
+              args[1]->as_if<slang::ast::AssignmentExpression>())
+        mem = context.convertLvalueExpression(assignExpr->left());
+      else
+        mem = context.convertLvalueExpression(*args[1]);
+      if (!mem)
+        return failure();
+      context.captureRef(mem);
+      moore::WriteMemHBIOp::create(builder, loc, filename, mem);
       return true;
     }
 

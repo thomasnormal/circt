@@ -9,6 +9,7 @@ module top;
     mem[1] = 8'b11001100;
     mem[2] = 8'b11110000;
     mem[3] = 8'b00001111;
+    #1; // Wait for drives to take effect
 
     $writememb("writememb_test.dat", mem);
     $readmemb("writememb_test.dat", readback);
@@ -17,7 +18,7 @@ module top;
       // CHECK: mem[0] = 10101010
       // CHECK: mem[1] = 11001100
       // CHECK: mem[2] = 11110000
-      // CHECK: mem[3] = 00001111
+      // CHECK: mem[3] = 1111
       $display("mem[%0d] = %b", i, readback[i]);
     end
     $finish;

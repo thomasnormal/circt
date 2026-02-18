@@ -9,6 +9,7 @@ module top;
     mem[1] = 8'hAD;
     mem[2] = 8'hBE;
     mem[3] = 8'hEF;
+    #1; // Wait for drives to take effect
 
     $writememh("writememh_test.dat", mem);
     $readmemh("writememh_test.dat", readback);

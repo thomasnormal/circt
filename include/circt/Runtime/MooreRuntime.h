@@ -5920,6 +5920,27 @@ void __moore_timeformat(int32_t units, int32_t precision,
                         int32_t min_width);
 
 MooreString __moore_format_time(int64_t time_fs);
+
+// $writememb/$writememh (IEEE 1800-2017 Section 21.4).
+// Write memory array contents to file.
+// filename is a stack-allocated {ptr, i64} string struct.
+// mem is the memory array pointer.
+// elem_width is the logical bit width of each element.
+// num_elems is the number of elements.
+void __moore_writememb(const void *filename, const void *mem,
+                       int32_t elem_width, int32_t num_elems);
+void __moore_writememh(const void *filename, const void *mem,
+                       int32_t elem_width, int32_t num_elems);
+
+// Distribution functions (IEEE 1800-2017 Section 20.15).
+// Each takes a pointer to a seed (updated in place) and distribution params.
+int32_t __moore_dist_uniform(int32_t *seed, int32_t start, int32_t end);
+int32_t __moore_dist_normal(int32_t *seed, int32_t mean, int32_t std_dev);
+int32_t __moore_dist_exponential(int32_t *seed, int32_t mean);
+int32_t __moore_dist_poisson(int32_t *seed, int32_t mean);
+int32_t __moore_dist_chi_square(int32_t *seed, int32_t df);
+int32_t __moore_dist_t(int32_t *seed, int32_t df);
+int32_t __moore_dist_erlang(int32_t *seed, int32_t k, int32_t mean);
 #ifdef __cplusplus
 }
 #endif
