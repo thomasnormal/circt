@@ -48,6 +48,16 @@
      - `/tmp/uart-vtable-slot-cache-profile-maxtime550g.log`
        - reached `550000000000 fs`,
        - coverage snapshot: `Tx=100.00%`, `Rx=0.00%`.
+   - bounded cross-suite smokes:
+     - sv-tests sim (`11.10.1--string_concat`): PASS
+       (`/tmp/sv-tests-circt-sim-vtable-slot-cache-20260218-2350.txt`).
+     - yosys SVA BMC (`basic00`): PASS
+       (`/tmp/yosys-sva-bmc-vtable-slot-cache-20260218-2350.tsv`).
+     - OpenTitan sim (`prim_count`): PASS
+       (`/tmp/opentitan-circt-sim-vtable-slot-cache-20260218-2350.log`).
+     - verilator-verification BMC (`assert_changed`): FAIL
+       (`/tmp/verilator-bmc-vtable-slot-cache-20260218-2350.tsv`);
+       treated as pre-existing smoke instability on this dirty tree.
 
 ## Iteration 1515 - February 18, 2026
 
