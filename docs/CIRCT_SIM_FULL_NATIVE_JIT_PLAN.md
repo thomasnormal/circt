@@ -1903,6 +1903,37 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - push these broader install/guard closures through rerun all9 compile
         matrix validation and then return to Rx functional progression closure
         work (`UartRxCovergroup` still `0%` in bounded UART runs).
+59. all9 compile-mode convergence rerun after item-58 closures
+    (February 18, 2026):
+    - matrix rerun:
+      - `AVIP_SET=all9`, `SEEDS=1`, compile mode.
+      - bounded settings:
+        - `COMPILE_TIMEOUT=120`
+        - `SIM_TIMEOUT=120`
+        - `MAX_WALL_MS=120000`
+      - output:
+        - `/tmp/avip-circt-sim-all9-profileguard-20260218-164640/matrix.tsv`
+    - results:
+      - compile `OK`: `9/9`
+      - sim `OK`: `6/9`
+      - sim `TIMEOUT`: `3/9`
+        - `axi4`
+        - `jtag`
+        - `uart`
+    - timeout follow-up:
+      - isolated `jtag` rerun with `SIM_TIMEOUT=180`:
+        - `/tmp/avip-circt-sim-jtag-profileguard-20260218-170318/matrix.tsv`
+        - remained `TIMEOUT`.
+    - comparison baseline:
+      - prior all9 snapshot:
+        - `/tmp/avip-circt-sim-all9-rerun-20260218-103206/matrix.tsv`
+        - sim `OK=7/9`, `TIMEOUT=2/9` (`axi4`,`uart`).
+      - current bounded rerun:
+        - sim `OK=6/9`, `TIMEOUT=3/9` (`axi4`,`jtag`,`uart`).
+    - next closure target:
+      - profile and close `jtag` reset-state hot loop regression under compile
+        mode, then rerun all9 with matched timeout budgets while continuing
+        `uart` Rx progression closure and `axi4` long-tail convergence.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
