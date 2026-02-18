@@ -1182,6 +1182,40 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - consume hot unresolved-site target-set profiles to install guarded
         native specializations (site hash/version guards) with strict
         `guard_failed` deopt fallback on guard mismatch.
+42. UVM `%d,%s` `sscanf` legalization closure + all-AVIP compile unblock
+    (February 18, 2026):
+    - root cause and lowering closure:
+      - fixed `moore.builtin.sscanf`/`fscanf` destination writeback helper
+        (`writeScanfResultToRef`) for UVM-style mixed destinations
+        (`!moore.ref<time>`, `!moore.ref<string>`):
+        - added string destination support via
+          `__moore_packed_string_to_string`.
+        - fixed invalid `arith.extsi i64 -> i64` generation when scanning into
+          64-bit time/integer destinations.
+      - threaded `ModuleOp` through scanf writeback helper so runtime helper
+        calls are materialized in conversion.
+    - regression coverage:
+      - added `test/Conversion/MooreToCore/sscanf-time-string.mlir` to lock
+        mixed time+string lowering (`__moore_sscanf` +
+        `__moore_packed_string_to_string`).
+    - validation:
+      - builds:
+        - `ninja -C build-test -j2 circt-opt circt-verilog`: PASS
+      - focused regressions:
+        - `test/Conversion/MooreToCore/sscanf-time-string.mlir`: PASS
+        - `test/Tools/circt-sim/syscall-sscanf.sv`: PASS
+      - AVIP all9 compile-mode matrix:
+        - `/tmp/avip-circt-sim-all9-rerun-20260218-103206/matrix.tsv`
+        - compile `OK` on all 9 AVIPs.
+        - sim `OK` on 7/9; `axi4` + `uart` timeout at `240s`.
+      - extended timeout rerun (`axi4`,`uart`):
+        - `/tmp/avip-circt-sim-axi4-uart-long-20260218-105251/matrix.tsv`
+        - both still timeout at `600s`, confirming runtime-progress bottlenecks
+          rather than short timeout artifacts.
+    - next closure target:
+      - profile and close long-tail runtime hot loops in `axi4`/`uart`
+        compile-mode lanes (step-progress dominated process loops), then rerun
+        all9 with strict coverage targets.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

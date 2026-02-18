@@ -1957,6 +1957,9 @@ struct SVModuleOpConversion : public OpConversionPattern<SVModuleOp> {
       hwModuleOp->setAttr("vpi.integer_vars", vpiIntVars);
     if (auto vpiStrVars = op->getAttrOfType<ArrayAttr>("vpi.string_vars"))
       hwModuleOp->setAttr("vpi.string_vars", vpiStrVars);
+    if (auto vpiStrVarVals =
+            op->getAttrOfType<DictionaryAttr>("vpi.string_var_values"))
+      hwModuleOp->setAttr("vpi.string_var_values", vpiStrVarVals);
     if (auto vpiRealVars = op->getAttrOfType<ArrayAttr>("vpi.real_vars"))
       hwModuleOp->setAttr("vpi.real_vars", vpiRealVars);
     // Make hw.module have the same visibility as the moore.module.
@@ -13681,6 +13684,45 @@ struct FormatStringOpConversion : public OpConversionPattern<FormatStringOp> {
   }
 };
 
+/// Conversion for moore.fmt.time -> runtime call to __moore_format_time.
+/// Converts a time value (in femtoseconds) to a formatted string using the
+/// global $timeformat settings.
+struct FormatTimeOpConversion : public OpConversionPattern<FormatTimeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FormatTimeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    // __moore_format_time returns MooreString = {ptr, i64}
+    auto resultTy =
+        LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+    auto fnTy = LLVM::LLVMFunctionType::get(resultTy, {i64Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_format_time", fnTy);
+
+    // Get the time value (already i64 after type conversion).
+    Value timeVal = adaptor.getTime();
+    if (timeVal.getType() != i64Ty)
+      timeVal = LLVM::SExtOp::create(rewriter, loc, i64Ty, timeVal);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, resultTy,
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{timeVal});
+
+    // Wrap result in sim::FormatDynStringOp (same as FormatStringOpConversion).
+    rewriter.replaceOpWithNewOp<sim::FormatDynStringOp>(op,
+                                                        call.getResult());
+    return success();
+  }
+};
+
 struct DisplayBIOpConversion : public OpConversionPattern<DisplayBIOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -14420,6 +14462,55 @@ struct FCloseBIOpConversion : public OpConversionPattern<FCloseBIOp> {
     LLVM::CallOp::create(rewriter, loc, TypeRange{},
                          SymbolRefAttr::get(fn),
                          ValueRange{fd});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.timeformat -> runtime call to
+/// __moore_timeformat.  Lowers $timeformat(units, precision, suffix, min_width)
+/// to the C runtime that stores the global formatting state.
+struct TimeFormatBIOpConversion : public OpConversionPattern<TimeFormatBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(TimeFormatBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // __moore_timeformat(i32 units, i32 precision, ptr suffix, i64 len,
+    //                    i32 min_width)
+    auto fnTy = LLVM::LLVMFunctionType::get(
+        voidTy, {i32Ty, i32Ty, ptrTy, i64Ty, i32Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_timeformat", fnTy);
+
+    // Units and precision are already i32.
+    Value units = adaptor.getUnits();
+    Value precision = adaptor.getPrecision();
+    Value minWidth = adaptor.getMinWidth();
+
+    // Create a global constant for the suffix string.
+    StringRef suffix = op.getSuffix();
+    std::string globalName =
+        ("__moore_timeformat_suffix_" + llvm::utohexstr(suffix.size())).str();
+    Value suffixPtr =
+        createGlobalStringConstant(loc, mod, rewriter, suffix, globalName);
+    Value suffixLen = LLVM::ConstantOp::create(
+        rewriter, loc, i64Ty,
+        rewriter.getI64IntegerAttr(suffix.size()));
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{units, precision, suffixPtr, suffixLen,
+                                    minWidth});
 
     rewriter.eraseOp(op);
     return success();
@@ -21822,8 +21913,6 @@ struct SScanfBIOpConversion : public OpConversionPattern<SScanfBIOp> {
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i32Ty = IntegerType::get(ctx, 32);
     auto i64Ty = IntegerType::get(ctx, 64);
-    auto stringStructTy =
-        LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
 
     StringRef format = op.getFormat();
     int32_t numArgs = adaptor.getArgs().size();
@@ -27997,6 +28086,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FormatRealOpConversion,
     FormatStringOpConversion,
     FormatStringToStringOpConversion,
+    FormatTimeOpConversion,
     DisplayBIOpConversion,
 
     // Patterns for system call builtins.
@@ -28007,6 +28097,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     MonitorOnBIOpConversion,
     MonitorOffBIOpConversion,
     PrintTimescaleBIOpConversion,
+    TimeFormatBIOpConversion,
     FErrorBIOpConversion,
     UngetCBIOpConversion,
     FSeekBIOpConversion,
