@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1497 - February 18, 2026
+
+### circt-sim: execute-phase monitor fork objection-waiter stabilization + regression lock
+
+1. **Runtime stabilization** (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - hardened execute-phase join_any interception while using
+     objection-zero waiters:
+     - when arming objection-zero waiting, the process now explicitly enters
+       scheduler `Waiting` state.
+     - `executeProcess()` now ignores spurious triggers while a process is
+       waiting on:
+       - execute-phase monitor poll state, or
+       - objection-zero waiter state.
+   - this prevents unintended re-entry into the intercepted `sim.fork`
+     operation while the process is intentionally suspended.
+
+2. **Regression coverage added** (`test/Tools/circt-sim/`):
+   - `execute-phase-monitor-fork-objection-waiter.mlir`
+   - validates objection-active monitor-fork interception emits
+     `wait_mode=objection_zero`, preserves completion ordering, and passes
+     both:
+     - default run
+     - `--parallel=4 --work-stealing --auto-partition` run
+
+3. **Validation**:
+   - build:
+     - `ninja -C build -j4 circt-sim`: PASS.
+   - focused regressions:
+     - `execute-phase-monitor-fork-objection-waiter.mlir`: PASS.
+     - `func-generate-baud-clk-resume-fast-path.mlir`: PASS.
+     - `func-baud-clk-generator-fast-path-delay-batch.mlir`: PASS.
+     - `jit-process-fast-path-store-wait-self-loop.mlir`: PASS.
+   - bounded UART direct sample (compile mode, `--timeout=60`):
+     - `/tmp/uart-direct-timeout60-objwaiter-summary.log`
+     - `fork_18_branch_0` `sim.fork` hotspot reduced to `steps=1` in the
+       bounded profile.
+
 ## Iteration 1496 - February 18, 2026
 
 ### circt-sim: `GenerateBaudClk` caller-side resume fast path (parallel-safe) for UART hot fork branches

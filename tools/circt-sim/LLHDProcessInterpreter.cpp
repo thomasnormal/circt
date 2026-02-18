@@ -1114,7 +1114,7 @@ void LLHDProcessInterpreter::dropPhaseObjection(int64_t handle, int64_t count) {
 void LLHDProcessInterpreter::enqueueObjectionZeroWaiter(int64_t handle,
                                                         ProcessId procId,
                                                         Operation *retryOp) {
-  if (handle == MOORE_OBJECTION_INVALID_HANDLE || !retryOp)
+  if (handle == MOORE_OBJECTION_INVALID_HANDLE)
     return;
 
   auto existingHandleIt = objectionWaitHandleByProc.find(procId);
@@ -1173,6 +1173,9 @@ void LLHDProcessInterpreter::wakeObjectionZeroWaitersIfReady(int64_t handle) {
     auto stateIt = processStates.find(waiter.procId);
     if (stateIt == processStates.end())
       continue;
+    executePhaseMonitorPollPhase.erase(waiter.procId);
+    executePhaseMonitorPollToken.erase(waiter.procId);
+    executePhaseYieldCounts.erase(waiter.procId);
     auto &state = stateIt->second;
     state.waiting = false;
     if (waiter.retryOp)
@@ -7887,6 +7890,18 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
                     "ignoring spurious trigger, will resume via poll callback\n");
       return;
     }
+    if (executePhaseMonitorPollPhase.count(procId)) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Process triggered while waiting on execute_phase "
+                    "monitor poll - ignoring spurious trigger\n");
+      return;
+    }
+    if (objectionWaitHandleByProc.count(procId)) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Process triggered while waiting on objection-zero "
+                    "waiter - ignoring spurious trigger\n");
+      return;
+    }
     //
     // We need to clear the waiting flag so the execution loop will run.
     // The process will resume at its current position (which should be right
@@ -8461,6 +8476,11 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
       removeObjectionZeroWaiter(procId);
       removeQueueNotEmptyWaiter(procId);
       memoryEventWaiters.erase(procId);
+      executePhaseYieldCounts.erase(procId);
+      executePhaseMonitorPollPhase.erase(procId);
+      executePhaseMonitorPollToken.erase(procId);
+      executePhaseBlockingPhaseMap.erase(procId);
+      currentExecutingPhaseAddr.erase(procId);
       notifyProcessAwaiters(procId);
       return;
     }
@@ -8472,6 +8492,11 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
 
     removeObjectionZeroWaiter(procId);
     memoryEventWaiters.erase(procId);
+    executePhaseYieldCounts.erase(procId);
+    executePhaseMonitorPollPhase.erase(procId);
+    executePhaseMonitorPollToken.erase(procId);
+    executePhaseBlockingPhaseMap.erase(procId);
+    currentExecutingPhaseAddr.erase(procId);
     if (it->second.waitConditionQueueAddr != 0) {
       removeQueueNotEmptyWaiter(procId);
       it->second.waitConditionQueueAddr = 0;
@@ -23172,6 +23197,109 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
   return mlir::success();
 }
 
+void LLHDProcessInterpreter::scheduleExecutePhaseMonitorForkPoll(
+    ProcessId procId, uint64_t phaseAddr, uint64_t pollToken,
+    int64_t objectionCount) {
+  SimTime currentTime = scheduler.getCurrentTime();
+  SimTime targetTime;
+  auto &yieldCount = executePhaseYieldCounts[procId];
+
+  // Poll objection-active phases on real time, not repeated deltas. This
+  // avoids re-running intercepted join_any forks millions of times.
+  constexpr int kExecutePhaseZeroDeltaPolls = 8;
+  constexpr int64_t kExecutePhaseBusyPollDelayFs = 10000000; // 10 ns
+  constexpr int64_t kExecutePhaseZeroPollDelayFs = 1000000;  // 1 ns
+  if (objectionCount > 0) {
+    targetTime = currentTime.advanceTime(kExecutePhaseBusyPollDelayFs);
+  } else if (yieldCount < kExecutePhaseZeroDeltaPolls &&
+             currentTime.deltaStep < kExecutePhaseZeroDeltaPolls) {
+    targetTime = currentTime.nextDelta();
+  } else {
+    targetTime = currentTime.advanceTime(kExecutePhaseZeroPollDelayFs);
+  }
+
+  scheduler.getEventScheduler().schedule(
+      targetTime, SchedulingRegion::Active,
+      Event([this, procId, phaseAddr, pollToken]() {
+        pollExecutePhaseMonitorFork(procId, phaseAddr, pollToken);
+      }));
+}
+
+void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
+    ProcessId procId, uint64_t phaseAddr, uint64_t pollToken) {
+  auto stateIt = processStates.find(procId);
+  if (stateIt == processStates.end()) {
+    executePhaseMonitorPollPhase.erase(procId);
+    executePhaseMonitorPollToken.erase(procId);
+    executePhaseYieldCounts.erase(procId);
+    return;
+  }
+  auto tokenIt = executePhaseMonitorPollToken.find(procId);
+  auto phaseIt = executePhaseMonitorPollPhase.find(procId);
+  if (tokenIt == executePhaseMonitorPollToken.end() ||
+      phaseIt == executePhaseMonitorPollPhase.end())
+    return;
+  if (tokenIt->second != pollToken || phaseIt->second != phaseAddr)
+    return;
+  if (stateIt->second.halted) {
+    executePhaseMonitorPollPhase.erase(procId);
+    executePhaseMonitorPollToken.erase(procId);
+    executePhaseYieldCounts.erase(procId);
+    return;
+  }
+
+  auto objIt = phaseObjectionHandles.find(phaseAddr);
+  MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
+  if (objIt != phaseObjectionHandles.end())
+    handle = objIt->second;
+
+  int64_t count = 0;
+  if (handle != MOORE_OBJECTION_INVALID_HANDLE)
+    count = __moore_objection_get_count(handle);
+
+  bool masterChildAlive = false;
+  auto childIt = masterPhaseProcessChild.find(phaseAddr);
+  if (childIt != masterPhaseProcessChild.end()) {
+    auto childStateIt = processStates.find(childIt->second);
+    if (childStateIt != processStates.end())
+      masterChildAlive = !childStateIt->second.halted;
+  }
+
+  auto &yieldCount = executePhaseYieldCounts[procId];
+  constexpr int kObjectionDropGrace = 100;
+  bool shouldKeepPolling = (count > 0) ||
+                           (count <= 0 && masterChildAlive &&
+                            yieldCount < kObjectionDropGrace) ||
+                           (count <= 0 && yieldCount < 10);
+  if (shouldKeepPolling) {
+    if (count > 0)
+      yieldCount = 0;
+    else
+      ++yieldCount;
+    scheduleExecutePhaseMonitorForkPoll(procId, phaseAddr, pollToken, count);
+    return;
+  }
+
+  yieldCount = 0;
+  executePhaseMonitorPollPhase.erase(procId);
+  executePhaseMonitorPollToken.erase(procId);
+
+  // Objections are at 0 and master child is done — phase is complete.
+  // Kill all processes spawned during this phase (monitors with forever
+  // loops, scoreboards waiting on events, etc.). Without this cleanup,
+  // these tasks would run indefinitely and block subsequent phases.
+  auto childIt2 = masterPhaseProcessChild.find(phaseAddr);
+  if (childIt2 != masterPhaseProcessChild.end()) {
+    ProcessId masterChildId = childIt2->second;
+    killProcessTree(masterChildId);
+    masterPhaseProcessChild.erase(childIt2);
+  }
+
+  auto &state = stateIt->second;
+  state.waiting = false;
+  scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+}
+
 //===----------------------------------------------------------------------===//
 // Fork/Join Operation Handlers
 //===----------------------------------------------------------------------===//
@@ -23349,36 +23477,47 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
                                 yieldCount < kObjectionDropGrace) ||
                                (count <= 0 && yieldCount < 10);
       if (shouldKeepPolling) {
-        ++yieldCount;
         if (count > 0)
-          yieldCount = 0; // Reset when objections are active
+          yieldCount = 0;
+        else
+          ++yieldCount;
+
         auto &state = processStates[procId];
         state.waiting = true;
 
-        SimTime currentTime = scheduler.getCurrentTime();
-        SimTime targetTime;
-        constexpr uint32_t kExecutePhaseMaxDeltaPolls = 64;
-        constexpr int64_t kExecutePhaseFallbackPollDelayFs = 10000000; // 10 ns
-        if (currentTime.deltaStep < kExecutePhaseMaxDeltaPolls)
-          targetTime = currentTime.nextDelta();
-        else
-          targetTime = currentTime.advanceTime(kExecutePhaseFallbackPollDelayFs);
+        // Hot-path closure: when objections are active, suspend on native
+        // objection-zero wakeup instead of periodic polling.
+        bool armedObjectionWaiter = false;
+        if (count > 0 && handle != MOORE_OBJECTION_INVALID_HANDLE) {
+          // Retry op is null so wakeup continues after this fork, instead of
+          // re-executing the intercepted join_any.
+          enqueueObjectionZeroWaiter(handle, procId, nullptr);
+          executePhaseMonitorPollPhase[procId] = phaseAddr;
+          ++executePhaseMonitorPollToken[procId];
+          armedObjectionWaiter = true;
+          if (traceForkJoinEnabled) {
+            llvm::errs() << "[FORK-INTERCEPT] proc=" << procId
+                         << " wait_mode=objection_zero handle=" << handle
+                         << " count=" << count << " phase=0x"
+                         << llvm::format_hex(phaseAddr, 16) << "\n";
+          }
+        } else {
+          removeObjectionZeroWaiter(procId);
+        }
 
-        // Re-arm explicit blocking marker only when this interception came
-        // from that marker path. Shape-based interception does not require it.
-        if (hadExplicitBlockingMap)
-          executePhaseBlockingPhaseMap[procId] = phaseAddr;
+        if (armedObjectionWaiter) {
+          if (auto *proc = scheduler.getProcess(procId))
+            proc->setState(ProcessState::Waiting);
+          return success();
+        }
 
-        // Re-execute this same fork op on the next delta
-        auto forkIt = mlir::Block::iterator(forkOp.getOperation());
-        scheduler.getEventScheduler().schedule(
-            targetTime, SchedulingRegion::Active,
-            Event([this, procId, forkIt]() {
-              auto &st = processStates[procId];
-              st.waiting = false;
-              st.currentOp = forkIt;
-              scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-            }));
+        if (auto *proc = scheduler.getProcess(procId))
+          proc->setState(ProcessState::Waiting);
+
+        executePhaseMonitorPollPhase[procId] = phaseAddr;
+        uint64_t pollToken = ++executePhaseMonitorPollToken[procId];
+        scheduleExecutePhaseMonitorForkPoll(procId, phaseAddr, pollToken,
+                                            count);
         return success();
       }
 
@@ -23393,6 +23532,8 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
         killProcessTree(masterChildId);
         masterPhaseProcessChild.erase(childIt2);
       }
+      executePhaseMonitorPollPhase.erase(procId);
+      executePhaseMonitorPollToken.erase(procId);
       // Skip the fork entirely — continue to next op after the fork
       return success();
     }
