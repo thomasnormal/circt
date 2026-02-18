@@ -99,8 +99,9 @@ static bool hasNumericSuffixName(StringRef name, StringRef prefix) {
 static bool isConfigDbSetWrapperCallPrelude(mlir::func::CallOp callOp) {
   if (callOp.getNumResults() != 0 || callOp.getNumOperands() != 4)
     return false;
-  if (!isa<LLVM::LLVMPointerType>(callOp.getOperand(0).getType()) ||
-      !isa<LLVM::LLVMPointerType>(callOp.getOperand(3).getType()))
+  // set_<digits> wrappers carry the payload in operand[3], which can be
+  // either pointer-backed or by-value aggregate/scalar depending on lowering.
+  if (!isa<LLVM::LLVMPointerType>(callOp.getOperand(0).getType()))
     return false;
   return isConfigDbSetWrapperName(callOp.getCallee());
 }
