@@ -54,6 +54,7 @@ unsigned g_lastFuncProcId = 0;
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <sstream>
 
 #define DEBUG_TYPE "llhd-interpreter"
@@ -509,6 +510,7 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   traceForkJoinEnabled = envFlagEnabled("CIRCT_SIM_TRACE_FORK_JOIN");
   traceCallIndirectSiteCacheEnabled =
       envFlagEnabled("CIRCT_SIM_TRACE_CALL_INDIRECT_SITE_CACHE");
+  flushProcPrintEnabled = envFlagEnabled("CIRCT_SIM_FLUSH_PROC_PRINT");
   fastPathUvmReportInfo = envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_INFO");
   fastPathUvmReportWarning =
       envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_WARNING");
@@ -7771,6 +7773,29 @@ void LLHDProcessInterpreter::checkMemoryEventWaiters() {
   }
 }
 
+size_t
+LLHDProcessInterpreter::getEffectiveMaxProcessSteps(ProcessId procId) const {
+  if (maxProcessSteps == 0)
+    return 0;
+
+  // Module-level/global-init execution uses temporary process IDs from the
+  // reserved high-ID range. These finite init paths can be much heavier than
+  // steady-state process activations, so give them a wider guard band.
+  if (inGlobalInit && procId >= kTempProcessIdBase) {
+    constexpr size_t kGlobalInitStepLimitMultiplier = 128;
+    constexpr size_t kGlobalInitMinStepLimit = 1000000;
+    size_t scaledLimit = maxProcessSteps;
+    if (scaledLimit >
+        std::numeric_limits<size_t>::max() / kGlobalInitStepLimitMultiplier)
+      scaledLimit = std::numeric_limits<size_t>::max();
+    else
+      scaledLimit *= kGlobalInitStepLimitMultiplier;
+    return std::max(scaledLimit, kGlobalInitMinStepLimit);
+  }
+
+  return maxProcessSteps;
+}
+
 void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   auto it = processStates.find(procId);
   if (it == processStates.end()) {
@@ -8188,12 +8213,15 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       }
     });
     // Global step limit check (totalSteps includes func body ops)
-    if (maxProcessSteps > 0 && state.totalSteps > maxProcessSteps) {
+    size_t effectiveMaxProcessSteps = getEffectiveMaxProcessSteps(procId);
+    if (effectiveMaxProcessSteps > 0 &&
+        state.totalSteps > effectiveMaxProcessSteps) {
       llvm::errs() << "[circt-sim] ERROR(PROCESS_STEP_OVERFLOW): process "
                    << procId;
       if (auto *proc = scheduler.getProcess(procId))
         llvm::errs() << " '" << proc->getName() << "'";
-      llvm::errs() << " exceeded " << maxProcessSteps << " total steps";
+      llvm::errs() << " exceeded " << effectiveMaxProcessSteps
+                   << " total steps";
       llvm::errs() << " (totalSteps=" << state.totalSteps
                    << ", funcBodySteps=" << state.funcBodySteps << ")";
       if (!state.currentFuncName.empty())
@@ -19094,11 +19122,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
                        << "\n";
         }
         // Enforce global process step limit inside function bodies
-        if (maxProcessSteps > 0 &&
-            statePtr->totalSteps > (size_t)maxProcessSteps) {
+        size_t effectiveMaxProcessSteps = getEffectiveMaxProcessSteps(procId);
+        if (effectiveMaxProcessSteps > 0 &&
+            statePtr->totalSteps > effectiveMaxProcessSteps) {
           llvm::errs()
               << "[circt-sim] ERROR(PROCESS_STEP_OVERFLOW in func): process "
-              << procId << " exceeded " << maxProcessSteps
+              << procId << " exceeded " << effectiveMaxProcessSteps
               << " total steps in function '" << funcOp.getName() << "'"
               << " (totalSteps=" << statePtr->totalSteps << ")\n";
           statePtr->halted = true;
@@ -19345,6 +19374,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_CALLSTACK");
           return env && env[0] != '\0' && env[0] != '0';
         }();
+        static bool traceCallStackFrames = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_CALLSTACK_FRAMES");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
 
         // If waiting (not halted), save the call stack frame so we can resume
         // from the NEXT operation after the one that caused the wait.
@@ -19370,6 +19403,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
               currentBlock != &entryBlock) {
             if (elideTailWrapperFrame) {
               haltCheckState->callStackOutermostCallOp = callOp;
+              if (traceCallStackFrames) {
+                llvm::errs() << "[CS-FRAME-SAVE] proc=" << procId
+                             << " mode=elide-tail"
+                             << " func=" << funcOp.getName() << " next_is_end="
+                             << (nextOpIt == currentBlock->end())
+                             << " block_ops="
+                             << currentBlock->getOperations().size() << "\n";
+              }
               static bool traceTailWrapperFastPath = []() {
                 const char *env =
                     std::getenv("CIRCT_SIM_TRACE_TAIL_WRAPPER_FASTPATH");
@@ -19415,6 +19456,16 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
               CallStackFrame frame(funcOp, currentBlock, nextOpIt, callOp);
               frame.args.assign(args.begin(), args.end());
               haltCheckState->callStack.push_back(std::move(frame));
+              if (traceCallStackFrames) {
+                llvm::errs() << "[CS-FRAME-SAVE] proc=" << procId
+                             << " mode=push"
+                             << " func=" << funcOp.getName() << " next_is_end="
+                             << (nextOpIt == currentBlock->end())
+                             << " block_ops="
+                             << currentBlock->getOperations().size()
+                             << " stack_size=" << haltCheckState->callStack.size()
+                             << "\n";
+              }
               if (traceI3CCallStackSave &&
                   (funcOp.getName().contains("i3c_target_monitor_bfm::") ||
                    funcOp.getName().contains("i3c_target_driver_bfm::") ||
@@ -20251,7 +20302,8 @@ LLHDProcessInterpreter::interpretProcPrint(ProcessId procId,
 
   // Print to stdout
   llvm::outs() << output;
-  llvm::outs().flush();
+  if (flushProcPrintEnabled)
+    llvm::outs().flush();
 
   return success();
 }
@@ -26443,6 +26495,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Mailbox DPI Hooks (Phase 1 - Non-blocking operations)
     //===------------------------------------------------------------------===//
 
+    static bool traceMailbox = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_MAILBOX");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+
     // Handle __moore_mailbox_create - create a new mailbox
     // Signature: (bound: i32) -> i64
     if (calleeName == "__moore_mailbox_create") {
@@ -26508,6 +26565,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         bool putSuccess = syncPrimitivesManager.mailboxTryPut(mboxId, msg);
 
+        if (traceMailbox)
+          llvm::errs() << "[MAILBOX-TRYPUT] proc=" << procId
+                       << " mbox=" << mboxId << " msg=" << msg
+                       << " ok=" << (putSuccess ? 1 : 0) << "\n";
+
         setValue(procId, callOp.getResult(),
                  InterpretedValue(putSuccess ? 1ULL : 0ULL, 1));
 
@@ -26526,6 +26588,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               auto waiterIt = processStates.find(waiterId);
               if (waiterIt != processStates.end()) {
                 auto &waiterState = waiterIt->second;
+                if (traceMailbox)
+                  llvm::errs() << "[MAILBOX-WAKE-GET] by=tryput proc="
+                               << procId << " waiter=" << waiterId
+                               << " mbox=" << mboxId
+                               << " out=0x"
+                               << llvm::format_hex(
+                                      waiterState.pendingMailboxGetResultAddr,
+                                      0)
+                               << " msg=" << waiterMsg << "\n";
                 if (waiterState.pendingMailboxGetResultAddr != 0) {
                   uint64_t outOffset = 0;
                   auto *outBlock = findMemoryBlockByAddress(
@@ -26745,6 +26816,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         // Try non-blocking get first
         uint64_t msg = 0;
         if (syncPrimitivesManager.mailboxTryGet(mboxId, msg)) {
+          if (traceMailbox)
+            llvm::errs() << "[MAILBOX-GET] proc=" << procId
+                         << " mbox=" << mboxId
+                         << " mode=immediate out=0x"
+                         << llvm::format_hex(msgOutAddr, 0)
+                         << " msg=" << msg << "\n";
           // Got a message - write it to the output pointer
           if (msgOutAddr != 0) {
             uint64_t outOffset = 0;
@@ -26779,6 +26856,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             wakePeekWaiters(mbox, mboxId);
           }
         } else {
+          if (traceMailbox)
+            llvm::errs() << "[MAILBOX-GET] proc=" << procId
+                         << " mbox=" << mboxId
+                         << " mode=block out=0x"
+                         << llvm::format_hex(msgOutAddr, 0) << "\n";
           // Mailbox is empty - block until a message is available
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_get("
                                   << mboxId << ", 0x"
@@ -32942,11 +33024,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
                          << "\n";
           }
           // Enforce global process step limit inside function bodies
-          if (maxProcessSteps > 0 &&
-              cachedState->totalSteps > (size_t)maxProcessSteps) {
+          size_t effectiveMaxProcessSteps = getEffectiveMaxProcessSteps(procId);
+          if (effectiveMaxProcessSteps > 0 &&
+              cachedState->totalSteps > effectiveMaxProcessSteps) {
             llvm::errs()
                 << "[circt-sim] ERROR(PROCESS_STEP_OVERFLOW in func): process "
-                << procId << " exceeded " << maxProcessSteps
+                << procId << " exceeded " << effectiveMaxProcessSteps
                 << " total steps in LLVM function '" << funcOp.getName() << "'"
                 << " (totalSteps=" << cachedState->totalSteps << ")\n";
             cachedState->halted = true;

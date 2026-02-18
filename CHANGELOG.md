@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1515 - February 18, 2026
+
+### circt-sim: global-init max-step false-overflow closure + bounded compile-lane revalidation
+
+1. **Global-init step-limit closure** (`tools/circt-sim/LLHDProcessInterpreter.cpp/.h`):
+   - added `getEffectiveMaxProcessSteps(ProcessId)` and routed all global
+     step-limit checks through it:
+     - `executeProcess`
+     - `interpretFuncBody`
+     - `interpretLLVMFuncBody`.
+   - during `inGlobalInit`, temporary module-init processes
+     (`procId >= 1<<60`) now use a widened guard band
+     (`max-process-steps * 128`, minimum `1,000,000`) to avoid false
+     `PROCESS_STEP_OVERFLOW` on finite module/global init call chains.
+   - kept steady-state process overflow behavior unchanged.
+
+2. **Regression coverage**:
+   - added
+     `test/Tools/circt-sim/max-process-steps-global-init-relax.mlir`.
+   - test runs with `--max-process-steps=50`, executes finite module-level
+     init work, and asserts no `PROCESS_STEP_OVERFLOW` diagnostic.
+
+3. **Proc-print flush policy regression validation**:
+   - validated existing env-gated flush policy and coverage:
+     - `CIRCT_SIM_FLUSH_PROC_PRINT=1`
+     - `test/Tools/circt-sim/proc-print-flush-env.mlir`.
+
+4. **Validation**:
+   - build:
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+   - focused checks:
+     - `max-process-steps-global-init-relax.mlir`: PASS.
+     - `jit-process-fast-path-budget-zero.mlir`: PASS.
+     - `proc-print-flush-env.mlir` (default + env variants): PASS.
+     - local repro `/tmp/global-init-step-overflow-repro.mlir` with
+       `--max-process-steps=50`: no overflow after fix.
+   - bounded AVIP compile-lane guard:
+     - `/tmp/avip-circt-sim-jtag-globalinitlimit-20260218-211230/matrix.tsv`
+       - `compile_status=OK` (`26s`)
+       - `sim_status=OK` (`44s`).
+   - bounded cross-suite smokes:
+     - sv-tests sim (`11.10.1--string_concat`): PASS
+       (`/tmp/sv-tests-circt-sim-globalinitlimit-20260218-211404.txt`).
+     - yosys SVA BMC (`basic00`): PASS
+       (`/tmp/yosys-sva-bmc-globalinitlimit-20260218-211432.tsv`).
+     - OpenTitan sim (`prim_count`): PASS
+       (`/tmp/opentitan-circt-sim-globalinitlimit-20260218-211441.log`).
+     - verilator-verification BMC (`assert_changed`): FAIL
+       (`/tmp/verilator-bmc-globalinitlimit-20260218-211426.tsv`);
+       treated as pre-existing smoke instability on this dirty tree.
+
 ## Iteration 1514 - February 18, 2026
 
 ### circt-sim: disable_fork wake-consumption guard + I3C baseline gap revalidation

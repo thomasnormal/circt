@@ -941,6 +941,9 @@ private:
   /// Returns true if the process should continue, false if suspended/halted.
   bool executeStep(ProcessId procId);
 
+  /// Return the active step limit for \p procId in the current phase.
+  size_t getEffectiveMaxProcessSteps(ProcessId procId) const;
+
   /// Execute a process until it suspends or halts.
   void executeProcess(ProcessId procId);
 
@@ -1629,7 +1632,8 @@ private:
   llvm::DenseMap<ProcessId, llvm::SmallVector<ProcessId, 4>> processAwaiters;
 
   /// Next temporary process ID used for combinational evaluation.
-  ProcessId nextTempProcId = 1ull << 60;
+  static constexpr ProcessId kTempProcessIdBase = 1ull << 60;
+  ProcessId nextTempProcId = kTempProcessIdBase;
 
   /// Map from llhd.process ops to process IDs.
   llvm::DenseMap<mlir::Operation *, ProcessId> opToProcessId;
@@ -1944,6 +1948,11 @@ private:
 
   /// Cached env flag for call_indirect site-cache diagnostics.
   bool traceCallIndirectSiteCacheEnabled = false;
+
+  /// Optional per-print stdout flush for sim.proc.print.
+  /// Disabled by default for throughput; enable with
+  /// CIRCT_SIM_FLUSH_PROC_PRINT=1 for interactive debugging.
+  bool flushProcPrintEnabled = false;
 
   /// Track a UVM fast-path hit and evaluate hotness-gated promotion hooks.
   void noteUvmFastPathActionHit(llvm::StringRef actionKey);
