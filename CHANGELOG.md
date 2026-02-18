@@ -70419,3 +70419,37 @@ See CHANGELOG.md on recent progress.
           - `first_op:llvm.call:__moore_semaphore_get` (3)
           - `first_op:func.call:from_write_class_6984` (1)
           - `first_op:func.call:from_read_class_6987` (1).
+58. `circt-sim` queue-push-back + class-bridge wrapper prelude closure wave
+    for AXI4 strict burn-down
+    (February 18, 2026):
+    - Expanded non-suspending `func.call` prelude allowlist with
+      signature-gated numeric class-bridge wrappers:
+      - `from_write_class_<digits>`
+      - `from_read_class_<digits>`
+      - `to_write_class_<digits>`
+      - `to_read_class_<digits>`
+    - Expanded non-suspending LLVM-call prelude allowlist with:
+      - `__moore_queue_push_back`
+    - Added strict compile-mode regressions:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-from-write-class-wrapper-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-from-read-class-wrapper-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-llvm-call-queue-push-back-halt.mlir`
+    - Validation:
+      - targeted strict compile-mode regressions (build-test lane): PASS
+        - `jit-process-thunk-func-call-from-write-class-wrapper-halt.mlir`
+        - `jit-process-thunk-func-call-from-read-class-wrapper-halt.mlir`
+        - `jit-process-thunk-llvm-call-queue-push-back-halt.mlir`
+        - `jit-process-thunk-llvm-call-assoc-size-halt.mlir`
+      - targeted parallel smoke (build-test lane): PASS
+        - `jit-process-thunk-llvm-call-queue-push-back-halt.mlir`
+          with `--parallel=4 --work-stealing --auto-partition`.
+      - TERM-bounded AXI4 queue sample after closure
+        (`/tmp/axi4-term120-after-queue-push-back.jit-report.json`):
+        - `jit_deopts_total=12`
+        - removed wrapper-tail classes:
+          - `first_op:func.call:from_write_class_*`
+          - `first_op:func.call:from_read_class_*`
+        - remaining queue:
+          - `first_op:scf.for` (2)
+          - `first_op:llvm.call:__moore_semaphore_get` (6)
+          - `first_op:func.call:from_class_6985` (4).

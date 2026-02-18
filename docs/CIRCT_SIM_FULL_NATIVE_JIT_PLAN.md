@@ -835,6 +835,47 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
           - `first_op:llvm.call:__moore_semaphore_get` (3)
           - `first_op:func.call:from_write_class_6984` (1)
           - `first_op:func.call:from_read_class_6987` (1).
+33. AXI4 wrapper-tail shift: close write/read class-bridge wrappers plus
+    queue push-back prelude
+    (February 18, 2026):
+    - native thunk policy closures:
+      - added signature-gated `func.call` prelude allowlist for numeric
+        class-bridge wrappers:
+        - `from_write_class_<digits>`
+        - `from_read_class_<digits>`
+        - `to_write_class_<digits>`
+        - `to_read_class_<digits>`
+      - added `llvm.call @__moore_queue_push_back` to the safe
+        non-suspending LLVM prelude allowlist for single-block terminating
+        thunk candidates.
+    - regression coverage:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-from-write-class-wrapper-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-from-read-class-wrapper-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-llvm-call-queue-push-back-halt.mlir`
+    - validation:
+      - targeted strict compile-mode regressions (build-test lane): PASS
+        - `jit-process-thunk-func-call-from-write-class-wrapper-halt.mlir`
+        - `jit-process-thunk-func-call-from-read-class-wrapper-halt.mlir`
+        - `jit-process-thunk-llvm-call-queue-push-back-halt.mlir`
+        - `jit-process-thunk-llvm-call-assoc-size-halt.mlir`
+      - targeted parallel compile-mode smoke (build-test lane): PASS
+        - `jit-process-thunk-llvm-call-queue-push-back-halt.mlir`
+          with `--parallel=4 --work-stealing --auto-partition`.
+      - TERM-bounded AXI4 queue sample after closure
+        (`/tmp/axi4-term120-after-queue-push-back.jit-report.json`):
+        - `jit_deopts_total=12`
+        - removed wrapper-tail entries:
+          - `first_op:func.call:from_write_class_*`
+          - `first_op:func.call:from_read_class_*`
+        - queue shifted to:
+          - `first_op:scf.for` (2)
+          - `first_op:llvm.call:__moore_semaphore_get` (6)
+          - `first_op:func.call:from_class_6985` (4)
+    - next closure target:
+      - close `first_op:scf.for` via remaining unsupported calls in the
+        structured prelude and then close/guard
+        `first_op:func.call:from_class_*` and
+        `first_op:llvm.call:__moore_semaphore_get`.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
