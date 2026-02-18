@@ -1,5 +1,4 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// XFAIL: *
 // Test $countones — count number of 1-bits in a bit vector
 module top;
   logic [7:0] a;
