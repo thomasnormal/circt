@@ -7039,3 +7039,42 @@ def ClockingSignalOp : MooreOp<"clocking_block.signal", [
 }
 
 #endif // CIRCT_DIALECT_MOORE_MOOREOPS
+
+def FormatTimeOp : MooreOp<"fmt.time", [Pure]> {
+  let summary = "Format a time value using $timeformat settings";
+  let description = [{
+    Format a simulation time value (in femtoseconds) using the global
+    timeformat settings (units, precision, suffix, minimum width).
+  }];
+  let arguments = (ins IntType:$time);
+  let results = (outs FormatStringType:$result);
+  let assemblyFormat = "$time attr-dict `:` type($time)";
+}
+
+def TimeFormatBIOp : Builtin<"timeformat"> {
+  let summary = "Set time display format";
+  let description = [{
+    Corresponds to the timeformat system task. Sets the formatting parameters
+    used by the %t format specifier in display, write, etc.
+  }];
+  let arguments = (ins TwoValuedI32:$units, TwoValuedI32:$precision,
+                       StrAttr:$suffix, TwoValuedI32:$min_width);
+  let assemblyFormat = "$units `,` $precision `,` $suffix `,` $min_width attr-dict";
+}
+
+def DistBIOp : Builtin<"dist"> {
+  let summary = "Distribution random number generation";
+  let description = [{
+    Implements IEEE 1800-2017 Section 20.15 probabilistic distribution functions:
+    $dist_uniform, $dist_normal, $dist_exponential, $dist_poisson,
+    $dist_chi_square, $dist_t, $dist_erlang.
+    The seed argument is inout (ref) and updated by the runtime.
+  }];
+  let arguments = (ins StrAttr:$dist_name, RefType:$seed,
+                       Variadic<IntType>:$params);
+  let results = (outs IntType:$result);
+  let assemblyFormat = [{
+    $dist_name `,` $seed `,` $params attr-dict `:` type($seed) `,`
+    type($params) `->` type($result)
+  }];
+}

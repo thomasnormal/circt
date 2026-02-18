@@ -22835,6 +22835,35 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting moore.wait_event\n");
 
   auto &state = processStates[procId];
+  static bool traceWaitEventCache = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_WAIT_EVENT_CACHE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+
+  // Reuse cached signal sensitivity for hot wait_event loops.
+  // This avoids repeatedly walking the detect_event body and tracing dynamic
+  // value chains on every wakeup when the resolved sensitivity is stable.
+  auto cacheIt = state.waitSensitivityCache.find(waitEventOp.getOperation());
+  if (cacheIt != state.waitSensitivityCache.end() && !cacheIt->second.empty()) {
+    SensitivityList cachedWaitList;
+    for (const auto &entry : cacheIt->second)
+      cachedWaitList.addEdge(entry.signalId, entry.edge);
+    if (!cachedWaitList.empty()) {
+      state.waiting = true;
+      scheduler.suspendProcessForEvents(procId, cachedWaitList);
+      ++state.waitSensitivityCacheHits;
+      if (traceWaitEventCache) {
+        llvm::errs() << "[WAIT-EVENT-CACHE] hit proc=" << procId
+                     << " entries=" << cachedWaitList.size()
+                     << " op=0x"
+                     << llvm::format_hex(reinterpret_cast<uintptr_t>(
+                                             waitEventOp.getOperation()),
+                                         18)
+                     << "\n";
+      }
+      return success();
+    }
+  }
 
   // Helper: getValue with parent-chain fallback for forked child processes.
   // When a fork child calls a BFM task with @(posedge clk), the VIF pointers
@@ -23143,6 +23172,12 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 
   // If we found signals to wait on, suspend the process
   if (!waitList.empty()) {
+    bool insertedWaitCache = false;
+    if (cacheIt == state.waitSensitivityCache.end()) {
+      auto inserted = state.waitSensitivityCache.try_emplace(
+          waitEventOp.getOperation(), waitList.getEntries());
+      insertedWaitCache = inserted.second;
+    }
     state.waiting = true;
 
     // The continuation point after the wait_event is the next operation
@@ -23151,6 +23186,14 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 
     // Register the wait sensitivity with the scheduler
     scheduler.suspendProcessForEvents(procId, waitList);
+    if (traceWaitEventCache && insertedWaitCache) {
+      llvm::errs() << "[WAIT-EVENT-CACHE] store proc=" << procId
+                   << " entries=" << waitList.size() << " op=0x"
+                   << llvm::format_hex(
+                          reinterpret_cast<uintptr_t>(waitEventOp.getOperation()),
+                          18)
+                   << "\n";
+    }
     // [WAIT-DIAG] diagnostic removed
     LLVM_DEBUG(llvm::dbgs() << "  wait_event: suspended process " << procId
                             << " on " << waitList.size() << " signals\n");

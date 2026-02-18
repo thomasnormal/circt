@@ -5,7 +5,7 @@ module top;
   initial begin
     $timeformat(-9, 3, " ns", 15);
     #42;
-    // CHECK: time= 42.000 ns
+    // CHECK: time=      42.000 ns
     $display("time=%t", $time);
     $finish;
   end

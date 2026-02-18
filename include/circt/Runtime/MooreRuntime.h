@@ -5914,6 +5914,12 @@ int32_t __moore_sscanf(const char *input_data, int64_t input_len,
 int32_t __moore_fscanf(int32_t fd, const char *format, int64_t *results,
                        int32_t *result_widths, int32_t max_results);
 
+
+void __moore_timeformat(int32_t units, int32_t precision,
+                        const char *suffix_data, int64_t suffix_len,
+                        int32_t min_width);
+
+MooreString __moore_format_time(int64_t time_fs);
 #ifdef __cplusplus
 }
 #endif

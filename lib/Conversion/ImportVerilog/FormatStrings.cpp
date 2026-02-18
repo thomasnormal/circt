@@ -305,28 +305,30 @@ struct FormatStringParser {
     return success();
   }
 
-  // Format an integer with the %t specifier according to IEEE 1800-2023
-  // § 20.4.3 "$timeformat". We currently don't support user-defined time
-  // formats. Instead, we just convert the time to an integer and print it. This
-  // applies the local timeunit/timescale and seem to be inline with what
-  // Verilator does.
+  // Format a time value with the %t specifier.  The runtime
+  // __moore_format_time function applies the global $timeformat settings
+  // (units, precision, suffix, min_width) set by $timeformat.
+  // We multiply the local-timescale time value back to femtoseconds so
+  // the runtime has an absolute reference to format from.
   LogicalResult emitTime(const slang::ast::Expression &arg,
                          const FormatOptions &options) {
-    // Handle the time argument and convert it to a 64 bit integer.
-    auto value = context.convertRvalueExpression(
-        arg, moore::IntType::getInt(context.getContext(), 64));
+    auto i64IntTy = moore::IntType::getInt(context.getContext(), 64);
+    auto value = context.convertRvalueExpression(arg, i64IntTy);
     if (!value)
       return failure();
 
-    // Create an integer formatting fragment.
-    uint32_t width = 20; // default $timeformat field width
-    if (options.width)
-      width = *options.width;
-    auto alignment = options.leftJustify ? IntAlign::Left : IntAlign::Right;
-    auto padding = options.zeroPad ? IntPadding::Zero : IntPadding::Space;
-    fragments.push_back(moore::FormatIntOp::create(
-        builder, loc, value, IntFormat::Decimal, alignment, padding,
-        builder.getI32IntegerAttr(width)));
+    // Multiply by the local timescale to recover femtoseconds.
+    unsigned unitExp = 5 - static_cast<unsigned>(context.timeScale.base.unit);
+    uint64_t scaleFemtos =
+        static_cast<uint64_t>(context.timeScale.base.magnitude);
+    for (unsigned i = 0; i < unitExp; ++i)
+      scaleFemtos *= 1000;
+    auto scaleConst =
+        moore::ConstantOp::create(builder, loc, i64IntTy,
+                                  static_cast<int64_t>(scaleFemtos));
+    value = moore::MulOp::create(builder, loc, value, scaleConst);
+
+    fragments.push_back(moore::FormatTimeOp::create(builder, loc, value));
     return success();
   }
 
