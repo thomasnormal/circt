@@ -34,6 +34,11 @@
    - additional spot checks:
      - `vtable-indirect-call.mlir` and `config-db.sv` pass
      - `static-class-variable.sv` remains `UNSUPPORTED` in this environment.
+   - bounded AVIP compile-lane smoke:
+     - `AVIPS=jtag`, `SEEDS=1`, `CIRCT_SIM_MODE=compile`,
+       `COMPILE_TIMEOUT=90`, `SIM_TIMEOUT=90`
+     - output: `/tmp/avip-circt-sim-20260218-022455/matrix.tsv`
+     - result: compile `OK` (28s), sim `OK` (88s).
 
 ## Iteration 1475 - February 18, 2026
 

@@ -567,6 +567,11 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       detection logic consistent across paths.
     - no intended behavior change; validated with global-init/vtable and
       strict compile-mode JIT regression sets.
+    - bounded AVIP compile-lane smoke refreshed:
+      - `AVIPS=jtag`, `SEEDS=1`, `CIRCT_SIM_MODE=compile`,
+        `COMPILE_TIMEOUT=90`, `SIM_TIMEOUT=90`
+      - output bundle: `/tmp/avip-circt-sim-20260218-022455`
+      - result: compile `OK` (`28s`), sim `OK` (`88s`).
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
