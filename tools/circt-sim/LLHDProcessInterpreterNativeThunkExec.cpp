@@ -239,6 +239,15 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
       return false;
     return isa<llhd::HaltOp>(*s.currentOp);
   };
+  auto isQueuedForImpPhaseOrdering = [&](ProcessId targetProcId) {
+    for (const auto &entry : impWaitingProcesses) {
+      for (const ImpWaiter &waiter : entry.second) {
+        if (waiter.procId == targetProcId)
+          return true;
+      }
+    }
+    return false;
+  };
   bool resumingDeferredHalt = false;
 
   // This thunk is non-resumable and only valid on token 0.
@@ -294,6 +303,13 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
       // Process-level sequencer retries are resumed by rewinding to the
       // recorded call op on the next activation.
       state.waiting = false;
+    } else if (isQueuedForImpPhaseOrdering(procId)) {
+      // process_phase IMP-order gating parks processes in impWaitingProcesses.
+      // Keep this suspension native until finish_phase explicitly wakes it.
+      thunkState.halted = state.halted;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
     } else {
       requestDeopt("unexpected_waiting_state", /*restoreSnapshot=*/true);
       return true;
@@ -420,15 +436,23 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
   bool waitingOnSavedCallStack =
       post->second.waiting && !post->second.callStack.empty() &&
       !post->second.halted;
+  bool waitingOnImpOrderQueue =
+      post->second.waiting && !post->second.halted &&
+      post->second.callStack.empty() && !post->second.sequencerGetRetryCallOp &&
+      !post->second.waitConditionRestartBlock && !post->second.destBlock &&
+      !post->second.resumeAtCurrentOp && post->second.currentBlock &&
+      post->second.currentBlock->getParent() == bodyRegion &&
+      post->second.currentOp != post->second.currentBlock->end() &&
+      isQueuedForImpPhaseOrdering(procId);
   if (!post->second.halted && !waitingOnWaitCondition &&
       !waitingOnDeferredHalt && !waitingOnSequencerRetry &&
-      !waitingOnSavedCallStack) {
+      !waitingOnSavedCallStack && !waitingOnImpOrderQueue) {
     requestDeopt("post_exec_not_halted_or_waiting", /*restoreSnapshot=*/false);
     return true;
   }
   if (post->second.waiting && !waitingOnWaitCondition &&
       !waitingOnDeferredHalt && !waitingOnSequencerRetry &&
-      !waitingOnSavedCallStack) {
+      !waitingOnSavedCallStack && !waitingOnImpOrderQueue) {
     requestDeopt("post_exec_waiting_without_wait_condition",
                  /*restoreSnapshot=*/false);
     return true;
