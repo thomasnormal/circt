@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1513 - February 18, 2026
+
+### circt-sim: post-closure status check (UART strict zero-deopt sample + all9 stability)
+
+1. **Extended UART validation (functional-vs-throughput check)**:
+   - ran bounded 180s direct UART lane (`UartBaudRate4800Test`, compile mode):
+     - `/tmp/uart-profile-setitem-180s-20260218-194021/jit.json`
+       - `run_wall_ms=172340`
+       - `final_time_fs=699000400000`
+       - `jit_deopts_total=0`
+   - despite zero strict deopts and deeper time progress, `UartRxCovergroup`
+     remains `0.00%` while `UartTxCovergroup` remains `100.00%`.
+   - conclusion: current UART blocker is functional Rx progression, not strict
+     deopt coverage on this bounded lane.
+
+2. **All9 compile-mode rerun after UART strict-tail closures**:
+   - matrix:
+     `/tmp/avip-circt-sim-all9-post-uarttail-20260218-194354/matrix.tsv`
+   - result:
+     - compile: `OK` on `9/9`
+     - sim: `OK` on `7/9`, `TIMEOUT` on `2/9` (`axi4`, `uart`)
+   - no new regression introduced by recent UART strict-tail policy closures.
+
+3. **Current priority**:
+   - maintain strict zero-deopt posture on UART bounded lane while pivoting
+     closure effort to Rx functional progression root cause.
+
 ## Iteration 1512 - February 18, 2026
 
 ### circt-sim: close remaining UART strict tail (`set_item_context`) to zero deopts on bounded lane
