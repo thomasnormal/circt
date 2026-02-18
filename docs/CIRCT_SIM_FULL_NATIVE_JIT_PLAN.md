@@ -520,11 +520,10 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - `guard_failed=7`
         - queue is now entirely
           `single_block_terminating:post_exec_not_halted_or_waiting`.
-    - remaining limitation:
-      - the residual queue is one-block fork-branch shapes with
+    - remaining limitation at this step (closed in item 25):
+      - one-block fork-branch shapes with
         `waiting=1, call_stack=0` around `func.call_indirect` + terminal
-        `sim.fork.terminator`; this needs a dedicated resumable terminal
-        suspend closure (next step), not generic waiting relaxation.
+        `sim.fork.terminator`.
 21. Maintainability split for long-term JIT development velocity:
     - extracted native-thunk execution methods from
       `LLHDProcessInterpreter.cpp` into
@@ -572,6 +571,33 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         `COMPILE_TIMEOUT=90`, `SIM_TIMEOUT=90`
       - output bundle: `/tmp/avip-circt-sim-20260218-022455`
       - result: compile `OK` (`28s`), sim `OK` (`88s`).
+25. Single-block IMP-order waiting closure for strict native thunk execution:
+    - closed the residual
+      `single_block_terminating:post_exec_not_halted_or_waiting` guard path
+      for `uvm_phase_hopper::process_phase` IMP-order gating waits.
+    - `executeSingleBlockTerminatingNativeThunk` now recognizes
+      `impWaitingProcesses`-queued states as valid waiting suspensions:
+      - both pre-activation queued waiting and post-exec queued waiting are
+        handled natively (no guard-failed deopt).
+      - closure is narrow to IMP-order queue membership; no broad waiting-state
+        guard relaxation.
+    - added strict regression:
+      - `jit-process-thunk-single-block-fork-process-phase-imp-wait.mlir`
+        (fork-branch `sim.fork.terminator` + `process_phase` wait queue shape,
+        strict no-deopt).
+    - validation:
+      - targeted strict checks pass for:
+        - `jit-process-thunk-single-block-fork-process-phase-imp-wait.mlir`
+        - `jit-process-thunk-single-block-call-indirect-fork-callstack-halt.mlir`
+        - `jit-process-thunk-func-call-set-report-id-verbosity-halt.mlir`
+        - `jit-process-thunk-multiblock-fork-loop-guard-failed.mlir`
+          (expected strict fail with `detail=step_limit_reached` preserved).
+      - parallel compatibility smoke passes for the new strict regression with
+        `--parallel=4` (expected sequential fallback warning).
+      - bounded AVIP compile-lane smoke (`jtag`, seed-1):
+        - output bundle:
+          `/tmp/avip-circt-sim-impwait-20260218-024142`
+        - compile `OK` (`26s`), sim `TIMEOUT` (`90s`).
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

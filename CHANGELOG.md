@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1477 - February 18, 2026
+
+### circt-sim JIT: close single-block `process_phase` IMP-wait guard gap
+
+1. **Closed residual strict guard gap** in
+   `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp` for
+   one-block fork-branch thunks that suspend in
+   `uvm_phase_hopper::process_phase` IMP-order gating:
+   - added `impWaitingProcesses` queue detection for the active process.
+   - treat queued IMP-order waits as valid resumable waiting state
+     (instead of `guard_failed:post_exec_not_halted_or_waiting`).
+2. **Hardened pre-activation waiting handling** for the same path:
+   - if a single-block terminating thunk is re-invoked while still queued in
+     IMP-order wait lists, keep it suspended natively (no deopt).
+3. **Added strict regression coverage**:
+   - `test/Tools/circt-sim/jit-process-thunk-single-block-fork-process-phase-imp-wait.mlir`
+   - reproduces the historical fork-branch/process_phase waiting pattern and
+     asserts strict compile mode completes with `jit_deopts_total = 0`.
+4. **Validation**:
+   - `ninja -C build circt-sim` passes.
+   - targeted strict checks pass:
+     - `jit-process-thunk-single-block-fork-process-phase-imp-wait.mlir`
+     - `jit-process-thunk-single-block-call-indirect-fork-callstack-halt.mlir`
+     - `jit-process-thunk-func-call-set-report-id-verbosity-halt.mlir`
+     - `jit-process-thunk-multiblock-fork-loop-guard-failed.mlir`
+       (expected strict fail with `detail=step_limit_reached` preserved).
+   - parallel compatibility smoke passes for the new regression with
+     `--parallel=4` (expected sequential fallback warning).
+   - bounded AVIP compile-lane smoke (`AVIPS=jtag`, `SEEDS=1`,
+     `CIRCT_SIM_MODE=compile`, `COMPILE_TIMEOUT=90`, `SIM_TIMEOUT=90`):
+     - output: `/tmp/avip-circt-sim-impwait-20260218-024142/matrix.tsv`
+     - result: compile `OK` (`26s`), sim `TIMEOUT` (`90s`).
+
 ## Iteration 1476 - February 18, 2026
 
 ### circt-sim: split module-level LLVM init dispatch from LLHDProcessInterpreter.cpp
