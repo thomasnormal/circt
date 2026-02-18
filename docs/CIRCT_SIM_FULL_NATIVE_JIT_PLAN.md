@@ -1700,6 +1700,45 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - next closure target:
       - extend this tail-wrapper strategy to additional hot monitor/driver
         wrapper chains and continue all9 compile-lane convergence checks.
+55. `DriveToBfm` tail-wrapper collapse for `SampleData` resume stacks
+    (February 18, 2026):
+    - runtime closure:
+      - in `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+        (`resumeSavedCallStackFrames`), generalized tail-wrapper collapse into
+        a reusable helper and added a second guarded chain:
+        - outer: `*::DriveToBfm`
+        - inner callee: `*::SampleData`
+      - this extends the wrapper-collapse strategy beyond monitor-only paths to
+        the hot Tx-driver wrapper lane seen in UART bounded profiles.
+      - added env-gated trace marker:
+        - `[DRV-SAMPLE-FP] resume-hit ...`
+        - controlled by
+          `CIRCT_SIM_TRACE_DRIVE_SAMPLE_FASTPATH=1`.
+    - regression coverage:
+      - added
+        `test/Tools/circt-sim/func-drive-to-bfm-resume-fast-path.mlir`.
+      - locks default + parallel lane behavior.
+    - validation:
+      - build:
+        - `ninja -C build-test -j4 circt-sim`: PASS.
+      - focused lit (filtered): PASS
+        - `func-drive-to-bfm-resume-fast-path.mlir`
+        - `func-start-monitoring-resume-fast-path.mlir`
+        - `func-generate-baud-clk-resume-fast-path.mlir`
+        - `func-baud-clk-generator-fast-path-delay-batch.mlir`
+        - `execute-phase-monitor-fork-objection-waiter.mlir`
+      - bounded AVIP UART compile lane (`SIM_TIMEOUT=60`):
+        - `/tmp/avip-circt-sim-uart-drive-sample-collapse-20260218-153547/matrix.tsv`
+          (`compile_status=OK`, `sim_status=TIMEOUT`)
+        - UART sim log confirms
+          `[DRV-SAMPLE-FP] resume-hit proc=93 callee=UartTxDriverBfm::DriveToBfm`.
+      - bounded UART compile direct sample (`--parallel=4`, 30s):
+        - `/tmp/uart-drive-sample-parallel30-20260218-153743.log`
+        - trace hit confirmed, no wrapper-collapse regressions observed.
+    - next closure target:
+      - continue wrapper-chain burn-down on remaining UART monitor lanes while
+        prioritizing Rx functional progression/coverage closure in all9
+        compile lanes.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
