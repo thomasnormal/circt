@@ -388,6 +388,12 @@ struct ProcessExecutionState {
   /// the function rather than skipping to the next process-level operation.
   llvm::SmallVector<CallStackFrame, 4> callStack;
 
+  /// Optional override for the outermost caller call site used when restoring
+  /// process-level position after call-stack resume.
+  /// This is populated when pure tail-wrapper frames are elided at suspension
+  /// time so resume can still jump back to the original caller correctly.
+  mlir::Operation *callStackOutermostCallOp = nullptr;
+
   /// When a seq_item_pull_port::get interceptor finds an empty FIFO, it saves
   /// the call_indirect operation here so that on resume the innermost call
   /// stack frame can be overridden to re-execute the get call (instead of
@@ -1089,6 +1095,7 @@ private:
     bool resumeAtCurrentOp = false;
     llvm::SmallVector<InterpretedValue, 4> destOperands;
     llvm::SmallVector<CallStackFrame, 4> callStack;
+    mlir::Operation *callStackOutermostCallOp = nullptr;
     uint64_t jitThunkResumeToken = 0;
   };
 

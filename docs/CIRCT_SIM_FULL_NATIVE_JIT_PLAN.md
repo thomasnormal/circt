@@ -1780,6 +1780,129 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - extend bounded profiling to confirm Rx-side monitor wrapper collapse
         activity (`UartRxMonitorBfm::StartMonitoring`) under longer windows,
         then continue Rx functional progression closure.
+57. Suspension-time tail-wrapper frame elision + caller-restore state seam
+    (February 18, 2026):
+    - runtime closure:
+      - in `tools/circt-sim/LLHDProcessInterpreter.cpp`
+        (`interpretFuncBody`), added suspension-time elision of pure
+        tail-wrapper frames (`func.call` + terminal `func.return`) when the
+        inner call suspends.
+      - introduced
+        `ProcessExecutionState::callStackOutermostCallOp` in
+        `tools/circt-sim/LLHDProcessInterpreter.h` as an explicit caller-restore
+        seam for frame elision.
+      - in `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`,
+        `resumeSavedCallStackFrames` now restores process-level position using
+        `callStackOutermostCallOp` when present.
+      - plumbed deopt snapshot/restore support in
+        `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`.
+      - trace behavior:
+        - generic: `[TAIL-WRAP-FP] suspend-elide ...`
+        - specialized tags retained:
+          - `[MON-DESER-FP]`
+          - `[DRV-SAMPLE-FP]`
+    - regression coverage:
+      - updated wrapper fast-path regressions to lock tag presence regardless
+        of resume-collapse vs suspend-elide activation:
+        - `func-start-monitoring-resume-fast-path.mlir`
+        - `func-drive-to-bfm-resume-fast-path.mlir`
+        - `func-tail-wrapper-generic-resume-fast-path.mlir`
+    - validation:
+      - build + focused lit: PASS
+        - includes all wrapper fast-path regressions plus:
+          - `func-generate-baud-clk-resume-fast-path.mlir`
+          - `func-baud-clk-generator-fast-path-delay-batch.mlir`
+          - `execute-phase-monitor-fork-objection-waiter.mlir`
+      - full suite: PASS
+        - `ninja -C build-test -j4 check-circt-tools-circt-sim`
+          (`Passed=440`, `XFAIL=49`, `Failed=0`).
+      - bounded AVIP UART compile lane (`SIM_TIMEOUT=60`):
+        - `/tmp/avip-circt-sim-uart-tail-wrapper-elide-20260218-160749/matrix.tsv`
+          (`compile_status=OK`, `sim_status=TIMEOUT`)
+        - UART log confirms suspend-elide hits for:
+          - `UartTxDriverBfm::DriveToBfm`
+          - `UartTxMonitorBfm::StartMonitoring`
+          - `UartRxMonitorBfm::StartMonitoring`
+      - bounded direct UART probe (`UartBaudRate19200Test`, `--timeout=60`):
+        - `/tmp/uart-tail-wrapper-elide-rxprobe-19200-timeout60-20260218-160620.log`
+        - `fork_80_branch_1` now observed at `callStack=1` (previously `2`),
+          confirming Rx-side wrapper depth reduction under bounded progress.
+    - next closure target:
+      - continue Rx functional progression/coverage root-cause closure
+        (`UartRxCovergroup` remains `0%`) after wrapper-depth reduction.
+58. Profile-guided `func.call_indirect` suspend analysis widening + LLHD
+    sub-reference correctness closure (February 18, 2026):
+    - runtime closure:
+      - in `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`:
+        - added a shared suspend-analysis context carrying process identity,
+          hot-threshold-derived minimum profile-call count, and collected
+          indirect-site guard specs.
+        - threaded context-aware suspend checks through single-block,
+          multiblock, and structured-control prelude analysis.
+        - added profile-guided `func.call_indirect` suspend closure:
+          - allow non-suspending classification only for resolved local target
+            sets (no unresolved calls) whose callees are statically
+            non-suspending.
+          - emit/install per-site target-set guards so runtime target drift
+            safely deopts thunk reuse.
+        - updated trivial-thunk candidate APIs to collect guard specs during
+          shape analysis and install them on successful thunk installs.
+      - in `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+        - corrected LLHD sub-reference probe/drive paths so
+          `sig.struct_extract`/`sig.array_get`/`sig.extract` do not bypass
+          required subfield extraction through parent-signal short-circuits.
+        - sub-reference probes now prefer pending epsilon drives when
+          available, preserving same-delta visibility.
+        - `llhd.sig.array_get` probe/drive now accounts for enclosing
+          struct-field bit offsets in struct-extract chains.
+        - added targeted call tracing
+          (`CIRCT_SIM_TRACE_CALL_FILTER`) for hotspot diagnosis.
+    - regression coverage:
+      - updated wait-event compile-mode report expectations to reflect reduced
+        duplicate compile/deopt churn (`jit_compiles_total 2 -> 1` and guarded
+        deopts `2 -> 1` in guard-failed variants).
+      - removed temporary `XFAIL` masking and updated expectations to explicit
+        pass behavior (`jit_deopts_total=0`) in:
+        - `jit-process-thunk-wait-event-derived-observed-impure-prewait-unsupported.mlir`
+        - `jit-process-thunk-wait-event-derived-observed-impure-prewait-unsupported-strict.mlir`
+        - `jit-report-deopt-processes.mlir`
+      - added focused prelude/guard coverage:
+        - `jit-process-thunk-fork-branch-disable-fork-terminator.mlir`
+        - `jit-process-thunk-func-call-from-class-wrapper-halt.mlir`
+        - `jit-process-thunk-func-call-get-automatic-phase-objection-halt.mlir`
+        - `jit-process-thunk-func-call-local-helper-call-indirect-profile-nonsuspending-halt.mlir`
+        - `jit-process-thunk-func-call-local-helper-call-indirect-profile-guard-mismatch.mlir`
+        - `jit-process-thunk-func-call-m-killed-halt.mlir`
+        - `jit-process-thunk-func-call-safe-drop-starting-phase-halt.mlir`
+        - `jit-process-thunk-func-call-safe-raise-starting-phase-halt.mlir`
+        - `jit-process-thunk-func-call-uvm-create-random-seed-halt.mlir`
+        - `jit-process-thunk-llvm-call-process-await-halt.mlir`
+        - `jit-process-thunk-llvm-call-process-srandom-halt.mlir`
+        - `jit-process-thunk-llvm-call-semaphore-get-blocking-halt.mlir`
+        - `jit-process-thunk-scf-for-uvm-is-match-halt.mlir`
+      - added LLHD sub-reference correctness regressions:
+        - `llhd-drv-array-get-struct-field-offset.mlir`
+        - `llhd-prb-subfield-pending-epsilon.mlir`
+        - `llhd-drv-memory-backed-struct-array-func-arg.mlir`
+        - `llhd-ref-cast-array-subfield-store-func-arg.mlir`
+        - `llhd-ref-cast-subfield-store-func-arg.mlir`
+      - updated:
+        - `llhd-drv-ref-blockarg-array-get.mlir`
+    - validation:
+      - focused lit filter sets: PASS
+        - wait-event thunk-report cluster
+        - profile-guarded call-indirect cluster
+        - LLHD sub-reference regression cluster.
+      - full tools suite: PASS
+        - `llvm-lit -sv -j8 build-test/test/Tools/circt-sim`
+          (`Total=491`, `Passed=445`, `XFAIL=46`, `Failed=0`).
+      - bounded AVIP UART compile lane (`SIM_TIMEOUT=60`):
+        - `/tmp/avip-circt-sim-uart-profileguard-20260218-163020/matrix.tsv`
+          (`compile_status=OK`, `sim_status=TIMEOUT`).
+    - next closure target:
+      - push these broader install/guard closures through rerun all9 compile
+        matrix validation and then return to Rx functional progression closure
+        work (`UartRxCovergroup` still `0%` in bounded UART runs).
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

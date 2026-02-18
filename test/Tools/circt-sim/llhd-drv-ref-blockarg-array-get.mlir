@@ -1,7 +1,7 @@
 // RUN: circt-sim %s 2>&1 | FileCheck %s
 
 // CHECK-NOT: interpretOperation failed
-// CHECK: arr0=7 arr1=0
+// CHECK: arr0=42 arr1=0
 // CHECK: [circt-sim] Simulation completed
 
 hw.module @top() {

@@ -1,7 +1,7 @@
 // RUN: env CIRCT_SIM_TRACE_TAIL_WRAPPER_FASTPATH=1 circt-sim %s --max-time=1000000 --max-process-steps=260 2>&1 | FileCheck %s
 // RUN: env CIRCT_SIM_TRACE_TAIL_WRAPPER_FASTPATH=1 circt-sim %s --parallel=4 --work-stealing --auto-partition --max-time=1000000 --max-process-steps=260 2>&1 | FileCheck %s
 //
-// CHECK: [TAIL-WRAP-FP] resume-hit
+// CHECK: [TAIL-WRAP-FP]
 // CHECK: out=
 // CHECK: [circt-sim] Simulation completed
 

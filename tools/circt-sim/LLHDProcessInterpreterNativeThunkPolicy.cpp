@@ -26,7 +26,6 @@ using namespace mlir;
 using namespace circt;
 using namespace circt::sim;
 
-static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op);
 static bool isBranchTerminatorInRegion(Operation &terminator,
                                        Region &bodyRegion);
 static Value stripCallIndirectCalleeCasts(Value value);
@@ -36,6 +35,32 @@ static std::optional<int64_t>
 getStaticCallIndirectVtableEntryIndex(mlir::func::CallIndirectOp callOp);
 static std::string
 getVtableEntryCalleeSymbol(LLVM::GlobalOp vtableGlobal, int64_t entryIndex);
+struct NativeThunkSuspendAnalysisContext {
+  const LLHDProcessInterpreter *interpreter = nullptr;
+  ProcessId procId = InvalidProcessId;
+  uint64_t minProfileCalls = 1;
+  llvm::SmallVectorImpl<LLHDProcessInterpreter::JitRuntimeIndirectSiteGuardSpec>
+      *profileGuardSpecs = nullptr;
+};
+
+static bool
+isSafeSingleBlockTerminatingPreludeOp(
+    Operation *op, const NativeThunkSuspendAnalysisContext &ctx);
+static bool
+isSafeResumableMultiblockWaitPreludeOp(
+    Operation *op, const NativeThunkSuspendAnalysisContext &ctx);
+static bool
+isSafeStructuredControlPreludeRegion(
+    Region &region, const NativeThunkSuspendAnalysisContext &ctx);
+static bool
+isSafeStructuredControlPreludeOp(
+    Operation *op, const NativeThunkSuspendAnalysisContext &ctx);
+static bool
+isStaticallyNonSuspendingLocalFuncCallPrelude(
+    mlir::func::CallOp callOp, const NativeThunkSuspendAnalysisContext &ctx);
+static bool
+isInterceptedNonSuspendingFuncCallPrelude(
+    mlir::func::CallOp callOp, const NativeThunkSuspendAnalysisContext &ctx);
 
 static bool isPureResumableWaitPreludeOp(Operation *op) {
   if (!op || op->getNumResults() == 0)
@@ -202,7 +227,8 @@ static mlir::func::FuncOp lookupLocalFuncCallee(mlir::func::CallOp callOp) {
 
 static bool
 funcBodyMaySuspend(mlir::func::FuncOp funcOp,
-                   llvm::DenseMap<Operation *, FuncSuspendSummary> &cache);
+                   llvm::DenseMap<Operation *, FuncSuspendSummary> &cache,
+                   const NativeThunkSuspendAnalysisContext &ctx);
 
 static bool collectStaticVtableEntryCandidateCallees(
     Operation *scopeOp, int64_t entryIndex,
@@ -230,8 +256,53 @@ static bool collectStaticVtableEntryCandidateCallees(
   return sawAny;
 }
 
+static void collectProfileGuidedIndirectSiteGuard(
+    Operation *siteOp, const LLHDProcessInterpreter::JitRuntimeIndirectSiteProfile &site,
+    const NativeThunkSuspendAnalysisContext &ctx) {
+  if (!siteOp || !ctx.profileGuardSpecs)
+    return;
+  for (const auto &guard : *ctx.profileGuardSpecs)
+    if (guard.siteOp == siteOp)
+      return;
+  LLHDProcessInterpreter::JitRuntimeIndirectSiteGuardSpec guard;
+  guard.siteOp = siteOp;
+  guard.expectedTargetSetVersion = site.targetSetVersion;
+  guard.expectedTargetSetHash = site.targetSetHash;
+  guard.expectedUnresolvedCalls = site.unresolvedCalls;
+  ctx.profileGuardSpecs->push_back(guard);
+}
+
+static bool profileGuidedCallIndirectMaySuspend(
+    mlir::func::CallIndirectOp callIndirectOp,
+    llvm::DenseMap<Operation *, FuncSuspendSummary> &cache,
+    const NativeThunkSuspendAnalysisContext &ctx) {
+  if (!ctx.interpreter || ctx.procId == InvalidProcessId)
+    return true;
+  auto siteProfile =
+      ctx.interpreter->lookupJitRuntimeIndirectSiteProfile(callIndirectOp);
+  if (!siteProfile)
+    return true;
+  if (siteProfile->callsTotal < ctx.minProfileCalls ||
+      siteProfile->unresolvedCalls != 0 || siteProfile->targets.empty())
+    return true;
+
+  for (const auto &target : siteProfile->targets) {
+    auto calleeFunc =
+        lookupLocalFuncCallee(callIndirectOp.getOperation(), target.targetName);
+    if (!calleeFunc || calleeFunc.isExternal())
+      return true;
+    if (funcBodyMaySuspend(calleeFunc, cache, ctx))
+      return true;
+  }
+
+  collectProfileGuidedIndirectSiteGuard(callIndirectOp.getOperation(),
+                                        *siteProfile, ctx);
+  return false;
+}
+
 static bool opMaySuspendInFuncBody(
-    Operation *op, llvm::DenseMap<Operation *, FuncSuspendSummary> &cache) {
+    Operation *op, llvm::DenseMap<Operation *, FuncSuspendSummary> &cache,
+    const NativeThunkSuspendAnalysisContext &ctx) {
   if (!op)
     return true;
   if (isa<llhd::WaitOp, llhd::YieldOp, llhd::HaltOp, sim::SimForkOp,
@@ -244,7 +315,7 @@ static bool opMaySuspendInFuncBody(
     auto calleeFunc = lookupLocalFuncCallee(callOp);
     if (!calleeFunc)
       return true;
-    return funcBodyMaySuspend(calleeFunc, cache);
+    return funcBodyMaySuspend(calleeFunc, cache, ctx);
   }
   if (auto callIndirectOp = dyn_cast<mlir::func::CallIndirectOp>(op)) {
     std::string calleeName = getStaticCallIndirectTargetSymbol(callIndirectOp);
@@ -252,21 +323,23 @@ static bool opMaySuspendInFuncBody(
       auto calleeFunc = lookupLocalFuncCallee(op, calleeName);
       if (!calleeFunc)
         return true;
-      return funcBodyMaySuspend(calleeFunc, cache);
+      return funcBodyMaySuspend(calleeFunc, cache, ctx);
     }
 
     auto vtableEntryIndex =
         getStaticCallIndirectVtableEntryIndex(callIndirectOp);
-    if (!vtableEntryIndex)
-      return true;
-    SmallVector<mlir::func::FuncOp, 8> candidateCallees;
-    if (!collectStaticVtableEntryCandidateCallees(op, *vtableEntryIndex,
-                                                  candidateCallees))
-      return true;
-    for (auto calleeFunc : candidateCallees)
-      if (funcBodyMaySuspend(calleeFunc, cache))
+    if (vtableEntryIndex) {
+      SmallVector<mlir::func::FuncOp, 8> candidateCallees;
+      if (!collectStaticVtableEntryCandidateCallees(op, *vtableEntryIndex,
+                                                    candidateCallees))
         return true;
-    return false;
+      for (auto calleeFunc : candidateCallees)
+        if (funcBodyMaySuspend(calleeFunc, cache, ctx))
+          return true;
+      return false;
+    }
+
+    return profileGuidedCallIndirectMaySuspend(callIndirectOp, cache, ctx);
   }
   if (auto llvmCall = dyn_cast<LLVM::CallOp>(op)) {
     auto callee = llvmCall.getCallee();
@@ -279,7 +352,8 @@ static bool opMaySuspendInFuncBody(
 
 static bool
 funcBodyMaySuspend(mlir::func::FuncOp funcOp,
-                   llvm::DenseMap<Operation *, FuncSuspendSummary> &cache) {
+                   llvm::DenseMap<Operation *, FuncSuspendSummary> &cache,
+                   const NativeThunkSuspendAnalysisContext &ctx) {
   Operation *key = funcOp.getOperation();
   auto it = cache.find(key);
   if (it != cache.end()) {
@@ -293,7 +367,7 @@ funcBodyMaySuspend(mlir::func::FuncOp funcOp,
   if (!maySuspend) {
     for (Block &block : funcOp.getBody()) {
       for (Operation &op : block) {
-        if (opMaySuspendInFuncBody(&op, cache)) {
+        if (opMaySuspendInFuncBody(&op, cache, ctx)) {
           maySuspend = true;
           break;
         }
@@ -309,18 +383,20 @@ funcBodyMaySuspend(mlir::func::FuncOp funcOp,
 }
 
 static bool
-isStaticallyNonSuspendingLocalFuncCallPrelude(mlir::func::CallOp callOp) {
+isStaticallyNonSuspendingLocalFuncCallPrelude(
+    mlir::func::CallOp callOp, const NativeThunkSuspendAnalysisContext &ctx) {
   auto calleeFunc = lookupLocalFuncCallee(callOp);
   if (!calleeFunc || calleeFunc.isExternal())
     return false;
   llvm::DenseMap<Operation *, FuncSuspendSummary> cache;
-  return !funcBodyMaySuspend(calleeFunc, cache);
+  return !funcBodyMaySuspend(calleeFunc, cache, ctx);
 }
 
-static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp) {
+static bool isInterceptedNonSuspendingFuncCallPrelude(
+    mlir::func::CallOp callOp, const NativeThunkSuspendAnalysisContext &ctx) {
   if (isManuallyInterceptedNonSuspendingFuncCallPrelude(callOp))
     return true;
-  return isStaticallyNonSuspendingLocalFuncCallPrelude(callOp);
+  return isStaticallyNonSuspendingLocalFuncCallPrelude(callOp, ctx);
 }
 
 static bool isMooreWaitConditionCall(LLVM::CallOp callOp) {
@@ -349,7 +425,8 @@ static bool isPotentialResumableMultiblockSuspendOp(Operation *op) {
   return false;
 }
 
-static bool isSafeStructuredControlPreludeRegion(Region &region) {
+static bool isSafeStructuredControlPreludeRegion(
+    Region &region, const NativeThunkSuspendAnalysisContext &ctx) {
   if (region.empty())
     return false;
 
@@ -365,29 +442,30 @@ static bool isSafeStructuredControlPreludeRegion(Region &region) {
       return false;
     sawStructuredTerminator |= isStructuredTerminator;
     for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
-      if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
+      if (!isSafeSingleBlockTerminatingPreludeOp(&*it, ctx))
         return false;
     }
   }
   return sawStructuredTerminator;
 }
 
-static bool isSafeStructuredControlPreludeOp(Operation *op) {
+static bool isSafeStructuredControlPreludeOp(
+    Operation *op, const NativeThunkSuspendAnalysisContext &ctx) {
   if (!op)
     return false;
   if (auto forOp = dyn_cast<mlir::scf::ForOp>(op))
-    return isSafeStructuredControlPreludeRegion(forOp.getRegion());
+    return isSafeStructuredControlPreludeRegion(forOp.getRegion(), ctx);
   if (auto ifOp = dyn_cast<mlir::scf::IfOp>(op)) {
-    if (!isSafeStructuredControlPreludeRegion(ifOp.getThenRegion()))
+    if (!isSafeStructuredControlPreludeRegion(ifOp.getThenRegion(), ctx))
       return false;
     if (!ifOp.getElseRegion().empty() &&
-        !isSafeStructuredControlPreludeRegion(ifOp.getElseRegion()))
+        !isSafeStructuredControlPreludeRegion(ifOp.getElseRegion(), ctx))
       return false;
     return true;
   }
   if (auto whileOp = dyn_cast<mlir::scf::WhileOp>(op))
-    return isSafeStructuredControlPreludeRegion(whileOp.getBefore()) &&
-           isSafeStructuredControlPreludeRegion(whileOp.getAfter());
+    return isSafeStructuredControlPreludeRegion(whileOp.getBefore(), ctx) &&
+           isSafeStructuredControlPreludeRegion(whileOp.getAfter(), ctx);
   return false;
 }
 
@@ -421,7 +499,8 @@ static bool isSafeForkPreludeOp(sim::SimForkOp forkOp) {
   return true;
 }
 
-static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
+static bool isSafeSingleBlockTerminatingPreludeOp(
+    Operation *op, const NativeThunkSuspendAnalysisContext &ctx) {
   if (!op)
     return false;
   if (isa<sim::PrintFormattedProcOp>(op))
@@ -436,10 +515,10 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
     return true;
   if (auto forkOp = dyn_cast<sim::SimForkOp>(op))
     return isSafeForkPreludeOp(forkOp);
-  if (isSafeStructuredControlPreludeOp(op))
+  if (isSafeStructuredControlPreludeOp(op, ctx))
     return true;
   if (auto callOp = dyn_cast<mlir::func::CallOp>(op))
-    return isInterceptedNonSuspendingFuncCallPrelude(callOp);
+    return isInterceptedNonSuspendingFuncCallPrelude(callOp, ctx);
   if (isa<mlir::func::CallIndirectOp>(op))
     return true;
   if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
@@ -498,7 +577,8 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
   return mlir::isMemoryEffectFree(op);
 }
 
-static bool isSafeResumableMultiblockWaitPreludeOp(Operation *op) {
+static bool isSafeResumableMultiblockWaitPreludeOp(
+    Operation *op, const NativeThunkSuspendAnalysisContext &ctx) {
   if (!op)
     return false;
   if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
@@ -511,7 +591,7 @@ static bool isSafeResumableMultiblockWaitPreludeOp(Operation *op) {
   // Multiblock wait loops commonly drive signals between waits.
   if (isa<llhd::DriveOp>(op))
     return true;
-  return isSafeSingleBlockTerminatingPreludeOp(op);
+  return isSafeSingleBlockTerminatingPreludeOp(op, ctx);
 }
 
 static bool isBranchTerminatorInRegion(Operation &terminator, Region &bodyRegion) {
@@ -775,8 +855,10 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
   PeriodicToggleClockThunkSpec periodicSpec;
   bool isPeriodicToggleClock =
       tryBuildPeriodicToggleClockThunkSpec(state, periodicSpec);
+  llvm::SmallVector<JitRuntimeIndirectSiteGuardSpec, 4> profileGuardSpecs;
   bool isTrivialCandidate =
-      !isPeriodicToggleClock && isTrivialNativeThunkCandidate(state);
+      !isPeriodicToggleClock &&
+      isTrivialNativeThunkCandidate(procId, state, &profileGuardSpecs);
   if (!isPeriodicToggleClock && !isTrivialCandidate) {
     std::string detail = getUnsupportedThunkDeoptDetail(state);
     if (deoptDetail)
@@ -801,6 +883,11 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
     periodicToggleClockThunkSpecs[procId] = std::move(periodicSpec);
   else
     periodicToggleClockThunkSpecs.erase(procId);
+
+  if (!isPeriodicToggleClock && !profileGuardSpecs.empty())
+    jitProcessThunkIndirectSiteGuards[procId] = std::move(profileGuardSpecs);
+  else
+    jitProcessThunkIndirectSiteGuards.erase(procId);
 
   jitCompileManager->noteCompile();
   return ProcessThunkInstallResult::Installed;
@@ -840,6 +927,7 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
   }
 
   if (auto processOp = state.getProcessOp()) {
+    NativeThunkSuspendAnalysisContext noCtx;
     const Region *bodyRegion = resolveNativeThunkProcessRegion(state);
     Region &body =
         bodyRegion ? *const_cast<Region *>(bodyRegion) : processOp.getBody();
@@ -850,7 +938,7 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
             isa<llhd::HaltOp, sim::SimForkTerminatorOp>(singleBlock.back())) {
           for (auto it = singleBlock.begin(), e = std::prev(singleBlock.end());
                it != e; ++it) {
-            if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
+            if (!isSafeSingleBlockTerminatingPreludeOp(&*it, noCtx))
               return formatUnsupportedProcessOpDetail(*it);
           }
         }
@@ -879,7 +967,7 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
           }
           for (auto it = block.begin(), e = std::prev(block.end()); it != e;
                ++it) {
-            if (!isSafeResumableMultiblockWaitPreludeOp(&*it))
+            if (!isSafeResumableMultiblockWaitPreludeOp(&*it, noCtx))
               return formatUnsupportedProcessOpDetail(*it);
             sawSuspend |= isPotentialResumableMultiblockSuspendOp(&*it);
           }
@@ -934,6 +1022,7 @@ bool LLHDProcessInterpreter::snapshotJITDeoptState(
   snapshot.resumeAtCurrentOp = state.resumeAtCurrentOp;
   snapshot.destOperands = state.destOperands;
   snapshot.callStack = state.callStack;
+  snapshot.callStackOutermostCallOp = state.callStackOutermostCallOp;
   snapshot.jitThunkResumeToken = state.jitThunkResumeToken;
   return true;
 }
@@ -952,28 +1041,49 @@ bool LLHDProcessInterpreter::restoreJITDeoptState(
   state.resumeAtCurrentOp = snapshot.resumeAtCurrentOp;
   state.destOperands = snapshot.destOperands;
   state.callStack = snapshot.callStack;
+  state.callStackOutermostCallOp = snapshot.callStackOutermostCallOp;
   state.jitThunkResumeToken = snapshot.jitThunkResumeToken;
   return true;
 }
 
+static NativeThunkSuspendAnalysisContext buildSuspendAnalysisContext(
+    const LLHDProcessInterpreter *interpreter, ProcessId procId,
+    llvm::SmallVectorImpl<LLHDProcessInterpreter::JitRuntimeIndirectSiteGuardSpec>
+        *profileGuardSpecs) {
+  NativeThunkSuspendAnalysisContext ctx;
+  ctx.interpreter = interpreter;
+  ctx.procId = procId;
+  ctx.profileGuardSpecs = profileGuardSpecs;
+  if (interpreter)
+    ctx.minProfileCalls = interpreter->getJitCompileHotThreshold();
+  return ctx;
+}
+
 bool LLHDProcessInterpreter::isTrivialNativeThunkCandidate(
-    const ProcessExecutionState &state) const {
-  if (isCombinationalNativeThunkCandidate(state))
+    ProcessId procId, const ProcessExecutionState &state,
+    llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec> *profileGuardSpecs)
+    const {
+  if (isCombinationalNativeThunkCandidate(procId, state, profileGuardSpecs))
     return true;
 
-  if (isSingleBlockTerminatingNativeThunkCandidate(state))
+  if (isSingleBlockTerminatingNativeThunkCandidate(procId, state,
+                                                   profileGuardSpecs))
     return true;
 
-  if (isMultiBlockTerminatingNativeThunkCandidate(state))
+  if (isMultiBlockTerminatingNativeThunkCandidate(procId, state,
+                                                  profileGuardSpecs))
     return true;
 
-  if (isResumableWaitSelfLoopNativeThunkCandidate(state))
+  if (isResumableWaitSelfLoopNativeThunkCandidate(procId, state,
+                                                  profileGuardSpecs))
     return true;
 
-  if (isResumableMultiblockWaitNativeThunkCandidate(state))
+  if (isResumableMultiblockWaitNativeThunkCandidate(procId, state,
+                                                    profileGuardSpecs))
     return true;
 
-  if (isResumableWaitThenHaltNativeThunkCandidate(state))
+  if (isResumableWaitThenHaltNativeThunkCandidate(procId, state,
+                                                  profileGuardSpecs))
     return true;
 
   if (state.getProcessOp()) {
@@ -1034,7 +1144,11 @@ bool LLHDProcessInterpreter::isTrivialNativeThunkCandidate(
 }
 
 bool LLHDProcessInterpreter::isSingleBlockTerminatingNativeThunkCandidate(
-    const ProcessExecutionState &state) const {
+    ProcessId procId, const ProcessExecutionState &state,
+    llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec> *profileGuardSpecs)
+    const {
+  NativeThunkSuspendAnalysisContext ctx =
+      buildSuspendAnalysisContext(this, procId, profileGuardSpecs);
   Region *bodyRegion =
       resolveNativeThunkProcessRegion(const_cast<ProcessExecutionState &>(state));
   if (!bodyRegion || !bodyRegion->hasOneBlock())
@@ -1050,14 +1164,18 @@ bool LLHDProcessInterpreter::isSingleBlockTerminatingNativeThunkCandidate(
 
   for (auto it = body.begin(), e = std::prev(body.end()); it != e; ++it) {
     Operation *op = &*it;
-    if (!isSafeSingleBlockTerminatingPreludeOp(op))
+    if (!isSafeSingleBlockTerminatingPreludeOp(op, ctx))
       return false;
   }
   return true;
 }
 
 bool LLHDProcessInterpreter::isMultiBlockTerminatingNativeThunkCandidate(
-    const ProcessExecutionState &state) const {
+    ProcessId procId, const ProcessExecutionState &state,
+    llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec> *profileGuardSpecs)
+    const {
+  NativeThunkSuspendAnalysisContext ctx =
+      buildSuspendAnalysisContext(this, procId, profileGuardSpecs);
   Region *bodyRegion =
       resolveNativeThunkProcessRegion(const_cast<ProcessExecutionState &>(state));
   if (!bodyRegion || bodyRegion->empty() || bodyRegion->hasOneBlock())
@@ -1076,7 +1194,7 @@ bool LLHDProcessInterpreter::isMultiBlockTerminatingNativeThunkCandidate(
     sawTerminal |= isTerminal;
 
     for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
-      if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
+      if (!isSafeSingleBlockTerminatingPreludeOp(&*it, ctx))
         return false;
     }
   }
@@ -1085,7 +1203,11 @@ bool LLHDProcessInterpreter::isMultiBlockTerminatingNativeThunkCandidate(
 }
 
 bool LLHDProcessInterpreter::isCombinationalNativeThunkCandidate(
-    const ProcessExecutionState &state) const {
+    ProcessId procId, const ProcessExecutionState &state,
+    llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec> *profileGuardSpecs)
+    const {
+  (void)procId;
+  (void)profileGuardSpecs;
   auto combOp = state.getCombinationalOp();
   if (!combOp)
     return false;
@@ -1111,7 +1233,11 @@ bool LLHDProcessInterpreter::isCombinationalNativeThunkCandidate(
 }
 
 bool LLHDProcessInterpreter::isResumableWaitSelfLoopNativeThunkCandidate(
-    const ProcessExecutionState &state) const {
+    ProcessId procId, const ProcessExecutionState &state,
+    llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec> *profileGuardSpecs)
+    const {
+  NativeThunkSuspendAnalysisContext ctx =
+      buildSuspendAnalysisContext(this, procId, profileGuardSpecs);
   auto processOp = state.getProcessOp();
   if (!processOp)
     return false;
@@ -1131,7 +1257,7 @@ bool LLHDProcessInterpreter::isResumableWaitSelfLoopNativeThunkCandidate(
     if (!entryBranch || !entryBranch.getDestOperands().empty())
       return false;
     for (auto it = entry.begin(), e = std::prev(entry.end()); it != e; ++it) {
-      if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
+      if (!isSafeSingleBlockTerminatingPreludeOp(&*it, ctx))
         return false;
     }
     loopBlock = entryBranch.getDest();
@@ -1149,14 +1275,18 @@ bool LLHDProcessInterpreter::isResumableWaitSelfLoopNativeThunkCandidate(
 
   for (auto it = loopBlock->begin(), e = std::prev(loopBlock->end()); it != e;
        ++it) {
-    if (!isSafeSingleBlockTerminatingPreludeOp(&*it))
+    if (!isSafeSingleBlockTerminatingPreludeOp(&*it, ctx))
       return false;
   }
   return true;
 }
 
 bool LLHDProcessInterpreter::isResumableMultiblockWaitNativeThunkCandidate(
-    const ProcessExecutionState &state) const {
+    ProcessId procId, const ProcessExecutionState &state,
+    llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec> *profileGuardSpecs)
+    const {
+  NativeThunkSuspendAnalysisContext ctx =
+      buildSuspendAnalysisContext(this, procId, profileGuardSpecs);
   Region *bodyRegion =
       resolveNativeThunkProcessRegion(const_cast<ProcessExecutionState &>(state));
   if (!bodyRegion || bodyRegion->empty())
@@ -1195,7 +1325,7 @@ bool LLHDProcessInterpreter::isResumableMultiblockWaitNativeThunkCandidate(
     }
 
     for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
-      if (!isSafeResumableMultiblockWaitPreludeOp(&*it))
+      if (!isSafeResumableMultiblockWaitPreludeOp(&*it, ctx))
         return false;
       sawSuspendSource |= isPotentialResumableMultiblockSuspendOp(&*it);
     }
@@ -1205,7 +1335,11 @@ bool LLHDProcessInterpreter::isResumableMultiblockWaitNativeThunkCandidate(
 }
 
 bool LLHDProcessInterpreter::isResumableWaitThenHaltNativeThunkCandidate(
-    const ProcessExecutionState &state) const {
+    ProcessId procId, const ProcessExecutionState &state,
+    llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec> *profileGuardSpecs)
+    const {
+  (void)procId;
+  (void)profileGuardSpecs;
   auto processOp = state.getProcessOp();
   if (!processOp)
     return false;

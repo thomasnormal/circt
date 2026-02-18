@@ -4,7 +4,7 @@
 // This regression locks the call-stack resume fast path for
 // `*::StartMonitoring` wrappers that tail-call `*::Deserializer`.
 //
-// CHECK: [MON-DESER-FP] resume-hit
+// CHECK: [MON-DESER-FP]
 // CHECK: out=
 // CHECK: [circt-sim] Simulation completed
 

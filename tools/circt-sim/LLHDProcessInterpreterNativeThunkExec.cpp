@@ -1783,8 +1783,10 @@ bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(
 LLHDProcessInterpreter::CallStackResumeResult
 LLHDProcessInterpreter::resumeSavedCallStackFrames(
     ProcessId procId, ProcessExecutionState &state) {
-  if (state.callStack.empty())
+  if (state.callStack.empty()) {
+    state.callStackOutermostCallOp = nullptr;
     return CallStackResumeResult::NoFrames;
+  }
 
   LLVM_DEBUG(llvm::dbgs()
              << "  Process has " << state.callStack.size()
@@ -1792,7 +1794,9 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
 
   // Preserve the outermost call site for restoring process-level position
   // once all nested frames have completed.
-  Operation *outermostCallOp = state.callStack.back().callOp;
+  Operation *outermostCallOp = state.callStackOutermostCallOp
+                                   ? state.callStackOutermostCallOp
+                                   : state.callStack.back().callOp;
   enum class FastResumeAction : uint8_t {
     NotHandled,
     Continue,
@@ -2059,6 +2063,7 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
     state.currentOp = std::next(outermostCallOp->getIterator());
   }
   state.waitConditionRestartBlock = nullptr;
+  state.callStackOutermostCallOp = nullptr;
 
   LLVM_DEBUG(llvm::dbgs()
              << "  Call stack frames exhausted, continuing process\n");

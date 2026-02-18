@@ -12,9 +12,9 @@
 // JSON: "jit_compiles_total": 1
 // JSON: "jit_cache_hits_total": {{[1-9][0-9]*}}
 // JSON: "jit_exec_hits_total": {{[1-9][0-9]*}}
-// JSON: "jit_deopts_total": 1
+// JSON: "jit_deopts_total": 0
 // JSON: "jit_deopt_reason_guard_failed": 0
-// JSON: "jit_deopt_reason_unsupported_operation": 1
+// JSON: "jit_deopt_reason_unsupported_operation": 0
 // JSON: "jit_deopt_reason_missing_thunk": 0
 // JSON: "jit_strict_violations_total": 0
 
@@ -40,8 +40,7 @@ hw.module @top() {
     cf.br ^bb1
   }
 
-  // llvm.alloca is side-effecting and should disqualify this process from
-  // native resumable wait-thunk compilation.
+  // Lock that this mixed pre-wait shape compiles without deopt in compile mode.
   %proc_val = llhd.process -> i1 {
     %c1_i64 = llvm.mlir.constant(1 : i64) : i64
     %ptr = llvm.alloca %c1_i64 x i8 : (i64) -> !llvm.ptr

@@ -273,6 +273,60 @@ static bool getMaskedUInt64(const InterpretedValue &value,
   return true;
 }
 
+/// Optional function-call tracing for focused runtime diagnosis.
+/// Enable with CIRCT_SIM_TRACE_CALL_FILTER. Example:
+///   CIRCT_SIM_TRACE_CALL_FILTER=uvm_tlm_analysis_fifo::write,uvm_tlm_fifo::get
+/// If the env var is set to "1", all function calls are traced.
+static void maybeTraceFilteredCall(ProcessId procId, llvm::StringRef callKind,
+                                   llvm::StringRef calleeName) {
+  static bool enabled = []() {
+    if (const char *env = std::getenv("CIRCT_SIM_TRACE_CALL_FILTER"))
+      return env[0] != '\0';
+    return false;
+  }();
+  if (!enabled)
+    return;
+
+  static bool traceAll = []() {
+    if (const char *env = std::getenv("CIRCT_SIM_TRACE_CALL_FILTER"))
+      return llvm::StringRef(env).trim() == "1";
+    return false;
+  }();
+
+  static llvm::SmallVector<std::string, 8> filters = []() {
+    llvm::SmallVector<std::string, 8> parsed;
+    const char *env = std::getenv("CIRCT_SIM_TRACE_CALL_FILTER");
+    if (!env)
+      return parsed;
+    llvm::StringRef raw(env);
+    if (raw.trim() == "1")
+      return parsed;
+    llvm::SmallVector<llvm::StringRef, 8> pieces;
+    raw.split(pieces, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+    for (llvm::StringRef piece : pieces) {
+      llvm::StringRef trimmed = piece.trim();
+      if (!trimmed.empty())
+        parsed.push_back(trimmed.str());
+    }
+    return parsed;
+  }();
+
+  if (!traceAll) {
+    bool matched = false;
+    for (const std::string &filter : filters) {
+      if (calleeName.contains(filter)) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched)
+      return;
+  }
+
+  llvm::errs() << "[CALL-TRACE] " << callKind << " proc=" << procId
+               << " callee=" << calleeName << "\n";
+}
+
 static unsigned writeConfigDbBytesToNativeMemory(
     uint64_t addr, uint64_t nativeOffset, size_t nativeSize,
     const std::vector<uint8_t> &valueData, unsigned requestedBytes,
@@ -8559,6 +8613,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     it->second.recursionVisited.clear();
     it->second.waitSensitivityCache.clear();
     it->second.callStack.clear();
+    it->second.callStackOutermostCallOp = nullptr;
     it->second.refBlockArgSources.clear();
   }
 
@@ -11676,6 +11731,7 @@ arith_dispatch:
     } while (false);
 
     noteResolvedTarget(calleeName);
+    maybeTraceFilteredCall(procId, "func.call_indirect", calleeName);
 
     if (traceConfigDbEnabled && calleeName.contains("config_db")) {
       llvm::errs() << "[CFG-CI-DISPATCH] callee=" << calleeName
@@ -14938,8 +14994,19 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
     remapRefBlockArgSource(signal);
   }
 
-  // Get the signal ID for the probed signal
+  // Get the signal ID for the probed signal.
+  //
+  // Sub-reference probes must be handled by the dedicated extraction paths
+  // below. resolveSignalId() intentionally traces these refs to the parent
+  // signal ID, but probing through the parent ID directly can return a
+  // whole-aggregate pending value with the wrong width/layout for the probe
+  // result type.
   SignalId sigId = resolveSignalId(signal);
+  if (signal.getDefiningOp<llhd::SigStructExtractOp>() ||
+      signal.getDefiningOp<llhd::SigArrayGetOp>() ||
+      signal.getDefiningOp<llhd::SigExtractOp>()) {
+    sigId = 0;
+  }
   if (sigId == 0) {
     // Check if this is a global variable access via UnrealizedConversionCastOp
     // This happens when static class properties are accessed - they're stored
@@ -15308,9 +15375,16 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
         return failure();
       }
 
-      // Get the current value of the parent signal
-      const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
-      InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+      // Get the current value of the parent signal, preferring pending epsilon
+      // drives so that immediate same-process probes observe blocking writes.
+      InterpretedValue parentVal;
+      auto pendingIt = pendingEpsilonDrives.find(parentSigId);
+      if (pendingIt != pendingEpsilonDrives.end()) {
+        parentVal = pendingIt->second;
+      } else {
+        const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+        parentVal = InterpretedValue::fromSignalValue(parentSV);
+      }
 
       // Compute the bit offset by walking the extract chain in reverse
       // (from root signal to the target field)
@@ -15470,8 +15544,14 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
         parentSigId = resolveSignalId(parentRef);
 
       if (parentSigId != 0) {
-        const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
-        InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+        InterpretedValue parentVal;
+        auto pendingIt = pendingEpsilonDrives.find(parentSigId);
+        if (pendingIt != pendingEpsilonDrives.end()) {
+          parentVal = pendingIt->second;
+        } else {
+          const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+          parentVal = InterpretedValue::fromSignalValue(parentSV);
+        }
 
         if (parentVal.isX() ||
             totalBitOffset + resultWidth > parentVal.getWidth()) {
@@ -15571,9 +15651,16 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
       }
       uint64_t index = indexVal.getUInt64();
 
-      // Get the current value of the parent signal
-      const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
-      InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+      // Get the current value of the parent signal, preferring pending epsilon
+      // drives so same-delta array element probes see prior drives.
+      InterpretedValue parentVal;
+      auto pendingIt = pendingEpsilonDrives.find(parentSigId);
+      if (pendingIt != pendingEpsilonDrives.end()) {
+        parentVal = pendingIt->second;
+      } else {
+        const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+        parentVal = InterpretedValue::fromSignalValue(parentSV);
+      }
 
       // Get array element type and width
       auto arrayType = cast<hw::ArrayType>(unwrapSignalType(parentSignal.getType()));
@@ -15589,8 +15676,50 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
         return success();
       }
 
-      // hw::ArrayType layout: element 0 at low bits, element N-1 at high bits
+      // hw::ArrayType layout: element 0 at low bits, element N-1 at high bits.
+      // If the array ref came from a struct field extract, include that field's
+      // low-bit offset within the parent signal.
       unsigned bitOffset = index * elementWidth;
+      if (parentSignal.getDefiningOp<llhd::SigStructExtractOp>()) {
+        llvm::SmallVector<llhd::SigStructExtractOp, 4> extractChain;
+        Value rootSignal = parentSignal;
+        while (auto extractOp =
+                   rootSignal.getDefiningOp<llhd::SigStructExtractOp>()) {
+          extractChain.push_back(extractOp);
+          rootSignal = extractOp.getInput();
+        }
+
+        unsigned structFieldOffset = 0;
+        bool validChain = true;
+        Type currentType = rootSignal.getType();
+        if (auto refType = dyn_cast<llhd::RefType>(currentType))
+          currentType = refType.getNestedType();
+
+        for (auto it = extractChain.rbegin(); it != extractChain.rend(); ++it) {
+          auto structType = dyn_cast<hw::StructType>(currentType);
+          if (!structType) {
+            validChain = false;
+            break;
+          }
+          auto elements = structType.getElements();
+          auto fieldIndexOpt = structType.getFieldIndex((*it).getField());
+          if (!fieldIndexOpt) {
+            validChain = false;
+            break;
+          }
+          unsigned fieldIndex = *fieldIndexOpt;
+
+          unsigned fieldOffset = 0;
+          for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+            fieldOffset += getTypeWidth(elements[i].type);
+
+          structFieldOffset += fieldOffset;
+          currentType = elements[fieldIndex].type;
+        }
+
+        if (validChain)
+          bitOffset += structFieldOffset;
+      }
 
       // Extract the element value from the parent signal
       InterpretedValue elementVal;
@@ -16993,8 +17122,75 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         return success(); // Out of bounds - don't drive
       }
 
-      // hw::ArrayType layout: element 0 at low bits, element N-1 at high bits
+      // hw::ArrayType layout: element 0 at low bits, element N-1 at high bits.
+      // If the array ref came from a struct field extract, include that field's
+      // low-bit offset within the parent signal.
       unsigned bitOffset = index * elementWidth;
+      if (parentSignal.getDefiningOp<llhd::SigStructExtractOp>()) {
+        llvm::SmallVector<llhd::SigStructExtractOp, 4> extractChain;
+        Value rootSignal = parentSignal;
+        while (auto extractOp =
+                   rootSignal.getDefiningOp<llhd::SigStructExtractOp>()) {
+          extractChain.push_back(extractOp);
+          rootSignal = extractOp.getInput();
+        }
+
+        unsigned structFieldOffset = 0;
+        bool validChain = true;
+        Type currentType = rootSignal.getType();
+        if (auto refType = dyn_cast<llhd::RefType>(currentType))
+          currentType = refType.getNestedType();
+
+        for (auto it = extractChain.rbegin(); it != extractChain.rend(); ++it) {
+          auto structType = dyn_cast<hw::StructType>(currentType);
+          if (!structType) {
+            validChain = false;
+            break;
+          }
+          auto elements = structType.getElements();
+          auto fieldIndexOpt = structType.getFieldIndex((*it).getField());
+          if (!fieldIndexOpt) {
+            validChain = false;
+            break;
+          }
+          unsigned fieldIndex = *fieldIndexOpt;
+
+          unsigned fieldOffset = 0;
+          for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+            fieldOffset += getTypeWidth(elements[i].type);
+
+          structFieldOffset += fieldOffset;
+          currentType = elements[fieldIndex].type;
+        }
+
+        if (validChain)
+          bitOffset += structFieldOffset;
+      }
+
+      static bool traceI3CFieldDrives = []() {
+        const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_FIELD_DRIVES");
+        return env && env[0] != '\0' && env[0] != '0';
+      }();
+      if (traceI3CFieldDrives) {
+        if (auto parentExtract =
+                parentSignal.getDefiningOp<llhd::SigStructExtractOp>()) {
+          StringRef field = parentExtract.getField();
+          if (field == "writeData" || field == "readData" ||
+              field == "writeDataStatus" || field == "readDataStatus") {
+            llvm::SmallString<64> bits;
+            if (driveVal.isX())
+              bits = "X";
+            else
+              driveVal.getAPInt().toString(bits, 16, false);
+            llvm::errs() << "[I3C-FIELD-DRV] proc=" << procId
+                         << " field=" << field << " idx=" << index
+                         << " bitOffset=" << bitOffset << " val=0x" << bits
+                         << " t=" << scheduler.getCurrentTime().realTime
+                         << " d=" << scheduler.getCurrentTime().deltaStep
+                         << "\n";
+          }
+        }
+      }
 
       // Insert the new value at the computed bit offset
       APInt elementValue = driveVal.isX() ? APInt::getZero(elementWidth)
@@ -18535,6 +18731,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting func.call to '"
                           << callOp.getCallee() << "'\n");
   StringRef calleeName = callOp.getCallee();
+  maybeTraceFilteredCall(procId, "func.call", calleeName);
   bool traceSeq = traceSeqEnabled;
 
   LLVM_DEBUG({
@@ -21956,16 +22153,73 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           auto nextOpIt = opIt;
           ++nextOpIt;
 
+          bool elideTailWrapperFrame = false;
+          if (funcOp.getBody().hasOneBlock() && currentBlock == &entryBlock &&
+              nextOpIt != currentBlock->end() &&
+              std::next(nextOpIt) == currentBlock->end()) {
+            auto calleeCallOp = dyn_cast<mlir::func::CallOp>(&op);
+            auto returnOp = dyn_cast<mlir::func::ReturnOp>(*nextOpIt);
+            if (calleeCallOp && calleeCallOp.getNumResults() == 0 && returnOp &&
+                returnOp.getNumOperands() == 0) {
+              elideTailWrapperFrame = true;
+            }
+          }
+
           // Only save if there are more operations to execute in this function
           if (nextOpIt != currentBlock->end() ||
               currentBlock != &entryBlock) {
-            CallStackFrame frame(funcOp, currentBlock, nextOpIt, callOp);
-            frame.args.assign(args.begin(), args.end());
-            haltCheckState->callStack.push_back(std::move(frame));
-            LLVM_DEBUG(llvm::dbgs()
-                       << "    Saved call frame for function '"
-                       << funcOp.getName() << "' with " << args.size()
-                       << " args, will resume after current op\n");
+            if (elideTailWrapperFrame) {
+              haltCheckState->callStackOutermostCallOp = callOp;
+              static bool traceTailWrapperFastPath = []() {
+                const char *env =
+                    std::getenv("CIRCT_SIM_TRACE_TAIL_WRAPPER_FASTPATH");
+                return env && env[0] != '\0' && env[0] != '0';
+              }();
+              static bool traceMonitorDeserializerFastPath = []() {
+                const char *env =
+                    std::getenv("CIRCT_SIM_TRACE_MONITOR_DESERIALIZER_FASTPATH");
+                return env && env[0] != '\0' && env[0] != '0';
+              }();
+              static bool traceDriveSampleFastPath = []() {
+                const char *env =
+                    std::getenv("CIRCT_SIM_TRACE_DRIVE_SAMPLE_FASTPATH");
+                return env && env[0] != '\0' && env[0] != '0';
+              }();
+              auto wrapperName = funcOp.getName();
+              auto calleeName = cast<mlir::func::CallOp>(op).getCallee();
+              bool monitorDeserializer =
+                  wrapperName.ends_with("::StartMonitoring") &&
+                  calleeName.ends_with("::Deserializer");
+              bool driveSample = wrapperName.ends_with("::DriveToBfm") &&
+                                 calleeName.ends_with("::SampleData");
+              if (traceTailWrapperFastPath || traceMonitorDeserializerFastPath ||
+                  traceDriveSampleFastPath) {
+                static unsigned tailWrapperSuspendElideHits = 0;
+                if (tailWrapperSuspendElideHits < 100) {
+                  ++tailWrapperSuspendElideHits;
+                  if (monitorDeserializer && traceMonitorDeserializerFastPath)
+                    llvm::errs() << "[MON-DESER-FP]";
+                  else if (driveSample && traceDriveSampleFastPath)
+                    llvm::errs() << "[DRV-SAMPLE-FP]";
+                  else
+                    llvm::errs() << "[TAIL-WRAP-FP]";
+                  llvm::errs() << " suspend-elide proc=" << procId
+                               << " wrapper=" << wrapperName
+                               << " callee=" << calleeName << "\n";
+                }
+              }
+              LLVM_DEBUG(llvm::dbgs()
+                         << "    Elided tail-wrapper frame for function '"
+                         << funcOp.getName() << "'\n");
+            } else {
+              CallStackFrame frame(funcOp, currentBlock, nextOpIt, callOp);
+              frame.args.assign(args.begin(), args.end());
+              haltCheckState->callStack.push_back(std::move(frame));
+              LLVM_DEBUG(llvm::dbgs()
+                         << "    Saved call frame for function '"
+                         << funcOp.getName() << "' with " << args.size()
+                         << " args, will resume after current op\n");
+            }
           }
         }
 
@@ -25126,7 +25380,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     }
 
     Type signalType = getSignalValueType(sigId);
-    if (!signalType) {
+    // If the inferred signal type is missing or width-mismatched, re-derive it
+    // from the ref operand being loaded. This avoids accidental narrowing when
+    // the same SignalId is reachable from both whole-aggregate refs and
+    // sub-field refs (which share the ID but not the type width).
+    if (!signalType || getTypeWidth(signalType) != signalVal.getWidth()) {
       if (auto castOp =
               loadOp.getAddr()
                   .getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
