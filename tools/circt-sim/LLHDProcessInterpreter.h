@@ -407,6 +407,14 @@ struct ProcessExecutionState {
     SignalId clockSignalId = 0;
     SignalId outputSignalId = 0;
     int32_t divider = 1;
+    bool useDelayBatching = false;
+    uint64_t delayBatchEdges = 0;
+    uint64_t pendingDelayedEdges = 0;
+    uint64_t stableEdgeIntervals = 0;
+    int64_t edgeIntervalFs = 0;
+    int64_t lastEdgeTimeFs = -1;
+    bool clockSampleValid = false;
+    bool lastClockSample = false;
   };
   llvm::DenseMap<mlir::Operation *, BaudClkGeneratorFastPathState>
       baudClkGeneratorFastPathByCall;
@@ -951,6 +959,17 @@ private:
     llhd::DriveOp toggleDriveOp;
     uint64_t delayFs = 0;
   };
+
+  enum class DirectProcessFastPathKind : uint8_t {
+    None = 0,
+    PeriodicToggleClock = 1u << 0,
+    ResumableWaitSelfLoop = 1u << 1,
+  };
+
+  /// Try a cached direct fast path for common hot process loop shapes.
+  /// This bypasses compile-budgeted thunk installation for known-safe loops.
+  bool tryExecuteDirectProcessFastPath(ProcessId procId,
+                                       ProcessExecutionState &state);
 
   /// Attempt to compile/install a native thunk for this process.
   ProcessThunkInstallResult tryInstallProcessThunk(ProcessId procId,
@@ -1719,6 +1738,9 @@ private:
   /// Per-process metadata for periodic clock toggle native thunks.
   llvm::DenseMap<ProcessId, PeriodicToggleClockThunkSpec>
       periodicToggleClockThunkSpecs;
+
+  /// Cached direct process fast-path classification mask by process.
+  llvm::DenseMap<ProcessId, uint8_t> directProcessFastPathKinds;
 
   /// Test hook: force native thunks to request deopt after dispatch.
   bool forceJitThunkDeoptRequests = false;

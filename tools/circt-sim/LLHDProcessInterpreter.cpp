@@ -7656,6 +7656,12 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
   ProcessExecutionState &state = it->second;
 
+  // Direct fast paths for known hot process loop shapes. These execute
+  // without compile-budgeted thunk installation and avoid repeated
+  // compile-mode missing-thunk deopts for common AVIP clock loops.
+  if (tryExecuteDirectProcessFastPath(procId, state))
+    return;
+
   // Compile-mode entry hook: try native process thunk first, then attempt
   // on-demand install for currently supported trivial process shapes.
   //
@@ -8461,6 +8467,9 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
   }
   auto it = processStates.find(procId);
   if (it != processStates.end()) {
+    periodicToggleClockThunkSpecs.erase(procId);
+    directProcessFastPathKinds.erase(procId);
+
     removeObjectionZeroWaiter(procId);
     memoryEventWaiters.erase(procId);
     if (it->second.waitConditionQueueAddr != 0) {
@@ -17913,6 +17922,34 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
     const char *env = std::getenv("CIRCT_SIM_TRACE_BAUD_FASTPATH");
     return env && env[0] != '\0' && env[0] != '0';
   }();
+  static bool enableDelayBatching = []() {
+    const char *env = std::getenv("CIRCT_SIM_BAUD_FASTPATH_DELAY_BATCH");
+    if (!env || env[0] == '\0')
+      return true;
+    return env[0] != '0';
+  }();
+  static uint64_t minStableDelayBatchEdges = []() -> uint64_t {
+    const char *env =
+        std::getenv("CIRCT_SIM_BAUD_FASTPATH_DELAY_BATCH_MIN_STABLE_EDGES");
+    if (!env || env[0] == '\0')
+      return 6;
+    char *end = nullptr;
+    unsigned long long parsed = std::strtoull(env, &end, 10);
+    if (!end || *end != '\0' || parsed == 0)
+      return 6;
+    return static_cast<uint64_t>(parsed);
+  }();
+  static uint64_t maxDelayBatchEdges = []() -> uint64_t {
+    const char *env =
+        std::getenv("CIRCT_SIM_BAUD_FASTPATH_DELAY_BATCH_MAX_EDGES");
+    if (!env || env[0] == '\0')
+      return 64;
+    char *end = nullptr;
+    unsigned long long parsed = std::strtoull(env, &end, 10);
+    if (!end || *end != '\0' || parsed == 0)
+      return 64;
+    return static_cast<uint64_t>(parsed);
+  }();
   auto reject = [&](llvm::StringRef reason) {
     if (traceBaudFastPath) {
       static unsigned rejectCount = 0;
@@ -18171,7 +18208,149 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
       outputIt != interfaceFieldSignals.end())
     fastState.outputSignalId = outputIt->second;
 
+  auto sampleClockLevel = [&](bool &clockSample) -> bool {
+    if (fastState.clockSignalId != 0) {
+      InterpretedValue clockSigVal = InterpretedValue::fromSignalValue(
+          scheduler.getSignalValue(fastState.clockSignalId));
+      if (!clockSigVal.isX()) {
+        clockSample = (clockSigVal.getUInt64() & 0x1) != 0;
+        return true;
+      }
+    }
+    return readI1AtAddr(clockAddr, clockSample);
+  };
+
+  auto normalizeCount = [&](int32_t count) -> int32_t {
+    if (fastState.divider <= 0)
+      return 0;
+    if (count >= 0 && count < fastState.divider)
+      return count;
+    int64_t div = static_cast<int64_t>(fastState.divider);
+    int64_t mod = static_cast<int64_t>(count) % div;
+    if (mod < 0)
+      mod += div;
+    return static_cast<int32_t>(mod);
+  };
+
+  auto toggleOutput = [&]() {
+    bool currentOut = false;
+    if (fastState.outputSignalId != 0) {
+      InterpretedValue curSigVal = InterpretedValue::fromSignalValue(
+          scheduler.getSignalValue(fastState.outputSignalId));
+      if (!curSigVal.isX())
+        currentOut = (curSigVal.getUInt64() & 0x1) != 0;
+    }
+    (void)readI1AtAddr(outputAddr, currentOut);
+    bool nextOut = !currentOut;
+    (void)writeI1AtAddr(outputAddr, nextOut);
+
+    if (fastState.outputSignalId != 0) {
+      const SignalValue &currentSig =
+          scheduler.getSignalValue(fastState.outputSignalId);
+      unsigned sigWidth = std::max(1u, currentSig.getWidth());
+      InterpretedValue nextOutVal(llvm::APInt(sigWidth, nextOut ? 1u : 0u, false));
+      SignalValue nextSig = nextOutVal.toSignalValue();
+      pendingEpsilonDrives[fastState.outputSignalId] = nextOutVal;
+      scheduler.updateSignal(fastState.outputSignalId, nextSig);
+      forwardPropagateOnSignalChange(fastState.outputSignalId, nextSig);
+    }
+  };
+
+  bool clockSample = false;
+  bool haveClockSample = sampleClockLevel(clockSample);
+  uint64_t nowFs = scheduler.getCurrentTime().realTime;
+  int64_t nowFsSigned =
+      nowFs <= static_cast<uint64_t>(INT64_MAX) ? static_cast<int64_t>(nowFs)
+                                                : INT64_MAX;
+
+  uint64_t pendingDelayedEdges = fastState.pendingDelayedEdges;
+  fastState.pendingDelayedEdges = 0;
+  uint64_t edgesToProcess = 0;
+  bool delayBatchGuardFailed = false;
+
   if (fastState.primed) {
+    if (pendingDelayedEdges) {
+      bool guardOk = fastState.useDelayBatching && fastState.edgeIntervalFs > 0 &&
+                     fastState.lastEdgeTimeFs >= 0 && haveClockSample &&
+                     fastState.clockSampleValid;
+      if (guardOk) {
+        uint64_t edgeInterval = static_cast<uint64_t>(fastState.edgeIntervalFs);
+        uint64_t elapsedFs =
+            nowFsSigned >= fastState.lastEdgeTimeFs
+                ? static_cast<uint64_t>(nowFsSigned - fastState.lastEdgeTimeFs)
+                : 0;
+        if (edgeInterval == 0 || pendingDelayedEdges > UINT64_MAX / edgeInterval) {
+          guardOk = false;
+        } else {
+          uint64_t expectedDelayFs = edgeInterval * pendingDelayedEdges;
+          bool expectedClock = fastState.lastClockSample;
+          if (pendingDelayedEdges & 1)
+            expectedClock = !expectedClock;
+          guardOk = elapsedFs == expectedDelayFs && clockSample == expectedClock;
+        }
+      }
+
+      if (guardOk) {
+        edgesToProcess = pendingDelayedEdges;
+      } else {
+        delayBatchGuardFailed = true;
+        fastState.useDelayBatching = false;
+        fastState.delayBatchEdges = 0;
+        fastState.stableEdgeIntervals = 0;
+        fastState.edgeIntervalFs = 0;
+        if (traceBaudFastPath) {
+          static unsigned batchMismatchCount = 0;
+          if (batchMismatchCount < 50) {
+            ++batchMismatchCount;
+            llvm::errs() << "[BAUD-FP] batch-mismatch proc=" << procId
+                         << " callee=" << calleeName
+                         << " pendingEdges=" << pendingDelayedEdges
+                         << " clockSample=" << (haveClockSample ? (clockSample ? 1 : 0) : -1)
+                         << " lastClock="
+                         << (fastState.clockSampleValid
+                                 ? (fastState.lastClockSample ? 1 : 0)
+                                 : -1)
+                         << " nowFs=" << nowFs << "\n";
+          }
+        }
+      }
+    } else {
+      edgesToProcess = 1;
+      if (haveClockSample) {
+        if (fastState.clockSampleValid && fastState.lastEdgeTimeFs >= 0 &&
+            clockSample != fastState.lastClockSample &&
+            nowFsSigned >= fastState.lastEdgeTimeFs) {
+          uint64_t observedDeltaFs =
+              static_cast<uint64_t>(nowFsSigned - fastState.lastEdgeTimeFs);
+          if (observedDeltaFs > 0 &&
+              observedDeltaFs <= static_cast<uint64_t>(INT64_MAX)) {
+            int64_t observedDeltaSigned = static_cast<int64_t>(observedDeltaFs);
+            if (fastState.edgeIntervalFs == observedDeltaSigned) {
+              ++fastState.stableEdgeIntervals;
+            } else {
+              fastState.edgeIntervalFs = observedDeltaSigned;
+              fastState.stableEdgeIntervals = 1;
+            }
+          } else {
+            fastState.stableEdgeIntervals = 0;
+            fastState.edgeIntervalFs = 0;
+            fastState.useDelayBatching = false;
+          }
+        } else if (fastState.clockSampleValid &&
+                   clockSample == fastState.lastClockSample) {
+          fastState.stableEdgeIntervals = 0;
+          fastState.edgeIntervalFs = 0;
+          fastState.useDelayBatching = false;
+        }
+      } else {
+        fastState.stableEdgeIntervals = 0;
+        fastState.edgeIntervalFs = 0;
+        fastState.useDelayBatching = false;
+      }
+    }
+  }
+
+  if (edgesToProcess) {
     int32_t count = 0;
     if (fastState.countLocalOnly) {
       count = fastState.localCount;
@@ -18179,64 +18358,114 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
       return reject("count-read-failed");
     }
 
-    bool toggleClock = count == (fastState.divider - 1);
-    if (toggleClock) {
-      if (fastState.countLocalOnly) {
-        fastState.localCount = 0;
-      } else if (!writeI32AtAddr(fastState.countAddr, 0)) {
-        return reject("count-reset-write-failed");
-      }
-
-      bool currentOut = false;
-      if (fastState.outputSignalId != 0) {
-        InterpretedValue curSigVal = InterpretedValue::fromSignalValue(
-            scheduler.getSignalValue(fastState.outputSignalId));
-        if (!curSigVal.isX())
-          currentOut = (curSigVal.getUInt64() & 0x1) != 0;
-      }
-      (void)readI1AtAddr(outputAddr, currentOut);
-      bool nextOut = !currentOut;
-      (void)writeI1AtAddr(outputAddr, nextOut);
-
-      if (fastState.outputSignalId != 0) {
-        const SignalValue &currentSig =
-            scheduler.getSignalValue(fastState.outputSignalId);
-        unsigned sigWidth = std::max(1u, currentSig.getWidth());
-        InterpretedValue nextOutVal(
-            llvm::APInt(sigWidth, nextOut ? 1u : 0u, false));
-        SignalValue nextSig = nextOutVal.toSignalValue();
-        pendingEpsilonDrives[fastState.outputSignalId] = nextOutVal;
-        scheduler.updateSignal(fastState.outputSignalId, nextSig);
-        forwardPropagateOnSignalChange(fastState.outputSignalId, nextSig);
+    if (edgesToProcess == 1) {
+      bool toggleClock = count == (fastState.divider - 1);
+      if (toggleClock) {
+        if (fastState.countLocalOnly) {
+          fastState.localCount = 0;
+        } else if (!writeI32AtAddr(fastState.countAddr, 0)) {
+          return reject("count-reset-write-failed");
+        }
+        toggleOutput();
+      } else {
+        int32_t nextCount = count + 1;
+        if (fastState.countLocalOnly) {
+          fastState.localCount = nextCount;
+        } else if (!writeI32AtAddr(fastState.countAddr, nextCount)) {
+          return reject("count-inc-write-failed");
+        }
       }
     } else {
-      int32_t nextCount = count + 1;
+      count = normalizeCount(count);
+      uint64_t divider = static_cast<uint64_t>(std::max(1, fastState.divider));
+      uint64_t totalEdges = static_cast<uint64_t>(count) + edgesToProcess;
+      uint64_t wraps = totalEdges / divider;
+      int32_t nextCount = static_cast<int32_t>(totalEdges % divider);
+
       if (fastState.countLocalOnly) {
         fastState.localCount = nextCount;
       } else if (!writeI32AtAddr(fastState.countAddr, nextCount)) {
-        return reject("count-inc-write-failed");
+        return reject("count-write-failed");
       }
+
+      if (wraps & 0x1)
+        toggleOutput();
     }
+    fastState.lastEdgeTimeFs = nowFsSigned;
+  } else if (delayBatchGuardFailed) {
+    fastState.lastEdgeTimeFs = nowFsSigned;
   }
+
+  if (haveClockSample) {
+    fastState.clockSampleValid = true;
+    fastState.lastClockSample = clockSample;
+  } else if (delayBatchGuardFailed) {
+    fastState.clockSampleValid = false;
+  }
+
   fastState.primed = true;
 
   state.waiting = true;
   state.sequencerGetRetryCallOp = callOp.getOperation();
-  if (fastState.clockSignalId != 0) {
-    memoryEventWaiters.erase(procId);
-    SensitivityList waitList;
-    waitList.addEdge(fastState.clockSignalId, EdgeType::AnyEdge);
-    scheduler.suspendProcessForEvents(procId, waitList);
-  } else {
-    bool clockSample = false;
-    if (!readI1AtAddr(clockAddr, clockSample))
-      return reject("clock-sample-read-failed");
-    MemoryEventWaiter waiter;
-    waiter.address = clockAddr;
-    waiter.lastValue = clockSample ? 1 : 0;
-    waiter.valueSize = 1;
-    waiter.waitForRisingEdge = false;
-    memoryEventWaiters[procId] = waiter;
+
+  bool scheduledDelayBatch = false;
+  if (enableDelayBatching && fastState.countLocalOnly &&
+      fastState.clockSampleValid &&
+      fastState.stableEdgeIntervals >= minStableDelayBatchEdges &&
+      fastState.edgeIntervalFs > 0 && fastState.divider > 1 &&
+      fastState.localCount >= 0 && fastState.localCount < fastState.divider) {
+    uint64_t edgesToToggle =
+        static_cast<uint64_t>(fastState.divider - fastState.localCount);
+    uint64_t batchEdges = std::min(edgesToToggle, maxDelayBatchEdges);
+    uint64_t edgeInterval = static_cast<uint64_t>(fastState.edgeIntervalFs);
+    if (batchEdges > 1 && edgeInterval > 0 &&
+        batchEdges <= UINT64_MAX / edgeInterval) {
+      uint64_t delayFs = batchEdges * edgeInterval;
+      SimTime targetTime = scheduler.getCurrentTime().advanceTime(delayFs);
+      fastState.useDelayBatching = true;
+      fastState.delayBatchEdges = batchEdges;
+      fastState.pendingDelayedEdges = batchEdges;
+      memoryEventWaiters.erase(procId);
+      scheduler.suspendProcessForEvents(procId, SensitivityList());
+      scheduler.getEventScheduler().schedule(
+          targetTime, SchedulingRegion::Active,
+          Event([this, procId]() { resumeProcess(procId); }));
+      scheduledDelayBatch = true;
+      if (traceBaudFastPath) {
+        static unsigned batchScheduleCount = 0;
+        if (batchScheduleCount < 50) {
+          ++batchScheduleCount;
+          llvm::errs() << "[BAUD-FP] batch-schedule proc=" << procId
+                       << " callee=" << calleeName
+                       << " batchEdges=" << batchEdges
+                       << " edgeFs=" << edgeInterval
+                       << " stable=" << fastState.stableEdgeIntervals
+                       << " count=" << fastState.localCount
+                       << " divider=" << fastState.divider << "\n";
+        }
+      }
+    }
+  }
+
+  if (!scheduledDelayBatch) {
+    fastState.useDelayBatching = false;
+    fastState.delayBatchEdges = 0;
+    if (fastState.clockSignalId != 0) {
+      memoryEventWaiters.erase(procId);
+      SensitivityList waitList;
+      waitList.addEdge(fastState.clockSignalId, EdgeType::AnyEdge);
+      scheduler.suspendProcessForEvents(procId, waitList);
+    } else {
+      bool waitClockSample = false;
+      if (!readI1AtAddr(clockAddr, waitClockSample))
+        return reject("clock-sample-read-failed");
+      MemoryEventWaiter waiter;
+      waiter.address = clockAddr;
+      waiter.lastValue = waitClockSample ? 1 : 0;
+      waiter.valueSize = 1;
+      waiter.waitForRisingEdge = false;
+      memoryEventWaiters[procId] = waiter;
+    }
   }
   if (traceBaudFastPath) {
     static unsigned hitCount = 0;

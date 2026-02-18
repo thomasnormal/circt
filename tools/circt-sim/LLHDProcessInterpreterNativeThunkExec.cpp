@@ -10,6 +10,7 @@
 #include "JITCompileManager.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
@@ -90,6 +91,95 @@ static Region *resolveNativeThunkProcessRegion(ProcessExecutionState &state) {
           state)));
 }
 
+bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
+    ProcessId procId, ProcessExecutionState &state) {
+  auto toFastPathMask = [](DirectProcessFastPathKind kind) -> uint8_t {
+    return static_cast<uint8_t>(kind);
+  };
+
+  // Restrict this direct path to top-level llhd.process bodies. Fork children,
+  // combinationals, and seq.initials keep existing dispatch.
+  if (state.parentProcessId != InvalidProcessId || state.getCombinationalOp() ||
+      state.getInitialOp())
+    return false;
+
+  uint8_t kindMask = 0;
+  auto kindIt = directProcessFastPathKinds.find(procId);
+  if (kindIt == directProcessFastPathKinds.end()) {
+    PeriodicToggleClockThunkSpec periodicSpec;
+    if (tryBuildPeriodicToggleClockThunkSpec(state, periodicSpec)) {
+      periodicToggleClockThunkSpecs[procId] = std::move(periodicSpec);
+      kindMask |= toFastPathMask(DirectProcessFastPathKind::PeriodicToggleClock);
+    } else {
+      periodicToggleClockThunkSpecs.erase(procId);
+    }
+
+    if (isResumableWaitSelfLoopNativeThunkCandidate(procId, state, nullptr))
+      kindMask |=
+          toFastPathMask(DirectProcessFastPathKind::ResumableWaitSelfLoop);
+
+    directProcessFastPathKinds[procId] = kindMask;
+  } else {
+    kindMask = kindIt->second;
+  }
+
+  if (kindMask == 0)
+    return false;
+
+  auto clearKind = [&](DirectProcessFastPathKind kind) {
+    kindMask &= ~toFastPathMask(kind);
+    directProcessFastPathKinds[procId] = kindMask;
+    if ((kind == DirectProcessFastPathKind::PeriodicToggleClock) &&
+        ((kindMask &
+          toFastPathMask(DirectProcessFastPathKind::PeriodicToggleClock)) == 0))
+      periodicToggleClockThunkSpecs.erase(procId);
+  };
+
+  auto tryKind = [&](DirectProcessFastPathKind kind,
+                     auto &&executor) -> bool {
+    JITDeoptStateSnapshot deoptSnapshot;
+    bool hasDeoptSnapshot = snapshotJITDeoptState(procId, deoptSnapshot);
+
+    ProcessThunkExecutionState thunkState;
+    thunkState.resumeToken = state.jitThunkResumeToken;
+
+    if (!executor(procId, state, thunkState)) {
+      clearKind(kind);
+      return false;
+    }
+
+    if (!thunkState.deoptRequested) {
+      state.jitThunkResumeToken = thunkState.resumeToken;
+      return true;
+    }
+
+    if (hasDeoptSnapshot)
+      (void)restoreJITDeoptState(procId, deoptSnapshot);
+    clearKind(kind);
+    return false;
+  };
+
+  if (kindMask & toFastPathMask(DirectProcessFastPathKind::PeriodicToggleClock))
+    if (tryKind(DirectProcessFastPathKind::PeriodicToggleClock,
+                [this](ProcessId id, ProcessExecutionState &s,
+                       ProcessThunkExecutionState &thunkState) {
+                  return executePeriodicToggleClockNativeThunk(id, s,
+                                                               thunkState);
+                }))
+      return true;
+
+  if (kindMask & toFastPathMask(DirectProcessFastPathKind::ResumableWaitSelfLoop))
+    if (tryKind(DirectProcessFastPathKind::ResumableWaitSelfLoop,
+                [this](ProcessId id, ProcessExecutionState &s,
+                       ProcessThunkExecutionState &thunkState) {
+                  return executeResumableWaitSelfLoopNativeThunk(id, s,
+                                                                 thunkState);
+                }))
+      return true;
+
+  return false;
+}
+
 void LLHDProcessInterpreter::executeTrivialNativeThunk(
     ProcessId procId, ProcessThunkExecutionState &thunkState) {
   if (forceJitThunkDeoptRequests) {
@@ -100,6 +190,62 @@ void LLHDProcessInterpreter::executeTrivialNativeThunk(
   auto it = processStates.find(procId);
   if (it == processStates.end() || it->second.halted)
     return;
+
+  auto guardIt = jitProcessThunkIndirectSiteGuards.find(procId);
+  if (guardIt != jitProcessThunkIndirectSiteGuards.end()) {
+    static bool traceThunkGuards = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_JIT_THUNK_GUARDS");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+    auto requestGuardDeopt = [&](std::string detail) {
+      if (traceThunkGuards) {
+        llvm::errs() << "[JIT-THUNK-GUARD] proc=" << procId;
+        if (auto *proc = scheduler.getProcess(procId))
+          llvm::errs() << " name=" << proc->getName();
+        llvm::errs() << " shape=indirect_target_set_guard reason=" << detail
+                     << "\n";
+      }
+      thunkState.deoptRequested = true;
+      thunkState.deoptDetail = std::move(detail);
+      if (jitCompileManager)
+        jitCompileManager->invalidateProcessThunk(procId);
+      jitProcessThunkIndirectSiteGuards.erase(procId);
+    };
+    for (const auto &guard : guardIt->second) {
+      auto callIndirect =
+          dyn_cast_or_null<mlir::func::CallIndirectOp>(guard.siteOp);
+      if (!callIndirect) {
+        requestGuardDeopt("call_indirect_target_guard:invalid_site");
+        return;
+      }
+      auto siteProfile = lookupJitRuntimeIndirectSiteProfile(callIndirect);
+      if (!siteProfile) {
+        requestGuardDeopt("call_indirect_target_guard:profile_missing");
+        return;
+      }
+      if (siteProfile->unresolvedCalls != guard.expectedUnresolvedCalls) {
+        requestGuardDeopt(
+            (Twine("call_indirect_target_guard:unresolved_calls_changed:site=") +
+             Twine(siteProfile->siteId) + ":expected=" +
+             Twine(guard.expectedUnresolvedCalls) + ":actual=" +
+             Twine(siteProfile->unresolvedCalls))
+                .str());
+        return;
+      }
+      if (siteProfile->targetSetVersion != guard.expectedTargetSetVersion ||
+          siteProfile->targetSetHash != guard.expectedTargetSetHash) {
+        requestGuardDeopt(
+            (Twine("call_indirect_target_guard:target_set_changed:site=") +
+             Twine(siteProfile->siteId) + ":expected_version=" +
+             Twine(guard.expectedTargetSetVersion) + ":actual_version=" +
+             Twine(siteProfile->targetSetVersion) + ":expected_hash=" +
+             Twine(guard.expectedTargetSetHash) + ":actual_hash=" +
+             Twine(siteProfile->targetSetHash))
+                .str());
+        return;
+      }
+    }
+  }
 
   if (executeResumableWaitThenHaltNativeThunk(procId, it->second, thunkState))
     return;
@@ -173,7 +319,7 @@ void LLHDProcessInterpreter::executeTrivialNativeThunk(
 bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     ProcessId procId, ProcessExecutionState &state,
     ProcessThunkExecutionState &thunkState) {
-  if (!isSingleBlockTerminatingNativeThunkCandidate(state))
+  if (!isSingleBlockTerminatingNativeThunkCandidate(procId, state, nullptr))
     return false;
 
   Region *bodyRegion = resolveNativeThunkProcessRegion(state);
@@ -246,6 +392,30 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
       return false;
     return isa<llhd::HaltOp>(*s.currentOp);
   };
+  auto isResumingAfterSemaphoreGet = [&](const ProcessExecutionState &s) {
+    if (!s.destBlock || s.destBlock != &body || !s.resumeAtCurrentOp)
+      return false;
+    if (s.pendingSemaphoreGetId == 0)
+      return false;
+    if (!s.currentBlock || s.currentBlock != s.destBlock ||
+        s.currentOp == s.currentBlock->end())
+      return false;
+    return true;
+  };
+  auto normalizeDestResumeState = [&](ProcessExecutionState &s) {
+    s.currentBlock = s.destBlock;
+    for (auto [arg, val] :
+         llvm::zip(s.currentBlock->getArguments(), s.destOperands)) {
+      s.valueMap[arg] = val;
+      if (isa<llhd::RefType>(arg.getType()))
+        s.refBlockArgSources.erase(arg);
+    }
+    s.waiting = false;
+    s.destBlock = nullptr;
+    s.destOperands.clear();
+    s.resumeAtCurrentOp = false;
+    s.pendingSemaphoreGetId = 0;
+  };
   auto isQueuedForImpPhaseOrdering = [&](ProcessId targetProcId) {
     for (const auto &entry : impWaitingProcesses) {
       for (const ImpWaiter &waiter : entry.second) {
@@ -295,22 +465,12 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     return true;
   }
   if (state.destBlock || state.resumeAtCurrentOp) {
-    if (!isDeferredHaltState(state)) {
+    if (!isDeferredHaltState(state) && !isResumingAfterSemaphoreGet(state)) {
       requestDeopt("unexpected_resume_state", /*restoreSnapshot=*/true);
       return true;
     }
-    resumingDeferredHalt = true;
-    state.currentBlock = state.destBlock;
-    for (auto [arg, val] :
-         llvm::zip(state.currentBlock->getArguments(), state.destOperands)) {
-      state.valueMap[arg] = val;
-      if (isa<llhd::RefType>(arg.getType()))
-        state.refBlockArgSources.erase(arg);
-    }
-    state.waiting = false;
-    state.destBlock = nullptr;
-    state.destOperands.clear();
-    state.resumeAtCurrentOp = false;
+    resumingDeferredHalt = isDeferredHaltState(state);
+    normalizeDestResumeState(state);
   }
   if (state.waiting) {
     if (state.waitConditionRestartBlock && !state.halted) {
@@ -322,17 +482,9 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     }
     if (isDeferredHaltState(state)) {
       resumingDeferredHalt = true;
-      state.currentBlock = state.destBlock;
-      for (auto [arg, val] :
-           llvm::zip(state.currentBlock->getArguments(), state.destOperands)) {
-        state.valueMap[arg] = val;
-        if (isa<llhd::RefType>(arg.getType()))
-          state.refBlockArgSources.erase(arg);
-      }
-      state.waiting = false;
-      state.destBlock = nullptr;
-      state.destOperands.clear();
-      state.resumeAtCurrentOp = false;
+      normalizeDestResumeState(state);
+    } else if (isResumingAfterSemaphoreGet(state)) {
+      normalizeDestResumeState(state);
     } else if (!state.callStack.empty()) {
       // Some suspension paths can schedule the process with waiting still set.
       // Normalize this to the active execution path before call-stack resume.
@@ -503,17 +655,25 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
       post->second.waiting && !post->second.halted &&
       isAwaitingProcessCompletion(procId);
   bool waitingOnForkJoinChildren = isWaitingOnForkJoinChildren(post->second);
+  bool waitingOnSemaphoreGet =
+      post->second.waiting && !post->second.halted &&
+      post->second.pendingSemaphoreGetId != 0 && post->second.destBlock &&
+      post->second.destBlock == &body && post->second.resumeAtCurrentOp &&
+      post->second.currentBlock == post->second.destBlock &&
+      post->second.currentOp != post->second.currentBlock->end();
   if (!post->second.halted && !waitingOnWaitCondition &&
       !waitingOnDeferredHalt && !waitingOnSequencerRetry &&
       !waitingOnSavedCallStack && !waitingOnImpOrderQueue &&
-      !waitingOnProcessAwaitQueue && !waitingOnForkJoinChildren) {
+      !waitingOnProcessAwaitQueue && !waitingOnForkJoinChildren &&
+      !waitingOnSemaphoreGet) {
     requestDeopt("post_exec_not_halted_or_waiting", /*restoreSnapshot=*/false);
     return true;
   }
   if (post->second.waiting && !waitingOnWaitCondition &&
       !waitingOnDeferredHalt && !waitingOnSequencerRetry &&
       !waitingOnSavedCallStack && !waitingOnImpOrderQueue &&
-      !waitingOnProcessAwaitQueue && !waitingOnForkJoinChildren) {
+      !waitingOnProcessAwaitQueue && !waitingOnForkJoinChildren &&
+      !waitingOnSemaphoreGet) {
     requestDeopt("post_exec_waiting_without_wait_condition",
                  /*restoreSnapshot=*/false);
     return true;
@@ -528,7 +688,7 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
 bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
     ProcessId procId, ProcessExecutionState &state,
     ProcessThunkExecutionState &thunkState) {
-  if (!isMultiBlockTerminatingNativeThunkCandidate(state))
+  if (!isMultiBlockTerminatingNativeThunkCandidate(procId, state, nullptr))
     return false;
 
   static bool traceThunkGuards = []() {
@@ -644,6 +804,30 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
     }
     return false;
   };
+  auto isResumingAfterSemaphoreGet = [&](const ProcessExecutionState &s) {
+    if (!s.destBlock || !s.resumeAtCurrentOp || s.pendingSemaphoreGetId == 0)
+      return false;
+    if (s.destBlock->getParent() != bodyRegion)
+      return false;
+    if (!s.currentBlock || s.currentBlock != s.destBlock ||
+        s.currentOp == s.currentBlock->end())
+      return false;
+    return true;
+  };
+  auto normalizeDestResumeState = [&](ProcessExecutionState &s) {
+    s.currentBlock = s.destBlock;
+    for (auto [arg, val] :
+         llvm::zip(s.currentBlock->getArguments(), s.destOperands)) {
+      s.valueMap[arg] = val;
+      if (isa<llhd::RefType>(arg.getType()))
+        s.refBlockArgSources.erase(arg);
+    }
+    s.waiting = false;
+    s.destBlock = nullptr;
+    s.destOperands.clear();
+    s.resumeAtCurrentOp = false;
+    s.pendingSemaphoreGetId = 0;
+  };
 
   // This thunk is non-resumable and only valid on token 0.
   if (thunkState.resumeToken != state.jitThunkResumeToken ||
@@ -652,8 +836,11 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
     return true;
   }
   if (state.destBlock || state.resumeAtCurrentOp) {
-    requestDeopt("unexpected_resume_state", /*restoreSnapshot=*/true);
-    return true;
+    if (!isResumingAfterSemaphoreGet(state)) {
+      requestDeopt("unexpected_resume_state", /*restoreSnapshot=*/true);
+      return true;
+    }
+    normalizeDestResumeState(state);
   }
   if (state.waiting) {
     if (isAwaitingProcessCompletion(procId)) {
@@ -729,13 +916,22 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
   bool waitingOnProcessAwaitQueue =
       post->second.waiting && !post->second.halted &&
       isAwaitingProcessCompletion(procId);
+  bool waitingOnSemaphoreGet =
+      post->second.waiting && !post->second.halted &&
+      post->second.pendingSemaphoreGetId != 0 && post->second.destBlock &&
+      post->second.resumeAtCurrentOp &&
+      post->second.destBlock->getParent() == bodyRegion &&
+      post->second.currentBlock == post->second.destBlock &&
+      post->second.currentOp != post->second.currentBlock->end();
   if (!post->second.halted && !waitingOnForkJoinChildren &&
-      !waitingOnObjectionWaitFor && !waitingOnProcessAwaitQueue) {
+      !waitingOnObjectionWaitFor && !waitingOnProcessAwaitQueue &&
+      !waitingOnSemaphoreGet) {
     requestDeopt("post_exec_not_halted", /*restoreSnapshot=*/false);
     return true;
   }
   if (post->second.waiting && !waitingOnForkJoinChildren &&
-      !waitingOnObjectionWaitFor && !waitingOnProcessAwaitQueue) {
+      !waitingOnObjectionWaitFor && !waitingOnProcessAwaitQueue &&
+      !waitingOnSemaphoreGet) {
     requestDeopt("post_exec_waiting_without_fork_wait",
                  /*restoreSnapshot=*/false);
     return true;
@@ -750,7 +946,7 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
 bool LLHDProcessInterpreter::executeResumableWaitSelfLoopNativeThunk(
     ProcessId procId, ProcessExecutionState &state,
     ProcessThunkExecutionState &thunkState) {
-  if (!isResumableWaitSelfLoopNativeThunkCandidate(state))
+  if (!isResumableWaitSelfLoopNativeThunkCandidate(procId, state, nullptr))
     return false;
 
   auto processOp = state.getProcessOp();
@@ -882,7 +1078,7 @@ bool LLHDProcessInterpreter::executeResumableWaitSelfLoopNativeThunk(
 bool LLHDProcessInterpreter::executeResumableMultiblockWaitNativeThunk(
     ProcessId procId, ProcessExecutionState &state,
     ProcessThunkExecutionState &thunkState) {
-  if (!isResumableMultiblockWaitNativeThunkCandidate(state))
+  if (!isResumableMultiblockWaitNativeThunkCandidate(procId, state, nullptr))
     return false;
 
   static bool traceThunkGuards = []() {
@@ -1072,7 +1268,7 @@ bool LLHDProcessInterpreter::executeResumableMultiblockWaitNativeThunk(
 bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
     ProcessId procId, ProcessExecutionState &state,
     ProcessThunkExecutionState &thunkState) {
-  if (!isResumableWaitThenHaltNativeThunkCandidate(state))
+  if (!isResumableWaitThenHaltNativeThunkCandidate(procId, state, nullptr))
     return false;
 
   auto processOp = state.getProcessOp();
@@ -1220,7 +1416,7 @@ bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
 bool LLHDProcessInterpreter::executeCombinationalNativeThunk(
     ProcessId procId, ProcessExecutionState &state,
     ProcessThunkExecutionState &thunkState) {
-  if (!isCombinationalNativeThunkCandidate(state))
+  if (!isCombinationalNativeThunkCandidate(procId, state, nullptr))
     return false;
 
   auto combOp = state.getCombinationalOp();
