@@ -170,6 +170,7 @@ isManuallyInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp) {
       calleeName == "m_process_guard" ||
       calleeName == "uvm_pkg::run_test" ||
       calleeName == "uvm_pkg::uvm_sequence_base::create_item" ||
+      calleeName == "uvm_pkg::uvm_sequence_item::set_item_context" ||
       calleeName == "uvm_pkg::uvm_create_random_seed" ||
       calleeName == "uvm_pkg::uvm_get_report_object" ||
       calleeName == "uvm_pkg::uvm_is_match" ||
