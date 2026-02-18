@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1478 - February 18, 2026
+
+### MooreToCore: fix inline `array.size()==N` and `inside {array}` randomize constraints
+
+1. **Fixed missing inline constraint lowering in `RandomizeOpConversion`**:
+   - Added extraction and lowering for `moore.constraint.expr` patterns:
+     - `moore.eq (moore.array.size %arr), %const`
+     - `moore.array.contains %arr, %prop`
+   - These constraints now actively update constrained class properties during
+     constraint-aware randomization instead of being dropped.
+2. **Added dynamic-array/queue size fixup path**:
+   - Uses `__moore_dyn_array_new` and patches `.len` to the requested element
+     count for inline `arr.size()==N`.
+3. **Added contains fixup path for inline set-membership by array**:
+   - Chooses an element from the source open array/queue and assigns it to the
+     constrained scalar property.
+   - Supports arrays captured from outside the randomized object.
+4. **Constraint priority integration**:
+   - Inline array-size/contains constraints now participate in hard-constraint
+     property blocking so soft constraints do not override them.
+5. **Regression test added**:
+   - `test/Conversion/MooreToCore/inline-constraints.mlir` now includes
+     `@test_inline_array_constraint_exprs` validating both patterns.
+6. **Validation**:
+   - `ninja -C build-test circt-opt`
+   - `build-test/bin/circt-opt test/Conversion/MooreToCore/inline-constraints.mlir --convert-moore-to-core --verify-diagnostics`
+   - bounded I3C AVIP runs (`AVIPS=i3c`, `SEEDS=1`, `CIRCT_SIM_MODE=compile`,
+     `COMPILE_TIMEOUT=180`, `SIM_TIMEOUT=180`) now drive the constrained
+     address path but still report a scoreboard writeData check-phase error,
+     indicating a remaining downstream issue outside this specific lowering gap.
+
 ## Iteration 1477 - February 18, 2026
 
 ### circt-sim JIT: close single-block `process_phase` IMP-wait guard gap
