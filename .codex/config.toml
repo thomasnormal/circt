@@ -1,2 +1,0 @@
-# .codex/config.toml (repo-local)
-notify = ["python3", ".codex/auto_continue.py"]
