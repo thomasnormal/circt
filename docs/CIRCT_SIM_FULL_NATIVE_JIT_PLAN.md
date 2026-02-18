@@ -1132,6 +1132,56 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - add guarded runtime indirect-target-set profiling and specialization
         for hot unresolved `call_indirect` sites (target-set hash/version
         guards + strict deopt fallback) to close remaining strict tails.
+41. Guarded runtime `call_indirect` target-set profiling substrate
+    (February 18, 2026):
+    - runtime profiling closure:
+      - added per-site runtime target-set profiling for `func.call_indirect`
+        in `LLHDProcessInterpreter`:
+        - stable `site_id`
+        - `owner` + `location`
+        - `calls_total` + `unresolved_calls`
+        - per-target call counts
+        - `target_set_version` (increments on first-seen target per site)
+        - `target_set_hash` (stable hash of sorted target names)
+      - profiling is guarded and only enabled when:
+        - `--mode=compile`, and
+        - JIT report emission is active (`--jit-report` or
+          `CIRCT_SIM_JIT_REPORT_PATH`).
+    - telemetry/report closure:
+      - extended JIT JSON schema in `circt-sim` with:
+        - `jit_call_indirect_sites_total`
+        - `jit_call_indirect_calls_total`
+        - `jit_call_indirect_unresolved_total`
+        - `jit_call_indirect_sites[]` with per-site target-set details.
+    - regression coverage:
+      - added
+        `test/Tools/circt-sim/jit-report-call-indirect-target-profile.mlir`
+        to lock schema/behavior for mixed resolved+unresolved sites.
+    - validation:
+      - builds:
+        - `ninja -C build circt-sim`: PASS
+        - `ninja -C build-test circt-sim`: PASS
+      - focused lit regressions: PASS (5 tests)
+        - `jit-report-call-indirect-target-profile.mlir`
+        - static/vtable-slot `call_indirect` local-helper strict/parallel
+          coverage set.
+      - bounded integration smokes: PASS
+        - AVIP compile lane (`jtag`, seed 1):
+          `/tmp/avip-circt-sim-indirect-profile-20260218-092325/matrix.tsv`
+          (`compile_status=OK` `27s`, `sim_status=OK` `41s`).
+        - `sv-tests`: `11.10.1--string_concat` PASS
+          (`/tmp/sv-tests-circt-sim-indirect-profile-20260218-092447.txt`).
+        - `verilator-verification` BMC smoke:
+          `assert_changed` PASS
+          (`/tmp/verilator-bmc-indirect-profile-20260218-092447.tsv`).
+        - `yosys/tests/sva` BMC smoke: `basic00` PASS
+          (`/tmp/yosys-sva-bmc-indirect-profile-20260218-092447.tsv`).
+        - OpenTitan sim smoke: `prim_count` PASS
+          (`/tmp/opentitan-circt-sim-indirect-profile-20260218-092447.log`).
+    - next closure target:
+      - consume hot unresolved-site target-set profiles to install guarded
+        native specializations (site hash/version guards) with strict
+        `guard_failed` deopt fallback on guard mismatch.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
