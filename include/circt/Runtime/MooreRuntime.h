@@ -5886,6 +5886,34 @@ void __moore_uvm_set_root_inst(void *inst);
 /// @return Pointer to the uvm_root instance (may be partially constructed)
 void *__moore_uvm_get_root_inst(void);
 
+/// Scan formatted data from a string (multi-specifier $sscanf).
+/// Parses input string according to format, writing each parsed value
+/// into results[]. Returns the number of items successfully parsed.
+///
+/// @param input_data Pointer to the input string data
+/// @param input_len Length of the input string
+/// @param format Null-terminated format string (e.g., "%d %s %h")
+/// @param results Array to receive parsed values (int64_t per item)
+/// @param result_widths Array of bit-widths for each result (0 = string result)
+/// @param max_results Maximum number of results to parse
+/// @return Number of items successfully parsed
+int32_t __moore_sscanf(const char *input_data, int64_t input_len,
+                       const char *format, int64_t *results,
+                       int32_t *result_widths, int32_t max_results);
+
+/// Scan formatted data from a file ($fscanf).
+/// Reads from the file identified by fd (MCD), parses according to format.
+/// Same interface as __moore_sscanf but reads from a file.
+///
+/// @param fd File descriptor (MCD) to read from
+/// @param format Null-terminated format string
+/// @param results Array to receive parsed values
+/// @param result_widths Array of bit-widths for each result (0 = string result)
+/// @param max_results Maximum number of results to parse
+/// @return Number of items successfully parsed, or -1 on EOF
+int32_t __moore_fscanf(int32_t fd, const char *format, int64_t *results,
+                       int32_t *result_widths, int32_t max_results);
+
 #ifdef __cplusplus
 }
 #endif

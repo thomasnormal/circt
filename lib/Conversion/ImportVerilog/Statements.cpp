@@ -2822,14 +2822,99 @@ struct StmtVisitor {
       return true;
     }
 
-    // $fscanf and $sscanf - stub implementation
+    // $fscanf(fd, format, args...) - used as a task (return value discarded)
     // IEEE 1800-2017 Section 21.3.3 "File input functions"
-    // When used as a task (return value discarded), we can just ignore
-    // the operation since the output variables won't be used anyway.
-    if (subroutine.name == "$fscanf" || subroutine.name == "$sscanf") {
-      // For now, just ignore. The output variables aren't written to.
-      mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
-                            << "` (stub: no I/O performed)";
+    if (subroutine.name == "$fscanf" && args.size() >= 2) {
+      Value fd = context.convertRvalueExpression(*args[0]);
+      if (!fd)
+        return failure();
+      auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+      if (fd.getType() != i32Ty)
+        fd = moore::ConversionOp::create(builder, loc, i32Ty, fd);
+
+      const auto *fmtArg = args[1];
+      std::string formatStr;
+      if (const auto *strLit = fmtArg->as_if<slang::ast::StringLiteral>()) {
+        formatStr = std::string(strLit->getValue());
+      } else {
+        auto cv = context.evaluateConstant(*fmtArg);
+        if (cv && cv.isString())
+          formatStr = cv.str();
+        else {
+          mlir::emitError(loc) << "$fscanf format must be a string literal";
+          return failure();
+        }
+      }
+
+      SmallVector<Value> outputRefs;
+      for (size_t i = 2; i < args.size(); ++i) {
+        const auto *arg = args[i];
+        if (const auto *assignExpr =
+                arg->as_if<slang::ast::AssignmentExpression>()) {
+          Value ref = context.convertLvalueExpression(assignExpr->left());
+          if (!ref)
+            return failure();
+          outputRefs.push_back(ref);
+        } else {
+          Value ref = context.convertLvalueExpression(*arg);
+          if (!ref)
+            return failure();
+          outputRefs.push_back(ref);
+        }
+      }
+
+      // Create the fscanf op and discard the result
+      moore::FScanfBIOp::create(builder, loc, fd,
+                                builder.getStringAttr(formatStr), outputRefs);
+      return true;
+    }
+
+    // $sscanf(str, format, args...) - used as a task (return value discarded)
+    // IEEE 1800-2017 Section 21.3.4 "Reading data from a string"
+    if (subroutine.name == "$sscanf" && args.size() >= 2) {
+      Value inputStr = context.convertRvalueExpression(*args[0]);
+      if (!inputStr)
+        return failure();
+      if (!isa<moore::StringType>(inputStr.getType())) {
+        inputStr = moore::ConversionOp::create(
+            builder, loc, moore::StringType::get(context.getContext()),
+            inputStr);
+      }
+
+      const auto *fmtArg = args[1];
+      std::string formatStr;
+      if (const auto *strLit = fmtArg->as_if<slang::ast::StringLiteral>()) {
+        formatStr = std::string(strLit->getValue());
+      } else {
+        auto cv = context.evaluateConstant(*fmtArg);
+        if (cv && cv.isString())
+          formatStr = cv.str();
+        else {
+          mlir::emitError(loc) << "$sscanf format must be a string literal";
+          return failure();
+        }
+      }
+
+      SmallVector<Value> outputRefs;
+      for (size_t i = 2; i < args.size(); ++i) {
+        const auto *arg = args[i];
+        if (const auto *assignExpr =
+                arg->as_if<slang::ast::AssignmentExpression>()) {
+          Value ref = context.convertLvalueExpression(assignExpr->left());
+          if (!ref)
+            return failure();
+          outputRefs.push_back(ref);
+        } else {
+          Value ref = context.convertLvalueExpression(*arg);
+          if (!ref)
+            return failure();
+          outputRefs.push_back(ref);
+        }
+      }
+
+      // Create the sscanf op and discard the result
+      moore::SScanfBIOp::create(builder, loc, inputStr,
+                                builder.getStringAttr(formatStr), outputRefs);
       return true;
     }
 

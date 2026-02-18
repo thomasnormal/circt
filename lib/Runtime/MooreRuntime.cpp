@@ -18274,3 +18274,201 @@ extern "C" void __moore_uvm_set_root_inst(void *inst) {
 extern "C" void *__moore_uvm_get_root_inst(void) {
   return getUvmRootState().rootInst.load();
 }
+
+//===----------------------------------------------------------------------===//
+// $sscanf / $fscanf Runtime Implementation
+//===----------------------------------------------------------------------===//
+
+/// Internal helper: parse a single value from input according to a format
+/// specifier character. Advances `pos` past consumed characters.
+/// Returns true if a value was successfully parsed, false otherwise.
+static bool parseScanfSpecifier(const char *input, int64_t inputLen,
+                                int64_t &pos, char spec, int64_t &result,
+                                int32_t /*width*/) {
+  // Skip leading whitespace (for most specifiers)
+  if (spec != 'c') {
+    while (pos < inputLen && std::isspace(static_cast<unsigned char>(input[pos])))
+      ++pos;
+  }
+
+  if (pos >= inputLen)
+    return false;
+
+  switch (spec) {
+  case 'd': {
+    // Decimal integer
+    char *end = nullptr;
+    long val = std::strtol(input + pos, &end, 10);
+    if (end == input + pos)
+      return false;
+    result = static_cast<int64_t>(val);
+    pos = end - input;
+    return true;
+  }
+  case 'h':
+  case 'x': {
+    // Hexadecimal integer
+    char *end = nullptr;
+    // Skip optional 0x prefix
+    int64_t start = pos;
+    if (pos + 1 < inputLen && input[pos] == '0' &&
+        (input[pos + 1] == 'x' || input[pos + 1] == 'X'))
+      start = pos + 2;
+    unsigned long val = std::strtoul(input + start, &end, 16);
+    if (end == input + start)
+      return false;
+    result = static_cast<int64_t>(val);
+    pos = end - input;
+    return true;
+  }
+  case 'o': {
+    // Octal integer
+    char *end = nullptr;
+    long val = std::strtol(input + pos, &end, 8);
+    if (end == input + pos)
+      return false;
+    result = static_cast<int64_t>(val);
+    pos = end - input;
+    return true;
+  }
+  case 'b': {
+    // Binary integer
+    char *end = nullptr;
+    long val = std::strtol(input + pos, &end, 2);
+    if (end == input + pos)
+      return false;
+    result = static_cast<int64_t>(val);
+    pos = end - input;
+    return true;
+  }
+  case 's': {
+    // String: read whitespace-delimited token, store as packed bit string
+    // (right-justified, 8 bits per character, MSB first)
+    int64_t start = pos;
+    while (pos < inputLen &&
+           !std::isspace(static_cast<unsigned char>(input[pos])))
+      ++pos;
+    if (pos == start)
+      return false;
+    // Pack characters into result (up to 8 chars in 64 bits)
+    result = 0;
+    int64_t len = pos - start;
+    for (int64_t i = 0; i < len && i < 8; ++i) {
+      result = (result << 8) | static_cast<unsigned char>(input[start + i]);
+    }
+    return true;
+  }
+  case 'c': {
+    // Single character
+    result = static_cast<unsigned char>(input[pos]);
+    ++pos;
+    return true;
+  }
+  case 'f':
+  case 'e':
+  case 'g': {
+    // Real number - store as bitcast double
+    char *end = nullptr;
+    double val = std::strtod(input + pos, &end);
+    if (end == input + pos)
+      return false;
+    int64_t bits;
+    std::memcpy(&bits, &val, sizeof(bits));
+    result = bits;
+    pos = end - input;
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
+extern "C" int32_t __moore_sscanf(const char *input_data, int64_t input_len,
+                                   const char *format, int64_t *results,
+                                   int32_t *result_widths,
+                                   int32_t max_results) {
+  if (!input_data || input_len <= 0 || !format || !results || max_results <= 0)
+    return 0;
+
+  int64_t inputPos = 0;
+  int32_t resultIdx = 0;
+  const char *f = format;
+
+  while (*f && resultIdx < max_results) {
+    if (*f == '%') {
+      ++f;
+      if (!*f)
+        break;
+
+      // Skip width/precision modifiers (e.g., %0d, %10s)
+      while (*f && std::isdigit(static_cast<unsigned char>(*f)))
+        ++f;
+      if (!*f)
+        break;
+
+      char spec = *f;
+      ++f;
+
+      int32_t width = result_widths ? result_widths[resultIdx] : 32;
+      int64_t val = 0;
+      if (!parseScanfSpecifier(input_data, input_len, inputPos, spec, val,
+                               width))
+        break;
+      results[resultIdx] = val;
+      ++resultIdx;
+    } else if (std::isspace(static_cast<unsigned char>(*f))) {
+      // Whitespace in format matches any amount of whitespace in input
+      while (*f && std::isspace(static_cast<unsigned char>(*f)))
+        ++f;
+      while (inputPos < input_len &&
+             std::isspace(static_cast<unsigned char>(input_data[inputPos])))
+        ++inputPos;
+    } else {
+      // Literal character must match
+      if (inputPos < input_len && input_data[inputPos] == *f) {
+        ++inputPos;
+        ++f;
+      } else {
+        break; // Mismatch
+      }
+    }
+  }
+
+  return resultIdx;
+}
+
+extern "C" int32_t __moore_fscanf(int32_t fd, const char *format,
+                                   int64_t *results, int32_t *result_widths,
+                                   int32_t max_results) {
+  if (!format || !results || max_results <= 0)
+    return -1;
+
+  // Find the FILE* from the MCD
+  FILE *file = nullptr;
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      file = fileHandles[i];
+      break;
+    }
+  }
+
+  if (!file)
+    return -1; // EOF/error
+
+  // Read a line from the file
+  char buffer[4096];
+  if (!std::fgets(buffer, sizeof(buffer), file)) {
+    return -1; // EOF
+  }
+
+  // Remove trailing newline
+  size_t len = std::strlen(buffer);
+  if (len > 0 && buffer[len - 1] == '\n') {
+    buffer[len - 1] = '\0';
+    --len;
+  }
+
+  // Delegate to sscanf
+  return __moore_sscanf(buffer, static_cast<int64_t>(len), format, results,
+                        result_widths, max_results);
+}
