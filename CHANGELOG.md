@@ -1,5 +1,63 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1488 - February 18, 2026
+
+### circt-sim JIT: AXI4 compile-lane tail burn-down from 12 deopts to 0 (bounded run)
+
+1. **Native thunk policy widened for remaining AXI4 unsupported tails**
+   (`tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`):
+   - added signature-gated non-suspending `func.call` prelude admission for:
+     - `*_driver_bfm::*_phase`
+     - `tx_*_packet`
+   - widened intercepted `func.call` prelude admission for:
+     - `*::get_minimum_transactions`
+     - `*::sprint`
+   - widened class-bridge wrapper signature handling for `to_*_class_<digits>`
+     value-to-ref forms.
+   - widened LLVM-call prelude admission families:
+     - `__moore_queue_*`
+     - `__moore_dyn_array_*`
+     - `__moore_assoc_*`
+     - `__moore_string_*`
+   - widened safe prelude op admission to include:
+     - `llhd.drv`
+     - `llhd.sig`
+
+2. **Strict regression coverage added for each new closure class** (`test/Tools/circt-sim/`):
+   - `jit-process-thunk-func-call-driver-bfm-phase-halt.mlir`
+   - `jit-process-thunk-llvm-call-queue-delete-index-halt.mlir`
+   - `jit-process-thunk-scf-for-driver-bfm-phase-queue-delete-halt.mlir`
+   - `jit-process-thunk-func-call-to-class-wrapper-halt.mlir`
+   - `jit-process-thunk-func-call-get-minimum-transactions-halt.mlir`
+   - `jit-process-thunk-llvm-call-dyn-array-new-halt.mlir`
+   - `jit-process-thunk-func-call-uvm-object-sprint-halt.mlir`
+   - `jit-process-thunk-func-call-tx-write-packet-halt.mlir`
+   - `jit-process-thunk-llhd-drv-halt.mlir`
+   - `jit-process-thunk-llvm-call-assoc-delete-key-halt.mlir`
+   - `jit-process-thunk-llvm-call-string-bintoa-halt.mlir`
+   - `jit-process-thunk-llhd-sig-halt.mlir`
+
+3. **Validation**:
+   - build:
+     - `ninja -C build-test circt-sim`: PASS.
+   - targeted strict compile-mode regressions:
+     - 17 focused tests: PASS (`jit_deopts_total=0`).
+   - targeted parallel compile-mode smokes:
+     - 7 focused tests with
+       `--parallel=4 --work-stealing --auto-partition`: PASS.
+   - bounded AXI4 compile-mode progression:
+     - `/tmp/axi4-term120-after-semaphore-fromclass-scf-for.jit-report.json`
+       -> `jit_deopts_total=12`
+     - `/tmp/axi4-term120-after-driverbfm-queuedelete.jit-report.json`
+       -> `jit_deopts_total=7`
+     - `/tmp/axi4-term120-after-sprint-txpacket.wall180.jit-report.json`
+       -> `jit_deopts_total=2`
+     - `/tmp/axi4-term120-after-string-sig.wall300.jit-report.json`
+       -> `jit_deopts_total=0`
+   - bounded AXI4 parallel smoke:
+     - `/tmp/axi4-term20-parallel-after-string-sig.jit-report.json`
+       -> `jit_deopts_total=0`
+
 ## Iteration 1487 - February 18, 2026
 
 ### circt-sim JIT: shared UVM getter cache hardening + cache telemetry for I3C triage

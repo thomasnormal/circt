@@ -893,6 +893,137 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         structured prelude and then close/guard
         `first_op:func.call:from_class_*` and
         `first_op:llvm.call:__moore_semaphore_get`.
+34. AXI4 semaphore + generic class-wrapper closure wave
+    (February 18, 2026):
+    - native thunk policy closures:
+      - expanded signature-gated class-bridge wrapper name coverage with:
+        - `from_class_<digits>`
+        - `to_class_<digits>`
+      - expanded non-suspending intercepted `func.call` prelude coverage with:
+        - `uvm_pkg::uvm_is_match`
+        - `*::uvm_is_match`
+      - expanded non-suspending LLVM-call prelude coverage with semaphore
+        runtime calls:
+        - `__moore_semaphore_create`
+        - `__moore_semaphore_get`
+        - `__moore_semaphore_put`
+        - `__moore_semaphore_try_get`
+    - native thunk execution closures:
+      - single-block and multiblock terminating native thunks now preserve
+        native execution across blocking `__moore_semaphore_get` suspend/resume
+        states (using `pendingSemaphoreGetId` + `destBlock` +
+        `resumeAtCurrentOp` guards) instead of deopting on wake.
+      - interpreter resume normalization now clears
+        `pendingSemaphoreGetId` after destination-block resume.
+    - regression coverage:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-from-class-wrapper-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-llvm-call-semaphore-get-blocking-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-scf-for-uvm-is-match-halt.mlir`
+    - validation:
+      - targeted strict compile-mode regressions: PASS
+        - all three new tests above
+        - existing closure guards:
+          - `jit-process-thunk-func-call-from-write-class-wrapper-halt.mlir`
+          - `jit-process-thunk-func-call-from-read-class-wrapper-halt.mlir`
+          - `jit-process-thunk-llvm-call-queue-push-back-halt.mlir`
+          - `jit-process-thunk-llvm-call-assoc-size-halt.mlir`
+      - targeted parallel compile-mode smoke: PASS
+        - `jit-process-thunk-llvm-call-semaphore-get-blocking-halt.mlir`
+          with `--parallel=4 --work-stealing --auto-partition`
+        - `jit-process-thunk-llvm-call-queue-push-back-halt.mlir`
+          with `--parallel=4 --work-stealing --auto-partition`
+      - TERM-bounded AXI4 queue sample after closure
+        (`/tmp/axi4-term120-after-semaphore-fromclass-scf-for.jit-report.json`):
+        - `jit_deopts_total=12` (unchanged count, shifted tail classes)
+        - removed:
+          - `first_op:func.call:from_class_6985`
+          - `first_op:llvm.call:__moore_semaphore_get`
+        - remaining queue:
+          - `first_op:scf.for` (2)
+          - `first_op:func.call:axi4_slave_driver_bfm::axi4_write_address_phase` (2)
+          - `first_op:func.call:axi4_slave_driver_bfm::axi4_write_data_phase` (2)
+          - `first_op:func.call:axi4_slave_driver_bfm::axi4_read_address_phase` (2)
+          - `first_op:llvm.call:__moore_queue_delete_index` (4)
+    - next closure target:
+      - close `first_op:scf.for` by widening nested structured-prelude
+        non-suspending call coverage in the affected loops.
+      - close direct BFM phase-call and queue-delete-index tails through
+        signature-gated non-suspending prelude admission plus strict regressions.
+35. AXI4 BFM-phase + queue family closure wave
+    (February 18, 2026):
+    - native thunk policy closures:
+      - added signature-gated non-suspending `func.call` prelude admission for
+        `*_driver_bfm::*_phase` methods (`this` pointer + handle/ref shape).
+      - widened non-suspending LLVM-call prelude admission to full
+        `__moore_queue_*` helper family (including delete-index paths).
+    - regression coverage:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-driver-bfm-phase-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-llvm-call-queue-delete-index-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-scf-for-driver-bfm-phase-queue-delete-halt.mlir`
+    - validation:
+      - targeted strict regressions: PASS (new tests + prior closure guards).
+      - targeted parallel smokes: PASS (`--parallel=4 --work-stealing --auto-partition`).
+      - TERM-bounded AXI4 queue sample
+        (`/tmp/axi4-term120-after-driverbfm-queuedelete.jit-report.json`):
+        - `jit_deopts_total=7` (from 12),
+        - removed BFM phase and `__moore_queue_delete_index` first-op tails.
+36. AXI4 wrapper/result-helper closure wave
+    (February 18, 2026):
+    - native thunk policy closures:
+      - widened `to_*_class_<digits>` wrapper signature acceptance to cover
+        value-to-ref bridge form used by generated wrappers.
+      - added non-suspending `func.call` prelude admission:
+        - `*::get_minimum_transactions`
+      - added non-suspending LLVM-call prelude admission:
+        - `__moore_dyn_array_*`
+    - regression coverage:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-to-class-wrapper-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-get-minimum-transactions-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-llvm-call-dyn-array-new-halt.mlir`
+    - validation:
+      - targeted strict regressions: PASS.
+      - targeted parallel smokes: PASS.
+      - TERM-bounded AXI4 queue sample
+        (`/tmp/axi4-term120-after-driverbfm-queueclass-dynarray.wall180.jit-report.json`):
+        - `jit_deopts_total=7` (count held; queue shifted),
+        - removed `to_*_class`, `get_minimum_transactions`,
+          `__moore_dyn_array_new` tails.
+37. AXI4 loop-tail burn-down to zero-deopt in bounded compile lane
+    (February 18, 2026):
+    - native thunk policy closures:
+      - added non-suspending intercepted `func.call` prelude admission:
+        - `*::sprint`
+        - signature-gated `tx_*_packet` helpers (ptr/ref packet helper shape).
+      - widened safe LLVM-call prelude families:
+        - `__moore_assoc_*`
+        - `__moore_string_*`
+      - widened safe non-suspending op preludes:
+        - `llhd.drv`
+        - `llhd.sig`
+    - regression coverage:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-uvm-object-sprint-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-tx-write-packet-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-llhd-drv-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-llvm-call-assoc-delete-key-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-llvm-call-string-bintoa-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-llhd-sig-halt.mlir`
+    - validation:
+      - targeted strict regressions: PASS (17 focused tests).
+      - targeted parallel smokes: PASS (7 focused tests).
+      - AXI4 bounded compile progression:
+        - `/tmp/axi4-term120-after-sprint-txpacket.wall180.jit-report.json`
+          -> `jit_deopts_total=2` (`first_op:scf.for` closed; tail shifted).
+        - `/tmp/axi4-term120-after-scffor-drv-assoc.wall180.jit-report.json`
+          -> `jit_deopts_total=2` (shifted to
+             `first_op:llvm.call:__moore_string_bintoa` and `first_op:llhd.sig`).
+        - `/tmp/axi4-term120-after-string-sig.wall300.jit-report.json`
+          -> `jit_deopts_total=0`.
+      - parallel bounded AXI4 smoke:
+        - `/tmp/axi4-term20-parallel-after-string-sig.jit-report.json`
+          -> `jit_deopts_total=0`.
+    - next closure target:
+      - expand zero-deopt compile-mode burn-down from bounded AXI4 sample to
+        broader AVIP matrix and non-AVIP suites under plan gates.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
