@@ -70381,3 +70381,21 @@ See CHANGELOG.md on recent progress.
         `/tmp/avip-circt-sim-20260218-065058`
         (`compile_status=OK`, `compile_sec=28`, `sim_status=OK`,
         `sim_sec=40`, `jit_deopts_total=0`).
+56. AXI4 post-crash timeout status and strict queue extraction
+    (February 18, 2026):
+    - Repeated bounded AXI4 compile runs after the `sig.extract` guard closure
+      (`/tmp/avip-circt-sim-20260218-065533`,
+      `/tmp/avip-circt-sim-20260218-070122`) keep the previous
+      `tx_read_packet` absorbed internal-failure signature eliminated, but
+      still hit configured timeout caps (`180s`, `300s`).
+    - Direct TERM-bounded compile-mode profiling run with JIT report emission
+      (`/tmp/axi4-term120.jit-report.json`) extracted current strict queue:
+      - `jit_deopts_total=7`
+      - all deopts are `unsupported_operation`, details:
+        - `first_op:llvm.call:__moore_assoc_size` (2)
+        - `first_op:llvm.call:__moore_semaphore_get` (3)
+        - `first_op:func.call:from_write_class_6984` (1)
+        - `first_op:func.call:from_read_class_6987` (1)
+    - Next closure focus is now explicit: reduce AXI4 timeout pressure by
+      adding native-thunk coverage/guards for these remaining unsupported
+      first-op classes.
