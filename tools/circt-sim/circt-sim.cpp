@@ -102,6 +102,7 @@
 #include <mutex>
 #include <thread>
 #include <utility>
+#include <vector>
 
 using namespace mlir;
 using namespace circt;
@@ -518,6 +519,13 @@ public:
       llhdInterpreter->setJITCompileManager(jitCompileManager);
   }
 
+  /// Enable runtime func.call_indirect target-set profiling.
+  void setJitRuntimeIndirectProfileEnabled(bool enable) {
+    jitRuntimeIndirectProfileEnabled = enable;
+    if (llhdInterpreter)
+      llhdInterpreter->setJitRuntimeIndirectProfileEnabled(enable);
+  }
+
   /// Dump signals that changed in the last delta cycle.
   void dumpLastDeltaSignals(llvm::raw_ostream &os) const {
     scheduler.dumpLastDeltaSignals(os);
@@ -623,6 +631,7 @@ private:
   // LLHD Process interpreter
   std::unique_ptr<LLHDProcessInterpreter> llhdInterpreter;
   JITCompileManager *jitCompileManager = nullptr;
+  bool jitRuntimeIndirectProfileEnabled = false;
 
   std::atomic<bool> abortRequested{false};
   std::atomic<bool> abortHandled{false};
@@ -872,9 +881,12 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
             unpackedDepth = depthAttr.getInt();
         }
         if (unpackedDepth >= 2) {
+          // Read inner dimension bounds from vpi.array_bounds attribute.
+          ArrayAttr innerBoundsAttr =
+              sigBounds.getAs<ArrayAttr>("inner_bounds");
           // Build nested inner array info by peeling hw::ArrayType layers.
           auto buildInner =
-              [](mlir::Type type, int depth,
+              [&innerBoundsAttr](mlir::Type type, int depth, int dimIdx,
                  auto &self) -> std::shared_ptr<ProcessScheduler::SignalArrayInfo> {
             if (depth <= 0)
               return nullptr;
@@ -888,14 +900,26 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
                 LLHDProcessInterpreter::getTypeWidth(innerElem);
             inner->elementLogicalWidth =
                 LLHDProcessInterpreter::getLogicalWidth(innerElem);
-            inner->leftBound = 0;
-            inner->rightBound =
-                static_cast<int32_t>(inner->numElements - 1);
-            inner->innerArrayInfo = self(innerElem, depth - 1, self);
+            // Use stored inner bounds if available.
+            if (innerBoundsAttr &&
+                dimIdx < static_cast<int>(innerBoundsAttr.size())) {
+              auto dimBounds =
+                  cast<DictionaryAttr>(innerBoundsAttr[dimIdx]);
+              if (auto l = dimBounds.getAs<IntegerAttr>("left"))
+                inner->leftBound = l.getInt();
+              if (auto r = dimBounds.getAs<IntegerAttr>("right"))
+                inner->rightBound = r.getInt();
+            } else {
+              inner->leftBound = 0;
+              inner->rightBound =
+                  static_cast<int32_t>(inner->numElements - 1);
+            }
+            inner->innerArrayInfo =
+                self(innerElem, depth - 1, dimIdx + 1, self);
             return inner;
           };
           info.innerArrayInfo =
-              buildInner(elemType, unpackedDepth - 1, buildInner);
+              buildInner(elemType, unpackedDepth - 1, 0, buildInner);
         }
 
         scheduler.setSignalArrayInfo(signalId, info);
@@ -995,6 +1019,8 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
         return abortRequested.load();
       });
       llhdInterpreter->setAbortCallback([this]() { handleAbort(); });
+      llhdInterpreter->setJitRuntimeIndirectProfileEnabled(
+          jitRuntimeIndirectProfileEnabled);
 
       // Set up terminate callback to signal SimulationControl (only once)
       llhdInterpreter->setTerminateCallback(
@@ -1032,6 +1058,8 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
 
     llhdInterpreter->setCompileModeEnabled(runMode == RunMode::Compile);
     llhdInterpreter->setJITCompileManager(jitCompileManager);
+    llhdInterpreter->setJitRuntimeIndirectProfileEnabled(
+        jitRuntimeIndirectProfileEnabled);
 
     // Provide port signal mappings so the interpreter can map non-ref-type
     // block arguments (e.g., four-state struct ports) to signal IDs.
@@ -2006,6 +2034,10 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
     std::string detail;
   };
   llvm::SmallVector<JitDeoptProcessEntry, 8> jitDeoptProcesses;
+  std::vector<LLHDProcessInterpreter::JitRuntimeIndirectSiteProfile>
+      jitRuntimeIndirectSites;
+  uint64_t jitRuntimeIndirectCallsTotal = 0;
+  uint64_t jitRuntimeIndirectUnresolvedTotal = 0;
   if (interpreter) {
     const auto &deoptDetails = interpreter->getJitDeoptDetailByProcess();
     uvmFastPathHitsTotal = interpreter->getUvmFastPathHitsTotal();
@@ -2014,6 +2046,11 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
     uvmJitHotThreshold = interpreter->getUvmJitHotThreshold();
     uvmJitPromotionBudgetRemaining =
         interpreter->getUvmJitPromotionBudgetRemaining();
+    jitRuntimeIndirectSites = interpreter->getJitRuntimeIndirectSiteProfiles();
+    for (const auto &site : jitRuntimeIndirectSites) {
+      jitRuntimeIndirectCallsTotal += site.callsTotal;
+      jitRuntimeIndirectUnresolvedTotal += site.unresolvedCalls;
+    }
     for (const auto &entry : interpreter->getJitDeoptReasonByProcess()) {
       std::string detail;
       auto detailIt = deoptDetails.find(entry.first);
@@ -2081,6 +2118,12 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
       jos.attribute("jit_exec_wall_ms", jitStats.jitExecWallMs);
       jos.attribute("jit_strict_violations_total",
                     jitStats.jitStrictViolationsTotal);
+      jos.attribute("jit_call_indirect_sites_total",
+                    static_cast<uint64_t>(jitRuntimeIndirectSites.size()));
+      jos.attribute("jit_call_indirect_calls_total",
+                    jitRuntimeIndirectCallsTotal);
+      jos.attribute("jit_call_indirect_unresolved_total",
+                    jitRuntimeIndirectUnresolvedTotal);
       jos.attributeArray("jit_deopt_processes", [&] {
         for (const auto &entry : jitDeoptProcesses) {
           jos.object([&] {
@@ -2089,6 +2132,31 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
             jos.attribute("reason", entry.reason);
             if (!entry.detail.empty())
               jos.attribute("detail", entry.detail);
+          });
+        }
+      });
+      jos.attributeArray("jit_call_indirect_sites", [&] {
+        for (const auto &site : jitRuntimeIndirectSites) {
+          jos.object([&] {
+            jos.attribute("site_id", site.siteId);
+            jos.attribute("owner", site.owner);
+            jos.attribute("location", site.location);
+            jos.attribute("calls_total", site.callsTotal);
+            jos.attribute("unresolved_calls", site.unresolvedCalls);
+            jos.attribute("targets_total",
+                          static_cast<uint64_t>(site.targets.size()));
+            jos.attribute("target_set_version", site.targetSetVersion);
+            jos.attribute(
+                "target_set_hash",
+                (Twine("0x") + llvm::utohexstr(site.targetSetHash)).str());
+            jos.attributeArray("targets", [&] {
+              for (const auto &target : site.targets) {
+                jos.object([&] {
+                  jos.attribute("target_name", target.targetName);
+                  jos.attribute("calls", target.calls);
+                });
+              }
+            });
           });
         }
       });
@@ -2397,6 +2465,8 @@ static LogicalResult processInput(MLIRContext &context,
   reportStage("init");
   SimulationContext simContext;
   simContext.setJITCompileManager(&jitCompileManager);
+  simContext.setJitRuntimeIndirectProfileEnabled(
+      runMode == RunMode::Compile && !resolveJitReportPath().empty());
   simContext.setMaxDeltaCycles(maxDeltas);
   simContext.setMaxProcessSteps(maxProcessSteps);
   if (failed(simContext.initialize(*module, tops))) {

@@ -439,6 +439,56 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   maxFunctionOps = envUint64Value("CIRCT_SIM_MAX_FUNC_OPS", 0);
 }
 
+LLHDProcessInterpreter::JitRuntimeIndirectSiteData &
+LLHDProcessInterpreter::getOrCreateJitRuntimeIndirectSiteData(
+    ProcessId procId, mlir::func::CallIndirectOp callOp) {
+  auto *siteOp = callOp.getOperation();
+  auto [it, inserted] =
+      jitRuntimeIndirectSiteProfiles.try_emplace(siteOp, JitRuntimeIndirectSiteData{});
+  if (!inserted)
+    return it->second;
+
+  auto &site = it->second;
+  site.siteId = jitRuntimeIndirectNextSiteId++;
+
+  if (auto parentFunc = siteOp->getParentOfType<mlir::func::FuncOp>())
+    site.owner = parentFunc.getSymName().str();
+  else if (const Process *proc = scheduler.getProcess(procId))
+    site.owner = proc->getName();
+  else
+    site.owner = "<unknown>";
+
+  {
+    std::string locText;
+    llvm::raw_string_ostream locOS(locText);
+    siteOp->getLoc().print(locOS);
+    locOS.flush();
+    site.location = std::move(locText);
+  }
+
+  return site;
+}
+
+void LLHDProcessInterpreter::noteJitRuntimeIndirectResolvedTarget(
+    ProcessId procId, mlir::func::CallIndirectOp callOp,
+    llvm::StringRef calleeName) {
+  if (calleeName.empty())
+    return;
+  auto &site = getOrCreateJitRuntimeIndirectSiteData(procId, callOp);
+  ++site.callsTotal;
+  auto [it, inserted] = site.targetCalls.try_emplace(calleeName, 0);
+  ++it->second;
+  if (inserted)
+    ++site.targetSetVersion;
+}
+
+void LLHDProcessInterpreter::noteJitRuntimeIndirectUnresolved(
+    ProcessId procId, mlir::func::CallIndirectOp callOp) {
+  auto &site = getOrCreateJitRuntimeIndirectSiteData(procId, callOp);
+  ++site.callsTotal;
+  ++site.unresolvedCalls;
+}
+
 bool LLHDProcessInterpreter::lookupUvmSequencerQueueCache(
     uint64_t portAddr, uint64_t &queueAddr) {
   if (portAddr == 0)
@@ -1445,6 +1495,52 @@ LLHDProcessInterpreter::getJitDeoptProcessName(ProcessId procId) const {
   if (const Process *proc = scheduler.getProcess(procId))
     return proc->getName();
   return {};
+}
+
+std::vector<LLHDProcessInterpreter::JitRuntimeIndirectSiteProfile>
+LLHDProcessInterpreter::getJitRuntimeIndirectSiteProfiles() const {
+  std::vector<JitRuntimeIndirectSiteProfile> sites;
+  sites.reserve(jitRuntimeIndirectSiteProfiles.size());
+
+  for (const auto &entry : jitRuntimeIndirectSiteProfiles) {
+    const auto &siteData = entry.second;
+    JitRuntimeIndirectSiteProfile site;
+    site.siteId = siteData.siteId;
+    site.owner = siteData.owner;
+    site.location = siteData.location;
+    site.callsTotal = siteData.callsTotal;
+    site.unresolvedCalls = siteData.unresolvedCalls;
+    site.targetSetVersion = siteData.targetSetVersion;
+
+    site.targets.reserve(siteData.targetCalls.size());
+    std::vector<std::string> targetNames;
+    targetNames.reserve(siteData.targetCalls.size());
+    for (const auto &target : siteData.targetCalls) {
+      site.targets.push_back(
+          JitRuntimeIndirectTargetEntry{target.getKey().str(), target.getValue()});
+      targetNames.push_back(target.getKey().str());
+    }
+    llvm::sort(site.targets, [](const auto &lhs, const auto &rhs) {
+      if (lhs.calls != rhs.calls)
+        return lhs.calls > rhs.calls;
+      return lhs.targetName < rhs.targetName;
+    });
+    llvm::sort(targetNames);
+    if (!targetNames.empty())
+      site.targetSetHash = static_cast<uint64_t>(
+          llvm::hash_combine_range(targetNames.begin(), targetNames.end()));
+
+    sites.push_back(std::move(site));
+  }
+
+  llvm::sort(sites, [](const auto &lhs, const auto &rhs) {
+    if (lhs.unresolvedCalls != rhs.unresolvedCalls)
+      return lhs.unresolvedCalls > rhs.unresolvedCalls;
+    if (lhs.callsTotal != rhs.callsTotal)
+      return lhs.callsTotal > rhs.callsTotal;
+    return lhs.siteId < rhs.siteId;
+  });
+  return sites;
 }
 
 void LLHDProcessInterpreter::rebuildAddrRangeIndex() {
@@ -9816,6 +9912,23 @@ arith_dispatch:
     Value calleeValue = callIndirectOp.getCallee();
     InterpretedValue funcPtrVal = getValue(procId, calleeValue);
     bool traceSeq = traceSeqEnabled;
+    bool sawResolvedTarget = false;
+    std::string resolvedTargetName;
+    auto noteResolvedTarget = [&](llvm::StringRef name) {
+      if (name.empty())
+        return;
+      sawResolvedTarget = true;
+      resolvedTargetName = name.str();
+    };
+    auto noteRuntimeIndirectProfileOnExit = llvm::make_scope_exit([&]() {
+      if (!jitRuntimeIndirectProfileEnabled || !compileModeEnabled)
+        return;
+      if (sawResolvedTarget)
+        noteJitRuntimeIndirectResolvedTarget(procId, callIndirectOp,
+                                            resolvedTargetName);
+      else
+        noteJitRuntimeIndirectUnresolved(procId, callIndirectOp);
+    });
 
     // Early trace: log every call_indirect to detect analysis_port writes.
     if (traceAnalysisEnabled) {
@@ -10005,6 +10118,7 @@ arith_dispatch:
           break;
 
         StringRef resolvedName = funcIt->second;
+        noteResolvedTarget(resolvedName);
         // [CI-XFALLBACK] diagnostic removed
         LLVM_DEBUG(llvm::dbgs()
                    << "  func.call_indirect: fallback vtable resolution: "
@@ -10314,6 +10428,7 @@ arith_dispatch:
         if (funcIt2 == addressToFunction.end())
           break;
         StringRef resolvedName = funcIt2->second;
+        noteResolvedTarget(resolvedName);
 
         LLVM_DEBUG(llvm::dbgs()
                    << "  func.call_indirect: static fallback: "
@@ -11155,6 +11270,8 @@ arith_dispatch:
                  << " slot=" << methodIndex << ")\n");
       calleeName = overriddenCalleeName;
     } while (false);
+
+    noteResolvedTarget(calleeName);
 
     if (traceConfigDbEnabled && calleeName.contains("config_db")) {
       llvm::errs() << "[CFG-CI-DISPATCH] callee=" << calleeName

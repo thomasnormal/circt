@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1489 - February 18, 2026
+
+### circt-sim JIT: guarded runtime `call_indirect` target-set profiling + report schema extension
+
+1. **Runtime profiling substrate added** (`tools/circt-sim/LLHDProcessInterpreter.h`,
+   `tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - added per-site runtime profiling for `func.call_indirect` dispatch:
+     - `site_id`, `owner`, `location`
+     - `calls_total`, `unresolved_calls`
+     - per-target call counts
+     - `target_set_version` (first-seen target increments)
+     - `target_set_hash` (sorted target-set hash)
+   - profiling is guarded and only enabled for compile-mode runs that emit
+     JIT reports.
+
+2. **JIT report schema extended** (`tools/circt-sim/circt-sim.cpp`):
+   - added `jit` fields:
+     - `jit_call_indirect_sites_total`
+     - `jit_call_indirect_calls_total`
+     - `jit_call_indirect_unresolved_total`
+     - `jit_call_indirect_sites[]` (per-site target-set details).
+
+3. **Regression coverage added** (`test/Tools/circt-sim/`):
+   - `jit-report-call-indirect-target-profile.mlir`
+   - validates mixed resolved/unresolved indirect-call site telemetry in the
+     JIT report.
+
+4. **Validation**:
+   - build:
+     - `ninja -C build circt-sim`: PASS.
+     - `ninja -C build-test circt-sim`: PASS.
+   - focused lit regression set: PASS (5 tests):
+     - new JIT report profile test.
+     - static/vtable-slot local-helper `call_indirect` strict/parallel set.
+   - bounded integration smokes: PASS
+     - AVIP compile lane (`jtag`, seed 1):
+       `/tmp/avip-circt-sim-indirect-profile-20260218-092325/matrix.tsv`
+       (`compile_status=OK`, `sim_status=OK`).
+     - `sv-tests`: `11.10.1--string_concat` PASS
+       (`/tmp/sv-tests-circt-sim-indirect-profile-20260218-092447.txt`).
+     - `verilator-verification` BMC smoke: `assert_changed` PASS
+       (`/tmp/verilator-bmc-indirect-profile-20260218-092447.tsv`).
+     - `yosys/tests/sva` BMC smoke: `basic00` PASS
+       (`/tmp/yosys-sva-bmc-indirect-profile-20260218-092447.tsv`).
+     - OpenTitan sim smoke: `prim_count` PASS
+       (`/tmp/opentitan-circt-sim-indirect-profile-20260218-092447.log`).
+
 ## Iteration 1488 - February 18, 2026
 
 ### circt-sim JIT: AXI4 compile-lane tail burn-down from 12 deopts to 0 (bounded run)

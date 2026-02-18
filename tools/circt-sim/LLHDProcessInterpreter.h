@@ -41,6 +41,7 @@
 #include <optional>
 #include <random>
 #include <unordered_map>
+#include <vector>
 
 // Forward declarations for SCF, Func, and LLVM dialects
 namespace mlir {
@@ -616,6 +617,27 @@ public:
     return jitDeoptDetailByProcess;
   }
 
+  struct JitRuntimeIndirectTargetEntry {
+    std::string targetName;
+    uint64_t calls = 0;
+  };
+
+  struct JitRuntimeIndirectSiteProfile {
+    uint64_t siteId = 0;
+    std::string owner;
+    std::string location;
+    uint64_t callsTotal = 0;
+    uint64_t unresolvedCalls = 0;
+    uint64_t targetSetVersion = 0;
+    uint64_t targetSetHash = 0;
+    std::vector<JitRuntimeIndirectTargetEntry> targets;
+  };
+
+  /// Per-site runtime target-set profile for func.call_indirect dispatch.
+  /// Used for guarded JIT specialization triage in compile mode.
+  std::vector<JitRuntimeIndirectSiteProfile>
+  getJitRuntimeIndirectSiteProfiles() const;
+
   /// Resolve scheduler-registered process name for a process ID.
   std::string getJitDeoptProcessName(ProcessId procId) const;
 
@@ -648,6 +670,11 @@ public:
 
   /// Enable or disable compile-mode execution behavior.
   void setCompileModeEnabled(bool enable) { compileModeEnabled = enable; }
+
+  /// Enable or disable runtime call_indirect target-set profiling.
+  void setJitRuntimeIndirectProfileEnabled(bool enable) {
+    jitRuntimeIndirectProfileEnabled = enable;
+  }
 
   /// Provide JIT compile manager for compile-mode thunk/deopt accounting.
   void setJITCompileManager(JITCompileManager *manager) {
@@ -1672,6 +1699,29 @@ private:
   /// call_indirect target is invoked. Keyed by callee name for easy reporting.
   /// Enabled when CIRCT_SIM_PROFILE_FUNCS env var is set.
   llvm::StringMap<uint64_t> funcCallProfile;
+
+  struct JitRuntimeIndirectSiteData {
+    uint64_t siteId = 0;
+    std::string owner;
+    std::string location;
+    uint64_t callsTotal = 0;
+    uint64_t unresolvedCalls = 0;
+    uint64_t targetSetVersion = 0;
+    llvm::StringMap<uint64_t> targetCalls;
+  };
+  llvm::DenseMap<mlir::Operation *, JitRuntimeIndirectSiteData>
+      jitRuntimeIndirectSiteProfiles;
+  uint64_t jitRuntimeIndirectNextSiteId = 1;
+  bool jitRuntimeIndirectProfileEnabled = false;
+
+  JitRuntimeIndirectSiteData &
+  getOrCreateJitRuntimeIndirectSiteData(ProcessId procId,
+                                        mlir::func::CallIndirectOp callOp);
+  void noteJitRuntimeIndirectResolvedTarget(ProcessId procId,
+                                            mlir::func::CallIndirectOp callOp,
+                                            llvm::StringRef calleeName);
+  void noteJitRuntimeIndirectUnresolved(ProcessId procId,
+                                        mlir::func::CallIndirectOp callOp);
 
   /// UVM fast-path profiling counters keyed by fast-path action name.
   /// Enabled together with CIRCT_SIM_PROFILE_FUNCS.
