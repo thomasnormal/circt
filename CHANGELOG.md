@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1472 - February 18, 2026
+
+### circt-sim JIT: targeted single-block call-stack resume support
+
+1. **Added shared call-stack resume helper** in
+   `tools/circt-sim/LLHDProcessInterpreter.{h,cpp}`:
+   - introduced `CallStackResumeResult` and
+     `resumeSavedCallStackFrames(ProcessId, ProcessExecutionState&)`.
+   - replaced duplicated inline call-stack resume block in `executeProcess`
+     with helper dispatch.
+2. **Extended single-block terminating native thunk execution**:
+   - `executeSingleBlockTerminatingNativeThunk` now supports resumable
+     call-stack suspension states and sequencer retry waits
+     (`sequencerGetRetryCallOp`) instead of deopting immediately.
+   - aligned wait-condition restart/call-stack frame rewrites with
+     interpreter resume behavior.
+   - guard details are shape-qualified as
+     `single_block_terminating:<reason>` and guard tracing now includes
+     richer state fields (`call_stack`, `seq_retry`, current op/block).
+3. **Added strict regression coverage**:
+   - `test/Tools/circt-sim/jit-process-thunk-single-block-call-indirect-fork-callstack-halt.mlir`
+     validates strict no-deopt for a one-block
+     `call_indirect -> print -> halt` shape where the callee suspends on a
+     blocking fork and resumes through saved call frames.
+4. **Validation**:
+   - targeted strict tests pass:
+     - `jit-process-thunk-single-block-call-indirect-fork-callstack-halt.mlir`
+     - `jit-process-thunk-func-call-set-report-id-verbosity-halt.mlir`
+     - `jit-process-thunk-llvm-call-process-self-halt.mlir`
+     - `jit-process-thunk-multiblock-fork-loop-guard-failed.mlir`
+   - bounded AVIP compile lane (`jtag`, seed-1):
+     - `/tmp/avip-circt-sim-singleblock-callstack-v2-20260218-012809`
+     - `sim_status=OK`, `sim_sec=35s`
+     - deopt queue remains `guard_failed` only, now
+       `single_block_terminating:post_exec_not_halted_or_waiting` (7).
+
 ## Iteration 1471 - February 18, 2026
 
 ### circt-sim JIT: guard-failed detail telemetry for strict convergence
