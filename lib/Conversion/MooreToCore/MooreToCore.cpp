@@ -10823,6 +10823,133 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
       }
     }
 
+    // Handle integer to string conversion.
+    // SystemVerilog allows implicit conversion from packed types to string.
+    // We interpret the integer bytes as ASCII characters and create a
+    // MooreString struct {ptr, i64}.
+    if (isa<moore::IntType>(op.getInput().getType()) &&
+        isa<moore::StringType>(op.getResult().getType())) {
+      auto *ctx = rewriter.getContext();
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = IntegerType::get(ctx, 64);
+      auto i8Ty = IntegerType::get(ctx, 8);
+      auto stringStructTy =
+          LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+      Value inputValue = adaptor.getInput();
+      // Handle 4-state input: extract the value part
+      if (isFourStateStructType(inputValue.getType()))
+        inputValue = extractFourStateValue(rewriter, loc, inputValue);
+      // Ensure plain integer
+      if (!isa<IntegerType>(inputValue.getType())) {
+        int64_t bw = hw::getBitWidth(inputValue.getType());
+        if (bw <= 0) bw = 64;
+        inputValue = rewriter.createOrFold<hw::BitcastOp>(
+            loc, rewriter.getIntegerType(bw), inputValue);
+      }
+
+      unsigned bitWidth = cast<IntegerType>(inputValue.getType()).getWidth();
+      unsigned byteWidth = (bitWidth + 7) / 8;
+
+      // Allocate buffer for the string (malloc)
+      auto mallocSize = LLVM::ConstantOp::create(
+          rewriter, loc, i64Ty,
+          rewriter.getI64IntegerAttr(byteWidth + 1));
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+      auto mallocFnTy = LLVM::LLVMFunctionType::get(ptrTy, {i64Ty});
+      auto mallocFn =
+          getOrCreateRuntimeFunc(mod, rewriter, "malloc", mallocFnTy);
+      auto mallocCall = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{ptrTy}, SymbolRefAttr::get(mallocFn),
+          ValueRange{mallocSize});
+      Value bufPtr = mallocCall.getResult();
+
+      // Copy bytes from integer to buffer (big-endian byte order)
+      for (unsigned i = 0; i < byteWidth; ++i) {
+        unsigned shiftAmount = (byteWidth - 1 - i) * 8;
+        Value shifted = inputValue;
+        if (shiftAmount > 0) {
+          Value shiftConst = hw::ConstantOp::create(
+              rewriter, loc, APInt(bitWidth, shiftAmount));
+          shifted = comb::ShrUOp::create(rewriter, loc, inputValue, shiftConst);
+        }
+        Value byte = arith::TruncIOp::create(rewriter, loc, i8Ty, shifted);
+
+        auto idxConst = LLVM::ConstantOp::create(
+            rewriter, loc, rewriter.getI64IntegerAttr(i));
+        Value destPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i8Ty,
+                                            bufPtr, ValueRange{idxConst});
+        LLVM::StoreOp::create(rewriter, loc, byte, destPtr);
+      }
+
+      // Null-terminate
+      auto nullByte = LLVM::ConstantOp::create(rewriter, loc, i8Ty,
+                                               rewriter.getI8IntegerAttr(0));
+      auto nullIdx = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(byteWidth));
+      Value nullDest = LLVM::GEPOp::create(rewriter, loc, ptrTy, i8Ty,
+                                           bufPtr, ValueRange{nullIdx});
+      LLVM::StoreOp::create(rewriter, loc, nullByte, nullDest);
+
+      Value lenVal = LLVM::ConstantOp::create(
+          rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteWidth));
+
+      Value result = LLVM::UndefOp::create(rewriter, loc, stringStructTy);
+      result = LLVM::InsertValueOp::create(rewriter, loc, result, bufPtr,
+                                           ArrayRef<int64_t>{0});
+      result = LLVM::InsertValueOp::create(rewriter, loc, result, lenVal,
+                                           ArrayRef<int64_t>{1});
+
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    // Handle string to integer conversion.
+    if (isa<moore::StringType>(op.getInput().getType()) &&
+        isa<moore::IntType>(op.getResult().getType())) {
+      auto *ctx = rewriter.getContext();
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i8Ty = IntegerType::get(ctx, 8);
+
+      auto resultMooreInt = cast<moore::IntType>(op.getResult().getType());
+      unsigned resultWidth = resultMooreInt.getWidth();
+      unsigned byteWidth = (resultWidth + 7) / 8;
+
+      Value inputStruct = adaptor.getInput();
+      Value strPtr = LLVM::ExtractValueOp::create(
+          rewriter, loc, ptrTy, inputStruct, ArrayRef<int64_t>{0});
+
+      Type resultIntTy = rewriter.getIntegerType(resultWidth);
+      Value result = hw::ConstantOp::create(rewriter, loc,
+                                            APInt(resultWidth, 0));
+      for (unsigned i = 0; i < byteWidth; ++i) {
+        auto idxConst = LLVM::ConstantOp::create(
+            rewriter, loc, rewriter.getI64IntegerAttr(i));
+        Value bytePtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i8Ty,
+                                            strPtr, ValueRange{idxConst});
+        Value byte = LLVM::LoadOp::create(rewriter, loc, i8Ty, bytePtr);
+        Value extended =
+            arith::ExtUIOp::create(rewriter, loc, resultIntTy, byte);
+
+        unsigned shiftAmount = (byteWidth - 1 - i) * 8;
+        if (shiftAmount > 0) {
+          Value shiftConst = hw::ConstantOp::create(
+              rewriter, loc, APInt(resultWidth, shiftAmount));
+          extended = comb::ShlOp::create(rewriter, loc, extended, shiftConst);
+        }
+        result = comb::OrOp::create(rewriter, loc, result, extended);
+      }
+
+      if (isFourStateStructType(resultType)) {
+        Value zero = hw::ConstantOp::create(rewriter, loc,
+                                            APInt(resultWidth, 0));
+        result = createFourStateStruct(rewriter, loc, result, zero);
+      }
+
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     int64_t inputBw = hw::getBitWidth(adaptor.getInput().getType());
     int64_t resultBw = hw::getBitWidth(resultType);
     if (inputBw == -1 || resultBw == -1)
@@ -13879,9 +14006,9 @@ struct FormatStringToStringOpConversion
 
   // Helper to convert a format string value to a dynamic string
   // Returns the dynamic string value, or nullptr if conversion failed
-  Value convertFormatStringToString(Value fmtValue, Location loc,
-                                    ConversionPatternRewriter &rewriter,
-                                    ModuleOp mod) const {
+  static Value convertFormatStringToStringStatic(
+      Value fmtValue, Location loc, ConversionPatternRewriter &rewriter,
+      ModuleOp mod) {
     auto *ctx = rewriter.getContext();
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i64Ty = IntegerType::get(ctx, 64);
@@ -14029,7 +14156,7 @@ struct FormatStringToStringOpConversion
         return createEmptyString(rewriter, loc, ctx);
 
       // Convert the first input
-      Value result = convertFormatStringToString(inputs[0], loc, rewriter, mod);
+      Value result = convertFormatStringToStringStatic(inputs[0], loc, rewriter, mod);
       if (!result)
         result = createEmptyString(rewriter, loc, ctx);
 
@@ -14046,7 +14173,7 @@ struct FormatStringToStringOpConversion
 
         for (size_t i = 1; i < inputs.size(); ++i) {
           Value nextStr =
-              convertFormatStringToString(inputs[i], loc, rewriter, mod);
+              convertFormatStringToStringStatic(inputs[i], loc, rewriter, mod);
           if (!nextStr)
             nextStr = createEmptyString(rewriter, loc, ctx);
 
@@ -14080,7 +14207,7 @@ struct FormatStringToStringOpConversion
     auto mod = op->getParentOfType<ModuleOp>();
     Value fmtString = adaptor.getFmtstring();
 
-    Value result = convertFormatStringToString(fmtString, loc, rewriter, mod);
+    Value result = convertFormatStringToStringStatic(fmtString, loc, rewriter, mod);
     if (!result) {
       auto *ctx = rewriter.getContext();
       result = createEmptyString(rewriter, loc, ctx);
@@ -14226,24 +14353,29 @@ struct FWriteBIOpConversion : public OpConversionPattern<FWriteBIOp> {
       fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
     }
 
-    // Create alloca for the message string and store a placeholder
+    // Convert the format string message to a MooreString struct.
+    auto i64Ty = IntegerType::get(ctx, 64);
     auto stringTy = getFileIOStringStructType(ctx);
     auto one =
         LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
     auto msgAlloca =
         LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringTy, one);
 
-    // Create a placeholder string: the actual message conversion requires
-    // more complex handling of the format string type.
-    auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
-    auto zeroLen =
-        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(0));
-
-    Value stringVal = LLVM::UndefOp::create(rewriter, loc, stringTy);
-    stringVal = LLVM::InsertValueOp::create(rewriter, loc, stringVal, nullPtr,
-                                            ArrayRef<int64_t>{0});
-    stringVal = LLVM::InsertValueOp::create(rewriter, loc, stringVal, zeroLen,
-                                            ArrayRef<int64_t>{1});
+    // Use FormatStringToStringOpConversion's helper to render the message.
+    Value stringVal =
+        FormatStringToStringOpConversion::convertFormatStringToStringStatic(
+            adaptor.getMessage(), loc, rewriter, mod);
+    if (!stringVal) {
+      // Fallback: empty string
+      auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+      auto zeroLen = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(0));
+      stringVal = LLVM::UndefOp::create(rewriter, loc, stringTy);
+      stringVal = LLVM::InsertValueOp::create(rewriter, loc, stringVal,
+                                              nullPtr, ArrayRef<int64_t>{0});
+      stringVal = LLVM::InsertValueOp::create(rewriter, loc, stringVal,
+                                              zeroLen, ArrayRef<int64_t>{1});
+    }
     LLVM::StoreOp::create(rewriter, loc, stringVal, msgAlloca);
 
     // Call __moore_fwrite(fd, message_ptr)
@@ -21564,9 +21696,119 @@ struct StringToIntOpConversion : public OpConversionPattern<StringToIntOp> {
 // SScanfBIOp Conversion
 //===----------------------------------------------------------------------===//
 
-/// Conversion for moore.builtin.sscanf -> runtime function call.
-/// Lowers $sscanf(input, format, args...) to __moore_sscanf_* calls based on
-/// the format specifier.
+/// Helper: write a parsed i64 value to a destination reference.
+/// Handles both llhd::RefType (signals, using llhd.drive) and
+/// !llvm.ptr (alloca-backed locals, using llvm.store).
+/// `origMooreRefType` is the original Moore RefType before conversion,
+/// used to determine the target type for alloca-backed locals.
+static LogicalResult writeScanfResultToRef(Location loc, MLIRContext *ctx,
+                                           ModuleOp mod, Value destRef,
+                                           Value parsedI64,
+                                           Type origMooreRefType,
+                                           const TypeConverter *typeConverter,
+                                           OpBuilder &rewriter) {
+  auto i32Ty = IntegerType::get(ctx, 32);
+  auto i64Ty = IntegerType::get(ctx, 64);
+  Value parsedI32 = arith::TruncIOp::create(rewriter, loc, i32Ty, parsedI64);
+
+  // Determine target type and whether this is a signal or alloca
+  Type targetTy;
+  bool isSignal = false;
+
+  if (auto sigTy = dyn_cast<llhd::RefType>(destRef.getType())) {
+    targetTy = sigTy.getNestedType();
+    isSignal = true;
+  } else if (isa<LLVM::LLVMPointerType>(destRef.getType())) {
+    // Alloca-backed local variable. Get the target type from the original
+    // Moore RefType.
+    auto mooreRef = dyn_cast<moore::RefType>(origMooreRefType);
+    if (!mooreRef)
+      return failure();
+    targetTy = typeConverter->convertType(mooreRef.getNestedType());
+    if (!targetTy)
+      return failure();
+    isSignal = false;
+  } else {
+    return failure();
+  }
+
+  // String destinations are represented as an LLVM struct {ptr, i64}. The
+  // runtime parser returns packed i64 payloads for %s, so convert that payload
+  // back to a dynamic string before storing to the destination reference.
+  if (auto mooreRef = dyn_cast<moore::RefType>(origMooreRefType);
+      mooreRef && isa<moore::StringType>(mooreRef.getNestedType())) {
+    if (isSignal)
+      return failure();
+    auto stringStructTy = getStringStructType(ctx);
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
+    auto runtimeFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                            "__moore_packed_string_to_string",
+                                            fnTy);
+    auto converted = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{stringStructTy}, SymbolRefAttr::get(runtimeFn),
+        ValueRange{parsedI64});
+    LLVM::StoreOp::create(rewriter, loc, converted.getResult(), destRef);
+    return success();
+  }
+
+  // Build the value to store/drive
+  Value valueToWrite;
+  if (isFourStateStructType(targetTy)) {
+    auto structType = cast<hw::StructType>(targetTy);
+    auto valueType = structType.getElements()[0].type;
+    unsigned targetWidth = valueType.getIntOrFloatBitWidth();
+
+    Value val;
+    if (targetWidth < 32)
+      val = arith::TruncIOp::create(rewriter, loc, valueType, parsedI32);
+    else if (targetWidth > 32)
+      val = valueType == parsedI64.getType()
+                ? parsedI64
+                : arith::ExtSIOp::create(rewriter, loc, valueType, parsedI64);
+    else if (valueType != i32Ty)
+      val = arith::ExtSIOp::create(rewriter, loc, valueType, parsedI32);
+    else
+      val = parsedI32;
+
+    Value zero = hw::ConstantOp::create(rewriter, loc, valueType, 0);
+    valueToWrite = createFourStateStruct(rewriter, loc, val, zero);
+  } else if (targetTy.isIntOrFloat()) {
+    unsigned targetWidth = targetTy.getIntOrFloatBitWidth();
+
+    if (targetWidth < 32)
+      valueToWrite =
+          arith::TruncIOp::create(rewriter, loc, targetTy, parsedI32);
+    else if (targetWidth > 32)
+      valueToWrite = targetTy == parsedI64.getType()
+                         ? parsedI64
+                         : arith::ExtSIOp::create(rewriter, loc, targetTy,
+                                                  parsedI64);
+    else if (targetTy != i32Ty)
+      valueToWrite =
+          arith::ExtSIOp::create(rewriter, loc, targetTy, parsedI32);
+    else
+      valueToWrite = parsedI32;
+  } else {
+    return failure();
+  }
+
+  if (isSignal) {
+    // Drive signal
+    auto timeAttr =
+        llhd::TimeAttr::get(ctx, 0U, llvm::StringRef("ns"), 0, 1);
+    auto time = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
+    llhd::DriveOp::create(rewriter, loc, destRef, valueToWrite, time,
+                          Value{});
+  } else {
+    // Store to alloca - need LLVM type
+    Value llvmVal = convertValueToLLVMType(valueToWrite, loc, rewriter);
+    LLVM::StoreOp::create(rewriter, loc, llvmVal, destRef);
+  }
+  return success();
+}
+
+/// Conversion for moore.builtin.sscanf -> __moore_sscanf runtime call.
+/// Handles multiple format specifiers and writes results to output refs.
 struct SScanfBIOpConversion : public OpConversionPattern<SScanfBIOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -21583,123 +21825,200 @@ struct SScanfBIOpConversion : public OpConversionPattern<SScanfBIOp> {
     auto stringStructTy =
         LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
 
-    // Get format string to determine which runtime function to call
     StringRef format = op.getFormat();
+    int32_t numArgs = adaptor.getArgs().size();
 
-    // Store input string to stack
+    // The adapted input is always a {ptr, i64} MooreString struct
+    // (the ImportVerilog handler ensures ConversionOp to StringType).
+    Value adaptedInput = adaptor.getInput();
+    Value inputData = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy,
+                                                   adaptedInput,
+                                                   ArrayRef<int64_t>{0});
+    Value inputLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty,
+                                                  adaptedInput,
+                                                  ArrayRef<int64_t>{1});
+
+    // Create a null-terminated format string as a global constant
+    std::string fmtGlobalName =
+        "__sscanf_fmt_" +
+        std::to_string(std::hash<std::string>{}(format.str()));
+    Value fmtDataPtr = createGlobalStringConstant(loc, mod, rewriter, format,
+                                                  fmtGlobalName);
+
+    // Allocate stack arrays for results and result widths
+    auto resultsArrayTy = LLVM::LLVMArrayType::get(i64Ty, numArgs > 0 ? numArgs : 1);
+    auto widthsArrayTy = LLVM::LLVMArrayType::get(i32Ty, numArgs > 0 ? numArgs : 1);
     auto one = LLVM::ConstantOp::create(rewriter, loc,
                                         rewriter.getI64IntegerAttr(1));
-    auto strAlloca =
-        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getInput(), strAlloca);
+    auto resultsAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, resultsArrayTy, one);
+    auto widthsAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, widthsArrayTy, one);
 
-    // Handle common single-specifier formats
-    // For now, support %d, %h, %x, %o, %b for integers
-    StringRef runtimeFnName;
-    if (format == "%d")
-      runtimeFnName = "__moore_string_atoi";
-    else if (format == "%h" || format == "%x")
-      runtimeFnName = "__moore_string_atohex";
-    else if (format == "%o")
-      runtimeFnName = "__moore_string_atooct";
-    else if (format == "%b")
-      runtimeFnName = "__moore_string_atobin";
-    else {
-      // For unsupported formats, return 0 (no items parsed)
-      // TODO: Implement full sscanf with multiple format specifiers
-      auto zero = arith::ConstantOp::create(rewriter, loc, i32Ty,
-                                            rewriter.getI32IntegerAttr(0));
-      rewriter.replaceOp(op, zero);
-      return success();
-    }
-
-    // Get the runtime function
-    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
-    auto runtimeFn = getOrCreateRuntimeFunc(mod, rewriter, runtimeFnName, fnTy);
-
-    // Call the runtime function
-    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
-                                     SymbolRefAttr::get(runtimeFn),
-                                     ValueRange{strAlloca});
-    Value parsedValue = call.getResult();
-
-    // Store the result in the first argument if present
-    if (!adaptor.getArgs().empty()) {
-      auto destRef = adaptor.getArgs()[0];
-      // The destination is an llhd.ref (converted from moore.ref)
-      // Get the target type to potentially extend/truncate the result
+    // Store the bit-widths for each output argument
+    for (int32_t i = 0; i < numArgs; ++i) {
+      auto destRef = adaptor.getArgs()[i];
+      int32_t width = 32; // default
       if (auto sigTy = dyn_cast<llhd::RefType>(destRef.getType())) {
         auto targetTy = sigTy.getNestedType();
-
-        // Note: TimeType now converts to i64, so time values are handled
-        // by the targetTy.isIntOrFloat() case below.
         if (isFourStateStructType(targetTy)) {
-          // 4-state type: wrap the integer result in a 4-state struct
           auto structType = cast<hw::StructType>(targetTy);
-          auto valueType = structType.getElements()[0].type;
-          unsigned targetWidth = valueType.getIntOrFloatBitWidth();
-
-          // Extend or truncate to match the target value type
-          Value valueToStore;
-          if (targetWidth < 32) {
-            valueToStore =
-                arith::TruncIOp::create(rewriter, loc, valueType, parsedValue);
-          } else if (targetWidth > 32) {
-            // Sign extend for larger types
-            valueToStore =
-                arith::ExtSIOp::create(rewriter, loc, valueType, parsedValue);
-          } else {
-            valueToStore = parsedValue;
-            // Need to ensure type matches
-            if (valueToStore.getType() != valueType)
-              valueToStore = arith::ExtSIOp::create(rewriter, loc, valueType,
-                                                    parsedValue);
-          }
-
-          // Create 4-state struct with unknown=0 (parsed values are known)
-          Value zero = hw::ConstantOp::create(rewriter, loc, valueType, 0);
-          Value fourStateValue =
-              createFourStateStruct(rewriter, loc, valueToStore, zero);
-
-          // Create llhd.drive to store the value
-          auto timeAttr =
-              llhd::TimeAttr::get(ctx, 0U, llvm::StringRef("ns"), 0, 1);
-          auto time = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
-          llhd::DriveOp::create(rewriter, loc, destRef, fourStateValue, time,
-                                Value{});
+          width = structType.getElements()[0].type.getIntOrFloatBitWidth();
         } else if (targetTy.isIntOrFloat()) {
-          unsigned targetWidth = targetTy.getIntOrFloatBitWidth();
-
-          // Extend or truncate to match the target type
-          Value valueToStore;
-          if (targetWidth < 32) {
-            valueToStore =
-                arith::TruncIOp::create(rewriter, loc, targetTy, parsedValue);
-          } else if (targetWidth > 32) {
-            // Sign extend for larger types
-            valueToStore =
-                arith::ExtSIOp::create(rewriter, loc, targetTy, parsedValue);
-          } else {
-            valueToStore = parsedValue;
-          }
-
-          // Create llhd.drive to store the value
-          auto timeAttr =
-              llhd::TimeAttr::get(ctx, 0U, llvm::StringRef("ns"), 0, 1);
-          auto time = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
-          llhd::DriveOp::create(rewriter, loc, destRef, valueToStore, time,
-                                Value{});
-        } else {
-          return rewriter.notifyMatchFailure(
-              op, "sscanf destination must be an integer or time type");
+          width = targetTy.getIntOrFloatBitWidth();
         }
       }
+      auto idxVal = LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                             rewriter.getI32IntegerAttr(i));
+      auto elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i32Ty,
+                                          widthsAlloca,
+                                          ValueRange{idxVal});
+      auto widthConst = LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                                  rewriter.getI32IntegerAttr(width));
+      LLVM::StoreOp::create(rewriter, loc, widthConst, elemPtr);
     }
 
-    // Return 1 (one item successfully parsed)
-    auto resultVal = arith::ConstantOp::create(rewriter, loc, i32Ty,
-                                               rewriter.getI32IntegerAttr(1));
-    rewriter.replaceOp(op, resultVal);
+    // Call __moore_sscanf(input_data, input_len, format, results, widths, N)
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    (void)voidTy;
+    auto fnTy = LLVM::LLVMFunctionType::get(
+        i32Ty, {ptrTy, i64Ty, ptrTy, ptrTy, ptrTy, i32Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_sscanf", fnTy);
+
+    auto maxResultsConst = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(numArgs));
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(fn),
+        ValueRange{inputData, inputLen, fmtDataPtr, resultsAlloca,
+                   widthsAlloca, maxResultsConst});
+    Value itemCount = call.getResult();
+
+    // Load each result and drive to the corresponding output ref
+    for (int32_t i = 0; i < numArgs; ++i) {
+      auto destRef = adaptor.getArgs()[i];
+      auto idxVal = LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                             rewriter.getI32IntegerAttr(i));
+      auto elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                          resultsAlloca,
+                                          ValueRange{idxVal});
+      Value parsedVal = LLVM::LoadOp::create(rewriter, loc, i64Ty, elemPtr);
+
+      Type origType = op.getArgs()[i].getType();
+      if (failed(writeScanfResultToRef(loc, ctx, mod, destRef, parsedVal,
+                                       origType, getTypeConverter(),
+                                       rewriter)))
+        return rewriter.notifyMatchFailure(
+            op, "sscanf: unsupported destination type for arg " +
+                    std::to_string(i));
+    }
+
+    rewriter.replaceOp(op, itemCount);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.fscanf -> __moore_fscanf runtime call.
+struct FScanfBIOpConversion : public OpConversionPattern<FScanfBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FScanfBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    StringRef format = op.getFormat();
+    int32_t numArgs = adaptor.getArgs().size();
+
+    // Get the file descriptor (i32)
+    Value fd = adaptor.getFd();
+    if (fd.getType() != i32Ty)
+      fd = arith::TruncIOp::create(rewriter, loc, i32Ty, fd);
+
+    // Create a null-terminated format string as a global constant
+    std::string fmtGlobalName =
+        "__fscanf_fmt_" +
+        std::to_string(std::hash<std::string>{}(format.str()));
+    Value fmtDataPtr = createGlobalStringConstant(loc, mod, rewriter, format,
+                                                  fmtGlobalName);
+
+    // Allocate stack arrays for results and widths
+    auto resultsArrayTy =
+        LLVM::LLVMArrayType::get(i64Ty, numArgs > 0 ? numArgs : 1);
+    auto widthsArrayTy =
+        LLVM::LLVMArrayType::get(i32Ty, numArgs > 0 ? numArgs : 1);
+    auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                        rewriter.getI64IntegerAttr(1));
+    auto resultsAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, resultsArrayTy, one);
+    auto widthsAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, widthsArrayTy, one);
+
+    // Store bit-widths
+    for (int32_t i = 0; i < numArgs; ++i) {
+      auto destRef = adaptor.getArgs()[i];
+      int32_t width = 32;
+      if (auto sigTy = dyn_cast<llhd::RefType>(destRef.getType())) {
+        auto targetTy = sigTy.getNestedType();
+        if (isFourStateStructType(targetTy)) {
+          auto structType = cast<hw::StructType>(targetTy);
+          width = structType.getElements()[0].type.getIntOrFloatBitWidth();
+        } else if (targetTy.isIntOrFloat()) {
+          width = targetTy.getIntOrFloatBitWidth();
+        }
+      }
+      auto idxVal = LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                             rewriter.getI32IntegerAttr(i));
+      auto elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i32Ty,
+                                          widthsAlloca,
+                                          ValueRange{idxVal});
+      auto widthConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(width));
+      LLVM::StoreOp::create(rewriter, loc, widthConst, elemPtr);
+    }
+
+    // Call __moore_fscanf(fd, format, results, widths, N)
+    auto fnTy = LLVM::LLVMFunctionType::get(
+        i32Ty, {i32Ty, ptrTy, ptrTy, ptrTy, i32Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_fscanf", fnTy);
+
+    auto maxResultsConst = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(numArgs));
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(fn),
+        ValueRange{fd, fmtDataPtr, resultsAlloca, widthsAlloca,
+                   maxResultsConst});
+    Value itemCount = call.getResult();
+
+    // Load each result and drive to the corresponding output ref
+    for (int32_t i = 0; i < numArgs; ++i) {
+      auto destRef = adaptor.getArgs()[i];
+      auto idxVal = LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                             rewriter.getI32IntegerAttr(i));
+      auto elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                          resultsAlloca,
+                                          ValueRange{idxVal});
+      Value parsedVal = LLVM::LoadOp::create(rewriter, loc, i64Ty, elemPtr);
+
+      Type origType = op.getArgs()[i].getType();
+      if (failed(writeScanfResultToRef(loc, ctx, mod, destRef, parsedVal,
+                                       origType, getTypeConverter(),
+                                       rewriter)))
+        return rewriter.notifyMatchFailure(
+            op, "fscanf: unsupported destination type for arg " +
+                    std::to_string(i));
+    }
+
+    rewriter.replaceOp(op, itemCount);
     return success();
   }
 };
@@ -24483,6 +24802,42 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
               result = arith::TruncIOp::create(rewriter, loc, resTy, inner);
           }
         }
+        // moore.class.upcast -> pointer passthrough in opaque-pointer mode.
+        else if (auto upcastOp = v.getDefiningOp<ClassUpcastOp>()) {
+          Value inner = convertMooreValue(upcastOp.getInstance());
+          if (inner) {
+            Type resTy = typeConverter->convertType(v.getType());
+            if (resTy) {
+              if (inner.getType() == resTy)
+                result = inner;
+              else if (isa<LLVM::LLVMPointerType>(inner.getType()) &&
+                       isa<LLVM::LLVMPointerType>(resTy))
+                result = inner;
+              else
+                result = UnrealizedConversionCastOp::create(rewriter, loc, resTy,
+                                                            inner)
+                             .getResult(0);
+            }
+          }
+        }
+        // moore.conversion used for class-handle/null conversions in constraints.
+        else if (auto convOp = v.getDefiningOp<ConversionOp>()) {
+          Value inner = convertMooreValue(convOp.getInput());
+          if (inner) {
+            Type resTy = typeConverter->convertType(v.getType());
+            if (resTy) {
+              if (inner.getType() == resTy)
+                result = inner;
+              else if (isa<LLVM::LLVMPointerType>(inner.getType()) &&
+                       isa<LLVM::LLVMPointerType>(resTy))
+                result = inner;
+              else
+                result = UnrealizedConversionCastOp::create(rewriter, loc, resTy,
+                                                            inner)
+                             .getResult(0);
+            }
+          }
+        }
         // moore.read %ref -> load from converted ref
         else if (auto readOp = v.getDefiningOp<ReadOp>()) {
           Value ref = readOp.getInput();
@@ -24534,6 +24889,11 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
                 if (handleTy) {
                   auto refClassSym = handleTy.getClassSym();
                   auto refStructInfo = cache.getStructInfo(refClassSym);
+                  if (!refStructInfo) {
+                    (void)resolveClassStructBody(mod, refClassSym,
+                                                 *typeConverter, cache);
+                    refStructInfo = cache.getStructInfo(refClassSym);
+                  }
                   if (refStructInfo) {
                     auto pathIt = refStructInfo->propertyPath.find(propName);
                     if (pathIt != refStructInfo->propertyPath.end()) {
@@ -27726,6 +28086,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     IntToStringOpConversion,
     StringToIntOpConversion,
     SScanfBIOpConversion,
+    FScanfBIOpConversion,
     IsUnknownBIOpConversion,
     CountOnesBIOpConversion,
     OneHotBIOpConversion,

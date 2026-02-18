@@ -5175,7 +5175,7 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (!inputStr)
         return {};
 
-      // Convert to StringType if not already
+      // Convert to StringType if not already (slang may pass packed integers)
       if (!isa<moore::StringType>(inputStr.getType())) {
         inputStr = moore::ConversionOp::create(
             builder, loc, moore::StringType::get(context.getContext()),
@@ -5223,6 +5223,64 @@ struct RvalueExprVisitor : public ExprVisitor {
                                                  builder.getStringAttr(formatStr),
                                                  outputRefs);
       return sscanfOp.getResult();
+    }
+
+    // $fscanf(fd, format, args...) reads formatted data from a file.
+    // IEEE 1800-2017 Section 21.3.3 "File input functions".
+    // The first argument is the file descriptor, the second is the format
+    // string, and the remaining arguments are output variables.
+    // Returns the number of items successfully read.
+    if (!subroutine.name.compare("$fscanf") && args.size() >= 2) {
+      // First argument is the file descriptor
+      Value fd = context.convertRvalueExpression(*args[0]);
+      if (!fd)
+        return {};
+
+      // Ensure fd is i32
+      auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+      if (fd.getType() != i32Ty)
+        fd = moore::ConversionOp::create(builder, loc, i32Ty, fd);
+
+      // Second argument is the format string - must be a string literal
+      const auto *fmtArg = args[1];
+      std::string formatStr;
+      if (const auto *strLit = fmtArg->as_if<slang::ast::StringLiteral>()) {
+        formatStr = std::string(strLit->getValue());
+      } else {
+        // Try to evaluate as constant
+        auto cv = context.evaluateConstant(*fmtArg);
+        if (cv && cv.isString()) {
+          formatStr = cv.str();
+        } else {
+          mlir::emitError(loc) << "$fscanf format must be a string literal";
+          return {};
+        }
+      }
+
+      // Remaining arguments are output variables
+      SmallVector<Value> outputRefs;
+      for (size_t i = 2; i < args.size(); ++i) {
+        const auto *arg = args[i];
+        // Slang wraps output arguments in AssignmentExpression
+        if (const auto *assignExpr =
+                arg->as_if<slang::ast::AssignmentExpression>()) {
+          Value ref = context.convertLvalueExpression(assignExpr->left());
+          if (!ref)
+            return {};
+          outputRefs.push_back(ref);
+        } else {
+          // Try direct lvalue conversion
+          Value ref = context.convertLvalueExpression(*arg);
+          if (!ref)
+            return {};
+          outputRefs.push_back(ref);
+        }
+      }
+
+      // Create the fscanf operation
+      auto fscanfOp = moore::FScanfBIOp::create(
+          builder, loc, fd, builder.getStringAttr(formatStr), outputRefs);
+      return fscanfOp.getResult();
     }
 
     // Handle string substr method: str.substr(start, len) has 3 args

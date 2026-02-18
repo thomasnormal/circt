@@ -3266,6 +3266,31 @@ def SScanfBIOp : Builtin<"sscanf"> {
   let assemblyFormat = "$input `,` $format `,` $args attr-dict `:` type($args)";
 }
 
+def FScanfBIOp : Builtin<"fscanf"> {
+  let summary = "Read formatted data from a file";
+  let description = [{
+    Corresponds to the `$fscanf` system function. Reads data from the file
+    associated with the given file descriptor according to the format
+    specification and stores the results in the provided output arguments.
+
+    The format string supports the same format specifiers as `$sscanf`:
+    - %d: Signed decimal integer
+    - %h, %x: Hexadecimal integer
+    - %o: Octal integer
+    - %b: Binary integer
+    - %s: String (whitespace-delimited)
+    - %c: Single character
+
+    Returns the number of items successfully read and assigned, or EOF (-1)
+    if an input failure occurs before any conversion.
+
+    See IEEE 1800-2017 Section 21.3.3 "File input functions".
+  }];
+  let arguments = (ins TwoValuedI32:$fd, StrAttr:$format, Variadic<RefType>:$args);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$fd `,` $format `,` $args attr-dict `:` type($args)";
+}
+
 def FGetCBIOp : Builtin<"fgetc"> {
   let summary = "Read a single character from a file";
   let description = [{
