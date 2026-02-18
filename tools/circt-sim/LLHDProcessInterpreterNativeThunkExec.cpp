@@ -1112,8 +1112,13 @@ bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
   Block *terminalBlock = waitOp.getDest();
   auto opIt = terminalBlock->begin();
   sim::PrintFormattedProcOp printOp;
+  sim::TerminateOp terminateOp;
   if (auto maybePrint = dyn_cast<sim::PrintFormattedProcOp>(*opIt)) {
     printOp = maybePrint;
+    ++opIt;
+  }
+  if (auto maybeTerminate = dyn_cast<sim::TerminateOp>(*opIt)) {
+    terminateOp = maybeTerminate;
     ++opIt;
   }
   auto haltOp = dyn_cast<llhd::HaltOp>(*opIt);
@@ -1174,6 +1179,23 @@ bool LLHDProcessInterpreter::executeResumableWaitThenHaltNativeThunk(
     state.waiting = false;
     if (printOp && failed(interpretProcPrint(procId, printOp))) {
       thunkState.deoptRequested = true;
+      return true;
+    }
+    if (terminateOp && failed(interpretTerminate(procId, terminateOp))) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
+    if (state.halted) {
+      state.jitThunkResumeToken = 0;
+      thunkState.halted = true;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
+    }
+    if (state.waiting) {
+      thunkState.halted = state.halted;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
       return true;
     }
     if (failed(interpretHalt(procId, haltOp))) {

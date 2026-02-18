@@ -725,6 +725,39 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         this wave; full plan still requires periodic broader sweeps across
         `~/mbit/*avip*`, `~/sv-tests/`, `~/verilator-verification/`,
         `~/yosys/tests/`, and `~/opentitan/`.
+29. i2s strict burn-down closure for terminate path + updated core8 snapshot:
+    - closure target:
+      - bounded core8 sweep
+        (`/tmp/avip-circt-sim-jit-core8-buildbin-20260218-052944`) showed
+        one remaining strict deopt in `i2s`:
+        `unsupported_operation:first_op:sim.terminate`
+        (`llhd_process_4`), with shape:
+        `llhd.wait delay -> sim.terminate -> llhd.halt`.
+    - implementation:
+      - narrowed resumable wait-then-halt support to allow terminal
+        destination block form:
+        optional `sim.proc.print`, optional `sim.terminate`, then `llhd.halt`.
+      - execution path now runs optional `sim.terminate` before `llhd.halt`
+        and preserves native resume semantics when terminate defers.
+    - regression coverage:
+      - added strict test:
+        `jit-process-thunk-resumable-wait-then-terminate-halt.mlir`.
+    - validation:
+      - `ninja -C build circt-sim`: PASS.
+      - direct strict compile-mode checks on touched regressions: PASS
+        (`jit_deopts_total=0` for all).
+      - bounded reruns:
+        - `i2s`:
+          `/tmp/avip-circt-sim-jit-i2s-buildbin-20260218-055443`
+          compile `OK` (`39s`), sim `OK` (`71s`), `jit_deopts_total=0`.
+        - `jtag`:
+          `/tmp/avip-circt-sim-jit-jtag-buildbin-20260218-055649`
+          compile `OK` (`26s`), sim `OK` (`39s`), `jit_deopts_total=0`.
+    - updated bounded core8 status after this wave:
+      - strict-native deopt closure: `apb`, `ahb`, `axi4Lite`, `i2s`,
+        `i3c`, `jtag`, `spi` at `jit_deopts_total=0` (bounded sample lane).
+      - remaining blocker in core8 matrix: `axi4` compile timeout
+        (`COMPILE_TIMEOUT=180`, sim skipped).
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

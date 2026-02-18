@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1483 - February 18, 2026
+
+### circt-sim JIT: close `i2s` `first_op:sim.terminate` tail with narrow wait->terminate->halt native support
+
+1. **Extended resumable wait-then-halt candidate matching** in
+   `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`:
+   - terminal wait-destination block now accepts:
+     - optional `sim.proc.print`
+     - optional `sim.terminate`
+     - required trailing `llhd.halt`
+2. **Extended resumable wait-then-halt execution** in
+   `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`:
+   - token-1 resume path now executes optional `sim.terminate` before `llhd.halt`.
+   - handles post-terminate states safely:
+     - halted: complete thunk successfully.
+     - waiting (deferred terminate): keep resumable suspension without deopt.
+3. **Added strict regression coverage**:
+   - `test/Tools/circt-sim/jit-process-thunk-resumable-wait-then-terminate-halt.mlir`
+4. **Validation**:
+   - `ninja -C build circt-sim`: PASS.
+   - direct strict compile-mode checks (all `jit_deopts_total=0`):
+     - `jit-process-thunk-resumable-wait-then-terminate-halt.mlir`
+     - `jit-process-thunk-multiblock-call-indirect-delay-halt.mlir`
+     - `jit-process-thunk-multiblock-call-indirect-process-await-halt.mlir`
+     - `jit-process-thunk-multiblock-llvm-call-process-await-halt.mlir`
+     - `jit-process-thunk-multiblock-bare-wait-no-trigger.mlir`
+     - `jit-process-thunk-multiblock-scf-if-randomize-range-halt.mlir`
+     - `jit-process-thunk-fork-join-disable-fork-terminator.mlir`
+   - bounded AVIP compile-mode reruns:
+     - `i2s`:
+       `/tmp/avip-circt-sim-jit-i2s-buildbin-20260218-055443`
+       -> compile `OK` (`39s`), sim `OK` (`71s`), `jit_deopts_total=0`.
+     - `jtag`:
+       `/tmp/avip-circt-sim-jit-jtag-buildbin-20260218-055649`
+       -> compile `OK` (`26s`), sim `OK` (`39s`), `jit_deopts_total=0`.
+   - broader bounded core8 sweep snapshot:
+     - `/tmp/avip-circt-sim-jit-core8-buildbin-20260218-052944`
+     - deopt summary:
+       - `apb/ahb/axi4Lite/i3c/jtag/spi`: `jit_deopts_total=0`
+       - `i2s`: `jit_deopts_total=1` (now closed by rerun above)
+       - `axi4`: compile timeout at `180s` (sim skipped), still open.
+
 ## Iteration 1482 - February 18, 2026
 
 ### circt-sim JIT: close final APB `invalid_dest_block_state` tail and reach zero-deopt in bounded compile lane

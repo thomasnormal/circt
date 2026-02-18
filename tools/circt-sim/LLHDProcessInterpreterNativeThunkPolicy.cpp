@@ -935,6 +935,12 @@ bool LLHDProcessInterpreter::isResumableWaitThenHaltNativeThunkCandidate(
   }
   if (opIt == dest->end())
     return false;
+  if (auto terminateOp = dyn_cast<sim::TerminateOp>(*opIt)) {
+    (void)terminateOp;
+    ++opIt;
+    if (opIt == dest->end())
+      return false;
+  }
   auto haltOp = dyn_cast<llhd::HaltOp>(*opIt);
   if (!haltOp)
     return false;
