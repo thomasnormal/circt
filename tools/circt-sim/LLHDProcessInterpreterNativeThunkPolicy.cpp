@@ -11,10 +11,12 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 
 #define DEBUG_TYPE "llhd-interpreter"
@@ -127,7 +129,8 @@ static bool isTxPacketHelperCallPrelude(mlir::func::CallOp callOp) {
   return true;
 }
 
-static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp) {
+static bool
+isManuallyInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp) {
   StringRef calleeName = callOp.getCallee();
   if (calleeName == "m_execute_scheduled_forks" ||
       calleeName == "m_process_guard" ||
@@ -163,6 +166,98 @@ static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp)
     return true;
 
   return false;
+}
+
+enum class FuncSuspendSummary : uint8_t { InProgress, NonSuspending, MaySuspend };
+
+static bool
+isKnownSuspendingRuntimeCalleeNameForNativeThunkPolicy(StringRef calleeName) {
+  return calleeName == "__moore_wait_condition" ||
+         calleeName == "__moore_delay" ||
+         calleeName == "__moore_process_await" ||
+         calleeName == "__moore_wait_event";
+}
+
+static mlir::func::FuncOp lookupLocalFuncCallee(mlir::func::CallOp callOp) {
+  ModuleOp module = callOp->getParentOfType<ModuleOp>();
+  if (!module)
+    return {};
+  return module.lookupSymbol<mlir::func::FuncOp>(callOp.getCallee());
+}
+
+static bool
+funcBodyMaySuspend(mlir::func::FuncOp funcOp,
+                   llvm::DenseMap<Operation *, FuncSuspendSummary> &cache);
+
+static bool opMaySuspendInFuncBody(
+    Operation *op, llvm::DenseMap<Operation *, FuncSuspendSummary> &cache) {
+  if (!op)
+    return true;
+  if (isa<llhd::WaitOp, llhd::YieldOp, llhd::HaltOp, sim::SimForkOp,
+          sim::SimJoinOp, sim::SimJoinAnyOp, sim::SimWaitForkOp,
+          sim::SimDisableForkOp, mlir::func::CallIndirectOp>(op))
+    return true;
+  if (auto callOp = dyn_cast<mlir::func::CallOp>(op)) {
+    if (isManuallyInterceptedNonSuspendingFuncCallPrelude(callOp))
+      return false;
+    auto calleeFunc = lookupLocalFuncCallee(callOp);
+    if (!calleeFunc)
+      return true;
+    return funcBodyMaySuspend(calleeFunc, cache);
+  }
+  if (auto llvmCall = dyn_cast<LLVM::CallOp>(op)) {
+    auto callee = llvmCall.getCallee();
+    if (!callee)
+      return true;
+    return isKnownSuspendingRuntimeCalleeNameForNativeThunkPolicy(*callee);
+  }
+  return false;
+}
+
+static bool
+funcBodyMaySuspend(mlir::func::FuncOp funcOp,
+                   llvm::DenseMap<Operation *, FuncSuspendSummary> &cache) {
+  Operation *key = funcOp.getOperation();
+  auto it = cache.find(key);
+  if (it != cache.end()) {
+    if (it->second == FuncSuspendSummary::InProgress)
+      return true;
+    return it->second == FuncSuspendSummary::MaySuspend;
+  }
+
+  cache[key] = FuncSuspendSummary::InProgress;
+  bool maySuspend = funcOp.isExternal();
+  if (!maySuspend) {
+    for (Block &block : funcOp.getBody()) {
+      for (Operation &op : block) {
+        if (opMaySuspendInFuncBody(&op, cache)) {
+          maySuspend = true;
+          break;
+        }
+      }
+      if (maySuspend)
+        break;
+    }
+  }
+
+  cache[key] = maySuspend ? FuncSuspendSummary::MaySuspend
+                          : FuncSuspendSummary::NonSuspending;
+  return maySuspend;
+}
+
+static bool
+isStaticallyNonSuspendingLocalFuncCallPrelude(mlir::func::CallOp callOp) {
+  auto calleeFunc = lookupLocalFuncCallee(callOp);
+  if (!calleeFunc || calleeFunc.isExternal())
+    return false;
+  llvm::DenseMap<Operation *, FuncSuspendSummary> cache;
+  return !funcBodyMaySuspend(calleeFunc, cache);
+}
+
+static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp) {
+  if (isManuallyInterceptedNonSuspendingFuncCallPrelude(callOp))
+    return true;
+  return isStaticallyNonSuspendingLocalFuncCallPrelude(callOp);
 }
 
 static bool isMooreWaitConditionCall(LLVM::CallOp callOp) {
