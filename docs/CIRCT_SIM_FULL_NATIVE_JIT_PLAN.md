@@ -12,19 +12,24 @@ This plan is decision-complete and implementation-ready.
 ---
 
 ## Latest Program Update (February 18, 2026)
-1. Shared UVM getter cache instrumentation was hardened:
-   - shared-hit trace formatting fixed
-   - shared-store tracing added
-   - profile summary now emits
-     `UVM function-result cache: local_hits/shared_hits/local_entries/shared_entries`.
-2. Bounded I3C compile-mode repro (55s cap, seed 1) now confirms heavy shared-cache
-   activity in real workload conditions:
-   - `shared_hits=5742`, `shared_entries=176`
-   - sim-time progress reached `451490000000 fs` in bounded window.
-3. Functional closure remains the primary blocker for I3C:
-   - coverage still `0.00% / 0.00%` despite runtime cache gains.
-   - next work should target functional progression/coverage sampling root cause,
-     not only getter hot-path overhead.
+1. Strict native-thunk call-stack regression was closed for `func.call_indirect`
+   resumptions:
+   - fixed process-region resolution in both native-thunk policy and execution
+     paths so saved-call-stack activations stay anchored to process-body
+     dispatch instead of transient callee regions.
+   - this removes strict deopts with
+     `detail=trivial_thunk:call_stack_active` in the known call-indirect
+     multiblock/single-block strict tests.
+2. Validation status for this closure:
+   - focused strict lit set: `3/3 PASS`
+     (`jit-process-thunk-multiblock-call-indirect-delay-halt`,
+     `jit-process-thunk-multiblock-call-indirect-process-await-halt`,
+     `jit-process-thunk-single-block-call-indirect-fork-callstack-halt`).
+   - focused unit set: `*TrivialThunk*` `2/2 PASS`.
+3. Current broad-suite status on this dirty tree:
+   - full `check-circt-tools-circt-sim` run still has unrelated instability
+     (`2 FAIL`, `1 XPASS`), so immediate next work remains stabilization and
+     cleanup before promoting additional default-on JIT behavior.
 
 ---
 

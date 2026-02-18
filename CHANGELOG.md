@@ -72016,6 +72016,42 @@ See CHANGELOG.md on recent progress.
         - `finish-item-blocks-until-item-done.mlir` (`XFAIL`, unchanged).
       - bounded AVIP `jtag` compile-mode smokes on this dirty tree:
         - `/tmp/avip-circt-sim-jtag-callindirect-split-20260218-204023/matrix.tsv`
-        - `/tmp/avip-circt-sim-jtag-callindirect-split120-20260218-204155/matrix.tsv`
+      - `/tmp/avip-circt-sim-jtag-callindirect-split120-20260218-204155/matrix.tsv`
         - both runs compile `OK`, sim `TIMEOUT` in reset-state loop
           (tracked as ongoing dirty-tree instability, not a new crash mode).
+67. `circt-sim` eliminate strict deopts for saved-call-stack
+    `func.call_indirect` resumptions in native-thunk dispatch
+    (February 18, 2026):
+    - root cause:
+      - native-thunk region resolution could pivot to transient callee regions
+        when `currentBlock` was inside a suspended function frame, causing
+        resumable thunk handlers to be skipped and trivial fallback to deopt
+        with `trivial_thunk:call_stack_active`.
+    - fixes:
+      - `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+      - `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`
+      - both `resolveNativeThunkProcessRegion(...)` variants now keep dispatch
+        anchored on the process body while `callStack` is non-empty.
+    - regression coverage:
+      - retained/validated strict no-deopt call-indirect tests:
+        - `jit-process-thunk-multiblock-call-indirect-delay-halt.mlir`
+        - `jit-process-thunk-multiblock-call-indirect-process-await-halt.mlir`
+        - `jit-process-thunk-single-block-call-indirect-fork-callstack-halt.mlir`
+      - unit checks (saved call-stack handling):
+        - `TrivialThunkDeoptsWithSavedCallStack`
+        - `TrivialThunkResumesSavedCallStackWhenWaiting`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test -j4 circt-sim CIRCTSimToolTests`
+      - focused lit: PASS
+        - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/jit-process-thunk-multiblock-call-indirect-delay-halt.mlir build-test/test/Tools/circt-sim/jit-process-thunk-multiblock-call-indirect-process-await-halt.mlir build-test/test/Tools/circt-sim/jit-process-thunk-single-block-call-indirect-fork-callstack-halt.mlir`
+      - focused unit tests: PASS
+        - `build-test/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter='*TrivialThunk*'`
+      - full `check-circt-tools-circt-sim` on this dirty tree:
+        - `Passed=454`, `XFAIL=45`, `Failed=2`, `XPASS=1`
+        - failures observed:
+          - `module-drive-process-result-comb.mlir`
+          - `llhd-process-result-instance-input.mlir`
+        - xpass observed:
+          - `self-driven-module-drive-filter.mlir`
+        - treated as pre-existing dirty-tree instability pending cleanup.
