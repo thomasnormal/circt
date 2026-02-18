@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1514 - February 18, 2026
+
+### circt-sim: disable_fork wake-consumption guard + I3C baseline gap revalidation
+
+1. **disable_fork wake-consumption guard** (`tools/circt-sim/LLHDProcessInterpreter.cpp/.h`):
+   - added a one-shot deferred `sim.disable_fork` path when a fork child is in a
+     schedulable wake-pending state (`Ready`/`Suspended` + interpreter
+     `waiting=true` + nonzero step history).
+   - defer is tokenized per-parent (`disableForkDeferredToken`) and executes
+     on a bounded future delta, then resumes the parent.
+   - added explicit cleanup of deferred-token state in `finalizeProcess`.
+
+2. **A/B control switch for execute-phase interception**:
+   - added `CIRCT_SIM_DISABLE_EXEC_PHASE_INTERCEPT` runtime switch for direct
+     isolate-and-compare runs against the execute-phase fork interception path.
+
+3. **Regression coverage**:
+   - added `test/Tools/circt-sim/fork-disable-ready-wakeup.sv`
+     (deterministic fork/join_any + immediate wake + disable pattern).
+   - asserts deferred disable path is taken and the woken child executes before
+     fork teardown (`PASS`, no `FAIL`).
+
+4. **Validation**:
+   - build:
+     - `ninja -C build-test circt-sim circt-verilog` PASS.
+   - focused circt-sim tests PASS:
+     - `fork-disable-ready-wakeup.sv`
+     - `disable-fork-halt.mlir`
+     - `fork-join-basic.mlir`
+     - `fork-execute-phase-monitor-intercept-single-shot.mlir`
+     - `execute-phase-monitor-fork-objection-waiter.mlir`
+     - `jit-process-thunk-fork-branch-disable-fork-terminator.mlir`
+     - `jit-process-thunk-fork-join-disable-fork-terminator.mlir`.
+   - I3C compile-mode lane re-runs:
+     - circt-sim: still completes in ~65-66s with persistent scoreboard errors
+       at `713 ns` and printed coverage `100%/100%`.
+     - xcelium reference (`utils/run_avip_xcelium_reference.sh`, i3c seed 1):
+       `0` UVM errors, `sim_time=3970 ns`, coverage `35.19%/35.19%`.
+
+5. **Current limitation (reconfirmed)**:
+   - I3C parity is still open.
+   - circt-sim diverges from xcelium in both temporal behavior and transaction
+     accounting for this lane; execute-phase sequencing and/or sequencer-driver
+     lifecycle semantics still need a deeper root-cause closure.
+
 ## Iteration 1513 - February 18, 2026
 
 ### circt-sim: post-closure status check (UART strict zero-deopt sample + all9 stability)
@@ -71833,3 +71878,34 @@ See CHANGELOG.md on recent progress.
           `/tmp/yosys-sva-bmc-defaultjit-20260218-173617.tsv`
         - OpenTitan:
           `/tmp/opentitan-circt-sim-defaultjit-20260218-173617/run.log`.
+66. `circt-sim` split `func.call_indirect` execution into a dedicated
+    interpreter source file
+    (February 18, 2026):
+    - refactored `executeStep` by extracting the full
+      `func.call_indirect` block into:
+      - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+      - new entrypoint:
+        `LLHDProcessInterpreter::interpretFuncCallIndirect(...)`
+    - updated:
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp` (dispatch-only branch)
+      - `tools/circt-sim/LLHDProcessInterpreter.h` (method declaration)
+      - `tools/circt-sim/CMakeLists.txt` (new TU build wiring).
+    - intent:
+      - reduce churn risk and review complexity in
+        `LLHDProcessInterpreter.cpp` while keeping runtime behavior unchanged.
+    - validation:
+      - build:
+        - `ninja -C build-test -j4 circt-sim`: PASS.
+        - `ninja -C build -j4 circt-sim`: PASS.
+      - focused `call_indirect` regression cluster: PASS (`5 PASS`, `1 XFAIL`)
+        - `call-indirect-runtime-override-site-cache.mlir`
+        - `vtable-dispatch.mlir`
+        - `vtable-dispatch-inherited.mlir`
+        - `jit-process-thunk-func-call-local-helper-call-indirect-vtable-slot-nonsuspending-halt.mlir`
+        - `jit-process-thunk-func-call-local-helper-call-indirect-static-nonsuspending-halt.mlir`
+        - `finish-item-blocks-until-item-done.mlir` (`XFAIL`, unchanged).
+      - bounded AVIP `jtag` compile-mode smokes on this dirty tree:
+        - `/tmp/avip-circt-sim-jtag-callindirect-split-20260218-204023/matrix.tsv`
+        - `/tmp/avip-circt-sim-jtag-callindirect-split120-20260218-204155/matrix.tsv`
+        - both runs compile `OK`, sim `TIMEOUT` in reset-state loop
+          (tracked as ongoing dirty-tree instability, not a new crash mode).

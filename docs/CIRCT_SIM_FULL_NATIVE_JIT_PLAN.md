@@ -1983,6 +1983,84 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - next closure target:
       - continue compile-mode long-tail closure on `axi4` and `uart` while
         keeping compile-mode default JIT governor enabled.
+61. `func.call_indirect` runtime-override site-cache for static vtable slots
+    (February 18, 2026):
+    - runtime closure:
+      - added per-callsite cache for static `func.call_indirect` vtable-slot
+        extraction used by direct-path runtime-override logic in
+        `tools/circt-sim/LLHDProcessInterpreter.cpp`.
+      - cache stores the static slot index once per callsite and reuses it on
+        subsequent executions, avoiding repeated SSA-chain tracing
+        (`cast -> load -> gep`) on hot indirect dispatch paths.
+      - dynamic-slot callsites preserve prior behavior by falling back to
+        per-activation index resolution.
+      - added env-gated diagnostics:
+        - `CIRCT_SIM_TRACE_CALL_INDIRECT_SITE_CACHE=1`
+        - emits `[CI-SITE-CACHE] store ...` and `[CI-SITE-CACHE] hit ...`.
+    - regression coverage:
+      - added
+        `test/Tools/circt-sim/call-indirect-runtime-override-site-cache.mlir`
+        to lock store/hit trace behavior and functional result (`sum = 6`).
+    - validation:
+      - targeted lit checks: PASS
+        - `call-indirect-runtime-override-site-cache.mlir`
+        - `vtable-dispatch.mlir`
+        - `vtable-dispatch-inherited.mlir`
+        - `jit-process-thunk-func-call-local-helper-call-indirect-vtable-slot-nonsuspending-halt.mlir`
+        - `jit-process-thunk-func-call-local-helper-call-indirect-static-nonsuspending-halt.mlir`
+      - bounded AVIP compile-mode reruns (`--timeout=60`):
+        - UART:
+          `/tmp/avip-circt-sim-uart-sitecache-20260218-202648`
+          (`jit_deopts_total=0`; bounded progression effectively neutral vs
+          prior sample).
+        - AXI4:
+          `/tmp/avip-circt-sim-axi4-sitecache-20260218-202831`
+          (`jit_deopts_total=0`; bounded `final_time_fs`
+          `149870000000 -> 153610000000`, +2.5% vs prior sample).
+        - JTAG guard:
+          `/tmp/avip-circt-sim-jtag-sitecache-20260218-203118`
+          (`compile=OK`, `sim=OK`).
+    - note:
+      - full `check-circt-tools-circt-sim` remains noisy on this dirty tree
+        due pre-existing crashes in unrelated paths
+        (`LLHDProcessInterpreterGlobals.cpp` / global-constructor lanes).
+
+62. `func.call_indirect` execution-path maintainability split into dedicated
+    translation unit
+    (February 18, 2026):
+    - structural refactor:
+      - extracted `executeStep` `func.call_indirect` handling into:
+        - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+      - introduced:
+        - `LLHDProcessInterpreter::interpretFuncCallIndirect(...)`
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp` now dispatches
+        `func.call_indirect` to that helper instead of carrying the full
+        inline block.
+      - updated build wiring:
+        - `tools/circt-sim/CMakeLists.txt`
+      - updated interface declaration:
+        - `tools/circt-sim/LLHDProcessInterpreter.h`.
+    - rationale:
+      - this reduces `LLHDProcessInterpreter.cpp` size/complexity and isolates
+        the highest-churn dispatch path for upcoming full-native JIT closure
+        work.
+    - validation:
+      - builds: PASS
+        - `ninja -C build-test -j4 circt-sim`
+        - `ninja -C build -j4 circt-sim`
+      - focused lit cluster: PASS (`5 PASS`, `1 XFAIL`)
+        - `call-indirect-runtime-override-site-cache.mlir`
+        - `vtable-dispatch.mlir`
+        - `vtable-dispatch-inherited.mlir`
+        - `jit-process-thunk-func-call-local-helper-call-indirect-vtable-slot-nonsuspending-halt.mlir`
+        - `jit-process-thunk-func-call-local-helper-call-indirect-static-nonsuspending-halt.mlir`
+        - `finish-item-blocks-until-item-done.mlir` (`XFAIL`, unchanged).
+      - bounded AVIP compile-mode smoke on this dirty tree:
+        - `/tmp/avip-circt-sim-jtag-callindirect-split-20260218-204023/matrix.tsv`
+        - `/tmp/avip-circt-sim-jtag-callindirect-split120-20260218-204155/matrix.tsv`
+        - both reruns compile `OK`, sim `TIMEOUT` in reset-state loop
+          (no new crash signature; status currently treated as unresolved
+          dirty-tree performance/functional noise).
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

@@ -1171,6 +1171,11 @@ private:
   mlir::LogicalResult interpretFuncCall(ProcessId procId,
                                          mlir::func::CallOp callOp);
 
+  /// Interpret a func.call_indirect operation.
+  mlir::LogicalResult
+  interpretFuncCallIndirect(ProcessId procId,
+                            mlir::func::CallIndirectOp callIndirectOp);
+
   /// Handle UVM-focused fast-paths for func.call sites.
   /// Returns true when handled and results (if any) are already set.
   bool handleUvmFuncCallFastPath(ProcessId procId, mlir::func::CallOp callOp,
@@ -1441,6 +1446,9 @@ private:
   /// Recursively kill a process and all its fork descendants.
   /// Used when a UVM phase ends to clean up forever-loop monitors, etc.
   void killProcessTree(ProcessId procId);
+
+  /// Returns true if `rootProcId` or any non-halted descendant is still alive.
+  bool isProcessSubtreeAlive(ProcessId rootProcId) const;
 
   //===--------------------------------------------------------------------===//
   // Signal Registry Bridge
@@ -1810,6 +1818,13 @@ private:
   uint64_t jitRuntimeIndirectNextSiteId = 1;
   bool jitRuntimeIndirectProfileEnabled = false;
 
+  struct CallIndirectRuntimeOverrideSiteInfo {
+    bool hasStaticMethodIndex = false;
+    int64_t staticMethodIndex = -1;
+  };
+  llvm::DenseMap<mlir::Operation *, CallIndirectRuntimeOverrideSiteInfo>
+      callIndirectRuntimeOverrideSiteInfo;
+
   JitRuntimeIndirectSiteData &
   getOrCreateJitRuntimeIndirectSiteData(ProcessId procId,
                                         mlir::func::CallIndirectOp callOp);
@@ -1818,6 +1833,8 @@ private:
                                             llvm::StringRef calleeName);
   void noteJitRuntimeIndirectUnresolved(ProcessId procId,
                                         mlir::func::CallIndirectOp callOp);
+  bool getCachedCallIndirectStaticMethodIndex(
+      mlir::func::CallIndirectOp callOp, int64_t &methodIndex);
 
   /// UVM fast-path profiling counters keyed by fast-path action name.
   /// Enabled together with CIRCT_SIM_PROFILE_FUNCS.
@@ -1924,6 +1941,9 @@ private:
 
   /// Cached env flag for fork/join diagnostics (CIRCT_SIM_TRACE_FORK_JOIN).
   bool traceForkJoinEnabled = false;
+
+  /// Cached env flag for call_indirect site-cache diagnostics.
+  bool traceCallIndirectSiteCacheEnabled = false;
 
   /// Track a UVM fast-path hit and evaluate hotness-gated promotion hooks.
   void noteUvmFastPathActionHit(llvm::StringRef actionKey);
@@ -2220,6 +2240,10 @@ private:
   std::map<ProcessId, ForkId> joinNoneDisableForkResumeFork;
   std::map<ProcessId, uint64_t> joinNoneDisableForkResumeToken;
   std::map<ProcessId, unsigned> joinNoneDisableForkResumePollCount;
+
+  /// One-shot deferral token for sim.disable_fork when a child is Ready but
+  /// still marked waiting in interpreter state (wakeup not yet consumed).
+  std::map<ProcessId, uint64_t> disableForkDeferredToken;
 
   /// Per-process phase address currently being executed by the phase hopper.
   /// Set when execute_phase is entered, used by raise/drop_objection
