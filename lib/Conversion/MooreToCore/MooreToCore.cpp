@@ -14500,8 +14500,8 @@ struct TimeFormatBIOpConversion : public OpConversionPattern<TimeFormatBIOp> {
 
     // Create a global constant for the suffix string.
     StringRef suffix = op.getSuffix();
-    std::string globalName =
-        ("__moore_timeformat_suffix_" + llvm::utohexstr(suffix.size())).str();
+    std::string globalName = std::string("__moore_timeformat_suffix_") +
+                             llvm::utohexstr(llvm::hash_value(suffix));
     Value suffixPtr =
         createGlobalStringConstant(loc, mod, rewriter, suffix, globalName);
     Value suffixLen = LLVM::ConstantOp::create(
@@ -28116,6 +28116,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FEofBIOpConversion,
     FFlushBIOpConversion,
     FTellBIOpConversion,
+    TimeFormatBIOpConversion,
 
     // Patterns for queue and dynamic array operations.
     QueueMaxOpConversion,

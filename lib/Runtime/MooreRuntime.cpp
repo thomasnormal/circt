@@ -18472,3 +18472,57 @@ extern "C" int32_t __moore_fscanf(int32_t fd, const char *format,
   return __moore_sscanf(buffer, static_cast<int64_t>(len), format, results,
                         result_widths, max_results);
 }
+
+// ---- $timeformat support ----
+
+static int32_t g_timeformat_units = -9;       // ns
+static int32_t g_timeformat_precision = 0;
+static std::string g_timeformat_suffix = " ns";
+static int32_t g_timeformat_min_width = 20;
+
+void __moore_timeformat(int32_t units, int32_t precision,
+                        const char *suffix_data, int64_t suffix_len,
+                        int32_t min_width) {
+  g_timeformat_units = units;
+  g_timeformat_precision = precision;
+  if (suffix_data && suffix_len > 0)
+    g_timeformat_suffix.assign(suffix_data, suffix_len);
+  else
+    g_timeformat_suffix.clear();
+  g_timeformat_min_width = min_width;
+}
+
+MooreString __moore_format_time(int64_t time_fs) {
+  // Convert femtoseconds to the unit specified by $timeformat.
+  // Units: 0=s, -3=ms, -6=us, -9=ns, -12=ps, -15=fs
+  // displayed_value = time_fs / 10^(15 + units)
+  // For units=-9 (ns): time_fs / 10^6
+  int scale_exp = 15 + g_timeformat_units; // e.g., units=-9 → 6
+  double divisor = 1.0;
+  for (int i = 0; i < scale_exp; ++i)
+    divisor *= 10.0;
+  for (int i = 0; i > scale_exp; --i)
+    divisor *= 0.1;
+  double value = static_cast<double>(time_fs) / divisor;
+
+  // Format with the specified precision.
+  char buf[128];
+  int n = std::snprintf(buf, sizeof(buf), "%.*f%s", g_timeformat_precision,
+                        value, g_timeformat_suffix.c_str());
+  if (n < 0)
+    n = 0;
+
+  // Pad to min_width.
+  int total = std::max(n, static_cast<int>(g_timeformat_min_width));
+  char *result = static_cast<char *>(std::malloc(total + 1));
+  int padding = total - n;
+  if (padding > 0)
+    std::memset(result, ' ', padding);
+  std::memcpy(result + padding, buf, n);
+  result[total] = '\0';
+
+  MooreString ms;
+  ms.data = result;
+  ms.len = total;
+  return ms;
+}
