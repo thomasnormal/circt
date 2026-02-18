@@ -1409,6 +1409,49 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - add targeted fast path for `GenerateBaudClk` caller-side resumptions
         (fork branch lane) so bounded UART can advance further per wall second
         before broad all-AVIP rerun.
+48. Baud delay-batch guard broadening for low-visibility edge lanes + UART
+    bounded-progress jump (February 18, 2026):
+    - runtime closure:
+      - refined `handleBaudClkGeneratorFastPath` guarding in
+        `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+        - batch-resume guard now accepts elapsed-time-only validation as the
+          primary criterion (`elapsedFs == expectedDelayFs`) even when direct
+          clock-level sampling is unavailable.
+        - when clock-level sampling is available, parity mismatch can be
+          corrected via one-edge adjustment before applying batched count
+          updates.
+        - stable edge-interval tracking for batch eligibility is now based on
+          observed activation deltas, avoiding dependence on per-edge sampled
+          polarity toggles.
+        - batch scheduling no longer requires `clockSampleValid` at schedule
+          point when interval stability is already established.
+      - keeps existing mismatch fallback/de-batching path for unsafe cases.
+    - validation:
+      - build:
+        - `ninja -C build -j4 circt-sim`: PASS.
+        - `ninja -C build-test -j4 circt-sim`: PASS.
+      - focused regressions:
+        - `func-baud-clk-generator-fast-path-delay-batch.mlir`: PASS
+          (`batch-schedule` observed).
+        - `jit-process-fast-path-store-wait-self-loop.mlir`: PASS.
+      - UART bounded compile lane (20s):
+        - trace sample:
+          `/tmp/uart-baudtrace-20s-post-20260218-135147.log`
+          shows active `batch-schedule` hits.
+        - runtime sample:
+          `/tmp/uart-timeout20-post-batchguard-20260218-135207.log`
+          advances to `74876400000 fs` (up from ~`4e9`-class pre-closure in
+          same bound), and
+          `fork_{80,81,82}_branch_0` drop from ~`37k-43k` steps to `52`.
+      - UART extended bounds:
+        - `/tmp/uart-timeout60-post-batchguard-20260218-135349.log`:
+          `353040000000 fs`, coverage `Rx=0%`, `Tx=100%`.
+        - `/tmp/uart-timeout120-post-batchguard-20260218-135534.log`:
+          `569765800000 fs`, coverage `Rx=0%`, `Tx=100%`.
+    - next closure target:
+      - resolve remaining functional/phase-progress blocker for UART Rx
+        coverage (`UartRxCovergroup` still 0%) and reduce new dominant hotspot
+        (`fork_18_branch_0` `sim.fork` lane) before all-AVIP rerun.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

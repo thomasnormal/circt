@@ -70975,3 +70975,37 @@ See CHANGELOG.md on recent progress.
         - `/tmp/uart-timeout20-storewaitfastpath-20260218-133742.log`
         - `llhd_process_0` now reports `steps=0`; dominant remaining pressure
           is in fork branch `func.call(*::GenerateBaudClk)` lanes.
+64. `circt-sim` baud delay-batch guard broadening for UART compile-lane
+    progress
+    (February 18, 2026):
+    - updated `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      (`handleBaudClkGeneratorFastPath`) to improve delay batching activation
+      on real AVIP lanes:
+      - batch guard now admits elapsed-time-only validation when clock-level
+        sample checks are unavailable.
+      - added parity-adjust handling when sample parity disagrees at batch
+        resume.
+      - stable interval tracking now keys off observed activation deltas
+        (instead of requiring sampled polarity flips each activation).
+      - removed strict `clockSampleValid` requirement from batch scheduling
+        eligibility once interval stability is established.
+    - validation:
+      - `ninja -C build -j4 circt-sim`: PASS.
+      - `ninja -C build-test -j4 circt-sim`: PASS.
+      - `func-baud-clk-generator-fast-path-delay-batch.mlir`: PASS.
+      - bounded UART samples:
+        - trace:
+          `/tmp/uart-baudtrace-20s-post-20260218-135147.log`
+          shows active `batch-schedule` events.
+        - 20s runtime:
+          `/tmp/uart-timeout20-post-batchguard-20260218-135207.log`
+          reaches `74876400000 fs` with
+          `fork_{80,81,82}_branch_0` reduced to `52` steps each.
+        - 60s runtime:
+          `/tmp/uart-timeout60-post-batchguard-20260218-135349.log`
+          reaches `353040000000 fs` with coverage
+          `Rx=0.00%`, `Tx=100.00%`.
+        - 120s runtime:
+          `/tmp/uart-timeout120-post-batchguard-20260218-135534.log`
+          reaches `569765800000 fs` with coverage
+          `Rx=0.00%`, `Tx=100.00%`.

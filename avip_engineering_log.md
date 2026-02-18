@@ -1826,3 +1826,58 @@ Checks:
 - UART remains timeout-bound with `0.00% / 0.00%` coverage in the short bound.
 - Next closure target is caller-side `GenerateBaudClk` resume overhead in fork
   branches.
+
+---
+
+## 2026-02-18 Session: Baud Batch Guard Broadening + UART Runtime Jump
+
+### Problem
+
+After the direct self-loop closure, UART still timed out with dominant pressure
+in `fork_{80,81,82}_branch_0` (`func.call(*::GenerateBaudClk)` paths).
+`BaudClkGenerator` fast-path hits were active, but AVIP traces showed no
+`batch-schedule` engagement in this lane.
+
+### Change
+
+File: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+- Refined `handleBaudClkGeneratorFastPath` batching guard/eligibility:
+  - batch resume now primarily validates by elapsed delay matching expected
+    delay (`elapsedFs == expectedDelayFs`), even when sampled clock parity is
+    not available.
+  - when sampled parity is available and mismatched, allows one-edge parity
+    adjustment before batched count application.
+  - stable edge interval tracking now uses observed activation deltas directly.
+  - removed strict `clockSampleValid` requirement from scheduling eligibility
+    once interval stability and divider/count constraints are satisfied.
+
+### Validation
+
+- Builds ✅
+  - `ninja -C build -j4 circt-sim`
+  - `ninja -C build-test -j4 circt-sim`
+- Focused regressions ✅
+  - `func-baud-clk-generator-fast-path-delay-batch.mlir`
+  - `jit-process-fast-path-store-wait-self-loop.mlir`
+- UART traced 20s sample ✅
+  - `/tmp/uart-baudtrace-20s-post-20260218-135147.log`
+  - shows active `batch-schedule` events in AVIP context.
+- UART bounded runtime samples ✅
+  - 20s: `/tmp/uart-timeout20-post-batchguard-20260218-135207.log`
+    - sim time `74876400000 fs`
+    - `fork_{80,81,82}_branch_0` reduced to `52` steps each
+    - `llhd_process_0` remains `steps=0`
+  - 60s: `/tmp/uart-timeout60-post-batchguard-20260218-135349.log`
+    - sim time `353040000000 fs`
+    - coverage: `UartRxCovergroup=0.00%`, `UartTxCovergroup=100.00%`
+  - 120s: `/tmp/uart-timeout120-post-batchguard-20260218-135534.log`
+    - sim time `569765800000 fs`
+    - coverage still `Rx=0.00%`, `Tx=100.00%`
+
+### Current status after this pass
+
+- Runtime bottleneck shifted away from `GenerateBaudClk` call branches.
+- New dominant hotspot is `fork_18_branch_0` (`sim.fork`) in long bounds.
+- Remaining UART blocker appears functional/progress-related on Rx side
+  (`UartRxCovergroup` still 0%), not purely baud-loop throughput.
