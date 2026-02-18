@@ -182,6 +182,13 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     return true;
   }
   Block &body = bodyRegion->front();
+  bool bodyContainsForkPrelude = false;
+  for (auto it = body.begin(), e = std::prev(body.end()); it != e; ++it) {
+    if (isa<sim::SimForkOp>(*it)) {
+      bodyContainsForkPrelude = true;
+      break;
+    }
+  }
   static bool traceThunkGuards = []() {
     const char *env = std::getenv("CIRCT_SIM_TRACE_JIT_THUNK_GUARDS");
     return env && env[0] != '\0' && env[0] != '0';
@@ -248,6 +255,37 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     }
     return false;
   };
+  auto isAwaitingProcessCompletion = [&](ProcessId targetProcId) {
+    for (const auto &entry : processAwaiters) {
+      for (ProcessId waiterProcId : entry.second) {
+        if (waiterProcId == targetProcId)
+          return true;
+      }
+    }
+    return false;
+  };
+  auto isWaitingOnForkJoinChildren = [&](const ProcessExecutionState &s) {
+    if (!bodyContainsForkPrelude || !s.waiting || s.halted)
+      return false;
+    if (s.waitConditionRestartBlock || s.destBlock || s.resumeAtCurrentOp ||
+        !s.callStack.empty() || s.sequencerGetRetryCallOp)
+      return false;
+    if (isQueuedForImpPhaseOrdering(procId) ||
+        isAwaitingProcessCompletion(procId))
+      return false;
+    return forkJoinManager.hasActiveChildren(procId);
+  };
+  auto isResumingAfterForkJoinWait = [&](const ProcessExecutionState &s) {
+    if (!bodyContainsForkPrelude || !s.waiting || s.halted)
+      return false;
+    if (s.waitConditionRestartBlock || s.destBlock || s.resumeAtCurrentOp ||
+        !s.callStack.empty() || s.sequencerGetRetryCallOp)
+      return false;
+    if (isQueuedForImpPhaseOrdering(procId) ||
+        isAwaitingProcessCompletion(procId))
+      return false;
+    return !forkJoinManager.hasActiveChildren(procId);
+  };
   bool resumingDeferredHalt = false;
 
   // This thunk is non-resumable and only valid on token 0.
@@ -310,6 +348,23 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
       thunkState.waiting = state.waiting;
       thunkState.resumeToken = state.jitThunkResumeToken;
       return true;
+    } else if (isAwaitingProcessCompletion(procId)) {
+      // process::await() suspension is resumed by notifyProcessAwaiters when
+      // the awaited process terminates.
+      thunkState.halted = state.halted;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
+    } else if (isWaitingOnForkJoinChildren(state)) {
+      // Blocking fork joins park the process until child completion.
+      thunkState.halted = state.halted;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
+    } else if (isResumingAfterForkJoinWait(state)) {
+      // resumeProcess in ForkJoinManager clears scheduler waiting state but
+      // does not clear interpreter waiting; mirror executeProcess behavior.
+      state.waiting = false;
     } else {
       requestDeopt("unexpected_waiting_state", /*restoreSnapshot=*/true);
       return true;
@@ -444,15 +499,21 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
       post->second.currentBlock->getParent() == bodyRegion &&
       post->second.currentOp != post->second.currentBlock->end() &&
       isQueuedForImpPhaseOrdering(procId);
+  bool waitingOnProcessAwaitQueue =
+      post->second.waiting && !post->second.halted &&
+      isAwaitingProcessCompletion(procId);
+  bool waitingOnForkJoinChildren = isWaitingOnForkJoinChildren(post->second);
   if (!post->second.halted && !waitingOnWaitCondition &&
       !waitingOnDeferredHalt && !waitingOnSequencerRetry &&
-      !waitingOnSavedCallStack && !waitingOnImpOrderQueue) {
+      !waitingOnSavedCallStack && !waitingOnImpOrderQueue &&
+      !waitingOnProcessAwaitQueue && !waitingOnForkJoinChildren) {
     requestDeopt("post_exec_not_halted_or_waiting", /*restoreSnapshot=*/false);
     return true;
   }
   if (post->second.waiting && !waitingOnWaitCondition &&
       !waitingOnDeferredHalt && !waitingOnSequencerRetry &&
-      !waitingOnSavedCallStack && !waitingOnImpOrderQueue) {
+      !waitingOnSavedCallStack && !waitingOnImpOrderQueue &&
+      !waitingOnProcessAwaitQueue && !waitingOnForkJoinChildren) {
     requestDeopt("post_exec_waiting_without_wait_condition",
                  /*restoreSnapshot=*/false);
     return true;
@@ -470,17 +531,119 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
   if (!isMultiBlockTerminatingNativeThunkCandidate(state))
     return false;
 
+  static bool traceThunkGuards = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_JIT_THUNK_GUARDS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  Region *bodyRegion = resolveNativeThunkProcessRegion(state);
   auto requestDeopt = [&](StringRef reason, bool restoreSnapshot) {
+    if (traceThunkGuards) {
+      llvm::errs() << "[JIT-THUNK-GUARD] proc=" << procId;
+      if (auto *proc = scheduler.getProcess(procId))
+        llvm::errs() << " name=" << proc->getName();
+      llvm::errs() << " shape=multi_block_terminating"
+                   << " reason=" << reason;
+      llvm::errs() << " state{halted=" << (state.halted ? 1 : 0)
+                   << " waiting=" << (state.waiting ? 1 : 0)
+                   << " resume_token=" << state.jitThunkResumeToken
+                   << " call_stack=" << state.callStack.size()
+                   << " seq_retry=" << (state.sequencerGetRetryCallOp ? 1 : 0)
+                   << " resume_at_current_op="
+                   << (state.resumeAtCurrentOp ? 1 : 0)
+                   << " parent=" << state.parentProcessId;
+      if (state.currentBlock) {
+        llvm::errs()
+            << " current_block_ops=" << state.currentBlock->getOperations().size();
+        if (state.currentOp == state.currentBlock->end())
+          llvm::errs() << " current_op=<end>";
+        else
+          llvm::errs() << " current_op="
+                       << state.currentOp->getName().getStringRef();
+      } else {
+        llvm::errs() << " current_block=<null>";
+      }
+      if (state.destBlock) {
+        llvm::errs() << " dest_block_ops=" << state.destBlock->getOperations().size()
+                     << " dest_args=" << state.destOperands.size();
+      } else {
+        llvm::errs() << " dest_block=<null>";
+      }
+      llvm::errs() << "}\n";
+      if ((reason == "post_exec_not_halted" ||
+           reason == "post_exec_waiting_without_fork_wait") &&
+          bodyRegion) {
+        for (auto [blockIdx, block] : llvm::enumerate(*bodyRegion)) {
+          llvm::errs() << "  [JIT-THUNK-GUARD] block " << blockIdx
+                       << " term=" << block.back().getName().getStringRef()
+                       << " ops:";
+          for (Operation &op : block) {
+            llvm::errs() << " " << op.getName().getStringRef();
+            if (auto callOp = dyn_cast<mlir::func::CallOp>(op))
+              llvm::errs() << "(" << callOp.getCallee() << ")";
+            else if (auto llvmCall = dyn_cast<LLVM::CallOp>(op))
+              if (auto callee = llvmCall.getCallee())
+                llvm::errs() << "(" << *callee << ")";
+          }
+          llvm::errs() << "\n";
+        }
+      }
+    }
     thunkState.deoptRequested = true;
     thunkState.restoreSnapshotOnDeopt = restoreSnapshot;
     thunkState.deoptDetail = reason.str();
   };
 
-  Region *bodyRegion = resolveNativeThunkProcessRegion(state);
   if (!bodyRegion || bodyRegion->empty() || bodyRegion->front().empty()) {
     requestDeopt("empty_body_region", /*restoreSnapshot=*/true);
     return true;
   }
+  bool bodyContainsForkPrelude = false;
+  for (Block &block : *bodyRegion) {
+    if (block.empty())
+      continue;
+    for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
+      if (isa<sim::SimForkOp>(*it)) {
+        bodyContainsForkPrelude = true;
+        break;
+      }
+    }
+    if (bodyContainsForkPrelude)
+      break;
+  }
+  auto isWaitingOnForkJoinChildren = [&](const ProcessExecutionState &s) {
+    if (!bodyContainsForkPrelude || !s.waiting || s.halted)
+      return false;
+    if (s.destBlock || s.resumeAtCurrentOp || s.waitConditionRestartBlock ||
+        !s.callStack.empty() || s.sequencerGetRetryCallOp)
+      return false;
+    return forkJoinManager.hasActiveChildren(procId);
+  };
+  auto isResumingAfterForkJoinWait = [&](const ProcessExecutionState &s) {
+    if (!bodyContainsForkPrelude || !s.waiting || s.halted)
+      return false;
+    if (s.destBlock || s.resumeAtCurrentOp || s.waitConditionRestartBlock ||
+        !s.callStack.empty() || s.sequencerGetRetryCallOp)
+      return false;
+    return !forkJoinManager.hasActiveChildren(procId);
+  };
+  auto isWaitingOnObjectionWaitFor = [&](ProcessId targetProcId,
+                                         const ProcessExecutionState &s) {
+    if (!s.waiting || s.halted)
+      return false;
+    if (s.destBlock || s.resumeAtCurrentOp || s.waitConditionRestartBlock ||
+        !s.callStack.empty() || s.sequencerGetRetryCallOp)
+      return false;
+    return objectionWaitForStateByProc.count(targetProcId) != 0;
+  };
+  auto isAwaitingProcessCompletion = [&](ProcessId targetProcId) {
+    for (const auto &entry : processAwaiters) {
+      for (ProcessId waiterProcId : entry.second) {
+        if (waiterProcId == targetProcId)
+          return true;
+      }
+    }
+    return false;
+  };
 
   // This thunk is non-resumable and only valid on token 0.
   if (thunkState.resumeToken != state.jitThunkResumeToken ||
@@ -488,13 +651,44 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
     requestDeopt("resume_token_mismatch", /*restoreSnapshot=*/true);
     return true;
   }
-  if (state.waiting || state.destBlock || state.resumeAtCurrentOp) {
+  if (state.destBlock || state.resumeAtCurrentOp) {
     requestDeopt("unexpected_resume_state", /*restoreSnapshot=*/true);
     return true;
   }
+  if (state.waiting) {
+    if (isAwaitingProcessCompletion(procId)) {
+      thunkState.halted = state.halted;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
+    }
+    if (isWaitingOnForkJoinChildren(state)) {
+      thunkState.halted = state.halted;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
+    }
+    if (isWaitingOnObjectionWaitFor(procId, state)) {
+      // wait_for-style objection polling is resumed by scheduled callbacks.
+      thunkState.halted = state.halted;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
+    }
+    if (isResumingAfterForkJoinWait(state)) {
+      // resumeProcess in ForkJoinManager only touches scheduler state.
+      state.waiting = false;
+    } else {
+      requestDeopt("unexpected_resume_state", /*restoreSnapshot=*/true);
+      return true;
+    }
+  }
 
-  state.currentBlock = &bodyRegion->front();
-  state.currentOp = state.currentBlock->begin();
+  if (!state.currentBlock || state.currentBlock->getParent() != bodyRegion ||
+      state.currentOp == state.currentBlock->end()) {
+    state.currentBlock = &bodyRegion->front();
+    state.currentOp = state.currentBlock->begin();
+  }
 
   ProcessId savedActiveProcessId = activeProcessId;
   ProcessExecutionState *savedActiveProcessState = activeProcessState;
@@ -529,8 +723,21 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
                  /*restoreSnapshot=*/false);
     return true;
   }
-  if (!post->second.halted || post->second.waiting) {
+  bool waitingOnForkJoinChildren = isWaitingOnForkJoinChildren(post->second);
+  bool waitingOnObjectionWaitFor =
+      isWaitingOnObjectionWaitFor(procId, post->second);
+  bool waitingOnProcessAwaitQueue =
+      post->second.waiting && !post->second.halted &&
+      isAwaitingProcessCompletion(procId);
+  if (!post->second.halted && !waitingOnForkJoinChildren &&
+      !waitingOnObjectionWaitFor && !waitingOnProcessAwaitQueue) {
     requestDeopt("post_exec_not_halted", /*restoreSnapshot=*/false);
+    return true;
+  }
+  if (post->second.waiting && !waitingOnForkJoinChildren &&
+      !waitingOnObjectionWaitFor && !waitingOnProcessAwaitQueue) {
+    requestDeopt("post_exec_waiting_without_fork_wait",
+                 /*restoreSnapshot=*/false);
     return true;
   }
 
@@ -696,10 +903,6 @@ bool LLHDProcessInterpreter::executeResumableMultiblockWaitNativeThunk(
     requestDeopt("resume_token_mismatch", /*restoreSnapshot=*/true);
     return true;
   }
-  if (!state.callStack.empty()) {
-    requestDeopt("non_empty_call_stack", /*restoreSnapshot=*/true);
-    return true;
-  }
   bool containsWaitConditionCall = hasMooreWaitConditionCall(*bodyRegion);
 
   if (state.destBlock) {
@@ -758,6 +961,32 @@ bool LLHDProcessInterpreter::executeResumableMultiblockWaitNativeThunk(
     activeProcessId = savedActiveProcessId;
     activeProcessState = savedActiveProcessState;
   });
+
+  CallStackResumeResult callStackResume =
+      resumeSavedCallStackFrames(procId, state);
+  if (callStackResume == CallStackResumeResult::Failed) {
+    if (state.halted) {
+      thunkState.halted = true;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
+    }
+    requestDeopt("call_stack_resume_failed", /*restoreSnapshot=*/false);
+    return true;
+  }
+  if (callStackResume == CallStackResumeResult::Suspended) {
+    thunkState.halted = state.halted;
+    thunkState.waiting = state.waiting;
+    thunkState.resumeToken = state.jitThunkResumeToken;
+    return true;
+  }
+
+  if (callStackResume == CallStackResumeResult::Completed &&
+      (!state.currentBlock || state.currentBlock->getParent() != bodyRegion ||
+       state.currentOp == state.currentBlock->end())) {
+    state.currentBlock = &bodyRegion->front();
+    state.currentOp = state.currentBlock->begin();
+  }
 
   size_t maxSteps =
       std::max<size_t>(8192, countRegionOps(*bodyRegion) * 256);

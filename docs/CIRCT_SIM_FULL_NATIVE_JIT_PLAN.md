@@ -598,6 +598,43 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - output bundle:
           `/tmp/avip-circt-sim-impwait-20260218-024142`
         - compile `OK` (`26s`), sim `TIMEOUT` (`90s`).
+26. Multiblock resumable call-stack closure and AVIP `jtag` strict burn-down to
+    zero deopts:
+    - removed hard resumable multiblock guard deopt
+      (`non_empty_call_stack`) in
+      `executeResumableMultiblockWaitNativeThunk`.
+    - resumable multiblock wait thunks now route through
+      `resumeSavedCallStackFrames(...)` and honor `Completed` / `Suspended` /
+      `Failed` outcomes with guarded fallback.
+    - expanded native waiting-state closure in terminating thunk paths:
+      - fork-join active-child waits.
+      - process-await queue waits (`processAwaiters`).
+      - objection wait polling (`objectionWaitForStateByProc`) for multiblock
+        terminating paths.
+    - expanded single-block safe fork prelude classification:
+      - accepts `join` / `join_any` / `join_none`.
+      - accepts `sim.disable_fork` prelude op.
+      - adds richer unsupported-shape diagnostics for nested fork branches.
+    - strict regression coverage:
+      - added:
+        - `jit-process-thunk-fork-join-disable-fork-terminator.mlir`
+        - `jit-process-thunk-multiblock-llvm-call-process-await-halt.mlir`
+      - updated existing fork-branch strict tests to no-deopt expectations:
+        - `jit-process-thunk-fork-branch-alloca-gep-load-store-terminator.mlir`
+        - `jit-process-thunk-fork-branch-insertvalue-terminator.mlir`
+    - validation:
+      - targeted strict checks pass for the updated/new regressions.
+      - targeted parallel-mode compile smokes pass with `--parallel=4`.
+      - bounded AVIP compile-lane burn-down (`AVIPS=jtag`, `SEEDS=1`):
+        - output bundle:
+          `/tmp/avip-circt-sim-jit-jtag-20260218-041130`
+        - compile `OK` (`25s`), sim `OK` (`90s`).
+        - `jit_deopts_total=0` and no per-process deopt rows.
+    - remaining limitation at this step:
+      - strict zero-deopt has only been re-proven on bounded AVIP `jtag`
+        (`seed=1`) in this wave; wider closure still requires periodic
+        full-lane sweeps across `~/mbit/*avip*`, `~/sv-tests/`,
+        `~/verilator-verification/`, `~/yosys/tests/`, and `~/opentitan/`.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
