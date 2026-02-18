@@ -1,5 +1,87 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1494 - February 18, 2026
+
+### circt-sim: Baud fast-path hardening (null-self + count-escape safety) and UART hotspot extraction
+
+1. **Baud fast-path hardening** (`tools/circt-sim/LLHDProcessInterpreter.h`,
+   `tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - hardened `*::BaudClkGenerator` fast path for null-handle invocations:
+     - null `self` now stalls via a non-resolving memory waiter instead of
+       entering no-sensitivity `moore.wait_event` spin loops.
+   - added guarded local count-state optimization:
+     - when static symbol-use scan proves `BaudClkGenerator::count` does not
+       escape the callee/init scope, count updates stay in fast-path local
+       state (`countLocalOnly`), reducing per-edge memory traffic.
+     - if the count global is externally visible, fast path preserves normal
+       memory writes (no semantic drop).
+
+2. **Regression coverage added** (`test/Tools/circt-sim/`):
+   - `func-baud-clk-generator-fast-path-null-self.mlir`
+   - `func-baud-clk-generator-fast-path-count-visible.mlir`
+   - existing baseline `func-baud-clk-generator-fast-path.mlir` retained.
+
+3. **Validation**:
+   - build:
+     - `ninja -C build -j4 circt-sim`: PASS.
+   - focused regressions:
+     - `func-baud-clk-generator-fast-path.mlir`: PASS.
+     - `func-baud-clk-generator-fast-path-null-self.mlir`: PASS.
+     - `func-baud-clk-generator-fast-path-count-visible.mlir`: PASS.
+   - bounded UART AVIP sanity:
+     - `/tmp/avip-circt-sim-uart-baudfp-postopt-20260218-1300/matrix.tsv`
+       (`compile_status=OK`, `sim_status=TIMEOUT`, `sim_sec=120s`).
+   - direct profiling snapshots (wrapper-equivalent tops/args,
+     internal timeout mode):
+     - `/tmp/uart-direct-timeout60-funcprof.log`
+     - `/tmp/uart-direct-timeout60-funcprof-after-countcache.log`
+     - both confirm Baud path remains dominant (`~34k-38k` calls each to
+       `Uart{TxDriver,TxMonitor,RxMonitor}Bfm::BaudClkGenerator`) with
+       bounded-run coverage still `0.00% / 0.00%`.
+   - direct fast-path trace:
+     - `/tmp/uart-direct-baudtrace-nullstall-60s.log`
+     - confirms active Baud fast-path hits and no `missing-gep-fields` reject.
+
+## Iteration 1493 - February 18, 2026
+
+### circt-sim: cache `moore.wait_event` signal sensitivities for hot event loops
+
+1. **Runtime optimization** (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - added per-process/per-op cache reuse for `moore.wait_event` signal
+     sensitivities (using the existing `waitSensitivityCache` map).
+   - hot-loop wait paths now bypass repeated detect-event body tracing and
+     suspend directly on cached sensitivities after first resolution.
+   - added env-gated diagnostics:
+     `CIRCT_SIM_TRACE_WAIT_EVENT_CACHE=1`
+     (`[WAIT-EVENT-CACHE] store/hit ...`) for verification/triage.
+
+2. **Regression coverage added**:
+   - `test/Tools/circt-sim/moore-wait-event-sensitivity-cache.mlir`
+   - verifies first-use cache `store`, subsequent `hit`, and successful
+     simulation completion.
+
+3. **Validation**:
+   - build:
+     - `ninja -C build-test circt-sim -j2`: PASS.
+   - focused regressions:
+     - `moore-wait-event-sensitivity-cache.mlir`: PASS.
+     - wait-event suite (`moore-wait-event.mlir`,
+       `moore-wait-memory-event.mlir`, `wait-event-class-member.mlir`): PASS.
+   - bounded AVIP lanes:
+     - `uart` compile mode (`SIM_TIMEOUT=180`):
+       `/tmp/avip-circt-sim-uart-waitcache-20260218-113049/matrix.tsv`
+       (`compile_status=OK`, `sim_status=TIMEOUT`).
+     - `i3c` compile mode regression guard:
+       `/tmp/avip-circt-sim-i3c-waitcache-20260218-113610/matrix.tsv`
+       (`compile_status=OK`, `sim_status=OK`, `cov_1_pct=100`,
+       `cov_2_pct=100`).
+   - direct UART bounded-progress sample:
+     - `/tmp/uart-direct-waitcache-113439.log`
+     - reached `max-time=6000000000 fs` without wall abort;
+       top hot processes (`fork_81/82/83_branch_0`, GenerateBaudClk path)
+       report `sens_cache=59996`, confirming heavy wait-sensitivity reuse in
+       the dominant loop.
+
 ## Iteration 1492 - February 18, 2026
 
 ### MooreToCore/circt-sim: unblock UVM `$sscanf("%d,%s", time, string)` and restore all-AVIP compile lane

@@ -1216,6 +1216,92 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - profile and close long-tail runtime hot loops in `axi4`/`uart`
         compile-mode lanes (step-progress dominated process loops), then rerun
         all9 with strict coverage targets.
+43. `moore.wait_event` sensitivity-cache closure for hot event loops
+    (February 18, 2026):
+    - runtime closure:
+      - added `moore.wait_event` reuse of per-process/per-op
+        `waitSensitivityCache` entries in
+        `LLHDProcessInterpreter::interpretMooreWaitEvent`.
+      - on cache hit, wait paths now directly suspend on cached sensitivity
+        lists without re-walking detect-event body SSA chains.
+      - added env-gated trace hook:
+        `CIRCT_SIM_TRACE_WAIT_EVENT_CACHE=1`
+        (`[WAIT-EVENT-CACHE] store/hit ...`).
+    - regression coverage:
+      - `test/Tools/circt-sim/moore-wait-event-sensitivity-cache.mlir`
+        (asserts first store + subsequent hit).
+    - validation:
+      - build:
+        - `ninja -C build-test circt-sim -j2`: PASS.
+      - focused wait-event regressions: PASS
+        - new cache test
+        - `moore-wait-event.mlir`
+        - `moore-wait-memory-event.mlir`
+        - `wait-event-class-member.mlir`.
+      - bounded AVIP checks:
+        - `uart` compile lane:
+          `/tmp/avip-circt-sim-uart-waitcache-20260218-113049/matrix.tsv`
+          (`compile_status=OK`, `sim_status=TIMEOUT`, 180s cap).
+        - `i3c` compile lane regression guard:
+          `/tmp/avip-circt-sim-i3c-waitcache-20260218-113610/matrix.tsv`
+          (`compile_status=OK`, `sim_status=OK`, `cov_1_pct=100`,
+          `cov_2_pct=100`).
+      - direct UART bounded-progress sample:
+        - `/tmp/uart-direct-waitcache-113439.log`
+        - reached `max-time=6000000000 fs` with hot GenerateBaudClk processes
+          showing `sens_cache=59996`, confirming cache engagement on the
+          dominant loop.
+    - next closure target:
+      - remove remaining UART/AXI4 timeout pressure by reducing per-activation
+        cost in hot function loops beyond wait setup (clock-divider and BFM
+        loop bodies) and improve timeout-lane telemetry emission on bounded
+        exits.
+44. UART clock-divider fast-path hardening + bounded-lane hotspot extraction
+    (February 18, 2026):
+    - runtime closures (`tools/circt-sim/LLHDProcessInterpreter.h`,
+      `tools/circt-sim/LLHDProcessInterpreter.cpp`):
+      - hardened `*::BaudClkGenerator` fast path for null-handle calls:
+        - null `self` now suspends via a non-resolving memory waiter instead
+          of degrading into no-sensitivity `moore.wait_event` spin loops.
+      - added safe count-state fast-path caching:
+        - static symbol-use check marks `BaudClkGenerator::count` as
+          `countLocalOnly` only when its address-of use is confined to the
+          target callee + generated init function.
+        - local-only mode avoids per-edge count memory loads/stores.
+        - escape-visible mode retains memory writes for external observers.
+    - regression coverage:
+      - added:
+        - `test/Tools/circt-sim/func-baud-clk-generator-fast-path-null-self.mlir`
+        - `test/Tools/circt-sim/func-baud-clk-generator-fast-path-count-visible.mlir`
+      - retained existing baseline:
+        - `test/Tools/circt-sim/func-baud-clk-generator-fast-path.mlir`.
+    - validation:
+      - build:
+        - `ninja -C build -j4 circt-sim`: PASS.
+      - focused regressions:
+        - all three Baud fast-path tests above: PASS.
+      - bounded AVIP UART lanes:
+        - `/tmp/avip-circt-sim-uart-baudfp-check-20260218-1219/matrix.tsv`
+          (`compile_status=OK`, `sim_status=TIMEOUT`, `sim_sec=240s`).
+        - `/tmp/avip-circt-sim-uart-baudfp-postopt-20260218-1300/matrix.tsv`
+          (`compile_status=OK`, `sim_status=TIMEOUT`, `sim_sec=120s`).
+      - direct hotspot profiling (wrapper-equivalent tops/args,
+        internal timeout mode):
+        - `/tmp/uart-direct-timeout60-funcprof.log` and
+          `/tmp/uart-direct-timeout60-funcprof-after-countcache.log`
+          show dominant remaining function-call pressure:
+          `~34k-38k` calls each to:
+          - `UartTxDriverBfm::BaudClkGenerator`
+          - `UartTxMonitorBfm::BaudClkGenerator`
+          - `UartRxMonitorBfm::BaudClkGenerator`
+          with `0.00% / 0.00%` coverage at bounded wall timeout.
+      - direct Baud trace confirmation:
+        - `/tmp/uart-direct-baudtrace-nullstall-60s.log` shows active
+          fast-path hits (no `missing-gep-fields` rejects).
+    - next closure target:
+      - remove edge-by-edge wakeup pressure in hot UART clock-divider loops
+        (GenerateBaudClk/BaudClkGenerator path) with guarded native scheduling
+        that preserves parity under period/guard mismatch fallback.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
