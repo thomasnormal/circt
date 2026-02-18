@@ -1370,6 +1370,45 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         the same guarded batching approach to remaining hot loop bodies beyond
         BaudClkGenerator (GenerateBaudClk caller-side dispatch and monitor/driver
         wake choreography), then rerun all9 compile lanes.
+47. Resumable wait-self-loop direct linear dispatch for probe/store mirror
+    loops (February 18, 2026):
+    - runtime closure:
+      - refined `executeResumableWaitSelfLoopNativeThunk` in
+        `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp` with a
+        true direct linear lane for simple self-loop waits:
+        - supports non-suspending prelude ops (including `llhd.probe`,
+          `llhd.drv`, and `llvm.store`) followed by self-loop `llhd.wait`.
+        - executes prelude + wait directly (without per-op `executeStep()`
+          dispatch), preserving wait scheduling semantics and deopt guards.
+      - keeps existing generic resumable-self-loop fallback for non-linear or
+        unsupported shapes.
+    - regression coverage:
+      - added
+        `test/Tools/circt-sim/jit-process-fast-path-store-wait-self-loop.mlir`
+        to lock compile-mode budget-zero behavior for probe/store mirror loops:
+        - `llhd_process_0` and periodic toggler both report `steps=0`.
+        - `jit_compiles_total = 0`
+        - `jit_deopts_total = 0`
+        - `jit_deopt_reason_missing_thunk = 0`
+    - validation:
+      - build:
+        - `ninja -C build-test -j4 circt-sim`: PASS.
+        - `ninja -C build -j4 circt-sim`: PASS.
+      - focused regressions (manual RUN + checks): PASS.
+        - `jit-process-fast-path-store-wait-self-loop.mlir`
+        - `jit-process-fast-path-budget-zero.mlir`
+      - bounded UART compile-lane sample:
+        - `/tmp/uart-timeout20-storewaitfastpath-20260218-133742.log`
+        - `llhd_process_0` now runs with `steps=0` (was hot pre-patch),
+          and top remaining hotspots are now
+          `fork_{80,81,82}_branch_0` waiting in
+          `func.call(*::GenerateBaudClk)` (`~37.4k` steps each in this bound).
+        - lane remains timeout/0% coverage in this short bound; closure focus
+          shifts to caller-side `GenerateBaudClk` resume overhead.
+    - next closure target:
+      - add targeted fast path for `GenerateBaudClk` caller-side resumptions
+        (fork branch lane) so bounded UART can advance further per wall second
+        before broad all-AVIP rerun.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

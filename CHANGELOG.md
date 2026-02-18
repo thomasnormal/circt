@@ -70949,3 +70949,29 @@ See CHANGELOG.md on recent progress.
     - note:
       - bounded UART rerun on this current tree is blocked by a separate
         in-flight crash in module-level init (`executeModuleLevelLLVMOps`).
+63. `circt-sim` direct linear self-loop dispatch for probe/store wait mirrors
+    (February 18, 2026):
+    - optimized
+      `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+      `executeResumableWaitSelfLoopNativeThunk`:
+      - added a true direct linear lane for simple self-looping wait bodies
+        with non-suspending preludes (including `llhd.probe`, `llhd.drv`,
+        `llvm.store`).
+      - this bypasses per-op `executeStep()` for those loops while preserving
+        wait scheduling/deopt guard behavior.
+      - generic resumable-self-loop fallback remains for unsupported shapes.
+    - added regression:
+      - `test/Tools/circt-sim/jit-process-fast-path-store-wait-self-loop.mlir`
+      - asserts compile-budget-zero telemetry remains zero-deopt and process
+        stats show the mirror self-loop process at `steps=0`.
+    - validation:
+      - builds:
+        - `ninja -C build-test -j4 circt-sim`: PASS.
+        - `ninja -C build -j4 circt-sim`: PASS.
+      - focused manual regression checks: PASS.
+        - `jit-process-fast-path-store-wait-self-loop.mlir`
+        - `jit-process-fast-path-budget-zero.mlir`
+      - bounded UART compile sample:
+        - `/tmp/uart-timeout20-storewaitfastpath-20260218-133742.log`
+        - `llhd_process_0` now reports `steps=0`; dominant remaining pressure
+          is in fork branch `func.call(*::GenerateBaudClk)` lanes.

@@ -1771,3 +1771,58 @@ long AVIP timeout lanes.
 - Bounded UART rerun on this current tree crashed in module-level init
   (`executeModuleLevelLLVMOps` stack). This appears separate from the direct
   process fast-path change and currently blocks fresh UART lane perf numbers.
+
+---
+
+## 2026-02-18 Session: Direct Linear Wait-Self-Loop Path for Probe/Store Mirror Loops
+
+### Problem
+
+The earlier resumable wait-self-loop native thunk still executed loop bodies via
+`executeStep()` per op. In UART timeout lanes this left top-level mirror loops
+hot (`llhd_process_0`), despite compile-budget-zero direct dispatch.
+
+### Change
+
+File: `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+
+- Added a stricter direct linear execution lane inside
+  `executeResumableWaitSelfLoopNativeThunk` for simple self-loop wait bodies:
+  - single loop block (or entry branch + loop),
+  - self-looping `llhd.wait`,
+  - non-suspending preludes (including `llhd.probe`, `llhd.drv`, `llvm.store`).
+- Direct lane executes prelude ops + `interpretWait` directly without per-op
+  `executeStep()` dispatch.
+- Existing generic resumable-self-loop fallback is retained for complex shapes.
+
+### New Regression
+
+Added:
+
+- `test/Tools/circt-sim/jit-process-fast-path-store-wait-self-loop.mlir`
+
+Checks:
+
+- compile-budget-zero telemetry remains zero-deopt (`jit_compiles_total=0`,
+  `jit_deopts_total=0`, `jit_deopt_reason_missing_thunk=0`),
+- process stats show both mirror loop and periodic toggler at `steps=0`.
+
+### Validation
+
+- `ninja -C build-test -j4 circt-sim` ✅
+- `ninja -C build -j4 circt-sim` ✅
+- Focused manual regressions ✅
+  - `jit-process-fast-path-store-wait-self-loop.mlir`
+  - `jit-process-fast-path-budget-zero.mlir`
+- Bounded UART compile-lane sample ✅
+  - log: `/tmp/uart-timeout20-storewaitfastpath-20260218-133742.log`
+  - `llhd_process_0` now reports `steps=0`.
+  - dominant remaining hotspots are now fork branches waiting in
+    `func.call(*::GenerateBaudClk)` (`~37.4k` steps each in this bound).
+
+### Current UART status after this pass
+
+- Top-level mirror-loop overhead is removed for this lane.
+- UART remains timeout-bound with `0.00% / 0.00%` coverage in the short bound.
+- Next closure target is caller-side `GenerateBaudClk` resume overhead in fork
+  branches.
