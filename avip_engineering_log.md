@@ -33,6 +33,45 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-18 Session: Execute-Phase Objection Lifecycle Hardening + I3C Fork Diagnostics
+
+### Why this pass
+I3C had regressed into long/timeout behavior during execute-phase monitor interception tuning, and then returned to completion with a persistent scoreboard mismatch (`i3c_scoreboard.sv:162 @ 713ns`). We needed to stabilize phase completion semantics while collecting precise fork/child state evidence for the remaining I3C mismatch.
+
+### Changes
+1. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - Replaced execute-phase monitor "descendant progress" completion logic with a two-stage objection lifecycle:
+     - startup grace before first positive objection count
+     - short drop grace after objections have been observed
+   - Added per-process `executePhaseSawPositiveObjection` state.
+   - Updated objection-zero wake path (`wakeObjectionZeroWaitersIfReady`) to route execute-phase waiters back through monitor poll handling instead of forcing immediate phase completion.
+2. `tools/circt-sim/LLHDProcessInterpreter.h`
+   - Added execute-phase objection lifecycle tracking state used by the updated polling path.
+3. `tools/circt-sim/LLHDProcessInterpreter.cpp` + `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+   - Expanded I3C callstack tracing scope to include controller-side BFM frames in addition to target-side BFM frames.
+   - Extended fork trace lines with parent function context.
+   - Extended `sim.disable_fork` trace lines with child `waiting` and `steps` state.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-sim` PASS
+2. Focused lit:
+   - `fork-execute-phase-monitor-intercept-single-shot` PASS
+   - `execute-phase-monitor-fork-objection-waiter` PASS
+   - `wait-condition-execute-phase-objection-fallback-backoff` PASS
+   - `disable-fork-halt` / `fork-join-basic` / `fork-halt-waits-children` / `jit-process-thunk-fork-*-disable-fork-terminator` PASS
+3. I3C AVIP seed=1:
+   - compile `OK` (~30-33s)
+   - sim `OK` (~67-69s) after objection lifecycle fix (no timeout regression)
+   - persistent mismatch remains:
+     - `UVM_ERROR ... i3c_scoreboard.sv(162) ... Not equal`
+     - coverage print still `100% / 100%`
+
+### Remaining limitation
+I3C mismatch is still open. New traces show controller monitor fork children (`sampleWriteDataAndACK` subtree) can be logically waiting yet appear scheduler-ready before `disable_fork`, and are then terminated before matching target-side progression. Root-cause fix likely needs scheduler-level wake ordering/consumption semantics for waiting children, not only fork join_none gating.
+
+---
+
 ## 2026-02-18 Session: Execute-Phase Monitor Wake Cleanup + 10us Wait-Condition Watchdog Backoff
 
 ### Why this pass

@@ -1783,6 +1783,10 @@ bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(
 LLHDProcessInterpreter::CallStackResumeResult
 LLHDProcessInterpreter::resumeSavedCallStackFrames(
     ProcessId procId, ProcessExecutionState &state) {
+  static bool traceI3CCallStack = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_CALLSTACK");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
   if (state.callStack.empty()) {
     state.callStackOutermostCallOp = nullptr;
     return CallStackResumeResult::NoFrames;
@@ -1959,6 +1963,15 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
 
     llvm::StringRef frameName =
         frame.isLLVM() ? frame.llvmFuncOp.getName() : frame.funcOp.getName();
+    if (traceI3CCallStack &&
+        (frameName.contains("i3c_target_monitor_bfm::") ||
+         frameName.contains("i3c_target_driver_bfm::") ||
+         frameName.contains("i3c_controller_monitor_bfm::") ||
+         frameName.contains("i3c_controller_driver_bfm::"))) {
+      llvm::errs() << "[I3C-CS-RESUME] proc=" << procId
+                   << " func=" << frameName << " old_outer=" << oldFrameCount
+                   << " stack_remaining=" << state.callStack.size() << "\n";
+    }
     LLVM_DEBUG(llvm::dbgs()
                << "    Resuming " << (frame.isLLVM() ? "LLVM " : "")
                << "function '" << frameName << "' (remaining old frames: "
@@ -1996,6 +2009,16 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
     // Function suspended again: rotate newly created inner frames to front so
     // the next resume continues innermost-first.
     if (state.waiting) {
+      if (traceI3CCallStack &&
+          (frameName.contains("i3c_target_monitor_bfm::") ||
+           frameName.contains("i3c_target_driver_bfm::") ||
+           frameName.contains("i3c_controller_monitor_bfm::") ||
+           frameName.contains("i3c_controller_driver_bfm::"))) {
+        llvm::errs() << "[I3C-CS-SUSPEND] proc=" << procId
+                     << " func=" << frameName
+                     << " stack_size=" << state.callStack.size()
+                     << " old_outer=" << oldFrameCount << "\n";
+      }
       LLVM_DEBUG(llvm::dbgs()
                  << "    Function '" << frameName
                  << "' suspended again during resume, "
