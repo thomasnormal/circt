@@ -796,6 +796,24 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - bounded JTAG compile lane regression check
         (`/tmp/avip-circt-sim-20260218-065058`):
         compile `OK` (`28s`), sim `OK` (`40s`), `jit_deopts_total=0`.
+31. AXI4 post-crash status and next strict-native queue extraction
+    (February 18, 2026):
+    - repeated bounded AXI4 compile lane checks after the `sig.extract` guard
+      closure (`/tmp/avip-circt-sim-20260218-065533`,
+      `/tmp/avip-circt-sim-20260218-070122`) confirm:
+      - no absorbed `tx_read_packet` internal-failure signature,
+      - lane still times out under 180s and 300s caps.
+    - direct TERM-bounded profiling run with JIT report emission
+      (`/tmp/axi4-term120.jit-report.json`) exposes the current strict queue:
+      - `jit_deopts_total=7`
+      - all remaining deopts are `unsupported_operation`, details:
+        - `first_op:llvm.call:__moore_assoc_size` (2)
+        - `first_op:llvm.call:__moore_semaphore_get` (3)
+        - `first_op:func.call:from_write_class_6984` (1)
+        - `first_op:func.call:from_read_class_6987` (1)
+    - next closure target:
+      - reduce AXI4 timeout pressure by closing/guarding these four
+        unsupported first-op classes in native thunk policy/execution.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
