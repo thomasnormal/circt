@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1510 - February 18, 2026
+
+### circt-sim: close UART `set_<digits>` by-value config-db strict tails
+
+1. **Policy closure**:
+   - widened `set_<digits>` prelude matcher in
+     `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`:
+     - still requires 4 operands and pointer context operand[0]
+     - now accepts by-value payloads in operand[3] (not only pointer payloads).
+   - this directly targets UART strict tails
+     `first_op:func.call:set_7359`.
+
+2. **Regression coverage**:
+   - added strict compile-mode regression:
+     - `test/Tools/circt-sim/jit-process-thunk-func-call-configdb-set-byvalue-halt.mlir`
+   - verifies zero deopts for a terminating process prelude containing
+     `func.call @set_<digits>(..., byvalue-payload)`.
+
+3. **Validation**:
+   - focused lit: PASS
+     - `jit-process-thunk-func-call-configdb-set-byvalue-halt.mlir`
+     - `jit-process-thunk-llvm-call-dyn-cast-check-halt.mlir`
+   - bounded UART profile lane (`UartBaudRate4800Test`, compile mode, 120s):
+     - prior (after item-1509): `jit_deopts_total=6`, includes
+       `first_op:func.call:set_7359`.
+     - after closure:
+       - `/tmp/uart-profile-configset-byvalue-20260218-192312/jit.json`
+         - `final_time_fs=436504400000`, `jit_deopts_total=4`
+       - `/tmp/uart-profile-configset-byvalue-r2-20260218-192523/jit.json`
+         - `final_time_fs=442277400000`, `jit_deopts_total=4`
+     - `set_7359` tails removed in both runs.
+   - bounded AVIP `jtag` compile-lane guard:
+     - `/tmp/avip-circt-sim-jtag-configset-20260218-192731/matrix.tsv`
+     - `compile_status=OK`, `sim_status=OK` (`39s`).
+
+4. **Remaining UART strict queue**:
+   - `first_op:func.call:uvm_pkg::uvm_sequence_base::create_item`
+   - `first_op:func.call:UartTxSequencePkg::UartTxTransmitterSequence::setConfig`
+
 ## Iteration 1509 - February 18, 2026
 
 ### circt-sim: native-thunk prelude closure for `__moore_dyn_cast_check` in UART compile lane
