@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1502 - February 18, 2026
+
+### circt-sim: extend tail-wrapper resume collapse to `DriveToBfm -> SampleData`
+
+1. **Runtime updates** (`tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`):
+   - generalized the resume-time tail-wrapper collapse helper in
+     `resumeSavedCallStackFrames` so it can be reused across wrapper chains.
+   - kept existing `StartMonitoring -> Deserializer` behavior and added
+     `DriveToBfm -> SampleData` collapse coverage.
+   - added env-gated trace marker:
+     - `CIRCT_SIM_TRACE_DRIVE_SAMPLE_FASTPATH=1`
+     - `[DRV-SAMPLE-FP] resume-hit ...`
+
+2. **Regression coverage**:
+   - added:
+     - `test/Tools/circt-sim/func-drive-to-bfm-resume-fast-path.mlir`
+   - locks trace activation and behavior for default + parallel lanes
+     (`--parallel=4 --work-stealing --auto-partition`).
+
+3. **Validation**:
+   - build:
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+   - focused lit (filtered): PASS
+     - `func-drive-to-bfm-resume-fast-path.mlir`
+     - `func-start-monitoring-resume-fast-path.mlir`
+     - `func-generate-baud-clk-resume-fast-path.mlir`
+     - `func-baud-clk-generator-fast-path-delay-batch.mlir`
+     - `execute-phase-monitor-fork-objection-waiter.mlir`
+   - bounded AVIP UART compile lane (`SIM_TIMEOUT=60`):
+     - `/tmp/avip-circt-sim-uart-drive-sample-collapse-20260218-153547/matrix.tsv`
+       (`compile_status=OK`, `sim_status=TIMEOUT`).
+     - `/tmp/avip-circt-sim-uart-drive-sample-collapse-20260218-153547/uart/sim_seed_1.log`
+       includes `[DRV-SAMPLE-FP] resume-hit proc=93 callee=UartTxDriverBfm::DriveToBfm`.
+   - bounded UART direct compile sample (`--parallel=4`, 30s wall guard):
+     - `/tmp/uart-drive-sample-parallel30-20260218-153743.log`
+       includes `[DRV-SAMPLE-FP] resume-hit ...`
+       (current runtime still warns that experimental parallel execution is
+       default-disabled unless `CIRCT_SIM_EXPERIMENTAL_PARALLEL=1`).
+
 ## Iteration 1501 - February 18, 2026
 
 ### circt-sim: collapse `StartMonitoring` tail-wrapper frames during call-stack resume
