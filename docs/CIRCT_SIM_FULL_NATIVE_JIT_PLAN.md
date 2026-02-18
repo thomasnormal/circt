@@ -1739,6 +1739,47 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - continue wrapper-chain burn-down on remaining UART monitor lanes while
         prioritizing Rx functional progression/coverage closure in all9
         compile lanes.
+56. Generic tail-wrapper collapse for resumable call-stack frames
+    (February 18, 2026):
+    - runtime closure:
+      - in `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+        (`resumeSavedCallStackFrames`), generalized tail-wrapper collapse from
+        pair-specific suffix checks to a pure-shape guard:
+        - outer frame resumes at `func.return` (no return operands)
+        - immediately preceding op is `func.call` (void call)
+        - wrapper call target equals the active inner frame symbol.
+      - this preserves explicit monitor/driver lanes while enabling additional
+        pure tail wrappers without further hardcoded pair additions.
+      - retained specialized trace tags:
+        - `[MON-DESER-FP]`
+        - `[DRV-SAMPLE-FP]`
+      - added generic trace tag:
+        - `[TAIL-WRAP-FP]`
+        - enabled by `CIRCT_SIM_TRACE_TAIL_WRAPPER_FASTPATH=1`.
+    - regression coverage:
+      - added
+        `test/Tools/circt-sim/func-tail-wrapper-generic-resume-fast-path.mlir`
+        to lock generic shape-based collapse in default + parallel lanes.
+    - validation:
+      - build:
+        - `ninja -C build-test -j4 circt-sim`: PASS.
+      - focused lit (filtered): PASS
+        - `func-tail-wrapper-generic-resume-fast-path.mlir`
+        - `func-drive-to-bfm-resume-fast-path.mlir`
+        - `func-start-monitoring-resume-fast-path.mlir`
+        - `func-generate-baud-clk-resume-fast-path.mlir`
+        - `func-baud-clk-generator-fast-path-delay-batch.mlir`
+        - `execute-phase-monitor-fork-objection-waiter.mlir`
+      - bounded AVIP UART compile lane (`SIM_TIMEOUT=60`):
+        - `/tmp/avip-circt-sim-uart-tail-wrapper-generic-20260218-154800/matrix.tsv`
+          (`compile_status=OK`, `sim_status=TIMEOUT`)
+        - UART sim log confirms generic hits:
+          - `wrapper=UartTxDriverBfm::DriveToBfm`
+          - `wrapper=UartTxMonitorBfm::StartMonitoring`.
+    - next closure target:
+      - extend bounded profiling to confirm Rx-side monitor wrapper collapse
+        activity (`UartRxMonitorBfm::StartMonitoring`) under longer windows,
+        then continue Rx functional progression closure.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
