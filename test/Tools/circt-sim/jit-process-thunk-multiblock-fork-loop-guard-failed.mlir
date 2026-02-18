@@ -5,7 +5,7 @@
 // RUN: FileCheck %s --check-prefix=JSON < %t/jit.json
 //
 // LOG: [circt-sim] Strict JIT policy violation: deopts_total=1
-// LOG: [circt-sim] Strict JIT deopt process: id={{[1-9][0-9]*}} name=llhd_process_{{[0-9]+}} reason=guard_failed
+// LOG: [circt-sim] Strict JIT deopt process: id={{[1-9][0-9]*}} name=llhd_process_{{[0-9]+}} reason=guard_failed detail=step_limit_reached
 // LOG-NOT: detail=multiblock_no_terminal
 // LOG: [circt-sim] Simulation finished with exit code 1
 //
@@ -14,6 +14,7 @@
 // JSON: "jit_deopts_total": 1
 // JSON: "jit_deopt_reason_guard_failed": 1
 // JSON: "jit_deopt_reason_unsupported_operation": 0
+// JSON: "detail": "step_limit_reached"
 
 module {
   hw.module @top() {

@@ -26,9 +26,14 @@ namespace circt::sim {
 
 struct ProcessThunkExecutionState {
   bool deoptRequested = false;
+  // Some thunks may execute side effects before deciding to deopt. In that
+  // case, interpreter fallback should continue from the mutated process state
+  // instead of restoring the pre-thunk snapshot.
+  bool restoreSnapshotOnDeopt = true;
   bool halted = false;
   bool waiting = false;
   uint64_t resumeToken = 0;
+  std::string deoptDetail;
 };
 
 class JITCompileManager {
