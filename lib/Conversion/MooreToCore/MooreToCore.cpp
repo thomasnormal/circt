@@ -5173,6 +5173,33 @@ struct CovergroupGetCoverageOpConversion
   }
 };
 
+/// Conversion for moore.builtin.get_coverage -> __moore_coverage_get_total()
+/// Returns the total coverage percentage across all registered covergroups.
+struct GetCoverageBIOpConversion
+    : public OpConversionPattern<GetCoverageBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(GetCoverageBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto f64Ty = Float64Type::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(f64Ty, {});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                     "__moore_coverage_get_total", fnTy);
+
+    auto callOp = LLVM::CallOp::create(rewriter, loc, TypeRange{f64Ty},
+                                       SymbolRefAttr::get(fn), ValueRange{});
+
+    rewriter.replaceOp(op, callOp.getResult());
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Constraint Expression Operations Lowering
 //===----------------------------------------------------------------------===//
@@ -28026,6 +28053,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<CovergroupInstOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CovergroupSampleOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CovergroupGetCoverageOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<GetCoverageBIOpConversion>(typeConverter, patterns.getContext());
 
   // Constraint patterns (processed during RandomizeOp lowering, then erased).
   patterns.add<ConstraintBlockOpConversion>(typeConverter, patterns.getContext());
