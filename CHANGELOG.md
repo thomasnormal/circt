@@ -1,5 +1,66 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1481 - February 18, 2026
+
+### circt-sim JIT: APB deopt burn-down from 5 to 2 with strict regressions and wait-shape closure
+
+1. **Expanded safe LLVM-call prelude coverage** in
+   `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp` for native
+   single-block/multiblock thunk candidates:
+   - `__moore_is_rand_enabled`
+   - `__moore_int_to_string`
+   - `__moore_string_itoa`
+   - `__moore_string_concat`
+   - `__moore_randomize_basic`
+   - `__moore_randomize_with_range`
+   - `__moore_randomize_with_ranges`
+   - `__moore_randomize_with_dist`
+2. **Closed resumable multiblock bare-wait terminator gap**:
+   - multiblock candidate/detail checks now accept `llhd.wait` terminators with
+     no delay/observed list when destination block and operand mapping are
+     structurally valid.
+3. **Improved unsupported-shape triage for structured control**:
+   - `CIRCT_SIM_TRACE_JIT_UNSUPPORTED_SHAPES=1` now dumps nested `scf.if`
+     then/else region block skeletons and nested call ops, enabling direct
+     APB-tail attribution.
+4. **Added strict regression coverage**:
+   - `test/Tools/circt-sim/jit-process-thunk-llvm-call-is-rand-enabled-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-llvm-call-int-to-string-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-llvm-call-randomize-basic-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-llvm-call-randomize-with-range-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-llvm-call-string-concat-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-multiblock-scf-if-randomize-range-halt.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-multiblock-bare-wait-no-trigger.mlir`
+   - `test/Tools/circt-sim/jit-process-thunk-multiblock-call-indirect-process-await-halt.mlir`
+5. **Validation**:
+   - `ninja -C build circt-sim` passes.
+   - targeted strict regressions above pass with zero deopts.
+   - targeted parallel smoke passes:
+     - `jit-process-thunk-multiblock-scf-if-randomize-range-halt.mlir`
+       with `--parallel=4` and `jit_deopts_total=0`.
+   - bounded APB compile-lane burn-down (`AVIPS=apb`, `SEEDS=1`,
+     `CIRCT_SIM=/home/thomas-ahle/circt/build/bin/circt-sim`,
+     `CIRCT_VERILOG=/home/thomas-ahle/circt/build-test/bin/circt-verilog`,
+     `CIRCT_SIM_MODE=compile`,
+     `CIRCT_SIM_WRITE_JIT_REPORT=1`,
+     `CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=-1'`):
+     - baseline:
+       `/tmp/avip-circt-sim-jit-apb-buildbin-20260218-042511`
+       -> `jit_deopts_total=5`
+     - intermediate:
+       `/tmp/avip-circt-sim-jit-apb-buildbin-20260218-044313`
+       -> `jit_deopts_total=2`
+     - latest:
+       `/tmp/avip-circt-sim-jit-apb-buildbin-20260218-050046`
+       -> `jit_deopts_total=2`
+6. **Regression control**:
+   - tried broad multiblock saved-call-stack wait acceptance for
+     `post_exec_not_halted` closure, observed APB timeout regression, and
+     reverted that broad guard relaxation.
+   - remaining APB queue is now:
+     - `unsupported_operation:multiblock_no_terminal` (`fork_96_branch_0`)
+     - `guard_failed:post_exec_not_halted` (`fork_97_branch_0`)
+
 ## Iteration 1480 - February 18, 2026
 
 ### circt-sim JIT: close resumable multiblock call-stack deopts; AVIP `jtag` reaches zero-deopt
