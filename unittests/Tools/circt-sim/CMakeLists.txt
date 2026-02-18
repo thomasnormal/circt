@@ -26,6 +26,7 @@ set(CIRCT_SIM_TEST_LIBS
   MLIRIndexDialect
   MLIRLLVMDialect
   MLIRLLVMIRTransforms
+  MLIRMathDialect
   MLIRParser
   MLIRSCFDialect
   MLIRTransforms
@@ -34,6 +35,13 @@ set(CIRCT_SIM_TEST_LIBS
 add_circt_unittest(CIRCTSimToolTests
   LLHDProcessInterpreterTest.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreter.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/JITCompileManager.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterGlobals.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterModuleLevelInit.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/UVMFastPaths.cpp
 )
 
 target_include_directories(CIRCTSimToolTests

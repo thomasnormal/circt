@@ -201,8 +201,29 @@ typedef struct t_cb_data *p_cb_data;
 #ifndef vpiSigned
 #define vpiSigned 65
 #endif
+#ifndef vpiLeftRange
+#define vpiLeftRange 79
+#endif
+#ifndef vpiRightRange
+#define vpiRightRange 83
+#endif
 #ifndef vpiArray
 #define vpiArray 28
+#endif
+#ifndef vpiRegArray
+#define vpiRegArray 116
+#endif
+#ifndef vpiStructVar
+#define vpiStructVar 618
+#endif
+#ifndef vpiStructNet
+#define vpiStructNet 683
+#endif
+#ifndef vpiMember
+#define vpiMember 742
+#endif
+#ifndef vpiPacked
+#define vpiPacked 630
 #endif
 #ifndef vpiDefName
 #define vpiDefName 9
@@ -291,6 +312,18 @@ typedef struct t_cb_data *p_cb_data;
 #ifndef vpiTimeUnit
 #define vpiTimeUnit 11
 #endif
+// SystemVerilog extensions (sv_vpi_user.h)
+#ifndef vpiInstance
+#define vpiInstance 745
+#endif
+
+#ifndef vpiGenScope
+#define vpiGenScope 134
+#endif
+
+#ifndef vpiGenScopeArray
+#define vpiGenScopeArray 133
+#endif
 
 namespace circt {
 namespace sim {
@@ -307,6 +340,10 @@ enum class VPIObjectType : uint8_t {
   Parameter = 4,
   Iterator = 5,
   Callback = 6,
+  Array = 7,
+  GenScope = 8,
+  GenScopeArray = 9,
+  StructVar = 10,
 };
 
 //===----------------------------------------------------------------------===//
@@ -337,6 +374,17 @@ struct VPIObject {
 
   /// For ports: direction (1=input, 2=output, 3=inout).
   int32_t direction = 0;
+
+  /// For parameters: the elaborated constant value.
+  int64_t paramValue = 0;
+
+  /// For array element sub-signals: bit offset within the parent signal.
+  /// Used to read/write the correct slice of the parent signal's bits.
+  uint32_t bitOffset = 0;
+
+  /// For Array objects: SV-declared left and right bounds.
+  int32_t leftBound = 0;
+  int32_t rightBound = 0;
 
   /// Parent object ID (0 = no parent / root).
   uint32_t parentId = 0;
@@ -419,11 +467,22 @@ public:
                           VPIObjectType type = VPIObjectType::Net,
                           uint32_t parentModuleId = 0);
 
+  /// Register a parameter object. Returns its handle ID.
+  uint32_t registerParameter(const std::string &name,
+                             const std::string &fullName,
+                             int64_t value, uint32_t width,
+                             uint32_t parentModuleId = 0);
+
   /// Look up an object by full hierarchical name.
   VPIObject *findByName(const std::string &fullName);
 
   /// Look up an object by handle ID.
   VPIObject *findById(uint32_t id);
+
+  /// Add an alias name mapping (e.g., unqualified name → object ID).
+  void addNameMapping(const std::string &name, uint32_t objectId) {
+    nameToId[name] = objectId;
+  }
 
   //===--------------------------------------------------------------------===//
   // VPI C API Implementation
@@ -472,6 +531,9 @@ public:
 
   /// Fire all callbacks of the given reason.
   void fireCallbacks(int32_t reason);
+
+  /// Check if there are any active callbacks registered for the given reason.
+  bool hasActiveCallbacks(int32_t reason) const;
 
   /// Fire value-change callbacks for a specific signal.
   void fireValueChangeCallbacks(SignalId signalId);
@@ -555,6 +617,16 @@ private:
 
   /// Signal ID to object ID mapping (for value-change callback dispatch).
   llvm::DenseMap<SignalId, llvm::SmallVector<uint32_t, 4>> signalToObjectIds;
+
+  /// Map from signal name to all SignalIds with that name.
+  /// Used to propagate VPI writes from port signals to internal copies
+  /// (e.g., hw.module port "mode_in" → llhd.sig name "mode_in").
+  llvm::StringMap<llvm::SmallVector<SignalId, 2>> nameToSiblingSignals;
+
+  /// Signals actively driven by VPI putValue and their expected values.
+  /// Used to re-assert VPI-written values after executeCurrentTime() fires
+  /// stale scheduled drives. Cleared at the start of each time step.
+  llvm::DenseMap<SignalId, SignalValue> vpiDrivenSignals;
 
   /// Object ID to callback IDs mapping (for value-change callbacks).
   llvm::DenseMap<uint32_t, llvm::SmallVector<uint32_t, 4>> objectToCallbackIds;

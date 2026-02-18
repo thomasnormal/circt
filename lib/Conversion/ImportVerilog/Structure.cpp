@@ -757,6 +757,87 @@ struct ModuleVisitor : public BaseVisitor {
         context.pendingInterfacePortConnections.push_back(
             {&instNode, instOp.getResult(), loc});
 
+      // Instantiate interface continuous assignments at each interface
+      // instance site. Interface body conversion currently declares interface
+      // signals and methods, but continuous assigns need concrete instance
+      // context to produce virtual interface signal refs.
+      bool hasInterfaceContAssign = false;
+      for (auto &member : instNode.body.members()) {
+        if (member.kind == slang::ast::SymbolKind::ContinuousAssign) {
+          hasInterfaceContAssign = true;
+          break;
+        }
+      }
+      if (hasInterfaceContAssign) {
+        Value interfaceValue = instOp.getResult();
+        if (isa<moore::RefType>(interfaceValue.getType()))
+          interfaceValue = moore::ReadOp::create(builder, loc, interfaceValue);
+
+        auto prevInterfaceArg = context.currentInterfaceArg;
+        auto prevInterfaceBody = context.currentInterfaceBody;
+        auto prevSignalNames = std::move(context.interfaceSignalNames);
+        context.currentInterfaceArg = interfaceValue;
+        context.currentInterfaceBody = &instNode.body;
+        context.interfaceSignalNames.clear();
+        auto restore = llvm::make_scope_exit([&] {
+          context.currentInterfaceArg = prevInterfaceArg;
+          context.currentInterfaceBody = prevInterfaceBody;
+          context.interfaceSignalNames = std::move(prevSignalNames);
+        });
+
+        llvm::DenseSet<const slang::ast::Symbol *> portInternalSymbols;
+        for (auto *symbol : instNode.body.getPortList()) {
+          if (const auto *port = symbol->as_if<slang::ast::PortSymbol>()) {
+            if (port->internalSymbol) {
+              portInternalSymbols.insert(port->internalSymbol);
+              context.interfaceSignalNames[port->internalSymbol] = port->name;
+            }
+            context.interfaceSignalNames[port] = port->name;
+          } else if (const auto *multiPort =
+                         symbol->as_if<slang::ast::MultiPortSymbol>()) {
+            for (auto *port : multiPort->ports) {
+              if (port->internalSymbol) {
+                portInternalSymbols.insert(port->internalSymbol);
+                context.interfaceSignalNames[port->internalSymbol] =
+                    port->name;
+              }
+              context.interfaceSignalNames[port] = port->name;
+            }
+          }
+        }
+
+        for (auto &member : instNode.body.members()) {
+          if (member.as_if<slang::ast::PortSymbol>() ||
+              member.as_if<slang::ast::MultiPortSymbol>())
+            continue;
+          if (portInternalSymbols.count(&member))
+            continue;
+          if (auto *var = member.as_if<slang::ast::VariableSymbol>()) {
+            context.interfaceSignalNames[var] = var->name;
+            continue;
+          }
+          if (auto *net = member.as_if<slang::ast::NetSymbol>()) {
+            context.interfaceSignalNames[net] = net->name;
+            continue;
+          }
+          if (auto *inst = member.as_if<slang::ast::InstanceSymbol>()) {
+            if (inst->getDefinition().definitionKind ==
+                slang::ast::DefinitionKind::Interface) {
+              context.interfaceSignalNames[inst] = inst->name;
+            }
+          }
+        }
+
+        for (auto &member : instNode.body.members()) {
+          if (member.kind != slang::ast::SymbolKind::ContinuousAssign)
+            continue;
+          auto memberLoc = context.convertLocation(member.location);
+          if (failed(member.visit(ModuleVisitor(context, memberLoc,
+                                                blockNamePrefix))))
+            return failure();
+        }
+      }
+
       return success();
     }
 
@@ -2839,6 +2920,154 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
       return failure();
     }
     outputs.push_back(it->second);
+  }
+
+  // Collect elaborated parameter values and attach them as a dictionary
+  // attribute on the module op so that VPI can expose them to cocotb.
+  {
+    SmallVector<NamedAttribute> paramEntries;
+    for (auto &member : module->members()) {
+      if (auto *paramSym =
+              member.as_if<slang::ast::ParameterSymbol>()) {
+        const auto &constVal = paramSym->getValue();
+        if (!constVal || !constVal.isInteger())
+          continue;
+        const auto &svint = constVal.integer();
+        auto maybeVal = svint.as<int64_t>();
+        if (!maybeVal)
+          continue;
+        auto intAttr = builder.getIntegerAttr(
+            builder.getIntegerType(svint.getBitWidth()), *maybeVal);
+        paramEntries.push_back(
+            builder.getNamedAttr(paramSym->name, intAttr));
+      }
+    }
+    if (!paramEntries.empty())
+      lowering.op->setAttr("vpi.parameters",
+                           builder.getDictionaryAttr(paramEntries));
+  }
+
+  // Collect unpacked array bounds and attach as vpi.array_bounds so that
+  // VPI can report correct SV-style indices to cocotb.
+  {
+    SmallVector<NamedAttribute> boundsEntries;
+    for (auto &member : module->members()) {
+      const slang::ast::Type *memberType = nullptr;
+      std::string_view memberName;
+      if (auto *varSym = member.as_if<slang::ast::VariableSymbol>()) {
+        memberType = &varSym->getType();
+        memberName = varSym->name;
+      } else if (auto *netSym = member.as_if<slang::ast::NetSymbol>()) {
+        memberType = &netSym->getType();
+        memberName = netSym->name;
+      }
+      if (!memberType || memberName.empty())
+        continue;
+      auto &ct = memberType->getCanonicalType();
+      if (ct.kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+        auto &arr =
+            ct.as<slang::ast::FixedSizeUnpackedArrayType>();
+        auto i32Ty = builder.getIntegerType(32);
+        auto leftAttr = builder.getIntegerAttr(i32Ty, arr.range.left);
+        auto rightAttr = builder.getIntegerAttr(i32Ty, arr.range.right);
+        SmallVector<NamedAttribute> rangeAttrs;
+        rangeAttrs.push_back(builder.getNamedAttr("left", leftAttr));
+        rangeAttrs.push_back(builder.getNamedAttr("right", rightAttr));
+        boundsEntries.push_back(builder.getNamedAttr(
+            llvm::StringRef(memberName.data(), memberName.size()),
+            builder.getDictionaryAttr(rangeAttrs)));
+      }
+    }
+    // Also check ports (may not appear as members).
+    for (auto *portSym : module->getPortList()) {
+      if (!portSym)
+        continue;
+      auto *port = portSym->as_if<slang::ast::PortSymbol>();
+      if (!port)
+        continue;
+      auto &ct = port->getType().getCanonicalType();
+      if (ct.kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+        auto &arr =
+            ct.as<slang::ast::FixedSizeUnpackedArrayType>();
+        auto i32Ty = builder.getIntegerType(32);
+        auto leftAttr = builder.getIntegerAttr(i32Ty, arr.range.left);
+        auto rightAttr = builder.getIntegerAttr(i32Ty, arr.range.right);
+        SmallVector<NamedAttribute> rangeAttrs;
+        rangeAttrs.push_back(builder.getNamedAttr("left", leftAttr));
+        rangeAttrs.push_back(builder.getNamedAttr("right", rightAttr));
+        std::string portName(port->name);
+        // Only add if not already present from members.
+        bool found = false;
+        for (auto &e : boundsEntries) {
+          if (e.getName().strref() == portName) {
+            found = true;
+            break;
+          }
+        }
+        if (!found)
+          boundsEntries.push_back(builder.getNamedAttr(
+              portName, builder.getDictionaryAttr(rangeAttrs)));
+      }
+    }
+    if (!boundsEntries.empty())
+      lowering.op->setAttr("vpi.array_bounds",
+                           builder.getDictionaryAttr(boundsEntries));
+  }
+
+  // Collect unpacked struct field info and attach as vpi.struct_fields so that
+  // VPI can expose struct members as hierarchical children to cocotb.
+  {
+    SmallVector<NamedAttribute> structEntries;
+    auto addStructFields =
+        [&](std::string_view sigName, const slang::ast::Type &type) {
+          auto &ct = type.getCanonicalType();
+          if (ct.kind != slang::ast::SymbolKind::UnpackedStructType)
+            return;
+          auto &ust = ct.as<slang::ast::UnpackedStructType>();
+          SmallVector<Attribute> fieldList;
+          for (auto *field : ust.fields) {
+            SmallVector<NamedAttribute> fieldAttrs;
+            fieldAttrs.push_back(builder.getNamedAttr(
+                "name",
+                builder.getStringAttr(llvm::StringRef(
+                    field->name.data(), field->name.size()))));
+            fieldAttrs.push_back(builder.getNamedAttr(
+                "width",
+                builder.getI32IntegerAttr(field->getType().getBitstreamWidth())));
+            fieldList.push_back(builder.getDictionaryAttr(fieldAttrs));
+          }
+          if (!fieldList.empty())
+            structEntries.push_back(builder.getNamedAttr(
+                llvm::StringRef(sigName.data(), sigName.size()),
+                builder.getArrayAttr(fieldList)));
+        };
+    for (auto &member : module->members()) {
+      if (auto *varSym = member.as_if<slang::ast::VariableSymbol>())
+        addStructFields(varSym->name, varSym->getType());
+      else if (auto *netSym = member.as_if<slang::ast::NetSymbol>())
+        addStructFields(netSym->name, netSym->getType());
+    }
+    for (auto *portSym : module->getPortList()) {
+      if (!portSym)
+        continue;
+      auto *port = portSym->as_if<slang::ast::PortSymbol>();
+      if (!port)
+        continue;
+      // Only add if not already present from members.
+      bool found = false;
+      for (auto &e : structEntries) {
+        if (e.getName().strref() ==
+            llvm::StringRef(port->name.data(), port->name.size())) {
+          found = true;
+          break;
+        }
+      }
+      if (!found)
+        addStructFields(port->name, port->getType());
+    }
+    if (!structEntries.empty())
+      lowering.op->setAttr("vpi.struct_fields",
+                           builder.getDictionaryAttr(structEntries));
   }
 
   moore::OutputOp::create(builder, lowering.op.getLoc(), outputs);

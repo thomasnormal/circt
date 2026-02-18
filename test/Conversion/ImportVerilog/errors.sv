@@ -109,9 +109,9 @@ module Foo;
 endmodule
 
 // -----
+// release statement is silently handled (no diagnostic)
 module Foo;
   int a;
-  // expected-remark @below {{release statement ignored (simplified simulation semantics)}}
   initial release a;
 endmodule
 

@@ -832,6 +832,14 @@ private:
   // NOTE: collectSignalIdsFromCombinational was removed and inlined into
   // collectSignalIds to prevent stack overflow on large designs.
 
+  /// Normalize implicit four-state Z drives to high-impedance strengths.
+  /// This preserves pullup/open-drain resolution for drive values encoded as Z
+  /// ({value=1, unknown=1} in each logical bit).
+  void normalizeImplicitZDriveStrength(SignalId signalId,
+                                       const InterpretedValue &driveVal,
+                                       DriveStrength &strength0,
+                                       DriveStrength &strength1) const;
+
   /// Execute a single continuous assignment (static module-level drive).
   void executeContinuousAssignment(llhd::DriveOp driveOp);
 
@@ -1842,6 +1850,11 @@ private:
   /// Reverse map: signal ID → memory address for interface field signals.
   llvm::DenseMap<SignalId, uint64_t> fieldSignalToAddr;
 
+  /// Per-interface-memory byte initialization mask keyed by malloc base address.
+  /// This fixes coarse whole-block initialization for interface structs where
+  /// only some fields are written: loads from untouched fields should return X.
+  llvm::DenseMap<uint64_t, std::vector<uint8_t>> interfaceMemoryByteInitMask;
+
   /// Maps interface pointer signal ID → list of shadow field signal IDs.
   /// Used during sensitivity derivation: when a process probes an interface
   /// pointer signal, its field shadow signals are added to the sensitivity.
@@ -2000,6 +2013,18 @@ private:
   llvm::DenseMap<int64_t, llvm::SmallVector<ObjectionWaiter, 4>>
       objectionZeroWaiters;
   llvm::DenseMap<ProcessId, int64_t> objectionWaitHandleByProc;
+
+  /// Per-process state for uvm_objection::wait_for interception.
+  /// Tracks whether a given handle was ever raised in this wait context and
+  /// any active drain-time deadline in simulation time.
+  struct ObjectionWaitForState {
+    int64_t handle = -1;
+    bool wasEverRaised = false;
+    uint32_t zeroYields = 0;
+    bool drainArmed = false;
+    uint64_t drainDeadlineFs = 0;
+  };
+  std::map<ProcessId, ObjectionWaitForState> objectionWaitForStateByProc;
 
   /// Per-process mapping of execute_phase's task phase address.
   /// When execute_phase is intercepted for a task phase, the phase address

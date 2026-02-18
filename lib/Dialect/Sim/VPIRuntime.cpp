@@ -137,6 +137,30 @@ uint32_t VPIRuntime::registerSignal(const std::string &name,
   return id;
 }
 
+uint32_t VPIRuntime::registerParameter(const std::string &name,
+                                       const std::string &fullName,
+                                       int64_t value, uint32_t width,
+                                       uint32_t parentModuleId) {
+  uint32_t id = nextObjectId();
+  auto obj = std::make_unique<VPIObject>();
+  obj->id = id;
+  obj->type = VPIObjectType::Parameter;
+  obj->name = name;
+  obj->fullName = fullName;
+  obj->paramValue = value;
+  obj->width = width;
+  obj->parentId = parentModuleId;
+  if (parentModuleId != 0) {
+    auto *parent = findById(parentModuleId);
+    if (parent)
+      parent->children.push_back(id);
+  }
+  nameToId[fullName] = id;
+  objects[id] = std::move(obj);
+  stats.objectsCreated++;
+  return id;
+}
+
 VPIObject *VPIRuntime::findByName(const std::string &fullName) {
   auto it = nameToId.find(fullName);
   if (it == nameToId.end())
@@ -166,70 +190,490 @@ void VPIRuntime::buildHierarchy() {
       topModuleNames.empty() ? "top" : topModuleNames[0];
 
   // Create top-level module objects for each registered module.
-  // The scheduler provides signal names in "module.signal" format.
+  // The scheduler provides signal names in hierarchical "inst.signal" format.
+  // We build a proper parent-child tree: top-level signals belong to the
+  // default module, and dotted prefixes like "i_module_a.sig" create child
+  // module scopes under the default module.
   llvm::StringMap<uint32_t> moduleIds;
+
+  // Helper: ensure a module exists for the given hierarchical path, creating
+  // intermediate scopes as needed.  Returns the module's VPI object id.
+  auto ensureModule = [&](llvm::StringRef path) -> uint32_t {
+    auto it = moduleIds.find(path);
+    if (it != moduleIds.end())
+      return it->second;
+
+    // Walk the path components and create missing intermediates.
+    // E.g. for "top.i_module_a.sub", create "top", then "top.i_module_a",
+    // then "top.i_module_a.sub", each as a child of its parent.
+    llvm::SmallVector<llvm::StringRef, 4> parts;
+    path.split(parts, '.');
+    std::string accum;
+    uint32_t parentId = 0;
+    for (auto part : parts) {
+      if (accum.empty())
+        accum = part.str();
+      else
+        accum = accum + "." + part.str();
+      auto modIt = moduleIds.find(accum);
+      if (modIt != moduleIds.end()) {
+        parentId = modIt->second;
+      } else {
+        uint32_t mid = registerModule(part.str(), accum, parentId);
+        moduleIds[accum] = mid;
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Created module '" << accum << "' id=" << mid
+                   << " parent=" << parentId << "\n");
+        parentId = mid;
+      }
+    }
+    return parentId;
+  };
 
   for (const auto &entry : scheduler->getSignalNames()) {
     SignalId sigId = entry.first;
     llvm::StringRef fullName = entry.second;
     const SignalValue &sv = scheduler->getSignalValue(sigId);
     uint32_t width = sv.getWidth();
-    // For four-state signals, the physical width is 2x the logical width
-    // (value bits + unknown bits). Report the logical width to VPI.
-    SignalEncoding enc = scheduler->getSignalEncoding(sigId);
-    if (enc == SignalEncoding::FourStateStruct && width >= 2 && (width % 2) == 0)
-      width /= 2;
-
-    // Split "module.signal" into module and signal parts.
-    auto dotPos = fullName.rfind('.');
-    std::string moduleName, signalName;
-    if (dotPos != llvm::StringRef::npos) {
-      moduleName = fullName.substr(0, dotPos).str();
-      signalName = fullName.substr(dotPos + 1).str();
+    // Use the pre-computed logical width if available (strips 4-state overhead
+    // from both simple and nested struct types).  Fall back to the old halving
+    // heuristic for signals that don't have a logical width recorded.
+    uint32_t logicalWidth = scheduler->getSignalLogicalWidth(sigId);
+    if (logicalWidth > 0) {
+      width = logicalWidth;
     } else {
-      moduleName = defaultModuleName;
+      SignalEncoding enc = scheduler->getSignalEncoding(sigId);
+      if (enc == SignalEncoding::FourStateStruct && width >= 2 &&
+          (width % 2) == 0)
+        width /= 2;
+    }
+
+    // Split "inst.sub.signal" into module path and signal name.
+    // Signals without dots belong to the default module.
+    auto dotPos = fullName.rfind('.');
+    std::string modulePath, signalName;
+    if (dotPos != llvm::StringRef::npos) {
+      std::string prefix = fullName.substr(0, dotPos).str();
+      signalName = fullName.substr(dotPos + 1).str();
+      // Nest the instance under the default (top) module.
+      modulePath = defaultModuleName + "." + prefix;
+    } else {
+      modulePath = defaultModuleName;
       signalName = fullName.str();
     }
 
-    // Ensure module exists.
-    uint32_t moduleId;
-    auto modIt = moduleIds.find(moduleName);
-    if (modIt == moduleIds.end()) {
-      moduleId = registerModule(moduleName, moduleName);
-      moduleIds[moduleName] = moduleId;
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Created module '" << moduleName << "' id=" << moduleId
-                 << "\n");
-    } else {
-      moduleId = modIt->second;
-    }
+    // Ensure module hierarchy exists.
+    uint32_t moduleId = ensureModule(modulePath);
 
-    // Register signal under both short name and module-qualified name.
-    std::string qualifiedName = moduleName + "." + signalName;
-    uint32_t sigObjId =
-        registerSignal(signalName, qualifiedName, sigId, width,
-                       VPIObjectType::Reg, moduleId);
-    // Also register under the unqualified name for vpi_handle_by_name.
-    if (nameToId.find(signalName) == nameToId.end())
-      nameToId[signalName] = sigObjId;
-    LLVM_DEBUG(llvm::dbgs() << "  Created signal '" << qualifiedName
-                            << "' id=" << sigObjId << " sigId=" << sigId
-                            << " width=" << width << "\n");
+    // Check if this signal is an unpacked array.
+    std::string qualifiedName = modulePath + "." + signalName;
+    const auto *arrayInfo = scheduler->getSignalArrayInfo(sigId);
+    if (arrayInfo && arrayInfo->numElements > 1) {
+      // Create an Array parent object.
+      uint32_t arrayObjId =
+          registerSignal(signalName, qualifiedName, sigId, width,
+                         VPIObjectType::Array, moduleId);
+      if (nameToId.find(signalName) == nameToId.end())
+        nameToId[signalName] = arrayObjId;
+
+      // Create child Reg objects for each array element.
+      uint32_t elemPhysW = arrayInfo->elementPhysWidth;
+      uint32_t elemLogW = arrayInfo->elementLogicalWidth;
+      // Determine the SV index range.  If bounds are available (from
+      // vpi.array_bounds), use them; otherwise fall back to 0-based.
+      int32_t leftBound = arrayInfo->leftBound;
+      int32_t rightBound = arrayInfo->rightBound;
+      bool hasBounds = (rightBound != -1);
+      // Direction: downto if left > right, ascending if left < right.
+      int32_t step = (hasBounds && leftBound > rightBound) ? -1 : 1;
+      // Store bounds on the array parent for range queries.
+      auto *arrayParent = findById(arrayObjId);
+      if (arrayParent) {
+        arrayParent->leftBound = hasBounds ? leftBound : 0;
+        arrayParent->rightBound =
+            hasBounds ? rightBound
+                      : static_cast<int32_t>(arrayInfo->numElements - 1);
+      }
+      for (uint32_t i = 0; i < arrayInfo->numElements; ++i) {
+        int32_t svIndex = hasBounds ? (leftBound + step * (int32_t)i)
+                                    : (int32_t)i;
+        std::string elemName =
+            signalName + "[" + std::to_string(svIndex) + "]";
+        std::string elemQName =
+            qualifiedName + "[" + std::to_string(svIndex) + "]";
+        uint32_t elemId = nextObjectId();
+        auto elemObj = std::make_unique<VPIObject>();
+        elemObj->id = elemId;
+        elemObj->type = VPIObjectType::Reg;
+        elemObj->name = elemName;
+        elemObj->fullName = elemQName;
+        elemObj->signalId = sigId;
+        elemObj->width = elemLogW;
+        // HW convention: element 0 is in the highest bits (field order
+        // high-to-low). Bit offset = (N-1-i) * elemPhysWidth.
+        elemObj->bitOffset =
+            (arrayInfo->numElements - 1 - i) * elemPhysW;
+        elemObj->parentId = arrayObjId;
+        if (arrayParent)
+          arrayParent->children.push_back(elemId);
+        nameToId[elemQName] = elemId;
+        if (nameToId.find(elemName) == nameToId.end())
+          nameToId[elemName] = elemId;
+        objects[elemId] = std::move(elemObj);
+        stats.objectsCreated++;
+      }
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Created array '" << qualifiedName << "' id="
+                 << arrayObjId << " sigId=" << sigId << " elements="
+                 << arrayInfo->numElements << " elemWidth=" << elemLogW
+                 << "\n");
+    } else if (const auto *structFields =
+                   scheduler->getSignalStructFields(sigId)) {
+      // Unpacked struct: create a StructVar parent with field children.
+      uint32_t structObjId =
+          registerSignal(signalName, qualifiedName, sigId, width,
+                         VPIObjectType::StructVar, moduleId);
+      if (nameToId.find(signalName) == nameToId.end())
+        nameToId[signalName] = structObjId;
+      auto *structParent = findById(structObjId);
+
+      // HW convention: first field is in the highest bits.
+      // Accumulate physical offset from the top.
+      uint32_t totalPhysWidth = 0;
+      for (const auto &f : *structFields)
+        totalPhysWidth += f.physicalWidth;
+      uint32_t bitOff = totalPhysWidth;
+      for (const auto &field : *structFields) {
+        bitOff -= field.physicalWidth;
+        std::string fieldName = field.name;
+        std::string fieldQName = qualifiedName + "." + fieldName;
+        uint32_t fieldId = nextObjectId();
+        auto fieldObj = std::make_unique<VPIObject>();
+        fieldObj->id = fieldId;
+        fieldObj->type = VPIObjectType::Reg;
+        fieldObj->name = fieldName;
+        fieldObj->fullName = fieldQName;
+        fieldObj->signalId = sigId;
+        fieldObj->width = field.logicalWidth;
+        fieldObj->bitOffset = bitOff;
+        fieldObj->parentId = structObjId;
+        if (structParent)
+          structParent->children.push_back(fieldId);
+        nameToId[fieldQName] = fieldId;
+        objects[fieldId] = std::move(fieldObj);
+        stats.objectsCreated++;
+      }
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Created struct '" << qualifiedName << "' id="
+                 << structObjId << " sigId=" << sigId << " fields="
+                 << structFields->size() << "\n");
+    } else {
+      // Register as a regular signal.
+      uint32_t sigObjId =
+          registerSignal(signalName, qualifiedName, sigId, width,
+                         VPIObjectType::Reg, moduleId);
+      if (nameToId.find(signalName) == nameToId.end())
+        nameToId[signalName] = sigObjId;
+      LLVM_DEBUG(llvm::dbgs() << "  Created signal '" << qualifiedName
+                              << "' id=" << sigObjId << " sigId=" << sigId
+                              << " width=" << width << "\n");
+    }
   }
 
   // Ensure all --top modules exist even if they have no signals.
   for (const auto &modName : topModuleNames) {
-    if (moduleIds.find(modName) == moduleIds.end()) {
-      uint32_t moduleId = registerModule(modName, modName);
-      moduleIds[modName] = moduleId;
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Created empty module '" << modName
-                 << "' id=" << moduleId << "\n");
+    ensureModule(modName);
+  }
+
+  // Register child instance scopes that have no signals (so they appear
+  // as VPI module children even without any registered signals).
+  for (const auto &instPath : scheduler->getInstanceScopes()) {
+    std::string fullPath = defaultModuleName + "." + instPath;
+    ensureModule(fullPath);
+  }
+
+  // Register VPI parameters on child instance modules.
+  for (const auto &param : scheduler->getVPIParameters()) {
+    std::string instFullPath = defaultModuleName + "." + param.instancePath;
+    auto modIt = moduleIds.find(instFullPath);
+    if (modIt != moduleIds.end()) {
+      uint32_t parentModId = modIt->second;
+      std::string paramQName = instFullPath + "." + param.paramName;
+      registerParameter(param.paramName, paramQName, param.value,
+                        param.width, parentModId);
     }
   }
 
+  // Process signal aliases (e.g., sv.namehint wire names).
+  // These create additional nameToId entries so VPI can find signals by
+  // their original SystemVerilog wire names (e.g., "counter_plus_two"
+  // instead of "i_module_a.data_out").
+  for (const auto &alias : scheduler->getSignalAliases()) {
+    llvm::StringRef aliasName = alias.first;
+    SignalId sigId = alias.second;
+    // Find the VPI object for this signal.
+    for (auto &objEntry : objects) {
+      auto *obj = objEntry.second.get();
+      if (obj && obj->signalId == sigId &&
+          obj->type != VPIObjectType::Iterator &&
+          obj->type != VPIObjectType::Callback &&
+          obj->type != VPIObjectType::Module) {
+        // Register the alias under the top module's qualified name.
+        std::string qualAlias = defaultModuleName + "." + aliasName.str();
+        nameToId[qualAlias] = obj->id;
+        if (nameToId.find(aliasName) == nameToId.end())
+          nameToId[aliasName] = obj->id;
+        // Also add as a child of the top module so iterate() finds it.
+        auto topIt = moduleIds.find(defaultModuleName);
+        if (topIt != moduleIds.end()) {
+          auto *topMod = findById(topIt->second);
+          if (topMod) {
+            // Check it's not already a child of top.
+            bool alreadyChild = false;
+            for (uint32_t cid : topMod->children) {
+              if (cid == obj->id) {
+                alreadyChild = true;
+                break;
+              }
+            }
+            if (!alreadyChild)
+              topMod->children.push_back(obj->id);
+          }
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Alias '" << aliasName << "' -> signal id="
+                   << obj->id << " (sigId=" << sigId << ")\n");
+        break;
+      }
+    }
+  }
+
+  // Generate scope array support: detect instance names like "arr_1", "arr_2"
+  // and create bracket-indexed aliases "arr[1]", "arr[2]" with a parent scope
+  // "arr" that contains them. This reconstructs Verilog generate for-loop
+  // hierarchy from CIRCT's flattened naming convention.
+  {
+    // Group module names by parent and detect numeric suffix patterns.
+    // For each parent module, collect children and group by prefix.
+    llvm::StringMap<llvm::SmallVector<std::pair<std::string, int>, 4>>
+        prefixGroups;
+    // Track underscore→bracket path mappings for nested fixup.
+    llvm::StringMap<std::string> underscoreToBracket;
+    for (auto &entry : moduleIds) {
+      llvm::StringRef fullPath = entry.first();
+      auto lastDot = fullPath.rfind('.');
+      if (lastDot == llvm::StringRef::npos)
+        continue;
+      llvm::StringRef parentPath = fullPath.substr(0, lastDot);
+      llvm::StringRef childName = fullPath.substr(lastDot + 1);
+
+      // Check if childName matches "prefix_N" where N is a number.
+      auto lastUnderscore = childName.rfind('_');
+      if (lastUnderscore == llvm::StringRef::npos || lastUnderscore == 0)
+        continue;
+      llvm::StringRef prefix = childName.substr(0, lastUnderscore);
+      llvm::StringRef suffix = childName.substr(lastUnderscore + 1);
+      int index;
+      if (suffix.getAsInteger(10, index))
+        continue;
+
+      std::string key = (parentPath + "." + prefix).str();
+      prefixGroups[key].push_back({fullPath.str(), index});
+    }
+
+    // For groups with 2+ entries, create bracket-indexed aliases.
+    for (auto &group : prefixGroups) {
+      if (group.second.size() < 2)
+        continue;
+
+      llvm::StringRef arrayPath = group.first();
+      // Ensure the parent array scope exists (GenScopeArray type).
+      uint32_t arrayModId = 0;
+      if (moduleIds.find(arrayPath) == moduleIds.end()) {
+        auto parentDot = arrayPath.rfind('.');
+        uint32_t parentId = 0;
+        if (parentDot != llvm::StringRef::npos) {
+          auto parentIt = moduleIds.find(arrayPath.substr(0, parentDot));
+          if (parentIt != moduleIds.end())
+            parentId = parentIt->second;
+        }
+        llvm::StringRef scopeName = arrayPath.substr(
+            arrayPath.rfind('.') != llvm::StringRef::npos
+                ? arrayPath.rfind('.') + 1
+                : 0);
+        arrayModId =
+            registerModule(scopeName.str(), arrayPath.str(), parentId);
+        moduleIds[arrayPath] = arrayModId;
+        // Mark as GenScopeArray.
+        auto *arrayObj = findById(arrayModId);
+        if (arrayObj)
+          arrayObj->type = VPIObjectType::GenScopeArray;
+      } else {
+        arrayModId = moduleIds[arrayPath];
+      }
+
+      // Create bracket-indexed aliases for each member.
+      for (auto &member : group.second) {
+        uint32_t childId = moduleIds[member.first];
+        // Create alias: "parent.prefix[N]" → same module ID
+        std::string bracketName =
+            arrayPath.str() + "[" + std::to_string(member.second) + "]";
+        moduleIds[bracketName] = childId;
+        nameToId[bracketName] = childId;
+        // Record the underscore→bracket mapping for nested path fixup.
+        // e.g. "sample_module.outer_scope_1" → "sample_module.outer_scope[1]"
+        underscoreToBracket[member.first] = bracketName;
+        // Also register the short form for VPI by-name access.
+        auto shortDot = bracketName.rfind('.');
+        if (shortDot != llvm::StringRef::npos) {
+          std::string shortName = bracketName.substr(shortDot + 1);
+          if (nameToId.find(shortName) == nameToId.end())
+            nameToId[shortName] = childId;
+        }
+        // Update the object's name to use bracket notation and GenScope type.
+        auto *obj = findById(childId);
+        if (obj) {
+          llvm::StringRef origName = obj->name;
+          auto underscore = origName.rfind('_');
+          if (underscore != llvm::StringRef::npos) {
+            llvm::StringRef origPrefix = origName.substr(0, underscore);
+            llvm::StringRef origSuffix = origName.substr(underscore + 1);
+            int origIdx;
+            if (!origSuffix.getAsInteger(10, origIdx)) {
+              obj->name = (origPrefix + "[" + std::to_string(origIdx) + "]").str();
+              obj->fullName = bracketName;
+            }
+          }
+          obj->type = VPIObjectType::GenScope;
+          // Re-parent under the array scope.
+          obj->parentId = arrayModId;
+          auto *arrayMod = findById(arrayModId);
+          if (arrayMod) {
+            bool alreadyChild = false;
+            for (uint32_t cid : arrayMod->children)
+              if (cid == childId) { alreadyChild = true; break; }
+            if (!alreadyChild)
+              arrayMod->children.push_back(childId);
+          }
+          // Remove from old parent's children list.
+          auto parentDot = member.first.rfind('.');
+          if (parentDot != std::string::npos) {
+            std::string oldParentPath = member.first.substr(0, parentDot);
+            auto oldParentIt = moduleIds.find(oldParentPath);
+            if (oldParentIt != moduleIds.end()) {
+              auto *oldParent = findById(oldParentIt->second);
+              if (oldParent) {
+                oldParent->children.erase(
+                    std::remove(oldParent->children.begin(),
+                                oldParent->children.end(), childId),
+                    oldParent->children.end());
+              }
+            }
+          }
+        }
+      }
+
+      // Set leftBound/rightBound on the GenScopeArray from children indices.
+      auto *gsa = findById(arrayModId);
+      if (gsa && !group.second.empty()) {
+        int32_t minIdx = group.second[0].second;
+        int32_t maxIdx = group.second[0].second;
+        for (auto &m : group.second) {
+          minIdx = std::min(minIdx, m.second);
+          maxIdx = std::max(maxIdx, m.second);
+        }
+        gsa->leftBound = minIdx;
+        gsa->rightBound = maxIdx;
+      }
+    }
+
+    // Second pass: create bracket-form aliases for nested paths.
+    // E.g. if we mapped "sample_module.outer_scope_1" →
+    //   "sample_module.outer_scope[1]", then any nameToId/moduleIds entry
+    //   containing "outer_scope_1." as a path component should also get an
+    //   alias with "outer_scope[1]." substituted.
+    if (!underscoreToBracket.empty()) {
+      llvm::StringMap<uint32_t> extraNameEntries;
+      llvm::StringMap<uint32_t> extraModuleEntries;
+      for (auto &mapping : underscoreToBracket) {
+        std::string underscorePrefix = mapping.first().str() + ".";
+        std::string bracketPrefix = mapping.second + ".";
+        // Scan nameToId for entries with the underscore prefix.
+        for (auto &ne : nameToId) {
+          llvm::StringRef path = ne.first();
+          if (path.contains(underscorePrefix)) {
+            std::string newPath = path.str();
+            size_t pos = newPath.find(underscorePrefix);
+            while (pos != std::string::npos) {
+              newPath.replace(pos, underscorePrefix.size(),
+                              bracketPrefix);
+              pos = newPath.find(underscorePrefix,
+                                 pos + bracketPrefix.size());
+            }
+            extraNameEntries[newPath] = ne.second;
+          }
+        }
+        // Scan moduleIds too.
+        for (auto &me : moduleIds) {
+          llvm::StringRef path = me.first();
+          if (path.contains(underscorePrefix)) {
+            std::string newPath = path.str();
+            size_t pos = newPath.find(underscorePrefix);
+            while (pos != std::string::npos) {
+              newPath.replace(pos, underscorePrefix.size(),
+                              bracketPrefix);
+              pos = newPath.find(underscorePrefix,
+                                 pos + bracketPrefix.size());
+            }
+            extraModuleEntries[newPath] = me.second;
+          }
+        }
+      }
+      for (auto &e : extraNameEntries)
+        nameToId[e.first()] = e.second;
+      for (auto &e : extraModuleEntries)
+        moduleIds[e.first()] = e.second;
+    }
+  }
+
+  // Build the nameToSiblingSignals map for port-to-internal propagation.
+  // When multiple signals share the same base name (e.g., a hw.module port
+  // "mode_in" and an llhd.sig name "mode_in"), VPI writes to one should
+  // propagate to all siblings so that the combinational logic sees the update.
+  nameToSiblingSignals.clear();
+  for (const auto &entry : scheduler->getSignalNames()) {
+    llvm::StringRef name = entry.second;
+    // Use the base signal name (after the last dot, if any).
+    auto dotPos = name.rfind('.');
+    std::string baseName =
+        dotPos != llvm::StringRef::npos ? name.substr(dotPos + 1).str()
+                                        : name.str();
+    nameToSiblingSignals[baseName].push_back(entry.first);
+  }
+  // Remove entries with only one signal (no siblings to propagate to).
+  llvm::SmallVector<llvm::StringRef, 16> toRemove;
+  for (auto &entry : nameToSiblingSignals) {
+    if (entry.second.size() <= 1)
+      toRemove.push_back(entry.first());
+  }
+  for (auto &key : toRemove)
+    nameToSiblingSignals.erase(key);
+
+  LLVM_DEBUG({
+    for (auto &entry : nameToSiblingSignals) {
+      llvm::dbgs() << "VPIRuntime: Sibling signals for '" << entry.first()
+                    << "': ";
+      for (SignalId s : entry.second)
+        llvm::dbgs() << s << " ";
+      llvm::dbgs() << "\n";
+    }
+  });
+
   LLVM_DEBUG(llvm::dbgs() << "VPIRuntime: Built hierarchy with "
                           << objects.size() << " objects\n");
+
 }
 
 //===----------------------------------------------------------------------===//
@@ -320,6 +764,21 @@ uint32_t VPIRuntime::handleByIndex(uint32_t objectId, int32_t index) {
   auto *obj = findById(objectId);
   if (!obj)
     return 0;
+
+  // For GenScopeArray and Array, the index is the actual SV index (e.g., 7
+  // for array_7_downto_4[7]) not a 0-based vector position.  Find the child
+  // whose name ends with [index].
+  if (obj->type == VPIObjectType::GenScopeArray ||
+      obj->type == VPIObjectType::Array) {
+    std::string suffix = "[" + std::to_string(index) + "]";
+    for (uint32_t childId : obj->children) {
+      auto *child = findById(childId);
+      if (child && llvm::StringRef(child->name).ends_with(suffix))
+        return childId;
+    }
+    return 0;
+  }
+
   if (index < 0 || static_cast<size_t>(index) >= obj->children.size())
     return 0;
   return obj->children[index];
@@ -334,6 +793,48 @@ uint32_t VPIRuntime::handle(int32_t type, uint32_t refId) {
     // Return parent module.
     return obj->parentId;
   }
+
+  // Return range bound handles for arrays and GenScopeArrays. cocotb calls
+  // vpi_handle(vpiLeftRange, array) then vpi_get_value() on the result.
+  if ((type == vpiLeftRange || type == vpiRightRange) &&
+      (obj->type == VPIObjectType::Array ||
+       obj->type == VPIObjectType::GenScopeArray)) {
+    // Look up or lazily create the range bound parameter object.
+    std::string boundName =
+        obj->name + (type == vpiLeftRange ? ".__left" : ".__right");
+    auto it = nameToId.find(boundName);
+    if (it != nameToId.end())
+      return it->second;
+    int64_t boundValue;
+    if (obj->type == VPIObjectType::GenScopeArray) {
+      // Extract min/max indices from children names (e.g., "arr[1]" → 1).
+      int64_t minIdx = INT64_MAX, maxIdx = INT64_MIN;
+      for (uint32_t childId : obj->children) {
+        auto *child = findById(childId);
+        if (!child)
+          continue;
+        auto lbracket = child->name.rfind('[');
+        auto rbracket = child->name.rfind(']');
+        if (lbracket != std::string::npos && rbracket != std::string::npos) {
+          int64_t idx;
+          if (!llvm::StringRef(child->name)
+                   .substr(lbracket + 1, rbracket - lbracket - 1)
+                   .getAsInteger(10, idx)) {
+            minIdx = std::min(minIdx, idx);
+            maxIdx = std::max(maxIdx, idx);
+          }
+        }
+      }
+      boundValue = type == vpiLeftRange ? minIdx : maxIdx;
+    } else {
+      // Use stored SV bounds if available.
+      boundValue = type == vpiLeftRange
+                       ? static_cast<int64_t>(obj->leftBound)
+                       : static_cast<int64_t>(obj->rightBound);
+    }
+    return registerParameter(boundName, boundName, boundValue, 32, obj->id);
+  }
+
   return 0;
 }
 
@@ -345,8 +846,8 @@ uint32_t VPIRuntime::iterate(int32_t type, uint32_t refId) {
   llvm::SmallVector<uint32_t, 8> elements;
 
   if (refId == 0) {
-    // Iterate top-level modules.
-    if (type == vpiModule) {
+    // Iterate top-level modules/instances.
+    if (type == vpiModule || type == vpiInstance) {
       elements.append(rootModules.begin(), rootModules.end());
     }
   } else {
@@ -354,19 +855,72 @@ uint32_t VPIRuntime::iterate(int32_t type, uint32_t refId) {
     if (!obj)
       return 0;
 
-    if (type == vpiModule || type == vpiInternalScope) {
-      // Return child modules.
+    if (type == vpiModule || type == vpiInternalScope || type == vpiInstance) {
+      // Return child modules/instances/generate scopes.
+      // For GenScopeArray: don't return the array itself (it would be
+      // GPI_ARRAY/ArrayObject with range issues); instead flatten its
+      // GenScope children into the parent's results.  cocotb's fallback
+      // in get_child_by_name will auto-create the pseudo-region parent.
       for (uint32_t childId : obj->children) {
         auto *child = findById(childId);
-        if (child && child->type == VPIObjectType::Module)
+        if (!child)
+          continue;
+        if (child->type == VPIObjectType::Module ||
+            child->type == VPIObjectType::GenScope)
+          elements.push_back(childId);
+        else if (child->type == VPIObjectType::GenScopeArray) {
+          // Flatten: include the GenScope children instead.
+          for (uint32_t gcId : child->children) {
+            auto *gc = findById(gcId);
+            if (gc && gc->type == VPIObjectType::GenScope)
+              elements.push_back(gcId);
+          }
+        }
+      }
+    } else if (type == vpiGenScopeArray) {
+      // Return child generate scope arrays.
+      for (uint32_t childId : obj->children) {
+        auto *child = findById(childId);
+        if (child && child->type == VPIObjectType::GenScopeArray)
+          elements.push_back(childId);
+      }
+    } else if (type == vpiStructVar || type == vpiStructNet) {
+      // Return only struct-typed child signals.
+      for (uint32_t childId : obj->children) {
+        auto *child = findById(childId);
+        if (child && child->type == VPIObjectType::StructVar)
           elements.push_back(childId);
       }
     } else if (type == vpiNet || type == vpiReg) {
-      // Return child signals.
+      // Return child signals (including arrays, but NOT structs).
       for (uint32_t childId : obj->children) {
         auto *child = findById(childId);
         if (child && (child->type == VPIObjectType::Net ||
-                      child->type == VPIObjectType::Reg))
+                      child->type == VPIObjectType::Reg ||
+                      child->type == VPIObjectType::Array))
+          elements.push_back(childId);
+      }
+    } else if (type == vpiMember) {
+      // Return struct member fields.
+      if (obj->type == VPIObjectType::StructVar) {
+        for (uint32_t childId : obj->children) {
+          auto *child = findById(childId);
+          if (child)
+            elements.push_back(childId);
+        }
+      }
+    } else if (type == vpiRegArray) {
+      // Return child arrays only.
+      for (uint32_t childId : obj->children) {
+        auto *child = findById(childId);
+        if (child && child->type == VPIObjectType::Array)
+          elements.push_back(childId);
+      }
+    } else if (type == vpiParameter) {
+      // Return child parameters.
+      for (uint32_t childId : obj->children) {
+        auto *child = findById(childId);
+        if (child && child->type == VPIObjectType::Parameter)
           elements.push_back(childId);
       }
     }
@@ -425,11 +979,32 @@ int32_t VPIRuntime::getProperty(int32_t property, uint32_t objectId) {
       return vpiPort;
     case VPIObjectType::Parameter:
       return vpiParameter;
+    case VPIObjectType::Array:
+      return vpiRegArray;
+    case VPIObjectType::GenScope:
+      return vpiGenScope;
+    case VPIObjectType::GenScopeArray:
+      return vpiGenScopeArray;
+    case VPIObjectType::StructVar:
+      return vpiStructVar;
     default:
       return vpiUndefined;
     }
   case vpiSize:
+    if (obj->type == VPIObjectType::Array ||
+        obj->type == VPIObjectType::GenScopeArray)
+      return static_cast<int32_t>(obj->children.size());
     return static_cast<int32_t>(obj->width);
+  case vpiLeftRange:
+    if (obj->type == VPIObjectType::GenScopeArray ||
+        obj->type == VPIObjectType::Array)
+      return obj->leftBound;
+    return obj->width > 0 ? static_cast<int32_t>(obj->width - 1) : 0;
+  case vpiRightRange:
+    if (obj->type == VPIObjectType::GenScopeArray ||
+        obj->type == VPIObjectType::Array)
+      return obj->rightBound;
+    return 0;
   case vpiDirection:
     return obj->direction;
   case vpiVector:
@@ -438,6 +1013,8 @@ int32_t VPIRuntime::getProperty(int32_t property, uint32_t objectId) {
     return obj->width == 1 ? 1 : 0;
   case vpiSigned:
     return 0; // Unsigned by default.
+  case vpiPacked:
+    return 0; // Unpacked structs only; packed structs stay as plain Reg.
   case vpiTopModule:
     return obj->parentId == 0 ? 1 : 0;
   default:
@@ -473,6 +1050,18 @@ const char *VPIRuntime::getStrProperty(int32_t property, uint32_t objectId) {
     case VPIObjectType::Reg:
       strBuffer = "vpiReg";
       break;
+    case VPIObjectType::Array:
+      strBuffer = "vpiRegArray";
+      break;
+    case VPIObjectType::GenScope:
+      strBuffer = "vpiGenScope";
+      break;
+    case VPIObjectType::GenScopeArray:
+      strBuffer = "vpiGenScopeArray";
+      break;
+    case VPIObjectType::StructVar:
+      strBuffer = "vpiStructVar";
+      break;
     default:
       strBuffer = "vpiUndefined";
     }
@@ -490,20 +1079,83 @@ const char *VPIRuntime::getStrProperty(int32_t property, uint32_t objectId) {
 void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
   stats.valueReads++;
   auto *obj = findById(objectId);
-  if (!obj || !obj->signalId || !scheduler || !value)
+  if (!obj || !value)
+    return;
+
+  static bool traceVPI = []() {
+    const char *env = std::getenv("CIRCT_VPI_TRACE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+
+  // Handle parameters: return the elaborated constant value.
+  if (obj->type == VPIObjectType::Parameter) {
+    switch (value->format) {
+    case vpiIntVal:
+      value->value.integer = static_cast<PLI_INT32>(obj->paramValue);
+      break;
+    case vpiDecStrVal: {
+      strBuffer = std::to_string(obj->paramValue);
+      value->value.str = const_cast<PLI_BYTE8 *>(strBuffer.c_str());
+      break;
+    }
+    case vpiBinStrVal: {
+      uint32_t w = obj->width > 0 ? obj->width : 32;
+      strBuffer.clear();
+      strBuffer.reserve(w);
+      for (int i = static_cast<int>(w) - 1; i >= 0; --i)
+        strBuffer.push_back((obj->paramValue >> i) & 1 ? '1' : '0');
+      value->value.str = const_cast<PLI_BYTE8 *>(strBuffer.c_str());
+      break;
+    }
+    case vpiHexStrVal: {
+      llvm::SmallString<64> hexStr;
+      llvm::APInt(obj->width > 0 ? obj->width : 32, obj->paramValue)
+          .toString(hexStr, 16, /*Signed=*/false);
+      strBuffer = std::string(hexStr.begin(), hexStr.end());
+      value->value.str = const_cast<PLI_BYTE8 *>(strBuffer.c_str());
+      break;
+    }
+    default:
+      value->value.integer = static_cast<PLI_INT32>(obj->paramValue);
+      break;
+    }
+    return;
+  }
+
+  if (!obj->signalId || !scheduler)
     return;
 
   const SignalValue &sv = scheduler->getSignalValue(obj->signalId);
   uint32_t width = obj->width; // Logical width (already halved for 4-state).
 
-  // Extract logical value and unknown mask for four-state signals.
+  // For array element sub-signals, extract the element's bits from the parent
+  // signal and determine 4-state encoding from the element's physical width.
   SignalEncoding enc = scheduler->getSignalEncoding(obj->signalId);
   bool isFourState = (enc == SignalEncoding::FourStateStruct);
   llvm::APInt valueBits(width, 0);
   llvm::APInt unknownBits(width, 0);
   bool hasUnknown = false;
 
-  if (isFourState) {
+  // Check if this is an array element (not the array parent itself).
+  const auto *arrayInfo = scheduler->getSignalArrayInfo(obj->signalId);
+  if (arrayInfo && obj->type != VPIObjectType::Array) {
+    // Array element: extract element bits from the parent signal.
+    {
+      uint32_t elemPhysW = arrayInfo->elementPhysWidth;
+      const llvm::APInt &raw = sv.getAPInt();
+      if (obj->bitOffset + elemPhysW <= raw.getBitWidth()) {
+        llvm::APInt elemBits = raw.extractBits(elemPhysW, obj->bitOffset);
+        // Check if element is 4-state (elemPhysW = 2 * elemLogicalW).
+        if (elemPhysW == width * 2) {
+          valueBits = elemBits.extractBits(width, width);
+          unknownBits = elemBits.extractBits(width, 0);
+          hasUnknown = !unknownBits.isZero();
+        } else {
+          valueBits = elemBits.zextOrTrunc(width);
+        }
+      }
+    }
+  } else if (isFourState) {
     const llvm::APInt &raw = sv.getAPInt();
     uint32_t physWidth = raw.getBitWidth();
     if (physWidth >= width * 2) {
@@ -592,6 +1244,18 @@ void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
   default:
     break;
   }
+
+  if (traceVPI && obj->signalId) {
+    const SignalValue &svDbg = scheduler->getSignalValue(obj->signalId);
+    llvm::SmallString<64> rawHex, valHex;
+    svDbg.getAPInt().toString(rawHex, 16, false);
+    valueBits.toString(valHex, 16, false);
+    llvm::errs() << "[VPI-GET] obj=" << objectId << " name=" << obj->name
+                 << " sig=" << obj->signalId << " raw=0x" << rawHex
+                 << " val=0x" << valHex;
+    if (hasUnknown) llvm::errs() << " UNK";
+    llvm::errs() << " t=" << scheduler->getCurrentTime().realTime << "\n";
+  }
 }
 
 uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
@@ -601,6 +1265,16 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
   auto *obj = findById(objectId);
   if (!obj || !obj->signalId || !scheduler || !value)
     return 0;
+
+  static bool traceVPI = []() {
+    const char *env = std::getenv("CIRCT_VPI_TRACE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (traceVPI) {
+    llvm::errs() << "[VPI-PUT] obj=" << objectId << " name=" << obj->name
+                 << " sig=" << obj->signalId << " flags=" << flags
+                 << " t=" << scheduler->getCurrentTime().realTime << "\n";
+  }
 
   uint32_t logicalWidth = obj->width;
   SignalEncoding enc = scheduler->getSignalEncoding(obj->signalId);
@@ -650,25 +1324,112 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
   }
 
   // Construct the physical signal value.
-  SignalValue newVal(llvm::APInt(physWidth, 0));
-  if (isFourState) {
-    // Pack: [value_bits | zero_unknown_bits]
-    llvm::APInt physBits(physWidth, 0);
-    physBits |= valueBits.zext(physWidth) << logicalWidth;
-    // Unknown bits = 0 (all known).
-    newVal = SignalValue(physBits);
+  // For array element sub-signals, do a read-modify-write on the parent signal.
+  SignalValue writtenValue(llvm::APInt(physWidth, 0));
+  const auto *arrayInfoPut = scheduler->getSignalArrayInfo(obj->signalId);
+  if (arrayInfoPut && obj->type != VPIObjectType::Array) {
+    // Array element write: read parent, modify element slice, write back.
+    const SignalValue &parentSv = scheduler->getSignalValue(obj->signalId);
+    llvm::APInt parentBits = parentSv.getAPInt();
+    uint32_t elemPhysW = arrayInfoPut->elementPhysWidth;
+
+    // Build the element's physical bits.
+    llvm::APInt elemPhysBits(elemPhysW, 0);
+    if (elemPhysW == logicalWidth * 2) {
+      // 4-state element: [value | 0_unknown]
+      elemPhysBits |= valueBits.zext(elemPhysW) << logicalWidth;
+    } else {
+      elemPhysBits = valueBits.zextOrTrunc(elemPhysW);
+    }
+
+    // Clear the old element bits and insert the new ones.
+    llvm::APInt mask =
+        llvm::APInt::getBitsSet(parentBits.getBitWidth(), obj->bitOffset,
+                                obj->bitOffset + elemPhysW);
+    parentBits &= ~mask;
+    parentBits |= elemPhysBits.zext(parentBits.getBitWidth()) << obj->bitOffset;
+    writtenValue = SignalValue(parentBits);
+    scheduler->updateSignal(obj->signalId, writtenValue);
   } else {
-    newVal = SignalValue(valueBits);
+    SignalValue newVal(llvm::APInt(physWidth, 0));
+    if (isFourState) {
+      // Pack: [value_bits | zero_unknown_bits]
+      llvm::APInt physBits(physWidth, 0);
+      physBits |= valueBits.zext(physWidth) << logicalWidth;
+      // Unknown bits = 0 (all known).
+      newVal = SignalValue(physBits);
+    } else {
+      newVal = SignalValue(valueBits);
+    }
+
+    // Apply the value immediately (vpiNoDelay).
+    writtenValue = newVal;
+    scheduler->updateSignal(obj->signalId, writtenValue);
   }
 
-  // Apply the value immediately (vpiNoDelay).
-  scheduler->updateSignal(obj->signalId, newVal);
+  // Propagate to sibling signals with the same name. This handles the case
+  // where a hw.module port signal and an internal llhd.sig have the same name
+  // (e.g., port "mode_in" and llhd.sig name "mode_in"). Without this,
+  // VPI writes to the port signal don't reach the internal signal that
+  // combinational logic reads from.
+  auto nameIt = scheduler->getSignalNames().find(obj->signalId);
+  if (nameIt != scheduler->getSignalNames().end()) {
+    llvm::StringRef sigName = nameIt->second;
+    auto dotPos = sigName.rfind('.');
+    std::string baseName =
+        dotPos != llvm::StringRef::npos ? sigName.substr(dotPos + 1).str()
+                                        : sigName.str();
+    auto sibIt = nameToSiblingSignals.find(baseName);
+    if (sibIt != nameToSiblingSignals.end()) {
+      for (SignalId sibId : sibIt->second) {
+        if (sibId == obj->signalId)
+          continue;
+        const SignalValue &sibVal = scheduler->getSignalValue(sibId);
+        if (sibVal.getWidth() == writtenValue.getWidth())
+          scheduler->updateSignal(sibId, writtenValue);
+      }
+    }
+  }
 
   // Flush combinational logic: execute delta cycles so that downstream
   // combinational processes see the updated value. This matches Verilog
   // semantics where vpi_put_value(vpiNoDelay) causes immediate propagation
   // through combinational logic before returning.
+  //
+  // Track the VPI-written signal (and its siblings) so we can restore their
+  // values if executeCurrentTime() fires stale scheduled drives that
+  // overwrite them.
+  vpiDrivenSignals[obj->signalId] = writtenValue;
+  auto nameIt2 = scheduler->getSignalNames().find(obj->signalId);
+  if (nameIt2 != scheduler->getSignalNames().end()) {
+    llvm::StringRef sigName2 = nameIt2->second;
+    auto dotPos2 = sigName2.rfind('.');
+    std::string baseName2 =
+        dotPos2 != llvm::StringRef::npos ? sigName2.substr(dotPos2 + 1).str()
+                                         : sigName2.str();
+    auto sibIt2 = nameToSiblingSignals.find(baseName2);
+    if (sibIt2 != nameToSiblingSignals.end()) {
+      for (SignalId sibId : sibIt2->second) {
+        if (sibId != obj->signalId) {
+          const SignalValue &sibVal = scheduler->getSignalValue(sibId);
+          if (sibVal.getWidth() == writtenValue.getWidth())
+            vpiDrivenSignals[sibId] = writtenValue;
+        }
+      }
+    }
+  }
+
   scheduler->executeCurrentTime();
+
+  // Re-assert VPI-driven values that were overwritten by stale scheduled
+  // drives during executeCurrentTime(). This ensures VPI writes have
+  // highest priority — testbench-driven values always win.
+  for (auto &[sigId, expectedVal] : vpiDrivenSignals) {
+    const SignalValue &currentVal = scheduler->getSignalValue(sigId);
+    if (!(currentVal == expectedVal)) {
+      scheduler->updateSignal(sigId, expectedVal);
+    }
+  }
 
   return objectId;
 }
@@ -752,11 +1513,20 @@ uint32_t VPIRuntime::registerCb(struct t_cb_data *cbData) {
           cbFunc(&data);
           stats.callbacksFired++;
           // Fire ReadWriteSynch callbacks after the delay callback completes.
-          // cocotb defers signal writes (vpi_put_value) to the ReadWriteSynch
-          // region. Without this, writes made during cbAfterDelay callbacks
-          // would never be flushed when advanceTime() processes multiple
-          // time steps internally without returning to the main loop.
-          fireCallbacks(cbReadWriteSynch);
+          // cocotb 2.0.1 defers DEPOSIT writes — they are only applied when
+          // a ReadWrite trigger fires (_apply_scheduled_writes). Each round
+          // of ReadWriteSynch may cause signal changes (via the applied
+          // writes) that wake coroutines which defer MORE writes, registering
+          // new cbReadWriteSynch callbacks. We must loop until all deferred
+          // writes have been flushed before firing ReadOnlySynch (where
+          // cocotb reads signal values for assertions).
+          // Note: putValue() calls executeCurrentTime() internally, so
+          // combinational propagation happens within each write.
+          for (int rwIter = 0; rwIter < 100; ++rwIter) {
+            fireCallbacks(cbReadWriteSynch);
+            if (!hasActiveCallbacks(cbReadWriteSynch))
+              break;
+          }
           fireCallbacks(cbReadOnlySynch);
           if (isOneShot) {
             // Re-find after potential DenseMap rehash.
@@ -895,6 +1665,17 @@ void VPIRuntime::fireCallbacks(int32_t reason) {
                        return callbacks.find(id) == callbacks.end();
                      }),
       list.end());
+}
+
+bool VPIRuntime::hasActiveCallbacks(int32_t reason) const {
+  auto it = callbacksByReason.find(reason);
+  if (it == callbacksByReason.end())
+    return false;
+  for (uint32_t id : it->second) {
+    if (callbacks.find(id) != callbacks.end())
+      return true;
+  }
+  return false;
 }
 
 void VPIRuntime::fireValueChangeCallbacks(SignalId signalId) {

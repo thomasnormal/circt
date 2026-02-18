@@ -82,32 +82,30 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
                                         triPattern) &&
             triPattern.srcAddr != 0 && triPattern.condAddr != 0) {
           InterpretedValue elseVal = getValue(tempProcId, triPattern.elseValue);
-          if (!elseVal.isX()) {
-            bool duplicate = false;
-            for (const auto &cand : interfaceTriStateCandidates) {
-              bool elseMatch = false;
-              if (cand.elseValue.isX() && elseVal.isX()) {
-                elseMatch = true;
-              } else if (!cand.elseValue.isX() && !elseVal.isX() &&
-                         cand.elseValue.getAPInt() == elseVal.getAPInt()) {
-                elseMatch = true;
-              }
-              if (cand.condAddr == triPattern.condAddr &&
-                  cand.srcAddr == triPattern.srcAddr && cand.destAddr == dest &&
-                  cand.condBitIndex == triPattern.condBitIndex && elseMatch) {
-                duplicate = true;
-                break;
-              }
+          bool duplicate = false;
+          for (const auto &cand : interfaceTriStateCandidates) {
+            bool elseMatch = false;
+            if (cand.elseValue.isX() && elseVal.isX()) {
+              elseMatch = true;
+            } else if (!cand.elseValue.isX() && !elseVal.isX() &&
+                       cand.elseValue.getAPInt() == elseVal.getAPInt()) {
+              elseMatch = true;
             }
-            if (!duplicate) {
-              InterfaceTriStateCandidate cand;
-              cand.condAddr = triPattern.condAddr;
-              cand.srcAddr = triPattern.srcAddr;
-              cand.destAddr = dest;
-              cand.condBitIndex = triPattern.condBitIndex;
-              cand.elseValue = elseVal;
-              interfaceTriStateCandidates.push_back(cand);
+            if (cand.condAddr == triPattern.condAddr &&
+                cand.srcAddr == triPattern.srcAddr && cand.destAddr == dest &&
+                cand.condBitIndex == triPattern.condBitIndex && elseMatch) {
+              duplicate = true;
+              break;
             }
+          }
+          if (!duplicate) {
+            InterfaceTriStateCandidate cand;
+            cand.condAddr = triPattern.condAddr;
+            cand.srcAddr = triPattern.srcAddr;
+            cand.destAddr = dest;
+            cand.condBitIndex = triPattern.condBitIndex;
+            cand.elseValue = elseVal;
+            interfaceTriStateCandidates.push_back(cand);
           }
         }
       }

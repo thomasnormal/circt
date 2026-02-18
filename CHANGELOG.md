@@ -1,5 +1,78 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1486 - February 18, 2026
+
+### VPI: parameter, array bounds, struct field, and signal alias support for cocotb
+
+1. **VPI parameter registration** (`Structure.cpp`, `MooreToCore.cpp`, `VPIRuntime.cpp`):
+   - Collect elaborated `ParameterSymbol` values from slang AST and attach as
+     `vpi.parameters` dictionary attribute on module ops.
+   - Preserve `vpi.parameters` through MooreToCore SVModuleOp→HWModuleOp lowering.
+   - `VPIRuntime::registerParameter()` creates VPI objects discoverable via
+     `vpi_handle_by_name` and `vpi_iterate(vpiParameter, ...)`.
+   - Enables cocotb tests to read `dut.PARAM.value` for parameterized designs.
+
+2. **VPI array bounds and struct fields** (`Structure.cpp`, `MooreToCore.cpp`,
+   `VPIRuntime.cpp`, `ProcessScheduler.h/cpp`):
+   - Collect `FixedSizeUnpackedArrayType` bounds as `vpi.array_bounds` attribute.
+   - Collect `UnpackedStructType` field info as `vpi.struct_fields` attribute.
+   - Preserve both through MooreToCore lowering.
+   - `ProcessScheduler` extended with `SignalArrayInfo` and `SignalStructFieldInfo`.
+   - VPI hierarchy builder creates array element and struct field child objects.
+
+3. **Signal aliasing and hierarchy** (`ProcessScheduler.h/cpp`, `VPIRuntime.cpp`,
+   `circt-sim.cpp`):
+   - `registerSignalAlias()` maps sv.namehint wire names to signal IDs.
+   - `registerInstanceScope()` creates VPI scope objects for child instances.
+   - `setSignalLogicalWidth()` tracks 4-state logical width (physical=2x).
+   - `buildHierarchy()` in VPIRuntime creates full VPI object tree from scheduler
+     metadata (signals, aliases, parameters, arrays, structs, instances).
+
+4. **Signal update tracing** (`ProcessScheduler.cpp`):
+   - `CIRCT_SIM_TRACE_SIGNAL_UPDATES` env var enables per-update logging.
+   - `CIRCT_SIM_TRACE_SIGNAL_STRENGTH` env var enables strength-resolved logging.
+   - Optional filter via `_FILTER` suffix to trace specific signals.
+
+5. **New header** `include/circt/Runtime/VPIDispatch.h`:
+   - VPI dispatch table for cocotb VPI library interop.
+
+6. **CVDP benchmark validation** (130 tests with SV, 275 NO_SV):
+   - **6 PASS**: 64b66b_encoder/0022, cont_adder/0042, cont_adder/0045,
+     generic_nbit_counter/0039, sigma_delta_audio/0007,
+     write_through_data_direct_mapped_cache/0012
+   - 119 COCOTB_FAIL (mostly benchmark RTL bugs, not circt-sim issues)
+   - 4 COMPILE_FAIL, 1 SIM_TIMEOUT, 0 SIM_FAIL
+
+## Iteration 1485 - February 18, 2026
+
+### circt-sim: fix shared inout tri-state mirror feedback causing I3C-class ACK/data loss
+
+1. **Root-cause reproducer added and validated**:
+   - new focused regression:
+     - `test/Tools/circt-sim/interface-inout-shared-wire-bidirectional.sv`
+   - models two interface instances sharing one pullup wire with tri-state
+     driving and mirror sampling (`S = s_oe ? s_o : 'z`, `s_i = S`).
+   - pre-fix behavior reproduced directional failure and stale mirror sampling.
+2. **Interpreter fix in `tools/circt-sim/LLHDProcessInterpreter.cpp`**:
+   - added suppression for probe-mirror stores targeting interface tri-state
+     destination fields in `interpretLLVMStore`.
+   - these stores are now treated as observation-only for the tri-state drive
+     field, preventing bus-value feedback from being re-driven onto the shared
+     net.
+   - dynamic source-linking is redirected to mirror child fields (e.g. `s_i`)
+     instead of the tri-state drive destination itself.
+3. **Strength driver identity hardening**:
+   - introduced `getDistinctContinuousDriverId(...)` and switched distinct
+     driver ID generation to include instance context.
+4. **Validation**:
+   - `ninja -C build-test circt-sim`: PASS.
+   - lit regressions: PASS.
+     - `interface-inout-shared-wire-bidirectional.sv`
+     - `interface-inout-tristate-propagation.sv`
+     - `interface-intra-tristate-propagation.sv`
+     - `interface-field-propagation.sv`
+   - additional carryover regressions (memory-backed ref/array paths): PASS.
+
 ## Iteration 1484 - February 18, 2026
 
 ### circt-sim AVIP follow-up: `axi4` blocker is sim-timeout path (not immediate compile failure)

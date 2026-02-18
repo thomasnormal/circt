@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
 #include <variant>
 #include <vector>
@@ -837,8 +838,81 @@ public:
   SignalId registerSignal(const std::string &name, uint32_t width,
                           SignalEncoding encoding, SignalResolution resolution);
 
+  /// Register an additional name alias for an existing signal.
+  /// VPI buildHierarchy() will create VPI objects for aliases as well.
+  void registerSignalAlias(SignalId signalId, const std::string &alias);
+
+  /// Get aliases for signals (alias name → SignalId).
+  const std::map<std::string, SignalId> &getSignalAliases() const {
+    return signalAliases;
+  }
+
+  /// VPI parameter info for child instances.
+  struct VPIParamInfo {
+    std::string instancePath; // e.g., "the_foo"
+    std::string paramName;    // e.g., "has_default"
+    int64_t value;
+    uint32_t width;           // in bits
+  };
+
+  /// Register a VPI parameter for a child instance.
+  void registerVPIParameter(const VPIParamInfo &info) {
+    vpiParams.push_back(info);
+  }
+
+  /// Register a child instance scope (even with no signals).
+  void registerInstanceScope(const std::string &instancePath);
+
+  /// Get registered VPI parameters.
+  const std::vector<VPIParamInfo> &getVPIParameters() const {
+    return vpiParams;
+  }
+
+  /// Get registered instance scopes.
+  const std::set<std::string> &getInstanceScopes() const {
+    return instanceScopes;
+  }
+
   /// Get the signal encoding for a given signal ID.
   SignalEncoding getSignalEncoding(SignalId signalId) const;
+
+  /// Set the logical (VPI-visible) width for a signal.
+  /// For 4-state signals, the physical width is 2x the logical width.
+  void setSignalLogicalWidth(SignalId signalId, uint32_t logicalWidth);
+
+  /// Get the logical (VPI-visible) width for a signal.
+  /// Returns 0 if not set (caller should use physical width).
+  uint32_t getSignalLogicalWidth(SignalId signalId) const;
+
+  /// Information about signals that are unpacked arrays.
+  struct SignalArrayInfo {
+    uint32_t numElements;
+    uint32_t elementPhysWidth;
+    uint32_t elementLogicalWidth;
+    int32_t leftBound = 0;   // SV left bound (e.g., 7 for [7:4])
+    int32_t rightBound = -1; // SV right bound; -1 = use 0-based default
+  };
+
+  /// Set array info for a signal (for unpacked array types).
+  void setSignalArrayInfo(SignalId signalId, const SignalArrayInfo &info);
+
+  /// Get array info for a signal. Returns nullptr if not an array.
+  const SignalArrayInfo *getSignalArrayInfo(SignalId signalId) const;
+
+  /// Information about struct fields for unpacked struct signals.
+  struct SignalStructFieldInfo {
+    std::string name;
+    uint32_t logicalWidth;
+    uint32_t physicalWidth;
+  };
+
+  /// Set struct field info for a signal (for unpacked struct types).
+  void setSignalStructFields(SignalId signalId,
+                             std::vector<SignalStructFieldInfo> fields);
+
+  /// Get struct field info for a signal. Returns nullptr if not a struct.
+  const std::vector<SignalStructFieldInfo> *
+  getSignalStructFields(SignalId signalId) const;
 
   /// Set the resolution function for a signal (wand/wor nets).
   void setSignalResolution(SignalId signalId, SignalResolution resolution);
@@ -1003,7 +1077,14 @@ private:
   // Signal management
   llvm::DenseMap<SignalId, SignalState> signalStates;
   llvm::DenseMap<SignalId, std::string> signalNames;
+  std::map<std::string, SignalId> signalAliases;
+  std::vector<VPIParamInfo> vpiParams;
+  std::set<std::string> instanceScopes;
   llvm::DenseMap<SignalId, SignalEncoding> signalEncodings;
+  llvm::DenseMap<SignalId, uint32_t> signalLogicalWidths;
+  llvm::DenseMap<SignalId, SignalArrayInfo> signalArrayInfos;
+  llvm::DenseMap<SignalId, std::vector<SignalStructFieldInfo>>
+      signalStructFields;
   SignalId nextSigId = 1;
 
   // Maps signals to processes sensitive to them
