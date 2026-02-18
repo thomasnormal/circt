@@ -9709,30 +9709,68 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
           // $scale returns the input scaled to the time unit of another
           // module (IEEE 1800-2017 Section 20.4.2). Stub: return input.
           .Case("$scale", [&]() { return value; })
-          // Query functions that may reach here for dynamic types.
-          // For static types, slang constant-folds these.
-          .Case("$bits",
+          // Query functions for dynamic types.
+          // For static types, slang constant-folds these at compile time.
+          .Case("$size",
                 [&]() -> Value {
+                  // Use ArraySizeOp for dynamic/queue/assoc array types.
+                  if (isa<moore::OpenUnpackedArrayType,
+                          moore::AssocArrayType,
+                          moore::QueueType>(value.getType()))
+                    return moore::ArraySizeOp::create(builder, loc, value);
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
-          .Case("$size",
+          .Case("$bits",
                 [&]() -> Value {
+                  // $bits = $size * element_bit_width for dynamic types.
                   auto intTy = moore::IntType::getInt(getContext(), 32);
+                  if (auto qt = dyn_cast<moore::QueueType>(value.getType())) {
+                    if (auto elemBits = qt.getElementType().getBitSize()) {
+                      auto size =
+                          moore::ArraySizeOp::create(builder, loc, value);
+                      auto bitsPerElem = moore::ConstantOp::create(
+                          builder, loc, intTy, *elemBits);
+                      return moore::MulOp::create(builder, loc, size,
+                                                  bitsPerElem);
+                    }
+                  }
+                  if (auto dt = dyn_cast<moore::OpenUnpackedArrayType>(
+                          value.getType())) {
+                    if (auto elemBits = dt.getElementType().getBitSize()) {
+                      auto size =
+                          moore::ArraySizeOp::create(builder, loc, value);
+                      auto bitsPerElem = moore::ConstantOp::create(
+                          builder, loc, intTy, *elemBits);
+                      return moore::MulOp::create(builder, loc, size,
+                                                  bitsPerElem);
+                    }
+                  }
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$dimensions",
                 [&]() -> Value {
+                  // Dynamic types always have 1 unpacked dimension.
                   auto intTy = moore::IntType::getInt(getContext(), 32);
+                  if (isa<moore::OpenUnpackedArrayType,
+                          moore::AssocArrayType,
+                          moore::QueueType>(value.getType()))
+                    return moore::ConstantOp::create(builder, loc, intTy, 1);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$unpacked_dimensions",
                 [&]() -> Value {
+                  // Dynamic types always have 1 unpacked dimension.
                   auto intTy = moore::IntType::getInt(getContext(), 32);
+                  if (isa<moore::OpenUnpackedArrayType,
+                          moore::AssocArrayType,
+                          moore::QueueType>(value.getType()))
+                    return moore::ConstantOp::create(builder, loc, intTy, 1);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$increment",
                 [&]() -> Value {
+                  // For dynamic types, $increment = -1 (ascending indices).
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return moore::ConstantOp::create(builder, loc, intTy, 1);
                 })
