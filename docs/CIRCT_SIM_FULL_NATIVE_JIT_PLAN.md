@@ -1452,6 +1452,50 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - resolve remaining functional/phase-progress blocker for UART Rx
         coverage (`UartRxCovergroup` still 0%) and reduce new dominant hotspot
         (`fork_18_branch_0` `sim.fork` lane) before all-AVIP rerun.
+49. `GenerateBaudClk` caller-side resume fast path closure for hot fork
+    wrappers (February 18, 2026):
+    - runtime closure:
+      - added a targeted call-stack resume fast path in
+        `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`:
+        - detects resumed `*::GenerateBaudClk` frames at tail
+          `func.call *::BaudClkGenerator` sites.
+        - bypasses full `interpretFuncBody` re-entry on those resume hits and
+          dispatches directly through existing
+          `handleBaudClkGeneratorFastPath` logic.
+        - keeps conservative fallback to normal resume path on guard miss.
+      - added env-gated trace marker:
+        - `[BAUD-GEN-FP] resume-hit ...`
+        - toggled by `CIRCT_SIM_TRACE_BAUD_FASTPATH=1`.
+    - regression coverage:
+      - added
+        `test/Tools/circt-sim/func-generate-baud-clk-resume-fast-path.mlir`.
+      - locks caller-side resume fast-path activation in both:
+        - default lane.
+        - `--parallel=4 --work-stealing --auto-partition` lane.
+    - validation:
+      - build:
+        - `ninja -C build -j4 circt-sim`: PASS.
+      - focused regressions:
+        - `func-generate-baud-clk-resume-fast-path.mlir`: PASS.
+        - `func-generate-baud-clk-resume-fast-path.mlir` parallel lane: PASS.
+        - `func-baud-clk-generator-fast-path.mlir`: PASS.
+        - `func-baud-clk-generator-fast-path-delay-batch.mlir`: PASS.
+        - `func-baud-clk-generator-fast-path-count-visible.mlir`: PASS.
+      - direct UART bounded profile (compile mode, `--timeout=60`):
+        - `/tmp/uart-direct-timeout60-generatefp.log`
+        - `fork_{80,81,82}_branch_0` `GenerateBaudClk` steps now `52` each,
+          down from prior `~48673-48674` in
+          `/tmp/uart-direct-timeout60-baudbatch-v3.log`.
+        - simulation-time progress improved to `324960000000 fs`
+          (from `310910000000 fs` in the prior 60s bound).
+      - bounded AVIP UART lane (compile mode, 120s external bound):
+        - `/tmp/avip-circt-sim-uart-generatefp2-20260218-135458/matrix.tsv`
+          remains timeout; scoreboard-region activity still reaches
+          `~423169 ns` in sim log.
+    - next closure target:
+      - convert this caller-side overhead win into completion by focusing on
+        remaining dominant non-Baud hotspots (`fork_18_branch_0` `sim.fork`
+        lane and Rx-coverage progression) and then rerun all9 compile lanes.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

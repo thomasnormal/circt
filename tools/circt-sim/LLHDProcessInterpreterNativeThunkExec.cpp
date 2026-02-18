@@ -1793,6 +1793,82 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
   // Preserve the outermost call site for restoring process-level position
   // once all nested frames have completed.
   Operation *outermostCallOp = state.callStack.back().callOp;
+  static bool traceBaudFastPath = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_BAUD_FASTPATH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto tryResumeGenerateBaudClkFrameFastPath =
+      [&](CallStackFrame &frame,
+          size_t oldFrameCount) -> std::optional<CallStackResumeResult> {
+    if (frame.isLLVM() || !frame.funcOp || !frame.resumeBlock)
+      return std::nullopt;
+    if (!frame.funcOp.getName().ends_with("::GenerateBaudClk"))
+      return std::nullopt;
+    if (frame.resumeOp == frame.resumeBlock->end())
+      return std::nullopt;
+
+    auto baudCallOp = dyn_cast<mlir::func::CallOp>(*frame.resumeOp);
+    if (!baudCallOp || !baudCallOp.getCallee().ends_with("::BaudClkGenerator"))
+      return std::nullopt;
+
+    auto nextOp = std::next(frame.resumeOp);
+    if (nextOp == frame.resumeBlock->end() ||
+        !isa<mlir::func::ReturnOp>(*nextOp))
+      return std::nullopt;
+
+    auto *symbolOp = mlir::SymbolTable::lookupNearestSymbolFrom(
+        baudCallOp.getOperation(), baudCallOp.getCalleeAttr());
+    auto baudFuncOp = dyn_cast_or_null<mlir::func::FuncOp>(symbolOp);
+    if (!baudFuncOp || baudFuncOp.isExternal())
+      return std::nullopt;
+
+    llvm::SmallVector<InterpretedValue, 4> args;
+    args.reserve(baudCallOp.getNumOperands());
+    for (Value operand : baudCallOp.getOperands())
+      args.push_back(getValue(procId, operand));
+
+    if (!handleBaudClkGeneratorFastPath(procId, baudCallOp, baudFuncOp, args,
+                                        baudCallOp.getCallee()))
+      return std::nullopt;
+    if (!state.waiting)
+      return std::nullopt;
+
+    if (traceBaudFastPath) {
+      static unsigned generateResumeFastPathHits = 0;
+      if (generateResumeFastPathHits < 50) {
+        ++generateResumeFastPathHits;
+        llvm::errs() << "[BAUD-GEN-FP] resume-hit proc=" << procId
+                     << " callee=" << frame.funcOp.getName() << "\n";
+      }
+    }
+
+    if (frame.callOp &&
+        (nextOp != frame.resumeBlock->end() ||
+         frame.resumeBlock != &frame.funcOp.getBody().front())) {
+      CallStackFrame resumedFrame(frame.funcOp, frame.resumeBlock, nextOp,
+                                  frame.callOp);
+      resumedFrame.args.assign(frame.args.begin(), frame.args.end());
+      state.callStack.push_back(std::move(resumedFrame));
+    }
+
+    if (oldFrameCount > 0 && state.callStack.size() > oldFrameCount) {
+      std::rotate(state.callStack.begin(),
+                  state.callStack.begin() + oldFrameCount,
+                  state.callStack.end());
+    }
+
+    if (state.pendingDelayFs > 0) {
+      SimTime currentTime = scheduler.getCurrentTime();
+      SimTime targetTime = currentTime.advanceTime(state.pendingDelayFs);
+      state.pendingDelayFs = 0;
+      scheduler.getEventScheduler().schedule(
+          targetTime, SchedulingRegion::Active,
+          Event([this, procId]() { resumeProcess(procId); }));
+    }
+
+    return CallStackResumeResult::Suspended;
+  };
+
   while (!state.callStack.empty()) {
     CallStackFrame frame = std::move(state.callStack.front());
     state.callStack.erase(state.callStack.begin());
@@ -1806,6 +1882,10 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
                << "    Resuming " << (frame.isLLVM() ? "LLVM " : "")
                << "function '" << frameName << "' (remaining old frames: "
                << oldFrameCount << ")\n");
+
+    if (auto fastResumeResult =
+            tryResumeGenerateBaudClkFrameFastPath(frame, oldFrameCount))
+      return *fastResumeResult;
 
     llvm::SmallVector<InterpretedValue, 4> results;
     ++state.callDepth;
