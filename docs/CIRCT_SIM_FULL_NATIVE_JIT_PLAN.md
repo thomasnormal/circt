@@ -2120,6 +2120,51 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
           known smoke instability on this dirty tree)
           (`/tmp/verilator-bmc-globalinitlimit-20260218-211426.tsv`).
 
+65. `func.call_indirect` runtime-vtable slot cache + compile-lane regression
+    stabilization
+    (February 18, 2026):
+    - runtime closure:
+      - added cache keyed by `(runtime_vtable_addr, method_index)` for
+        `func.call_indirect` runtime override lookup in:
+        - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+        - `tools/circt-sim/LLHDProcessInterpreter.h`
+      - this avoids repeated global-memory vtable slot decoding on hot
+        runtime-override paths.
+      - added trace points under
+        `CIRCT_SIM_TRACE_CALL_INDIRECT_SITE_CACHE`:
+        - `runtime-slot-store`
+        - `runtime-slot-hit`.
+    - follow-up hardening:
+      - fixed split-TU link regression in sim tool unittests by wiring:
+        - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+          into `unittests/Tools/circt-sim/CMakeLists.txt`.
+      - stabilized log-order fragile regressions (strict deopt + procedural
+        assert streams) with `LOG-DAG` / `CHECK-DAG` patterns.
+      - fixed symbol-scope bug in
+        `test/Tools/circt-sim/call-indirect-runtime-vtable-slot-cache.mlir`
+        by moving `llvm.func @malloc` declaration into the module scope.
+    - regression coverage:
+      - added:
+        `test/Tools/circt-sim/call-indirect-runtime-vtable-slot-cache.mlir`
+      - validates:
+        - runtime slot cache store/hit tracing,
+        - runtime override correctness (`sum = 24`).
+    - validation:
+      - build: PASS
+        - `ninja -C build-test -j4 circt-sim`
+        - `ninja -C build-test -j4 CIRCTSimToolTests`
+      - tools regression suite: PASS
+        - `ninja -C build-test -j4 check-circt-tools-circt-sim`
+        - totals: `Passed=456`, `XFAIL=46`, `Failed=0`.
+      - bounded AVIP UART compile lane (compile mode):
+        - `/tmp/avip-circt-sim-uart-vtable-slot-cache-20260218-2330/matrix.tsv`
+        - `compile_status=OK` (`54s`), `sim_status=TIMEOUT` (`120s`).
+      - bounded direct UART max-time profile:
+        - `/tmp/uart-vtable-slot-cache-profile-maxtime550g.log`
+        - reaches `550000000000 fs`, with `Tx=100.00%`, `Rx=0.00%`;
+          remaining top-step pressure is in fork branch clocks/driver loops,
+          not in a dominant `func.call_indirect` frame on this sample.
+
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
 2. Create deterministic parity harness:

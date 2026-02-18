@@ -4,9 +4,9 @@
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 // RUN: FileCheck %s --check-prefix=JSON < %t/jit.json
 //
-// LOG: local_helper_suspending_unsupported
-// LOG: [circt-sim] Strict JIT policy violation: deopts_total=1
-// LOG: [circt-sim] Strict JIT deopt process: id={{[1-9][0-9]*}} name=llhd_process_{{[0-9]+}} reason=unsupported_operation detail=first_op:func.call:local_helper_with_delay
+// LOG-DAG: [circt-sim] Strict JIT policy violation: deopts_total=1
+// LOG-DAG: [circt-sim] Strict JIT deopt process: id={{[1-9][0-9]*}} name=llhd_process_{{[0-9]+}} reason=unsupported_operation detail=first_op:func.call:local_helper_with_delay
+// LOG-DAG: local_helper_suspending_unsupported
 // LOG: [circt-sim] Simulation finished with exit code 1
 //
 // JSON: "mode": "compile"

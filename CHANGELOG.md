@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1516 - February 18, 2026
+
+### circt-sim: cache runtime `call_indirect` vtable slots and stabilize compile-mode regressions
+
+1. **Runtime vtable-slot cache for `func.call_indirect` runtime override**:
+   - added cache keyed by `(runtime_vtable_addr, method_index)` in:
+     - `tools/circt-sim/LLHDProcessInterpreter.h`
+     - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+   - cache stores resolved runtime function addresses and reuses them on
+     repeated dispatches.
+   - trace support (existing env gate):
+     `CIRCT_SIM_TRACE_CALL_INDIRECT_SITE_CACHE`
+     now includes `runtime-slot-store` / `runtime-slot-hit` events.
+
+2. **Regression tests / coverage**:
+   - added:
+     - `test/Tools/circt-sim/call-indirect-runtime-vtable-slot-cache.mlir`
+   - validates:
+     - runtime slot cache store/hit behavior,
+     - runtime override correctness (`sum = 24`).
+   - fixed module symbol-scope parse failure by declaring `llvm.func @malloc`
+     inside module scope.
+
+3. **Follow-up stability fix from test lane**:
+   - fixed sim-tool unittest link break from the earlier `call_indirect` split
+     by adding:
+     - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+       to `unittests/Tools/circt-sim/CMakeLists.txt`.
+   - hardened order-fragile lit checks (`LOG-DAG` / `CHECK-DAG`) in:
+     - strict deopt guard regressions
+       (`jit-process-thunk-*-guard-failed-env.mlir`,
+       `jit-process-thunk-func-call-local-helper-*-strict.mlir`)
+     - `test/Tools/circt-sim/procedural-assert.sv`.
+
+4. **Validation**:
+   - build:
+     - `ninja -C build-test -j4 circt-sim`: PASS
+     - `ninja -C build-test -j4 CIRCTSimToolTests`: PASS
+   - full tools sim suite:
+     - `ninja -C build-test -j4 check-circt-tools-circt-sim`: PASS
+       - `Total=502`, `Passed=456`, `XFAIL=46`, `Failed=0`.
+   - bounded AVIP UART compile-lane probe:
+     - `/tmp/avip-circt-sim-uart-vtable-slot-cache-20260218-2330/matrix.tsv`
+       - `compile_status=OK` (`54s`), `sim_status=TIMEOUT` (`120s`).
+   - bounded direct UART profile (max-time bounded):
+     - `/tmp/uart-vtable-slot-cache-profile-maxtime550g.log`
+       - reached `550000000000 fs`,
+       - coverage snapshot: `Tx=100.00%`, `Rx=0.00%`.
+
 ## Iteration 1515 - February 18, 2026
 
 ### circt-sim: global-init max-step false-overflow closure + bounded compile-lane revalidation

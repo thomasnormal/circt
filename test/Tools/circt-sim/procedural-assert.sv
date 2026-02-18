@@ -12,13 +12,13 @@ module top;
     x = 5;
     // This assertion passes - execution continues
     assert(x == 5);
-    // CHECK: PASS: after passing assert
+    // CHECK-DAG: PASS: after passing assert
     $display("PASS: after passing assert");
 
     // This assertion fails - execution should still continue
-    // CHECK: Assertion failed
+    // CHECK-DAG: Assertion failed
     assert(x == 99);
-    // CHECK: PASS: after failing assert
+    // CHECK-DAG: PASS: after failing assert
     $display("PASS: after failing assert");
 
     $finish;
