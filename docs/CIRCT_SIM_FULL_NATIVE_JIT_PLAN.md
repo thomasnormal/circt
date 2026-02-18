@@ -455,6 +455,31 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - `first_op:func.call:uvm_pkg::uvm_report_object::set_report_id_verbosity` (1)
         - `multiblock_no_terminal` (1)
       - guard-failed remains dominant (`9` rows in latest run).
+18. Unsupported-tail elimination for AVIP jtag compile lane:
+    - expanded one-block non-suspending `func.call` prelude allowlist with:
+      - `*::set_report_id_verbosity`.
+    - added env-gated unsupported-shape tracer for strict burn-down triage:
+      - `CIRCT_SIM_TRACE_JIT_UNSUPPORTED_SHAPES=1`
+      - emits per-process block/op skeleton when thunk install classifies
+        `unsupported_operation`.
+    - multiblock suspend-source matching/deopt-detail classification now treats
+      `sim.fork` preludes as suspend-capable for resumable multiblock thunk
+      candidacy (narrow closure for fork-loop shapes previously classified as
+      `multiblock_no_terminal`).
+    - added strict regressions:
+      - `jit-process-thunk-func-call-set-report-id-verbosity-halt.mlir`
+      - `jit-process-thunk-multiblock-fork-loop-guard-failed.mlir`
+        (asserts deopt classification is `guard_failed` rather than
+        `unsupported_operation:multiblock_no_terminal`).
+    - bounded AVIP compile-lane progression (`jtag`, seed-1):
+      - baseline `/tmp/avip-circt-sim-20260217-235254`:
+        - `guard_failed=9`
+        - `unsupported_operation=1` (`multiblock_no_terminal`)
+      - after closure `/tmp/avip-circt-sim-20260217-235838`:
+        - `guard_failed=8`
+        - `unsupported_operation=0`
+      - result: unsupported-operation tail eliminated on this lane; remaining
+        strict convergence queue is entirely guard-failed.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

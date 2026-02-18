@@ -106,6 +106,7 @@ static bool isInterceptedNonSuspendingFuncCallPrelude(mlir::func::CallOp callOp)
       calleeName == "uvm_pkg::run_test" ||
       calleeName == "uvm_pkg::uvm_get_report_object" ||
       calleeName == "uvm_pkg::uvm_root::find_all" ||
+      calleeName.ends_with("::set_report_id_verbosity") ||
       calleeName.ends_with("::get_report_action") ||
       calleeName.ends_with("::get_report_verbosity_level") ||
       calleeName.ends_with("::set_report_verbosity_level") ||
@@ -7590,6 +7591,52 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
   if (!jitCompileManager)
     return ProcessThunkInstallResult::MissingThunk;
 
+  auto traceUnsupported = []() {
+    const char *env =
+        std::getenv("CIRCT_SIM_TRACE_JIT_UNSUPPORTED_SHAPES");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+
+  auto dumpUnsupportedShape = [&](StringRef detail) {
+    if (!traceUnsupported || !state.getProcessOp())
+      return;
+    auto processOp = state.getProcessOp();
+    Region *bodyRegion = resolveNativeThunkProcessRegion(state);
+    Region &body = bodyRegion ? *bodyRegion : processOp.getBody();
+    auto *proc = scheduler.getProcess(procId);
+    StringRef procName = proc ? proc->getName() : "<unknown>";
+    llvm::errs() << "[JIT-UNSUPPORTED] proc=" << procId << " name=" << procName
+                 << " detail=" << detail
+                 << " blocks=" << static_cast<unsigned>(body.getBlocks().size())
+                 << "\n";
+    for (auto [blockIdx, block] : llvm::enumerate(body)) {
+      if (block.empty()) {
+        llvm::errs() << "  [block " << blockIdx << "] <empty>\n";
+        continue;
+      }
+      Operation &terminator = block.back();
+      llvm::errs() << "  [block " << blockIdx
+                   << "] terminator=" << terminator.getName().getStringRef();
+      if (auto waitOp = dyn_cast<llhd::WaitOp>(terminator)) {
+        llvm::errs() << " wait(delay=" << (waitOp.getDelay() ? "1" : "0")
+                     << ", observed=" << waitOp.getObserved().size()
+                     << ", dest="
+                     << (waitOp.getDest() ? "set" : "null") << ")";
+      }
+      llvm::errs() << "\n";
+      for (Operation &op : block) {
+        llvm::errs() << "    op=" << op.getName().getStringRef();
+        if (auto callOp = dyn_cast<mlir::func::CallOp>(op))
+          llvm::errs() << " callee=" << callOp.getCallee();
+        else if (auto llvmCall = dyn_cast<LLVM::CallOp>(op)) {
+          if (auto callee = llvmCall.getCallee())
+            llvm::errs() << " callee=" << *callee;
+        }
+        llvm::errs() << "\n";
+      }
+    }
+  };
+
   auto compileAttempt =
       jitCompileManager->classifyProcessCompileAttempt(procId);
   if (compileAttempt != JITCompileManager::CompileAttemptDecision::Proceed) {
@@ -7606,8 +7653,10 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
   bool isTrivialCandidate =
       !isPeriodicToggleClock && isTrivialNativeThunkCandidate(state);
   if (!isPeriodicToggleClock && !isTrivialCandidate) {
+    std::string detail = getUnsupportedThunkDeoptDetail(state);
     if (deoptDetail)
-      *deoptDetail = getUnsupportedThunkDeoptDetail(state);
+      *deoptDetail = detail;
+    dumpUnsupportedShape(detail);
     return ProcessThunkInstallResult::UnsupportedOperation;
   }
 
@@ -7708,6 +7757,7 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
                ++it) {
             if (!isSafeResumableMultiblockWaitPreludeOp(&*it))
               return formatUnsupportedProcessOpDetail(*it);
+            sawSuspend |= isa<sim::SimForkOp>(&*it);
             if (auto callOp = dyn_cast<LLVM::CallOp>(&*it))
               sawSuspend |=
                   isMooreWaitConditionCall(callOp) || isMooreDelayCall(callOp);
@@ -8027,6 +8077,7 @@ bool LLHDProcessInterpreter::isResumableMultiblockWaitNativeThunkCandidate(
     for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
       if (!isSafeResumableMultiblockWaitPreludeOp(&*it))
         return false;
+      sawSuspendSource |= isa<sim::SimForkOp>(&*it);
       if (auto callOp = dyn_cast<LLVM::CallOp>(&*it))
         sawSuspendSource |=
             isMooreWaitConditionCall(callOp) || isMooreDelayCall(callOp);
@@ -10163,10 +10214,8 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   // Dispatch to specific handlers based on operation type
 
   // LLHD operations
-  if (auto probeOp = dyn_cast<llhd::ProbeOp>(op)) {
-    fprintf(stderr, "[PROBE-DISPATCH] procId=%u\n", (unsigned)procId);
+  if (auto probeOp = dyn_cast<llhd::ProbeOp>(op))
     return interpretProbe(procId, probeOp);
-  }
 
   if (auto driveOp = dyn_cast<llhd::DriveOp>(op))
     return interpretDrive(procId, driveOp);
@@ -13442,13 +13491,13 @@ arith_dispatch:
       args.push_back(getValue(procId, arg));
     }
 
-    auto writePointerToOutRef = [&](Value outRef, uint64_t ptrValue) {
+    auto writePointerToOutRef = [&](Value outRef, uint64_t ptrValue) -> bool {
       InterpretedValue refAddr = getValue(procId, outRef);
       if (refAddr.isX())
-        return;
+        return false;
       uint64_t addr = refAddr.getUInt64();
       if (!addr)
-        return;
+        return false;
 
       uint64_t offset = 0;
       MemoryBlock *refBlock = findMemoryBlockByAddress(addr, procId, &offset);
@@ -13457,14 +13506,17 @@ arith_dispatch:
           refBlock->data[offset + i] =
               static_cast<uint8_t>((ptrValue >> (i * 8)) & 0xFF);
         refBlock->initialized = true;
-        return;
+        return true;
       }
 
       uint64_t nativeOffset = 0;
       size_t nativeSize = 0;
       if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
-          nativeOffset + 8 <= nativeSize)
+          nativeOffset + 8 <= nativeSize) {
         std::memcpy(reinterpret_cast<void *>(addr), &ptrValue, 8);
+        return true;
+      }
+      return false;
     };
 
     auto waitOnHopperDataForCallIndirect = [&](uint64_t hopperAddr) {
@@ -13529,17 +13581,20 @@ arith_dispatch:
       auto it = phaseHopperQueue.find(hopperAddr);
       if (it != phaseHopperQueue.end() && !it->second.empty()) {
         phaseAddr = it->second.front();
-        it->second.pop_front();
         hasPhase = true;
-        auto handleIt = phaseObjectionHandles.find(hopperAddr);
-        if (handleIt != phaseObjectionHandles.end())
-          dropPhaseObjection(handleIt->second, 1);
       }
-      writePointerToOutRef(callIndirectOp.getArgOperands()[1], phaseAddr);
-      unsigned width = getTypeWidth(callIndirectOp.getResult(0).getType());
-      setValue(procId, callIndirectOp.getResult(0),
-               InterpretedValue(llvm::APInt(width, hasPhase ? 1 : 0)));
-      return success();
+      if (writePointerToOutRef(callIndirectOp.getArgOperands()[1], phaseAddr)) {
+        if (hasPhase) {
+          it->second.pop_front();
+          auto handleIt = phaseObjectionHandles.find(hopperAddr);
+          if (handleIt != phaseObjectionHandles.end())
+            dropPhaseObjection(handleIt->second, 1);
+        }
+        unsigned width = getTypeWidth(callIndirectOp.getResult(0).getType());
+        setValue(procId, callIndirectOp.getResult(0),
+                 InterpretedValue(llvm::APInt(width, hasPhase ? 1 : 0)));
+        return success();
+      }
     }
 
     if (calleeName.ends_with("uvm_phase_hopper::try_peek") && args.size() >= 2 &&
@@ -13552,22 +13607,25 @@ arith_dispatch:
         phaseAddr = it->second.front();
         hasPhase = true;
       }
-      writePointerToOutRef(callIndirectOp.getArgOperands()[1], phaseAddr);
-      unsigned width = getTypeWidth(callIndirectOp.getResult(0).getType());
-      setValue(procId, callIndirectOp.getResult(0),
-               InterpretedValue(llvm::APInt(width, hasPhase ? 1 : 0)));
-      return success();
+      if (writePointerToOutRef(callIndirectOp.getArgOperands()[1], phaseAddr)) {
+        unsigned width = getTypeWidth(callIndirectOp.getResult(0).getType());
+        setValue(procId, callIndirectOp.getResult(0),
+                 InterpretedValue(llvm::APInt(width, hasPhase ? 1 : 0)));
+        return success();
+      }
     }
 
     if (calleeName.ends_with("uvm_phase_hopper::peek") && args.size() >= 2) {
       uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
       auto it = phaseHopperQueue.find(hopperAddr);
       if (it != phaseHopperQueue.end() && !it->second.empty()) {
-        writePointerToOutRef(callIndirectOp.getArgOperands()[1], it->second.front());
+        if (writePointerToOutRef(callIndirectOp.getArgOperands()[1],
+                                 it->second.front()))
+          return success();
+      } else {
+        waitOnHopperDataForCallIndirect(hopperAddr);
         return success();
       }
-      waitOnHopperDataForCallIndirect(hopperAddr);
-      return success();
     }
 
     if (calleeName.ends_with("uvm_phase_hopper::get") && args.size() >= 2) {
@@ -13575,15 +13633,17 @@ arith_dispatch:
       auto it = phaseHopperQueue.find(hopperAddr);
       if (it != phaseHopperQueue.end() && !it->second.empty()) {
         uint64_t phaseAddr = it->second.front();
-        it->second.pop_front();
-        auto handleIt = phaseObjectionHandles.find(hopperAddr);
-        if (handleIt != phaseObjectionHandles.end())
-          dropPhaseObjection(handleIt->second, 1);
-        writePointerToOutRef(callIndirectOp.getArgOperands()[1], phaseAddr);
+        if (writePointerToOutRef(callIndirectOp.getArgOperands()[1], phaseAddr)) {
+          it->second.pop_front();
+          auto handleIt = phaseObjectionHandles.find(hopperAddr);
+          if (handleIt != phaseObjectionHandles.end())
+            dropPhaseObjection(handleIt->second, 1);
+          return success();
+        }
+      } else {
+        waitOnHopperDataForCallIndirect(hopperAddr);
         return success();
       }
-      waitOnHopperDataForCallIndirect(hopperAddr);
-      return success();
     }
 
     // Intercept uvm_port_base::size() and report count from native
@@ -13970,7 +14030,15 @@ arith_dispatch:
     // end_of_elaboration as DONE before connect_phase callbacks finish.
     // The native connection map is used by get_next_item, item_done,
     // analysis_port::write, and other TLM operations.
-    if (calleeName.contains("uvm_port_base") && calleeName.contains("::connect") &&
+    auto isNativeConnectCallee = [&](llvm::StringRef name) {
+      if (!name.contains("::connect"))
+        return false;
+      return name.contains("uvm_port_base") ||
+             name.contains("uvm_analysis_port") ||
+             name.contains("uvm_analysis_export") ||
+             name.contains("uvm_analysis_imp");
+    };
+    if (isNativeConnectCallee(calleeName) &&
         !calleeName.contains("connect_phase") && args.size() >= 2) {
       uint64_t selfAddr = args[0].isX() ? 0 : args[0].getUInt64();
       uint64_t providerAddr = args[1].isX() ? 0 : args[1].getUInt64();
@@ -15966,16 +16034,6 @@ llvm_dispatch:
 
 LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                                                       llhd::ProbeOp probeOp) {
-  {
-    static bool traceProbeEntry = []() {
-      const char *env = std::getenv("CIRCT_SIM_TRACE_PROBE_ENTRY");
-      return env && env[0] != '\0' && env[0] != '0';
-    }();
-    if (traceProbeEntry) {
-      llvm::errs() << "[PROBE-ENTRY] procId=" << procId << "\n";
-      llvm::errs().flush();
-    }
-  }
   auto *statePtr = (procId == activeProcessId && activeProcessState)
                        ? activeProcessState
                        : &processStates[procId];
@@ -16867,9 +16925,6 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
   // potentially stale scheduler signal values.
   {
     auto combIt = combSignalDriveMap.find(sigId);
-    fprintf(stderr, "[PROBE-COMB] sig=%u name=%s inCombMap=%s\n",
-            (unsigned)sigId, getSignalName(sigId).data(),
-            (combIt != combSignalDriveMap.end() ? "YES" : "NO"));
     if (combIt != combSignalDriveMap.end() &&
         !continuousEvalVisitedSignals.count(sigId)) {
       continuousEvalVisitedSignals.insert(sigId);
@@ -19191,13 +19246,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
-  auto writePointerToOutRef = [&](Value outRef, uint64_t ptrValue) {
+  auto writePointerToOutRef = [&](Value outRef, uint64_t ptrValue) -> bool {
     InterpretedValue refAddr = getValue(procId, outRef);
     if (refAddr.isX())
-      return;
+      return false;
     uint64_t addr = refAddr.getUInt64();
     if (!addr)
-      return;
+      return false;
 
     uint64_t offset = 0;
     MemoryBlock *refBlock = findMemoryBlockByAddress(addr, procId, &offset);
@@ -19206,14 +19261,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         refBlock->data[offset + i] =
             static_cast<uint8_t>((ptrValue >> (i * 8)) & 0xFF);
       refBlock->initialized = true;
-      return;
+      return true;
     }
 
     uint64_t nativeOffset = 0;
     size_t nativeSize = 0;
     if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
-        nativeOffset + 8 <= nativeSize)
+        nativeOffset + 8 <= nativeSize) {
       std::memcpy(reinterpret_cast<void *>(addr), &ptrValue, 8);
+      return true;
+    }
+    return false;
   };
 
   auto waitOnHopperDataForCall = [&](uint64_t hopperAddr, Operation *retryOp) {
@@ -19289,17 +19347,20 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     auto it = phaseHopperQueue.find(hopperAddr);
     if (it != phaseHopperQueue.end() && !it->second.empty()) {
       phaseAddr = it->second.front();
-      it->second.pop_front();
       hasPhase = true;
-      auto handleIt = phaseObjectionHandles.find(hopperAddr);
-      if (handleIt != phaseObjectionHandles.end())
-        dropPhaseObjection(handleIt->second, 1);
     }
-    writePointerToOutRef(callOp.getOperand(1), phaseAddr);
-    unsigned width = getTypeWidth(callOp.getResult(0).getType());
-    setValue(procId, callOp.getResult(0),
-             InterpretedValue(llvm::APInt(width, hasPhase ? 1 : 0)));
-    return success();
+    if (writePointerToOutRef(callOp.getOperand(1), phaseAddr)) {
+      if (hasPhase) {
+        it->second.pop_front();
+        auto handleIt = phaseObjectionHandles.find(hopperAddr);
+        if (handleIt != phaseObjectionHandles.end())
+          dropPhaseObjection(handleIt->second, 1);
+      }
+      unsigned width = getTypeWidth(callOp.getResult(0).getType());
+      setValue(procId, callOp.getResult(0),
+               InterpretedValue(llvm::APInt(width, hasPhase ? 1 : 0)));
+      return success();
+    }
   }
 
   if (calleeName.ends_with("uvm_phase_hopper::try_peek") &&
@@ -19312,11 +19373,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       phaseAddr = it->second.front();
       hasPhase = true;
     }
-    writePointerToOutRef(callOp.getOperand(1), phaseAddr);
-    unsigned width = getTypeWidth(callOp.getResult(0).getType());
-    setValue(procId, callOp.getResult(0),
-             InterpretedValue(llvm::APInt(width, hasPhase ? 1 : 0)));
-    return success();
+    if (writePointerToOutRef(callOp.getOperand(1), phaseAddr)) {
+      unsigned width = getTypeWidth(callOp.getResult(0).getType());
+      setValue(procId, callOp.getResult(0),
+               InterpretedValue(llvm::APInt(width, hasPhase ? 1 : 0)));
+      return success();
+    }
   }
 
   if (calleeName.ends_with("uvm_phase_hopper::peek") &&
@@ -19326,11 +19388,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     auto it = phaseHopperQueue.find(hopperAddr);
     if (it != phaseHopperQueue.end() && !it->second.empty()) {
       phaseAddr = it->second.front();
-      writePointerToOutRef(callOp.getOperand(1), phaseAddr);
+      if (writePointerToOutRef(callOp.getOperand(1), phaseAddr))
+        return success();
+    } else {
+      waitOnHopperDataForCall(hopperAddr, callOp.getOperation());
       return success();
     }
-    waitOnHopperDataForCall(hopperAddr, callOp.getOperation());
-    return success();
   }
 
   if (calleeName.ends_with("uvm_phase_hopper::get") &&
@@ -19339,15 +19402,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     auto it = phaseHopperQueue.find(hopperAddr);
     if (it != phaseHopperQueue.end() && !it->second.empty()) {
       uint64_t phaseAddr = it->second.front();
-      it->second.pop_front();
-      auto handleIt = phaseObjectionHandles.find(hopperAddr);
-      if (handleIt != phaseObjectionHandles.end())
-        dropPhaseObjection(handleIt->second, 1);
-      writePointerToOutRef(callOp.getOperand(1), phaseAddr);
+      if (writePointerToOutRef(callOp.getOperand(1), phaseAddr)) {
+        it->second.pop_front();
+        auto handleIt = phaseObjectionHandles.find(hopperAddr);
+        if (handleIt != phaseObjectionHandles.end())
+          dropPhaseObjection(handleIt->second, 1);
+        return success();
+      }
+    } else {
+      waitOnHopperDataForCall(hopperAddr, callOp.getOperation());
       return success();
     }
-    waitOnHopperDataForCall(hopperAddr, callOp.getOperation());
-    return success();
   }
 
   // Intercept uvm_driver::end_of_elaboration_phase at func.call level.
@@ -19502,8 +19567,15 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   // Intercept uvm_port_base::connect() at func.call level.
   // Some UVM code paths call connect directly instead of through vtables.
-  if (calleeName.contains("uvm_port_base") &&
-      calleeName.contains("::connect") &&
+  auto isNativeConnectCallee = [&](llvm::StringRef name) {
+    if (!name.contains("::connect"))
+      return false;
+    return name.contains("uvm_port_base") ||
+           name.contains("uvm_analysis_port") ||
+           name.contains("uvm_analysis_export") ||
+           name.contains("uvm_analysis_imp");
+  };
+  if (isNativeConnectCallee(calleeName) &&
       !calleeName.contains("connect_phase") &&
       callOp.getNumOperands() >= 2) {
     InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
