@@ -1,5 +1,63 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1474 - February 18, 2026
+
+### circt-sim: split native-thunk candidate/policy logic from LLHDProcessInterpreter.cpp
+
+1. **Added `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`**
+   and moved compile-mode native-thunk policy/candidate logic out of
+   `LLHDProcessInterpreter.cpp`, including:
+   - `tryInstallProcessThunk`
+   - `getUnsupportedThunkDeoptDetail`
+   - `snapshotJITDeoptState`
+   - `restoreJITDeoptState`
+   - candidate classifiers:
+     - `isTrivialNativeThunkCandidate`
+     - `isSingleBlockTerminatingNativeThunkCandidate`
+     - `isMultiBlockTerminatingNativeThunkCandidate`
+     - `isCombinationalNativeThunkCandidate`
+     - `isResumableWaitSelfLoopNativeThunkCandidate`
+     - `isResumableMultiblockWaitNativeThunkCandidate`
+     - `isResumableWaitThenHaltNativeThunkCandidate`
+2. **Moved supporting static thunk-shape helpers** (safe prelude and
+   region/terminator checks) into the new policy file.
+3. **Build system update**:
+   - registered `LLHDProcessInterpreterNativeThunkPolicy.cpp` in
+     `tools/circt-sim/CMakeLists.txt`.
+4. **Validation**:
+   - `ninja -C build circt-sim` passes.
+   - strict regression trio passes:
+     - `jit-process-thunk-single-block-call-indirect-fork-callstack-halt.mlir`
+     - `jit-process-thunk-func-call-set-report-id-verbosity-halt.mlir`
+     - `jit-process-thunk-multiblock-fork-loop-guard-failed.mlir`
+
+## Iteration 1473 - February 18, 2026
+
+### circt-sim: split native-thunk execution out of LLHDProcessInterpreter.cpp
+
+1. **Refactored native-thunk execution methods into a new compilation unit**:
+   - added `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`.
+   - moved these method definitions from `LLHDProcessInterpreter.cpp`:
+     - `executeTrivialNativeThunk`
+     - `executeSingleBlockTerminatingNativeThunk`
+     - `executeMultiBlockTerminatingNativeThunk`
+     - `executeResumableWaitSelfLoopNativeThunk`
+     - `executeResumableMultiblockWaitNativeThunk`
+     - `executeResumableWaitThenHaltNativeThunk`
+     - `executeCombinationalNativeThunk`
+     - `tryBuildPeriodicToggleClockThunkSpec`
+     - `executePeriodicToggleClockNativeThunk`
+     - `resumeSavedCallStackFrames`
+2. **Build system update**:
+   - registered `LLHDProcessInterpreterNativeThunkExec.cpp` in
+     `tools/circt-sim/CMakeLists.txt`.
+3. **Validation**:
+   - rebuilt `circt-sim` successfully with the new file split.
+   - targeted compile-mode regressions pass:
+     - `jit-process-thunk-single-block-call-indirect-fork-callstack-halt.mlir`
+     - `jit-process-thunk-func-call-set-report-id-verbosity-halt.mlir`
+     - `jit-process-thunk-multiblock-fork-loop-guard-failed.mlir`
+
 ## Iteration 1472 - February 18, 2026
 
 ### circt-sim JIT: targeted single-block call-stack resume support
