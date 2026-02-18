@@ -1829,6 +1829,11 @@ private:
   llvm::DenseMap<mlir::Operation *, CallIndirectRuntimeOverrideSiteInfo>
       callIndirectRuntimeOverrideSiteInfo;
 
+  /// Cache runtime vtable slot lookups used by call_indirect runtime override.
+  /// Key: (runtime_vtable_address, method_index), Value: function address.
+  llvm::DenseMap<std::pair<uint64_t, int64_t>, uint64_t>
+      callIndirectRuntimeVtableSlotCache;
+
   JitRuntimeIndirectSiteData &
   getOrCreateJitRuntimeIndirectSiteData(ProcessId procId,
                                         mlir::func::CallIndirectOp callOp);

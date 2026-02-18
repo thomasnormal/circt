@@ -1539,23 +1539,43 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         runtimeVtableAddr |= static_cast<uint64_t>(
                                  objBlock->data[vtableOff + 4 + i])
                              << (i * 8);
-      auto globalIt = addressToGlobal.find(runtimeVtableAddr);
-      if (globalIt == addressToGlobal.end())
-        break;
-      std::string runtimeVtableName = globalIt->second;
-
-      // Read the function pointer from the runtime vtable at the same slot
-      auto vtableBlockIt = globalMemoryBlocks.find(runtimeVtableName);
-      if (vtableBlockIt == globalMemoryBlocks.end())
-        break;
-      auto &vtableBlock = vtableBlockIt->second;
-      unsigned slotOffset = methodIndex * 8;
-      if (slotOffset + 8 > vtableBlock.size)
-        break;
       uint64_t runtimeFuncAddr = 0;
-      for (unsigned i = 0; i < 8; ++i)
-        runtimeFuncAddr |=
-            static_cast<uint64_t>(vtableBlock.data[slotOffset + i]) << (i * 8);
+      auto cacheKey = std::make_pair(runtimeVtableAddr, methodIndex);
+      auto cacheIt = callIndirectRuntimeVtableSlotCache.find(cacheKey);
+      if (cacheIt != callIndirectRuntimeVtableSlotCache.end()) {
+        runtimeFuncAddr = cacheIt->second;
+        if (traceCallIndirectSiteCacheEnabled) {
+          llvm::errs() << "[CI-SITE-CACHE] runtime-slot-hit vtable=0x"
+                       << llvm::format_hex(runtimeVtableAddr, 16)
+                       << " method_index=" << methodIndex << " func=0x"
+                       << llvm::format_hex(runtimeFuncAddr, 16) << "\n";
+        }
+      } else {
+        auto globalIt = addressToGlobal.find(runtimeVtableAddr);
+        if (globalIt == addressToGlobal.end())
+          break;
+        std::string runtimeVtableName = globalIt->second;
+
+        // Read the function pointer from the runtime vtable at the same slot.
+        auto vtableBlockIt = globalMemoryBlocks.find(runtimeVtableName);
+        if (vtableBlockIt == globalMemoryBlocks.end())
+          break;
+        auto &vtableBlock = vtableBlockIt->second;
+        unsigned slotOffset = methodIndex * 8;
+        if (slotOffset + 8 > vtableBlock.size)
+          break;
+        for (unsigned i = 0; i < 8; ++i)
+          runtimeFuncAddr |=
+              static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+              << (i * 8);
+        callIndirectRuntimeVtableSlotCache[cacheKey] = runtimeFuncAddr;
+        if (traceCallIndirectSiteCacheEnabled) {
+          llvm::errs() << "[CI-SITE-CACHE] runtime-slot-store vtable=0x"
+                       << llvm::format_hex(runtimeVtableAddr, 16)
+                       << " method_index=" << methodIndex << " func=0x"
+                       << llvm::format_hex(runtimeFuncAddr, 16) << "\n";
+        }
+      }
       if (runtimeFuncAddr == 0 || runtimeFuncAddr == funcAddr)
         break;
 
@@ -1564,6 +1584,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       if (runtimeFuncIt == addressToFunction.end())
         break;
 
+      std::string runtimeVtableName = "<cached>";
+      if (auto globalIt = addressToGlobal.find(runtimeVtableAddr);
+          globalIt != addressToGlobal.end())
+        runtimeVtableName = globalIt->second;
       overriddenCalleeName = runtimeFuncIt->second;
       LLVM_DEBUG(llvm::dbgs()
                  << "  func.call_indirect: runtime vtable override: "

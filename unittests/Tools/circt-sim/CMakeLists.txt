@@ -36,6 +36,7 @@ add_circt_unittest(CIRCTSimToolTests
   LLHDProcessInterpreterTest.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreter.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/JITCompileManager.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterGlobals.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterModuleLevelInit.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp

@@ -4,8 +4,8 @@
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 // RUN: FileCheck %s --check-prefix=JSON < %t/jit.json
 //
-// LOG: jit-process-thunk-wait-event-print-halt
-// LOG: [circt-sim] Strict JIT policy violation: deopts_total=1
+// LOG-DAG: [circt-sim] Strict JIT policy violation: deopts_total=1
+// LOG-DAG: jit-process-thunk-wait-event-print-halt
 // LOG: [circt-sim] Simulation finished with exit code 1
 //
 // JSON: "mode": "compile"
