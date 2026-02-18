@@ -2164,6 +2164,16 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - reaches `550000000000 fs`, with `Tx=100.00%`, `Rx=0.00%`;
           remaining top-step pressure is in fork branch clocks/driver loops,
           not in a dominant `func.call_indirect` frame on this sample.
+      - bounded cross-suite smokes:
+        - sv-tests sim (`11.10.1--string_concat`): PASS
+          (`/tmp/sv-tests-circt-sim-vtable-slot-cache-20260218-2350.txt`)
+        - yosys SVA BMC (`basic00`): PASS
+          (`/tmp/yosys-sva-bmc-vtable-slot-cache-20260218-2350.tsv`)
+        - OpenTitan sim (`prim_count`): PASS
+          (`/tmp/opentitan-circt-sim-vtable-slot-cache-20260218-2350.log`)
+        - verilator-verification BMC (`assert_changed`): FAIL (unchanged
+          known smoke instability on this dirty tree)
+          (`/tmp/verilator-bmc-vtable-slot-cache-20260218-2350.tsv`).
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
