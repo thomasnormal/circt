@@ -99,6 +99,22 @@ static bool isMooreDelayCall(LLVM::CallOp callOp) {
   return callee && *callee == "__moore_delay";
 }
 
+static bool isMooreProcessAwaitCall(LLVM::CallOp callOp) {
+  auto callee = callOp.getCallee();
+  return callee && *callee == "__moore_process_await";
+}
+
+static bool isPotentialResumableMultiblockSuspendOp(Operation *op) {
+  if (!op)
+    return false;
+  if (isa<sim::SimForkOp, mlir::func::CallIndirectOp>(op))
+    return true;
+  if (auto callOp = dyn_cast<LLVM::CallOp>(op))
+    return isMooreWaitConditionCall(callOp) || isMooreDelayCall(callOp) ||
+           isMooreProcessAwaitCall(callOp);
+  return false;
+}
+
 static bool isSafeStructuredControlPreludeRegion(Region &region) {
   if (region.empty())
     return false;
@@ -238,9 +254,10 @@ static bool isSafeResumableMultiblockWaitPreludeOp(Operation *op) {
   if (!op)
     return false;
   if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
-    // wait_condition and __moore_delay can suspend/resume; resumable
-    // multiblock thunks handle these state-machine paths explicitly.
-    if (isMooreWaitConditionCall(callOp) || isMooreDelayCall(callOp))
+    // wait_condition, __moore_delay, and process::await can suspend/resume;
+    // resumable multiblock thunks handle these state-machine paths explicitly.
+    if (isMooreWaitConditionCall(callOp) || isMooreDelayCall(callOp) ||
+        isMooreProcessAwaitCall(callOp))
       return true;
   }
   // Multiblock wait loops commonly drive signals between waits.
@@ -550,10 +567,7 @@ std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
                ++it) {
             if (!isSafeResumableMultiblockWaitPreludeOp(&*it))
               return formatUnsupportedProcessOpDetail(*it);
-            sawSuspend |= isa<sim::SimForkOp>(&*it);
-            if (auto callOp = dyn_cast<LLVM::CallOp>(&*it))
-              sawSuspend |=
-                  isMooreWaitConditionCall(callOp) || isMooreDelayCall(callOp);
+            sawSuspend |= isPotentialResumableMultiblockSuspendOp(&*it);
           }
         }
         if (!sawTerminal && !sawSuspend)
@@ -869,10 +883,7 @@ bool LLHDProcessInterpreter::isResumableMultiblockWaitNativeThunkCandidate(
     for (auto it = block.begin(), e = std::prev(block.end()); it != e; ++it) {
       if (!isSafeResumableMultiblockWaitPreludeOp(&*it))
         return false;
-      sawSuspendSource |= isa<sim::SimForkOp>(&*it);
-      if (auto callOp = dyn_cast<LLVM::CallOp>(&*it))
-        sawSuspendSource |=
-            isMooreWaitConditionCall(callOp) || isMooreDelayCall(callOp);
+      sawSuspendSource |= isPotentialResumableMultiblockSuspendOp(&*it);
     }
   }
 

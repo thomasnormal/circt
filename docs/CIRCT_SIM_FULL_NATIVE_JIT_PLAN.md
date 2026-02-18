@@ -683,6 +683,48 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - remaining ranked APB queue:
       - `unsupported_operation:multiblock_no_terminal` (proc `fork_96_branch_0`)
       - `guard_failed:post_exec_not_halted` (proc `fork_97_branch_0`)
+28. APB strict burn-down closure: eliminate final `invalid_dest_block_state`
+    tail and reach zero-deopt in bounded compile lane:
+    - policy closure:
+      - introduced `isPotentialResumableMultiblockSuspendOp(...)` in
+        `LLHDProcessInterpreterNativeThunkPolicy.cpp`.
+      - resumable multiblock suspend sources now include:
+        - `sim.fork`
+        - `func.call_indirect`
+        - LLVM calls: `__moore_wait_condition`, `__moore_delay`,
+          `__moore_process_await`
+    - execution closure:
+      - added resumable-multiblock guard tracing under
+        `CIRCT_SIM_TRACE_JIT_THUNK_GUARDS=1`.
+      - selected resume body region from `state.destBlock->getParent()` when
+        destination-resuming.
+      - aligned destination-block operand handling with interpreter resume
+        behavior (removed strict arity deopt in this thunk path).
+    - strict regression coverage:
+      - added
+        `jit-process-thunk-multiblock-call-indirect-delay-halt.mlir`
+        (call-indirect to callee performing `llvm.call @__moore_delay`).
+    - validation:
+      - `ninja -C build circt-sim`: PASS.
+      - targeted strict regressions (6 tests): PASS.
+      - bounded APB compile lane (`AVIPS=apb`, `SEEDS=1`,
+        `CIRCT_SIM=build/bin/circt-sim`,
+        `CIRCT_VERILOG=build-test/bin/circt-verilog`,
+        `CIRCT_SIM_MODE=compile`,
+        `CIRCT_SIM_WRITE_JIT_REPORT=1`,
+        `CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=100000'`):
+        - `/tmp/avip-circt-sim-jit-apb-buildbin-20260218-051931`:
+          `jit_deopts_total=1` (`guard_failed:invalid_dest_block_state`)
+        - `/tmp/avip-circt-sim-jit-apb-buildbin-20260218-052243`:
+          `jit_deopts_total=0`
+      - bounded JTAG `--parallel=4` smoke
+        (`/tmp/avip-circt-sim-jit-jtag-p4-20260218-052357`):
+        compile `OK`, sim `OK`, `jit_deopts_total=0`.
+    - remaining limitation after this closure:
+      - zero-deopt has been re-proven on bounded `apb` and `jtag` samples in
+        this wave; full plan still requires periodic broader sweeps across
+        `~/mbit/*avip*`, `~/sv-tests/`, `~/verilator-verification/`,
+        `~/yosys/tests/`, and `~/opentitan/`.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
