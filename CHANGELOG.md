@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1491 - February 18, 2026
+
+### circt-sim: command-line plusarg propagation to Moore runtime/UVM
+
+1. **Plusarg bridge fix** (`tools/circt-sim/circt-sim.cpp`):
+   - fixed a regression where `circt-sim` filtered `+...` plusargs before LLVM
+     option parsing but did not forward them to Moore runtime command-line APIs.
+   - now merges extracted command-line plusargs into `CIRCT_UVM_ARGS`
+     (preserving existing `CIRCT_UVM_ARGS`/`UVM_ARGS` content), so:
+     - `$test$plusargs`
+     - `$value$plusargs`
+     - `run_test()` command-line `+UVM_TESTNAME=...`
+     all see command-line plusargs correctly.
+
+2. **Regression test added**:
+   - `test/Tools/circt-sim/syscall-plusargs-command-line.sv`
+   - verifies command-line `+VERBOSE +DEBUG=7` are visible via
+     `$test$plusargs` and `$value$plusargs` without pre-setting
+     `CIRCT_UVM_ARGS`.
+
+3. **Validation**:
+   - build:
+     - `ninja -C build-test circt-sim`: PASS.
+   - focused regression:
+     - `syscall-plusargs-command-line.sv`: PASS.
+   - AVIP I3C repro sanity:
+     - command-line `+UVM_TESTNAME=i3c_writeOperationWith8bitsData_test`
+       is now honored in both interpret/compile mode; target proxy activity and
+       `controller/target Agent Coverage = 100%` restored in bounded repro.
+
 ## Iteration 1490 - February 18, 2026
 
 ### circt-sim interface tri-state mirror suppression: bidirectional shared-wire fix + topology gating
