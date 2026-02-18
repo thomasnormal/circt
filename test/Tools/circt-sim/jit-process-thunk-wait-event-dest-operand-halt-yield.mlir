@@ -9,7 +9,7 @@
 //
 // JSON: "mode": "compile"
 // JSON: "jit":
-// JSON: "jit_compiles_total": 2
+// JSON: "jit_compiles_total": 1
 // JSON: "jit_cache_hits_total": {{[1-9][0-9]*}}
 // JSON: "jit_exec_hits_total": {{[1-9][0-9]*}}
 // JSON: "jit_deopts_total": 0
