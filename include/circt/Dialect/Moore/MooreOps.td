@@ -4166,6 +4166,19 @@ def CovergroupGetCoverageOp : MooreOp<"covergroup.get_coverage", [Pure]> {
   }];
 }
 
+def GetCoverageBIOp : Builtin<"get_coverage"> {
+  let summary = "Get total coverage percentage from runtime";
+  let description = [{
+    Corresponds to the `$get_coverage` and `$coverage_get` system functions.
+    Returns the total coverage percentage (0.0 to 100.0) across all
+    registered covergroups.
+
+    See IEEE 1800-2017 Section 20.14 "Coverage system functions".
+  }];
+  let results = (outs RealType:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
 //===----------------------------------------------------------------------===//
 // Constraint Expression Operations
 //===----------------------------------------------------------------------===//

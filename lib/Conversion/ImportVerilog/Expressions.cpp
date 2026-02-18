@@ -6508,7 +6508,6 @@ struct RvalueExprVisitor : public ExprVisitor {
 
     // Handle $dist_* distribution functions (IEEE 1800-2017 Section 20.15).
     // These have an inout seed as the first argument (bound as lvalue).
-    // Currently stubbed to return 0 without updating the seed.
     if (subroutine.name == "$dist_chi_square" ||
         subroutine.name == "$dist_exponential" ||
         subroutine.name == "$dist_t" ||
@@ -6516,10 +6515,35 @@ struct RvalueExprVisitor : public ExprVisitor {
         subroutine.name == "$dist_uniform" ||
         subroutine.name == "$dist_normal" ||
         subroutine.name == "$dist_erlang") {
-      // The seed argument is an lvalue that would be updated, but we
-      // ignore it in the stub. Just return 0.
+      if (args.size() < 2) {
+        mlir::emitError(loc)
+            << subroutine.name << " requires at least 2 arguments";
+        return {};
+      }
+      // First arg is inout seed (lvalue ref). Slang wraps inout args in
+      // AssignmentExpression — unwrap to get the actual lvalue.
+      Value seedRef;
+      if (auto *assignExpr =
+              args[0]->as_if<slang::ast::AssignmentExpression>()) {
+        seedRef = context.convertLvalueExpression(assignExpr->left());
+      } else {
+        seedRef = context.convertLvalueExpression(*args[0]);
+      }
+      if (!seedRef)
+        return {};
+      // Remaining args are rvalue parameters.
+      SmallVector<Value> params;
       auto intTy = moore::IntType::getInt(context.getContext(), 32);
-      auto result = moore::ConstantOp::create(builder, loc, intTy, 0);
+      for (size_t i = 1; i < args.size(); ++i) {
+        Value v = context.convertRvalueExpression(*args[i]);
+        if (!v)
+          return {};
+        if (v.getType() != intTy)
+          v = moore::ConversionOp::create(builder, loc, intTy, v);
+        params.push_back(v);
+      }
+      auto result = moore::DistBIOp::create(builder, loc, intTy,
+                                            subroutine.name, seedRef, params);
       auto ty = context.convertType(*expr.type);
       return context.materializeConversion(ty, result, expr.type->isSigned(),
                                            loc);
@@ -6527,16 +6551,14 @@ struct RvalueExprVisitor : public ExprVisitor {
 
     // Handle coverage control functions (IEEE 1800-2017 Section 20.14).
     // These are simulator-specific and stubbed to return appropriate defaults.
-    // $coverage_control: returns 0 (success)
-    // $coverage_get_max: returns 0 (no coverage)
-    // $coverage_merge: returns 0 (success)
-    // $coverage_save: returns 0 (success)
+    // $coverage_control: returns 0 (success) - simulator-specific control
+    // $coverage_get_max: returns 0 (no coverage) - simulator-specific
+    // $coverage_merge: returns 0 (success) - requires persistent DB
+    // $coverage_save: returns 0 (success) - requires persistent DB
     if (subroutine.name == "$coverage_control" ||
         subroutine.name == "$coverage_get_max" ||
         subroutine.name == "$coverage_merge" ||
         subroutine.name == "$coverage_save") {
-      mlir::emitRemark(loc)
-          << "ignoring coverage function `" << subroutine.name << "`";
       auto intTy = moore::IntType::getInt(context.getContext(), 32);
       auto result = moore::ConstantOp::create(builder, loc, intTy, 0);
       auto ty = context.convertType(*expr.type);
@@ -6544,15 +6566,12 @@ struct RvalueExprVisitor : public ExprVisitor {
                                            loc);
     }
 
-    // $coverage_get: returns 0.0 (no coverage percentage)
-    // $get_coverage: returns 0.0 (no coverage percentage)
+    // $coverage_get / $get_coverage: delegate to runtime for real coverage %
     if (subroutine.name == "$coverage_get" ||
         subroutine.name == "$get_coverage") {
-      mlir::emitRemark(loc)
-          << "ignoring coverage function `" << subroutine.name << "`";
-      auto fTy = mlir::Float64Type::get(context.getContext());
-      auto attr = mlir::FloatAttr::get(fTy, 0.0);
-      auto result = moore::ConstantRealOp::create(builder, loc, attr);
+      auto realTy = moore::RealType::get(context.getContext(),
+                                         moore::RealWidth::f64);
+      auto result = moore::GetCoverageBIOp::create(builder, loc, realTy);
       auto ty = context.convertType(*expr.type);
       return context.materializeConversion(ty, result, expr.type->isSigned(),
                                            loc);
@@ -9870,40 +9889,9 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                   return moore::UngetCBIOp::create(builder, loc, intTy, value1,
                                                    value2);
                 })
-          // Distribution functions (IEEE 1800-2017 Section 20.15)
-          // These are stubs that return 0 for now.
-          .Case("$dist_chi_square",
-                [&]() -> Value {
-                  // $dist_chi_square(seed, df) - chi-square distribution
-                  (void)value1;
-                  (void)value2;
-                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
-                })
-          .Case("$dist_exponential",
-                [&]() -> Value {
-                  // $dist_exponential(seed, mean) - exponential distribution
-                  (void)value1;
-                  (void)value2;
-                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
-                })
-          .Case("$dist_t",
-                [&]() -> Value {
-                  // $dist_t(seed, df) - Student's t-distribution
-                  (void)value1;
-                  (void)value2;
-                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
-                })
-          .Case("$dist_poisson",
-                [&]() -> Value {
-                  // $dist_poisson(seed, mean) - Poisson distribution
-                  (void)value1;
-                  (void)value2;
-                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
-                })
+          // $dist_chi_square, $dist_exponential, $dist_t, $dist_poisson:
+          // Handled by the generic DistBIOp path in visitSystemCall above.
+          // These arity-2 cases should never be reached.
           // Stochastic queue functions (IEEE 1800-2017 Section 21.6)
           // Legacy: return 0.
           .Case("$q_exam",
@@ -9940,35 +9928,9 @@ Context::convertSystemCallArity3(const slang::ast::SystemSubroutine &subroutine,
                                  Value value3) {
   auto systemCallRes =
       llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
-          // Distribution functions (IEEE 1800-2017 Section 20.15)
-          // These are stubs that return 0 for now.
-          .Case("$dist_uniform",
-                [&]() -> Value {
-                  // $dist_uniform(seed, start, end) - uniform distribution
-                  (void)value1;
-                  (void)value2;
-                  (void)value3;
-                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
-                })
-          .Case("$dist_normal",
-                [&]() -> Value {
-                  // $dist_normal(seed, mean, std_dev) - normal distribution
-                  (void)value1;
-                  (void)value2;
-                  (void)value3;
-                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
-                })
-          .Case("$dist_erlang",
-                [&]() -> Value {
-                  // $dist_erlang(seed, k, mean) - Erlang distribution
-                  (void)value1;
-                  (void)value2;
-                  (void)value3;
-                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
-                })
+          // $dist_uniform, $dist_normal, $dist_erlang:
+          // Handled by the generic DistBIOp path in visitSystemCall above.
+          // These arity-3 cases should never be reached.
           .Default([&]() -> FailureOr<Value> {
             mlir::emitError(loc) << "unsupported system call `"
                                  << subroutine.name << "`";

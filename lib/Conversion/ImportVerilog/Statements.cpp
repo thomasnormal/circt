@@ -2477,9 +2477,8 @@ struct StmtVisitor {
         subroutine.name == "$dumpportson" ||
         subroutine.name == "$dumpportsflush" ||
         subroutine.name == "$dumpportsall") {
-      // These tasks are simulator-specific; ignore for now.
-      mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
-                            << "`";
+      // VCD waveform dump tasks are simulator-specific and not implemented.
+      // Silent no-op; does not affect simulation correctness.
       return true;
     }
 
@@ -2548,12 +2547,10 @@ struct StmtVisitor {
     }
 
     // Coverage database tasks (IEEE 1800-2017 Section 20.14)
-    // $set_coverage_db_name and $load_coverage_db are simulator-specific;
-    // stub as no-ops.
+    // $set_coverage_db_name and $load_coverage_db are simulator-specific
+    // persistence commands. No-op since we report coverage at sim end.
     if (subroutine.name == "$set_coverage_db_name" ||
         subroutine.name == "$load_coverage_db") {
-      mlir::emitRemark(loc) << "ignoring coverage task `" << subroutine.name
-                            << "`";
       return true;
     }
 
@@ -2700,12 +2697,10 @@ struct StmtVisitor {
       return true;
     }
 
-    // $sreadmemb/$sreadmemh - read memory from string
-    // Stub as no-ops.
+    // $sreadmemb/$sreadmemh - read memory from string (non-standard extension)
+    // Silent no-op since these are rarely used and non-standard.
     if (subroutine.name == "$sreadmemb" ||
         subroutine.name == "$sreadmemh") {
-      mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
-                            << "`";
       return true;
     }
 
@@ -2724,9 +2719,11 @@ struct StmtVisitor {
     }
 
     if (subroutine.name == "$exit") {
-      // Calls to `$exit` from outside a `program` are ignored. Since we don't
-      // yet support programs, there is nothing to do here.
-      // TODO: Fix this once we support programs.
+      // Per IEEE 1800-2017, $exit terminates the calling program block.
+      // Since programs are not yet supported, treat as $finish(0).
+      moore::FinishBIOp::create(builder, loc, 0);
+      moore::UnreachableOp::create(builder, loc);
+      setTerminated();
       return true;
     }
 

@@ -38,6 +38,8 @@ unsigned g_lastFuncProcId = 0;
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -94,6 +96,53 @@ static bool computeMemoryBackedArrayBitOffset(hw::ArrayType arrayType,
       LLHDProcessInterpreter::getTypeWidth(arrayType.getElementType());
   bitOffset = static_cast<unsigned>(llvmIndex * elemWidth);
   return true;
+}
+
+static std::optional<llvm::APFloat>
+decodeFloatValueBits(const InterpretedValue &value, Type floatValueType) {
+  auto floatType = dyn_cast<FloatType>(floatValueType);
+  if (!floatType || value.isX())
+    return std::nullopt;
+  APInt bits = value.getAPInt();
+  unsigned width = floatType.getWidth();
+  if (bits.getBitWidth() != width)
+    bits = bits.zextOrTrunc(width);
+  return APFloat(floatType.getFloatSemantics(), bits);
+}
+
+static InterpretedValue encodeFloatValueBits(const APFloat &value,
+                                             unsigned width) {
+  APInt bits = value.bitcastToAPInt();
+  if (bits.getBitWidth() != width)
+    bits = bits.zextOrTrunc(width);
+  return InterpretedValue(bits);
+}
+
+static std::optional<InterpretedValue>
+convertIntToFloatValue(const InterpretedValue &input, Type floatResultType,
+                       bool isSigned) {
+  auto floatType = dyn_cast<FloatType>(floatResultType);
+  if (!floatType || input.isX())
+    return std::nullopt;
+  APFloat converted(floatType.getFloatSemantics());
+  (void)converted.convertFromAPInt(input.getAPInt(), isSigned,
+                                   APFloat::rmNearestTiesToEven);
+  return encodeFloatValueBits(converted, floatType.getWidth());
+}
+
+static std::optional<InterpretedValue>
+convertFloatToIntValue(const InterpretedValue &input, Type floatInputType,
+                       unsigned intResultWidth, bool isUnsignedResult) {
+  auto floatValue = decodeFloatValueBits(input, floatInputType);
+  if (!floatValue)
+    return std::nullopt;
+  APSInt converted(intResultWidth, isUnsignedResult);
+  bool isExact = false;
+  APFloat::opStatus status =
+      floatValue->convertToInteger(converted, APFloat::rmTowardZero, &isExact);
+  if (status & APFloat::opInvalidOp)
+    return std::nullopt;
+  return InterpretedValue(converted);
 }
 
 // When a {ptr, i64} aggregate is loaded from memory, treat it as a dynamic
@@ -9507,6 +9556,18 @@ arith_dispatch:
     if (auto intAttr = dyn_cast<IntegerAttr>(arithConstOp.getValue())) {
       setValue(procId, arithConstOp.getResult(),
                InterpretedValue(intAttr.getValue()));
+    } else if (auto floatAttr = dyn_cast<FloatAttr>(arithConstOp.getValue())) {
+      APFloat floatValue = floatAttr.getValue();
+      if (auto floatType = dyn_cast<FloatType>(arithConstOp.getType())) {
+        if (&floatValue.getSemantics() != &floatType.getFloatSemantics()) {
+          bool losesInfo = false;
+          (void)floatValue.convert(floatType.getFloatSemantics(),
+                                   APFloat::rmNearestTiesToEven, &losesInfo);
+        }
+      }
+      setValue(procId, arithConstOp.getResult(),
+               encodeFloatValueBits(floatValue,
+                                    getTypeWidth(arithConstOp.getType())));
     } else {
       setValue(procId, arithConstOp.getResult(),
                InterpretedValue::makeX(getTypeWidth(arithConstOp.getType())));
@@ -9776,6 +9837,118 @@ arith_dispatch:
     return success();
   }
 
+  if (auto arithAddFOp = dyn_cast<mlir::arith::AddFOp>(op)) {
+    InterpretedValue lhs = getValue(procId, arithAddFOp.getLhs());
+    InterpretedValue rhs = getValue(procId, arithAddFOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithAddFOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, arithAddFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    auto lhsFloat = decodeFloatValueBits(lhs, arithAddFOp.getLhs().getType());
+    auto rhsFloat = decodeFloatValueBits(rhs, arithAddFOp.getRhs().getType());
+    if (!lhsFloat || !rhsFloat) {
+      setValue(procId, arithAddFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    APFloat result = *lhsFloat;
+    (void)result.add(*rhsFloat, APFloat::rmNearestTiesToEven);
+    setValue(procId, arithAddFOp.getResult(),
+             encodeFloatValueBits(result, targetWidth));
+    return success();
+  }
+
+  if (auto arithSubFOp = dyn_cast<mlir::arith::SubFOp>(op)) {
+    InterpretedValue lhs = getValue(procId, arithSubFOp.getLhs());
+    InterpretedValue rhs = getValue(procId, arithSubFOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithSubFOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, arithSubFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    auto lhsFloat = decodeFloatValueBits(lhs, arithSubFOp.getLhs().getType());
+    auto rhsFloat = decodeFloatValueBits(rhs, arithSubFOp.getRhs().getType());
+    if (!lhsFloat || !rhsFloat) {
+      setValue(procId, arithSubFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    APFloat result = *lhsFloat;
+    (void)result.subtract(*rhsFloat, APFloat::rmNearestTiesToEven);
+    setValue(procId, arithSubFOp.getResult(),
+             encodeFloatValueBits(result, targetWidth));
+    return success();
+  }
+
+  if (auto arithMulFOp = dyn_cast<mlir::arith::MulFOp>(op)) {
+    InterpretedValue lhs = getValue(procId, arithMulFOp.getLhs());
+    InterpretedValue rhs = getValue(procId, arithMulFOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithMulFOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, arithMulFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    auto lhsFloat = decodeFloatValueBits(lhs, arithMulFOp.getLhs().getType());
+    auto rhsFloat = decodeFloatValueBits(rhs, arithMulFOp.getRhs().getType());
+    if (!lhsFloat || !rhsFloat) {
+      setValue(procId, arithMulFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    APFloat result = *lhsFloat;
+    (void)result.multiply(*rhsFloat, APFloat::rmNearestTiesToEven);
+    setValue(procId, arithMulFOp.getResult(),
+             encodeFloatValueBits(result, targetWidth));
+    return success();
+  }
+
+  if (auto arithDivFOp = dyn_cast<mlir::arith::DivFOp>(op)) {
+    InterpretedValue lhs = getValue(procId, arithDivFOp.getLhs());
+    InterpretedValue rhs = getValue(procId, arithDivFOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithDivFOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, arithDivFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    auto lhsFloat = decodeFloatValueBits(lhs, arithDivFOp.getLhs().getType());
+    auto rhsFloat = decodeFloatValueBits(rhs, arithDivFOp.getRhs().getType());
+    if (!lhsFloat || !rhsFloat) {
+      setValue(procId, arithDivFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    APFloat result = *lhsFloat;
+    (void)result.divide(*rhsFloat, APFloat::rmNearestTiesToEven);
+    setValue(procId, arithDivFOp.getResult(),
+             encodeFloatValueBits(result, targetWidth));
+    return success();
+  }
+
+  if (auto arithCmpFOp = dyn_cast<mlir::arith::CmpFOp>(op)) {
+    InterpretedValue lhs = getValue(procId, arithCmpFOp.getLhs());
+    InterpretedValue rhs = getValue(procId, arithCmpFOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, arithCmpFOp.getResult(), InterpretedValue::makeX(1));
+      return success();
+    }
+    auto lhsFloat = decodeFloatValueBits(lhs, arithCmpFOp.getLhs().getType());
+    auto rhsFloat = decodeFloatValueBits(rhs, arithCmpFOp.getRhs().getType());
+    if (!lhsFloat || !rhsFloat) {
+      setValue(procId, arithCmpFOp.getResult(), InterpretedValue::makeX(1));
+      return success();
+    }
+    bool result =
+        mlir::arith::applyCmpPredicate(arithCmpFOp.getPredicate(), *lhsFloat,
+                                       *rhsFloat);
+    setValue(procId, arithCmpFOp.getResult(), InterpretedValue(result ? 1 : 0, 1));
+    return success();
+  }
+
   if (auto arithSelectOp = dyn_cast<mlir::arith::SelectOp>(op)) {
     InterpretedValue cond = getValue(procId, arithSelectOp.getCondition());
     if (cond.isX()) {
@@ -9837,6 +10010,58 @@ arith_dispatch:
       setValue(procId, arithTruncIOp.getResult(),
                InterpretedValue(input.getAPInt().trunc(outWidth)));
     }
+    return success();
+  }
+
+  if (auto arithUIToFPOp = dyn_cast<mlir::arith::UIToFPOp>(op)) {
+    InterpretedValue input = getValue(procId, arithUIToFPOp.getIn());
+    unsigned outWidth = getTypeWidth(arithUIToFPOp.getType());
+    auto converted = convertIntToFloatValue(input, arithUIToFPOp.getType(),
+                                            /*isSigned=*/false);
+    if (!converted)
+      setValue(procId, arithUIToFPOp.getResult(),
+               InterpretedValue::makeX(outWidth));
+    else
+      setValue(procId, arithUIToFPOp.getResult(), *converted);
+    return success();
+  }
+
+  if (auto arithSIToFPOp = dyn_cast<mlir::arith::SIToFPOp>(op)) {
+    InterpretedValue input = getValue(procId, arithSIToFPOp.getIn());
+    unsigned outWidth = getTypeWidth(arithSIToFPOp.getType());
+    auto converted = convertIntToFloatValue(input, arithSIToFPOp.getType(),
+                                            /*isSigned=*/true);
+    if (!converted)
+      setValue(procId, arithSIToFPOp.getResult(),
+               InterpretedValue::makeX(outWidth));
+    else
+      setValue(procId, arithSIToFPOp.getResult(), *converted);
+    return success();
+  }
+
+  if (auto arithFPToUIOp = dyn_cast<mlir::arith::FPToUIOp>(op)) {
+    InterpretedValue input = getValue(procId, arithFPToUIOp.getIn());
+    unsigned outWidth = getTypeWidth(arithFPToUIOp.getType());
+    auto converted = convertFloatToIntValue(input, arithFPToUIOp.getIn().getType(),
+                                            outWidth, /*isUnsignedResult=*/true);
+    if (!converted)
+      setValue(procId, arithFPToUIOp.getResult(),
+               InterpretedValue::makeX(outWidth));
+    else
+      setValue(procId, arithFPToUIOp.getResult(), *converted);
+    return success();
+  }
+
+  if (auto arithFPToSIOp = dyn_cast<mlir::arith::FPToSIOp>(op)) {
+    InterpretedValue input = getValue(procId, arithFPToSIOp.getIn());
+    unsigned outWidth = getTypeWidth(arithFPToSIOp.getType());
+    auto converted = convertFloatToIntValue(input, arithFPToSIOp.getIn().getType(),
+                                            outWidth, /*isUnsignedResult=*/false);
+    if (!converted)
+      setValue(procId, arithFPToSIOp.getResult(),
+               InterpretedValue::makeX(outWidth));
+    else
+      setValue(procId, arithFPToSIOp.getResult(), *converted);
     return success();
   }
 
@@ -17684,20 +17909,37 @@ LogicalResult LLHDProcessInterpreter::interpretRegion(
 bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
     ProcessId procId, mlir::func::CallOp callOp, mlir::func::FuncOp funcOp,
     llvm::ArrayRef<InterpretedValue> args, llvm::StringRef calleeName) {
+  static bool traceBaudFastPath = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_BAUD_FASTPATH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto reject = [&](llvm::StringRef reason) {
+    if (traceBaudFastPath) {
+      static unsigned rejectCount = 0;
+      if (rejectCount < 50) {
+        ++rejectCount;
+        llvm::errs() << "[BAUD-FP] reject proc=" << procId
+                     << " callee=" << calleeName << " reason=" << reason
+                     << "\n";
+      }
+    }
+    return false;
+  };
+
   if (!calleeName.ends_with("::BaudClkGenerator"))
     return false;
   if (callOp.getNumOperands() < 2 || callOp.getNumResults() != 0)
-    return false;
+    return reject("bad-signature");
   if (funcOp.getNumArguments() < 2 || funcOp.getBody().empty())
-    return false;
-  if (args.size() < 2 || args[0].isX() || args[1].isX())
-    return false;
+    return reject("bad-func-body");
+  if (args.size() < 2 || args[0].isX())
+    return reject("bad-args");
 
   uint64_t selfAddr = args[0].getUInt64();
   if (selfAddr == 0)
-    return false;
+    return reject("null-self");
 
-  int64_t dividerRaw = args[1].getAPInt().getSExtValue();
+  int64_t dividerRaw = args[1].isX() ? 1 : args[1].getAPInt().getSExtValue();
   if (dividerRaw <= 0)
     dividerRaw = 1;
   if (dividerRaw > 0x7fffffff)
@@ -17802,39 +18044,76 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
     bool sawClockField = false;
     bool sawOutputField = false;
     Value selfArg = funcOp.getArgument(0);
+    unsigned gepSeen = 0;
+
+    auto stripSingleInputCasts = [](Value value) -> Value {
+      while (auto castOp =
+                 value.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+        if (castOp.getInputs().size() != 1)
+          break;
+        value = castOp.getInputs().front();
+      }
+      return value;
+    };
 
     for (Block &block : funcOp.getBody()) {
       for (Operation &op : block) {
         auto gepOp = dyn_cast<LLVM::GEPOp>(&op);
-        if (!gepOp || gepOp.getBase() != selfArg)
+        if (!gepOp)
+          continue;
+        ++gepSeen;
+        bool baseMatches = stripSingleInputCasts(gepOp.getBase()) == selfArg;
+        if (traceBaudFastPath && gepSeen <= 20) {
+          llvm::errs() << "[BAUD-FP] gep callee=" << calleeName
+                       << " baseMatches=" << (baseMatches ? 1 : 0)
+                       << " dynIdx=" << gepOp.getDynamicIndices().size();
+          auto raw = gepOp.getRawConstantIndices();
+          llvm::errs() << " rawIdx=[";
+          for (size_t i = 0; i < raw.size(); ++i) {
+            if (i)
+              llvm::errs() << ",";
+            llvm::errs() << raw[i];
+          }
+          llvm::errs() << "]\n";
+        }
+        if (stripSingleInputCasts(gepOp.getBase()) != selfArg)
           continue;
         auto structType = dyn_cast<LLVM::LLVMStructType>(gepOp.getElemType());
         if (!structType)
           continue;
-        auto indices = gepOp.getIndices();
-        if (indices.size() != 2)
+        if (!gepOp.getDynamicIndices().empty())
           continue;
-        auto idx0 = llvm::dyn_cast_if_present<IntegerAttr>(indices[0]);
-        auto idx1 = llvm::dyn_cast_if_present<IntegerAttr>(indices[1]);
-        if (!idx0 || !idx1 || idx0.getInt() != 0)
+        auto rawIndices = gepOp.getRawConstantIndices();
+        if (rawIndices.size() != 2)
           continue;
-        if (idx1.getInt() == 0) {
+        if (rawIndices[0] == LLVM::GEPOp::kDynamicIndex ||
+            rawIndices[1] == LLVM::GEPOp::kDynamicIndex)
+          continue;
+        if (rawIndices[0] != 0)
+          continue;
+        if (rawIndices[1] == 0) {
           clockFieldOffset = getLLVMStructFieldOffset(structType, 0);
           sawClockField = true;
-        } else if (idx1.getInt() == 4) {
+        } else if (rawIndices[1] == 4) {
           outputFieldOffset = getLLVMStructFieldOffset(structType, 4);
           sawOutputField = true;
         }
       }
     }
 
-    if (!sawClockField || !sawOutputField)
-      return false;
+    if (!sawClockField || !sawOutputField) {
+      if (traceBaudFastPath)
+        llvm::errs() << "[BAUD-FP] missing fields callee=" << calleeName
+                     << " gepSeen=" << gepSeen
+                     << " sawClock=" << (sawClockField ? 1 : 0)
+                     << " sawOutput=" << (sawOutputField ? 1 : 0) << "\n";
+      return reject("missing-gep-fields");
+    }
 
     std::string countSymbol = (calleeName + "::count").str();
     auto countIt = globalAddresses.find(countSymbol);
     if (countIt == globalAddresses.end())
-      return false;
+      return reject("missing-count-global");
 
     fastState.initialized = true;
     fastState.primed = false;
@@ -17859,12 +18138,12 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
   if (fastState.primed) {
     int32_t count = 0;
     if (!readI32AtAddr(fastState.countAddr, count))
-      return false;
+      return reject("count-read-failed");
 
     bool toggleClock = count == (fastState.divider - 1);
     if (toggleClock) {
       if (!writeI32AtAddr(fastState.countAddr, 0))
-        return false;
+        return reject("count-reset-write-failed");
 
       bool currentOut = false;
       if (fastState.outputSignalId != 0) {
@@ -17890,7 +18169,7 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
       }
     } else {
       if (!writeI32AtAddr(fastState.countAddr, count + 1))
-        return false;
+        return reject("count-inc-write-failed");
     }
   }
   fastState.primed = true;
@@ -17905,13 +18184,25 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
   } else {
     bool clockSample = false;
     if (!readI1AtAddr(clockAddr, clockSample))
-      return false;
+      return reject("clock-sample-read-failed");
     MemoryEventWaiter waiter;
     waiter.address = clockAddr;
     waiter.lastValue = clockSample ? 1 : 0;
     waiter.valueSize = 1;
     waiter.waitForRisingEdge = false;
     memoryEventWaiters[procId] = waiter;
+  }
+  if (traceBaudFastPath) {
+    static unsigned hitCount = 0;
+    if (hitCount < 50) {
+      ++hitCount;
+      llvm::errs() << "[BAUD-FP] hit proc=" << procId
+                   << " callee=" << calleeName
+                   << " divider=" << fastState.divider
+                   << " primed=" << fastState.primed
+                   << " clockSig=" << fastState.clockSignalId
+                   << " outputSig=" << fastState.outputSignalId << "\n";
+    }
   }
   return true;
 }
@@ -21574,6 +21865,20 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   if (auto arithConstOp = value.getDefiningOp<arith::ConstantOp>()) {
     if (auto intAttr = dyn_cast<IntegerAttr>(arithConstOp.getValue())) {
       InterpretedValue iv(intAttr.getValue());
+      valueMap[value] = iv;
+      return iv;
+    }
+    if (auto floatAttr = dyn_cast<FloatAttr>(arithConstOp.getValue())) {
+      APFloat floatValue = floatAttr.getValue();
+      if (auto floatType = dyn_cast<FloatType>(arithConstOp.getType())) {
+        if (&floatValue.getSemantics() != &floatType.getFloatSemantics()) {
+          bool losesInfo = false;
+          (void)floatValue.convert(floatType.getFloatSemantics(),
+                                   APFloat::rmNearestTiesToEven, &losesInfo);
+        }
+      }
+      InterpretedValue iv =
+          encodeFloatValueBits(floatValue, getTypeWidth(arithConstOp.getType()));
       valueMap[value] = iv;
       return iv;
     }
@@ -26361,6 +26666,20 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       LLVM_DEBUG(llvm::dbgs()
                  << "  llvm.call: __moore_covergroup_get_coverage("
                  << cg << ") -> " << coverage << "%\n");
+      return success();
+    }
+
+    // $get_coverage() / $coverage_get() -> total coverage percentage
+    if (calleeName == "__moore_coverage_get_total") {
+      double coverage = __moore_coverage_get_total();
+      if (callOp.getNumResults() >= 1) {
+        uint64_t bits;
+        std::memcpy(&bits, &coverage, sizeof(bits));
+        setValue(procId, callOp.getResult(), InterpretedValue(bits, 64));
+      }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_coverage_get_total() -> "
+                 << coverage << "%\n");
       return success();
     }
 
