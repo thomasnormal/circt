@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1490 - February 18, 2026
+
+### circt-sim interface tri-state mirror suppression: bidirectional shared-wire fix + topology gating
+
+1. **Shared inout tri-state mirror handling hardened** (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - on suppressed probe-copy stores into tri-state destination fields, added
+     targeted source-link removal (`copySrc -> dest`) and redirection to
+     mirrored observation fields for flat topologies.
+   - for the same flat-topology path, suppressed destination recovery now
+     derives from the installed tri-state rule state (`cond/src/else`) instead
+     of stale destination state.
+   - introduced topology gating so aggressive suppression behavior only applies
+     when interface field signals are flat synthetic `sig_*` fields
+     (`hasInstanceScopedInterfaceFieldSignals == false`); instance-scoped
+     topologies keep legacy behavior.
+
+2. **Interpreter compile unblock** (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - fixed APInt constructor use in `__moore_format_time` return packing:
+     `InterpretedValue(packed, 128)` -> `InterpretedValue(packed)`.
+
+3. **Validation**:
+   - build:
+     - `ninja -C build-test circt-sim`: PASS.
+   - focused regressions (manual RUN-style):
+     - `test/Tools/circt-sim/interface-inout-shared-wire-bidirectional.sv`: PASS.
+     - `test/Tools/circt-sim/interface-inout-tristate-propagation.sv`: PASS.
+   - bounded AVIP repro checks:
+     - I3C good/bad MLIR repros currently still at `0%/0%` coverage
+       (known open issue; logs:
+       `/tmp/i3c-good-after-scope-gate-20260218-105258.log`,
+       `/tmp/i3c-bad-after-scope-gate-20260218-105258.log`).
+
 ## Iteration 1489 - February 18, 2026
 
 ### circt-sim JIT: guarded runtime `call_indirect` target-set profiling + report schema extension

@@ -27,6 +27,7 @@
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "mlir/IR/Block.h"
@@ -633,13 +634,28 @@ public:
     std::vector<JitRuntimeIndirectTargetEntry> targets;
   };
 
+  struct JitRuntimeIndirectSiteGuardSpec {
+    mlir::Operation *siteOp = nullptr;
+    uint64_t expectedTargetSetVersion = 0;
+    uint64_t expectedTargetSetHash = 0;
+    uint64_t expectedUnresolvedCalls = 0;
+  };
+
   /// Per-site runtime target-set profile for func.call_indirect dispatch.
   /// Used for guarded JIT specialization triage in compile mode.
   std::vector<JitRuntimeIndirectSiteProfile>
   getJitRuntimeIndirectSiteProfiles() const;
 
+  /// Lookup runtime profile details for a specific call_indirect site.
+  std::optional<JitRuntimeIndirectSiteProfile>
+  lookupJitRuntimeIndirectSiteProfile(
+      mlir::func::CallIndirectOp callOp) const;
+
   /// Resolve scheduler-registered process name for a process ID.
   std::string getJitDeoptProcessName(ProcessId procId) const;
+
+  /// Compile-mode JIT hot threshold, clamped to at least 1.
+  uint64_t getJitCompileHotThreshold() const;
 
   friend class LLHDProcessInterpreterTest;
   friend struct ScopedInstanceContext;
@@ -925,41 +941,56 @@ private:
                                                    std::string *deoptDetail);
 
   /// Return true when this process is eligible for the initial native thunk.
-  bool isTrivialNativeThunkCandidate(const ProcessExecutionState &state) const;
+  bool isTrivialNativeThunkCandidate(
+      ProcessId procId, const ProcessExecutionState &state,
+      llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec>
+          *profileGuardSpecs = nullptr) const;
 
   /// Return true when the process executes a one-block straight-line body
   /// ending in `llhd.halt` or `sim.fork.terminator`.
   bool isSingleBlockTerminatingNativeThunkCandidate(
-      const ProcessExecutionState &state) const;
+      ProcessId procId, const ProcessExecutionState &state,
+      llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec>
+          *profileGuardSpecs = nullptr) const;
 
   /// Return true when the process executes a forward-only multiblock body
   /// where each block has safe preludes and terminates with either
   /// `cf.br`/`cf.cond_br` or `llhd.halt`/`sim.fork.terminator`.
   bool isMultiBlockTerminatingNativeThunkCandidate(
-      const ProcessExecutionState &state) const;
+      ProcessId procId, const ProcessExecutionState &state,
+      llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec>
+          *profileGuardSpecs = nullptr) const;
 
   /// Return true when the process matches one-block combinational
   /// `... -> llhd.yield` execution that can be thunk-dispatched.
   bool isCombinationalNativeThunkCandidate(
-      const ProcessExecutionState &state) const;
+      ProcessId procId, const ProcessExecutionState &state,
+      llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec>
+          *profileGuardSpecs = nullptr) const;
 
   /// Return true when the process matches a resumable self-looping wait body:
   /// optional entry `cf.br` into a loop block with safe preludes ending in
   /// `llhd.wait` whose destination is the same loop block.
   bool isResumableWaitSelfLoopNativeThunkCandidate(
-      const ProcessExecutionState &state) const;
+      ProcessId procId, const ProcessExecutionState &state,
+      llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec>
+          *profileGuardSpecs = nullptr) const;
 
   /// Return true when the process/fork region is a resumable multiblock wait
   /// state machine: all terminators are branch/cond_br/wait/(optional)
   /// terminal halt, with at least one suspend source (`llhd.wait`,
   /// `__moore_wait_condition`, or `__moore_delay`).
   bool isResumableMultiblockWaitNativeThunkCandidate(
-      const ProcessExecutionState &state) const;
+      ProcessId procId, const ProcessExecutionState &state,
+      llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec>
+          *profileGuardSpecs = nullptr) const;
 
   /// Return true when the process matches
   /// wait(delay|observed)->(optional print)->halt.
-  bool
-  isResumableWaitThenHaltNativeThunkCandidate(const ProcessExecutionState &state) const;
+  bool isResumableWaitThenHaltNativeThunkCandidate(
+      ProcessId procId, const ProcessExecutionState &state,
+      llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec>
+          *profileGuardSpecs = nullptr) const;
 
   enum class CallStackResumeResult {
     NoFrames,
@@ -1711,6 +1742,9 @@ private:
   };
   llvm::DenseMap<mlir::Operation *, JitRuntimeIndirectSiteData>
       jitRuntimeIndirectSiteProfiles;
+  llvm::DenseMap<ProcessId,
+                 llvm::SmallVector<JitRuntimeIndirectSiteGuardSpec, 2>>
+      jitProcessThunkIndirectSiteGuards;
   uint64_t jitRuntimeIndirectNextSiteId = 1;
   bool jitRuntimeIndirectProfileEnabled = false;
 
@@ -1914,6 +1948,11 @@ private:
   /// Used to bridge interface memory writes → LLHD signal events so that
   /// processes reading interface fields via GEP+load get proper sensitivity.
   llvm::DenseMap<uint64_t, SignalId> interfaceFieldSignals;
+
+  /// True when any interface field signal uses an instance-scoped name
+  /// (not top-level synthetic "sig_*"). Used to gate aggressive tri-state
+  /// mirror suppression heuristics that are only safe for flat topologies.
+  bool hasInstanceScopedInterfaceFieldSignals = false;
 
   /// Reverse map: signal ID → memory address for interface field signals.
   llvm::DenseMap<SignalId, uint64_t> fieldSignalToAddr;
