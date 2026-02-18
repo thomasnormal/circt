@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1512 - February 18, 2026
+
+### circt-sim: close remaining UART strict tail (`set_item_context`) to zero deopts on bounded lane
+
+1. **Policy closure**:
+   - extended manual non-suspending `func.call` prelude allowlist in
+     `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp` with:
+     - `uvm_pkg::uvm_sequence_item::set_item_context`.
+
+2. **Regression coverage**:
+   - added strict compile-mode regression:
+     - `test/Tools/circt-sim/jit-process-thunk-func-call-set-item-context-halt.mlir`
+   - focused strict lit set PASS including:
+     - `jit-process-thunk-func-call-set-item-context-halt.mlir`
+     - `jit-process-thunk-func-call-create-item-halt.mlir`
+     - `jit-process-thunk-func-call-set-config-halt.mlir`
+     - `jit-process-thunk-func-call-configdb-set-byvalue-halt.mlir`.
+
+3. **Validation**:
+   - bounded UART profile lane (`UartBaudRate4800Test`, compile mode, 120s):
+     - `/tmp/uart-profile-set-item-context-20260218-193612/jit.json`
+       - `jit_deopts_total=0` (from `2` in item-1511; `7` from pre-closure baseline)
+       - `final_time_fs=448371200000`
+       - bounded lane reaches strict zero-deopt for this sample.
+   - bounded AVIP `jtag` compile-lane guard:
+     - `/tmp/avip-circt-sim-jtag-set-item-context-20260218-193829/matrix.tsv`
+     - `compile_status=OK`, `sim_status=OK` (`42s`).
+
+4. **Remaining blocker in bounded UART lane**:
+   - strict deopt queue is cleared in this sample; primary remaining issue is
+     functional progression (`UartRxCovergroup` remains `0.00%` under 120s cap).
+
 ## Iteration 1511 - February 18, 2026
 
 ### circt-sim: close UART strict tails for `create_item` and `setConfig`
