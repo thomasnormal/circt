@@ -1944,6 +1944,12 @@ struct SVModuleOpConversion : public OpConversionPattern<SVModuleOp> {
       hwModuleOp->setAttr("moore.mixed_event_sources", eventSources);
     if (auto vpiParams = op->getAttrOfType<DictionaryAttr>("vpi.parameters"))
       hwModuleOp->setAttr("vpi.parameters", vpiParams);
+    if (auto vpiArrayBounds =
+            op->getAttrOfType<DictionaryAttr>("vpi.array_bounds"))
+      hwModuleOp->setAttr("vpi.array_bounds", vpiArrayBounds);
+    if (auto vpiStructFields =
+            op->getAttrOfType<DictionaryAttr>("vpi.struct_fields"))
+      hwModuleOp->setAttr("vpi.struct_fields", vpiStructFields);
     // Make hw.module have the same visibility as the moore.module.
     // The entry/top level module is public, otherwise is private.
     SymbolTable::setSymbolVisibility(hwModuleOp,

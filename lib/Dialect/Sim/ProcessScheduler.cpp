@@ -19,6 +19,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 
 using llvm::StringRef;
 
@@ -291,6 +292,53 @@ SignalEncoding ProcessScheduler::getSignalEncoding(SignalId signalId) const {
   return it->second;
 }
 
+void ProcessScheduler::registerSignalAlias(SignalId signalId,
+                                           const std::string &alias) {
+  signalAliases[alias] = signalId;
+}
+
+void ProcessScheduler::registerInstanceScope(const std::string &instancePath) {
+  instanceScopes.insert(instancePath);
+}
+
+void ProcessScheduler::setSignalLogicalWidth(SignalId signalId,
+                                              uint32_t logicalWidth) {
+  signalLogicalWidths[signalId] = logicalWidth;
+}
+
+uint32_t ProcessScheduler::getSignalLogicalWidth(SignalId signalId) const {
+  auto it = signalLogicalWidths.find(signalId);
+  if (it == signalLogicalWidths.end())
+    return 0;
+  return it->second;
+}
+
+void ProcessScheduler::setSignalArrayInfo(SignalId signalId,
+                                          const SignalArrayInfo &info) {
+  signalArrayInfos[signalId] = info;
+}
+
+const ProcessScheduler::SignalArrayInfo *
+ProcessScheduler::getSignalArrayInfo(SignalId signalId) const {
+  auto it = signalArrayInfos.find(signalId);
+  if (it == signalArrayInfos.end())
+    return nullptr;
+  return &it->second;
+}
+
+void ProcessScheduler::setSignalStructFields(
+    SignalId signalId, std::vector<SignalStructFieldInfo> fields) {
+  signalStructFields[signalId] = std::move(fields);
+}
+
+const std::vector<ProcessScheduler::SignalStructFieldInfo> *
+ProcessScheduler::getSignalStructFields(SignalId signalId) const {
+  auto it = signalStructFields.find(signalId);
+  if (it == signalStructFields.end())
+    return nullptr;
+  return &it->second;
+}
+
 void ProcessScheduler::setSignalResolution(SignalId signalId,
                                            SignalResolution resolution) {
   auto it = signalStates.find(signalId);
@@ -316,6 +364,36 @@ void ProcessScheduler::updateSignal(SignalId signalId,
       normalizeSignalValueWidth(newValue, signalWidth);
   SignalValue oldValue = it->second.getCurrentValue();
   (void)it->second.updateValue(normalizedValue);
+
+  static bool traceUpdates = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_SIGNAL_UPDATES");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  static llvm::StringRef traceFilter = []() -> llvm::StringRef {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_SIGNAL_UPDATES_FILTER");
+    return env ? llvm::StringRef(env) : llvm::StringRef();
+  }();
+  if (traceUpdates) {
+    auto formatSignalValue = [](const SignalValue &sv) -> std::string {
+      if (sv.isUnknown())
+        return "X";
+      llvm::SmallString<64> bits;
+      sv.getAPInt().toString(bits, 16, false);
+      return std::string(bits);
+    };
+    auto nameIt = signalNames.find(signalId);
+    llvm::StringRef sigName = nameIt != signalNames.end()
+                                  ? llvm::StringRef(nameIt->second)
+                                  : llvm::StringRef("<unknown>");
+    if (traceFilter.empty() || sigName.contains(traceFilter)) {
+      SimTime now = getCurrentTime();
+      llvm::errs() << "[SIG-UPD] t=" << now.realTime << " d=" << now.deltaStep
+                   << " sig=" << signalId << " (" << sigName << ")"
+                   << " old=0x" << formatSignalValue(oldValue)
+                   << " new=0x" << formatSignalValue(normalizedValue) << "\n";
+    }
+  }
+
   EdgeType edge =
       detectEdgeWithEncoding(oldValue, normalizedValue,
                              getSignalEncoding(signalId));
@@ -355,9 +433,43 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
   it->second.addOrUpdateDriver(driverId, normalizedValue, strength0, strength1);
 
   // Resolve all drivers to get the final signal value
-  SignalValue resolvedValue = it->second.resolveDrivers(encoding);
+  SignalValue resolvedValue = it->second.resolveDrivers();
   SignalValue normalizedResolved =
       normalizeSignalValueWidth(resolvedValue, signalWidth);
+
+  static bool traceStrength = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_SIGNAL_STRENGTH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  static llvm::StringRef traceFilter = []() -> llvm::StringRef {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_SIGNAL_STRENGTH_FILTER");
+    return env ? llvm::StringRef(env) : llvm::StringRef();
+  }();
+  if (traceStrength) {
+    auto formatSignalValue = [](const SignalValue &sv) -> std::string {
+      if (sv.isUnknown())
+        return "X";
+      llvm::SmallString<64> bits;
+      sv.getAPInt().toString(bits, 16, false);
+      return std::string(bits);
+    };
+    auto nameIt = signalNames.find(signalId);
+    llvm::StringRef sigName = nameIt != signalNames.end()
+                                  ? llvm::StringRef(nameIt->second)
+                                  : llvm::StringRef("<unknown>");
+    if (traceFilter.empty() || sigName.contains(traceFilter)) {
+      SimTime now = getCurrentTime();
+      llvm::errs() << "[SIG-DRV] t=" << now.realTime
+                   << " d=" << now.deltaStep << " sig=" << signalId
+                   << " (" << sigName << ")"
+                   << " drv=" << driverId
+                   << " val=0x" << formatSignalValue(normalizedValue)
+                   << " s=(" << getDriveStrengthName(strength0) << ","
+                   << getDriveStrengthName(strength1) << ")"
+                   << " resolved=0x" << formatSignalValue(normalizedResolved)
+                   << "\n";
+    }
+  }
 
   // Update the signal with the resolved value
   (void)it->second.updateValue(normalizedResolved);

@@ -32,6 +32,7 @@
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/Emit/EmitDialect.h"
 #include "circt/Dialect/HW/HWDialect.h"
+#include "circt/Dialect/HW/HWAttributes.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWPasses.h"
 #include "circt/Dialect/LLHD/IR/LLHDDialect.h"
@@ -612,6 +613,7 @@ private:
 
   // Module information
   llvm::SmallVector<std::string, 4> topModuleNames;
+  llvm::SmallVector<hw::HWModuleOp, 4> topHWModules;
   mlir::ModuleOp rootModule;
 
   // LLHD Process interpreter
@@ -684,6 +686,9 @@ LogicalResult SimulationContext::initialize(
       topModuleNames.push_back(hwModule.getName().str());
     }
   }
+
+  // Save hw.module ops for parameter extraction in VPI initialization.
+  topHWModules = hwModules;
 
   // Report what we're simulating
   if (topModuleNames.size() > 1) {
@@ -820,6 +825,54 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
                                              bitWidth, encoding);
     nameToSignal[portInfo.getName()] = signalId;
 
+    // Record logical width for VPI (strips 4-state overhead from nested
+    // structs).
+    unsigned logicalWidth =
+        LLHDProcessInterpreter::getLogicalWidth(portInfo.type);
+    if (logicalWidth != bitWidth)
+      scheduler.setSignalLogicalWidth(signalId, logicalWidth);
+
+    // Detect unpacked array types and record array info for VPI.
+    if (auto arrayType = dyn_cast<hw::ArrayType>(portInfo.type)) {
+      uint32_t numElems = arrayType.getNumElements();
+      mlir::Type elemType = arrayType.getElementType();
+      uint32_t elemPhysW =
+          LLHDProcessInterpreter::getTypeWidth(elemType);
+      uint32_t elemLogW =
+          LLHDProcessInterpreter::getLogicalWidth(elemType);
+      ProcessScheduler::SignalArrayInfo info{numElems, elemPhysW, elemLogW};
+      // Check for SV array bounds from vpi.array_bounds attribute.
+      if (auto boundsDict =
+              hwModule->getAttrOfType<DictionaryAttr>("vpi.array_bounds")) {
+        if (auto sigBounds = boundsDict.getAs<DictionaryAttr>(
+                portInfo.getName())) {
+          if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
+            info.leftBound = leftAttr.getInt();
+          if (auto rightAttr = sigBounds.getAs<IntegerAttr>("right"))
+            info.rightBound = rightAttr.getInt();
+        }
+      }
+      scheduler.setSignalArrayInfo(signalId, info);
+    }
+
+    // Detect unpacked struct types and record struct field info for VPI.
+    if (auto structFieldsDict =
+            hwModule->getAttrOfType<DictionaryAttr>("vpi.struct_fields")) {
+      if (auto fieldListAttr =
+              structFieldsDict.getAs<ArrayAttr>(portInfo.getName())) {
+        std::vector<ProcessScheduler::SignalStructFieldInfo> fields;
+        for (auto fieldAttr : fieldListAttr) {
+          auto fieldDict = cast<DictionaryAttr>(fieldAttr);
+          auto name = fieldDict.getAs<StringAttr>("name").getValue().str();
+          auto width = fieldDict.getAs<IntegerAttr>("width").getInt();
+          // Physical width is 2x logical for 4-state encoding.
+          fields.push_back({name, static_cast<uint32_t>(width),
+                            static_cast<uint32_t>(width * 2)});
+        }
+        scheduler.setSignalStructFields(signalId, std::move(fields));
+      }
+    }
+
     // Set up default tracing (ports-only) if enabled.
     if (tracePortsOnly)
       registerTracedSignal(signalId, portInfo.getName().str());
@@ -859,6 +912,15 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       hasCombinationals = true;
     } else if (isa<llhd::SignalOp, llhd::DriveOp>(op)) {
       hasLLHDSignals = true;
+    } else if (auto outOp = dyn_cast<hw::OutputOp>(op)) {
+      // If hw.output has non-trivial operands (not just block args),
+      // we need the interpreter to evaluate them.
+      for (auto val : outOp.getOperands()) {
+        if (!isa<mlir::BlockArgument>(val)) {
+          hasCombinationals = true;
+          break;
+        }
+      }
     }
     return WalkResult::advance();
   });
@@ -1015,18 +1077,59 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       }
     }
   } else {
-    // For modules without LLHD processes, create a simple placeholder process
-    auto topProcessId = scheduler.registerProcess(
-        "top_eval", [this]() {
-          // Placeholder evaluation function
-        });
+    // For modules without LLHD processes, register combinational processes
+    // for hw.output operands directly. Since the interpreter is not created,
+    // we can only handle direct input→output wiring (hw.output %inputPort).
+    if (auto *bodyBlock = hwModule.getBodyBlock()) {
+      if (auto outputOp = dyn_cast<hw::OutputOp>(bodyBlock->getTerminator())) {
+        // Build a block-argument-index to input signal map.
+        llvm::DenseMap<unsigned, SignalId> argIdxToSignal;
+        for (auto portInfo : hwModule.getPortList()) {
+          if (portInfo.isOutput())
+            continue;
+          auto it = nameToSignal.find(portInfo.getName());
+          if (it != nameToSignal.end())
+            argIdxToSignal[portInfo.argNum] = it->second;
+        }
 
-    // Mark as combinational (sensitive to all inputs)
-    auto *process = scheduler.getProcess(topProcessId);
-    if (process) {
-      process->setCombinational(true);
-      for (auto &entry : nameToSignal) {
-        scheduler.addSensitivity(topProcessId, entry.second);
+        auto outputPorts = hwModule.getPortList();
+        unsigned outputIdx = 0;
+        for (auto portInfo : outputPorts) {
+          if (!portInfo.isOutput())
+            continue;
+          if (outputIdx >= outputOp.getNumOperands())
+            break;
+          mlir::Value outputValue = outputOp.getOperand(outputIdx);
+          auto sigIt = nameToSignal.find(portInfo.getName());
+          if (sigIt == nameToSignal.end()) {
+            ++outputIdx;
+            continue;
+          }
+          SignalId outSigId = sigIt->second;
+
+          // Check if the output operand is a block argument (direct wiring).
+          if (auto blockArg = dyn_cast<mlir::BlockArgument>(outputValue)) {
+            auto inIt = argIdxToSignal.find(blockArg.getArgNumber());
+            if (inIt != argIdxToSignal.end()) {
+              SignalId inSigId = inIt->second;
+              std::string procName = "hw_output_" + portInfo.getName().str();
+              auto procId = scheduler.registerProcess(
+                  procName,
+                  [this, inSigId, outSigId]() {
+                    const SignalValue &sv =
+                        scheduler.getSignalValue(inSigId);
+                    scheduler.updateSignal(outSigId, sv);
+                  });
+              auto *proc = scheduler.getProcess(procId);
+              if (proc) {
+                proc->setCombinational(true);
+                proc->setState(ProcessState::Suspended);
+                scheduler.addSensitivity(procId, inSigId);
+              }
+            }
+          }
+          ++outputIdx;
+        }
       }
     }
   }
@@ -1299,6 +1402,77 @@ LogicalResult SimulationContext::run() {
     vpiRuntime.setScheduler(&scheduler);
     vpiRuntime.setTopModuleNames(topModuleNames);
     vpiRuntime.buildHierarchy();
+
+    // Register module parameters from hw.module ops so that cocotb can
+    // access them via vpi_handle_by_name / vpi_iterate(vpiParameter, ...).
+    // Parameters are stored as a "vpi.parameters" dictionary attribute on
+    // hw.module ops after elaboration (the standard "parameters" attribute
+    // is consumed during parameter specialization).
+    for (auto hwMod : topHWModules) {
+      if (!hwMod)
+        continue;
+      std::string modName = hwMod.getName().str();
+      // Find the VPI module object for this hw.module.
+      auto *vpiMod = vpiRuntime.findByName(modName);
+      uint32_t modId = vpiMod ? vpiMod->id : 0;
+
+      // Try vpi.parameters dictionary attribute first (post-elaboration).
+      if (auto vpiParams = hwMod->getAttrOfType<mlir::DictionaryAttr>(
+              "vpi.parameters")) {
+        for (auto namedAttr : vpiParams) {
+          llvm::StringRef paramName = namedAttr.getName().getValue();
+          mlir::Attribute valueAttr = namedAttr.getValue();
+          int64_t paramValue = 0;
+          uint32_t paramWidth = 32;
+          if (auto intAttr = dyn_cast<mlir::IntegerAttr>(valueAttr)) {
+            paramValue = intAttr.getValue().getSExtValue();
+            paramWidth = intAttr.getValue().getBitWidth();
+          }
+          std::string qualifiedName = modName + "." + paramName.str();
+          vpiRuntime.registerParameter(paramName.str(), qualifiedName,
+                                       paramValue, paramWidth, modId);
+          // Also register under unqualified name for vpi_handle_by_name.
+          auto *existingUnqual = vpiRuntime.findByName(paramName.str());
+          if (!existingUnqual) {
+            auto *paramObj = vpiRuntime.findByName(qualifiedName);
+            if (paramObj)
+              vpiRuntime.addNameMapping(paramName.str(), paramObj->id);
+          }
+        }
+      }
+
+      // Also try standard parameters attribute (pre-elaboration modules).
+      auto params = hwMod.getParameters();
+      if (params && !params.empty()) {
+        for (auto paramAttr : params) {
+          auto paramDecl = dyn_cast<hw::ParamDeclAttr>(paramAttr);
+          if (!paramDecl)
+            continue;
+          llvm::StringRef paramName = paramDecl.getName().getValue();
+          // Skip if already registered from vpi.parameters.
+          std::string qualifiedName = modName + "." + paramName.str();
+          if (vpiRuntime.findByName(qualifiedName))
+            continue;
+          mlir::Attribute valueAttr = paramDecl.getValue();
+          int64_t paramValue = 0;
+          uint32_t paramWidth = 32;
+          if (auto intAttr =
+                  dyn_cast_or_null<mlir::IntegerAttr>(valueAttr)) {
+            paramValue = intAttr.getValue().getSExtValue();
+            paramWidth = intAttr.getValue().getBitWidth();
+          }
+          vpiRuntime.registerParameter(paramName.str(), qualifiedName,
+                                       paramValue, paramWidth, modId);
+          auto *existingUnqual = vpiRuntime.findByName(paramName.str());
+          if (!existingUnqual) {
+            auto *paramObj = vpiRuntime.findByName(qualifiedName);
+            if (paramObj)
+              vpiRuntime.addNameMapping(paramName.str(), paramObj->id);
+          }
+        }
+      }
+    }
+
     vpiRuntime.installDispatchTable();
     if (!vpiRuntime.loadVPILibrary(vpiLibrary)) {
       llvm::errs() << "[circt-sim] Failed to load VPI library: " << vpiLibrary
@@ -1379,7 +1553,18 @@ LogicalResult SimulationContext::run() {
     // deltasExecuted > 0 — to ensure deferred writes are flushed.
     if (!vpiLibrary.empty()) {
       auto &vpi = VPIRuntime::getInstance();
-      vpi.fireCallbacks(cbReadWriteSynch);
+      // cocotb 2.0.1 defers DEPOSIT writes — they are only applied when a
+      // ReadWrite trigger fires. Each round of ReadWriteSynch may cause
+      // signal changes that wake coroutines which defer MORE writes,
+      // registering new cbReadWriteSynch callbacks. Loop until all deferred
+      // writes are flushed before entering ReadOnly (IEEE 1800-2017 §4.4).
+      // Note: putValue() calls executeCurrentTime() internally, so
+      // combinational propagation happens within each write.
+      for (int rwIter = 0; rwIter < 100; ++rwIter) {
+        vpi.fireCallbacks(cbReadWriteSynch);
+        if (!vpi.hasActiveCallbacks(cbReadWriteSynch))
+          break;
+      }
       vpi.fireCallbacks(cbReadOnlySynch);
     }
 
