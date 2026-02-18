@@ -557,6 +557,16 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       and native thunk work to reduce merge conflicts in active JIT paths.
     - no intended behavior change; validated with both global-ctor/vtable and
       strict JIT regressions (including parallel-mode compile tests).
+24. Maintainability split (phase-4): module-level LLVM init isolation:
+    - extracted `executeModuleLevelLLVMOps(...)` from
+      `LLHDProcessInterpreter.cpp` into
+      `LLHDProcessInterpreterModuleLevelInit.cpp`.
+    - introduced shared internal store-pattern matcher header:
+      `LLHDProcessInterpreterStorePatterns.h`, used by both core interpreter
+      and module-level init translation units to keep four-state copy/tri-state
+      detection logic consistent across paths.
+    - no intended behavior change; validated with global-init/vtable and
+      strict compile-mode JIT regression sets.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
