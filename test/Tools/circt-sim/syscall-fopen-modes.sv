@@ -1,5 +1,4 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// XFAIL: *
 // Test $fopen with different modes, $fclose, and verify data integrity
 module top;
   integer fd;

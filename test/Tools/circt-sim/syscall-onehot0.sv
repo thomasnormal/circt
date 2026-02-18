@@ -1,5 +1,4 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// XFAIL: *
 // Test $onehot and $onehot0 — IEEE 1800-2017 20.9
 // $onehot: returns 1 if exactly one bit is set
 // $onehot0: returns 1 if at most one bit is set (zero or one)
