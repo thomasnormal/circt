@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
 // Test $sdf_annotate — annotate timing from SDF file
 // In most simulators this is a compile-time directive that modifies delays.
 // We test that it processes the file and doesn't error on valid input.

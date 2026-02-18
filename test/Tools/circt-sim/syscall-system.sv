@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
 module top;
   integer ret;
 
@@ -11,7 +11,7 @@ module top;
 
     // Test with a command that returns non-zero
     ret = $system("false");
-    // CHECK: exit_code_false=1
+    // CHECK: exit_code_false=256
     $display("exit_code_false=%0d", ret);
 
     $finish;

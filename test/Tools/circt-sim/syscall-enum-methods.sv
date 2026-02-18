@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
 // Test enum methods: first, last, next, prev, num, name
 module top;
   typedef enum {RED=0, GREEN=1, BLUE=2, YELLOW=3} color_t;

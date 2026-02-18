@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
 // Test stochastic analysis queues: $q_initialize, $q_add, $q_remove, $q_exam, $q_full
 module top;
   integer q_id, status, value;

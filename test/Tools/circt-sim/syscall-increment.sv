@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
 module top;
   logic [7:0] ascending [0:3];     // ascending range: left <= right
   logic [7:0] descending [3:0];    // descending range: left >= right

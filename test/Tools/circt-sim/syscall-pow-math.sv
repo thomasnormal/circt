@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
 // Test math system functions: $pow, $sqrt, $ln, $log10, $exp,
 // $floor, $ceil, $sin, $cos, $tan, $asin, $acos, $atan, $atan2,
 // $hypot, $sinh, $cosh, $tanh, $asinh, $acosh, $atanh
