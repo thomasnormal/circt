@@ -1496,6 +1496,43 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - convert this caller-side overhead win into completion by focusing on
         remaining dominant non-Baud hotspots (`fork_18_branch_0` `sim.fork`
         lane and Rx-coverage progression) and then rerun all9 compile lanes.
+50. Execute-phase monitor `sim.fork` objection-waiter stabilization for
+    `fork_18_branch_0` hotspot (February 18, 2026):
+    - runtime closure:
+      - hardened execute-phase interception wait behavior in
+        `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+        - when objection-zero waiter mode is armed, force scheduler process
+          state to `Waiting` immediately.
+        - guard `executeProcess()` against spurious wakeups while process is
+          suspended on:
+          - execute-phase monitor poll state
+          - objection-zero waiter state.
+      - this prevents unintended re-entry into intercepted monitor `sim.fork`
+        loops during objection-driven suspension.
+    - regression coverage:
+      - added
+        `test/Tools/circt-sim/execute-phase-monitor-fork-objection-waiter.mlir`.
+      - locks:
+        - interception trace (`wait_mode=objection_zero`)
+        - functional ordering (`drop done` before `phase done`)
+        - default + parallel-flag lanes
+          (`--parallel=4 --work-stealing --auto-partition`).
+    - validation:
+      - build:
+        - `ninja -C build -j4 circt-sim`: PASS.
+      - focused regressions:
+        - `execute-phase-monitor-fork-objection-waiter.mlir`: PASS.
+        - `func-generate-baud-clk-resume-fast-path.mlir`: PASS.
+        - `func-baud-clk-generator-fast-path-delay-batch.mlir`: PASS.
+        - `jit-process-fast-path-store-wait-self-loop.mlir`: PASS.
+      - bounded UART direct profile (compile mode, `--timeout=60`):
+        - `/tmp/uart-direct-timeout60-objwaiter-summary.log`
+        - dominant execute-phase monitor process
+          `fork_18_branch_0` observed at `steps=1` in the bounded window.
+    - next closure target:
+      - convert reduced monitor-fork churn into end-to-end UART lane
+        completion by unblocking Rx functional progression
+        (`UartRxCovergroup` remains `0%`) and rerun full all9 compile lanes.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
