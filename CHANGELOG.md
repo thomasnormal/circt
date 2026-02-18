@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1496 - February 18, 2026
+
+### circt-sim: `GenerateBaudClk` caller-side resume fast path (parallel-safe) for UART hot fork branches
+
+1. **Runtime optimization** (`tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`):
+   - added a targeted call-stack resume fast path for
+     `*::GenerateBaudClk` frames resumed at the tail
+     `func.call *::BaudClkGenerator`.
+   - this bypasses full `interpretFuncBody` re-entry on hot resume activations
+     and dispatches directly through the existing
+     `handleBaudClkGeneratorFastPath` path.
+   - preserves fallback behavior on any guard miss.
+   - added trace marker:
+     `[BAUD-GEN-FP] resume-hit ...`
+     (enabled by `CIRCT_SIM_TRACE_BAUD_FASTPATH=1`).
+
+2. **Regression coverage added** (`test/Tools/circt-sim/`):
+   - `func-generate-baud-clk-resume-fast-path.mlir`
+   - locks caller-side fast-path activation for Generate-wrapper resumptions.
+   - includes both single-thread and parallel lanes:
+     - default
+     - `--parallel=4 --work-stealing --auto-partition`
+
+3. **Validation**:
+   - build:
+     - `ninja -C build -j4 circt-sim`: PASS.
+   - focused regressions:
+     - `func-generate-baud-clk-resume-fast-path.mlir` (single-thread): PASS.
+     - `func-generate-baud-clk-resume-fast-path.mlir` (parallel): PASS.
+     - `func-baud-clk-generator-fast-path.mlir`: PASS.
+     - `func-baud-clk-generator-fast-path-delay-batch.mlir`: PASS.
+     - `func-baud-clk-generator-fast-path-count-visible.mlir`: PASS.
+   - direct UART bounded profile (compile mode, `--timeout=60`):
+     - `/tmp/uart-direct-timeout60-generatefp.log`
+     - `fork_{80,81,82}_branch_0` `GenerateBaudClk` steps dropped to `52`
+       each (from prior `~48673-48674` in
+       `/tmp/uart-direct-timeout60-baudbatch-v3.log`).
+     - bounded simulation-time progress improved to `324960000000 fs`
+       (from `310910000000 fs` in the prior 60s bound).
+   - bounded AVIP UART lane (`SIM_TIMEOUT=120`, compile mode):
+     - `/tmp/avip-circt-sim-uart-generatefp2-20260218-135458/matrix.tsv`
+       remains `TIMEOUT`, with continued scoreboard-region advancement
+       (`~423169 ns` in sim log).
+
 ## Iteration 1495 - February 18, 2026
 
 ### circt-sim: Baud delay-batching regression lock and UART bounded-progress revalidation
