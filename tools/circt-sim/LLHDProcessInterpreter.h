@@ -394,6 +394,23 @@ struct ProcessExecutionState {
   /// skipping past it).
   mlir::Operation *sequencerGetRetryCallOp = nullptr;
 
+  /// Per-callsite state for native fast-path execution of
+  /// `*::BaudClkGenerator` helper loops.
+  struct BaudClkGeneratorFastPathState {
+    bool initialized = false;
+    bool primed = false;
+    uint64_t countAddr = 0;
+    bool countLocalOnly = false;
+    int32_t localCount = 0;
+    uint64_t clockFieldOffset = 0;
+    uint64_t outputFieldOffset = 0;
+    SignalId clockSignalId = 0;
+    SignalId outputSignalId = 0;
+    int32_t divider = 1;
+  };
+  llvm::DenseMap<mlir::Operation *, BaudClkGeneratorFastPathState>
+      baudClkGeneratorFastPathByCall;
+
   /// Address to write the result of a pending mailbox get operation.
   /// When a blocking mailbox get is waiting for a message, this stores where
   /// to write the message value when it becomes available.
@@ -1132,6 +1149,12 @@ private:
   /// Returns true when handled and results (if any) are already set.
   bool handleUvmFuncCallFastPath(ProcessId procId, mlir::func::CallOp callOp,
                                  llvm::StringRef calleeName);
+
+  /// Handle native fast-path execution for `*::BaudClkGenerator` helper loops.
+  /// Returns true when handled (including suspended wait/retry flow).
+  bool handleBaudClkGeneratorFastPath(
+      ProcessId procId, mlir::func::CallOp callOp, mlir::func::FuncOp funcOp,
+      llvm::ArrayRef<InterpretedValue> args, llvm::StringRef calleeName);
 
   /// Handle UVM-focused fast-paths for func.call_indirect sites.
   /// Returns true when handled and results (if any) are already set.

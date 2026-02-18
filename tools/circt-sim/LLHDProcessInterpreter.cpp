@@ -18132,9 +18132,28 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
     if (countIt == globalAddresses.end())
       return reject("missing-count-global");
 
+    bool countLocalOnly = true;
+    std::string countInitSymbol = "__moore_global_init_" + countSymbol;
+    rootModule.walk([&](LLVM::AddressOfOp addrOfOp) {
+      if (!countLocalOnly || addrOfOp.getGlobalName() != countSymbol)
+        return;
+      if (auto ownerFunc = addrOfOp->getParentOfType<func::FuncOp>();
+          ownerFunc && ownerFunc == funcOp)
+        return;
+      if (auto ownerLLVMFunc = addrOfOp->getParentOfType<LLVM::LLVMFuncOp>();
+          ownerLLVMFunc && ownerLLVMFunc.getSymName() == countInitSymbol)
+        return;
+      countLocalOnly = false;
+    });
+
+    int32_t initialCount = 0;
+    (void)readI32AtAddr(countIt->second, initialCount);
+
     fastState.initialized = true;
     fastState.primed = false;
     fastState.countAddr = countIt->second;
+    fastState.countLocalOnly = countLocalOnly;
+    fastState.localCount = initialCount;
     fastState.clockFieldOffset = clockFieldOffset;
     fastState.outputFieldOffset = outputFieldOffset;
   }
@@ -18154,13 +18173,19 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
 
   if (fastState.primed) {
     int32_t count = 0;
-    if (!readI32AtAddr(fastState.countAddr, count))
+    if (fastState.countLocalOnly) {
+      count = fastState.localCount;
+    } else if (!readI32AtAddr(fastState.countAddr, count)) {
       return reject("count-read-failed");
+    }
 
     bool toggleClock = count == (fastState.divider - 1);
     if (toggleClock) {
-      if (!writeI32AtAddr(fastState.countAddr, 0))
+      if (fastState.countLocalOnly) {
+        fastState.localCount = 0;
+      } else if (!writeI32AtAddr(fastState.countAddr, 0)) {
         return reject("count-reset-write-failed");
+      }
 
       bool currentOut = false;
       if (fastState.outputSignalId != 0) {
@@ -18185,8 +18210,12 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
         forwardPropagateOnSignalChange(fastState.outputSignalId, nextSig);
       }
     } else {
-      if (!writeI32AtAddr(fastState.countAddr, count + 1))
+      int32_t nextCount = count + 1;
+      if (fastState.countLocalOnly) {
+        fastState.localCount = nextCount;
+      } else if (!writeI32AtAddr(fastState.countAddr, nextCount)) {
         return reject("count-inc-write-failed");
+      }
     }
   }
   fastState.primed = true;
@@ -18217,6 +18246,7 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
                    << " callee=" << calleeName
                    << " divider=" << fastState.divider
                    << " primed=" << fastState.primed
+                   << " localCountOnly=" << (fastState.countLocalOnly ? 1 : 0)
                    << " clockSig=" << fastState.clockSignalId
                    << " outputSig=" << fastState.outputSignalId << "\n";
     }
