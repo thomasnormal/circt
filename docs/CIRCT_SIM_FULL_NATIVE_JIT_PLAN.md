@@ -542,6 +542,21 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       candidate-classifier implementations into the new unit.
     - no intended behavior change; validated with strict JIT thunk
       regressions after rebuild.
+23. Maintainability split (phase-3): global lifecycle isolation:
+    - extracted global/discovery finalization methods from
+      `LLHDProcessInterpreter.cpp` into
+      `LLHDProcessInterpreterGlobals.cpp`:
+      - `finalizeInit`
+      - `discoverGlobalOpsIteratively`
+      - `loadRTTIParentTable`
+      - `checkRTTICast`
+      - `initializeGlobals`
+      - `executeGlobalConstructors`
+      - `interpretLLVMAddressOf`
+    - keeps global-init/RTTI/vtable plumbing separate from process execution
+      and native thunk work to reduce merge conflicts in active JIT paths.
+    - no intended behavior change; validated with both global-ctor/vtable and
+      strict JIT regressions (including parallel-mode compile tests).
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
