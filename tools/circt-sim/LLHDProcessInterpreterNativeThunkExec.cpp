@@ -103,7 +103,10 @@ resolveNativeThunkProcessRegion(const ProcessExecutionState &state) {
   if (!processOp)
     return nullptr;
   const Region *region = &processOp.getBody();
-  if (state.parentProcessId != InvalidProcessId && state.currentBlock) {
+  // When resuming a saved call stack, keep thunk dispatch anchored on the
+  // process body; currentBlock may temporarily point into a callee function.
+  if (state.parentProcessId != InvalidProcessId && state.currentBlock &&
+      state.callStack.empty()) {
     const Region *activeRegion = state.currentBlock->getParent();
     if (activeRegion && activeRegion != region)
       region = activeRegion;
@@ -208,6 +211,10 @@ bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
 
 void LLHDProcessInterpreter::executeTrivialNativeThunk(
     ProcessId procId, ProcessThunkExecutionState &thunkState) {
+  static bool traceThunkGuards = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_JIT_THUNK_GUARDS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
   if (forceJitThunkDeoptRequests) {
     thunkState.deoptRequested = true;
     return;
@@ -217,12 +224,26 @@ void LLHDProcessInterpreter::executeTrivialNativeThunk(
   if (it == processStates.end() || it->second.halted)
     return;
 
+  auto requestTrivialDeopt = [&](StringRef reason) {
+    if (traceThunkGuards) {
+      llvm::errs() << "[JIT-THUNK-GUARD] proc=" << procId;
+      if (auto *proc = scheduler.getProcess(procId))
+        llvm::errs() << " name=" << proc->getName();
+      llvm::errs() << " shape=trivial reason=" << reason;
+      llvm::errs() << " state{halted=" << (it->second.halted ? 1 : 0)
+                   << " waiting=" << (it->second.waiting ? 1 : 0)
+                   << " resume_token=" << it->second.jitThunkResumeToken
+                   << " call_stack=" << it->second.callStack.size()
+                   << " seq_retry="
+                   << (it->second.sequencerGetRetryCallOp ? 1 : 0)
+                   << " parent=" << it->second.parentProcessId << "}\n";
+    }
+    thunkState.deoptRequested = true;
+    thunkState.deoptDetail = (Twine("trivial_thunk:") + reason).str();
+  };
+
   auto guardIt = jitProcessThunkIndirectSiteGuards.find(procId);
   if (guardIt != jitProcessThunkIndirectSiteGuards.end()) {
-    static bool traceThunkGuards = []() {
-      const char *env = std::getenv("CIRCT_SIM_TRACE_JIT_THUNK_GUARDS");
-      return env && env[0] != '\0' && env[0] != '0';
-    }();
     auto requestGuardDeopt = [&](std::string detail) {
       if (traceThunkGuards) {
         llvm::errs() << "[JIT-THUNK-GUARD] proc=" << procId;
@@ -294,14 +315,44 @@ void LLHDProcessInterpreter::executeTrivialNativeThunk(
   if (executeCombinationalNativeThunk(procId, it->second, thunkState))
     return;
 
+  // If resumable thunk shapes did not consume an active call stack, defer to
+  // interpreter replay rather than running trivial inline execution.
+  if (!it->second.callStack.empty()) {
+    requestTrivialDeopt("call_stack_active");
+    return;
+  }
+
   if (auto processOp = it->second.getProcessOp()) {
     Block &body = processOp.getBody().front();
-    auto opIt = body.begin();
-    if (auto printOp = dyn_cast<sim::PrintFormattedProcOp>(*opIt)) {
-      (void)interpretProcPrint(procId, printOp);
-      ++opIt;
+    if (body.empty()) {
+      requestTrivialDeopt("process_body_empty");
+      return;
     }
+
+    auto opIt = body.begin();
     if (auto haltOp = dyn_cast<llhd::HaltOp>(*opIt)) {
+      if (std::next(opIt) != body.end()) {
+        requestTrivialDeopt("process_halt_extra_ops");
+        return;
+      }
+      (void)interpretHalt(procId, haltOp);
+      auto post = processStates.find(procId);
+      if (post != processStates.end()) {
+        thunkState.halted = post->second.halted;
+        thunkState.waiting = post->second.waiting;
+      }
+      return;
+    }
+
+    if (auto printOp = dyn_cast<sim::PrintFormattedProcOp>(*opIt)) {
+      auto nextIt = std::next(opIt);
+      if (nextIt == body.end() || !isa<llhd::HaltOp>(*nextIt) ||
+          std::next(nextIt) != body.end()) {
+        requestTrivialDeopt("process_print_halt_shape_mismatch");
+        return;
+      }
+      (void)interpretProcPrint(procId, printOp);
+      auto haltOp = cast<llhd::HaltOp>(*nextIt);
       (void)interpretHalt(procId, haltOp);
       auto post = processStates.find(procId);
       if (post != processStates.end()) {
@@ -314,32 +365,54 @@ void LLHDProcessInterpreter::executeTrivialNativeThunk(
 
   if (auto initialOp = it->second.getInitialOp()) {
     Block *body = initialOp.getBodyBlock();
-    auto yieldOp = dyn_cast<seq::YieldOp>(body->back());
-    if (!yieldOp)
+    if (!body || body->empty()) {
+      requestTrivialDeopt("initial_body_empty");
       return;
+    }
+
+    auto yieldOp = dyn_cast<seq::YieldOp>(body->back());
+    if (!yieldOp || !yieldOp.getOperands().empty()) {
+      requestTrivialDeopt("initial_yield_shape_mismatch");
+      return;
+    }
+
+    sim::PrintFormattedProcOp printOp = nullptr;
+    bool validInitialShape = true;
     if (!llvm::hasSingleElement(*body)) {
       auto printIt = std::prev(body->end());
       --printIt;
-      if (auto printOp = dyn_cast<sim::PrintFormattedProcOp>(*printIt))
-        (void)interpretProcPrint(procId, printOp);
-    }
-    if (yieldOp) {
-      (void)interpretSeqYield(procId, yieldOp);
-      auto post = processStates.find(procId);
-      if (post != processStates.end()) {
-        thunkState.halted = post->second.halted;
-        thunkState.waiting = post->second.waiting;
+      printOp = dyn_cast<sim::PrintFormattedProcOp>(*printIt);
+      if (!printOp) {
+        validInitialShape = false;
+      } else {
+        for (auto it = body->begin(), e = printIt; it != e; ++it) {
+          Operation *op = &*it;
+          if (op->getName().getStringRef().starts_with("sim.fmt."))
+            continue;
+          if (isa<hw::ConstantOp, arith::ConstantOp, LLVM::ConstantOp>(op))
+            continue;
+          validInitialShape = false;
+          break;
+        }
       }
+    }
+    if (!validInitialShape) {
+      requestTrivialDeopt("initial_print_yield_shape_mismatch");
       return;
     }
+
+    if (printOp)
+      (void)interpretProcPrint(procId, printOp);
+    (void)interpretSeqYield(procId, yieldOp);
+    auto post = processStates.find(procId);
+    if (post != processStates.end()) {
+      thunkState.halted = post->second.halted;
+      thunkState.waiting = post->second.waiting;
+    }
+    return;
   }
 
-  finalizeProcess(procId, /*killed=*/false);
-  auto post = processStates.find(procId);
-  if (post != processStates.end()) {
-    thunkState.halted = post->second.halted;
-    thunkState.waiting = post->second.waiting;
-  }
+  requestTrivialDeopt("fallback_shape");
 }
 
 bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
@@ -980,9 +1053,8 @@ bool LLHDProcessInterpreter::executeResumableWaitSelfLoopNativeThunk(
     thunkState.deoptRequested = true;
     return true;
   }
-
-  Region &bodyRegion = processOp.getBody();
   Block *loopBlock = nullptr;
+  Region &bodyRegion = processOp.getBody();
   if (bodyRegion.hasOneBlock()) {
     loopBlock = &bodyRegion.front();
   } else {
@@ -1960,6 +2032,14 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
 
     // Remaining old outer frames before resuming this frame.
     size_t oldFrameCount = state.callStack.size();
+
+    // Corrupt or synthetic frames should fail gracefully through deopt bridge
+    // instead of dereferencing null function metadata.
+    if ((!frame.isLLVM() && !frame.funcOp) || !frame.resumeBlock) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "    Invalid saved call stack frame, cannot resume\n");
+      return CallStackResumeResult::Failed;
+    }
 
     llvm::StringRef frameName =
         frame.isLLVM() ? frame.llvmFuncOp.getName() : frame.funcOp.getName();

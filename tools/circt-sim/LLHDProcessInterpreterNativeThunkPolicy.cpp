@@ -726,7 +726,10 @@ resolveNativeThunkProcessRegion(const ProcessExecutionState &state) {
   if (!processOp)
     return nullptr;
   const Region *region = &processOp.getBody();
-  if (state.parentProcessId != InvalidProcessId && state.currentBlock) {
+  // Saved call stacks resume back into process control flow; avoid classifying
+  // against transient callee regions while frames are pending.
+  if (state.parentProcessId != InvalidProcessId && state.currentBlock &&
+      state.callStack.empty()) {
     const Region *activeRegion = state.currentBlock->getParent();
     if (activeRegion && activeRegion != region)
       region = activeRegion;
