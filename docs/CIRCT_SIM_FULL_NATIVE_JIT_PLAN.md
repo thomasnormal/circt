@@ -1656,6 +1656,50 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - next closure target:
       - continue root-cause closure on UART Rx functional progression while
         reducing remaining monitor/driver call-indirect wait stacks.
+54. `StartMonitoring` tail-wrapper collapse for `Deserializer` resume stacks
+    (February 18, 2026):
+    - runtime closure:
+      - in `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+        (`resumeSavedCallStackFrames`), added a guarded collapse of outer
+        `*::StartMonitoring` frames when the active inner callee frame is
+        `*::Deserializer` and the wrapper is a pure tail-call-through
+        (`call` then `return`).
+      - this keeps resume churn on the hot `Deserializer` frame and avoids
+        carrying redundant wrapper frames across repeated wait/resume cycles.
+      - added env-gated trace marker:
+        - `[MON-DESER-FP] resume-hit ...`
+        - controlled by
+          `CIRCT_SIM_TRACE_MONITOR_DESERIALIZER_FASTPATH=1`.
+    - regression coverage:
+      - added
+        `test/Tools/circt-sim/func-start-monitoring-resume-fast-path.mlir`.
+      - locks trace activation and behavior in both:
+        - default lane.
+        - `--parallel=4 --work-stealing --auto-partition` lane.
+    - validation:
+      - builds:
+        - `ninja -C build -j4 circt-sim`: PASS.
+        - `ninja -C build-test -j4 circt-sim`: PASS.
+      - focused regressions: PASS
+        - `func-start-monitoring-resume-fast-path.mlir`
+        - `func-generate-baud-clk-resume-fast-path.mlir`
+        - `func-baud-clk-generator-fast-path-delay-batch.mlir`
+        - `execute-phase-monitor-fork-objection-waiter.mlir`
+        - `wait-condition-queue-fallback-backoff.mlir`
+        - `wait-condition-execute-phase-objection-fallback-backoff.mlir`
+        - `jit-process-fast-path-store-wait-self-loop.mlir`
+      - bounded UART direct sample (compile mode, 60s wall guard):
+        - `/tmp/uart-mon-deser-collapse-direct60-20260218-151813.log`
+        - trace hit observed.
+        - reached `508600800000 fs`; hotspot sample
+          `fork_82_branch_1 steps=8694`.
+      - bounded UART parallel sample (compile mode, 30s wall guard):
+        - `/tmp/uart-mon-deser-collapse-parallel30-20260218-151942.log`
+        - trace hit observed in parallel lane.
+        - `fork_82_branch_1` wrapper stack depth dropped to `callStack=1`.
+    - next closure target:
+      - extend this tail-wrapper strategy to additional hot monitor/driver
+        wrapper chains and continue all9 compile-lane convergence checks.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

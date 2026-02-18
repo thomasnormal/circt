@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1501 - February 18, 2026
+
+### circt-sim: collapse `StartMonitoring` tail-wrapper frames during call-stack resume
+
+1. **Runtime updates** (`tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`):
+   - in `resumeSavedCallStackFrames`, added a guarded collapse for
+     `*::StartMonitoring` tail-wrapper frames around
+     `*::Deserializer` resumptions.
+   - this keeps resume churn on the hot `Deserializer` frame and avoids
+     repeatedly carrying the wrapper frame in the saved call stack.
+   - added trace marker gated by
+     `CIRCT_SIM_TRACE_MONITOR_DESERIALIZER_FASTPATH=1`:
+     - `[MON-DESER-FP] resume-hit ...`
+
+2. **Regression coverage**:
+   - added:
+     - `test/Tools/circt-sim/func-start-monitoring-resume-fast-path.mlir`
+   - locks:
+     - trace hit for collapsed monitor-deserializer resume path
+     - default + parallel lane behavior
+       (`--parallel=4 --work-stealing --auto-partition`).
+
+3. **Validation**:
+   - builds:
+     - `ninja -C build -j4 circt-sim`: PASS.
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+   - focused regressions (lit): PASS
+     - `func-start-monitoring-resume-fast-path.mlir`
+     - `func-generate-baud-clk-resume-fast-path.mlir`
+     - `func-baud-clk-generator-fast-path-delay-batch.mlir`
+     - `execute-phase-monitor-fork-objection-waiter.mlir`
+     - `wait-condition-queue-fallback-backoff.mlir`
+     - `wait-condition-execute-phase-objection-fallback-backoff.mlir`
+     - `jit-process-fast-path-store-wait-self-loop.mlir`
+   - bounded UART compile samples:
+     - direct 60s guard:
+       `/tmp/uart-mon-deser-collapse-direct60-20260218-151813.log`
+       - trace hit observed.
+       - reached `508600800000 fs` before wall guard.
+       - hotspot sample:
+         `fork_82_branch_1 steps=8694` (`lastOp=func.return`).
+     - parallel 30s guard:
+       `/tmp/uart-mon-deser-collapse-parallel30-20260218-151942.log`
+       - trace hit observed.
+       - no parallel-scheduler crash; run exited cleanly.
+       - `fork_82_branch_1` shows reduced wrapper stack depth
+         (`callStack=1`, previously `callStack=2` in prior snapshots).
+
 ## Iteration 1500 - February 18, 2026
 
 ### circt-sim: execute-phase monitor wake cleanup parity + 10us wait(condition) watchdog backoff
