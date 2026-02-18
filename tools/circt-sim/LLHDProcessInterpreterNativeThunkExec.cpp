@@ -1793,34 +1793,45 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
   // Preserve the outermost call site for restoring process-level position
   // once all nested frames have completed.
   Operation *outermostCallOp = state.callStack.back().callOp;
+  enum class FastResumeAction : uint8_t {
+    NotHandled,
+    Continue,
+    Suspended,
+    Failed,
+  };
   static bool traceBaudFastPath = []() {
     const char *env = std::getenv("CIRCT_SIM_TRACE_BAUD_FASTPATH");
     return env && env[0] != '\0' && env[0] != '0';
   }();
+  static bool traceMonitorDeserializerFastPath = []() {
+    const char *env =
+        std::getenv("CIRCT_SIM_TRACE_MONITOR_DESERIALIZER_FASTPATH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
   auto tryResumeGenerateBaudClkFrameFastPath =
       [&](CallStackFrame &frame,
-          size_t oldFrameCount) -> std::optional<CallStackResumeResult> {
+          size_t oldFrameCount) -> FastResumeAction {
     if (frame.isLLVM() || !frame.funcOp || !frame.resumeBlock)
-      return std::nullopt;
+      return FastResumeAction::NotHandled;
     if (!frame.funcOp.getName().ends_with("::GenerateBaudClk"))
-      return std::nullopt;
+      return FastResumeAction::NotHandled;
     if (frame.resumeOp == frame.resumeBlock->end())
-      return std::nullopt;
+      return FastResumeAction::NotHandled;
 
     auto baudCallOp = dyn_cast<mlir::func::CallOp>(*frame.resumeOp);
     if (!baudCallOp || !baudCallOp.getCallee().ends_with("::BaudClkGenerator"))
-      return std::nullopt;
+      return FastResumeAction::NotHandled;
 
     auto nextOp = std::next(frame.resumeOp);
     if (nextOp == frame.resumeBlock->end() ||
         !isa<mlir::func::ReturnOp>(*nextOp))
-      return std::nullopt;
+      return FastResumeAction::NotHandled;
 
     auto *symbolOp = mlir::SymbolTable::lookupNearestSymbolFrom(
         baudCallOp.getOperation(), baudCallOp.getCalleeAttr());
     auto baudFuncOp = dyn_cast_or_null<mlir::func::FuncOp>(symbolOp);
     if (!baudFuncOp || baudFuncOp.isExternal())
-      return std::nullopt;
+      return FastResumeAction::NotHandled;
 
     llvm::SmallVector<InterpretedValue, 4> args;
     args.reserve(baudCallOp.getNumOperands());
@@ -1829,9 +1840,9 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
 
     if (!handleBaudClkGeneratorFastPath(procId, baudCallOp, baudFuncOp, args,
                                         baudCallOp.getCallee()))
-      return std::nullopt;
+      return FastResumeAction::NotHandled;
     if (!state.waiting)
-      return std::nullopt;
+      return FastResumeAction::NotHandled;
 
     if (traceBaudFastPath) {
       static unsigned generateResumeFastPathHits = 0;
@@ -1866,7 +1877,51 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
           Event([this, procId]() { resumeProcess(procId); }));
     }
 
-    return CallStackResumeResult::Suspended;
+    return FastResumeAction::Suspended;
+  };
+  auto collapseStartMonitoringTailWrapperFrame =
+      [&](CallStackFrame &frame, size_t &oldFrameCount) {
+    if (frame.isLLVM() || !frame.funcOp || !frame.callOp || state.callStack.empty())
+      return;
+
+    auto callOp = dyn_cast<mlir::func::CallOp>(frame.callOp);
+    if (!callOp || !callOp.getCallee().ends_with("::Deserializer"))
+      return;
+    if (callOp.getCallee() != frame.funcOp.getName())
+      return;
+
+    CallStackFrame &outerFrame = state.callStack.front();
+    if (outerFrame.isLLVM() || !outerFrame.funcOp || !outerFrame.resumeBlock)
+      return;
+    if (!outerFrame.funcOp.getName().ends_with("::StartMonitoring"))
+      return;
+    if (outerFrame.resumeOp == outerFrame.resumeBlock->end())
+      return;
+
+    auto returnOp = dyn_cast<mlir::func::ReturnOp>(*outerFrame.resumeOp);
+    if (!returnOp || returnOp.getNumOperands() != 0)
+      return;
+    if (outerFrame.resumeOp == outerFrame.resumeBlock->begin())
+      return;
+
+    auto callInWrapperIt = std::prev(outerFrame.resumeOp);
+    if (&*callInWrapperIt != frame.callOp)
+      return;
+
+    // StartMonitoring wrappers are tail call-through shims around Deserializer.
+    // Collapse the wrapper frame so resume work stays on the real hot callee.
+    std::string outerFrameName = outerFrame.funcOp.getName().str();
+    state.callStack.erase(state.callStack.begin());
+    --oldFrameCount;
+
+    if (traceMonitorDeserializerFastPath) {
+      static unsigned monitorDeserializerResumeFastPathHits = 0;
+      if (monitorDeserializerResumeFastPathHits < 50) {
+        ++monitorDeserializerResumeFastPathHits;
+        llvm::errs() << "[MON-DESER-FP] resume-hit proc=" << procId
+                     << " callee=" << outerFrameName << "\n";
+      }
+    }
   };
 
   while (!state.callStack.empty()) {
@@ -1883,9 +1938,16 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
                << "function '" << frameName << "' (remaining old frames: "
                << oldFrameCount << ")\n");
 
-    if (auto fastResumeResult =
-            tryResumeGenerateBaudClkFrameFastPath(frame, oldFrameCount))
-      return *fastResumeResult;
+    collapseStartMonitoringTailWrapperFrame(frame, oldFrameCount);
+
+    FastResumeAction fastResumeAction =
+        tryResumeGenerateBaudClkFrameFastPath(frame, oldFrameCount);
+    if (fastResumeAction == FastResumeAction::Failed)
+      return CallStackResumeResult::Failed;
+    if (fastResumeAction == FastResumeAction::Suspended)
+      return CallStackResumeResult::Suspended;
+    if (fastResumeAction == FastResumeAction::Continue)
+      continue;
 
     llvm::SmallVector<InterpretedValue, 4> results;
     ++state.callDepth;
