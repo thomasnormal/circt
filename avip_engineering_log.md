@@ -33,6 +33,111 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-18 Session: Trivial Thunk Fallback Deopt Closure + I3C Re-check
+
+### Why this pass
+I3C debug traces showed compile-mode process thunk fallback could finalize a
+process while a saved call-stack was still active. That is semantically unsafe
+for UVM fork/run-phase flows and can create scoreboard divergence.
+
+### Changes
+1. `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+   - `executeTrivialNativeThunk` now deopts (`trivial_thunk:*`) on fallback
+     instead of finalizing the process.
+   - added explicit deopt guard when fallback is reached with a non-empty
+     saved call-stack.
+   - tightened fallback side-effect execution:
+     - process fallback now only executes strict `halt` or `print+halt`.
+     - initial fallback now only executes strict `yield` or
+       `const/sim.fmt* + print + yield`.
+2. `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`
+   - `resolveNativeThunkProcessRegion` now avoids switching to
+     `currentBlock` parent while `callStack` is active (prevents region drift
+     during saved-frame resume).
+3. Regression / unit lock:
+   - `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
+   - verified:
+     - `LLHDProcessInterpreterToolTest.TrivialThunkDeoptsWithSavedCallStack`
+
+### Validation
+1. Build:
+   - `ninja -C build CIRCTSimToolTests` PASS
+   - `ninja -C build circt-sim` PASS
+2. Focused checks:
+   - `CIRCTSimToolTests --gtest_filter=...TrivialThunkDeoptsWithSavedCallStack`
+     PASS
+   - `jit-process-thunk-wait-event-print-halt.mlir` PASS
+   - `jit-process-thunk-func-call-driver-bfm-phase-halt.mlir` PASS
+   - `jit-process-thunk-wait-event-print-halt-guard-failed-env.mlir` PASS
+3. I3C AVIP seed=1 compile lane:
+   - compile `OK` (about `30-60s`)
+   - sim can complete (`~244s` with JIT reporting enabled)
+   - remaining scoreboard mismatch persists:
+     - `i3c_scoreboard.sv(162)` writeData compare mismatch.
+   - JIT report shows recurring guard-failed deopts on fork branches
+     (notably process `76` / `fork_54_branch_0` with
+     `single_block_terminating:unexpected_resume_state`).
+
+### Remaining limitation
+The premature-finalize path is closed, but I3C parity is still not achieved.
+Current evidence points to deeper fork-branch resume semantics and/or
+single-block thunk resume-state handling in execute/check-phase timing.
+
+---
+
+## 2026-02-18 Session: disable_fork Wake-Consumption Guard + I3C Baseline Re-check
+
+### Why this pass
+I3C still had persistent scoreboard failures, and prior traces showed fork
+children being torn down close to wakeup boundaries. We needed a targeted
+runtime guard in `disable_fork`, plus a fresh xcelium-vs-circt-sim comparison
+to keep root-cause work anchored to an external baseline.
+
+### Changes
+1. `tools/circt-sim/LLHDProcessInterpreter.cpp/.h`
+   - Added one-shot deferred `sim.disable_fork` handling guarded by
+     per-parent tokens (`disableForkDeferredToken`):
+     - defers only when a child appears wake-pending (`Ready`/`Suspended`
+       with interpreter `waiting=true` and nonzero steps).
+     - runs deferred teardown on a bounded future delta and resumes parent.
+   - Added deferred-token cleanup in `finalizeProcess`.
+2. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - Added runtime A/B switch:
+     - `CIRCT_SIM_DISABLE_EXEC_PHASE_INTERCEPT=1`
+     - used for isolation experiments against execute-phase interception.
+3. Regression:
+   - Added `test/Tools/circt-sim/fork-disable-ready-wakeup.sv`.
+   - Locks the wake-before-disable behavior and verifies deferred path hits.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-sim circt-verilog` PASS
+2. Focused tests PASS:
+   - `fork-disable-ready-wakeup.sv`
+   - `disable-fork-halt.mlir`
+   - `fork-join-basic.mlir`
+   - `fork-execute-phase-monitor-intercept-single-shot.mlir`
+   - `execute-phase-monitor-fork-objection-waiter.mlir`
+   - `jit-process-thunk-fork-branch-disable-fork-terminator.mlir`
+   - `jit-process-thunk-fork-join-disable-fork-terminator.mlir`
+3. I3C lane checks:
+   - circt-sim compile-mode (`AVIPS=i3c`, seed 1): still `sim OK` around
+     `65-66s`, but with persistent scoreboard errors at `713 ns` and printed
+     `100%/100%` coverage.
+   - xcelium reference baseline (`utils/run_avip_xcelium_reference.sh`,
+     `AVIPS=i3c`, seed 1):
+     - `UVM_ERROR=0`, `UVM_FATAL=0`
+     - sim completion around `3970 ns`
+     - coverage `35.19% / 35.19%`
+
+### Remaining limitation
+I3C parity remains unresolved. Current evidence still indicates semantic
+divergence between circt-sim and xcelium in phase/transaction lifecycle timing.
+The disable_fork wake-consumption guard is validated, but it is not sufficient
+to close the I3C scoreboard mismatch by itself.
+
+---
+
 ## 2026-02-18 Session: Execute-Phase Objection Lifecycle Hardening + I3C Fork Diagnostics
 
 ### Why this pass
