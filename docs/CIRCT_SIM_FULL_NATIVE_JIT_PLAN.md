@@ -1024,6 +1024,43 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - next closure target:
       - expand zero-deopt compile-mode burn-down from bounded AXI4 sample to
         broader AVIP matrix and non-AVIP suites under plan gates.
+38. Local `func.call` non-suspending summary for native-thunk prelude
+    admission (February 18, 2026):
+    - native thunk policy closures:
+      - split manual intercepted-call admission from a new static local-callee
+        suspension summary.
+      - direct local `func.func` callees are now auto-admitted when their
+        transitive bodies are non-suspending.
+      - recursive summary is conservative and treats these as suspending:
+        - `llhd.wait` / `llhd.yield` / `llhd.halt`
+        - fork/join family ops
+        - `func.call_indirect`
+        - known suspending runtime calls:
+          `__moore_wait_condition`, `__moore_delay`,
+          `__moore_process_await`, `__moore_wait_event`
+        - unresolved local callees and recursive call cycles
+    - regression coverage:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-nonsuspending-halt.mlir`
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-suspending-unsupported-strict.mlir`
+    - validation:
+      - targeted strict/parallel regressions: PASS (9 focused tests, including
+        existing BFM/class-wrapper/tx packet closures and parallel thunk smoke).
+      - bounded AVIP compile smoke: PASS
+        - `/tmp/avip-circt-sim-local-helper-20260218-085223/matrix.tsv`
+        - `jtag seed=1`: `compile_status=OK` (`27s`),
+          `sim_status=OK` (`40s`).
+      - bounded non-AVIP suite smokes: PASS
+        - `sv-tests`: `11.10.1--string_concat` PASS
+        - `verilator-verification` BMC smoke:
+          `assert_changed` PASS
+        - `yosys/tests/sva` BMC smoke: `basic00` PASS
+        - OpenTitan sim smoke:
+          `prim_count` PASS
+          (`/tmp/opentitan-circt-sim-local-helper-20260218-085427/run.log`)
+    - next closure target:
+      - extend static suspension classification beyond direct local
+        `func.call`s (notably static-target `call_indirect`) while keeping
+        strict-no-deopt safety invariants.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.

@@ -70546,3 +70546,41 @@ See CHANGELOG.md on recent progress.
           - `first_op:scf.for` (2)
           - `first_op:llvm.call:__moore_semaphore_get` (6)
           - `first_op:func.call:from_class_6985` (4).
+59. `circt-sim` static local-callee non-suspending admission for
+    `func.call` native-thunk preludes
+    (February 18, 2026):
+    - refactored `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`
+      to split:
+      - manual intercepted-call prelude allowlisting, and
+      - a new static recursive local-callee suspension summary.
+    - direct local `func.func` callees now auto-admit for one-block/multiblock
+      terminating native thunk candidates when transitive function bodies are
+      non-suspending.
+    - conservative suspend classification marks the following as suspending:
+      - `llhd.wait` / `llhd.yield` / `llhd.halt`
+      - fork/join-family ops
+      - `func.call_indirect`
+      - runtime suspension calls:
+        `__moore_wait_condition`, `__moore_delay`,
+        `__moore_process_await`, `__moore_wait_event`
+      - unresolved local callees and recursive call cycles.
+    - added strict regression coverage:
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-nonsuspending-halt.mlir`
+        (includes `--parallel=4 --work-stealing --auto-partition` lane).
+      - `test/Tools/circt-sim/jit-process-thunk-func-call-local-helper-suspending-unsupported-strict.mlir`.
+    - validation:
+      - targeted `circt-sim` strict/parallel focused regressions: PASS
+        (9 tests, including previous BFM/class-wrapper/tx-packet closure
+        coverage).
+      - bounded integration smokes:
+        - AVIP compile lane (`jtag`, seed 1): PASS
+          (`/tmp/avip-circt-sim-local-helper-20260218-085223/matrix.tsv`,
+          compile `27s`, sim `40s`).
+        - sv-tests smoke (`11.10.1--string_concat`): PASS
+          (`/tmp/sv-tests-circt-sim-local-helper-20260218-085339.txt`).
+        - verilator-verification BMC smoke (`assert_changed`): PASS
+          (`/tmp/verilator-bmc-local-helper-20260218-085422.tsv`).
+        - yosys SVA BMC smoke (`basic00`): PASS
+          (`/tmp/yosys-sva-bmc-local-helper-20260218-085422.tsv`).
+        - OpenTitan sim smoke (`prim_count`): PASS
+          (`/tmp/opentitan-circt-sim-local-helper-20260218-085427/run.log`).
