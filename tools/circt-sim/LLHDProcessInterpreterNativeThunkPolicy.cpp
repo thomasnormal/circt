@@ -222,6 +222,7 @@ static bool isSafeSingleBlockTerminatingPreludeOp(Operation *op) {
         calleeName == "__moore_randomize_with_dist" ||
         calleeName == "__moore_packed_string_to_string" ||
         calleeName == "__moore_string_cmp" ||
+        calleeName == "__moore_assoc_size" ||
         calleeName == "__moore_assoc_get_ref" ||
         calleeName == "__moore_uvm_report_info" ||
         calleeName == "__moore_queue_push_front" ||

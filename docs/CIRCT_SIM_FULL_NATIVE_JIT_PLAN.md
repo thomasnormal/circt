@@ -814,6 +814,27 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - next closure target:
       - reduce AXI4 timeout pressure by closing/guarding these four
         unsupported first-op classes in native thunk policy/execution.
+32. AXI4 unsupported-tail shift: close `__moore_assoc_size` first-op class
+    (February 18, 2026):
+    - native thunk policy closure:
+      - added `llvm.call @__moore_assoc_size` to the safe non-suspending
+        LLVM prelude allowlist for single-block terminating thunk candidates.
+    - regression coverage:
+      - added strict compile-mode regression
+        `test/Tools/circt-sim/jit-process-thunk-llvm-call-assoc-size-halt.mlir`.
+    - validation:
+      - targeted strict regressions pass:
+        - `jit-process-thunk-llvm-call-assoc-size-halt.mlir`
+        - `jit-process-thunk-llvm-call-assoc-get-ref-halt.mlir`
+      - TERM-bounded AXI4 queue sample after closure
+        (`/tmp/axi4-term120-after-assoc-size.jit-report.json`):
+        - `jit_deopts_total=7` (unchanged),
+        - previous `first_op:llvm.call:__moore_assoc_size` tail removed,
+        - queue shifted to:
+          - `first_op:scf.for` (2)
+          - `first_op:llvm.call:__moore_semaphore_get` (3)
+          - `first_op:func.call:from_write_class_6984` (1)
+          - `first_op:func.call:from_read_class_6987` (1).
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
