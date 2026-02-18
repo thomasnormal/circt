@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1471 - February 18, 2026
+
+### circt-sim JIT: guard-failed detail telemetry for strict convergence
+
+1. **Extended thunk deopt state ABI** in `tools/circt-sim/JITCompileManager.h`:
+   - `ProcessThunkExecutionState` now carries `deoptDetail` so native thunk
+     guard failures can report precise cause text.
+2. **Forwarded guard detail into process-level JIT deopt telemetry**:
+   - compile-mode dispatch now records `guard_failed` details from thunk
+     execution (`jit_deopt_processes[].detail`) instead of only reason.
+3. **Added explicit guard-detail tagging** in multiblock thunk executors:
+   - reasons now include typed labels such as:
+     `resume_token_mismatch`, `non_empty_call_stack`,
+     `step_limit_reached`, `post_exec_not_halted_or_waiting`,
+     `process_state_missing_post_exec`.
+4. **Regression hardening**:
+   - `test/Tools/circt-sim/jit-process-thunk-multiblock-fork-loop-guard-failed.mlir`
+     now asserts strict detail `step_limit_reached`.
+5. **Validation**:
+   - targeted strict regressions pass (new and related JIT thunk tests).
+   - bounded AVIP compile-lane (`jtag`, seed-1) run
+     `/tmp/avip-circt-sim-20260218-000327`:
+     - `sim_status=OK`, `sim_sec=31s`
+     - deopts are now fully detail-qualified:
+       `guard_failed:post_exec_not_halted_or_waiting` (9)
+     - `unsupported_operation=0` maintained.
+
 ## Iteration 1470 - February 17, 2026
 
 ### circt-sim JIT: eliminate AVIP unsupported-operation tails; converge to guard-failed only

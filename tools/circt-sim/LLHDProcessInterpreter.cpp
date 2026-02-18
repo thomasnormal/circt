@@ -8244,6 +8244,7 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     }
     thunkState.deoptRequested = true;
     thunkState.restoreSnapshotOnDeopt = restoreSnapshot;
+    thunkState.deoptDetail = reason.str();
   };
   auto isDeferredHaltState = [&](const ProcessExecutionState &s) {
     if (!s.destBlock || s.destBlock != &body || !s.resumeAtCurrentOp)
@@ -8383,20 +8384,26 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
   if (!isMultiBlockTerminatingNativeThunkCandidate(state))
     return false;
 
+  auto requestDeopt = [&](StringRef reason, bool restoreSnapshot) {
+    thunkState.deoptRequested = true;
+    thunkState.restoreSnapshotOnDeopt = restoreSnapshot;
+    thunkState.deoptDetail = reason.str();
+  };
+
   Region *bodyRegion = resolveNativeThunkProcessRegion(state);
   if (!bodyRegion || bodyRegion->empty() || bodyRegion->front().empty()) {
-    thunkState.deoptRequested = true;
+    requestDeopt("empty_body_region", /*restoreSnapshot=*/true);
     return true;
   }
 
   // This thunk is non-resumable and only valid on token 0.
   if (thunkState.resumeToken != state.jitThunkResumeToken ||
       state.jitThunkResumeToken != 0) {
-    thunkState.deoptRequested = true;
+    requestDeopt("resume_token_mismatch", /*restoreSnapshot=*/true);
     return true;
   }
   if (state.waiting || state.destBlock || state.resumeAtCurrentOp) {
-    thunkState.deoptRequested = true;
+    requestDeopt("unexpected_resume_state", /*restoreSnapshot=*/true);
     return true;
   }
 
@@ -8426,20 +8433,18 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
     }
   }
   if (reachedStepLimit) {
-    thunkState.deoptRequested = true;
-    thunkState.restoreSnapshotOnDeopt = false;
+    requestDeopt("step_limit_reached", /*restoreSnapshot=*/false);
     return true;
   }
 
   auto post = processStates.find(procId);
   if (post == processStates.end()) {
-    thunkState.deoptRequested = true;
-    thunkState.restoreSnapshotOnDeopt = false;
+    requestDeopt("process_state_missing_post_exec",
+                 /*restoreSnapshot=*/false);
     return true;
   }
   if (!post->second.halted || post->second.waiting) {
-    thunkState.deoptRequested = true;
-    thunkState.restoreSnapshotOnDeopt = false;
+    requestDeopt("post_exec_not_halted", /*restoreSnapshot=*/false);
     return true;
   }
 
@@ -8587,20 +8592,26 @@ bool LLHDProcessInterpreter::executeResumableMultiblockWaitNativeThunk(
   if (!isResumableMultiblockWaitNativeThunkCandidate(state))
     return false;
 
+  auto requestDeopt = [&](StringRef reason, bool restoreSnapshot) {
+    thunkState.deoptRequested = true;
+    thunkState.restoreSnapshotOnDeopt = restoreSnapshot;
+    thunkState.deoptDetail = reason.str();
+  };
+
   Region *bodyRegion = resolveNativeThunkProcessRegion(state);
   if (!bodyRegion || bodyRegion->empty()) {
-    thunkState.deoptRequested = true;
+    requestDeopt("empty_body_region", /*restoreSnapshot=*/true);
     return true;
   }
 
   // Keep a stable token for resumable wait state machines.
   if (thunkState.resumeToken != state.jitThunkResumeToken ||
       state.jitThunkResumeToken != 0) {
-    thunkState.deoptRequested = true;
+    requestDeopt("resume_token_mismatch", /*restoreSnapshot=*/true);
     return true;
   }
   if (!state.callStack.empty()) {
-    thunkState.deoptRequested = true;
+    requestDeopt("non_empty_call_stack", /*restoreSnapshot=*/true);
     return true;
   }
   bool containsWaitConditionCall = hasMooreWaitConditionCall(*bodyRegion);
@@ -8608,7 +8619,7 @@ bool LLHDProcessInterpreter::executeResumableMultiblockWaitNativeThunk(
   if (state.destBlock) {
     if (state.destBlock->getParent() != bodyRegion ||
         state.destOperands.size() != state.destBlock->getNumArguments()) {
-      thunkState.deoptRequested = true;
+      requestDeopt("invalid_dest_block_state", /*restoreSnapshot=*/true);
       return true;
     }
     state.currentBlock = state.destBlock;
@@ -8638,7 +8649,8 @@ bool LLHDProcessInterpreter::executeResumableMultiblockWaitNativeThunk(
 
   if (containsWaitConditionCall && state.waitConditionRestartBlock) {
     if (state.waitConditionRestartBlock->getParent() != bodyRegion) {
-      thunkState.deoptRequested = true;
+      requestDeopt("invalid_wait_condition_restart_block",
+                   /*restoreSnapshot=*/true);
       return true;
     }
     state.currentBlock = state.waitConditionRestartBlock;
@@ -8671,20 +8683,19 @@ bool LLHDProcessInterpreter::executeResumableMultiblockWaitNativeThunk(
     }
   }
   if (reachedStepLimit) {
-    thunkState.deoptRequested = true;
-    thunkState.restoreSnapshotOnDeopt = false;
+    requestDeopt("step_limit_reached", /*restoreSnapshot=*/false);
     return true;
   }
 
   auto post = processStates.find(procId);
   if (post == processStates.end()) {
-    thunkState.deoptRequested = true;
-    thunkState.restoreSnapshotOnDeopt = false;
+    requestDeopt("process_state_missing_post_exec",
+                 /*restoreSnapshot=*/false);
     return true;
   }
   if (!post->second.halted && !post->second.waiting) {
-    thunkState.deoptRequested = true;
-    thunkState.restoreSnapshotOnDeopt = false;
+    requestDeopt("post_exec_not_halted_or_waiting",
+                 /*restoreSnapshot=*/false);
     return true;
   }
 
@@ -9153,7 +9164,8 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       }
       if (hasDeoptSnapshot && thunkState.restoreSnapshotOnDeopt)
         (void)restoreJITDeoptState(procId, deoptSnapshot);
-      noteProcessDeoptReason(JITCompileManager::DeoptReason::GuardFailed);
+      noteProcessDeoptReason(JITCompileManager::DeoptReason::GuardFailed,
+                             thunkState.deoptDetail);
     } else {
       std::string installDeoptDetail;
       ProcessThunkInstallResult installResult =
@@ -9169,7 +9181,8 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
           }
           if (hasDeoptSnapshot && installedThunkState.restoreSnapshotOnDeopt)
             (void)restoreJITDeoptState(procId, deoptSnapshot);
-          noteProcessDeoptReason(JITCompileManager::DeoptReason::GuardFailed);
+          noteProcessDeoptReason(JITCompileManager::DeoptReason::GuardFailed,
+                                 installedThunkState.deoptDetail);
         } else {
           installResult = ProcessThunkInstallResult::MissingThunk;
         }

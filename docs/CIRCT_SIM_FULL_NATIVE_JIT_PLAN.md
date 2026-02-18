@@ -480,6 +480,22 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - `unsupported_operation=0`
       - result: unsupported-operation tail eliminated on this lane; remaining
         strict convergence queue is entirely guard-failed.
+19. Guard-failed deopt detail instrumentation for strict convergence:
+    - extended thunk deopt bridge ABI with optional guard detail payload:
+      - `ProcessThunkExecutionState::deoptDetail`.
+    - compile-mode deopt accounting now forwards thunk guard details into
+      per-process JIT telemetry for `guard_failed` deopts.
+    - added explicit guard-deopt detail reasons in multiblock executors
+      (`empty_body_region`, `resume_token_mismatch`, `step_limit_reached`,
+      `post_exec_not_halted_or_waiting`, etc.) to avoid opaque guard bucketing.
+    - tightened regression for multiblock fork loop:
+      - `jit-process-thunk-multiblock-fork-loop-guard-failed.mlir` now checks
+        strict detail `step_limit_reached`.
+    - bounded AVIP compile-lane readout (`jtag`, seed-1):
+      - `/tmp/avip-circt-sim-20260218-000327`
+      - deopt queue now fully detail-qualified:
+        - `guard_failed:post_exec_not_halted_or_waiting` (9)
+      - unsupported-operation remains `0` on this lane.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
