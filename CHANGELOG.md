@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1495 - February 18, 2026
+
+### circt-sim: Baud delay-batching regression lock and UART bounded-progress revalidation
+
+1. **Regression coverage added** (`test/Tools/circt-sim/`):
+   - added `func-baud-clk-generator-fast-path-delay-batch.mlir`.
+   - test runs with env-gated fast-path diagnostics and locks that
+     `*::BaudClkGenerator` emits `batch-schedule` while preserving functional
+     output (`out=1`).
+
+2. **Validation**:
+   - build:
+     - `ninja -C build -j4 circt-sim`: PASS.
+   - focused regressions:
+     - `func-baud-clk-generator-fast-path.mlir`: PASS.
+     - `func-baud-clk-generator-fast-path-null-self.mlir`: PASS.
+     - `func-baud-clk-generator-fast-path-count-visible.mlir`: PASS.
+     - `func-baud-clk-generator-fast-path-delay-batch.mlir`
+       (RUN pipeline with `FileCheck`): PASS.
+   - direct UART bounded trace (compile mode, timeout-bounded):
+     - `/tmp/uart-direct-baudbatch-trace30-v3.log`
+     - confirms stable batch engagement (`batch-schedule=50`,
+       `batch-mismatch=0`).
+   - direct UART profile snapshot (compile mode, internal timeout):
+     - `/tmp/uart-direct-timeout60-baudbatch-v3.log`
+     - simulation-time progress improved to `310910000000 fs` in the 60s
+       bounded window; dominant Baud calls reduced to `~48622-48623` each.
+   - bounded AVIP UART lane:
+     - `/tmp/avip-circt-sim-uart-baudbatch-v3-20260218-132926/matrix.tsv`
+       remains `sim_status=TIMEOUT` at `120s`, but runtime now advances far
+       enough to show scoreboard activity (`~423176 ns` region in sim log).
+
 ## Iteration 1494 - February 18, 2026
 
 ### circt-sim: Baud fast-path hardening (null-self + count-escape safety) and UART hotspot extraction

@@ -1337,6 +1337,39 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - next closure target:
       - resolve module-level init crash, then rerun bounded UART and AVIP lanes
         to quantify timeout/cov improvements from direct loop fast paths.
+46. UART Baud delay-batching activation guardrail + bounded-progress follow-up
+    (February 18, 2026):
+    - regression closure:
+      - added `test/Tools/circt-sim/func-baud-clk-generator-fast-path-delay-batch.mlir`
+        to lock env-gated `batch-schedule` activation and functional output
+        parity (`out=1`) for `*::BaudClkGenerator`.
+    - validation:
+      - build:
+        - `ninja -C build -j4 circt-sim`: PASS.
+      - focused regressions:
+        - `func-baud-clk-generator-fast-path.mlir`: PASS.
+        - `func-baud-clk-generator-fast-path-null-self.mlir`: PASS.
+        - `func-baud-clk-generator-fast-path-count-visible.mlir`: PASS.
+        - `func-baud-clk-generator-fast-path-delay-batch.mlir` RUN pipeline:
+          PASS.
+      - direct UART trace sanity:
+        - `/tmp/uart-direct-baudbatch-trace30-v3.log`
+        - confirms stable batch engagement (`batch-schedule=50`,
+          `batch-mismatch=0`) in bounded run.
+      - direct UART profile snapshot (internal timeout mode):
+        - `/tmp/uart-direct-timeout60-baudbatch-v3.log`
+        - reached `310910000000 fs` with top Baud calls reduced to
+          `~48622-48623` each (down from prior `~186k`-class pressure in the
+          same bounded window).
+      - bounded AVIP UART lane:
+        - `/tmp/avip-circt-sim-uart-baudbatch-v3-20260218-132926/matrix.tsv`
+          remains `TIMEOUT` at `120s`, but now progresses into active
+          scoreboard traffic (`~423176 ns` region in sim log).
+    - next closure target:
+      - convert bounded time-progress gains into lane completion by extending
+        the same guarded batching approach to remaining hot loop bodies beyond
+        BaudClkGenerator (GenerateBaudClk caller-side dispatch and monitor/driver
+        wake choreography), then rerun all9 compile lanes.
 
 ## Phase A: Foundation and Correctness Harness
 1. Implement compile-mode telemetry framework and result artifact writer.
