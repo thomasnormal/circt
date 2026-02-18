@@ -45,6 +45,7 @@ unsigned g_lastFuncProcId = 0;
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 #include <cerrno>
 #include <cctype>
 #include <cmath>
@@ -1497,13 +1498,16 @@ LLHDProcessInterpreter::getJitDeoptProcessName(ProcessId procId) const {
   return {};
 }
 
-std::vector<LLHDProcessInterpreter::JitRuntimeIndirectSiteProfile>
-LLHDProcessInterpreter::getJitRuntimeIndirectSiteProfiles() const {
-  std::vector<JitRuntimeIndirectSiteProfile> sites;
-  sites.reserve(jitRuntimeIndirectSiteProfiles.size());
+uint64_t LLHDProcessInterpreter::getJitCompileHotThreshold() const {
+  if (!jitCompileManager)
+    return 1;
+  return std::max<uint64_t>(1, jitCompileManager->getConfig().hotThreshold);
+}
 
-  for (const auto &entry : jitRuntimeIndirectSiteProfiles) {
-    const auto &siteData = entry.second;
+std::optional<LLHDProcessInterpreter::JitRuntimeIndirectSiteProfile>
+LLHDProcessInterpreter::lookupJitRuntimeIndirectSiteProfile(
+    mlir::func::CallIndirectOp callOp) const {
+  auto buildSiteProfile = [&](const auto &siteData) {
     JitRuntimeIndirectSiteProfile site;
     site.siteId = siteData.siteId;
     site.owner = siteData.owner;
@@ -1529,9 +1533,53 @@ LLHDProcessInterpreter::getJitRuntimeIndirectSiteProfiles() const {
     if (!targetNames.empty())
       site.targetSetHash = static_cast<uint64_t>(
           llvm::hash_combine_range(targetNames.begin(), targetNames.end()));
+    return site;
+  };
 
-    sites.push_back(std::move(site));
-  }
+  if (!callOp)
+    return std::nullopt;
+  auto it = jitRuntimeIndirectSiteProfiles.find(callOp.getOperation());
+  if (it == jitRuntimeIndirectSiteProfiles.end())
+    return std::nullopt;
+  return buildSiteProfile(it->second);
+}
+
+std::vector<LLHDProcessInterpreter::JitRuntimeIndirectSiteProfile>
+LLHDProcessInterpreter::getJitRuntimeIndirectSiteProfiles() const {
+  auto buildSiteProfile = [&](const auto &siteData) {
+    JitRuntimeIndirectSiteProfile site;
+    site.siteId = siteData.siteId;
+    site.owner = siteData.owner;
+    site.location = siteData.location;
+    site.callsTotal = siteData.callsTotal;
+    site.unresolvedCalls = siteData.unresolvedCalls;
+    site.targetSetVersion = siteData.targetSetVersion;
+
+    site.targets.reserve(siteData.targetCalls.size());
+    std::vector<std::string> targetNames;
+    targetNames.reserve(siteData.targetCalls.size());
+    for (const auto &target : siteData.targetCalls) {
+      site.targets.push_back(
+          JitRuntimeIndirectTargetEntry{target.getKey().str(), target.getValue()});
+      targetNames.push_back(target.getKey().str());
+    }
+    llvm::sort(site.targets, [](const auto &lhs, const auto &rhs) {
+      if (lhs.calls != rhs.calls)
+        return lhs.calls > rhs.calls;
+      return lhs.targetName < rhs.targetName;
+    });
+    llvm::sort(targetNames);
+    if (!targetNames.empty())
+      site.targetSetHash = static_cast<uint64_t>(
+          llvm::hash_combine_range(targetNames.begin(), targetNames.end()));
+    return site;
+  };
+
+  std::vector<JitRuntimeIndirectSiteProfile> sites;
+  sites.reserve(jitRuntimeIndirectSiteProfiles.size());
+
+  for (const auto &entry : jitRuntimeIndirectSiteProfiles)
+    sites.push_back(buildSiteProfile(entry.second));
 
   llvm::sort(sites, [](const auto &lhs, const auto &rhs) {
     if (lhs.unresolvedCalls != rhs.unresolvedCalls)
@@ -2180,6 +2228,16 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // copy parent interface fields to child interface fields during init.
   bool traceInterfacePropagation = traceSeqEnabled || traceAnalysisEnabled;
   if (!childModuleCopyPairs.empty() && interfaceFieldSignals.size() > 1) {
+    hasInstanceScopedInterfaceFieldSignals = false;
+    for (const auto &[addr, sigId] : interfaceFieldSignals) {
+      (void)addr;
+      auto nameIt = signalIdToName.find(sigId);
+      if (nameIt != signalIdToName.end() &&
+          !llvm::StringRef(nameIt->second).starts_with("sig_")) {
+        hasInstanceScopedInterfaceFieldSignals = true;
+        break;
+      }
+    }
     unsigned resolvedPairs = 0;
     unsigned unresolvedSrc = 0, unresolvedDest = 0;
     for (auto &[srcAddr, destAddr] : childModuleCopyPairs) {
@@ -2195,6 +2253,25 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
       }
       SignalId parentSigId = srcIt->second;
       SignalId childSigId = destIt->second;
+      auto getTopLevelIfaceBase = [&](SignalId sigId) -> std::optional<llvm::StringRef> {
+        auto nameIt = signalIdToName.find(sigId);
+        if (nameIt == signalIdToName.end())
+          return std::nullopt;
+        llvm::StringRef name = nameIt->second;
+        if (!name.starts_with("sig_"))
+          return std::nullopt;
+        size_t dot = name.find('.');
+        if (dot == llvm::StringRef::npos)
+          return std::nullopt;
+        return name.substr(0, dot);
+      };
+      // Ignore same-interface self-links (e.g. sig_0.* -> sig_0.*).
+      // Cross-interface top-level links (sig_0.* -> sig_1.*) are valid.
+      if (hasInstanceScopedInterfaceFieldSignals)
+        if (auto srcBase = getTopLevelIfaceBase(parentSigId))
+          if (auto destBase = getTopLevelIfaceBase(childSigId))
+            if (*srcBase == *destBase)
+              continue;
       if (parentSigId == childSigId) {
         // Propagate childToParentFieldAddr entries for self-link pairs
         // so grandchild addresses inherit parent mappings.
@@ -2680,7 +2757,12 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   }
 
   // Resolve address-based tri-state candidates to signal-based runtime rules.
-  if (!interfaceTriStateCandidates.empty() && !interfaceFieldSignals.empty()) {
+  static bool disableIfaceTriStateRules = []() {
+    const char *env = std::getenv("CIRCT_SIM_DISABLE_IFACE_TRISTATE_RULES");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (!disableIfaceTriStateRules && !interfaceTriStateCandidates.empty() &&
+      !interfaceFieldSignals.empty()) {
     unsigned installed = 0;
     unsigned unresolved = 0;
     for (const auto &cand : interfaceTriStateCandidates) {
@@ -3614,26 +3696,79 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
     scheduler.setSignalLogicalWidth(sigId, logicalWidth);
 
   // Detect unpacked array types and record array info for VPI.
+  // Only create array info when the signal has unpacked dimensions
+  // (listed in vpi.array_bounds).  Fully-packed multi-dimensional arrays
+  // should appear as flat Reg signals in VPI.
   if (auto arrayType = dyn_cast<hw::ArrayType>(innerType)) {
-    uint32_t numElems = arrayType.getNumElements();
-    mlir::Type elemType = arrayType.getElementType();
-    uint32_t elemPhysW = getTypeWidth(elemType);
-    uint32_t elemLogW = getLogicalWidth(elemType);
-    ProcessScheduler::SignalArrayInfo info{numElems, elemPhysW, elemLogW};
-    // Look up SV array bounds from vpi.array_bounds attribute on the module.
     if (auto hwMod = sigOp->getParentOfType<hw::HWModuleOp>()) {
-      if (auto boundsDict =
-              hwMod->getAttrOfType<DictionaryAttr>("vpi.array_bounds")) {
-        if (auto sigBounds =
-                boundsDict.getAs<DictionaryAttr>(name)) {
-          if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
-            info.leftBound = leftAttr.getInt();
-          if (auto rightAttr = sigBounds.getAs<IntegerAttr>("right"))
-            info.rightBound = rightAttr.getInt();
+      auto boundsDict =
+          hwMod->getAttrOfType<DictionaryAttr>("vpi.array_bounds");
+      auto sigBounds = boundsDict
+          ? boundsDict.getAs<DictionaryAttr>(name)
+          : DictionaryAttr();
+      if (sigBounds) {
+        uint32_t numElems = arrayType.getNumElements();
+        mlir::Type elemType = arrayType.getElementType();
+        uint32_t elemPhysW = getTypeWidth(elemType);
+        uint32_t elemLogW = getLogicalWidth(elemType);
+        ProcessScheduler::SignalArrayInfo info{numElems, elemPhysW, elemLogW};
+        if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
+          info.leftBound = leftAttr.getInt();
+        if (auto rightAttr = sigBounds.getAs<IntegerAttr>("right"))
+          info.rightBound = rightAttr.getInt();
+
+        // Check for nested unpacked dimensions (e.g., logic x [3][3]).
+        auto depthDict =
+            hwMod->getAttrOfType<DictionaryAttr>("vpi.unpacked_depth");
+        int unpackedDepth = 1;
+        if (depthDict) {
+          if (auto depthAttr = depthDict.getAs<IntegerAttr>(name))
+            unpackedDepth = depthAttr.getInt();
         }
+        if (unpackedDepth >= 2) {
+          // Read inner dimension bounds from vpi.array_bounds attribute.
+          ArrayAttr innerBoundsAttr =
+              sigBounds.getAs<ArrayAttr>("inner_bounds");
+          auto buildInner =
+              [&innerBoundsAttr](mlir::Type type, int depth, int dimIdx,
+                 auto &self)
+                  -> std::shared_ptr<ProcessScheduler::SignalArrayInfo> {
+            if (depth <= 0)
+              return nullptr;
+            auto innerArray = dyn_cast<hw::ArrayType>(type);
+            if (!innerArray)
+              return nullptr;
+            auto inner =
+                std::make_shared<ProcessScheduler::SignalArrayInfo>();
+            inner->numElements = innerArray.getNumElements();
+            mlir::Type innerElem = innerArray.getElementType();
+            inner->elementPhysWidth = getTypeWidth(innerElem);
+            inner->elementLogicalWidth = getLogicalWidth(innerElem);
+            // Use stored inner bounds if available.
+            if (innerBoundsAttr &&
+                dimIdx < static_cast<int>(innerBoundsAttr.size())) {
+              auto dimBounds =
+                  cast<DictionaryAttr>(innerBoundsAttr[dimIdx]);
+              if (auto l = dimBounds.getAs<IntegerAttr>("left"))
+                inner->leftBound = l.getInt();
+              if (auto r = dimBounds.getAs<IntegerAttr>("right"))
+                inner->rightBound = r.getInt();
+            } else {
+              inner->leftBound = 0;
+              inner->rightBound =
+                  static_cast<int32_t>(inner->numElements - 1);
+            }
+            inner->innerArrayInfo =
+                self(innerElem, depth - 1, dimIdx + 1, self);
+            return inner;
+          };
+          info.innerArrayInfo =
+              buildInner(elemType, unpackedDepth - 1, 0, buildInner);
+        }
+
+        scheduler.setSignalArrayInfo(sigId, info);
       }
     }
-    scheduler.setSignalArrayInfo(sigId, info);
   }
 
   // Detect unpacked struct types and record struct field info for VPI.
@@ -7481,7 +7616,8 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   // strict-lane deopt noise while coverage converges.
   bool compilePathEligible = true;
   if (state.getCombinationalOp())
-    compilePathEligible = isCombinationalNativeThunkCandidate(state);
+    compilePathEligible =
+        isCombinationalNativeThunkCandidate(procId, state, nullptr);
   if (compileModeEnabled && jitCompileManager && compilePathEligible) {
     JITDeoptStateSnapshot deoptSnapshot;
     bool hasDeoptSnapshot = snapshotJITDeoptState(procId, deoptSnapshot);
@@ -11967,23 +12103,27 @@ arith_dispatch:
       }
     }
 
-    // Intercept uvm_port_base::size() and report count from native
-    // analysisPortConnections, not UVM's m_imp_list bookkeeping.
+    // Intercept uvm_port_base::size() only when the port is tracked in our
+    // native graph. Otherwise, fall through to the UVM implementation so we do
+    // not override valid m_imp_list bookkeeping for untracked ports.
     if (calleeName.contains("uvm_port_base") &&
         calleeName.ends_with("::size") &&
         callIndirectOp.getNumResults() >= 1) {
       uint64_t selfAddr =
           (!args.empty() && !args[0].isX()) ? args[0].getUInt64() : 0;
-      int32_t count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
-      Value result = callIndirectOp.getResult(0);
-      unsigned width = getTypeWidth(result.getType());
-      setValue(procId, result,
-               InterpretedValue(
-                   llvm::APInt(width, static_cast<uint64_t>(count), false)));
-      LLVM_DEBUG(llvm::dbgs() << "  call_indirect: uvm_port_base::size self=0x"
-                              << llvm::format_hex(selfAddr, 16) << " -> "
-                              << count << "\n");
-      return success();
+      if (analysisPortConnections.count(selfAddr)) {
+        int32_t count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
+        Value result = callIndirectOp.getResult(0);
+        unsigned width = getTypeWidth(result.getType());
+        setValue(procId, result,
+                 InterpretedValue(
+                     llvm::APInt(width, static_cast<uint64_t>(count), false)));
+        LLVM_DEBUG(
+            llvm::dbgs() << "  call_indirect: uvm_port_base::size self=0x"
+                         << llvm::format_hex(selfAddr, 16) << " -> " << count
+                         << "\n");
+        return success();
+      }
     }
 
     // Intercept resource_db_implementation via call_indirect (vtable dispatch).
@@ -18064,28 +18204,31 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
-  // Intercept uvm_port_base::size() and report count from native
-  // analysisPortConnections, not UVM's m_imp_list bookkeeping.
+  // Intercept uvm_port_base::size() only when the port is tracked in our
+  // native graph. Otherwise, fall through to the UVM implementation so we do
+  // not override valid m_imp_list bookkeeping for untracked ports.
   if (calleeName.contains("uvm_port_base") &&
       calleeName.ends_with("::size") &&
       callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 1) {
     InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
     uint64_t selfAddr = selfVal.isX() ? 0 : selfVal.getUInt64();
-    int32_t count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
-    Value result = callOp.getResult(0);
-    unsigned width = getTypeWidth(result.getType());
-    setValue(procId, result,
-             InterpretedValue(
-                 llvm::APInt(width, static_cast<uint64_t>(count), false)));
-    if (traceSeq)
-      llvm::errs() << "[SEQ-SIZE] func.call: " << calleeName << " self=0x"
-                   << llvm::format_hex(selfAddr, 16) << " -> " << count
-                   << " (total_conns=" << analysisPortConnections.size()
-                   << ")\n";
-    LLVM_DEBUG(llvm::dbgs() << "  func.call: uvm_port_base::size self=0x"
-                            << llvm::format_hex(selfAddr, 16) << " -> "
-                            << count << "\n");
-    return success();
+    if (analysisPortConnections.count(selfAddr)) {
+      int32_t count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
+      Value result = callOp.getResult(0);
+      unsigned width = getTypeWidth(result.getType());
+      setValue(procId, result,
+               InterpretedValue(
+                   llvm::APInt(width, static_cast<uint64_t>(count), false)));
+      if (traceSeq)
+        llvm::errs() << "[SEQ-SIZE] func.call: " << calleeName << " self=0x"
+                     << llvm::format_hex(selfAddr, 16) << " -> " << count
+                     << " (total_conns=" << analysisPortConnections.size()
+                     << ")\n";
+      LLVM_DEBUG(llvm::dbgs() << "  func.call: uvm_port_base::size self=0x"
+                              << llvm::format_hex(selfAddr, 16) << " -> "
+                              << count << "\n");
+      return success();
+    }
   }
 
   // Intercept analysis_port::write at func.call level.
@@ -21568,6 +21711,10 @@ unsigned LLHDProcessInterpreter::getTypeWidthUncached(Type type) {
   if (isa<FunctionType>(type))
     return 64;
 
+  // Handle floating-point types (f64 = 64 bits, f32 = 32 bits, etc.)
+  if (auto floatType = dyn_cast<FloatType>(type))
+    return floatType.getWidth();
+
   // Default to 1 bit for unknown types
   return 1;
 }
@@ -24348,7 +24495,27 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           triStateMirrorSrcSigId != 0 &&
           triStateMirrorSrcSigId != triStateMirrorFieldSigId &&
           isTriStateDestSignal(triStateMirrorFieldSigId)) {
-        suppressTriStateMirrorStoreWrite = true;
+        // Only suppress mirrored probe-copy writes once the corresponding
+        // tri-state rule can already drive the destination from known inputs.
+        // During early init some designs seed interface fields via probe-copy
+        // before src/cond settle; suppressing too early can latch X and block
+        // later bus activity.
+        bool triStateRuleCanDriveDest = false;
+        for (const auto &rule : interfaceTriStateRules) {
+          if (rule.destSigId != triStateMirrorFieldSigId)
+            continue;
+          InterpretedValue condVal =
+              InterpretedValue::fromSignalValue(scheduler.getSignalValue(
+                  rule.condSigId));
+          InterpretedValue srcVal =
+              InterpretedValue::fromSignalValue(scheduler.getSignalValue(
+                  rule.srcSigId));
+          if (!condVal.isX() && !srcVal.isX()) {
+            triStateRuleCanDriveDest = true;
+            break;
+          }
+        }
+        suppressTriStateMirrorStoreWrite = triStateRuleCanDriveDest;
       }
     }
   }
@@ -24534,6 +24701,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           suppressTriStateMirrorStoreWrite &&
           fieldSigId == triStateMirrorFieldSigId &&
           triStateMirrorSrcSigId != 0;
+      bool useAggressiveTriStateMirrorSuppression =
+          !hasInstanceScopedInterfaceFieldSignals;
       if (matchFourStateProbeCopyStore(storeOp.getValue(), resolveSignal,
                                        copySrcSigId) &&
           copySrcSigId != 0 && copySrcSigId != fieldSigId) {
@@ -24545,7 +24714,20 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
             addedDynamicCopyLink = true;
           }
         };
-        if (suppressTriStateMirrorStoreForField) {
+        auto removeDynamicLink = [&](SignalId destSigId) {
+          auto srcIt = interfaceFieldPropagation.find(copySrcSigId);
+          if (srcIt == interfaceFieldPropagation.end())
+            return;
+          auto &children = srcIt->second;
+          children.erase(std::remove(children.begin(), children.end(), destSigId),
+                         children.end());
+        };
+        if (suppressTriStateMirrorStoreForField &&
+            useAggressiveTriStateMirrorSuppression) {
+          // Once suppression becomes active, source->dest propagation is
+          // unsafe: mirrored net reads can overwrite the tri-state destination
+          // and keep stale drive values alive after OE release.
+          removeDynamicLink(fieldSigId);
           auto mirrorIt = interfaceFieldPropagation.find(fieldSigId);
           if (mirrorIt != interfaceFieldPropagation.end()) {
             for (SignalId mirrorSigId : mirrorIt->second)
@@ -24660,11 +24842,46 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           normalizeInterfaceStoreValue(fieldSigId, storeVal);
       if (suppressTriStateMirrorStoreForField) {
         driveVal = InterpretedValue::fromSignalValue(current);
-        // Mirror-feedback suppression keeps tri-state destination fields from
-        // being overwritten by probed bus values. If the shadow signal is
-        // still X (first mirrored store), recover the initialized drive
-        // expression from backing memory instead of latching X indefinitely.
-        if (driveVal.isX() && block) {
+        if (useAggressiveTriStateMirrorSuppression) {
+          // In flat topologies, derive the retained destination value directly
+          // from tri-state cond/src state to avoid stale bus-mirror latching.
+          auto getSignalValueForRule = [&](SignalId sigId) -> InterpretedValue {
+            auto pendingIt = pendingEpsilonDrives.find(sigId);
+            if (pendingIt != pendingEpsilonDrives.end())
+              return pendingIt->second;
+            return InterpretedValue::fromSignalValue(
+                scheduler.getSignalValue(sigId));
+          };
+          auto normalizeRuleValue = [&](InterpretedValue value)
+              -> InterpretedValue {
+            unsigned targetWidth = current.getWidth();
+            if (value.isX())
+              return InterpretedValue::makeX(targetWidth);
+            if (value.getWidth() == targetWidth)
+              return value;
+            APInt bits = value.getAPInt();
+            if (bits.getBitWidth() < targetWidth)
+              bits = bits.zext(targetWidth);
+            else if (bits.getBitWidth() > targetWidth)
+              bits = bits.trunc(targetWidth);
+            return InterpretedValue(bits);
+          };
+
+          for (const auto &rule : interfaceTriStateRules) {
+            if (rule.destSigId != fieldSigId)
+              continue;
+            InterpretedValue condVal = getSignalValueForRule(rule.condSigId);
+            bool condTrue = false;
+            if (!condVal.isX() && rule.condBitIndex < condVal.getWidth())
+              condTrue = condVal.getAPInt()[rule.condBitIndex];
+            InterpretedValue selectedVal =
+                condTrue ? getSignalValueForRule(rule.srcSigId)
+                         : rule.elseValue;
+            driveVal = normalizeRuleValue(selectedVal);
+            break;
+          }
+        } else if (driveVal.isX() && block) {
+          // Preserve legacy behavior for instance-scoped topologies.
           unsigned targetWidth = current.getWidth();
           unsigned numBytes = (targetWidth + 7) / 8;
           if (numBytes > 0 && offset + numBytes <= block->size) {
@@ -25025,8 +25242,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     return success();
   }
 
-  // Intercept uvm_port_base::size() in LLVM::CallOp path and report count
-  // from native analysisPortConnections.
+  // Intercept uvm_port_base::size() in LLVM::CallOp path only when the port
+  // is tracked in our native graph.
   if (calleeName.contains("uvm_port_base") &&
       calleeName.ends_with("::size") && callOp.getNumResults() >= 1) {
     SmallVector<InterpretedValue, 2> sizeArgs;
@@ -25034,16 +25251,18 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       sizeArgs.push_back(getValue(procId, operand));
     uint64_t selfAddr =
         (!sizeArgs.empty() && !sizeArgs[0].isX()) ? sizeArgs[0].getUInt64() : 0;
-    int32_t count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
-    Value result = callOp.getResult();
-    unsigned width = getTypeWidth(result.getType());
-    setValue(procId, result,
-             InterpretedValue(
-                 llvm::APInt(width, static_cast<uint64_t>(count), false)));
-    LLVM_DEBUG(llvm::dbgs() << "  llvm.call: uvm_port_base::size self=0x"
-                            << llvm::format_hex(selfAddr, 16) << " -> "
-                            << count << "\n");
-    return success();
+    if (analysisPortConnections.count(selfAddr)) {
+      int32_t count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
+      Value result = callOp.getResult();
+      unsigned width = getTypeWidth(result.getType());
+      setValue(procId, result,
+               InterpretedValue(
+                   llvm::APInt(width, static_cast<uint64_t>(count), false)));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: uvm_port_base::size self=0x"
+                              << llvm::format_hex(selfAddr, 16) << " -> "
+                              << count << "\n");
+      return success();
+    }
   }
 
   // Intercept uvm_port_base::resolve_bindings() (LLVM::CallOp path) — skip
@@ -28976,6 +29195,281 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.call: __moore_fclose(fd=" << fd << ")\n");
       }
+      return success();
+    }
+
+    // ---- __moore_sscanf ----
+    // __moore_sscanf(ptr input_data, i64 input_len, ptr format,
+    //                ptr results, ptr widths, i32 max_results) -> i32
+    if (calleeName == "__moore_sscanf") {
+      if (callOp.getNumOperands() >= 6) {
+        // Get input data pointer and length
+        uint64_t inputAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t inputLen = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+
+        // Read input bytes from interpreter memory
+        std::string inputStr;
+        if (inputAddr != 0 && inputLen > 0) {
+          uint64_t off = 0;
+          MemoryBlock *block =
+              findMemoryBlockByAddress(inputAddr, procId, &off);
+          if (!block)
+            block = findBlockByAddress(inputAddr, off);
+          if (block && block->initialized &&
+              off + inputLen <= block->data.size()) {
+            inputStr.assign(
+                reinterpret_cast<const char *>(block->data.data() + off),
+                inputLen);
+          }
+        }
+
+        // Get format string pointer
+        uint64_t fmtAddr =
+            getValue(procId, callOp.getOperand(2)).getUInt64();
+        const char *format = "";
+        if (fmtAddr != 0) {
+          auto globalIt = addressToGlobal.find(fmtAddr);
+          if (globalIt != addressToGlobal.end()) {
+            auto blockIt = globalMemoryBlocks.find(globalIt->second);
+            if (blockIt != globalMemoryBlocks.end() &&
+                blockIt->second.initialized)
+              format = reinterpret_cast<const char *>(
+                  blockIt->second.data.data());
+          }
+          if (!format || !format[0]) {
+            uint64_t off = 0;
+            MemoryBlock *block = findBlockByAddress(fmtAddr, off);
+            if (block && block->initialized)
+              format =
+                  reinterpret_cast<const char *>(block->data.data() + off);
+          }
+        }
+
+        // Get results and widths alloca addresses
+        uint64_t resultsAddr =
+            getValue(procId, callOp.getOperand(3)).getUInt64();
+        uint64_t widthsAddr =
+            getValue(procId, callOp.getOperand(4)).getUInt64();
+        int32_t maxResults = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(5)).getUInt64());
+
+        // Read widths from interpreter memory
+        std::vector<int32_t> widths(maxResults, 32);
+        if (widthsAddr != 0 && maxResults > 0) {
+          uint64_t wOff = 0;
+          MemoryBlock *wBlock =
+              findMemoryBlockByAddress(widthsAddr, procId, &wOff);
+          if (!wBlock)
+            wBlock = findBlockByAddress(widthsAddr, wOff);
+          if (wBlock && wBlock->initialized &&
+              wOff + maxResults * 4 <= wBlock->data.size()) {
+            for (int32_t i = 0; i < maxResults; ++i)
+              std::memcpy(&widths[i],
+                          wBlock->data.data() + wOff + i * 4, 4);
+          }
+        }
+
+        // Allocate native results array and call runtime
+        std::vector<int64_t> results(maxResults, 0);
+        int32_t count = __moore_sscanf(
+            inputStr.c_str(), static_cast<int64_t>(inputStr.size()), format,
+            results.data(), widths.data(), maxResults);
+
+        // Write results back to interpreter memory
+        if (resultsAddr != 0 && maxResults > 0) {
+          uint64_t rOff = 0;
+          MemoryBlock *rBlock =
+              findMemoryBlockByAddress(resultsAddr, procId, &rOff);
+          if (!rBlock)
+            rBlock = findBlockByAddress(resultsAddr, rOff);
+          if (rBlock && rBlock->initialized &&
+              rOff + maxResults * 8 <= rBlock->data.size()) {
+            for (int32_t i = 0; i < maxResults; ++i)
+              std::memcpy(rBlock->data.data() + rOff + i * 8,
+                          &results[i], 8);
+          }
+        }
+
+        if (callOp.getNumResults() >= 1)
+          setValue(procId, callOp.getResult(),
+                   InterpretedValue(APInt(32, static_cast<uint32_t>(count))));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_sscanf(\""
+                   << inputStr << "\", fmt=\"" << format
+                   << "\", maxResults=" << maxResults
+                   << ") = " << count << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_fscanf ----
+    // __moore_fscanf(i32 fd, ptr format, ptr results, ptr widths,
+    //                i32 max_results) -> i32
+    if (calleeName == "__moore_fscanf") {
+      if (callOp.getNumOperands() >= 5) {
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+
+        // Get format string pointer
+        uint64_t fmtAddr =
+            getValue(procId, callOp.getOperand(1)).getUInt64();
+        const char *format = "";
+        if (fmtAddr != 0) {
+          auto globalIt = addressToGlobal.find(fmtAddr);
+          if (globalIt != addressToGlobal.end()) {
+            auto blockIt = globalMemoryBlocks.find(globalIt->second);
+            if (blockIt != globalMemoryBlocks.end() &&
+                blockIt->second.initialized)
+              format = reinterpret_cast<const char *>(
+                  blockIt->second.data.data());
+          }
+          if (!format || !format[0]) {
+            uint64_t off = 0;
+            MemoryBlock *block = findBlockByAddress(fmtAddr, off);
+            if (block && block->initialized)
+              format =
+                  reinterpret_cast<const char *>(block->data.data() + off);
+          }
+        }
+
+        uint64_t resultsAddr =
+            getValue(procId, callOp.getOperand(2)).getUInt64();
+        uint64_t widthsAddr =
+            getValue(procId, callOp.getOperand(3)).getUInt64();
+        int32_t maxResults = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(4)).getUInt64());
+
+        // Read widths from interpreter memory
+        std::vector<int32_t> widths(maxResults, 32);
+        if (widthsAddr != 0 && maxResults > 0) {
+          uint64_t wOff = 0;
+          MemoryBlock *wBlock =
+              findMemoryBlockByAddress(widthsAddr, procId, &wOff);
+          if (!wBlock)
+            wBlock = findBlockByAddress(widthsAddr, wOff);
+          if (wBlock && wBlock->initialized &&
+              wOff + maxResults * 4 <= wBlock->data.size()) {
+            for (int32_t i = 0; i < maxResults; ++i)
+              std::memcpy(&widths[i],
+                          wBlock->data.data() + wOff + i * 4, 4);
+          }
+        }
+
+        // Allocate native results array and call runtime
+        std::vector<int64_t> results(maxResults, 0);
+        int32_t count = __moore_fscanf(fd, format, results.data(),
+                                       widths.data(), maxResults);
+
+        // Write results back to interpreter memory
+        if (resultsAddr != 0 && maxResults > 0) {
+          uint64_t rOff = 0;
+          MemoryBlock *rBlock =
+              findMemoryBlockByAddress(resultsAddr, procId, &rOff);
+          if (!rBlock)
+            rBlock = findBlockByAddress(resultsAddr, rOff);
+          if (rBlock && rBlock->initialized &&
+              rOff + maxResults * 8 <= rBlock->data.size()) {
+            for (int32_t i = 0; i < maxResults; ++i)
+              std::memcpy(rBlock->data.data() + rOff + i * 8,
+                          &results[i], 8);
+          }
+        }
+
+        if (callOp.getNumResults() >= 1)
+          setValue(procId, callOp.getResult(),
+                   InterpretedValue(APInt(32, static_cast<uint32_t>(count))));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_fscanf(fd=" << fd
+                   << ", fmt=\"" << format
+                   << "\", maxResults=" << maxResults
+                   << ") = " << count << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_timeformat ----
+    // __moore_timeformat(i32 units, i32 precision, ptr suffix, i64 len,
+    //                    i32 min_width)
+    if (calleeName == "__moore_timeformat") {
+      int32_t units = -9, precision = 0, minWidth = 20;
+      const char *suffixData = nullptr;
+      int64_t suffixLen = 0;
+
+      if (callOp.getNumOperands() >= 1)
+        units = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+      if (callOp.getNumOperands() >= 2)
+        precision = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+      if (callOp.getNumOperands() >= 3) {
+        uint64_t addr =
+            getValue(procId, callOp.getOperand(2)).getUInt64();
+        if (addr != 0) {
+          auto globalIt = addressToGlobal.find(addr);
+          if (globalIt != addressToGlobal.end()) {
+            auto blockIt = globalMemoryBlocks.find(globalIt->second);
+            if (blockIt != globalMemoryBlocks.end() &&
+                blockIt->second.initialized)
+              suffixData = reinterpret_cast<const char *>(
+                  blockIt->second.data.data());
+          }
+          if (!suffixData) {
+            uint64_t off = 0;
+            MemoryBlock *block = findBlockByAddress(addr, off);
+            if (block && block->initialized)
+              suffixData =
+                  reinterpret_cast<const char *>(block->data.data() + off);
+          }
+        }
+      }
+      if (callOp.getNumOperands() >= 4)
+        suffixLen = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(3)).getUInt64());
+      if (callOp.getNumOperands() >= 5)
+        minWidth = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(4)).getUInt64());
+
+      __moore_timeformat(units, precision, suffixData, suffixLen, minWidth);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_timeformat(units=" << units
+                 << ", precision=" << precision << ", minWidth=" << minWidth
+                 << ")\n");
+      return success();
+    }
+
+    // ---- __moore_format_time ----
+    // __moore_format_time(i64 time_fs) -> {ptr, i64}
+    if (calleeName == "__moore_format_time") {
+      int64_t timeFs = 0;
+      if (callOp.getNumOperands() >= 1)
+        timeFs = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+
+      MooreString result = __moore_format_time(timeFs);
+
+      // Store the result string in native memory and return {ptr, len}.
+      if (callOp.getNumResults() >= 1) {
+        uint64_t ptrVal = 0;
+        if (result.data && result.len > 0) {
+          // Allocate in native memory.
+          char *copy = static_cast<char *>(std::malloc(result.len + 1));
+          std::memcpy(copy, result.data, result.len);
+          copy[result.len] = '\0';
+          ptrVal = reinterpret_cast<uint64_t>(copy);
+          std::free(const_cast<char *>(result.data));
+        }
+        // Pack {ptr, len} into the struct.
+        APInt packed(128, 0);
+        packed.insertBits(APInt(64, ptrVal), 0);
+        packed.insertBits(APInt(64, result.len), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packed));
+      }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_format_time(" << timeFs
+                 << " fs)\n");
       return success();
     }
 
@@ -33425,11 +33919,20 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
                                     << " isX=" << addrVal.isX() << "\n");
           }
           if (srcAddr != 0) {
-            auto pair = std::make_pair(srcAddr, destAddr.getUInt64());
-            if (std::find(childModuleCopyPairs.begin(),
-                          childModuleCopyPairs.end(),
-                          pair) == childModuleCopyPairs.end())
-              childModuleCopyPairs.push_back(pair);
+            uint64_t srcOff = 0, destOff = 0;
+            MemoryBlock *srcBlk = findBlockByAddress(srcAddr, srcOff);
+            MemoryBlock *destBlk =
+                findBlockByAddress(destAddr.getUInt64(), destOff);
+            // Only record cross-block copies for child-module propagation.
+            // Same-block copies are intra-interface bookkeeping and can create
+            // incorrect feedback links when treated as parent->child edges.
+            if (!srcBlk || !destBlk || srcBlk != destBlk) {
+              auto pair = std::make_pair(srcAddr, destAddr.getUInt64());
+              if (std::find(childModuleCopyPairs.begin(),
+                            childModuleCopyPairs.end(),
+                            pair) == childModuleCopyPairs.end())
+                childModuleCopyPairs.push_back(pair);
+            }
           }
 
           SignalId srcSignalId = 0;
