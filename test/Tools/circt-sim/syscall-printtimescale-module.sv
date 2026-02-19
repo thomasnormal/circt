@@ -6,7 +6,7 @@ module top;
     $timeformat(-9, 2, " ns", 10);
     #15;
     // After #15 with timescale 10ns, that's 150ns
-    // CHECK: time=150.00 ns
+    // CHECK: time= 150.00 ns
     $display("time=%t", $time);
     $finish;
   end

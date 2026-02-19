@@ -1,6 +1,7 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
+// CHECK-DAG: llvm.func @__moore_randomize_bytes(!llvm.ptr, i64) -> i32
 // CHECK-DAG: llvm.func @__moore_randomize_with_range(i64, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_randomize_with_ranges(!llvm.ptr, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_dyn_array_new(i32) -> !llvm.struct<(ptr, i64)>
@@ -264,6 +265,7 @@ func.func @test_inline_array_constraint_exprs(%obj: !moore.class<@InlineArrayCon
 
   // CHECK: llvm.call @__moore_randomize_basic
   // CHECK: llvm.call @__moore_dyn_array_new
+  // CHECK: llvm.call @__moore_randomize_bytes
   // CHECK: llvm.insertvalue
   // CHECK: llvm.extractvalue %[[ALLOWED]][1]
   // CHECK: llvm.call @__moore_randomize_with_range
@@ -277,6 +279,46 @@ func.func @test_inline_array_constraint_exprs(%obj: !moore.class<@InlineArrayCon
     %addr_ref = moore.class.property_ref %obj[@targetAddress] : !moore.class<@InlineArrayConstraintClass> -> !moore.ref<i7>
     %addr_val = moore.read %addr_ref : <i7>
     %contains = moore.array.contains %allowed, %addr_val : open_uarray<i7>, i7
+    moore.constraint.expr %contains : i1
+  }
+  return %success : i1
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Inline array.contains through nested class properties with upcast
+//===----------------------------------------------------------------------===//
+// Covers the I3C-like pattern:
+//   tx.targetAddress inside { base.cfg.allowed };
+// where `base` is obtained via `moore.class.upcast` outside the inline region.
+
+moore.class.classdecl @NestedArrayCfg {
+  moore.class.propertydecl @allowed : !moore.open_uarray<!moore.i7>
+}
+
+moore.class.classdecl @NestedArrayBase {
+  moore.class.propertydecl @cfg : !moore.class<@NestedArrayCfg>
+}
+
+moore.class.classdecl @NestedArrayDerived extends @NestedArrayBase {
+}
+
+// CHECK-LABEL: func.func @test_inline_array_contains_nested_upcast
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr, %[[DERIVED:.*]]: !llvm.ptr)
+// CHECK: llvm.call @__moore_randomize_basic
+// CHECK: llvm.call @__moore_randomize_with_range
+func.func @test_inline_array_contains_nested_upcast(
+    %obj: !moore.class<@InlineArrayConstraintClass>,
+    %derived: !moore.class<@NestedArrayDerived>) -> i1 {
+  %base = moore.class.upcast %derived : <@NestedArrayDerived> to <@NestedArrayBase>
+  %success = moore.randomize %obj : !moore.class<@InlineArrayConstraintClass> {
+    %addr_ref = moore.class.property_ref %obj[@targetAddress] : !moore.class<@InlineArrayConstraintClass> -> !moore.ref<i7>
+    %addr_val = moore.read %addr_ref : <i7>
+
+    %cfg_ref = moore.class.property_ref %base[@cfg] : !moore.class<@NestedArrayBase> -> !moore.ref<class<@NestedArrayCfg>>
+    %cfg_val = moore.read %cfg_ref : <class<@NestedArrayCfg>>
+    %allowed_ref = moore.class.property_ref %cfg_val[@allowed] : !moore.class<@NestedArrayCfg> -> !moore.ref<open_uarray<i7>>
+    %allowed_val = moore.read %allowed_ref : <open_uarray<i7>>
+    %contains = moore.array.contains %allowed_val, %addr_val : open_uarray<i7>, i7
     moore.constraint.expr %contains : i1
   }
   return %success : i1

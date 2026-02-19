@@ -53,7 +53,7 @@ module top;
 
     // $atan2
     r = $atan2(1.0, 1.0);
-    // CHECK: atan2=0.7
+    // CHECK: atan2=0.8
     $display("atan2=%.1f", r);
 
     // $hypot

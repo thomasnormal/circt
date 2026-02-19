@@ -9,6 +9,7 @@ module top;
   initial begin
     packet p = new();
     int ok;
+    int saved_data;
     string state;
 
     // Basic randomize
@@ -27,7 +28,7 @@ module top;
     // get_randstate / set_randstate
     state = p.get_randstate();
     ok = p.randomize();
-    int saved_data = p.data;
+    saved_data = p.data;
     p.set_randstate(state);
     ok = p.randomize();
     // Same seed state should give same result
