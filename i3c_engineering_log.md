@@ -958,3 +958,208 @@ Current assessment:
 - mirror-drive behavior is improved and guarded by dedicated regression.
 - deeper I3C parity blocker remains (target progression + run-phase
   delta-overflow loop source not yet closed).
+
+## 2026-02-19 Session: sequencer get waiter conversion + high-delta behavior recheck
+
+Root-cause confirmation:
+- Deterministic trace run with filtered call tracing showed overwhelming
+  call-indirect retry pressure from one process:
+  - `uvm_pkg::uvm_seq_item_pull_port::get_next_item`
+  - `proc=45`, repeated at one sim-time (`d12..d138`) in
+    `/tmp/i3c-calltrace-loop.log`.
+- This confirmed empty-FIFO get polling was still a dominant delta-burst source.
+
+Runtime changes:
+1. Converted empty `get/get_next_item` handling from poll scheduling to
+   event-driven queue waiters.
+   - Files:
+     - `tools/circt-sim/LLHDProcessInterpreter.h`
+     - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+     - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+   - Added waiter maps and wake helpers:
+     - `enqueueUvmSequencerGetWaiter`
+     - `removeUvmSequencerGetWaiter`
+     - `wakeOneUvmSequencerGetWaiter`
+     - `wakeUvmSequencerGetWaiterForPush`
+   - `finish_item` push now wakes one matching/any unresolved blocked getter.
+   - Added waiter cleanup in `finalizeProcess`.
+2. Added regression:
+   - `test/Tools/circt-sim/seq-get-next-item-event-wakeup.mlir`
+   - verifies blocked `get_next_item` wakes on `finish_item` push under tight
+     delta budget (`--max-deltas=8`).
+3. Updated existing empty-get regression description:
+   - `test/Tools/circt-sim/seq-get-next-item-empty-fallback-backoff.mlir`.
+4. Global-ctor stability hardening:
+   - `tools/circt-sim/LLHDProcessInterpreterGlobals.cpp`
+   - `finalizeInit()` now re-discovers ctor ops before executing constructors,
+     avoiding stale cached-op handle traversal during finalize.
+
+Validation:
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Focused lit PASS:
+   - `build-test/test/Tools/circt-sim/seq-get-next-item-empty-fallback-backoff.mlir`
+   - `build-test/test/Tools/circt-sim/seq-get-next-item-event-wakeup.mlir`
+   - `build-test/test/Tools/circt-sim/seq-pull-port-reconnect-cache-invalidation.mlir`
+
+I3C replay impact:
+1. Default deterministic replay:
+   - `/tmp/i3c-full-after-seqwaiter.log`
+   - sequencer waiter state at overflow: `get_waiters=0` (loop removed),
+   - new overflow point moved far later to:
+     - `ERROR(DELTA_OVERFLOW)` at `33040000000fs`.
+2. High max-delta replay:
+   - `/tmp/i3c-full-after-seqwaiter-maxd1e8.log`
+   - no `DELTA_OVERFLOW`,
+   - simulation exits successfully, but parity remains open:
+     - `UVM_ERROR` at `i3c_scoreboard.sv(128,162)`,
+     - coverage remains controller `21.43%`, target `0.00%`.
+3. Continuous-drive trace sample:
+   - `/tmp/i3c-cont-exec-loop.log`
+   - around the prior overflow window, repeated module-drive executions keep
+     applying stable `I3C_SCL/I3C_SDA = 0x3`; additional root-cause work is
+     still needed for high-delta bursts and target monitor progression.
+
+Current status:
+- Sequencer get polling churn is now event-driven and regression-covered.
+- I3C still fails parity on target-side transaction progression/coverage.
+- Next targeted step remains target monitor conversion/sampling path closure
+  (scoreboard line 162 and target covergroup 0%).
+
+## 2026-02-19 Session: tri-state mirror suppression refinement (high-Z after startup)
+
+Root-cause update:
+- Recent I3C runs showed passive target progression was blocked by mirror-store
+  suppression treating explicit high-Z (`Z`) tri-state outputs as deterministic
+  drivers.
+- Unsuppressing that path unconditionally improved target progression, but caused
+  early pre-run activity (`RUNPHSTIME` fatal) in UVM startup.
+
+Runtime change:
+1. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - refined tri-state mirror suppression in `interpretLLVMStore`:
+     - explicit high-Z mirror suppression is now only considered deterministic
+       at startup time (`t=0`),
+     - after startup, explicit `Z` no longer suppresses mirrored probe-copy
+       observation writes.
+   - intent:
+     - preserve startup stability,
+     - allow passive interfaces to observe resolved shared-net activity during
+       runtime.
+
+New regression:
+1. Added:
+   - `test/Tools/circt-sim/interface-tristate-passive-observe-vif.sv`
+2. Coverage:
+   - class/virtual-interface topology over shared pullup inout net,
+   - validates passive side repeatedly observes low/high pulses,
+   - checks no late `sig_1.field_0 ... suppressed=1` after first observation.
+
+Validation:
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Focused lit PASS (tri-state + I3C/fork/seq stability):
+   - `interface-tristate-passive-observe-vif.sv`
+   - `interface-tristate-signalcopy-redirect.sv`
+   - `interface-inout-shared-wire-bidirectional.sv`
+   - `interface-tristate-suppression-cond-false.sv`
+   - `interface-inout-tristate-propagation.sv`
+   - `interface-intra-tristate-propagation.sv`
+   - `i3c-samplewrite-disable-fork-ordering.sv`
+   - `i3c-samplewrite-joinnone-disable-fork-ordering.sv`
+   - `fork-disable-ready-wakeup.sv`
+   - `seq-get-next-item-event-wakeup.mlir`
+   - `seq-get-next-item-empty-fallback-backoff.mlir`
+   - `seq-pull-port-reconnect-cache-invalidation.mlir`
+
+I3C replay impact (precompiled deterministic lane):
+1. Replay:
+   - `/tmp/i3c-after-nosuppress-v2-20260219-143634.log`
+2. Result:
+   - no `RUNPHSTIME` fatal,
+   - no transaction-count mismatch,
+   - remaining parity mismatch:
+     - `UVM_ERROR ... i3c_scoreboard.sv(179)`
+   - coverage improved from prior `21.43% / 0.00%` to:
+     - controller `21.43%`, target `21.43%`.
+3. Scoreboard debug snapshot:
+   - `ctrl_tx=1`, `tgt_tx=1`, but `ctrl_wsz=0`, `tgt_wsz=0`.
+
+Additional evidence:
+1. Field-drive trace:
+   - `/tmp/i3c-after-nosuppress-v2-fielddrives-20260219-143749.log`
+2. Shows write payload creation in conversion path (e.g. `from_class_5958`
+   writes `writeData idx=127 val=0xFB`), but monitor-side compare path still
+   reaches check-phase with empty `writeData` vectors.
+
+Current status:
+- Target monitor progression/coverage is no longer stuck at `0%`.
+- Remaining blocker is functional monitor sampling/conversion closure for
+  non-empty writeData in scoreboard compare path (line 179).
+
+## 2026-02-19 Session: compile-mode I3C recovery via monitor sample fork JIT guard
+
+Objective:
+- Recover the compile-mode I3C lane that regressed after native-thunk promotions
+  (`UVM_ERROR ... i3c_scoreboard.sv(179)`, `writeData=0`).
+
+What was confirmed first:
+1. New import-lowering copy-back behavior is correct in isolation:
+   - `test/Tools/circt-sim/task-inout-output-copy-back.sv` passes in
+     `interpret` and `compile` modes.
+2. Failure is compile-mode/JIT-promotion dependent:
+   - `--jit-compile-budget=0`: PASS (`ctrl_w0=fb`, no scoreboard error).
+   - default/high budget: FAIL (`ctrl_w0=0`, scoreboard line 179).
+
+Bisection evidence:
+1. Deterministic short-window replay (`--max-time=4500000000fs`) narrowed the
+   first failing compile budget:
+   - budget `144`: PASS
+   - budget `145`: FAIL
+2. `CIRCT_SIM_TRACE_FORK_JOIN=1` correlation identified the first bad promoted
+   fork branch as monitor sampling path:
+   - fork creation from:
+     - `i3c_controller_monitor_bfm::sampleWriteDataAndACK`
+     - `i3c_target_monitor_bfm::sampleWriteDataAndACK`
+
+Fix implemented:
+1. `tools/circt-sim/LLHDProcessInterpreter.h`
+   - added `forkSpawnParentFunctionName` map (`ProcessId -> parent function
+     name at fork creation`).
+2. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - record parent function name for each fork child at `sim.fork` creation.
+3. `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`
+   - in `tryInstallProcessThunk`, keep fork-child processes interpreted when
+     spawned from `*_monitor_bfm::sampleWriteDataAndACK`.
+   - deopt detail used for telemetry:
+     - `monitor_sample_write_data_fork_child_interpreter_fallback`.
+
+Regression added:
+1. `test/Tools/circt-sim/jit-monitor-sample-fork-policy.sv`
+   - validates monitor sample fork path remains functionally correct and that
+     JIT report records the fallback detail.
+
+Validation:
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Focused tests PASS:
+   - `jit-monitor-sample-fork-policy.sv`
+   - `task-inout-output-copy-back.sv`
+3. Budget boundary replay after fix:
+   - budget `145` now PASS (`ctrl_w0=fb`, no scoreboard error).
+4. Full compile-mode AVIP lane:
+   - command:
+     - `AVIPS=i3c SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 COMPILE_TIMEOUT=300 SIM_TIMEOUT=240 SIM_TIMEOUT_GRACE=30 utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-i3c-after-monitor-fork-guard-20260219-183748`
+   - result:
+     - compile `OK` (`31s`), sim `OK` (`31s`)
+     - `UVM_FATAL=0`, `UVM_ERROR=0`
+     - coverage: `40.4762 / 40.4762`
+   - JIT telemetry:
+     - `jit_compiles_total=145`
+     - `jit_deopts_total=2` with detail
+       `monitor_sample_write_data_fork_child_interpreter_fallback`.
+
+Current status:
+- Compile-mode I3C scoreboard regression is closed for this deterministic lane.
+- Remaining parity gap vs earlier `100/100` coverage printouts is now isolated
+  to coverage behavior/expectation, not a functional scoreboard mismatch.

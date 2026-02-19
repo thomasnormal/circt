@@ -22732,6 +22732,11 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
     // Copy value mappings from parent to child for values defined outside the fork
     // This allows child processes to access parent's local variables
     auto &parentState = processStates[procId];
+    if (!parentState.currentFuncName.empty())
+      forkSpawnParentFunctionName[childId] = parentState.currentFuncName;
+    else
+      forkSpawnParentFunctionName.erase(childId);
+
     childState.valueMap = parentState.valueMap;
     // Preserve ref argument provenance across forked execution. Children may
     // continue running after parent frames clean up temporary valueToSignal

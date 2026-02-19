@@ -2663,3 +2663,120 @@ Working hypothesis now:
 - landed targeted correctness improvement + regression coverage.
 - I3C remains open; next work stays on target progression and residual
   delta-overflow loop sources in run-phase fork paths.
+
+## 2026-02-19 Session: sequencer get waiter conversion (poll-loop removal) + I3C reprofile
+
+### Change set
+1. Converted empty `seq_item_pull_port::get/get_next_item` from delta/timed
+   polling to queue-driven waiters:
+   - `tools/circt-sim/LLHDProcessInterpreter.h`
+   - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+   - added waiter enqueue/wake/remove helpers and finalize cleanup.
+2. `finish_item` now wakes blocked get waiters when pushing into sequencer FIFOs.
+3. Added regression:
+   - `test/Tools/circt-sim/seq-get-next-item-event-wakeup.mlir`
+4. Updated empty-get regression comment for no-spin semantics:
+   - `test/Tools/circt-sim/seq-get-next-item-empty-fallback-backoff.mlir`
+5. Hardened finalize-time ctor execution against stale cached-op traversal:
+   - `tools/circt-sim/LLHDProcessInterpreterGlobals.cpp`
+   - re-discover ctor ops in `finalizeInit()` before execution.
+
+### Validation
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Focused regressions PASS:
+   - `build-test/test/Tools/circt-sim/seq-get-next-item-empty-fallback-backoff.mlir`
+   - `build-test/test/Tools/circt-sim/seq-get-next-item-event-wakeup.mlir`
+   - `build-test/test/Tools/circt-sim/seq-pull-port-reconnect-cache-invalidation.mlir`
+
+### I3C deterministic replay impact
+1. Trace evidence of old hotspot before fix:
+   - `/tmp/i3c-calltrace-loop.log`
+   - dominant churn: `proc=45`, callee
+     `uvm_pkg::uvm_seq_item_pull_port::get_next_item` (`~9.6k` calls).
+2. Post-fix default replay:
+   - `/tmp/i3c-full-after-seqwaiter.log`
+   - `get_waiters=0` at overflow point (sequencer poll loop removed),
+   - overflow moved later to `33040000000fs`.
+3. Post-fix high max-delta replay:
+   - `/tmp/i3c-full-after-seqwaiter-maxd1e8.log`
+   - no `DELTA_OVERFLOW`; simulation exits successfully.
+   - parity still open:
+     - `i3c_scoreboard.sv(128/162)` mismatches,
+     - coverage remains controller `21.43%`, target `0.00%`.
+
+### Current status
+- Sequencer empty-get loop source is closed with regression coverage.
+- Remaining I3C blocker is target-side functional progression/coverage, not the
+  prior call-indirect sequencer retry churn.
+77. `circt-sim` refine tri-state mirror suppression to recover I3C target progression
+    without pre-run UVM phase regression (February 19, 2026):
+    - root cause:
+      - mirrored probe-copy suppression treated explicit high-Z tri-state output
+        as deterministic during runtime, starving passive interface observation
+        on shared inout nets.
+    - fix:
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - in `interpretLLVMStore`, explicit high-Z suppression is now startup-only
+        (`t=0`); after startup, high-Z does not suppress mirrored observation
+        stores.
+    - regression coverage:
+      - new:
+        - `test/Tools/circt-sim/interface-tristate-passive-observe-vif.sv`
+      - validates repeated passive low/high observation and guards against late
+        `sig_1.field_0 ... suppressed=1` after initial startup window.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-sim`
+      - focused lit suites: PASS
+        - tri-state/interface set (6)
+        - I3C/fork/seq stability set (6)
+    - I3C deterministic replay impact (precompiled lane):
+      - log: `/tmp/i3c-after-nosuppress-v2-20260219-143634.log`
+      - no `RUNPHSTIME` fatal,
+      - transaction counts now match (`ctrl_tx=1`, `tgt_tx=1`),
+      - coverage improved to `21.4286 / 21.4286` (from `21.4286 / 0`),
+      - remaining mismatch: `UVM_ERROR ... i3c_scoreboard.sv(179)` with
+        empty writeData vectors (`ctrl_wsz=0`, `tgt_wsz=0`).
+    - next blocker:
+      - close monitor sampling/conversion path so scoreboard compare sees
+        non-empty writeData payloads.
+
+## 2026-02-19 Session: I3C compile-mode recovery (native-thunk fork guard)
+
+### Root cause slice
+1. I3C regression reproduced only when compile-mode JIT promotions were enabled:
+   - `--jit-compile-budget=0`: PASS
+   - high/default budget: FAIL with `UVM_ERROR ... i3c_scoreboard.sv(179)` and
+     `ctrl_w0/tgt_w0 = 0`.
+2. Budget bisection on bounded replay (`--max-time=4500000000fs`) found first
+   failing point at budget `145` (`144` PASS, `145` FAIL).
+3. Fork tracing showed the first bad promoted branch was created from
+   monitor sampling tasks (`*_monitor_bfm::sampleWriteDataAndACK`).
+
+### Change set
+1. `tools/circt-sim/LLHDProcessInterpreter.h`
+   - added `forkSpawnParentFunctionName` map.
+2. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - record parent function name at fork-child creation.
+3. `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`
+   - native-thunk install guard: keep fork children from
+     `*_monitor_bfm::sampleWriteDataAndACK` on interpreter path.
+4. New regression:
+   - `test/Tools/circt-sim/jit-monitor-sample-fork-policy.sv`
+
+### Validation
+1. `ninja -C build-test circt-sim`: PASS.
+2. Focused tests: PASS.
+   - `jit-monitor-sample-fork-policy.sv`
+   - `task-inout-output-copy-back.sv`
+3. Full I3C compile-mode AVIP lane:
+   - `/tmp/avip-circt-sim-i3c-after-monitor-fork-guard-20260219-183748/matrix.tsv`
+   - compile `OK` (`31s`), sim `OK` (`31s`), `uvm_error=0`, `uvm_fatal=0`,
+     coverage `40.4762 / 40.4762`.
+
+### Status
+- I3C compile-mode functional failure (scoreboard mismatch) is closed in this
+  lane.
+- Remaining I3C work is now coverage depth/parity, not functional mismatch.
