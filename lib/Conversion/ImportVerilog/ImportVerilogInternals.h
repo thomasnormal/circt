@@ -565,6 +565,9 @@ struct Context {
   /// Synthetic global that tracks runtime enablement of procedural immediate
   /// assertions controlled by $asserton/$assertoff/$assertcontrol.
   moore::GlobalVariableOp proceduralAssertionsEnabledGlobal;
+  /// Synthetic global that tracks whether assertion fail messages are displayed.
+  /// Controlled by $assertfailoff/$assertfailon.
+  moore::GlobalVariableOp assertionFailMessagesEnabledGlobal;
   /// A set of static class properties that are currently being converted.
   /// This is used to detect and handle recursive conversions when a property's
   /// type conversion triggers conversion of classes whose methods reference
