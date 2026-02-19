@@ -895,3 +895,66 @@ Interpretation:
   but does not fully eliminate the deeper I3C run-phase loop/overflow issue.
 - Remaining blocker likely involves additional wait/retry sources in forked
   monitor/driver paths beyond the empty-get retry budget alone.
+
+## 2026-02-19 Session: tri-state destination drive-intent evaluation (I3C mirror-clobber fix)
+
+Root-cause refinement from traces:
+- bounded traces showed `I3C_SCL` mirror drives (`i3c.mlir:9746:5`,
+  `i3c.mlir:9799:5`) reading interface destination fields that were also
+  bus-mirrored, so field copies could clobber drive intent.
+- target-side rule activity stalls left one side vulnerable to stale mirrored
+  values; this contributed to low-pinning behavior and coverage starvation.
+
+Attempted approach (reverted):
+- redirecting signal-copy propagation links away from tri-state destination
+  fields regressed `interface-inout-shared-wire-bidirectional.sv`, so this was
+  reverted.
+
+Landed fix:
+1. `tools/circt-sim/LLHDProcessInterpreter.h`
+   - added tri-state drive helpers:
+     - `resolveTriStateDriveSourceFieldSignal(...)`
+     - `tryEvaluateTriStateDestDriveValue(...)`
+   - added per-(drive,instance) cache:
+     - `triStateDriveSourceFieldCache`
+2. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - for tri-state-backed field loads, continuous/module drives now derive
+     drive value from resolved tri-state rule intent (`cond/src/else`) instead
+     of reusing potentially bus-mirrored destination field storage.
+   - wired in:
+     - `executeContinuousAssignment`
+     - `executeModuleDrives`
+     - `executeModuleDrivesForSignal`
+
+New regression:
+1. Added:
+   - `test/Tools/circt-sim/interface-tristate-signalcopy-redirect.sv`
+2. Scenario:
+   - active + passive interface instances share pullup inout bus,
+   - repeated low/release pulses,
+   - asserts release windows stay high and passive input tracks high.
+
+Validation:
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Focused regressions PASS:
+   - `interface-tristate-signalcopy-redirect.sv`
+   - `interface-inout-shared-wire-bidirectional.sv`
+   - `interface-tristate-suppression-cond-false.sv`
+   - `interface-inout-tristate-propagation.sv`
+   - `module-drive-enable-release-strength.mlir`
+   - `seq-get-next-item-empty-fallback-backoff.mlir`
+
+I3C replay impact:
+1. Bounded trace (`/tmp/i3c-bounded-trace-240-after-tri-fix.log`):
+   - `:9799` mirror drive now remains released/high (`11`) in problematic
+     windows instead of collapsing to `0`.
+   - `:9746` still toggles (`11/0`) and remains the dominant low contributor.
+2. Full deterministic replay (`/tmp/i3c-full-after-tri-fix.log`):
+   - still hits `ERROR(DELTA_OVERFLOW)` at `1110000000fs d138`.
+   - coverage unchanged: controller `21.43%`, target `0.00%`.
+
+Current assessment:
+- mirror-drive behavior is improved and guarded by dedicated regression.
+- deeper I3C parity blocker remains (target progression + run-phase
+  delta-overflow loop source not yet closed).

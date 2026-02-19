@@ -72722,3 +72722,43 @@ See CHANGELOG.md on recent progress.
       - deterministic I3C replay still overflows in this branch, but the failure
         point moves later (improved progress), indicating reduced retry-related
         delta pressure while deeper loop sources remain.
+76. `circt-sim` evaluate tri-state-backed interface drives from rule intent
+    and add passive-mirror regression
+    (February 19, 2026):
+    - root cause:
+      - for shared inout interface patterns (`assign S = s_oe ? s_o : 1'bz;`
+        + `assign s_i = S`), drive values could be read from destination field
+        storage that had been bus-mirrored, clobbering output intent.
+      - this could let passive instances retain sampled lows in long-running
+        flows and interfere with resolved bus behavior.
+    - fix:
+      - `tools/circt-sim/LLHDProcessInterpreter.{h,cpp}`
+      - added tri-state-backed drive helpers:
+        - `resolveTriStateDriveSourceFieldSignal(...)`
+        - `tryEvaluateTriStateDestDriveValue(...)`
+      - added per `(drive op, instance)` source-field cache:
+        - `triStateDriveSourceFieldCache`
+      - wired tri-state intent evaluation into:
+        - `executeContinuousAssignment`
+        - `executeModuleDrives`
+        - `executeModuleDrivesForSignal`
+      - when a drive value is sourced from a tri-state destination field,
+        drive value is derived from tri-state `cond/src/else` rule state
+        (not mirrored destination storage).
+    - regression coverage:
+      - new:
+        - `test/Tools/circt-sim/interface-tristate-signalcopy-redirect.sv`
+      - validates repeated low/release pulses on shared pullup inout with a
+        passive peer interface; release windows must remain high.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-sim`
+      - focused regressions: PASS
+        - `interface-tristate-signalcopy-redirect.sv`
+        - `interface-inout-shared-wire-bidirectional.sv`
+        - `interface-tristate-suppression-cond-false.sv`
+        - `interface-inout-tristate-propagation.sv`
+    - AVIP note:
+      - bounded I3C drive attribution improves (`:9799` remains released/high),
+        but full deterministic I3C replay still overflows at
+        `1110000000fs d138` with target coverage `0.00%`.

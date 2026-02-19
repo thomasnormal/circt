@@ -923,6 +923,19 @@ private:
                                        DriveStrength &strength0,
                                        DriveStrength &strength1) const;
 
+  /// Resolve the interface field signal loaded by a tri-state-backed drive
+  /// value, if any. Cached per (drive op, instance) to avoid re-matching hot
+  /// drive paths.
+  SignalId resolveTriStateDriveSourceFieldSignal(llhd::DriveOp driveOp,
+                                                 InstanceId instanceId);
+
+  /// Evaluate tri-state-backed drive values from cond/src/else rule intent
+  /// instead of reading potentially bus-mirrored destination field storage.
+  /// Returns true when the drive value was derived from a tri-state rule.
+  bool tryEvaluateTriStateDestDriveValue(llhd::DriveOp driveOp,
+                                         SignalId targetSigId,
+                                         InterpretedValue &driveVal);
+
   /// Execute a single continuous assignment (static module-level drive).
   void executeContinuousAssignment(llhd::DriveOp driveOp);
 
@@ -2165,6 +2178,11 @@ private:
   /// Reverse map to quickly find tri-state rules affected by a source update.
   llvm::DenseMap<SignalId, llvm::SmallVector<unsigned, 2>>
       interfaceTriStateRulesBySource;
+
+  /// Cache for tri-state-backed drive source field detection.
+  /// Key = hash(drive op pointer, instance ID), value = source field SignalId
+  /// (or 0 when no tri-state-backed field source was detected).
+  llvm::DenseMap<uint64_t, SignalId> triStateDriveSourceFieldCache;
 
   /// Last observed condition bit per tri-state destination field. Used by
   /// suppressed mirror-store handling to apply rule-derived release values only
