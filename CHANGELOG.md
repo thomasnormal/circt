@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1520 - February 19, 2026
+
+### circt-sim: multiblock thunk waiting-resume fix + I3C fork-runtime trace instrumentation
+
+1. **Fixed multiblock thunk waiting-state fallthrough during saved call-stack resume**  
+   (`tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`):
+   - made the `state.waiting` handling in
+     `executeMultiBlockTerminatingNativeThunk` mutually exclusive.
+   - prevents `callStack`/`sequencerGetRetryCallOp` resume paths from falling
+     into spurious `unexpected_resume_state` deopt.
+
+2. **Unit coverage for multiblock saved-call-stack resume**  
+   (`unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`):
+   - `LLHDProcessInterpreterToolTest.MultiBlockThunkResumesSavedCallStackWhenWaiting`
+     now passes and locks the non-deopt resume behavior.
+
+3. **Added dedicated I3C fork-runtime trace mode**  
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp/.h`):
+   - new env flag: `CIRCT_SIM_TRACE_I3C_FORK_RUNTIME=1`.
+   - emits high-context trace lines at `join_none` and `sim.disable_fork`
+     boundaries with:
+     - parent/child process IDs and scheduler state
+     - function name
+     - call-stack depth
+     - current/destination block + op identity.
+   - trace tags include:
+     `join_none_check`, `join_none_resume`, `disable_fork_enter`,
+     `disable_fork_defer`, `disable_fork_kill`, `disable_fork_resume_parent`.
+
+4. **Regression coverage for new trace contract**  
+   (`test/Tools/circt-sim/fork-disable-ready-wakeup.sv`):
+   - added trace-mode run line and FileCheck assertions for
+     `[I3C-FORK-RUNTIME]` output fields.
+
+5. **Validation**:
+   - build:
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+     - `ninja -C build-test -j4 CIRCTSimToolTests`: PASS.
+   - focused lit:
+     - `python3 llvm/llvm/utils/lit/lit.py -sv --filter "fork-disable-ready-wakeup|fork-disable-defer-poll|jit-process-thunk-multiblock-call-indirect-delay-halt|jit-process-thunk-multiblock-call-indirect-process-await-halt|jit-process-thunk-single-block-call-indirect-fork-callstack-halt" build-test/test/Tools/circt-sim`: PASS (`5/5`).
+   - focused unit:
+     - `build-test/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter='LLHDProcessInterpreterToolTest.TrivialThunkResumesSavedCallStackWhenWaiting:LLHDProcessInterpreterToolTest.MultiBlockThunkResumesSavedCallStackWhenWaiting:LLHDProcessInterpreterToolTest.TrivialThunkDeoptsWithSavedCallStack'`: PASS (`3/3`).
+   - deterministic I3C compile lane:
+     - `/tmp/avip-circt-sim-i3c-postfix-20260219-000042/compile/matrix.tsv`: sim `OK`, `deopt_process_rows=0`.
+     - `/tmp/avip-circt-sim-i3c-runtime-trace-20260219-001247/compile/matrix.tsv`: sim `OK`, `deopt_process_rows=0`, trace lines emitted.
+     - parity gap remains: `UVM_ERROR ... i3c_scoreboard.sv(162)` and
+       `uvm_pkg::uvm_root::die` call-indirect warning observed in logs.
+
 ## Iteration 1519 - February 18, 2026
 
 ### avip runner: align timeout policy to preserve JIT reports on bounded compile lanes

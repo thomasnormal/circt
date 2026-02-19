@@ -508,6 +508,8 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   traceAnalysisEnabled = std::getenv("CIRCT_SIM_TRACE_ANALYSIS") != nullptr;
   traceConfigDbEnabled = std::getenv("CIRCT_SIM_TRACE_CONFIG_DB") != nullptr;
   traceForkJoinEnabled = envFlagEnabled("CIRCT_SIM_TRACE_FORK_JOIN");
+  traceI3CForkRuntimeEnabled =
+      envFlagEnabled("CIRCT_SIM_TRACE_I3C_FORK_RUNTIME");
   traceCallIndirectSiteCacheEnabled =
       envFlagEnabled("CIRCT_SIM_TRACE_CALL_INDIRECT_SITE_CACHE");
   flushProcPrintEnabled = envFlagEnabled("CIRCT_SIM_FLUSH_PROC_PRINT");
@@ -3839,7 +3841,35 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
   // Get signal name - use the optional name attribute if present
   std::string name = sigOp.getName().value_or("").str();
   if (name.empty()) {
-    // Generate a name based on the SSA value
+    // Try to derive name from hw.output: if this signal is probed by an
+    // hw.output operand, use the corresponding output port name.  This ensures
+    // output port signals registered in circt-sim.cpp (by port name) get reused
+    // instead of creating duplicate signal IDs.
+    if (auto hwMod = sigOp->getParentOfType<hw::HWModuleOp>()) {
+      auto *terminator = hwMod.getBodyBlock()->getTerminator();
+      if (auto outputOp = dyn_cast<hw::OutputOp>(terminator)) {
+        auto portList = hwMod.getPortList();
+        unsigned outputIdx = 0;
+        for (auto portInfo : portList) {
+          if (portInfo.isOutput()) {
+            if (outputIdx < outputOp.getNumOperands()) {
+              auto outputVal = outputOp.getOperand(outputIdx);
+              // Trace through llhd.prb to find the backing llhd.sig
+              if (auto prbOp = outputVal.getDefiningOp<llhd::ProbeOp>()) {
+                if (prbOp.getSignal() == sigOp.getResult()) {
+                  name = portInfo.getName().str();
+                  break;
+                }
+              }
+            }
+            ++outputIdx;
+          }
+        }
+      }
+    }
+  }
+  if (name.empty()) {
+    // Fallback: generate a name based on the SSA value
     name = "sig_" + std::to_string(valueToSignal.size());
   }
 
@@ -3856,10 +3886,18 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
       resolution = SignalResolution::WiredOr;
   }
 
-  // Register with the scheduler
-  SignalId sigId =
-      scheduler.registerSignal(name, width, getSignalEncoding(innerType),
-                               resolution);
+  // Check if a signal with this name was already registered (e.g., from
+  // module port registration in circt-sim.cpp). If so, reuse its signal ID
+  // to ensure VPI writes to port signals are visible to LLHD processes.
+  // Without this, VPI and the interpreter use different signal IDs for the
+  // same conceptual signal, causing process sensitivity to miss VPI updates.
+  SignalId sigId = 0;
+  if (!name.empty())
+    sigId = scheduler.findSignalByName(name);
+  if (sigId == 0) {
+    sigId = scheduler.registerSignal(name, width,
+                                     getSignalEncoding(innerType), resolution);
+  }
 
   // Store the mapping
   valueToSignal[sigOp.getResult()] = sigId;
@@ -4776,7 +4814,7 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
                                                 : std::to_string(driveVal.getUInt64()))
                             << " at time " << targetTime.realTime << " fs\n");
 
-    // Schedule the signal update.
+    // Apply the signal update.
     // Use updateSignalWithStrength for multi-driver resolution (wand/wor).
     SignalValue newVal = driveVal.toSignalValue();
 
@@ -4799,6 +4837,8 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
                                                             activeInstanceId)
                             : static_cast<uint64_t>(sigId);
 
+    // Keep module-level drives in the scheduler to preserve NBA ordering
+    // against other same-time updates (for example, init-time llhd.sig drives).
     scheduler.getEventScheduler().schedule(
         targetTime, SchedulingRegion::NBA,
         Event([this, sigId, driverId, newVal, strength0, strength1]() {
@@ -6250,6 +6290,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     ArrayCreate,
     ArraySlice,
     ArrayConcat,
+    ArrayInject,
     StructCreate,
     StructInject,
     StructInjectLegacy,
@@ -6662,6 +6703,16 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         auto concatOp = current.getDefiningOp<hw::ArrayConcatOp>();
         for (Value input : concatOp.getInputs())
           pushValue(input);
+        continue;
+      }
+
+      if (current.getDefiningOp<hw::ArrayInjectOp>()) {
+        frame.kind = EvalKind::ArrayInject;
+        frame.stage = 1;
+        auto injectOp = current.getDefiningOp<hw::ArrayInjectOp>();
+        pushValue(injectOp.getInput());
+        pushValue(injectOp.getIndex());
+        pushValue(injectOp.getElement());
         continue;
       }
 
@@ -7128,6 +7179,39 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       } else {
         finish(InterpretedValue(result));
       }
+      break;
+    }
+    case EvalKind::ArrayInject: {
+      auto injectOp = current.getDefiningOp<hw::ArrayInjectOp>();
+      InterpretedValue arrayVal = getCached(injectOp.getInput());
+      InterpretedValue indexVal = getCached(injectOp.getIndex());
+      InterpretedValue elemVal = getCached(injectOp.getElement());
+
+      auto arrayType = cast<hw::ArrayType>(injectOp.getInput().getType());
+      unsigned elementWidth = getTypeWidth(arrayType.getElementType());
+      unsigned numElements = arrayType.getNumElements();
+      unsigned totalWidth = elementWidth * numElements;
+
+      if (indexVal.isX()) {
+        finish(InterpretedValue::makeX(totalWidth));
+        break;
+      }
+
+      uint64_t idx = indexVal.getAPInt().getZExtValue();
+      if (idx >= numElements) {
+        finish(arrayVal);
+        break;
+      }
+
+      APInt result = arrayVal.isX() ? APInt(totalWidth, 0) : arrayVal.getAPInt();
+      APInt elemBits = elemVal.isX() ? APInt(elementWidth, 0)
+                                     : elemVal.getAPInt().zextOrTrunc(elementWidth);
+
+      unsigned offset = idx * elementWidth;
+      APInt mask = APInt::getBitsSet(totalWidth, offset, offset + elementWidth);
+      result &= ~mask;
+      result |= elemBits.zext(totalWidth) << offset;
+      finish(InterpretedValue(result));
       break;
     }
     case EvalKind::StructCreate: {
@@ -8346,6 +8430,8 @@ void LLHDProcessInterpreter::registerProcessState(
   if (!insertResult.second)
     insertResult.first->second = std::move(state);
 
+  initializeNativeThunkRootRegion(insertResult.first->second);
+
   // If an explicit seed was provided (e.g. from a parent RNG during fork),
   // use it; otherwise fall back to the default deterministic seed.
   uint32_t seed = initialSeed.value_or(static_cast<uint32_t>(procId) ^ 0xC0FFEEu);
@@ -8354,6 +8440,62 @@ void LLHDProcessInterpreter::registerProcessState(
   uint64_t handle =
       reinterpret_cast<uint64_t>(&insertResult.first->second);
   processHandleToId[handle] = procId;
+}
+
+void LLHDProcessInterpreter::initializeNativeThunkRootRegion(
+    ProcessExecutionState &state) {
+  if (state.nativeThunkRootRegion)
+    return;
+
+  if (state.currentBlock) {
+    state.nativeThunkRootRegion = state.currentBlock->getParent();
+    return;
+  }
+
+  if (auto processOp = state.getProcessOp()) {
+    state.nativeThunkRootRegion = &processOp.getBody();
+    return;
+  }
+
+  if (auto combOp = state.getCombinationalOp()) {
+    state.nativeThunkRootRegion = &combOp.getBody();
+    return;
+  }
+
+  if (auto initialOp = state.getInitialOp()) {
+    if (auto *bodyBlock = initialOp.getBodyBlock())
+      state.nativeThunkRootRegion = bodyBlock->getParent();
+  }
+}
+
+const mlir::Region *LLHDProcessInterpreter::resolveNativeThunkProcessRegion(
+    const ProcessExecutionState &state) const {
+  if (state.nativeThunkRootRegion)
+    return state.nativeThunkRootRegion;
+
+  if (state.currentBlock)
+    return state.currentBlock->getParent();
+
+  if (auto processOp = state.getProcessOp())
+    return &processOp.getBody();
+
+  if (auto combOp = state.getCombinationalOp())
+    return &combOp.getBody();
+
+  if (auto initialOp = state.getInitialOp()) {
+    if (auto *bodyBlock = initialOp.getBodyBlock())
+      return bodyBlock->getParent();
+  }
+
+  return nullptr;
+}
+
+mlir::Region *LLHDProcessInterpreter::resolveNativeThunkProcessRegion(
+    ProcessExecutionState &state) {
+  initializeNativeThunkRootRegion(state);
+  return const_cast<mlir::Region *>(
+      resolveNativeThunkProcessRegion(static_cast<const ProcessExecutionState &>(
+          state)));
 }
 
 void LLHDProcessInterpreter::notifyProcessAwaiters(ProcessId procId) {
@@ -8673,6 +8815,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
       joinNoneDisableForkResumeToken.erase(procId);
       joinNoneDisableForkResumePollCount.erase(procId);
       disableForkDeferredToken.erase(procId);
+      disableForkDeferredPollCount.erase(procId);
       notifyProcessAwaiters(procId);
       return;
     }
@@ -8694,6 +8837,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     joinNoneDisableForkResumeToken.erase(procId);
     joinNoneDisableForkResumePollCount.erase(procId);
     disableForkDeferredToken.erase(procId);
+    disableForkDeferredPollCount.erase(procId);
     if (it->second.waitConditionQueueAddr != 0) {
       removeQueueNotEmptyWaiter(procId);
       it->second.waitConditionQueueAddr = 0;
@@ -10666,6 +10810,48 @@ arith_dispatch:
     return success();
   }
 
+  if (auto arrayInjectOp = dyn_cast<hw::ArrayInjectOp>(op)) {
+    InterpretedValue arrayVal = getValue(procId, arrayInjectOp.getInput());
+    InterpretedValue indexVal = getValue(procId, arrayInjectOp.getIndex());
+    InterpretedValue elemVal = getValue(procId, arrayInjectOp.getElement());
+
+    auto arrayType = cast<hw::ArrayType>(arrayInjectOp.getInput().getType());
+    unsigned elementWidth = getTypeWidth(arrayType.getElementType());
+    unsigned numElements = arrayType.getNumElements();
+    unsigned totalWidth = elementWidth * numElements;
+
+    if (indexVal.isX()) {
+      setValue(procId, arrayInjectOp.getResult(),
+               InterpretedValue::makeX(totalWidth));
+      return success();
+    }
+
+    uint64_t idx = indexVal.getAPInt().getZExtValue();
+    if (idx >= numElements) {
+      // Out of bounds - return input unchanged
+      setValue(procId, arrayInjectOp.getResult(), arrayVal);
+      return success();
+    }
+
+    // Start with the input array. If X, treat as all-zeros so that the
+    // injected element is preserved (matching 4-state semantics where
+    // uninitialized array elements are zero/X but the written one is valid).
+    APInt result = arrayVal.isX() ? APInt(totalWidth, 0) : arrayVal.getAPInt();
+    APInt elemBits = elemVal.isX() ? APInt(elementWidth, 0)
+                                   : elemVal.getAPInt().zextOrTrunc(elementWidth);
+
+    // Array element 0 is at LSB (offset 0), matching CIRCT hw dialect convention.
+    unsigned offset = idx * elementWidth;
+
+    // Clear old bits and insert new element.
+    APInt mask = APInt::getBitsSet(totalWidth, offset, offset + elementWidth);
+    result &= ~mask;
+    result |= elemBits.zext(totalWidth) << offset;
+
+    setValue(procId, arrayInjectOp.getResult(), InterpretedValue(result));
+    return success();
+  }
+
   if (auto arrayConcatOp = dyn_cast<hw::ArrayConcatOp>(op)) {
     auto resultType = hw::type_cast<hw::ArrayType>(arrayConcatOp.getType());
     unsigned resultWidth = getTypeWidth(resultType.getElementType()) *
@@ -11355,6 +11541,19 @@ llvm_dispatch:
     } else {
       // Pass through known values
       setValue(procId, freezeOp.getResult(), input);
+    }
+    return success();
+  }
+
+  // LLVM ctpop - count number of set bits (population count)
+  if (auto ctpopOp = dyn_cast<LLVM::CtPopOp>(op)) {
+    InterpretedValue input = getValue(procId, ctpopOp.getOperand());
+    unsigned width = getTypeWidth(ctpopOp.getType());
+    if (input.isX()) {
+      setValue(procId, ctpopOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      setValue(procId, ctpopOp.getResult(),
+               InterpretedValue(input.getAPInt().popcount(), width));
     }
     return success();
   }
@@ -19374,10 +19573,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_CALLSTACK");
           return env && env[0] != '\0' && env[0] != '0';
         }();
-        static bool traceCallStackFrames = []() {
-          const char *env = std::getenv("CIRCT_SIM_TRACE_CALLSTACK_FRAMES");
-          return env && env[0] != '\0' && env[0] != '0';
-        }();
 
         // If waiting (not halted), save the call stack frame so we can resume
         // from the NEXT operation after the one that caused the wait.
@@ -19403,14 +19598,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
               currentBlock != &entryBlock) {
             if (elideTailWrapperFrame) {
               haltCheckState->callStackOutermostCallOp = callOp;
-              if (traceCallStackFrames) {
-                llvm::errs() << "[CS-FRAME-SAVE] proc=" << procId
-                             << " mode=elide-tail"
-                             << " func=" << funcOp.getName() << " next_is_end="
-                             << (nextOpIt == currentBlock->end())
-                             << " block_ops="
-                             << currentBlock->getOperations().size() << "\n";
-              }
               static bool traceTailWrapperFastPath = []() {
                 const char *env =
                     std::getenv("CIRCT_SIM_TRACE_TAIL_WRAPPER_FASTPATH");
@@ -19456,16 +19643,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
               CallStackFrame frame(funcOp, currentBlock, nextOpIt, callOp);
               frame.args.assign(args.begin(), args.end());
               haltCheckState->callStack.push_back(std::move(frame));
-              if (traceCallStackFrames) {
-                llvm::errs() << "[CS-FRAME-SAVE] proc=" << procId
-                             << " mode=push"
-                             << " func=" << funcOp.getName() << " next_is_end="
-                             << (nextOpIt == currentBlock->end())
-                             << " block_ops="
-                             << currentBlock->getOperations().size()
-                             << " stack_size=" << haltCheckState->callStack.size()
-                             << "\n";
-              }
               if (traceI3CCallStackSave &&
                   (funcOp.getName().contains("i3c_target_monitor_bfm::") ||
                    funcOp.getName().contains("i3c_target_driver_bfm::") ||
@@ -20839,6 +21016,77 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
   scheduler.scheduleProcess(procId, SchedulingRegion::Active);
 }
 
+void LLHDProcessInterpreter::traceI3CForkRuntimeEvent(
+    llvm::StringRef tag, ProcessId parentProcId, ProcessId childProcId,
+    ForkId forkId, llvm::StringRef mode) {
+  if (!traceI3CForkRuntimeEnabled)
+    return;
+
+  auto procStateToString = [](ProcessState state) -> const char * {
+    switch (state) {
+    case ProcessState::Uninitialized:
+      return "Uninitialized";
+    case ProcessState::Ready:
+      return "Ready";
+    case ProcessState::Running:
+      return "Running";
+    case ProcessState::Waiting:
+      return "Waiting";
+    case ProcessState::Suspended:
+      return "Suspended";
+    case ProcessState::Terminated:
+      return "Terminated";
+    }
+    return "Unknown";
+  };
+  auto emitProc = [&](llvm::StringRef label, ProcessId pid) {
+    llvm::errs() << " " << label << "=" << pid;
+    auto stateIt = processStates.find(pid);
+    if (stateIt == processStates.end()) {
+      llvm::errs() << " " << label << "_state=<missing>";
+      return;
+    }
+    const auto &st = stateIt->second;
+    Process *proc = scheduler.getProcess(pid);
+    llvm::errs() << " " << label
+                 << "_sched="
+                 << (proc ? procStateToString(proc->getState()) : "<none>")
+                 << " " << label << "_halted=" << (st.halted ? 1 : 0)
+                 << " " << label << "_waiting=" << (st.waiting ? 1 : 0)
+                 << " " << label << "_call_stack=" << st.callStack.size()
+                 << " " << label << "_func=" << st.currentFuncName;
+    if (st.currentBlock) {
+      llvm::errs() << " " << label
+                   << "_current_block_ops="
+                   << st.currentBlock->getOperations().size();
+      if (st.currentOp == st.currentBlock->end())
+        llvm::errs() << " " << label << "_current_op=<end>";
+      else
+        llvm::errs() << " " << label
+                     << "_current_op=" << st.currentOp->getName().getStringRef();
+    } else {
+      llvm::errs() << " " << label << "_current_block=<null>";
+    }
+    if (st.destBlock) {
+      llvm::errs() << " " << label
+                   << "_dest_block_ops=" << st.destBlock->getOperations().size()
+                   << " " << label << "_dest_args=" << st.destOperands.size()
+                   << " " << label
+                   << "_resume_at_current_op=" << (st.resumeAtCurrentOp ? 1 : 0);
+    } else {
+      llvm::errs() << " " << label << "_dest_block=<null>";
+    }
+  };
+
+  llvm::errs() << "[I3C-FORK-RUNTIME] tag=" << tag << " fork=" << forkId;
+  if (!mode.empty())
+    llvm::errs() << " mode=" << mode;
+  emitProc("parent", parentProcId);
+  if (childProcId != InvalidProcessId)
+    emitProc("child", childProcId);
+  llvm::errs() << "\n";
+}
+
 void LLHDProcessInterpreter::pollJoinNoneDisableForkResume(
     ProcessId procId, ForkId forkId, uint64_t token) {
   auto procStateToString = [](ProcessState state) -> const char * {
@@ -20895,6 +21143,8 @@ void LLHDProcessInterpreter::pollJoinNoneDisableForkResume(
                      << " halted=" << (childStateIt->second.halted ? 1 : 0)
                      << " steps=" << childStateIt->second.totalSteps << "\n";
       }
+      if (traceI3CForkRuntimeEnabled && pollCount == 0)
+        traceI3CForkRuntimeEvent("join_none_check", procId, childId, forkId);
       if (childProc) {
         if (childProc->getState() == ProcessState::Ready) {
           waitingForChildReady = true;
@@ -20917,6 +21167,9 @@ void LLHDProcessInterpreter::pollJoinNoneDisableForkResume(
       llvm::errs() << "[JOIN-NONE-WAIT] parent=" << procId
                    << " fork=" << forkId << " poll=" << pollCount
                    << " child=" << pendingChildId << "\n";
+    if (traceI3CForkRuntimeEnabled && pollCount <= 4)
+      traceI3CForkRuntimeEvent("join_none_wait", procId, pendingChildId,
+                               forkId);
     scheduler.getEventScheduler().schedule(
         scheduler.getCurrentTime().nextDelta(), SchedulingRegion::Active,
         Event([this, procId, forkId, token]() {
@@ -20931,6 +21184,9 @@ void LLHDProcessInterpreter::pollJoinNoneDisableForkResume(
                  << " waitingForChildReady=" << (waitingForChildReady ? 1 : 0)
                  << "\n";
   }
+  if (traceI3CForkRuntimeEnabled)
+    traceI3CForkRuntimeEvent("join_none_resume", procId, InvalidProcessId,
+                             forkId);
 
   joinNoneDisableForkResumeFork.erase(procId);
   joinNoneDisableForkResumeToken.erase(procId);
@@ -21545,6 +21801,153 @@ LogicalResult LLHDProcessInterpreter::interpretSimWaitFork(
   return success();
 }
 
+bool LLHDProcessInterpreter::shouldDeferDisableFork(ProcessId procId,
+                                                    ProcessId &deferChildId,
+                                                    ForkId &deferForkId,
+                                                    ProcessState &deferChildSchedState) {
+  deferChildId = InvalidProcessId;
+  deferForkId = 0;
+  deferChildSchedState = ProcessState::Uninitialized;
+  auto forkIds = forkJoinManager.getForksForParent(procId);
+  for (ForkId forkId : forkIds) {
+    auto *group = forkJoinManager.getForkGroup(forkId);
+    if (!group)
+      continue;
+    for (ProcessId childId : group->childProcesses) {
+      auto childStateIt = processStates.find(childId);
+      if (childStateIt == processStates.end() || childStateIt->second.halted)
+        continue;
+      if (!childStateIt->second.waiting)
+        continue;
+      if (childStateIt->second.totalSteps == 0)
+        continue;
+      Process *childProc = scheduler.getProcess(childId);
+      if (!childProc)
+        continue;
+      ProcessState childSchedState = childProc->getState();
+      // Defer only for children that have pending runnable work (ready or
+      // suspended with a pending wake). Deferring pure waiting children can
+      // overrun monitor sampling loops before disable_fork takes effect.
+      if (childSchedState != ProcessState::Ready &&
+          childSchedState != ProcessState::Suspended)
+        continue;
+      deferChildId = childId;
+      deferForkId = forkId;
+      deferChildSchedState = childSchedState;
+      return true;
+    }
+  }
+  return false;
+}
+
+void LLHDProcessInterpreter::fireDeferredDisableFork(ProcessId procId,
+                                                     uint64_t deferToken) {
+  static bool traceDisableFork = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_DISABLE_FORK");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto stateToString = [](ProcessState state) -> const char * {
+    switch (state) {
+    case ProcessState::Uninitialized:
+      return "Uninitialized";
+    case ProcessState::Ready:
+      return "Ready";
+    case ProcessState::Running:
+      return "Running";
+    case ProcessState::Waiting:
+      return "Waiting";
+    case ProcessState::Suspended:
+      return "Suspended";
+    case ProcessState::Terminated:
+      return "Terminated";
+    }
+    return "Unknown";
+  };
+
+  auto tokenIt = disableForkDeferredToken.find(procId);
+  if (tokenIt == disableForkDeferredToken.end() || tokenIt->second != deferToken)
+    return;
+  auto stateIt = processStates.find(procId);
+  if (stateIt == processStates.end() || stateIt->second.halted) {
+    disableForkDeferredToken.erase(procId);
+    disableForkDeferredPollCount.erase(procId);
+    return;
+  }
+
+  constexpr unsigned kMaxDisableForkDeferredPolls = 8;
+  ProcessId deferChildId = InvalidProcessId;
+  ForkId deferForkId = 0;
+  ProcessState deferChildSchedState = ProcessState::Uninitialized;
+  unsigned pollCount = disableForkDeferredPollCount[procId];
+  bool shouldContinueDeferring = shouldDeferDisableFork(
+      procId, deferChildId, deferForkId, deferChildSchedState);
+  unsigned pollLimit = kMaxDisableForkDeferredPolls;
+  if (shouldContinueDeferring && pollCount < pollLimit) {
+    ++disableForkDeferredPollCount[procId];
+    if (traceDisableFork) {
+      llvm::errs() << "[DISABLE-FORK-DEFER-POLL] parent=" << procId
+                   << " fork=" << deferForkId << " child=" << deferChildId
+                   << " poll=" << disableForkDeferredPollCount[procId] << "\n";
+    }
+    if (traceI3CForkRuntimeEnabled)
+      traceI3CForkRuntimeEvent("disable_fork_defer_poll", procId, deferChildId,
+                               deferForkId, "deferred");
+    scheduler.getEventScheduler().schedule(
+        scheduler.getCurrentTime().nextDelta(), SchedulingRegion::Active,
+        Event([this, procId, deferToken]() {
+          fireDeferredDisableFork(procId, deferToken);
+        }));
+    return;
+  }
+
+  disableForkDeferredToken.erase(tokenIt);
+  disableForkDeferredPollCount.erase(procId);
+
+  auto deferredForkIds = forkJoinManager.getForksForParent(procId);
+  if (traceDisableFork) {
+    llvm::errs() << "[DISABLE-FORK-DEFER-FIRE] parent=" << procId
+                 << " fork_count=" << deferredForkIds.size() << "\n";
+  }
+  for (ForkId forkId : deferredForkIds) {
+    if (auto *group = forkJoinManager.getForkGroup(forkId)) {
+      for (ProcessId childId : group->childProcesses) {
+        auto childStateIt = processStates.find(childId);
+        if (childStateIt == processStates.end() || childStateIt->second.halted)
+          continue;
+        if (traceDisableFork) {
+          auto *childProc = scheduler.getProcess(childId);
+          llvm::StringRef childFunc =
+              childStateIt->second.currentFuncName;
+          bool halted = childStateIt->second.halted;
+          bool waiting = childStateIt->second.waiting;
+          uint64_t steps = childStateIt->second.totalSteps;
+          llvm::errs() << "  [DISABLE-FORK-CHILD] parent=" << procId
+                       << " fork=" << forkId << " child=" << childId
+                       << " state="
+                       << (childProc ? stateToString(childProc->getState())
+                                     : "<none>")
+                       << " waiting=" << (waiting ? 1 : 0)
+                       << " halted=" << (halted ? 1 : 0)
+                       << " steps=" << steps << " mode=deferred"
+                       << " func=" << childFunc << "\n";
+        }
+        if (traceI3CForkRuntimeEnabled)
+          traceI3CForkRuntimeEvent("disable_fork_kill", procId, childId, forkId,
+                                   "deferred");
+        finalizeProcess(childId, /*killed=*/true);
+      }
+    }
+  }
+  auto resumeStateIt = processStates.find(procId);
+  if (resumeStateIt != processStates.end() && !resumeStateIt->second.halted) {
+    resumeStateIt->second.waiting = false;
+    if (traceI3CForkRuntimeEnabled)
+      traceI3CForkRuntimeEvent("disable_fork_resume_parent", procId,
+                               InvalidProcessId, 0, "deferred");
+    scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+  }
+}
+
 LogicalResult LLHDProcessInterpreter::interpretSimDisableFork(
     ProcessId procId, sim::SimDisableForkOp disableForkOp) {
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.disable_fork\n");
@@ -21575,41 +21978,17 @@ LogicalResult LLHDProcessInterpreter::interpretSimDisableFork(
     llvm::errs() << "[DISABLE-FORK] parent=" << procId
                  << " fork_count=" << forkIds.size() << "\n";
 
-  // If a child still has waiting=true in interpreter state but is in a
-  // schedulable/transient scheduler state (READY or SUSPENDED), immediate
-  // disable can race with the child's pending wakeup consumption. Defer
-  // disable_fork once to the next delta so pending wakeups are observed first.
-  bool shouldDeferDisable = false;
   ProcessId deferChildId = InvalidProcessId;
   ForkId deferForkId = 0;
-  for (ForkId forkId : forkIds) {
-    auto *group = forkJoinManager.getForkGroup(forkId);
-    if (!group)
-      continue;
-    for (ProcessId childId : group->childProcesses) {
-      auto childStateIt = processStates.find(childId);
-      if (childStateIt == processStates.end() || childStateIt->second.halted)
-        continue;
-      Process *childProc = scheduler.getProcess(childId);
-      if (!childProc)
-        continue;
-      ProcessState childSchedState = childProc->getState();
-      if (childSchedState != ProcessState::Ready &&
-          childSchedState != ProcessState::Suspended)
-        continue;
-      if (!childStateIt->second.waiting)
-        continue;
-      if (childStateIt->second.totalSteps == 0)
-        continue;
-      shouldDeferDisable = true;
-      deferChildId = childId;
-      deferForkId = forkId;
-      break;
-    }
-    if (shouldDeferDisable)
-      break;
-  }
-
+  ProcessState deferChildSchedState = ProcessState::Uninitialized;
+  bool shouldDeferDisable = shouldDeferDisableFork(
+      procId, deferChildId, deferForkId, deferChildSchedState);
+  if (traceI3CForkRuntimeEnabled)
+    traceI3CForkRuntimeEvent("disable_fork_enter", procId,
+                             shouldDeferDisable ? deferChildId
+                                                : InvalidProcessId,
+                             shouldDeferDisable ? deferForkId : 0,
+                             shouldDeferDisable ? "deferred" : "immediate");
   if (shouldDeferDisable) {
     auto stateIt = processStates.find(procId);
     if (stateIt != processStates.end() && !stateIt->second.halted) {
@@ -21618,94 +21997,42 @@ LogicalResult LLHDProcessInterpreter::interpretSimDisableFork(
       if (Process *proc = scheduler.getProcess(procId))
         proc->setState(ProcessState::Waiting);
       uint64_t deferToken = ++disableForkDeferredToken[procId];
+      disableForkDeferredPollCount[procId] = 0;
       if (traceDisableFork) {
         llvm::errs() << "[DISABLE-FORK-DEFER] parent=" << procId
-                     << " fork=" << deferForkId
-                     << " child=" << deferChildId
+                     << " fork=" << deferForkId << " child=" << deferChildId
+                     << " child_state=" << stateToString(deferChildSchedState)
                      << " token=" << deferToken << "\n";
       }
+      if (traceI3CForkRuntimeEnabled)
+        traceI3CForkRuntimeEvent("disable_fork_defer", procId, deferChildId,
+                                 deferForkId, "deferred");
       scheduler.getEventScheduler().schedule(
           scheduler.getCurrentTime().nextDelta().nextDelta(),
-          SchedulingRegion::Inactive,
-          Event([this, procId, deferToken, stateToString]() {
-            auto tokenIt = disableForkDeferredToken.find(procId);
-            if (tokenIt == disableForkDeferredToken.end() ||
-                tokenIt->second != deferToken)
-              return;
-            auto stateIt = processStates.find(procId);
-            if (stateIt == processStates.end() || stateIt->second.halted) {
-              disableForkDeferredToken.erase(procId);
-              return;
-            }
-            disableForkDeferredToken.erase(tokenIt);
-
-            auto deferredForkIds = forkJoinManager.getForksForParent(procId);
-            if (traceDisableFork) {
-              llvm::errs() << "[DISABLE-FORK-DEFER-FIRE] parent=" << procId
-                           << " fork_count=" << deferredForkIds.size() << "\n";
-            }
-            for (ForkId forkId : deferredForkIds) {
-              if (auto *group = forkJoinManager.getForkGroup(forkId)) {
-                for (ProcessId childId : group->childProcesses) {
-                  if (traceDisableFork) {
-                    auto *childProc = scheduler.getProcess(childId);
-                    auto childStateIt = processStates.find(childId);
-                    llvm::StringRef childFunc =
-                        childStateIt != processStates.end()
-                            ? childStateIt->second.currentFuncName
-                            : llvm::StringRef("-");
-                    bool halted = childStateIt != processStates.end() &&
-                                  childStateIt->second.halted;
-                    bool waiting = childStateIt != processStates.end() &&
-                                   childStateIt->second.waiting;
-                    uint64_t steps = childStateIt != processStates.end()
-                                         ? childStateIt->second.totalSteps
-                                         : 0;
-                    llvm::errs()
-                        << "  [DISABLE-FORK-CHILD] parent=" << procId
-                        << " fork=" << forkId << " child=" << childId
-                        << " state="
-                        << (childProc ? stateToString(childProc->getState())
-                                      : "<none>")
-                        << " waiting=" << (waiting ? 1 : 0)
-                        << " halted=" << (halted ? 1 : 0)
-                        << " steps=" << steps
-                        << " mode=deferred"
-                        << " func=" << childFunc << "\n";
-                  }
-                  finalizeProcess(childId, /*killed=*/true);
-                }
-              }
-            }
-            auto resumeStateIt = processStates.find(procId);
-            if (resumeStateIt != processStates.end() && !resumeStateIt->second.halted) {
-              resumeStateIt->second.waiting = false;
-              scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-            }
+          SchedulingRegion::Inactive, Event([this, procId, deferToken]() {
+            fireDeferredDisableFork(procId, deferToken);
           }));
       return success();
     }
   }
 
   disableForkDeferredToken.erase(procId);
+  disableForkDeferredPollCount.erase(procId);
 
-  // Disable all fork groups created by this process
+  // Disable all fork groups created by this process.
   for (ForkId forkId : forkIds) {
     if (auto *group = forkJoinManager.getForkGroup(forkId)) {
       for (ProcessId childId : group->childProcesses) {
+        auto childStateIt = processStates.find(childId);
+        if (childStateIt == processStates.end() || childStateIt->second.halted)
+          continue;
         if (traceDisableFork) {
           auto *childProc = scheduler.getProcess(childId);
-          auto childStateIt = processStates.find(childId);
-          llvm::StringRef childFunc = childStateIt != processStates.end()
-                                          ? childStateIt->second.currentFuncName
-                                          : llvm::StringRef("-");
-          bool halted =
-              childStateIt != processStates.end() && childStateIt->second.halted;
-          bool waiting =
-              childStateIt != processStates.end() && childStateIt->second.waiting;
-          uint64_t steps = childStateIt != processStates.end()
-                               ? childStateIt->second.totalSteps
-                               : 0;
+          llvm::StringRef childFunc =
+              childStateIt->second.currentFuncName;
+          bool halted = childStateIt->second.halted;
+          bool waiting = childStateIt->second.waiting;
+          uint64_t steps = childStateIt->second.totalSteps;
           llvm::errs() << "  [DISABLE-FORK-CHILD] parent=" << procId
                        << " fork=" << forkId << " child=" << childId
                        << " state="
@@ -21713,10 +22040,12 @@ LogicalResult LLHDProcessInterpreter::interpretSimDisableFork(
                                      : "<none>")
                        << " waiting=" << (waiting ? 1 : 0)
                        << " halted=" << (halted ? 1 : 0)
-                       << " steps=" << steps
-                       << " mode=immediate"
+                       << " steps=" << steps << " mode=immediate"
                        << " func=" << childFunc << "\n";
         }
+        if (traceI3CForkRuntimeEnabled)
+          traceI3CForkRuntimeEvent("disable_fork_kill", procId, childId, forkId,
+                                   "immediate");
         finalizeProcess(childId, /*killed=*/true);
       }
     }

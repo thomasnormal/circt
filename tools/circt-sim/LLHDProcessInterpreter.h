@@ -453,6 +453,12 @@ struct ProcessExecutionState {
   /// defined within the fork body are local to the child.
   ProcessId parentProcessId = 0;
 
+  /// Stable region anchor used by native thunk classification/execution.
+  /// For fork children this is the fork-branch region, not the owning
+  /// llhd.process body. Keeping this stable avoids drifting to transient
+  /// function-body regions when currentBlock changes during call-stack resume.
+  mlir::Region *nativeThunkRootRegion = nullptr;
+
   /// Native-thunk resume token used for resumable compiled process patterns.
   uint64_t jitThunkResumeToken = 0;
 
@@ -950,6 +956,14 @@ private:
   /// Resume a process after a wait condition is satisfied.
   void resumeProcess(ProcessId procId);
 
+  /// Initialize the stable native-thunk region anchor for a process state.
+  void initializeNativeThunkRootRegion(ProcessExecutionState &state);
+
+  /// Resolve the stable region used by native thunk policy/execution.
+  const mlir::Region *
+  resolveNativeThunkProcessRegion(const ProcessExecutionState &state) const;
+  mlir::Region *resolveNativeThunkProcessRegion(ProcessExecutionState &state);
+
   /// Compile-mode process thunk installation outcome.
   enum class ProcessThunkInstallResult {
     Installed,
@@ -1271,6 +1285,13 @@ private:
                                            int64_t objectionCount);
   void pollJoinNoneDisableForkResume(ProcessId procId, ForkId forkId,
                                      uint64_t token);
+  void traceI3CForkRuntimeEvent(llvm::StringRef tag, ProcessId parentProcId,
+                                ProcessId childProcId, ForkId forkId,
+                                llvm::StringRef mode = "");
+  bool shouldDeferDisableFork(ProcessId procId, ProcessId &deferChildId,
+                              ForkId &deferForkId,
+                              ProcessState &deferChildSchedState);
+  void fireDeferredDisableFork(ProcessId procId, uint64_t deferToken);
 
   /// Interpret a sim.fork operation.
   /// Creates child processes for each branch region and schedules them.
@@ -1950,6 +1971,10 @@ private:
 
   /// Cached env flag for fork/join diagnostics (CIRCT_SIM_TRACE_FORK_JOIN).
   bool traceForkJoinEnabled = false;
+  /// Cached env flag for I3C-focused fork runtime diagnostics.
+  /// Enables high-context parent/child trace lines at disable_fork and
+  /// join_none resume boundaries.
+  bool traceI3CForkRuntimeEnabled = false;
 
   /// Cached env flag for call_indirect site-cache diagnostics.
   bool traceCallIndirectSiteCacheEnabled = false;
@@ -2255,9 +2280,10 @@ private:
   std::map<ProcessId, uint64_t> joinNoneDisableForkResumeToken;
   std::map<ProcessId, unsigned> joinNoneDisableForkResumePollCount;
 
-  /// One-shot deferral token for sim.disable_fork when a child is Ready but
-  /// still marked waiting in interpreter state (wakeup not yet consumed).
+  /// Deferred disable_fork state for children that may still be consuming
+  /// pending wakeups in scheduler/interpreter state.
   std::map<ProcessId, uint64_t> disableForkDeferredToken;
+  std::map<ProcessId, unsigned> disableForkDeferredPollCount;
 
   /// Per-process phase address currently being executed by the phase hopper.
   /// Set when execute_phase is entered, used by raise/drop_objection
