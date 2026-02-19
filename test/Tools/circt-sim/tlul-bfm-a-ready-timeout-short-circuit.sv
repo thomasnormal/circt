@@ -1,4 +1,5 @@
 // Test that tlul_bfm exits early when a_ready never asserts.
+// TODO: BFM timeout messages not printed — task-level $display in while loop not working.
 // This avoids waiting for d_valid on a request that never handshakes.
 //
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw -I %S/../../../utils/opentitan_wrappers %s -o %t.mlir

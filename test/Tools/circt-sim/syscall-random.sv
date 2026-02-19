@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// TODO: $random(seed) does not update seed variable — seed output not wired.
 // Test $random, $urandom, $urandom_range
 module top;
   integer r1, r2;

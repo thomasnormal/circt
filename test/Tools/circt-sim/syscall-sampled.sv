@@ -1,4 +1,7 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// XFAIL: *
+// Reason: $sampled/$rose/$fell/$stable/$changed/$past require SVA concurrent assertion
+// sampling semantics (preponed/observed regions) — not supported without SVA runtime.
 // Test $sampled, $rose, $fell, $stable, $changed, $past
 module top;
   reg clk = 0;

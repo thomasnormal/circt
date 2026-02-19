@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// TODO: $fread not yet implemented in ImportVerilog/interpreter.
 module top;
   integer fd, code;
   reg [7:0] data [0:3];

@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// TODO: $printtimescale produces no output — timescale info not propagated to runtime.
 `timescale 1ns/1ps
 module top;
   initial begin

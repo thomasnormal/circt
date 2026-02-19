@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// TODO: Generate-for produces data=101 instead of data=0101 — width/padding issue.
 // Test generate for/if/case
 module top;
   parameter N = 4;

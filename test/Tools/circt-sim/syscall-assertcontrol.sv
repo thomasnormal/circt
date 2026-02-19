@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// TODO: $assertcontrol not yet suppressing immediate assertions at runtime.
 // Test $assertcontrol with various control types
 // control_type: 3=AssertOff, 4=AssertOn, 5=AssertKill
 module top;
