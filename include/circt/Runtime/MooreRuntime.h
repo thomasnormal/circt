@@ -2948,6 +2948,14 @@ int32_t __moore_fread(void *dest, int32_t elemWidth, int32_t elemStorageBytes,
 /// @return Non-zero if EOF has been reached, 0 otherwise
 int32_t __moore_feof(int32_t fd);
 
+/// Get file error status and message.
+/// Implements the SystemVerilog $ferror system function.
+/// IEEE 1800-2017 §21.3.1.
+/// @param fd File descriptor to check
+/// @param errMsg Output string to receive the error message
+/// @return 0 if no error, OS errno otherwise
+int32_t __moore_ferror(int32_t fd, MooreString *errMsg);
+
 /// Flush file output buffer.
 /// Implements the SystemVerilog $fflush system task.
 /// @param fd File descriptor to flush (0 flushes all files)

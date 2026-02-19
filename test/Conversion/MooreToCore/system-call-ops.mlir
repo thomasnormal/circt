@@ -107,8 +107,8 @@ moore.module @test_monitoroff() {
 
 // CHECK-LABEL: hw.module @test_printtimescale
 moore.module @test_printtimescale() {
-  // printtimescale is erased; since procedure becomes empty, initial block is also removed
-  // CHECK-NOT: printtimescale
+  // printtimescale is lowered to a runtime call
+  // CHECK: llvm.call @__moore_printtimescale
   // CHECK: hw.output
   moore.procedure initial {
     moore.builtin.printtimescale
@@ -123,7 +123,7 @@ moore.module @test_printtimescale() {
 
 // CHECK-LABEL: hw.module @test_ferror
 moore.module @test_ferror(out err: !moore.i32) {
-  // CHECK: hw.constant 0 : i32
+  // CHECK: llvm.call @__moore_ferror
   %result = moore.variable : <i32>
   moore.procedure initial {
     %fd = moore.constant 1 : i32
@@ -162,8 +162,8 @@ moore.module @test_fseek(out result: !moore.i32) {
 
 // CHECK-LABEL: hw.module @test_rewind
 moore.module @test_rewind() {
-  // rewind is erased; since procedure becomes empty, initial block is also removed
-  // CHECK-NOT: rewind
+  // rewind is lowered to a runtime call
+  // CHECK: llvm.call @__moore_rewind
   // CHECK: hw.output
   moore.procedure initial {
     %fd = moore.constant 1 : i32

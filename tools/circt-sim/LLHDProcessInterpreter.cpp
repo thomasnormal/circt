@@ -17317,7 +17317,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       proc->setState(ProcessState::Waiting);
 
     SimTime currentTime = scheduler.getCurrentTime();
-    constexpr int64_t kFallbackPollDelayFs = 10000; // 10 ps
+    // Avoid excessive polling churn in long-running UVM phase loops.
+    constexpr int64_t kFallbackPollDelayFs = 100000; // 100 ps
     SimTime targetTime;
     if (currentTime.realTime == 0) {
       // Keep UVM pre-run synchronization at time 0.
@@ -17953,6 +17954,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     auto &pState = processStates[procId];
     pState.waiting = true;
     pState.sequencerGetRetryCallOp = callOp.getOperation();
+    // Park the process on an empty sensitivity list and resume it only from
+    // sequencer push wakeups. This avoids unrelated event wakeups repeatedly
+    // re-entering empty get_next_item loops.
+    scheduler.suspendProcessForEvents(procId, SensitivityList());
     enqueueUvmSequencerGetWaiter(seqrQueueAddr, procId, callOp.getOperation());
     if (traceSeq)
       llvm::errs() << "[SEQ-FC] wait port=0x" << llvm::format_hex(portAddr, 16)
@@ -23118,10 +23123,11 @@ void LLHDProcessInterpreter::fireDeferredDisableFork(ProcessId procId,
   unsigned pollCount = disableForkDeferredPollCount[procId];
   bool shouldContinueDeferring = shouldDeferDisableFork(
       procId, deferChildId, deferForkId, deferChildSchedState);
-  // Waiting children get a short grace window to consume a pending wakeup
-  // without letting disable_fork defer through extended wait loops.
-  unsigned pollLimit = (deferChildSchedState == ProcessState::Waiting) ? 1
-                                                                        : kMaxDisableForkDeferredPolls;
+  // Waiting children may carry pending wakeups through nested call-stack resume
+  // for a few deltas before scheduler/interpreter state converges. Allow the
+  // same bounded defer budget so join_none+disable_fork monitor patterns can
+  // observe one final child iteration before kill.
+  unsigned pollLimit = kMaxDisableForkDeferredPolls;
   if (shouldContinueDeferring && pollCount < pollLimit) {
     ++disableForkDeferredPollCount[procId];
     if (traceDisableFork) {
@@ -31370,6 +31376,29 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         setValue(procId, callOp.getResult(),
                  InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_feof() = " << result
+                               << "\n");
+      return success();
+    }
+
+    // ---- __moore_ferror ----
+    if (calleeName == "__moore_ferror") {
+      int32_t result = 0;
+      if (callOp.getNumOperands() >= 1) {
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        // Call runtime with a temporary MooreString for the error message.
+        // The MooreToCore lowering allocates a stack temporary, but the
+        // interpreter handles this via a local MooreString.
+        MooreString errMsg = {nullptr, 0};
+        result = __moore_ferror(fd, &errMsg);
+        // Free any allocated error message string
+        if (errMsg.data)
+          std::free(errMsg.data);
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_ferror() = " << result
                                << "\n");
       return success();
     }

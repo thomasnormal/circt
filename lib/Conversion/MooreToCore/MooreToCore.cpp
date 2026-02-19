@@ -1981,6 +1981,9 @@ struct SVModuleOpConversion : public OpConversionPattern<SVModuleOp> {
     if (auto vpiPackages =
             op->getAttrOfType<DictionaryAttr>("vpi.packages"))
       hwModuleOp->setAttr("vpi.packages", vpiPackages);
+    if (auto vpiAllVars =
+            op->getAttrOfType<DictionaryAttr>("vpi.all_vars"))
+      hwModuleOp->setAttr("vpi.all_vars", vpiAllVars);
     // Make hw.module have the same visibility as the moore.module.
     // The entry/top level module is public, otherwise is private.
     SymbolTable::setSymbolVisibility(hwModuleOp,
@@ -14093,17 +14096,52 @@ struct PrintTimescaleBIOpConversion
   }
 };
 
-/// Conversion for moore.builtin.ferror -> constant 0 (stub)
-/// $ferror returns file error status
+/// Conversion for moore.builtin.ferror -> runtime call
+/// $ferror returns file error status and writes error message
 struct FErrorBIOpConversion : public OpConversionPattern<FErrorBIOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(FErrorBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Return 0 (no error) as a stub
-    auto i32Ty = rewriter.getI32Type();
-    rewriter.replaceOpWithNewOp<hw::ConstantOp>(op, i32Ty, 0);
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty, ptrTy});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_ferror", fnTy);
+
+    Value fd = adaptor.getFd();
+    if (isFourStateStructType(fd.getType()))
+      fd = extractFourStateValue(rewriter, loc, fd);
+    if (fd.getType() != i32Ty)
+      fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
+
+    // Allocate a temporary MooreString on the stack for the error message.
+    // MooreString is struct { ptr, i64 }, i.e. {!llvm.ptr, i64}.
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto mooreStringTy =
+        LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+    auto one = LLVM::ConstantOp::create(rewriter, loc, i64Ty, 1);
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, mooreStringTy, one);
+
+    // Zero-initialize the temporary string
+    auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+    auto zeroI64 = LLVM::ConstantOp::create(rewriter, loc, i64Ty, 0);
+    auto undef = LLVM::UndefOp::create(rewriter, loc, mooreStringTy);
+    auto s1 = LLVM::InsertValueOp::create(rewriter, loc, undef, nullPtr,
+                                          ArrayRef<int64_t>{0});
+    auto s2 = LLVM::InsertValueOp::create(rewriter, loc, s1, zeroI64,
+                                          ArrayRef<int64_t>{1});
+    LLVM::StoreOp::create(rewriter, loc, s2, strAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{fd, strAlloca});
+    rewriter.replaceOp(op, call.getResult());
     return success();
   }
 };
