@@ -72692,3 +72692,33 @@ See CHANGELOG.md on recent progress.
       - this is an incremental correctness fix; I3C parity remains open on the
         current deterministic lane (target coverage still 0%, delta-overflow
         still observed in full replay).
+75. `circt-sim` make empty `seq_item_pull_port::get` retry polling
+    delta-budget-aware and add regression
+    (February 19, 2026):
+    - root cause:
+      - empty-FIFO `get_next_item` retry used long delta-only polling windows,
+        which could exhaust per-time-step delta budgets under UVM fork load and
+        trigger `DELTA_OVERFLOW` before fallback time polling.
+    - fix:
+      - `include/circt/Dialect/Sim/ProcessScheduler.h`
+        - add `getMaxDeltaCycles()` accessor.
+      - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+        - derive retry delta budget from scheduler max-delta config,
+        - switch to 10ps fallback polling once budget is reached,
+        - apply conservative retry-budget cap (`256`).
+    - regression coverage:
+      - new:
+        - `test/Tools/circt-sim/seq-get-next-item-empty-fallback-backoff.mlir`
+      - validates no `DELTA_OVERFLOW` under tight budget
+        (`--max-deltas=8`) for empty `get_next_item` polling.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-sim`
+      - focused regressions: PASS
+        - `seq-get-next-item-empty-fallback-backoff.mlir`
+        - `finish-item-blocks-until-item-done.mlir`
+        - `wait-condition-queue-fallback-backoff.mlir`
+    - AVIP note:
+      - deterministic I3C replay still overflows in this branch, but the failure
+        point moves later (improved progress), indicating reduced retry-related
+        delta pressure while deeper loop sources remain.

@@ -3166,10 +3166,18 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       pState.waiting = true;
       pState.sequencerGetRetryCallOp = callIndirectOp.getOperation();
       SimTime currentTime = scheduler.getCurrentTime();
-      constexpr uint32_t kMaxDeltaPolls = 1000;
+      constexpr uint32_t kDeltaPollSafetyMargin = 32;
+      constexpr uint32_t kMaxDeltaPollBudgetCap = 256;
       constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
+      size_t configuredMaxDeltas = scheduler.getMaxDeltaCycles();
+      uint32_t deltaPollBudget = 0;
+      if (configuredMaxDeltas > kDeltaPollSafetyMargin) {
+        deltaPollBudget = static_cast<uint32_t>(std::min<size_t>(
+            configuredMaxDeltas - kDeltaPollSafetyMargin,
+            kMaxDeltaPollBudgetCap));
+      }
       SimTime targetTime;
-      if (currentTime.deltaStep < kMaxDeltaPolls)
+      if (currentTime.deltaStep < deltaPollBudget)
         targetTime = currentTime.nextDelta();
       else
         targetTime = currentTime.advanceTime(kFallbackPollDelayFs);

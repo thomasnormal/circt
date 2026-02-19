@@ -928,6 +928,9 @@ public:
   /// Set the maximum delta cycles to execute at a single time.
   void setMaxDeltaCycles(size_t maxDeltaCycles);
 
+  /// Get the configured maximum delta cycles per time step.
+  size_t getMaxDeltaCycles() const { return config.maxDeltaCycles; }
+
   /// Update a signal value, triggering sensitive processes.
   void updateSignal(SignalId signalId, const SignalValue &newValue);
 

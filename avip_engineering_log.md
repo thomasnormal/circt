@@ -2585,3 +2585,40 @@ Working hypothesis now:
 - This landing improves simulator correctness and guards a concrete bug class,
   but I3C parity/coverage closure is still blocked by a deeper runtime issue
   (target-side progression + delta-overflow).
+
+## 2026-02-19 Session: sequencer empty-get retry backoff hardening
+
+### Change set
+1. Added scheduler delta-budget accessor:
+   - `include/circt/Dialect/Sim/ProcessScheduler.h`
+     - `getMaxDeltaCycles()`
+2. Updated call_indirect empty-get retry scheduling:
+   - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+   - retry now uses scheduler-aware delta budget + 10ps fallback polling,
+     with conservative budget cap (`256`).
+3. Added regression:
+   - `test/Tools/circt-sim/seq-get-next-item-empty-fallback-backoff.mlir`
+
+### Validation
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Focused regressions PASS:
+   - `seq-get-next-item-empty-fallback-backoff.mlir`
+   - `finish-item-blocks-until-item-done.mlir`
+   - `wait-condition-queue-fallback-backoff.mlir`
+   - `module-drive-enable-release-strength.mlir`
+   - `module-drive-enable.mlir`
+
+### I3C replay impact
+1. Full deterministic replay remains failing with `DELTA_OVERFLOW`, but failure
+   point moved later and delta profile changed:
+   - pre-hardening: `740000000fs d433`
+   - post-hardening (cap 1024): `730000000fs d1016`
+   - post-hardening (cap 256): `1110000000fs d135`
+2. Coverage remains controller-only (`21.43%`), target still `0.00%`.
+
+### Current status
+- Delta-pressure from empty-get retries is now better controlled and covered by
+  regression test.
+- End-to-end I3C parity is still open; additional loop source(s) remain in
+  forked run-phase paths.
