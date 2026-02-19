@@ -979,6 +979,9 @@ public:
   /// Get the current value of a signal.
   const SignalValue &getSignalValue(SignalId signalId) const;
 
+  /// Get the previous value of a signal (before the most recent update).
+  const SignalValue &getSignalPreviousValue(SignalId signalId) const;
+
   /// Get the registered signal names map.
   const llvm::DenseMap<SignalId, std::string> &getSignalNames() const {
     return signalNames;
