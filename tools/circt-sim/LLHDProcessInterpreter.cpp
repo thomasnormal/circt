@@ -2373,11 +2373,20 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Some module drives (notably interface tri-state wiring) depend on values
   // written by module-level llvm.store ops; their earlier initialization-time
   // evaluation can observe stale defaults.
+  // Skip drives to multi-driven signals — those are handled by the grouped
+  // processes registered in registerContinuousAssignments(). Calling
+  // executeContinuousAssignment() for individual drives to multi-driven
+  // signals schedules deferred epsilon events that overwrite the correct
+  // grouped-evaluation results.
   for (size_t i = staticDriveBaseline; i < staticModuleDrives.size(); ++i) {
     const auto &entry = staticModuleDrives[i];
     ScopedInstanceContext instScope(*this, entry.instanceId);
     ScopedInputValueMap inputScope(*this, entry.inputMap);
-    executeContinuousAssignment(entry.driveOp);
+    llhd::DriveOp driveOp = entry.driveOp;
+    SignalId targetSigId = getSignalId(driveOp.getSignal());
+    if (targetSigId != 0 && multiDrivenSignals.count(targetSigId))
+      continue;
+    executeContinuousAssignment(driveOp);
   }
 
   // Create shadow signals for interface struct fields. This must happen after
@@ -31037,6 +31046,40 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Helper utilities for queue runtime dispatch.
+    auto isNativeRuntimePointer = [&](uint64_t addr,
+                                      size_t minBytes = 1) -> bool {
+      if (!addr)
+        return false;
+      // Treat addresses tracked by interpreter memory blocks as interpreter
+      // managed even if numerically large.
+      uint64_t interpOffset = 0;
+      if (findMemoryBlockByAddress(addr, procId, &interpOffset))
+        return false;
+      uint64_t nativeOffset = 0;
+      size_t nativeSize = 0;
+      if (!findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize))
+        return false;
+      return nativeOffset + minBytes <= nativeSize;
+    };
+    auto inferQueueElemSize = [&](uint64_t dataPtr, int64_t queueLen,
+                                  int64_t requestedElemSize) -> int64_t {
+      if (requestedElemSize > 0 && requestedElemSize <= 8)
+        return requestedElemSize;
+      if (queueLen > 0) {
+        uint64_t nativeOffset = 0;
+        size_t nativeSize = 0;
+        if (findNativeMemoryBlockByAddress(dataPtr, &nativeOffset, &nativeSize) &&
+            nativeOffset < nativeSize) {
+          int64_t inferred =
+              static_cast<int64_t>(nativeSize - nativeOffset) / queueLen;
+          if (inferred > 0 && inferred <= 8)
+            return inferred;
+        }
+      }
+      return 8;
+    };
+
     // ---- __moore_queue_sort ----
     // Signature: (queue: ptr) -> void
     // Sorts queue elements in ascending order using unsigned little-endian
@@ -31045,14 +31088,22 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (callOp.getNumOperands() >= 1) {
         uint64_t queueAddr =
             getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t requestedElemSize = 0;
+        if (callOp.getNumOperands() >= 2) {
+          requestedElemSize = static_cast<int64_t>(
+              getValue(procId, callOp.getOperand(1)).getUInt64());
+        }
 
         if (queueAddr != 0) {
           // For native pointers, delegate to runtime sort_inplace
-          if (queueAddr >= 0x10000000000ULL) {
+          if (isNativeRuntimePointer(queueAddr, sizeof(MooreQueue))) {
             auto *nativeQueue =
                 reinterpret_cast<MooreQueue *>(queueAddr);
             if (nativeQueue && nativeQueue->data && nativeQueue->len > 1) {
-              __moore_queue_sort_inplace(nativeQueue, 8);
+              int64_t nativeElemSize =
+                  inferQueueElemSize(reinterpret_cast<uint64_t>(nativeQueue->data),
+                                    nativeQueue->len, requestedElemSize);
+              __moore_queue_sort_inplace(nativeQueue, nativeElemSize);
             }
             LLVM_DEBUG(llvm::dbgs()
                        << "  llvm.call: __moore_queue_sort(native 0x"
@@ -31080,19 +31131,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               if (queueLen > 1 && dataPtr != 0) {
                 // Check if data is in a tracked native memory block
                 // (from malloc in interceptors like queue_unique)
-                auto nmIt = nativeMemoryBlocks.find(dataPtr);
-                bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
-                                    (nmIt != nativeMemoryBlocks.end());
+                bool isNativeData = isNativeRuntimePointer(
+                    dataPtr, static_cast<size_t>(std::max<int64_t>(
+                                 requestedElemSize, 1)));
                 if (isNativeData) {
                   // Data is in native memory but queue struct is interpreted
                   // Infer element size from tracked native memory block
-                  int64_t nativeElemSize = 8; // default
-                  if (nmIt != nativeMemoryBlocks.end() && queueLen > 0) {
-                    nativeElemSize = static_cast<int64_t>(nmIt->second) /
-                                    queueLen;
-                    if (nativeElemSize <= 0)
-                      nativeElemSize = 8;
-                  }
+                  int64_t nativeElemSize =
+                      inferQueueElemSize(dataPtr, queueLen, requestedElemSize);
                   MooreQueue tmpQ;
                   tmpQ.data = reinterpret_cast<void *>(dataPtr);
                   tmpQ.len = queueLen;
@@ -31156,13 +31202,21 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (callOp.getNumOperands() >= 1) {
         uint64_t queueAddr =
             getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t requestedElemSize = 0;
+        if (callOp.getNumOperands() >= 2) {
+          requestedElemSize = static_cast<int64_t>(
+              getValue(procId, callOp.getOperand(1)).getUInt64());
+        }
 
         if (queueAddr != 0) {
-          if (queueAddr >= 0x10000000000ULL) {
+          if (isNativeRuntimePointer(queueAddr, sizeof(MooreQueue))) {
             auto *nativeQueue =
                 reinterpret_cast<MooreQueue *>(queueAddr);
             if (nativeQueue && nativeQueue->data && nativeQueue->len > 1) {
-              __moore_queue_rsort(nativeQueue, 8);
+              int64_t nativeElemSize =
+                  inferQueueElemSize(reinterpret_cast<uint64_t>(nativeQueue->data),
+                                    nativeQueue->len, requestedElemSize);
+              __moore_queue_rsort(nativeQueue, nativeElemSize);
             }
             LLVM_DEBUG(llvm::dbgs()
                        << "  llvm.call: __moore_queue_rsort(native 0x"
@@ -31185,17 +31239,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                             << (i * 8);
 
               if (queueLen > 1 && dataPtr != 0) {
-                auto nmItR = nativeMemoryBlocks.find(dataPtr);
-                bool isNativeR = (dataPtr >= 0x10000000000ULL) ||
-                                 (nmItR != nativeMemoryBlocks.end());
+                bool isNativeR = isNativeRuntimePointer(
+                    dataPtr, static_cast<size_t>(std::max<int64_t>(
+                                 requestedElemSize, 1)));
                 if (isNativeR) {
-                  int64_t nativeElemSize = 8;
-                  if (nmItR != nativeMemoryBlocks.end() && queueLen > 0) {
-                    nativeElemSize = static_cast<int64_t>(nmItR->second) /
-                                    queueLen;
-                    if (nativeElemSize <= 0)
-                      nativeElemSize = 8;
-                  }
+                  int64_t nativeElemSize =
+                      inferQueueElemSize(dataPtr, queueLen, requestedElemSize);
                   MooreQueue tmpQ;
                   tmpQ.data = reinterpret_cast<void *>(dataPtr);
                   tmpQ.len = queueLen;
@@ -31254,9 +31303,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (callOp.getNumOperands() >= 1) {
         uint64_t queueAddr =
             getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t requestedElemSize = 0;
+        if (callOp.getNumOperands() >= 2) {
+          requestedElemSize = static_cast<int64_t>(
+              getValue(procId, callOp.getOperand(1)).getUInt64());
+        }
 
         if (queueAddr != 0) {
-          if (queueAddr >= 0x10000000000ULL) {
+          if (isNativeRuntimePointer(queueAddr, sizeof(MooreQueue))) {
             auto *nativeQueue =
                 reinterpret_cast<MooreQueue *>(queueAddr);
             if (nativeQueue && nativeQueue->data && nativeQueue->len > 1) {
@@ -31264,7 +31318,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               // stability instead of __moore_queue_shuffle (std::rand).
               auto *data = static_cast<char *>(nativeQueue->data);
               int64_t len = nativeQueue->len;
-              int64_t elemSize = 8;
+              int64_t elemSize =
+                  inferQueueElemSize(reinterpret_cast<uint64_t>(nativeQueue->data),
+                                    nativeQueue->len, requestedElemSize);
               auto &rng = processStates[procId].randomGenerator;
               std::vector<char> temp(elemSize);
               for (int64_t i = len - 1; i > 0; --i) {
@@ -31299,17 +31355,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                             << (i * 8);
 
               if (queueLen > 1 && dataPtr != 0) {
-                auto nmItS = nativeMemoryBlocks.find(dataPtr);
-                bool isNativeS = (dataPtr >= 0x10000000000ULL) ||
-                                 (nmItS != nativeMemoryBlocks.end());
+                bool isNativeS = isNativeRuntimePointer(
+                    dataPtr, static_cast<size_t>(std::max<int64_t>(
+                                 requestedElemSize, 1)));
                 if (isNativeS) {
-                  int64_t nativeElemSize = 8;
-                  if (nmItS != nativeMemoryBlocks.end() && queueLen > 0) {
-                    nativeElemSize = static_cast<int64_t>(nmItS->second) /
-                                    queueLen;
-                    if (nativeElemSize <= 0)
-                      nativeElemSize = 8;
-                  }
+                  int64_t nativeElemSize =
+                      inferQueueElemSize(dataPtr, queueLen, requestedElemSize);
                   // Fisher-Yates shuffle using per-process RNG for
                   // random stability instead of __moore_queue_shuffle
                   // which uses std::rand().
@@ -31380,13 +31431,21 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (callOp.getNumOperands() >= 1) {
         uint64_t queueAddr =
             getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t requestedElemSize = 0;
+        if (callOp.getNumOperands() >= 2) {
+          requestedElemSize = static_cast<int64_t>(
+              getValue(procId, callOp.getOperand(1)).getUInt64());
+        }
 
         if (queueAddr != 0) {
-          if (queueAddr >= 0x10000000000ULL) {
+          if (isNativeRuntimePointer(queueAddr, sizeof(MooreQueue))) {
             auto *nativeQueue =
                 reinterpret_cast<MooreQueue *>(queueAddr);
             if (nativeQueue && nativeQueue->data && nativeQueue->len > 1) {
-              __moore_queue_reverse(nativeQueue, 8);
+              int64_t nativeElemSize =
+                  inferQueueElemSize(reinterpret_cast<uint64_t>(nativeQueue->data),
+                                    nativeQueue->len, requestedElemSize);
+              __moore_queue_reverse(nativeQueue, nativeElemSize);
             }
             LLVM_DEBUG(llvm::dbgs()
                        << "  llvm.call: __moore_queue_reverse(native 0x"
@@ -31409,17 +31468,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                             << (i * 8);
 
               if (queueLen > 1 && dataPtr != 0) {
-                auto nmItV = nativeMemoryBlocks.find(dataPtr);
-                bool isNativeV = (dataPtr >= 0x10000000000ULL) ||
-                                 (nmItV != nativeMemoryBlocks.end());
+                bool isNativeV = isNativeRuntimePointer(
+                    dataPtr, static_cast<size_t>(std::max<int64_t>(
+                                 requestedElemSize, 1)));
                 if (isNativeV) {
-                  int64_t nativeElemSize = 8;
-                  if (nmItV != nativeMemoryBlocks.end() && queueLen > 0) {
-                    nativeElemSize = static_cast<int64_t>(nmItV->second) /
-                                    queueLen;
-                    if (nativeElemSize <= 0)
-                      nativeElemSize = 8;
-                  }
+                  int64_t nativeElemSize =
+                      inferQueueElemSize(dataPtr, queueLen, requestedElemSize);
                   MooreQueue tmpQ;
                   tmpQ.data = reinterpret_cast<void *>(dataPtr);
                   tmpQ.len = queueLen;
@@ -31470,7 +31524,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t queueAddr =
             getValue(procId, callOp.getOperand(0)).getUInt64();
         MooreQueue result = {nullptr, 0};
-        if (queueAddr >= 0x10000000000ULL) {
+        if (isNativeRuntimePointer(queueAddr, sizeof(MooreQueue))) {
           result = __moore_queue_unique(
               reinterpret_cast<MooreQueue *>(queueAddr));
         } else if (queueAddr != 0) {
@@ -31490,15 +31544,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               int64_t elemSize = 0;
               // Check if data is in a native memory block (malloc or
               // nativeMemoryBlocks) or interpreter-managed memory
-              auto nmItU = nativeMemoryBlocks.find(dataPtr);
-              bool isNativeU = (dataPtr >= 0x10000000000ULL) ||
-                               (nmItU != nativeMemoryBlocks.end());
+              bool isNativeU = isNativeRuntimePointer(dataPtr);
               if (isNativeU) {
                 // Native data pointer - infer element size from tracked
                 // block if available, otherwise default to 4 (int)
-                if (nmItU != nativeMemoryBlocks.end() && queueLen > 0) {
-                  elemSize = static_cast<int64_t>(nmItU->second) /
-                             queueLen;
+                if (queueLen > 0) {
+                  uint64_t nativeOffset = 0;
+                  size_t nativeSize = 0;
+                  if (findNativeMemoryBlockByAddress(dataPtr, &nativeOffset,
+                                                     &nativeSize) &&
+                      nativeOffset < nativeSize) {
+                    elemSize =
+                        static_cast<int64_t>(nativeSize - nativeOffset) / queueLen;
+                  }
                 }
                 if (elemSize <= 0)
                   elemSize = 4; // common case for int queues
