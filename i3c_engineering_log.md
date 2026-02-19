@@ -299,3 +299,76 @@ Next debugging step (root-cause oriented):
 1. Build a narrow reproducer around I3C target-side write-data conversion path (`to_class`/`from_class`) and compare controller-vs-target payload at first divergence.
 2. Add a dedicated regression that fails on first mismatched writeData sample (without full AVIP runtime).
 3. Re-run deterministic lane and require: no line-162 mismatch and no lifecycle re-entry fatal.
+
+### 2026-02-19: Root cause found and fixed for nested struct field clobber
+
+Scope:
+- Investigated first-write divergence with a minimal standalone reproducer:
+  - `/tmp/i3c_struct_inout_nested.sv`
+  - shape: nested `inout struct` update under `fork/join_none` + `disable fork`
+
+Pre-fix observation:
+- `circt-sim` result:
+  - `addr=0 op=0 no=7 wd0=4e` (`FAIL`)
+  - log: `/tmp/i3c_struct_inout_nested.circt.log`
+- Xcelium result:
+  - `addr=68 op=0 no=8 wd0=4e` (`PASS`)
+  - log: `/tmp/i3c_struct_inout_nested.xcelium.log`
+
+Instrumentation finding:
+- Temporary trace in `LLHDProcessInterpreter` for signal-backed struct field
+  writeback showed first child update reading parent as `X` and not from pending
+  drive:
+  - log: `/tmp/i3c_struct_inout_nested_dbg.trace2.log`
+  - key symptom:
+    - `field=no_of_i3c_bits_transfer ... fromPending=0 ... parent=0xX`
+- This identified wrong driver-id semantics in subfield signal write paths:
+  they used per-process IDs, creating false multi-driver resolution behavior for
+  procedural updates.
+
+Fix:
+- File:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+- Updated signal-backed subfield writeback for:
+  - `llhd.sig.struct_extract`
+  - `llhd.sig.array_get`
+- Policy now matches regular `llhd.drv`:
+  - `sigId` by default
+  - `getDistinctContinuousDriverId(...)` only for
+    `distinctContinuousDriverSignals`.
+- Removed temporary trace instrumentation after diagnosis.
+
+Regression added:
+- `test/Tools/circt-sim/fork-struct-field-last-write.sv`
+- Intent: ensure sibling struct fields are preserved and forked procedural field
+  updates keep last-write semantics.
+
+Focused validation:
+- Build:
+  - `ninja -C build-test circt-sim circt-verilog` (`PASS`)
+- lit:
+  - `fork-disable-ready-wakeup.sv` (`PASS`)
+  - `fork-disable-defer-poll.sv` (`PASS`)
+  - `disable-fork-halt.mlir` (`PASS`)
+  - `fork-struct-field-last-write.sv` (`PASS`)
+- Reproducer after fix:
+  - `/tmp/i3c_struct_inout_nested.afterfix.log`
+  - `/tmp/i3c_struct_inout_nested_dbg.afterfix.log`
+  - output now: `addr=68 op=0 no=8 wd0=4e` (`PASS`)
+
+I3C AVIP lane status after fix:
+- Default resource guard run:
+  - `/tmp/avip-circt-sim-i3c-after-struct-driver-fix-20260219-010837/matrix.tsv`
+  - compile `OK` (`142s`), sim `FAIL` (resource guard):
+    `RSS 4625 MB exceeded limit 4096 MB`
+- Raised guard run (`CIRCT_MAX_RSS_MB=8192`):
+  - `/tmp/avip-circt-sim-i3c-after-struct-driver-fix-rss8g-20260219-011323/matrix.tsv`
+  - compile `OK` (`165s`), sim exits `OK` (`300s`)
+  - remaining mismatch:
+    - `UVM_ERROR ... i3c_scoreboard.sv(162)`
+  - coverage printout: `100% / 100%`
+
+Current conclusion:
+- The struct-field clobber bug is real, fixed, and regression-protected.
+- I3C line-162 parity gap remains open; continue root-cause work on remaining
+  payload divergence path.
