@@ -906,6 +906,13 @@ public:
     std::string name;
     uint32_t logicalWidth;
     uint32_t physicalWidth;
+    /// If this field is an unpacked array, the following are set.
+    bool isArray = false;
+    uint32_t numElements = 0;
+    int32_t leftBound = -1;
+    int32_t rightBound = -1;
+    uint32_t elementLogicalWidth = 0;
+    uint32_t elementPhysicalWidth = 0;
   };
 
   /// Set struct field info for a signal (for unpacked struct types).
@@ -923,6 +930,14 @@ public:
   void setSignalChangeCallback(
       std::function<void(SignalId, const SignalValue &)> callback) {
     signalChangeCallback = std::move(callback);
+  }
+
+  /// Set a callback invoked after all processes in a region have executed.
+  /// Used to implement two-phase firreg evaluation: all firregs evaluate
+  /// with pre-update values, then pending updates are applied in the callback.
+  void setPostRegionCallback(SchedulingRegion region,
+                             std::function<void()> callback) {
+    postRegionCallbacks[static_cast<size_t>(region)] = std::move(callback);
   }
 
   /// Set the maximum delta cycles to execute at a single time.
@@ -1139,6 +1154,10 @@ private:
 
   // Optional signal change callback for waveform tracing.
   std::function<void(SignalId, const SignalValue &)> signalChangeCallback;
+
+  // Optional post-region callbacks (indexed by SchedulingRegion).
+  std::function<void()>
+      postRegionCallbacks[static_cast<size_t>(SchedulingRegion::NumRegions)];
 
   // Signals currently owned by VPI (putValue). While owned, non-VPI drives
   // are suppressed to prevent stale init events from corrupting VPI values.

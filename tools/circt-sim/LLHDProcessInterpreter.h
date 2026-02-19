@@ -611,6 +611,13 @@ public:
   /// writes change an input signal.
   void executeModuleDrivesForSignal(SignalId sigId);
 
+  /// Register a top-level hw.output update. When the associated llhd.process
+  /// yields new values via interpretWait, executeInstanceOutputUpdates will
+  /// immediately re-evaluate and update the output signal. This ensures
+  /// correct output values even when inline combinational evaluation fails
+  /// for multi-block process CFGs.
+  void registerTopLevelOutputUpdate(SignalId signalId, mlir::Value outputValue);
+
   /// Get the number of registered signals.
   size_t getNumSignals() const { return valueToSignal.size(); }
 
@@ -883,6 +890,7 @@ private:
 
   /// Get the stored signal value type for a signal ID (nested type).
   mlir::Type getSignalValueType(SignalId sigId) const;
+
 
   /// Convert aggregate values between LLVM and HW layout conventions.
   llvm::APInt convertLLVMToHWLayout(llvm::APInt value, mlir::Type llvmType,
@@ -1775,6 +1783,18 @@ private:
   /// Registered seq.firreg state keyed by op.
   llvm::DenseMap<mlir::Operation *, FirRegState> firRegStates;
 
+  /// Pending firreg signal updates for two-phase evaluation.
+  /// During NBA region execution, firregs evaluate inputs using pre-update
+  /// signal values and defer their updates here. After all firregs have
+  /// evaluated, the post-NBA callback applies these updates atomically.
+  /// This implements correct Verilog non-blocking assignment semantics
+  /// where all RHS values are sampled before any LHS updates occur.
+  std::vector<std::pair<SignalId, SignalValue>> pendingFirRegUpdates;
+
+  /// When true, executeFirReg defers signal updates to pendingFirRegUpdates
+  /// instead of calling scheduler.updateSignal immediately.
+  bool deferFirRegUpdates = false;
+
   /// Registered clocked assertion state keyed by op.
   llvm::DenseMap<mlir::Operation *, ClockedAssertionState> clockedAssertionStates;
 
@@ -2058,15 +2078,30 @@ private:
                                        mlir::Operation *callSite,
                                        uint64_t &queueAddr);
 
+  /// Register a process waiting in get/get_next_item on a sequencer queue.
+  /// queueAddr==0 means unresolved queue and wakes on any push.
+  void enqueueUvmSequencerGetWaiter(uint64_t queueAddr, ProcessId procId,
+                                    mlir::Operation *retryOp);
+
+  /// Remove a process from sequencer get wait-queues.
+  void removeUvmSequencerGetWaiter(ProcessId procId);
+
+  /// Wake one pending sequencer get waiter for a queue (or unresolved queue 0).
+  bool wakeOneUvmSequencerGetWaiter(uint64_t queueAddr);
+
+  /// Wake one queue-specific waiter first, then unresolved waiters.
+  void wakeUvmSequencerGetWaiterForPush(uint64_t queueAddr);
+
   /// Record ownership mapping for sequence item -> sequencer address.
   void recordUvmSequencerItemOwner(uint64_t itemAddr, uint64_t sqrAddr);
 
   /// Consume ownership mapping for sequence item and return sequencer address.
   uint64_t takeUvmSequencerItemOwner(uint64_t itemAddr);
 
-  /// Track a dequeued sequence item by both pull-port and sequencer aliases.
-  void recordUvmDequeuedItem(uint64_t portAddr, uint64_t queueAddr,
-                             uint64_t itemAddr);
+  /// Track a dequeued sequence item for the caller process and for pull-port /
+  /// sequencer aliases used by item_done resolution.
+  void recordUvmDequeuedItem(ProcessId procId, uint64_t portAddr,
+                             uint64_t queueAddr, uint64_t itemAddr);
 
   /// Resolve and consume the last dequeued item for an item_done caller.
   uint64_t takeUvmDequeuedItemForDone(ProcessId procId, uint64_t doneAddr,
@@ -2230,6 +2265,19 @@ private:
   /// the sequence producer and driver consumer.
   llvm::DenseMap<uint64_t, std::deque<uint64_t>> sequencerItemFifo;
 
+  struct SequencerGetWaiter {
+    ProcessId procId = InvalidProcessId;
+    mlir::Operation *retryOp = nullptr;
+  };
+
+  /// Processes blocked in get/get_next_item by resolved queue address.
+  /// queueAddr==0 is the unresolved fallback bucket (wake on any push).
+  llvm::DenseMap<uint64_t, std::deque<SequencerGetWaiter>>
+      sequencerGetWaitersByQueue;
+
+  /// Reverse map for fast waiter removal on process finalize/kill.
+  llvm::DenseMap<ProcessId, uint64_t> sequencerGetWaitQueueByProc;
+
   /// Maps sequence item address to the sequencer address that owns it.
   /// Set during start_item() interception so finish_item() knows which
   /// sequencer FIFO to push the item into.
@@ -2247,9 +2295,13 @@ private:
   /// Checked by finish_item poll to determine when to resume.
   llvm::DenseSet<uint64_t> itemDoneReceived;
 
-  /// Maps port address to the last item dequeued by get/get_next_item.
-  /// Used by item_done to know which item the driver is completing.
-  llvm::DenseMap<uint64_t, uint64_t> lastDequeuedItem;
+  /// Maps pull-port / sequencer aliases to dequeued items not yet completed by
+  /// item_done. A deque is required because some benches may dequeue multiple
+  /// items before signaling completion.
+  llvm::DenseMap<uint64_t, std::deque<uint64_t>> lastDequeuedItem;
+
+  /// Outstanding dequeued items per driver process (in dequeue order).
+  llvm::DenseMap<ProcessId, std::deque<uint64_t>> lastDequeuedItemByProc;
 
   /// Cache of resolved sequencer queue address per pull-port object.
   /// This avoids repeating expensive port->export->component resolution on

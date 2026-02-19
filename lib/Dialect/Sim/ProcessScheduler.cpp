@@ -930,6 +930,15 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
     }
   }
 
+  // Invoke post-region callback if registered and processes were executed.
+  // This is used for two-phase firreg evaluation: all firregs evaluate
+  // with pre-update signal values, then pending updates are applied here.
+  if (executed > 0) {
+    auto &postCb = postRegionCallbacks[static_cast<size_t>(region)];
+    if (postCb)
+      postCb();
+  }
+
   return executed;
 }
 
@@ -937,19 +946,36 @@ size_t ProcessScheduler::executeCurrentTime() {
   if (isAbortRequested())
     return 0;
   size_t totalDeltas = 0;
+  static bool traceExecCT =
+      std::getenv("CIRCT_SIM_TRACE_VPI_TIMING") != nullptr;
+  static uint64_t execCTCount = 0;
+  ++execCTCount;
+  uint64_t localId = execCTCount;
 
   while (executeDeltaCycle()) {
     ++totalDeltas;
+    if (traceExecCT && (totalDeltas <= 3 || totalDeltas % 100 == 0)) {
+      llvm::errs() << "[EXEC-CT] id=" << localId << " delta=" << totalDeltas
+                   << " t=" << getCurrentTime().realTime << "\n";
+    }
     if (totalDeltas % 1000 == 0) {
       LLVM_DEBUG(llvm::dbgs() << "  [ProcessScheduler] Delta cycle " << totalDeltas
                               << ", processes executed: " << stats.processesExecuted << "\n");
     }
     if (totalDeltas >= config.maxDeltaCycles) {
       LLVM_DEBUG(llvm::dbgs() << "Max delta cycles reached at current time\n");
+      if (traceExecCT) {
+        llvm::errs() << "[EXEC-CT] id=" << localId
+                     << " MAX DELTAS REACHED (" << totalDeltas << ")\n";
+      }
       break;
     }
   }
 
+  if (traceExecCT && totalDeltas > 0) {
+    llvm::errs() << "[EXEC-CT] id=" << localId << " DONE deltas="
+                 << totalDeltas << " t=" << getCurrentTime().realTime << "\n";
+  }
   return totalDeltas;
 }
 
@@ -972,10 +998,10 @@ bool ProcessScheduler::advanceTime() {
   // Track whether we did any work (advanced time or processed events)
   bool didWork = false;
 
-  // Advance to the next event time and process ONE time step at a time.
-  // This is critical for correct behavior: we must return control to the
-  // ProcessScheduler after each event time so it can execute processes
-  // that were scheduled by the events.
+  // Process events at the current time, then advance to the next event time.
+  // We process all delta cycles at the current time (events may schedule more
+  // events at the same time). Then advance to the next real time and return
+  // to the caller so it can run VPI callbacks etc.
   while (!eventScheduler->isComplete()) {
     if (isAbortRequested())
       return false;
@@ -991,25 +1017,25 @@ bool ProcessScheduler::advanceTime() {
       continue;
     }
 
-    // No events at current time - advance to the next event time.
-    // Use advanceToNextTime which only advances time without processing events.
-    SimTime oldTime = eventScheduler->getCurrentTime();
+    // No events at current delta — advance to the next event time.
     if (!eventScheduler->advanceToNextTime()) {
-      // Could not advance - either no events or already at next event time
-      // Check if there are events to process at the "new" current time
       if (eventScheduler->isComplete())
         break;
-      // There might be events at current time that weren't cascaded yet
-      // Try stepping again
-      continue;
+      // Neither stepDelta nor advanceToNextTime made progress, but
+      // isComplete is false. This means orphaned events exist at past
+      // delta steps that are unreachable. Break to avoid spinning.
+      LLVM_DEBUG(llvm::dbgs()
+                 << "advanceTime: stuck — no delta events, no time advance, "
+                 << "but EventScheduler not complete. Breaking.\n");
+      break;
     }
 
     didWork = true;
-    LLVM_DEBUG(llvm::dbgs() << "Advanced time from " << oldTime.realTime
-                            << " to " << eventScheduler->getCurrentTime().realTime << " fs\n");
-
-    // Time advanced, now process events at the new time
-    // Continue to the next iteration which will call stepDelta
+    LLVM_DEBUG(llvm::dbgs() << "Advanced time to "
+                            << eventScheduler->getCurrentTime().realTime << " fs\n");
+    // Return after each time advance so the main loop can handle VPI
+    // scheduling-region callbacks and simulation control checks.
+    return true;
   }
 
   // Return true if we did any work or if there's still work to do
