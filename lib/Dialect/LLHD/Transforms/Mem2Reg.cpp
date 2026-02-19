@@ -810,6 +810,12 @@ void Promoter::findPromotableSlots() {
           projections.insert({user->getResult(0), operand});
           return true;
         }
+        // Reject drives with force/release attributes - these need to stay
+        // as-is so that HoistSignals and the interpreter can handle them.
+        if (auto driveOp = dyn_cast<DriveOp>(user))
+          if (driveOp->hasAttr("circt.force") ||
+              driveOp->hasAttr("circt.release"))
+            return false;
         return isa<ProbeOp>(user) || isBlockingDrive(user) ||
                isDeltaDrive(user);
       };

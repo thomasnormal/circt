@@ -544,6 +544,12 @@ void __moore_process_set_randstate(int64_t handle, MooreString state);
 /// @param seed Seed value
 void __moore_process_srandom(int64_t handle, int32_t seed);
 
+/// Return the initial random seed for the simulation.
+/// Implements SystemVerilog `$get_initial_random_seed`.
+/// Returns a non-zero seed, either from CIRCT_SIM_RANDOM_SEED env var
+/// or auto-generated from a time-based source.
+int32_t __moore_get_initial_random_seed(void);
+
 //===----------------------------------------------------------------------===//
 // Mailbox Operations (Inter-process Communication)
 //===----------------------------------------------------------------------===//

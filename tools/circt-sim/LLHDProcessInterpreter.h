@@ -1436,19 +1436,23 @@ private:
 
   /// Get the size in bytes for an LLVM type (sum of field sizes, no alignment
   /// padding, matching MooreToCore's sizeof computation).
-  unsigned getLLVMTypeSize(mlir::Type type);
+  unsigned getLLVMTypeSize(mlir::Type type) const;
 
   /// Get the size in bytes for an LLVM type, matching GEP offset computation
   /// (byte-addressable, no sub-byte packing).
-  unsigned getLLVMTypeSizeForGEP(mlir::Type type);
+  unsigned getLLVMTypeSizeForGEP(mlir::Type type) const;
+
+  /// Get the bit width for memory-backed aggregate layout used by ref-addressed
+  /// loads/stores (GEP-style byte-addressable sizing).
+  unsigned getMemoryLayoutBitWidth(mlir::Type type) const;
 
   /// Get the natural alignment in bytes for an LLVM type.
-  unsigned getLLVMTypeAlignment(mlir::Type type);
+  unsigned getLLVMTypeAlignment(mlir::Type type) const;
 
   /// Get the byte offset of a field within an LLVM struct type (unaligned,
   /// matching MooreToCore's layout).
   unsigned getLLVMStructFieldOffset(mlir::LLVM::LLVMStructType structType,
-                                   unsigned fieldIndex);
+                                   unsigned fieldIndex) const;
 
   /// Find the memory block for a pointer value.
   MemoryBlock *findMemoryBlock(ProcessId procId, mlir::Value ptr);
@@ -1646,6 +1650,10 @@ private:
   /// this map holds the value so subsequent probes can see it immediately.
   /// Key is SignalId, value is the pending value.
   llvm::DenseMap<SignalId, InterpretedValue> pendingEpsilonDrives;
+
+  /// Map from signal IDs to pre-force saved values. When a signal is forced,
+  /// we save the current value here so we can restore it on release.
+  llvm::DenseMap<SignalId, InterpretedValue> forcedSignalSavedValues;
 
   /// Map from signal IDs to {procId, Value key} for backing memory blocks.
   /// Allocated when unrealized_conversion_cast converts !llhd.ref<T> to
@@ -1858,7 +1866,7 @@ private:
   /// interpreter takes ~10-15s, so 30s gives enough margin for phases to
   /// complete and produce output while still being much shorter than the
   /// 120s external timeout.
-  static constexpr int kFinishGracePeriodSecs = 600;
+  static constexpr int kFinishGracePeriodSecs = 30;
 
   /// Cache of function lookups to avoid repeated moduleOp.lookupSymbol calls.
   /// Maps function name to a cached result:

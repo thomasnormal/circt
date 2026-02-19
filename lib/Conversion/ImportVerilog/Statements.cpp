@@ -2587,8 +2587,9 @@ struct StmtVisitor {
 
     // Simulation Control Tasks
 
-    // VCD dump tasks (IEEE 1800-2017 Section 21.7)
-    // These are simulator-specific and can be ignored for RTL compilation.
+    // VCD dump tasks (IEEE 1800-2017 Section 21.7).
+    // These are simulator-specific waveform controls. Treat them as no-ops so
+    // AVIP-style benches that unconditionally call dump tasks still compile.
     if (subroutine.name == "$dumpfile" || subroutine.name == "$dumpvars" ||
         subroutine.name == "$dumplimit" || subroutine.name == "$dumpoff" ||
         subroutine.name == "$dumpon" || subroutine.name == "$dumpflush" ||
@@ -2598,10 +2599,7 @@ struct StmtVisitor {
         subroutine.name == "$dumpportson" ||
         subroutine.name == "$dumpportsflush" ||
         subroutine.name == "$dumpportsall") {
-      mlir::emitError(loc) << "unsupported VCD dump task '" << subroutine.name
-                           << "'; VCD waveform dumping requires signal "
-                              "monitoring infrastructure not yet implemented";
-      return failure();
+      return true;
     }
 
     // Time formatting task (IEEE 1800-2017 Section 20.4.3)
@@ -2734,11 +2732,14 @@ struct StmtVisitor {
     }
 
     // Checkpoint/restart tasks (legacy Verilog, IEEE 1800-2017 Section 21.8)
-    // These have no meaning in CIRCT's compilation flow. Stub as no-ops.
+    // These have no meaning in CIRCT's compilation flow. Emit a warning.
     if (subroutine.name == "$save" ||
         subroutine.name == "$restart" ||
         subroutine.name == "$incsave" ||
         subroutine.name == "$reset") {
+      mlir::emitWarning(loc) << subroutine.name
+                             << " is not supported in circt-sim"
+                             << " (checkpoint/restart not implemented)";
       return true;
     }
 
@@ -2847,8 +2848,10 @@ struct StmtVisitor {
     }
 
     // SDF annotation (IEEE 1800-2017 Section 30)
-    // Timing back-annotation. Stub as no-op.
+    // Timing back-annotation. Emit a warning.
     if (subroutine.name == "$sdf_annotate") {
+      mlir::emitWarning(loc) << "$sdf_annotate is not supported in circt-sim"
+                             << " (SDF timing annotation not implemented)";
       return true;
     }
 
@@ -3485,8 +3488,6 @@ struct StmtVisitor {
   }
 
   // Handle procedural assign/force statements (IEEE 1800-2017 Section 10.6).
-  // These are deprecated simulation constructs. We convert them to blocking
-  // assignments which provides approximate behavior.
   LogicalResult visit(const slang::ast::ProceduralAssignStatement &stmt) {
     // The assignment expression contains the target and value
     const auto *assignExpr =
@@ -3505,25 +3506,25 @@ struct StmtVisitor {
     if (!src)
       return failure();
 
-    // Emit a remark about the simplified handling
-    mlir::emitRemark(loc) << (stmt.isForce ? "force" : "procedural assign")
-                          << " statement converted to blocking assignment "
-                          << "(simplified simulation semantics)";
-
-    moore::BlockingAssignOp::create(builder, loc, dst, src);
+    if (stmt.isForce) {
+      moore::ForceAssignOp::create(builder, loc, dst, src);
+    } else {
+      // Procedural assign (not force) — use blocking assign.
+      moore::BlockingAssignOp::create(builder, loc, dst, src);
+    }
     return success();
   }
 
   // Handle procedural deassign/release statements (IEEE 1800-2017 Section 10.6).
-  // These are deprecated simulation constructs. Since we convert assign/force
-  // to blocking assignments, deassign/release become no-ops.
   LogicalResult visit(const slang::ast::ProceduralDeassignStatement &stmt) {
-    // Emit a remark about the simplified handling
-    mlir::emitRemark(loc) << (stmt.isRelease ? "release" : "deassign")
-                          << " statement ignored (simplified simulation "
-                          << "semantics)";
-    // No-op: since we converted assign/force to blocking assignments,
-    // there's nothing to release/deassign
+    if (stmt.isRelease) {
+      auto dst = context.convertLvalueExpression(stmt.lvalue);
+      if (!dst)
+        return failure();
+      moore::ReleaseAssignOp::create(builder, loc, dst);
+      return success();
+    }
+    // Deassign — no-op for now (procedural assign uses blocking assign).
     return success();
   }
 
