@@ -33,6 +33,14 @@
    - focused lit:
      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter 'queue-(sort|reverse|operations|rsort|shuffle|unique)\\.sv'`
      - result: `Passed: 6`, `Failed: 0`, `Excluded: 502`.
+   - bounded non-I3C AVIP compile-mode sweep (`apb,uart`, seed 1):
+     - command:
+       `AVIPS=apb,uart SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 SIM_TIMEOUT=120 SIM_TIMEOUT_GRACE=60 CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=100000' utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-queuefix-apb-uart-20260219-014721`
+     - compile+sim status: both lanes `OK`.
+     - JIT summary (`utils/summarize_circt_sim_jit_reports.py`): `deopt_process_rows=0`.
+     - parity status:
+       - `apb`: scoreboard `UVM_ERROR` lines remain (`apb_scoreboard.sv` checks).
+       - `uart`: no `UVM_ERROR`/`UVM_FATAL` lines observed in this bounded run.
 
 ## Iteration 1521 - February 19, 2026
 
