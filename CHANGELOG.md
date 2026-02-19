@@ -72434,6 +72434,13 @@ See CHANGELOG.md on recent progress.
     - validation:
       - build: PASS
         - `ninja -C build-test -j4 circt-sim`
+      - bounded non-I3C AVIP compile-mode sweep: PASS
+        - command:
+          `AVIPS=apb,uart,jtag SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 SIM_TIMEOUT=120 SIM_TIMEOUT_GRACE=60 CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=100000' utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-fileio-20260219-compile`
+        - matrix:
+          `/tmp/avip-circt-sim-fileio-20260219-compile/matrix.tsv`
+        - JIT summary:
+          `reports_scanned=3`, `deopt_process_rows=0`.
       - focused lit: PASS
         - `llvm/build/bin/llvm-lit -sv --filter 'syscall-(display-format|display-write|generate|writememb-range|writememb|feof|fread)\\.sv' build-test/test/Tools/circt-sim`
       - focused file-I/O cluster: PASS
