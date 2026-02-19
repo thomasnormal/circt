@@ -72642,3 +72642,53 @@ See CHANGELOG.md on recent progress.
       - bounded traced I3C slice:
         - `/tmp/i3c-bounded-340-prop.log`
         - `I3C_SCL/I3C_SDA` fanout stayed non-zero in this window.
+73. `circt-sim` add I3C continuous-drive attribution diagnostics
+    (February 19, 2026):
+    - enhanced `CIRCT_SIM_TRACE_I3C_DRIVES` telemetry in
+      `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+      - `[I3C-DRV]` now includes process/func/instance metadata when available,
+      - new `[I3C-DRV-ID]` emits per-drive `driver=` id and source `loc=`.
+    - purpose:
+      - attribute conflicting multi-driver `I3C_SCL` behavior to concrete MLIR
+        drive sites during AVIP I3C root-cause analysis.
+    - validation:
+      - build PASS: `ninja -C build-test circt-sim`
+      - focused regressions PASS:
+        - `interface-tristate-suppression-cond-false.sv`
+        - `interface-tristate-signal-callback.sv`
+        - `interface-intra-tristate-propagation.sv`
+        - `interface-field-propagation.sv`
+74. `circt-sim` fix disabled continuous-drive release on four-state,
+    strength-resolved nets and add regression
+    (February 19, 2026):
+    - root cause:
+      - disabled `llhd.drv ... if %enable` continuous drives could retain stale
+        per-driver state on multi-driver four-state nets, pinning resolved
+        signals instead of releasing.
+    - fix:
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - add disabled-drive release handling in:
+        - `executeContinuousAssignment`
+        - `executeModuleDrives`
+        - `executeModuleDrivesForSignal`
+      - apply release only for four-state, distinct-driver targets.
+      - refine distinct-driver promotion for enable-driven nets to
+        four-state + multi-driven targets (avoids 2-state/single-driver
+        over-classification).
+    - regression coverage:
+      - new:
+        - `test/Tools/circt-sim/module-drive-enable-release-strength.mlir`
+      - validates pullup + conditional strong driver release sequence:
+        `pre_v=0 pre_u=0`, `post_v=1 post_u=0`.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-sim`
+      - focused regressions: PASS
+        - `module-drive-enable-release-strength.mlir`
+        - `module-drive-enable.mlir`
+        - `interface-tristate-suppression-cond-false.sv`
+        - `interface-intra-tristate-propagation.sv`
+    - AVIP note:
+      - this is an incremental correctness fix; I3C parity remains open on the
+        current deterministic lane (target coverage still 0%, delta-overflow
+        still observed in full replay).

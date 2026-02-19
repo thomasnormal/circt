@@ -735,3 +735,105 @@ Next focused step:
 - instrument rule trigger/dependency chains for target-side `sig_1` rule
   sources/conds (`field_5/field_6` and `field_8/field_9`) to identify where
   updates stop being scheduled, then fix scheduling/source ownership there.
+
+### 2026-02-19 Session: I3C `I3C_SCL` stuck-driver attribution (driver-id/loc trace)
+
+What changed (diagnostic-only):
+- Updated `tools/circt-sim/LLHDProcessInterpreter.cpp` in
+  `executeContinuousAssignment` tracing under
+  `CIRCT_SIM_TRACE_I3C_DRIVES=1`:
+  - enriched `[I3C-DRV]` with process/func/instance fields (when available),
+  - added `[I3C-DRV-ID]` lines including resolved `driver=` id and MLIR
+    source `loc=` for each `I3C_SCL`/`I3C_SDA` continuous drive.
+
+Bounded diagnostic run:
+- command:
+  - `CIRCT_SIM_TRACE_I3C_DRIVES=1 ... circt-sim ... --max-time=220000000`
+- log:
+  - `/tmp/i3c-drvid-loc-220.log`
+
+Key evidence:
+1. `I3C_SCL` has three contributors in this lane:
+   - pull-up style drive at `loc(.../i3c.mlir:9707:5)` (`val=10`),
+   - mirror drive A at `loc(.../i3c.mlir:9746:5)` (toggles `11/0`),
+   - mirror drive B at `loc(.../i3c.mlir:9799:5)` (frequently `0`).
+2. In the problematic window (`170ns+`), mirror A often drives `11` while
+   mirror B drives `0` in the same delta; resolved net remains pinned low,
+   matching missing target-side edge progression.
+3. The two mirror drivers correspond to two separate interface feedback paths
+   in the generated MLIR (`llhd.drv %I3C_SCL, %72` and
+   `llhd.drv %I3C_SCL, %83`).
+
+What was attempted and reverted this session:
+- broader tri-state re-application from
+  `forwardPropagateOnSignalChange` (including instance-scoped gating) was
+  tested but caused a zero-time delta explosion in I3C and/or regressed
+  `interface-tristate-suppression-cond-false.sv`; both variants were fully
+  reverted.
+
+Current conclusion:
+- root cause is now narrowed to mirror-drive ownership/feedback behavior for
+  dual-interface `I3C_SCL` drive loops, not simple missing callback wakeups.
+- next fix should target driver ownership semantics for the two mirror drive
+  ops (`:9746` vs `:9799`) rather than adding generic propagation hooks.
+
+### 2026-02-19 Session: enabled continuous-drive release fix (four-state/multi-driver)
+
+Problem addressed:
+- On strength-resolved four-state nets, disabled continuous drives could retain
+  stale driver contributions instead of releasing, depending on lowering shape.
+- This is a runtime correctness gap for `llhd.drv ... if %enable` on shared
+  tri-state/open-drain style nets.
+
+Runtime changes:
+1. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - Added disabled-drive release handling for continuous/module drives:
+     - `executeContinuousAssignment`
+     - `executeModuleDrives`
+     - `executeModuleDrivesForSignal`
+   - Disabled release now applies only when:
+     - target is in `distinctContinuousDriverSignals`, and
+     - signal encoding is `FourStateStruct`.
+   - Release uses per-drive high-Z semantics (high-Z strengths + encoded Z value)
+     so old driver state does not pin resolved nets.
+   - Added helper:
+     - `getDisabledContinuousDriveValue(...)`.
+
+2. Distinct-driver classification refinement:
+   - In `registerContinuousAssignments`, enabled-drive classification is now
+     limited to `FourStateStruct` + multi-driven targets.
+   - This avoids over-classifying single-driver/2-state paths and prevents
+     non-tri-state regressions.
+
+New regression:
+1. Added:
+   - `test/Tools/circt-sim/module-drive-enable-release-strength.mlir`
+2. Coverage:
+   - Pullup-like weak `1` + conditional strong `0` drive.
+   - After enable deassertion, resolved bus must release back to `1`:
+     - `pre_v=0 pre_u=0`
+     - `post_v=1 post_u=0`
+
+Validation:
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Focused regressions PASS:
+   - `module-drive-enable-release-strength.mlir`
+   - `module-drive-enable.mlir`
+   - `interface-tristate-suppression-cond-false.sv`
+   - `interface-intra-tristate-propagation.sv`
+
+I3C diagnostics after change:
+1. Bounded drive-id trace (`/tmp/i3c-drvid-loc-220-after-enable-release.log`):
+   - still shows three `I3C_SCL` contributors (`:9707`, `:9746`, `:9799`),
+   - in this lane, post-170ns mirrored drive samples were predominantly `11`.
+2. Full deterministic replay on existing compiled lane remains open:
+   - `/tmp/i3c-full-after-enable-release-v2.log`
+   - `ERROR(DELTA_OVERFLOW)` at `740000000fs d433`
+   - coverage remains controller `21.43%`, target `0.00%`.
+
+Conclusion:
+- The enabled-drive release fix is a valid runtime correctness improvement and
+  now has dedicated regression coverage.
+- It does not close the deeper I3C parity/root-cause issue (target monitor path
+  + delta-overflow behavior still unresolved).
