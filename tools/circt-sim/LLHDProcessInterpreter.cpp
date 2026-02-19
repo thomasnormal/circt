@@ -4375,7 +4375,10 @@ static llvm::APInt adjustAPIntWidth(llvm::APInt value, unsigned targetWidth) {
 
 llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayout(
     llvm::APInt value, Type llvmType, Type hwType) const {
-  unsigned llvmWidth = getTypeWidth(llvmType);
+  unsigned llvmWidth =
+      isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(llvmType)
+          ? getMemoryLayoutBitWidth(llvmType)
+          : getTypeWidth(llvmType);
   unsigned hwWidth = getTypeWidth(hwType);
   value = adjustAPIntWidth(value, llvmWidth);
 
@@ -4389,7 +4392,7 @@ llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayout(
       unsigned llvmOffset = 0;
       unsigned hwOffset = hwWidth;
       for (size_t i = 0; i < count; ++i) {
-        unsigned llvmFieldWidth = getTypeWidth(llvmBody[i]);
+        unsigned llvmFieldWidth = getMemoryLayoutBitWidth(llvmBody[i]);
         unsigned hwFieldWidth = getTypeWidth(hwElements[i].type);
         hwOffset -= hwFieldWidth;
         APInt fieldBits = value.extractBits(llvmFieldWidth, llvmOffset);
@@ -4405,7 +4408,8 @@ llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayout(
 
   if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(llvmType)) {
     if (auto hwArrayType = dyn_cast<hw::ArrayType>(hwType)) {
-      unsigned llvmElemWidth = getTypeWidth(llvmArrayType.getElementType());
+      unsigned llvmElemWidth =
+          getMemoryLayoutBitWidth(llvmArrayType.getElementType());
       unsigned hwElemWidth = getTypeWidth(hwArrayType.getElementType());
       unsigned numElements = hwArrayType.getNumElements();
       unsigned llvmElements = llvmArrayType.getNumElements();
@@ -4432,7 +4436,10 @@ llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayout(
 llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayout(
     llvm::APInt value, Type hwType, Type llvmType) const {
   unsigned hwWidth = getTypeWidth(hwType);
-  unsigned llvmWidth = getTypeWidth(llvmType);
+  unsigned llvmWidth =
+      isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(llvmType)
+          ? getMemoryLayoutBitWidth(llvmType)
+          : getTypeWidth(llvmType);
   value = adjustAPIntWidth(value, hwWidth);
 
   if (auto hwStructType = dyn_cast<hw::StructType>(hwType)) {
@@ -4446,7 +4453,7 @@ llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayout(
       unsigned llvmOffset = 0;
       for (size_t i = 0; i < count; ++i) {
         unsigned hwFieldWidth = getTypeWidth(hwElements[i].type);
-        unsigned llvmFieldWidth = getTypeWidth(llvmBody[i]);
+        unsigned llvmFieldWidth = getMemoryLayoutBitWidth(llvmBody[i]);
         hwOffset -= hwFieldWidth;
         APInt fieldBits = value.extractBits(hwFieldWidth, hwOffset);
         APInt converted = convertHWToLLVMLayout(
@@ -4462,7 +4469,8 @@ llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayout(
   if (auto hwArrayType = dyn_cast<hw::ArrayType>(hwType)) {
     if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(llvmType)) {
       unsigned hwElemWidth = getTypeWidth(hwArrayType.getElementType());
-      unsigned llvmElemWidth = getTypeWidth(llvmArrayType.getElementType());
+      unsigned llvmElemWidth =
+          getMemoryLayoutBitWidth(llvmArrayType.getElementType());
       unsigned numElements = hwArrayType.getNumElements();
       unsigned llvmElements = llvmArrayType.getNumElements();
       size_t count = std::min(numElements, llvmElements);
@@ -6038,8 +6046,13 @@ void LLHDProcessInterpreter::registerFirRegs(const DiscoveredOps &ops,
       name = "inst" + std::to_string(instanceId) + "." + baseName;
 
     unsigned width = getTypeWidth(regOp.getType());
-    SignalId sigId =
-        scheduler.registerSignal(name, width, getSignalEncoding(regOp.getType()));
+    // Reuse existing signal if one was already registered (e.g., from the
+    // llhd.sig path).  Without this, a duplicate signal is created that
+    // lacks array info, causing VPI type misclassification (GPI_LOGIC_ARRAY
+    // instead of GPI_ARRAY for unpacked array registers).
+    SignalId sigId = scheduler.findSignalByName(name);
+    if (sigId == 0)
+      sigId = scheduler.registerSignal(name, width, getSignalEncoding(regOp.getType()));
     signalMap[regOp.getResult()] = sigId;
     signalIdToName[sigId] = name;
     signalIdToType[sigId] = unwrapSignalType(regOp.getType());
@@ -12533,7 +12546,12 @@ llvm_dispatch:
   // LLVM extractvalue - extract a value from an aggregate (struct/array)
   if (auto extractValueOp = dyn_cast<LLVM::ExtractValueOp>(op)) {
     InterpretedValue container = getValue(procId, extractValueOp.getContainer());
-    unsigned resultWidth = getTypeWidth(extractValueOp.getType());
+    auto getLLVMValueWidth = [&](Type type) -> unsigned {
+      return isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(type)
+                 ? getMemoryLayoutBitWidth(type)
+                 : getTypeWidth(type);
+    };
+    unsigned resultWidth = getLLVMValueWidth(extractValueOp.getType());
     if (container.isX()) {
       setValue(procId, extractValueOp.getResult(),
                InterpretedValue::makeX(resultWidth));
@@ -12549,12 +12567,12 @@ llvm_dispatch:
         // For struct, accumulate offsets of preceding fields
         auto body = structType.getBody();
         for (int64_t i = 0; i < idx; ++i) {
-          bitOffset += getTypeWidth(body[i]);
+          bitOffset += getLLVMValueWidth(body[i]);
         }
         currentType = body[idx];
       } else if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
         // For array, compute offset based on element size
-        unsigned elemWidth = getTypeWidth(arrayType.getElementType());
+        unsigned elemWidth = getLLVMValueWidth(arrayType.getElementType());
         bitOffset += elemWidth * idx;
         currentType = arrayType.getElementType();
       }
@@ -12571,7 +12589,12 @@ llvm_dispatch:
   if (auto insertValueOp = dyn_cast<LLVM::InsertValueOp>(op)) {
     InterpretedValue container = getValue(procId, insertValueOp.getContainer());
     InterpretedValue value = getValue(procId, insertValueOp.getValue());
-    unsigned totalWidth = getTypeWidth(insertValueOp.getType());
+    auto getLLVMValueWidth = [&](Type type) -> unsigned {
+      return isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(type)
+                 ? getMemoryLayoutBitWidth(type)
+                 : getTypeWidth(type);
+    };
+    unsigned totalWidth = getLLVMValueWidth(insertValueOp.getType());
 
     // If only the value being inserted is X, propagate X
     if (value.isX()) {
@@ -12597,17 +12620,17 @@ llvm_dispatch:
         // For struct, accumulate offsets of preceding fields
         auto body = structType.getBody();
         for (int64_t i = 0; i < idx; ++i) {
-          bitOffset += getTypeWidth(body[i]);
+          bitOffset += getLLVMValueWidth(body[i]);
         }
         currentType = body[idx];
       } else if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
         // For array, compute offset based on element size
-        unsigned elemWidth = getTypeWidth(arrayType.getElementType());
+        unsigned elemWidth = getLLVMValueWidth(arrayType.getElementType());
         bitOffset += elemWidth * idx;
         currentType = arrayType.getElementType();
       }
     }
-    fieldWidth = getTypeWidth(currentType);
+    fieldWidth = getLLVMValueWidth(currentType);
 
     APInt result = container.getAPInt();
     APInt fieldValue = value.getAPInt();
@@ -12906,7 +12929,10 @@ llvm_dispatch:
         }
 
         // Adjust width if needed
-        unsigned outputWidth = getTypeWidth(output.getType());
+        unsigned outputWidth =
+            isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(output.getType())
+                ? getMemoryLayoutBitWidth(output.getType())
+                : getTypeWidth(output.getType());
         if (!val.isX() && val.getWidth() != outputWidth) {
           if (outputWidth > 64) {
             APInt apVal = val.getAPInt();
@@ -12930,7 +12956,10 @@ llvm_dispatch:
       // Single input to multiple outputs (common for function types)
       InterpretedValue val = getValue(procId, castOp.getInputs()[0]);
       for (Value output : castOp.getOutputs()) {
-        unsigned outputWidth = getTypeWidth(output.getType());
+        unsigned outputWidth =
+            isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(output.getType())
+                ? getMemoryLayoutBitWidth(output.getType())
+                : getTypeWidth(output.getType());
         // Mask the value to fit in outputWidth bits to avoid APInt assertion
         uint64_t maskedVal = val.isX() ? 0 : val.getUInt64();
         if (outputWidth < 64)
@@ -14019,6 +14048,21 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
   auto *statePtr = (procId == activeProcessId && activeProcessState)
                        ? activeProcessState
                        : &processStates[procId];
+  static bool traceDriveFailure = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_DRIVE_FAILURE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto emitDriveFailure = [&](StringRef reason, Value signalVal) {
+    if (!traceDriveFailure)
+      return;
+    llvm::errs() << "[DRIVE-FAIL] proc=" << procId;
+    if (const Process *proc = scheduler.getProcess(procId))
+      llvm::errs() << " name='" << proc->getName() << "'";
+    if (auto func = driveOp->getParentOfType<func::FuncOp>())
+      llvm::errs() << " func='" << func.getSymName() << "'";
+    llvm::errs() << " reason=" << reason << " signal=" << signalVal
+                 << " loc=" << driveOp.getLoc() << "\n";
+  };
   auto remapRefBlockArgSource = [&](Value &ref) {
     llvm::SmallVector<Value, 4> visited;
     while (auto arg = dyn_cast<BlockArgument>(ref)) {
@@ -14151,7 +14195,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
           unsigned memoryFieldBitOff = 0;
           for (size_t i = 0; i < fieldIndex; ++i)
-            memoryFieldBitOff += getTypeWidth(elements[i].type);
+            memoryFieldBitOff += getMemoryLayoutBitWidth(elements[i].type);
           memoryBitOffset += memoryFieldBitOff;
           parentRef = structExtract.getInput();
           continue;
@@ -14168,7 +14212,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           // This handles both alloca-backed refs (local variables) and
           // GEP-backed refs (class properties like JTAG coverage fields).
           InterpretedValue driveVal = getValue(procId, driveOp.getValue());
-          unsigned parentWidth = getTypeWidth(parentRef.getType());
+          unsigned parentWidth = getMemoryLayoutBitWidth(parentRef.getType());
           unsigned extractWidth = driveVal.getWidth();
           if (memoryBitOffset + extractWidth > parentWidth) {
             LLVM_DEBUG(llvm::dbgs()
@@ -14354,7 +14398,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               findMemoryBlockByAddress(addr, procId, &blockOffset);
           if (block) {
             InterpretedValue driveVal = getValue(procId, driveOp.getValue());
-            unsigned parentWidth = getTypeWidth(parentRef.getType());
+            unsigned parentWidth =
+                getMemoryLayoutBitWidth(parentRef.getType());
             unsigned extractWidth = driveVal.getWidth();
             if (memoryBitOffset + extractWidth > parentWidth) {
               LLVM_DEBUG(llvm::dbgs()
@@ -14434,6 +14479,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
           if (!block) {
             LLVM_DEBUG(llvm::dbgs() << "  Drive to alloca failed - memory not found\n");
+            emitDriveFailure("alloca_memory_not_found", signal);
             return failure();
           }
 
@@ -14444,6 +14490,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             LLVM_DEBUG(llvm::dbgs()
                        << "  Drive: out of bounds (size=" << storeSize
                        << " block=" << block->size << ")\n");
+            emitDriveFailure("alloca_store_out_of_bounds", signal);
             return failure();
           }
 
@@ -14633,8 +14680,9 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               // Get the value to drive
               InterpretedValue driveVal = getValue(procId, driveOp.getValue());
 
-              // Find the memory block for this alloca
+              // Find the memory block for this alloca.
               MemoryBlock *block = findMemoryBlock(procId, allocaOp);
+              uint64_t blockOffset = 0;
               if (!block) {
                 auto &state = processStates[procId];
                 auto it = state.memoryBlocks.find(allocaOp.getResult());
@@ -14644,10 +14692,20 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               }
 
               if (!block) {
+                // Fallback for refs passed through function arguments where the
+                // alloca is in the caller frame: resolve by runtime address.
+                InterpretedValue parentPtrVal = getValue(procId, parentSignal);
+                if (!parentPtrVal.isX() && parentPtrVal.getUInt64() != 0) {
+                  block = findMemoryBlockByAddress(parentPtrVal.getUInt64(),
+                                                   procId, &blockOffset);
+                }
+              }
+
+              if (!block) {
                 LLVM_DEBUG(llvm::dbgs()
                            << "  Drive to struct field in alloca failed - "
                               "memory not found\n");
-                return failure();
+                return success();
               }
 
               // Compute the bit offset by walking the extract chain in reverse.
@@ -14670,6 +14728,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                   LLVM_DEBUG(llvm::dbgs()
                              << "  Error: Field not found: " << fieldName
                              << "\n");
+                  emitDriveFailure("struct_field_missing_alloca_path", signal);
                   return failure();
                 }
                 unsigned fieldIndex = *fieldIndexOpt;
@@ -14678,20 +14737,21 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 // Field 0 starts at bit 0, field 1 starts after field 0, etc.
                 unsigned fieldOffset = 0;
                 for (size_t i = 0; i < fieldIndex; ++i)
-                  fieldOffset += getTypeWidth(elements[i].type);
+                  fieldOffset += getMemoryLayoutBitWidth(elements[i].type);
 
                 bitOffset += fieldOffset;
                 currentType = elements[fieldIndex].type;
               }
 
               unsigned fieldWidth = getTypeWidth(currentType);
-              unsigned parentWidth = getTypeWidth(parentSignal.getType());
+              unsigned parentWidth =
+                  getMemoryLayoutBitWidth(parentSignal.getType());
               unsigned storeSize = (parentWidth + 7) / 8;
 
-              if (storeSize > block->size) {
+              if (blockOffset + storeSize > block->size) {
                 LLVM_DEBUG(llvm::dbgs()
                            << "  Drive to struct field in alloca: out of bounds\n");
-                return failure();
+                return success();
               }
 
               // Read the current value from memory
@@ -14701,8 +14761,9 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 unsigned insertPos = i * 8;
                 unsigned bitsToInsert = std::min(8u, parentWidth - insertPos);
                 if (bitsToInsert > 0 && insertPos < parentWidth) {
-                  APInt byteVal(bitsToInsert,
-                                block->data[i] & ((1u << bitsToInsert) - 1));
+                  APInt byteVal(
+                      bitsToInsert, block->data[blockOffset + i] &
+                                        ((1u << bitsToInsert) - 1));
                   safeInsertBits(currentVal,byteVal, insertPos);
                 }
               }
@@ -14775,11 +14836,11 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 unsigned bitsToExtract =
                     std::min(8u, parentWidth - extractPos);
                 if (bitsToExtract > 0 && extractPos < parentWidth) {
-                  block->data[i] =
+                  block->data[blockOffset + i] =
                       currentVal.extractBits(bitsToExtract, extractPos)
                           .getZExtValue();
                 } else {
-                  block->data[i] = 0;
+                  block->data[blockOffset + i] = 0;
                 }
               }
               block->initialized = !driveVal.isX();
@@ -14854,17 +14915,20 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               StringRef fieldName = extractOp.getField();
               auto fieldIndexOpt = structType.getFieldIndex(fieldName);
               if (!fieldIndexOpt)
+                emitDriveFailure("struct_field_missing_memref_path", signal);
+              if (!fieldIndexOpt)
                 return failure();
               unsigned fieldIndex = *fieldIndexOpt;
               unsigned fieldOff = 0;
               for (size_t i = 0; i < fieldIndex; ++i)
-                fieldOff += getTypeWidth(elements[i].type);
+                fieldOff += getMemoryLayoutBitWidth(elements[i].type);
               bitOffset += fieldOff;
               currentType = elements[fieldIndex].type;
             }
 
             unsigned fieldWidth = getTypeWidth(currentType);
-            unsigned parentWidth = getTypeWidth(parentSignal.getType());
+            unsigned parentWidth =
+                getMemoryLayoutBitWidth(parentSignal.getType());
             unsigned storeSize = (parentWidth + 7) / 8;
 
             if (blockOffset + storeSize <= block->size) {
@@ -15027,6 +15091,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         if (!fieldIndexOpt) {
           LLVM_DEBUG(llvm::dbgs() << "  Error: Field not found: " << fieldName
                                   << "\n");
+          emitDriveFailure("struct_field_missing_signal_path", signal);
           return failure();
         }
         unsigned fieldIndex = *fieldIndexOpt;
@@ -15287,7 +15352,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                     break;
                   unsigned fieldOff = 0;
                   for (size_t i = 0; i < *fidx; ++i)
-                    fieldOff += getTypeWidth(elems[i].type);
+                    fieldOff += getMemoryLayoutBitWidth(elems[i].type);
                   structBitOffset += fieldOff;
                   curType = elems[*fidx].type;
                 }
@@ -15316,7 +15381,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                       getValue(procId, driveOp.getValue());
 
                   // Read-modify-write the memory block
-                  unsigned rootWidth = getTypeWidth(traceVal.getType());
+                  unsigned rootWidth =
+                      getMemoryLayoutBitWidth(traceVal.getType());
                   unsigned storeSize = (rootWidth + 7) / 8;
 
                   if (blockOffset + storeSize <= block->size) {
@@ -15658,6 +15724,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       // Fall through to the normal drive handling below
     } else {
       LLVM_DEBUG(llvm::dbgs() << "  Error: Unknown signal in drive\n");
+      emitDriveFailure("unknown_signal", signal);
       return failure();
     }
   }
@@ -15672,8 +15739,41 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
     }
   }
 
+  // Handle force/release attributes on the drive.
+  bool isForce = driveOp->hasAttr("circt.force");
+  bool isRelease = driveOp->hasAttr("circt.release");
+
+  if (isForce) {
+    // Save the current signal value before applying the force, so that
+    // a subsequent "release" can restore it.
+    auto pendingIt = pendingEpsilonDrives.find(sigId);
+    if (pendingIt != pendingEpsilonDrives.end()) {
+      forcedSignalSavedValues[sigId] = pendingIt->second;
+    } else {
+      forcedSignalSavedValues[sigId] =
+          InterpretedValue::fromSignalValue(scheduler.getSignalValue(sigId));
+    }
+    LLVM_DEBUG(llvm::dbgs() << "  Force: saved pre-force value for signal "
+                            << sigId << "\n");
+  }
+
   // Get the value to drive
   InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+
+  if (isRelease) {
+    // On release, restore the saved pre-force value instead of the
+    // probed current value (which would be the forced value).
+    auto savedIt = forcedSignalSavedValues.find(sigId);
+    if (savedIt != forcedSignalSavedValues.end()) {
+      driveVal = savedIt->second;
+      forcedSignalSavedValues.erase(savedIt);
+      LLVM_DEBUG(llvm::dbgs() << "  Release: restoring saved value for signal "
+                              << sigId << "\n");
+    } else {
+      LLVM_DEBUG(llvm::dbgs() << "  Release: no saved value for signal "
+                              << sigId << ", using current\n");
+    }
+  }
 
   // Get the delay time
   SimTime delay = convertTimeValue(procId, driveOp.getTime());
@@ -21127,7 +21227,10 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
 
   // Check if this is an llvm.mlir.undef (undefined value)
   if (auto undefOp = value.getDefiningOp<LLVM::UndefOp>()) {
-    unsigned width = getTypeWidth(undefOp.getType());
+    unsigned width =
+        isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(undefOp.getType())
+            ? getMemoryLayoutBitWidth(undefOp.getType())
+            : getTypeWidth(undefOp.getType());
     // Initialize undef to zero (safe default for building structs)
     InterpretedValue iv(APInt::getZero(width));
     valueMap[value] = iv;
@@ -21139,7 +21242,10 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     if (!castOp.getInputs().empty()) {
       InterpretedValue inputVal = getValue(procId, castOp.getInputs()[0]);
       // Adjust width if needed
-      unsigned outputWidth = getTypeWidth(value.getType());
+      unsigned outputWidth =
+          isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(value.getType())
+              ? getMemoryLayoutBitWidth(value.getType())
+              : getTypeWidth(value.getType());
       InterpretedValue result;
       if (inputVal.isX()) {
         result = InterpretedValue::makeX(outputWidth);
@@ -21253,7 +21359,10 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     // Get the pointer value (may recursively evaluate GEPs)
     InterpretedValue ptrVal = getValue(procId, loadOp.getAddr());
     if (ptrVal.isX()) {
-      unsigned bitWidth = getTypeWidth(loadOp.getType());
+      unsigned bitWidth =
+          isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(loadOp.getType())
+              ? getMemoryLayoutBitWidth(loadOp.getType())
+              : getTypeWidth(loadOp.getType());
       InterpretedValue result = InterpretedValue::makeX(bitWidth);
       valueMap[value] = result;
       return result;
@@ -21261,7 +21370,10 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
 
     uint64_t addr = ptrVal.getUInt64();
     Type resultType = loadOp.getType();
-    unsigned bitWidth = getTypeWidth(resultType);
+    unsigned bitWidth =
+        isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(resultType)
+            ? getMemoryLayoutBitWidth(resultType)
+            : getTypeWidth(resultType);
     unsigned loadSize = getLLVMTypeSize(resultType);
 
     // Interface fields are represented as shadow signals. Prefer reading
@@ -24053,7 +24165,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 // LLVM Dialect Operation Handlers
 //===----------------------------------------------------------------------===//
 
-unsigned LLHDProcessInterpreter::getLLVMTypeAlignment(Type type) {
+unsigned LLHDProcessInterpreter::getLLVMTypeAlignment(Type type) const {
   // Note: This function exists for future use. Currently the interpreter
   // uses unaligned struct layout to match MooreToCore's sizeof computation
   // (which sums field sizes without alignment padding).
@@ -24078,7 +24190,7 @@ unsigned LLHDProcessInterpreter::getLLVMTypeAlignment(Type type) {
 }
 
 unsigned LLHDProcessInterpreter::getLLVMStructFieldOffset(
-    LLVM::LLVMStructType structType, unsigned fieldIndex) {
+    LLVM::LLVMStructType structType, unsigned fieldIndex) const {
   // Use GEP-aligned sizes: each sub-byte field occupies at least one byte,
   // matching LLVM's data layout for GEP offset computation.
   auto body = structType.getBody();
@@ -24088,7 +24200,7 @@ unsigned LLHDProcessInterpreter::getLLVMStructFieldOffset(
   return offset;
 }
 
-unsigned LLHDProcessInterpreter::getLLVMTypeSize(Type type) {
+unsigned LLHDProcessInterpreter::getLLVMTypeSize(Type type) const {
   // For LLVM pointer types, use 64 bits (8 bytes)
   if (isa<LLVM::LLVMPointerType>(type))
     return 8;
@@ -24119,7 +24231,7 @@ unsigned LLHDProcessInterpreter::getLLVMTypeSize(Type type) {
   return (bitWidth + 7) / 8;
 }
 
-unsigned LLHDProcessInterpreter::getLLVMTypeSizeForGEP(Type type) {
+unsigned LLHDProcessInterpreter::getLLVMTypeSizeForGEP(Type type) const {
   // Returns the byte size of a type as seen by GEP offset computation.
   // For struct types, each field occupies at least one byte (matching LLVM's
   // data layout where sub-byte fields like i1, i3 each occupy 1 byte in
@@ -24143,6 +24255,42 @@ unsigned LLHDProcessInterpreter::getLLVMTypeSizeForGEP(Type type) {
 
   // For non-aggregate types, same as getLLVMTypeSize
   return getLLVMTypeSize(type);
+}
+
+unsigned LLHDProcessInterpreter::getMemoryLayoutBitWidth(Type type) const {
+  // Memory-backed refs are byte-addressable. Scalars narrower than one byte
+  // still consume one byte in memory layout.
+  if (auto refType = dyn_cast<llhd::RefType>(type))
+    return getMemoryLayoutBitWidth(refType.getNestedType());
+
+  if (auto intType = dyn_cast<IntegerType>(type))
+    return std::max(8u, intType.getWidth());
+
+  if (auto floatType = dyn_cast<FloatType>(type))
+    return std::max(8u, floatType.getWidth());
+
+  if (auto arrayType = dyn_cast<hw::ArrayType>(type))
+    return getMemoryLayoutBitWidth(arrayType.getElementType()) *
+           arrayType.getNumElements();
+
+  if (auto structType = dyn_cast<hw::StructType>(type)) {
+    unsigned totalWidth = 0;
+    for (auto field : structType.getElements())
+      totalWidth += getMemoryLayoutBitWidth(field.type);
+    return totalWidth;
+  }
+
+  if (auto llvmStructType = dyn_cast<LLVM::LLVMStructType>(type))
+    return getLLVMTypeSizeForGEP(llvmStructType) * 8;
+
+  if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(type))
+    return getLLVMTypeSizeForGEP(llvmArrayType) * 8;
+
+  if (isa<LLVM::LLVMPointerType>(type))
+    return 64;
+
+  unsigned width = getTypeWidth(type);
+  return width == 0 ? 0 : std::max(8u, width);
 }
 
 MemoryBlock *LLHDProcessInterpreter::findMemoryBlock(ProcessId procId,
@@ -24777,7 +24925,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
   // Get the pointer value
   InterpretedValue ptrVal = getValue(procId, loadOp.getAddr());
   Type resultType = loadOp.getType();
-  unsigned bitWidth = getTypeWidth(resultType);
+  unsigned bitWidth =
+      isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(resultType)
+          ? getMemoryLayoutBitWidth(resultType)
+          : getTypeWidth(resultType);
   unsigned loadSize = getLLVMTypeSize(resultType);
 
   // Check if this load targets an interface field that has a shadow signal.
@@ -27512,13 +27663,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
     // Handle __moore_process_kill - terminate a process.
     // Implements SystemVerilog process::kill().
+    // Per IEEE 1800-2017, process::kill() terminates the process and all
+    // its subprocesses, so use killProcessTree instead of finalizeProcess.
     if (calleeName == "__moore_process_kill") {
       if (callOp.getNumOperands() >= 1) {
         InterpretedValue handleVal = getValue(procId, callOp.getOperand(0));
         if (!handleVal.isX()) {
           ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
           if (targetId != InvalidProcessId) {
-            finalizeProcess(targetId, /*killed=*/true);
+            killProcessTree(targetId);
           }
         }
       }
@@ -29278,17 +29431,28 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         std::string pattern;
         if (strAddr != 0 && strLen > 0) {
-          uint64_t blockOffset = 0;
-          auto *block =
-              findMemoryBlockByAddress(strAddr, procId, &blockOffset);
-          if (block && block->initialized) {
-            for (int32_t i = 0; i < strLen; ++i) {
-              size_t idx = blockOffset + i;
-              if (idx < block->data.size()) {
-                char c = static_cast<char>(block->data[idx]);
-                if (c == '\0')
-                  break;
-                pattern += c;
+          // Check dynamicStrings first (strings from __moore_string_concat,
+          // __moore_packed_string_to_string, etc.)
+          auto dynIt = dynamicStrings.find(static_cast<int64_t>(strAddr));
+          if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+              dynIt->second.second > 0) {
+            size_t copyLen = std::min(static_cast<size_t>(strLen),
+                                      static_cast<size_t>(dynIt->second.second));
+            pattern.assign(dynIt->second.first, copyLen);
+          } else {
+            // Fall back to memory blocks (global string constants)
+            uint64_t blockOffset = 0;
+            auto *block =
+                findMemoryBlockByAddress(strAddr, procId, &blockOffset);
+            if (block && block->initialized) {
+              for (int32_t i = 0; i < strLen; ++i) {
+                size_t idx = blockOffset + i;
+                if (idx < block->data.size()) {
+                  char c = static_cast<char>(block->data[idx]);
+                  if (c == '\0')
+                    break;
+                  pattern += c;
+                }
               }
             }
           }
@@ -30129,6 +30293,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                    << ", depth=" << inheritanceDepth << ") = " << result
                    << "\n");
       }
+      return success();
+    }
+
+    // ---- __moore_get_initial_random_seed ----
+    // IEEE 1800-2017 §20.15.2: Returns the initial random seed.
+    if (calleeName == "__moore_get_initial_random_seed") {
+      int32_t seed = __moore_get_initial_random_seed();
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(seed))));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_get_initial_random_seed() = " << seed
+                 << "\n");
       return success();
     }
 
@@ -32268,18 +32445,36 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             // Read {data_ptr, length} from the struct
             std::memcpy(&dataPtr, initBlock->data.data() + initOffset, 8);
             std::memcpy(&initLen, initBlock->data.data() + initOffset + 8, 8);
-          } else if (initAddr >= 0x10000000000ULL) {
-            auto *structPtr = reinterpret_cast<const uint8_t *>(initAddr);
-            std::memcpy(&dataPtr, structPtr, 8);
-            std::memcpy(&initLen, structPtr + 8, 8);
+          } else {
+            // Only dereference as native pointer if the address is known to be
+            // within a tracked native allocation. This avoids invalid
+            // host-pointer dereferences from corrupted/unknown values.
+            uint64_t nativeOffset = 0, nativeSize = 0;
+            if (findNativeMemoryBlockByAddress(initAddr, &nativeOffset,
+                                               &nativeSize) &&
+                nativeSize >= nativeOffset + 16) {
+              auto *structPtr = reinterpret_cast<const uint8_t *>(initAddr);
+              std::memcpy(&dataPtr, structPtr, 8);
+              std::memcpy(&initLen, structPtr + 8, 8);
+            }
           }
           // Now copy from the actual data pointer
           if (dataPtr != 0) {
-            size_t copySize = std::min<size_t>(size, static_cast<size_t>(initLen));
-            if (copySize > 0) {
-              // The data pointer is a native heap pointer from __moore_dyn_array_new
-              std::memcpy(result.data,
-                          reinterpret_cast<void *>(dataPtr), copySize);
+            uint64_t nativeOffset = 0, nativeSize = 0;
+            if (findNativeMemoryBlockByAddress(dataPtr, &nativeOffset,
+                                               &nativeSize)) {
+              size_t srcAvail = 0;
+              if (nativeSize > nativeOffset)
+                srcAvail = static_cast<size_t>(nativeSize - nativeOffset);
+              size_t copyBound =
+                  std::min<size_t>(static_cast<size_t>(size),
+                                   static_cast<size_t>(initLen));
+              size_t copySize = std::min(copyBound, srcAvail);
+              if (copySize > 0) {
+                // dataPtr already points to the resolved source address.
+                std::memcpy(result.data,
+                            reinterpret_cast<const void *>(dataPtr), copySize);
+              }
             }
           }
         }

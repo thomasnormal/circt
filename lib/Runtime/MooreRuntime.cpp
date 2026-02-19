@@ -2050,6 +2050,30 @@ extern "C" void __moore_process_srandom(int64_t /*handle*/, int32_t /*seed*/) {
   // No-op in compiled simulation.
 }
 
+/// Global initial random seed, set once at startup.
+static int32_t globalInitialRandomSeed = 0;
+static bool globalInitialRandomSeedInitialized = false;
+
+extern "C" int32_t __moore_get_initial_random_seed(void) {
+  if (!globalInitialRandomSeedInitialized) {
+    // Generate a seed from the environment or a random source.
+    const char *envSeed = std::getenv("CIRCT_SIM_RANDOM_SEED");
+    if (envSeed) {
+      globalInitialRandomSeed =
+          static_cast<int32_t>(std::strtol(envSeed, nullptr, 10));
+    } else {
+      // Use a time-based seed that is non-zero.
+      globalInitialRandomSeed = static_cast<int32_t>(
+          std::chrono::steady_clock::now().time_since_epoch().count() &
+          0x7FFFFFFF);
+      if (globalInitialRandomSeed == 0)
+        globalInitialRandomSeed = 12345;
+    }
+    globalInitialRandomSeedInitialized = true;
+  }
+  return globalInitialRandomSeed;
+}
+
 //===----------------------------------------------------------------------===//
 // Mailbox Operations (Stubs)
 //===----------------------------------------------------------------------===//

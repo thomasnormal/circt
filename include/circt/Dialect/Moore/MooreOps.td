@@ -496,6 +496,40 @@ def DelayedNonBlockingAssignOp :
   }];
 }
 
+// Force assignment
+
+def ForceAssignOp : MooreOp<"force_assign"> {
+  let summary = "Procedural force assignment";
+  let description = [{
+    A procedural force assignment, such as `force x = y`. Overrides the
+    signal value until a corresponding `release` statement. The pre-force
+    value is saved and restored on release.
+
+    See IEEE 1800-2017 § 10.6.2 "The force and release procedural statements".
+  }];
+  let arguments = (ins
+    Arg<RefType, "", [MemWrite]>:$dst,
+    UnpackedType:$src
+  );
+  let assemblyFormat = "$dst `,` $src attr-dict `:` type($dst) `,` type($src)";
+}
+
+// Release assignment
+
+def ReleaseAssignOp : MooreOp<"release_assign"> {
+  let summary = "Procedural release assignment";
+  let description = [{
+    A procedural release statement, such as `release x`. Removes the force
+    override and restores the pre-force value.
+
+    See IEEE 1800-2017 § 10.6.2 "The force and release procedural statements".
+  }];
+  let arguments = (ins
+    Arg<RefType, "", [MemWrite]>:$dst
+  );
+  let assemblyFormat = "$dst attr-dict `:` type($dst)";
+}
+
 //===----------------------------------------------------------------------===//
 // Statements
 //===----------------------------------------------------------------------===//
@@ -2621,6 +2655,47 @@ def TimeBIOp : Builtin<"time"> {
   // Optional positional attribute for the seed
   let results = (outs TimeType:$result);
   let assemblyFormat = "attr-dict";
+}
+
+def InitStateBIOp : Builtin<"initstate"> {
+  let summary = "Return 1 during initialization, 0 otherwise";
+  let description = [{
+    Corresponds to the `$initstate` system function.
+    Returns 1 when simulation time is 0 (initialization phase) and the
+    calling context is an initial block. Returns 0 after simulation time
+    has advanced.
+
+    See IEEE 1800-2017 § 20.15.
+  }];
+  let results = (outs TwoValuedI1:$result);
+  let assemblyFormat = "attr-dict";
+}
+
+def GetInitialRandomSeedBIOp : Builtin<"get_initial_random_seed"> {
+  let summary = "Return the initial random seed for the simulation";
+  let description = [{
+    Corresponds to the `$get_initial_random_seed` system function.
+    Returns the initial seed value used for simulation randomization.
+
+    See IEEE 1800-2017 § 20.15.2.
+  }];
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "attr-dict";
+}
+
+def TestPlusArgsBIOp : Builtin<"test_plusargs"> {
+  let summary = "Check if a plusarg exists on the command line";
+  let description = [{
+    Corresponds to the `$test$plusargs` system function.
+    Takes a string argument and returns 1 if a matching plusarg was
+    provided on the command line, 0 otherwise. Supports both compile-time
+    constant and runtime dynamic strings.
+
+    See IEEE 1800-2017 § 21.6.
+  }];
+  let arguments = (ins StringType:$pattern);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$pattern attr-dict";
 }
 
 //===----------------------------------------------------------------------===//

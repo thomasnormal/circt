@@ -12921,8 +12921,9 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
     // Determine the delay for the assignment.
     Value delay;
     if constexpr (std::is_same_v<OpTy, ContinuousAssignOp> ||
-                  std::is_same_v<OpTy, BlockingAssignOp>) {
-      // Blocking and continuous assignments normally get a 0ns 0d 1e delay.
+                  std::is_same_v<OpTy, BlockingAssignOp> ||
+                  std::is_same_v<OpTy, ForceAssignOp>) {
+      // Blocking, force, and continuous assignments normally get 0ns 0d 1e delay.
       // However, for assignments from module inputs (block arguments), use
       // zero epsilon delay (0ns 0d 0e) to fix initialization order issues.
       // This ensures that signals driven from inputs have the correct value
@@ -13445,8 +13446,11 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       }
     }
 
-    rewriter.replaceOpWithNewOp<llhd::DriveOp>(
+    auto driveOp = rewriter.replaceOpWithNewOp<llhd::DriveOp>(
         op, dst, srcValue, delay, Value{}, llhdStrength0, llhdStrength1);
+    // Tag force assigns so the interpreter can save/restore the pre-force value.
+    if constexpr (std::is_same_v<OpTy, ForceAssignOp>)
+      driveOp->setAttr("circt.force", rewriter.getUnitAttr());
     return success();
   }
 };
@@ -23022,6 +23026,110 @@ static LogicalResult convert(TimeBIOp op, TimeBIOp::Adaptor adaptor,
   return success();
 }
 
+// moore.builtin.initstate
+// Returns 1 when simulation time is 0, 0 otherwise.
+static LogicalResult convert(InitStateBIOp op, InitStateBIOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  Location loc = op.getLoc();
+  // Get current time as i64, compare to 0.
+  auto llhdTime = llhd::CurrentTimeOp::create(rewriter, loc);
+  auto i64Ty = rewriter.getIntegerType(64);
+  auto timeInt = llhd::TimeToIntOp::create(rewriter, loc, i64Ty, llhdTime);
+  auto zero = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                         rewriter.getI64IntegerAttr(0));
+  auto cmp = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                     timeInt, zero);
+  rewriter.replaceOp(op, cmp.getResult());
+  return success();
+}
+
+// moore.builtin.get_initial_random_seed
+// Returns the initial random seed via a runtime call.
+static LogicalResult convert(GetInitialRandomSeedBIOp op,
+                             GetInitialRandomSeedBIOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  Location loc = op.getLoc();
+  auto *ctx = rewriter.getContext();
+  ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+  auto i32Ty = IntegerType::get(ctx, 32);
+  auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {});
+  auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                    "__moore_get_initial_random_seed", fnTy);
+  auto call = LLVM::CallOp::create(rewriter, loc, i32Ty,
+                                    SymbolRefAttr::get(fn), ValueRange{});
+  rewriter.replaceOp(op, call.getResult());
+  return success();
+}
+
+// moore.builtin.test_plusargs
+// Lowers to a runtime call __moore_test_plusargs(ptr, len) -> i32.
+// Extracts ptr and len from the lowered string struct.
+static LogicalResult convert(TestPlusArgsBIOp op,
+                             TestPlusArgsBIOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  Location loc = op.getLoc();
+  auto *ctx = rewriter.getContext();
+  ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+  auto i32Ty = IntegerType::get(ctx, 32);
+  auto i64Ty = IntegerType::get(ctx, 64);
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+  // The string has been lowered to !llvm.struct<(ptr, i64)>.
+  Value strStruct = adaptor.getPattern();
+
+  // Extract pointer (field 0) and length (field 1).
+  Value strPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, strStruct,
+                                               ArrayRef<int64_t>{0});
+  Value strLen64 = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty,
+                                                  strStruct,
+                                                  ArrayRef<int64_t>{1});
+  Value strLen = LLVM::TruncOp::create(rewriter, loc, i32Ty, strLen64);
+
+  auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i32Ty});
+  auto fn =
+      getOrCreateRuntimeFunc(mod, rewriter, "__moore_test_plusargs", fnTy);
+  auto call = LLVM::CallOp::create(rewriter, loc, i32Ty,
+                                    SymbolRefAttr::get(fn),
+                                    ValueRange{strPtr, strLen});
+  rewriter.replaceOp(op, call.getResult());
+  return success();
+}
+
+// moore.release_assign
+// Release a forced signal. The interpreter handles the value restore.
+// Lower to a no-op drive of the signal with a "circt.release" attribute.
+struct ReleaseAssignOpConversion
+    : public OpConversionPattern<ReleaseAssignOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ReleaseAssignOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value dst = adaptor.getDst();
+
+    // If the destination is an llhd.ref, probe the current value and
+    // drive it back (no-op drive) with a "circt.release" attribute.
+    if (auto refType = dyn_cast<llhd::RefType>(dst.getType())) {
+      Value currentVal = llhd::ProbeOp::create(rewriter, loc, dst);
+      auto delay = llhd::ConstantTimeOp::create(
+          rewriter, loc,
+          llhd::TimeAttr::get(op->getContext(), 0U, "ns", 0, 1));
+      auto driveOp = llhd::DriveOp::create(rewriter, loc, dst, currentVal,
+                                             delay, Value{});
+      driveOp->setAttr("circt.release", rewriter.getUnitAttr());
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // For LLVM pointer destinations, just erase (no-op).
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // moore.logic_to_time
 // Since TimeType now converts to i64, this operation just extracts the value
 // from a 4-state struct (if present) and produces an i64.
@@ -28723,6 +28831,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     AssignOpConversion<ContinuousAssignOp>,
     AssignOpConversion<DelayedContinuousAssignOp>,
     AssignOpConversion<BlockingAssignOp>,
+    AssignOpConversion<ForceAssignOp>,
+    ReleaseAssignOpConversion,
     AssignOpConversion<NonBlockingAssignOp>,
     AssignOpConversion<DelayedNonBlockingAssignOp>,
     AssignedVariableOpConversion,
@@ -28892,6 +29002,9 @@ static void populateOpConversion(ConversionPatternSet &patterns,
 
   // Timing control
   patterns.add<TimeBIOp>(convert);
+  patterns.add<InitStateBIOp>(convert);
+  patterns.add<GetInitialRandomSeedBIOp>(convert);
+  patterns.add<TestPlusArgsBIOp>(convert);
   patterns.add<LogicToTimeOp>(convert);
   patterns.add<TimeToLogicOpConversion>(typeConverter, patterns.getContext());
 

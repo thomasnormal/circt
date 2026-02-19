@@ -405,6 +405,22 @@ void DriveHoister::findHoistableSlots() {
     if (hw::getBitWidth(nestedType) < 0)
       return;
 
+    // Skip slots that have any force/release drives. These drives carry
+    // special attributes (circt.force/circt.release) that must remain inline
+    // in the process body so the interpreter can implement force/release
+    // semantics (saving and restoring the pre-force value).
+    bool hasForceRelease = false;
+    for (auto *user : slot.getUsers()) {
+      if (auto drive = dyn_cast<DriveOp>(user)) {
+        if (drive->hasAttr("circt.force") || drive->hasAttr("circt.release")) {
+          hasForceRelease = true;
+          break;
+        }
+      }
+    }
+    if (hasForceRelease)
+      return;
+
     slots.insert(slot);
   });
   LLVM_DEBUG(llvm::dbgs() << "Found " << slots.size()

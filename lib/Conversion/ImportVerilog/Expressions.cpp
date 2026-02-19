@@ -3278,7 +3278,8 @@ struct RvalueExprVisitor : public ExprVisitor {
     if (auto *sci = std::get_if<slang::ast::CallExpression::SystemCallInfo>(
             &expr.subroutine)) {
       if (sci->subroutine->name == "$test$plusargs" ||
-          sci->subroutine->name == "$value$plusargs")
+          sci->subroutine->name == "$value$plusargs" ||
+          sci->subroutine->name == "$initstate")
         skipConstEval = true;
     }
     if (!skipConstEval) {
@@ -4732,14 +4733,21 @@ struct RvalueExprVisitor : public ExprVisitor {
     context.methodReceiverOverride = {};
 
     // Convert the call arguments. Input arguments are converted to an rvalue.
-    // All other arguments are converted to lvalues and passed into the function
-    // by reference.
+    // `ref` arguments are passed through directly as references.
+    // `output` / `inout` arguments use copy-out semantics: pass a temporary
+    // reference and write the temporary back to the actual after the call.
     //
     // For method calls, default argument expressions (which contain method calls
     // with implicit `this`) should use the receiver's `this`, not the caller's.
     // We detect default arguments by checking if the argument expression's
     // source location is within the subroutine's location range.
+    struct DeferredOutputCopy {
+      Value actualRef;
+      Value tempRef;
+      bool isSigned;
+    };
     SmallVector<Value> arguments;
+    SmallVector<DeferredOutputCopy> deferredOutputCopies;
     auto subroutineLoc = subroutine->location;
     for (auto [callArg, declArg] :
          llvm::zip(expr.arguments(), subroutine->getArguments())) {
@@ -4806,14 +4814,55 @@ struct RvalueExprVisitor : public ExprVisitor {
         auto unpackedType = dyn_cast<moore::UnpackedType>(type);
         if (!unpackedType)
           return {};
-        value =
-            context.materializeConversion(moore::RefType::get(unpackedType),
-                                          lvalue, argExpr->type->isSigned(), loc);
+        auto refType = moore::RefType::get(unpackedType);
+        Value lvalueRef = context.materializeConversion(
+            refType, lvalue, argExpr->type->isSigned(), loc);
+        if (!lvalueRef)
+          return {};
+
+        using slang::ast::ArgumentDirection;
+        switch (declArg->direction) {
+        case ArgumentDirection::Ref:
+          value = lvalueRef;
+          break;
+        case ArgumentDirection::Out:
+        case ArgumentDirection::InOut: {
+          Value initValue;
+          if (declArg->direction == ArgumentDirection::InOut)
+            initValue = moore::ReadOp::create(builder, loc, lvalueRef);
+          auto tempRef = moore::VariableOp::create(
+              builder, loc, refType, StringAttr{}, initValue);
+          value = tempRef;
+          deferredOutputCopies.push_back(
+              {lvalueRef, tempRef, argExpr->type->isSigned()});
+          break;
+        }
+        default:
+          value = lvalueRef;
+          break;
+        }
       }
       if (!value)
         return {};
       arguments.push_back(value);
     }
+
+    auto emitDeferredOutputCopies = [&]() -> bool {
+      for (const auto &copy : deferredOutputCopies) {
+        auto actualRefType = dyn_cast<moore::RefType>(copy.actualRef.getType());
+        if (!actualRefType)
+          return false;
+        auto actualType = actualRefType.getNestedType();
+        Value tempValue = moore::ReadOp::create(builder, loc, copy.tempRef);
+        tempValue =
+            context.materializeConversion(actualType, tempValue, copy.isSigned,
+                                          loc);
+        if (!tempValue)
+          return false;
+        moore::BlockingAssignOp::create(builder, loc, copy.actualRef, tempValue);
+      }
+      return true;
+    };
 
     if (!lowering->isConverting && !lowering->captures.empty()) {
       auto materializeCaptureAtCall = [&](Value cap) -> Value {
@@ -4916,6 +4965,8 @@ struct RvalueExprVisitor : public ExprVisitor {
 
       auto callOp = moore::ConstraintMethodCallOp::create(
           builder, loc, resultType, methodRef, explicitArguments);
+      if (!emitDeferredOutputCopies())
+        return {};
       if (resultTypes.empty())
         return mlir::UnrealizedConversionCastOp::create(
                    builder, loc, moore::VoidType::get(context.getContext()),
@@ -4956,6 +5007,9 @@ struct RvalueExprVisitor : public ExprVisitor {
       callOp =
           mlir::func::CallOp::create(builder, loc, lowering->op, arguments);
     }
+
+    if (!emitDeferredOutputCopies())
+      return {};
 
     auto result = resultTypes.size() > 0 ? callOp->getOpResult(0) : Value{};
     // For calls to void functions we need to have a value to return from this
@@ -6604,15 +6658,28 @@ struct RvalueExprVisitor : public ExprVisitor {
     }
 
     // Handle coverage control functions (IEEE 1800-2017 Section 20.14).
-    // These are simulator-specific and stubbed to return appropriate defaults.
-    // $coverage_control: returns 0 (success) - simulator-specific control
-    // $coverage_get_max: returns 0 (no coverage) - simulator-specific
-    // $coverage_merge: returns 0 (success) - requires persistent DB
-    // $coverage_save: returns 0 (success) - requires persistent DB
-    if (subroutine.name == "$coverage_control" ||
-        subroutine.name == "$coverage_get_max" ||
-        subroutine.name == "$coverage_merge" ||
+    // $coverage_control: returns 1 on success (IEEE 1800-2017 §20.14.1)
+    // $coverage_get_max: returns max coverage count (100 for percentage-based)
+    // $coverage_merge: returns 0 on success
+    // $coverage_save: returns 0 on success
+    if (subroutine.name == "$coverage_control") {
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      auto result = moore::ConstantOp::create(builder, loc, intTy, 1);
+      auto ty = context.convertType(*expr.type);
+      return context.materializeConversion(ty, result, expr.type->isSigned(),
+                                           loc);
+    }
+    if (subroutine.name == "$coverage_get_max") {
+      // Return 100 as the maximum coverage count (percentage-based).
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      auto result = moore::ConstantOp::create(builder, loc, intTy, 100);
+      auto ty = context.convertType(*expr.type);
+      return context.materializeConversion(ty, result, expr.type->isSigned(),
+                                           loc);
+    }
+    if (subroutine.name == "$coverage_merge" ||
         subroutine.name == "$coverage_save") {
+      // Return 0 on success.
       auto intTy = moore::IntType::getInt(context.getContext(), 32);
       auto result = moore::ConstantOp::create(builder, loc, intTy, 0);
       auto ty = context.convertType(*expr.type);
@@ -9095,19 +9162,18 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
                 })
           .Case("$get_initial_random_seed",
                 [&]() -> FailureOr<Value> {
-                  // $get_initial_random_seed is a Verilator-specific extension
-                  // that returns the initial random seed. Stub it to return 0.
-                  auto intTy = moore::IntType::getInt(getContext(), 32);
-                  return (Value)moore::ConstantOp::create(builder, loc, intTy,
-                                                          0);
+                  // $get_initial_random_seed returns the initial random seed.
+                  // IEEE 1800-2017 §20.15.2. Emit a runtime call.
+                  return (Value)moore::GetInitialRandomSeedBIOp::create(
+                      builder, loc);
                 })
           .Case("$initstate",
                 [&]() -> FailureOr<Value> {
                   // $initstate returns 1 during the initial/reset state and 0
                   // otherwise. IEEE 1800-2017 §20.15.
-                  // Check if we're statically inside an initial block.
-                  auto bitTy = moore::IntType::getInt(getContext(), 1);
-                  int initVal = 0;
+                  // In non-initial blocks, always return 0.
+                  // In initial blocks, emit a runtime check (time == 0).
+                  bool inInitialBlock = false;
                   if (auto *block = builder.getInsertionBlock()) {
                     if (auto *parentOp = block->getParentOp()) {
                       Operation *op = parentOp;
@@ -9115,15 +9181,20 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
                         if (auto proc = dyn_cast<moore::ProcedureOp>(op)) {
                           if (proc.getKind() ==
                               moore::ProcedureKind::Initial)
-                            initVal = 1;
+                            inInitialBlock = true;
                           break;
                         }
                         op = op->getParentOp();
                       }
                     }
                   }
-                  return (Value)moore::ConstantOp::create(builder, loc, bitTy,
-                                                          initVal);
+                  if (!inInitialBlock) {
+                    auto bitTy = moore::IntType::getInt(getContext(), 1);
+                    return (Value)moore::ConstantOp::create(builder, loc,
+                                                            bitTy, 0);
+                  }
+                  // Emit runtime check via InitStateBIOp.
+                  return (Value)moore::InitStateBIOp::create(builder, loc);
                 })
           .Case("$isunbounded",
                 [&]() -> Value {
@@ -9419,10 +9490,16 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                     }
                   }
                   if (plusargStr.empty()) {
-                    // Can't determine string at compile time, fall back to 0
-                    auto intTy = moore::IntType::getInt(getContext(), 32);
-                    return (Value)moore::ConstantOp::create(builder, loc, intTy,
-                                                            0);
+                    // Dynamic string — emit a TestPlusArgsBIOp for runtime
+                    // evaluation. Ensure the value is a StringType.
+                    auto strTy =
+                        moore::StringType::get(getContext());
+                    Value strVal = value;
+                    if (!isa<moore::StringType>(value.getType()))
+                      strVal = builder.createOrFold<moore::ConversionOp>(
+                          loc, strTy, value);
+                    return (Value)moore::TestPlusArgsBIOp::create(builder, loc,
+                                                                   strVal);
                   }
 
                   // Create LLVM global string constant at module level
