@@ -1,5 +1,4 @@
 // RUN: circt-sim %s | FileCheck %s
-// XFAIL: *
 
 // CHECK: reg_val=0 reg_unk=0 out_val=0 out_unk=0
 
