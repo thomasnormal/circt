@@ -3969,10 +3969,10 @@ endmodule
 // CHECK-LABEL: moore.module @TestInitstate
 module TestInitstate;
     bit b;
-    // $initstate returns 1 inside an initial block per IEEE 1800-2017 §20.15.
+    // $initstate emits a runtime check (not constant-folded).
     // CHECK: moore.procedure initial {
-    // CHECK:   %[[CONST:.*]] = moore.constant 1 : i1
-    // CHECK:   moore.blocking_assign %b, %[[CONST]]
+    // CHECK:   %[[IS:.*]] = moore.builtin.initstate
+    // CHECK:   moore.blocking_assign %b, %[[IS]]
     initial begin
         b = $initstate;
     end
