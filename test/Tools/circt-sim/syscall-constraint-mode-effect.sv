@@ -1,8 +1,7 @@
 // RUN: circt-verilog %s --ir-moore --ir-hw --ir-llhd -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// Test that constraint_mode(0) actually disables a constraint during randomize.
+// Test that constraint_mode(0) actually disables a constraint during randomize,
+// and constraint_mode(1) re-enables it.
 // Bug: constraint_mode tracks state but doesn't affect randomize() behavior.
-// When c_range.constraint_mode(0) is called, the constraint should not be
-// enforced during randomize().
 class bounded;
   rand int x;
   constraint c_range { x >= 100; x <= 100; }
@@ -35,6 +34,12 @@ module top;
 
     // CHECK: constraint_disabled_effect=1
     $display("constraint_disabled_effect=%0d", saw_not_100);
+
+    // Re-enable the constraint and verify it's enforced again
+    obj.c_range.constraint_mode(1);
+    ok = obj.randomize();
+    // CHECK: re_enabled=100
+    $display("re_enabled=%0d", obj.x);
 
     $finish;
   end

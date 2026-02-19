@@ -2,19 +2,21 @@
 // Test force/release — release should revert to the driven value.
 // Bug: force is converted to a blocking assignment, release is a no-op.
 // After release, the signal should revert to the last procedurally
-// driven value (0), not retain the forced value (1).
+// driven value, not retain the forced value.
 module top;
-  reg a;
+  reg [7:0] a;
   initial begin
-    a = 0;
-    force a = 1;
+    // Drive a to 42 (not 0, not the forced value)
+    a = 42;
+    force a = 99;
     #1;
-    // CHECK: forced=1
+    // CHECK: forced=99
     $display("forced=%0d", a);
     release a;
     #1;
-    // After release, a should revert to its pre-force value of 0
-    // CHECK: released=0
+    // After release, a should revert to its pre-force driven value of 42
+    // (not 99, and not 0 — this distinguishes real release from "a = 0")
+    // CHECK: released=42
     $display("released=%0d", a);
     $finish;
   end

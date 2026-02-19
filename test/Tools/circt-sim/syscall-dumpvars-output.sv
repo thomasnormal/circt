@@ -1,7 +1,7 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// Test that $dumpfile/$dumpvars produce VCD output or at minimum a diagnostic.
+// Test that $dumpfile/$dumpvars produce VCD output.
 // Bug: $dumpfile/$dumpvars are completely silent no-ops — no file is created,
-// no VCD content is output, and no warning is emitted.
+// no VCD content is output, and no diagnostic is emitted.
 // IEEE 1800-2017 Section 21.7: $dumpfile opens a VCD file and
 // $dumpvars selects variables to dump.
 module top;
@@ -17,8 +17,8 @@ module top;
     $display("vcd_test_complete");
     $finish;
   end
-  // When properly implemented, the output should contain VCD content
-  // or at least reference the dump file. Currently it's totally silent.
+  // When properly implemented, the simulator should report writing a VCD file
+  // that contains the actual dump filename we specified.
   // CHECK: vcd_test_complete
-  // CHECK: {{[Ww]rote.*[Vv][Cc][Dd]|[Dd]ump|\.vcd}}
+  // CHECK: syscall_dumpvars_test.vcd
 endmodule
