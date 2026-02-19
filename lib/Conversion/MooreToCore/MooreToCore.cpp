@@ -1962,6 +1962,15 @@ struct SVModuleOpConversion : public OpConversionPattern<SVModuleOp> {
       hwModuleOp->setAttr("vpi.string_var_values", vpiStrVarVals);
     if (auto vpiRealVars = op->getAttrOfType<ArrayAttr>("vpi.real_vars"))
       hwModuleOp->setAttr("vpi.real_vars", vpiRealVars);
+    if (auto vpiGenScopes =
+            op->getAttrOfType<DictionaryAttr>("vpi.gen_scopes"))
+      hwModuleOp->setAttr("vpi.gen_scopes", vpiGenScopes);
+    if (auto vpiGenScopeParams =
+            op->getAttrOfType<DictionaryAttr>("vpi.gen_scope_params"))
+      hwModuleOp->setAttr("vpi.gen_scope_params", vpiGenScopeParams);
+    if (auto vpiGateInstances =
+            op->getAttrOfType<DictionaryAttr>("vpi.gate_instances"))
+      hwModuleOp->setAttr("vpi.gate_instances", vpiGateInstances);
     // Make hw.module have the same visibility as the moore.module.
     // The entry/top level module is public, otherwise is private.
     SymbolTable::setSymbolVisibility(hwModuleOp,
@@ -22312,15 +22321,30 @@ struct FScanfBIOpConversion : public OpConversionPattern<FScanfBIOp> {
 // IsUnknownBIOp Conversion
 //===----------------------------------------------------------------------===//
 
-// moore.builtin.isunknown -> constant false (since we only support two-valued)
+// moore.builtin.isunknown -> check if any bit in the unknown mask is set
 struct IsUnknownBIOpConversion : public OpConversionPattern<IsUnknownBIOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(IsUnknownBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // In the current two-valued lowering, there are no X or Z bits,
-    // so $isunknown always returns 0.
+    auto loc = op.getLoc();
+    Value input = adaptor.getValue();
+
+    // For 4-state types, check if any bit in the unknown mask is set
+    if (isFourStateStructType(input.getType())) {
+      Value unknown = extractFourStateUnknown(rewriter, loc, input);
+      auto unknownType = cast<IntegerType>(unknown.getType());
+      Value zero = hw::ConstantOp::create(rewriter, loc,
+                                           APInt(unknownType.getWidth(), 0));
+      // unknown != 0 means at least one bit is X or Z
+      Value isUnknown = comb::ICmpOp::create(rewriter, loc,
+                                              ICmpPredicate::ne, unknown, zero);
+      rewriter.replaceOp(op, isUnknown);
+      return success();
+    }
+
+    // For two-valued types, there are no X or Z bits
     rewriter.replaceOpWithNewOp<hw::ConstantOp>(op, APInt(1, 0));
     return success();
   }
@@ -22330,8 +22354,9 @@ struct IsUnknownBIOpConversion : public OpConversionPattern<IsUnknownBIOp> {
 // CountOnesBIOp Conversion
 //===----------------------------------------------------------------------===//
 
-/// $countones(x) -> llvm.ctpop(x)
+/// $countones(x) -> llvm.ctpop(x), wrapped in 4-state struct if needed.
 /// Returns the number of 1 bits in the input.
+/// Per IEEE 1800-2017 §20.9, if any bit is X/Z, result is X.
 struct CountOnesBIOpConversion : public OpConversionPattern<CountOnesBIOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -22340,16 +22365,37 @@ struct CountOnesBIOpConversion : public OpConversionPattern<CountOnesBIOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     Value input = adaptor.getValue();
+    bool isFourState = isFourStateStructType(input.getType());
 
-    // Handle 4-state types which are lowered to {value, unknown} structs
-    if (isFourStateStructType(input.getType()))
+    Value unknown;
+    if (isFourState) {
+      unknown = extractFourStateUnknown(rewriter, loc, input);
       input = extractFourStateValue(rewriter, loc, input);
+    }
 
     auto inputType = cast<IntegerType>(input.getType());
 
     // Use LLVM's ctpop (count population) intrinsic to count 1 bits.
     Value ctpop = LLVM::CtPopOp::create(rewriter, loc, inputType, input);
-    rewriter.replaceOp(op, ctpop);
+
+    // If the original type was 4-state, wrap the result back into a struct.
+    // Per IEEE, if any input bit is X/Z, the result is X — propagate unknown.
+    if (isFourState) {
+      // If any unknown bit is set, the entire result is unknown.
+      Value zero = hw::ConstantOp::create(rewriter, loc,
+                                           APInt(inputType.getWidth(), 0));
+      Value hasUnk = comb::ICmpOp::create(rewriter, loc,
+                                            ICmpPredicate::ne, unknown, zero);
+      Value allOnes = hw::ConstantOp::create(rewriter, loc,
+                                              APInt::getAllOnes(inputType.getWidth()));
+      // resultUnk = hasUnk ? allOnes : zero
+      Value resultUnk = comb::MuxOp::create(rewriter, loc, hasUnk,
+                                             allOnes, zero);
+      auto result = createFourStateStruct(rewriter, loc, ctpop, resultUnk);
+      rewriter.replaceOp(op, result);
+    } else {
+      rewriter.replaceOp(op, ctpop);
+    }
     return success();
   }
 };
