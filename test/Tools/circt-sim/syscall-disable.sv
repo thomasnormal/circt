@@ -1,5 +1,4 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// TODO: Named block disable and task return produce wrong counter values.
 // Test disable statement for named blocks and tasks
 module top;
   integer i;

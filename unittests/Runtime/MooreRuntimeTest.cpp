@@ -1676,6 +1676,36 @@ TEST(MooreRuntimeRandomizeTest, RandomizeBasicOddSize) {
   // Functions completed without crash - success
 }
 
+TEST(MooreRuntimeRandomizeTest, RandomizeBytesSmallSizes) {
+  uint8_t buffer1[1] = {0};
+  uint8_t buffer5[5] = {0, 0, 0, 0, 0};
+
+  // Validate exact byte mapping from RNG words for odd sizes.
+  constexpr int32_t kSeed = 2026;
+  (void)__moore_urandom_seeded(kSeed);
+  uint32_t expectedWord0 = __moore_urandom();
+  uint32_t expectedWord1 = __moore_urandom();
+  uint32_t expectedWord2 = __moore_urandom();
+
+  (void)__moore_urandom_seeded(kSeed);
+  EXPECT_EQ(__moore_randomize_bytes(buffer1, 1), 1);
+  EXPECT_EQ(__moore_randomize_bytes(buffer5, 5), 1);
+
+  EXPECT_EQ(buffer1[0], static_cast<uint8_t>(expectedWord0 & 0xFF));
+  EXPECT_EQ(buffer5[0], static_cast<uint8_t>(expectedWord1 & 0xFF));
+  EXPECT_EQ(buffer5[1], static_cast<uint8_t>((expectedWord1 >> 8) & 0xFF));
+  EXPECT_EQ(buffer5[2], static_cast<uint8_t>((expectedWord1 >> 16) & 0xFF));
+  EXPECT_EQ(buffer5[3], static_cast<uint8_t>((expectedWord1 >> 24) & 0xFF));
+  EXPECT_EQ(buffer5[4], static_cast<uint8_t>(expectedWord2 & 0xFF));
+}
+
+TEST(MooreRuntimeRandomizeTest, RandomizeBytesInvalidInput) {
+  uint8_t value = 0;
+  EXPECT_EQ(__moore_randomize_bytes(nullptr, 4), 0);
+  EXPECT_EQ(__moore_randomize_bytes(&value, 0), 0);
+  EXPECT_EQ(__moore_randomize_bytes(&value, -1), 0);
+}
+
 TEST(MooreRuntimeRandomizeTest, RandomizeBasicSeededConsistency) {
   // Test that seeding the RNG produces consistent randomization results
   struct TestClass {

@@ -1,16 +1,17 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
 // Test streaming operators: {<<{...}} and {>>{...}}
 module top;
-  logic [7:0] a;
+  logic [7:0] a, a_rev;
   logic [31:0] packed_val;
   logic [7:0] b0, b1, b2, b3;
 
   initial begin
     a = 8'b10110001;
 
-    // Bit reverse with left-streaming
+    // Bit reverse with left-streaming (assign to temp first)
+    a_rev = {<<{a}};
     // CHECK: reversed=10001101
-    $display("reversed=%b", {<<{a}});
+    $display("reversed=%b", a_rev);
 
     // Pack bytes into word
     b0 = 8'hDE; b1 = 8'hAD; b2 = 8'hBE; b3 = 8'hEF;

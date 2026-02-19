@@ -3913,11 +3913,13 @@ module implicitCastsFunctionArguments;
 
   // CHECK: procedure initial
   initial begin
-    // CHECK: [[TMP1:%.+]] = moore.conversion %q : !moore.ref<f64> -> !moore.ref<l4>
+    // CHECK: [[OUT:%.+]] = moore.variable : <l4>
     // CHECK: [[TMP2:%.+]] = moore.read %r : <f64>
     // CHECK: [[TMP3:%.+]] = moore.real_to_int [[TMP2]] : f64 -> i4
     // CHECK: [[TMP4:%.+]] = moore.int_to_logic [[TMP3]] : i4
-    // CHECK: func.call @fn([[TMP1]], [[TMP4]]) : (!moore.ref<l4>, !moore.l4) -> ()
+    // CHECK: func.call @fn([[OUT]], [[TMP4]]) : (!moore.ref<l4>, !moore.l4) -> ()
+    // CHECK: [[OUTVAL:%.+]] = moore.read [[OUT]] : <l4>
+    // CHECK: moore.blocking_assign %q, {{.*}} : !moore.ref<f64>, f64
     fn(q, r);
   end
 endmodule

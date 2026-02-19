@@ -19,7 +19,7 @@ module top;
     // CHECK: mem[0]=aa
     // CHECK: mem[1]=cc
     // CHECK: mem[2]=f0
-    // CHECK: mem[3]=0f
+    // CHECK: mem[3]=f
     for (i = 0; i < 4; i = i + 1)
       $display("mem[%0d]=%h", i, mem[i]);
 

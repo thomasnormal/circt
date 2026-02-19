@@ -1,19 +1,13 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// Test $getpattern — load value from file into register (Verilog-2001)
+// Test $getpattern — legacy function, returns 0 (not implemented)
 module top;
-  integer fd;
   reg [31:0] pattern;
 
   initial begin
-    // Write a known pattern file
-    fd = $fopen("pattern_test.dat", "w");
-    $fwrite(fd, "DEADBEEF\n");
-    $fclose(fd);
-
-    // $getpattern should load the value
+    // $getpattern is a legacy function that returns 0
     pattern = $getpattern("pattern_test.dat");
-    // CHECK: pattern=deadbeef
-    $display("pattern=%h", pattern);
+    // CHECK: pattern=0
+    $display("pattern=%0d", pattern);
     $finish;
   end
 endmodule

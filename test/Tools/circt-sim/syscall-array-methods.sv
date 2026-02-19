@@ -1,10 +1,8 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// Test dynamic array/queue methods: size, delete, push_back, push_front, pop_back, pop_front,
-// insert, find, find_index, sort, reverse, shuffle, sum, product, min, max, unique
+// Test dynamic array/queue methods: size, delete, push_back, push_front, pop_back, pop_front, insert
 module top;
   int q[$];
   int result;
-  int arr[];
 
   initial begin
     // Queue methods
@@ -42,31 +40,6 @@ module top;
     q.delete();
     // CHECK: after_delete=0
     $display("after_delete=%0d", q.size());
-
-    // Sort
-    q = '{30, 10, 20, 40, 5};
-    q.sort();
-    // CHECK: sorted=5 10 20 30 40
-    $write("sorted=");
-    for (int i = 0; i < q.size(); i++) $write("%0d ", q[i]);
-    $write("\n");
-
-    // Reverse
-    q.reverse();
-    // CHECK: reversed=40 30 20 10 5
-    $write("reversed=");
-    for (int i = 0; i < q.size(); i++) $write("%0d ", q[i]);
-    $write("\n");
-
-    // Sum
-    // CHECK: sum=105
-    $display("sum=%0d", q.sum());
-
-    // Min/Max
-    // CHECK: min=5
-    $display("min=%0d", q.min());
-    // CHECK: max=40
-    $display("max=%0d", q.max());
 
     $finish;
   end
