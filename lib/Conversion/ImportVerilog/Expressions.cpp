@@ -10059,20 +10059,20 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
           // Handled by the generic DistBIOp path in visitSystemCall above.
           // These arity-2 cases should never be reached.
           // Stochastic queue functions (IEEE 1800-2017 Section 21.6)
-          // Legacy: return 0.
+          // Legacy — deprecated, not implemented.
           .Case("$q_exam",
                 [&]() -> Value {
-                  (void)value1;
-                  (void)value2;
-                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                  mlir::emitError(loc)
+                      << "unsupported legacy stochastic queue function "
+                         "'$q_exam'";
+                  return {};
                 })
           .Case("$q_full",
                 [&]() -> Value {
-                  (void)value1;
-                  (void)value2;
-                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                  mlir::emitError(loc)
+                      << "unsupported legacy stochastic queue function "
+                         "'$q_full'";
+                  return {};
                 })
           .Default([&]() -> FailureOr<Value> {
             if (subroutine.name == "rand_mode" ||

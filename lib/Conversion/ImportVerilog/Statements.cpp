@@ -2757,7 +2757,7 @@ struct StmtVisitor {
     }
 
     // PLD array tasks (IEEE 1800-2017 Section 21.7)
-    // Legacy gate-array modeling functions. Stub as no-ops.
+    // Legacy gate-array modeling functions — deprecated, not implemented.
     if (subroutine.name == "$async$and$array" ||
         subroutine.name == "$async$and$plane" ||
         subroutine.name == "$async$nand$array" ||
@@ -2774,15 +2774,20 @@ struct StmtVisitor {
         subroutine.name == "$sync$nor$plane" ||
         subroutine.name == "$sync$or$array" ||
         subroutine.name == "$sync$or$plane") {
-      return true;
+      mlir::emitError(loc) << "unsupported legacy PLD array task '"
+                           << subroutine.name << "'";
+      return failure();
     }
 
     // Stochastic queue tasks (IEEE 1800-2017 Section 21.6)
-    // Legacy abstract queue functions. Stub as no-ops.
+    // Legacy abstract queue functions — deprecated, not implemented.
     if (subroutine.name == "$q_initialize" ||
         subroutine.name == "$q_add" ||
-        subroutine.name == "$q_remove") {
-      return true;
+        subroutine.name == "$q_remove" ||
+        subroutine.name == "$q_exam") {
+      mlir::emitError(loc) << "unsupported legacy stochastic queue task '"
+                           << subroutine.name << "'";
+      return failure();
     }
 
     // SDF annotation (IEEE 1800-2017 Section 30)
