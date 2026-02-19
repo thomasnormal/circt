@@ -837,3 +837,61 @@ Conclusion:
   now has dedicated regression coverage.
 - It does not close the deeper I3C parity/root-cause issue (target monitor path
   + delta-overflow behavior still unresolved).
+
+### 2026-02-19 Session: sequencer get retry backoff hardening (delta-budget aware)
+
+Observed failure mode:
+- Full deterministic I3C replay continued to fail with
+  `ERROR(DELTA_OVERFLOW)` in a forked run-phase lane.
+- Process dump repeatedly showed suspended/retry states with
+  `seqRetry=func.call_indirect`, indicating empty `seq_item_pull_port::get`
+  retry polling pressure.
+
+Root-cause hypothesis:
+- `seq_item_pull_port::get` empty-FIFO retry path used long delta-only polling
+  windows before real-time fallback. Under heavy UVM fork/load, this could
+  consume the per-time-step delta budget and trigger overflow.
+
+Runtime changes:
+1. `include/circt/Dialect/Sim/ProcessScheduler.h`
+   - added `getMaxDeltaCycles()` accessor.
+2. `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+   - in empty `get_next_item` retry scheduling:
+     - replaced fixed `kMaxDeltaPolls` with delta-budget-aware computation
+       derived from scheduler max-delta config,
+     - retained real-time fallback polling (`10 ps`) once budget is reached,
+     - applied conservative cap (`kMaxDeltaPollBudgetCap = 256`).
+
+New regression:
+1. Added:
+   - `test/Tools/circt-sim/seq-get-next-item-empty-fallback-backoff.mlir`
+2. Validates no `DELTA_OVERFLOW` with tight delta budget:
+   - run with `--max-deltas=8 --max-time=1000000`
+   - expected bounded completion at `1000000 fs`.
+
+Validation:
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Focused regressions PASS:
+   - `seq-get-next-item-empty-fallback-backoff.mlir`
+   - `finish-item-blocks-until-item-done.mlir`
+   - `wait-condition-queue-fallback-backoff.mlir`
+   - `module-drive-enable-release-strength.mlir`
+   - `module-drive-enable.mlir`
+
+I3C impact snapshot:
+1. Full replay before this change:
+   - `/tmp/i3c-full-after-enable-release-v2.log`
+   - overflow at `740000000fs d433`.
+2. Full replay after initial delta-budget-aware change (cap 1024):
+   - `/tmp/i3c-full-after-seqretry-backoff.log`
+   - overflow moved to `730000000fs d1016`.
+3. Full replay with conservative cap 256:
+   - `/tmp/i3c-full-after-seqretry-backoff-v2.log`
+   - overflow moved later to `1110000000fs d135`.
+
+Interpretation:
+- Retry backoff hardening is reducing delta-pressure and extending progress,
+  but does not fully eliminate the deeper I3C run-phase loop/overflow issue.
+- Remaining blocker likely involves additional wait/retry sources in forked
+  monitor/driver paths beyond the empty-get retry budget alone.
