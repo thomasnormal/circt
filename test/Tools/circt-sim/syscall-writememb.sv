@@ -18,7 +18,7 @@ module top;
       // CHECK: mem[0] = 10101010
       // CHECK: mem[1] = 11001100
       // CHECK: mem[2] = 11110000
-      // CHECK: mem[3] = 1111
+      // CHECK: mem[3] = 00001111
       $display("mem[%0d] = %b", i, readback[i]);
     end
     $finish;

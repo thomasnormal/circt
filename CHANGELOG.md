@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1523 - February 19, 2026
+
+### ImportVerilog: immediate assertion runtime control for `$asserton/$assertoff/$assertkill/$assertcontrol`
+
+1. **Implemented runtime immediate-assertion enable state in ImportVerilog**  
+   (`lib/Conversion/ImportVerilog/ImportVerilogInternals.h`,
+   `lib/Conversion/ImportVerilog/Statements.cpp`):
+   - added a synthetic per-design Moore global that tracks whether procedural
+     immediate assertions are enabled.
+   - assertion-control syscalls now drive that state:
+     - `$assertoff` / `$assertkill` => disable
+     - `$asserton` => enable
+     - `$assertcontrol(type)` => handles `3` (off), `4` (on), `5` (kill),
+       preserves state for other control types.
+
+2. **Gated immediate assertion lowering on runtime assertion-control state**  
+   (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   - no-action immediate assertions are now vacuously true when disabled.
+   - action-block immediate assertions now branch through an
+     `assertions-enabled` gate and skip action blocks while disabled.
+
+3. **Updated assertion syscall regressions**  
+   (`test/Tools/circt-sim/syscall-assertoff.sv`,
+   `test/Tools/circt-sim/syscall-assertkill.sv`,
+   `test/Tools/circt-sim/syscall-assertcontrol.sv`):
+   - removed stale TODO comments claiming unsupported behavior.
+   - extended `$assertcontrol` regression to check control type `5` (`kill`)
+     suppresses a subsequent immediate assertion failure.
+
+4. **Validation**:
+   - focused assertion syscall lit:
+     - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter 'syscall-assert(on|off|kill|control)\\.sv'`
+     - result: `Passed: 4`, `Failed: 0`.
+   - bounded non-I3C AVIP compile-mode sweep:
+     - command:
+       `AVIPS=apb,uart,jtag SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 SIM_TIMEOUT=120 SIM_TIMEOUT_GRACE=60 CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=100000' utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-assertctl-noni3c-20260219-020555`
+     - compile+sim status: all three lanes `OK`.
+     - JIT summary (`utils/summarize_circt_sim_jit_reports.py`): `deopt_process_rows=0`.
+     - parity status:
+       - `apb`: scoreboard `UVM_ERROR` remains (`apb_scoreboard.sv` lines
+         `272/283/294/305/318`).
+       - `uart`, `jtag`: no `UVM_ERROR`/`UVM_FATAL` observed in bounded run.
+
 ## Iteration 1522 - February 19, 2026
 
 ### circt-sim: queue native-pointer dispatch hardening and queue XFAIL burn-down
@@ -72355,3 +72398,50 @@ See CHANGELOG.md on recent progress.
       - removes one deep I3C-analog correctness bug and improves stability.
       - remaining I3C scoreboard mismatch at
         `i3c_scoreboard.sv(162)` is still open and tracked separately.
+70. `circt-sim` close file-I/O signal-layout regressions for `$fread`,
+    `$feof`, `$writememb/$writememh`, and `%b` output width behavior
+    (February 19, 2026):
+    - root causes:
+      - `__moore_fread` signal-backed path wrote LLVM-layout bytes straight
+        into scheduler state and skipped pending/backing-memory sync, so
+        probes observed stale/zero data.
+      - `__moore_feof` relied only on C `feof` flag state, missing EOF-at-end
+        behavior expected by the current syscall regression.
+      - `__moore_writememb/__moore_writememh` signal path only sampled
+        scheduler state, ignoring fresher pending/backing-memory writes for
+        ref->ptr-backed memories.
+      - `sim.fmt.bin` formatting policy drifted between minimal-width integer
+        output and fixed-width packed-vector output.
+    - fixes:
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+        - `__moore_fread`: convert LLVM->HW layout for signal-backed targets,
+          drive `pendingEpsilonDrives`, update scheduler, and sync backing
+          memory bytes.
+        - `__moore_writemem{b,h}`: prefer pending/backing-memory signal state
+          before scheduler fallback when dumping signal-backed memories.
+        - `sim.fmt.bin`: apply width policy matching current regressions:
+          `%0b` minimum width, packed sub-32-bit values padded by type width,
+          generic 32-bit integer scalars not forced to 32-bit binary output.
+      - `lib/Runtime/MooreRuntime.cpp`
+        - `__moore_feof`: EOF peek (`fgetc`/`ungetc`) path to report EOF once
+          stream position reaches end-of-file.
+      - refreshed tests:
+        - `test/Tools/circt-sim/syscall-writememb.sv`
+          (`mem[3]` expectation to `00001111`)
+        - removed stale TODO notes:
+          - `test/Tools/circt-sim/syscall-writememb-range.sv`
+          - `test/Tools/circt-sim/syscall-writememh-range.sv`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test -j4 circt-sim`
+      - focused lit: PASS
+        - `llvm/build/bin/llvm-lit -sv --filter 'syscall-(display-format|display-write|generate|writememb-range|writememb|feof|fread)\\.sv' build-test/test/Tools/circt-sim`
+      - focused file-I/O cluster: PASS
+        - `llvm/build/bin/llvm-lit -sv --filter 'syscall-(fopen-fclose|fopen-modes|fwrite-fdisplay|fwrite-time-char|ferror|fscanf|fgetc-fgets|ftell-fseek-rewind|fread|feof|ungetc|writememb|writememb-range|writememh-range|writememh)\\.sv' build-test/test/Tools/circt-sim`
+      - full tools suite on this dirty tree:
+        - `ninja -C build-test -j4 check-circt-tools-circt-sim`
+        - before: `Passed=484`, `Failed=15`
+        - after: `Passed=487`, `Failed=12`
+        - remaining failures (12):
+          `syscall-{coverage,covergroup,disable,isunbounded,monitor,printtimescale,random,randomize-with,shortrealtobits,strobe,wait}.sv` and
+          `tlul-bfm-a-ready-timeout-short-circuit.sv`.

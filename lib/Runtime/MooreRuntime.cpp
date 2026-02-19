@@ -661,7 +661,15 @@ extern "C" MooreQueue __moore_dyn_array_new(int32_t size) {
 extern "C" MooreQueue __moore_dyn_array_new_copy(int32_t size, void *init) {
   MooreQueue result = __moore_dyn_array_new(size);
   if (result.data && init && size > 0) {
-    std::memcpy(result.data, init, size);
+    // init is a pointer to a MooreQueue struct {data_ptr, length}.
+    // Extract the data pointer and copy from there.
+    auto *initQ = static_cast<MooreQueue *>(init);
+    if (initQ->data) {
+      size_t copySize = std::min(static_cast<size_t>(size),
+                                 static_cast<size_t>(initQ->len));
+      if (copySize > 0)
+        std::memcpy(result.data, initQ->data, copySize);
+    }
   }
   return result;
 }
@@ -10828,6 +10836,15 @@ extern "C" int32_t __moore_fgetc(int32_t fd) {
   return -1; // EOF/error
 }
 
+extern "C" int32_t __moore_ungetc(int32_t c, int32_t fd) {
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      return std::ungetc(c & 0xFF, fileHandles[i]);
+    }
+  }
+  return -1; // EOF/error
+}
+
 extern "C" int32_t __moore_fgets(MooreString *str, int32_t fd) {
   if (!str)
     return 0;
@@ -10862,11 +10879,69 @@ extern "C" int32_t __moore_fgets(MooreString *str, int32_t fd) {
   return static_cast<int32_t>(len);
 }
 
+extern "C" int32_t __moore_fread(void *dest, int32_t elemWidth,
+                                 int32_t elemStorageBytes, int32_t numElems,
+                                 int32_t fd) {
+  if (!dest || elemWidth <= 0 || elemStorageBytes <= 0 || numElems <= 0)
+    return 0;
+
+  FILE *file = nullptr;
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      file = fileHandles[i];
+      break;
+    }
+  }
+  if (!file)
+    return 0;
+
+  int32_t elemBytes = (elemWidth + 7) / 8;
+  if (elemBytes <= 0 || elemBytes > elemStorageBytes)
+    return 0;
+
+  auto *dst = static_cast<uint8_t *>(dest);
+  int32_t totalBytesRead = 0;
+  std::vector<uint8_t> tmp(static_cast<size_t>(elemBytes), 0);
+
+  for (int32_t i = 0; i < numElems; ++i) {
+    uint8_t *elemBase = dst + static_cast<size_t>(i) * elemStorageBytes;
+    std::memset(elemBase, 0, static_cast<size_t>(elemStorageBytes));
+
+    size_t bytesRead = std::fread(tmp.data(), 1, static_cast<size_t>(elemBytes),
+                                  file);
+    if (bytesRead == 0)
+      break;
+
+    // SystemVerilog packs file bytes MSB-first into packed elements.
+    for (size_t b = 0; b < bytesRead; ++b) {
+      auto destByte = static_cast<size_t>(elemBytes - 1) - b;
+      elemBase[destByte] = tmp[b];
+    }
+
+    totalBytesRead += static_cast<int32_t>(bytesRead);
+    if (bytesRead < static_cast<size_t>(elemBytes))
+      break;
+  }
+
+  return totalBytesRead;
+}
+
 extern "C" int32_t __moore_feof(int32_t fd) {
   // Find the first file indicated by the MCD
   for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
     if ((fd & (1 << i)) && fileHandles[i]) {
-      return std::feof(fileHandles[i]) ? 1 : 0;
+      FILE *file = fileHandles[i];
+      if (std::feof(file))
+        return 1;
+
+      // SystemVerilog expects EOF as soon as the stream position reaches end
+      // of file. Peek one byte and push back on success to avoid consuming
+      // data while still setting EOF when already at the end.
+      int c = std::fgetc(file);
+      if (c == EOF)
+        return std::feof(file) ? 1 : 0;
+      std::ungetc(c, file);
+      return 0;
     }
   }
   return 1; // Treat invalid fd as EOF
@@ -10899,6 +10974,32 @@ extern "C" int32_t __moore_ftell(int32_t fd) {
     }
   }
   return -1; // Error
+}
+
+extern "C" int32_t __moore_fseek(int32_t fd, int32_t offset, int32_t whence) {
+  // Map SystemVerilog whence values to C values
+  int cWhence;
+  switch (whence) {
+  case 0: cWhence = SEEK_SET; break;
+  case 1: cWhence = SEEK_CUR; break;
+  case 2: cWhence = SEEK_END; break;
+  default: return -1;
+  }
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      return std::fseek(fileHandles[i], offset, cWhence);
+    }
+  }
+  return -1; // Error
+}
+
+extern "C" void __moore_rewind(int32_t fd) {
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      std::rewind(fileHandles[i]);
+      return;
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//

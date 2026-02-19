@@ -7833,24 +7833,40 @@ void LLHDProcessInterpreter::checkMemoryEventWaiters() {
     // NEXT trigger (0→1), not just any change.
     bool shouldWake = false;
     if (currentValue != waiter.lastValue) {
-      if (waiter.waitForRisingEdge) {
-        // Only wake on rising edge (0→1)
+      switch (waiter.edgeMode) {
+      case MemoryEventWaiter::EdgeMode::RisingEdge:
         shouldWake = (waiter.lastValue == 0 && currentValue != 0);
         LLVM_DEBUG(llvm::dbgs()
                    << "  Memory event check for process " << procId
-                   << ": address 0x" << llvm::format_hex(addr, 16) << " changed "
-                   << waiter.lastValue << " -> " << currentValue
-                   << (shouldWake ? " (rising edge - WAKE)" : " (not rising edge - continue waiting)") << "\n");
-        // Update lastValue so we can detect the next rising edge
-        waiter.lastValue = currentValue;
-      } else {
-        // Wake on any change
+                   << ": address 0x" << llvm::format_hex(addr, 16)
+                   << " changed " << waiter.lastValue << " -> "
+                   << currentValue
+                   << (shouldWake ? " (rising edge - WAKE)"
+                                  : " (not rising edge - continue waiting)")
+                   << "\n");
+        break;
+      case MemoryEventWaiter::EdgeMode::FallingEdge:
+        shouldWake = (waiter.lastValue != 0 && currentValue == 0);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Memory event check for process " << procId
+                   << ": address 0x" << llvm::format_hex(addr, 16)
+                   << " changed " << waiter.lastValue << " -> "
+                   << currentValue
+                   << (shouldWake ? " (falling edge - WAKE)"
+                                  : " (not falling edge - continue waiting)")
+                   << "\n");
+        break;
+      case MemoryEventWaiter::EdgeMode::AnyChange:
         shouldWake = true;
         LLVM_DEBUG(llvm::dbgs()
                    << "  Memory event triggered for process " << procId
-                   << ": address 0x" << llvm::format_hex(addr, 16) << " changed "
-                   << waiter.lastValue << " -> " << currentValue << "\n");
+                   << ": address 0x" << llvm::format_hex(addr, 16)
+                   << " changed " << waiter.lastValue << " -> "
+                   << currentValue << "\n");
+        break;
       }
+      // Update lastValue so directional edge waiters can detect future edges.
+      waiter.lastValue = currentValue;
     }
     if (shouldWake) {
       toWake.push_back(procId);
@@ -8051,7 +8067,24 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
         return;
       }
 
-      // Value changed - wake up the process
+      bool shouldWake = false;
+      switch (waiter.edgeMode) {
+      case MemoryEventWaiter::EdgeMode::RisingEdge:
+        shouldWake = (waiter.lastValue == 0 && currentValue != 0);
+        break;
+      case MemoryEventWaiter::EdgeMode::FallingEdge:
+        shouldWake = (waiter.lastValue != 0 && currentValue == 0);
+        break;
+      case MemoryEventWaiter::EdgeMode::AnyChange:
+        shouldWake = true;
+        break;
+      }
+      if (!shouldWake) {
+        waiter.lastValue = currentValue;
+        return;
+      }
+
+      // Value changed and edge condition matched - wake up the process.
       LLVM_DEBUG(llvm::dbgs()
                  << "  Memory event triggered for process " << procId
                  << ": address 0x" << llvm::format_hex(addr, 16) << " changed "
@@ -12567,6 +12600,11 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
     if (auto sigExtractOp = signal.getDefiningOp<llhd::SigStructExtractOp>()) {
       // Find the parent signal ID by tracing through nested extracts
       Value parentSignal = sigExtractOp.getInput();
+      // Resolve function block-argument refs to their caller operands before
+      // probing. This keeps memory-backed refs (e.g., class fields passed
+      // through helper functions) on the memory-backed path instead of
+      // accidentally reusing a stale temporary signal mapping.
+      remapRefBlockArgSource(parentSignal);
       SignalId parentSigId = getSignalId(parentSignal);
 
       // Handle nested struct extracts by tracing to the root signal
@@ -12578,6 +12616,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                 parentSignal.getDefiningOp<llhd::SigStructExtractOp>()) {
           extractChain.push_back(nestedExtract);
           parentSignal = nestedExtract.getInput();
+          remapRefBlockArgSource(parentSignal);
           parentSigId = getSignalId(parentSignal);
         } else {
           break;
@@ -15663,7 +15702,7 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
     waiter.address = ~static_cast<uint64_t>(0);
     waiter.lastValue = 0;
     waiter.valueSize = 1;
-    waiter.waitForRisingEdge = false;
+    waiter.edgeMode = MemoryEventWaiter::EdgeMode::AnyChange;
     memoryEventWaiters[procId] = waiter;
     if (traceBaudFastPath) {
       static unsigned nullSelfStallCount = 0;
@@ -16146,7 +16185,7 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
       waiter.address = clockAddr;
       waiter.lastValue = waitClockSample ? 1 : 0;
       waiter.valueSize = 1;
-      waiter.waitForRisingEdge = false;
+      waiter.edgeMode = MemoryEventWaiter::EdgeMode::AnyChange;
       memoryEventWaiters[procId] = waiter;
     }
   }
@@ -20676,7 +20715,21 @@ std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
       return "x";
     llvm::SmallString<64> binStr;
     val.getAPInt().toStringUnsigned(binStr, 2);
-    return std::string(binStr.str());
+    std::string result(binStr.str());
+    unsigned width = 0;
+    if (auto widthAttr = binOp.getSpecifierWidth()) {
+      // `%0b` requests minimum-width output; positive widths are padding.
+      if (widthAttr.value() > 0)
+        width = std::max<unsigned>(val.getAPInt().getBitWidth(),
+                                   widthAttr.value());
+    } else if (val.getAPInt().getBitWidth() < 32) {
+      // Keep sized packed values zero-padded by default, but avoid forcing
+      // 32-bit padding for generic integer scalars.
+      width = val.getAPInt().getBitWidth();
+    }
+    if (result.size() < width)
+      result.insert(0, width - result.size(), '0');
+    return result;
   }
 
   // Handle sim.fmt.oct - octal integer format
@@ -22751,10 +22804,14 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
       // Determine edge detection mode:
       // - For event types (!moore.event), use rising edge (0→1)
       // - For posedge detect_event, use rising edge
-      // - For negedge, use falling edge (via rising edge on inverted value)
+      // - For negedge detect_event, use falling edge (1→0)
       // - For any/both edges, use any change
-      waiter.waitForRisingEdge = isEventType ||
-          detectOp.getEdge() == moore::Edge::PosEdge;
+      waiter.edgeMode = MemoryEventWaiter::EdgeMode::AnyChange;
+      if (isEventType || detectOp.getEdge() == moore::Edge::PosEdge) {
+        waiter.edgeMode = MemoryEventWaiter::EdgeMode::RisingEdge;
+      } else if (detectOp.getEdge() == moore::Edge::NegEdge) {
+        waiter.edgeMode = MemoryEventWaiter::EdgeMode::FallingEdge;
+      }
       memoryEventWaiters[procId] = waiter;
 
       LLVM_DEBUG(llvm::dbgs() << "    Set up memory event waiter for address 0x"
@@ -26042,7 +26099,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         InterpretedValue edgeKindVal = getValue(procId, callOp.getOperand(0));
         InterpretedValue valuePtrVal = getValue(procId, callOp.getOperand(1));
 
-        int32_t edgeKind = edgeKindVal.isX() ? 0 : static_cast<int32_t>(edgeKindVal.getUInt64());
+        int32_t edgeKind =
+            edgeKindVal.isX() ? 0 : static_cast<int32_t>(edgeKindVal.getUInt64());
         uint64_t valueAddr = valuePtrVal.isX() ? 0 : valuePtrVal.getUInt64();
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_wait_event(edgeKind="
@@ -26052,10 +26110,121 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto &state = processStates[procId];
         state.waiting = true;
 
+        auto edgeKindToSensitivity = [](int32_t kind) -> EdgeType {
+          switch (kind) {
+          case 1:
+            return EdgeType::Posedge;
+          case 2:
+            return EdgeType::Negedge;
+          default:
+            return EdgeType::AnyEdge;
+          }
+        };
+        EdgeType waitEdge = edgeKindToSensitivity(edgeKind);
+
+        auto resolveSignalFromValue = [&](Value seed) -> SignalId {
+          llvm::SmallVector<Value, 8> stack;
+          llvm::SmallDenseSet<Value, 16> seen;
+          stack.push_back(seed);
+
+          while (!stack.empty()) {
+            Value value = stack.pop_back_val();
+            if (!value || !seen.insert(value).second)
+              continue;
+
+            Value remapped = this->remapRefBlockArgSource(value);
+            if (SignalId sigId = getSignalId(remapped); sigId != 0)
+              return sigId;
+
+            Operation *defOp = value.getDefiningOp();
+            if (!defOp)
+              continue;
+
+            if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
+              for (Value input : castOp.getInputs())
+                stack.push_back(input);
+              continue;
+            }
+            if (auto bitcastOp = dyn_cast<LLVM::BitcastOp>(defOp)) {
+              stack.push_back(bitcastOp.getArg());
+              continue;
+            }
+            if (auto addrCastOp = dyn_cast<LLVM::AddrSpaceCastOp>(defOp)) {
+              stack.push_back(addrCastOp.getArg());
+              continue;
+            }
+            if (auto intToPtrOp = dyn_cast<LLVM::IntToPtrOp>(defOp)) {
+              stack.push_back(intToPtrOp.getArg());
+              continue;
+            }
+            if (auto probeOp = dyn_cast<llhd::ProbeOp>(defOp)) {
+              stack.push_back(probeOp.getSignal());
+              continue;
+            }
+            if (auto sigExtractOp = dyn_cast<llhd::SigExtractOp>(defOp)) {
+              stack.push_back(sigExtractOp.getInput());
+              continue;
+            }
+            if (auto structExtract = dyn_cast<hw::StructExtractOp>(defOp)) {
+              stack.push_back(structExtract.getInput());
+              continue;
+            }
+            if (auto arrayGet = dyn_cast<hw::ArrayGetOp>(defOp)) {
+              stack.push_back(arrayGet.getInput());
+              continue;
+            }
+          }
+
+          return 0;
+        };
+
+        auto inferSignalFromNearbyOps = [&]() -> SignalId {
+          auto it = mlir::Block::iterator(callOp.getOperation());
+          auto end = callOp->getBlock()->end();
+          unsigned budget = 24;
+          while (budget-- > 0) {
+            ++it;
+            if (it == end)
+              break;
+            Operation &nextOp = *it;
+            if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(nextOp)) {
+              for (Value input : castOp.getInputs()) {
+                if (SignalId sigId = resolveSignalFromValue(input);
+                    sigId != 0)
+                  return sigId;
+              }
+            }
+            if (auto loadOp = dyn_cast<LLVM::LoadOp>(nextOp)) {
+              if (SignalId sigId = resolveSignalFromValue(loadOp.getAddr());
+                  sigId != 0)
+                return sigId;
+            }
+            if (isa<cf::BranchOp, cf::CondBranchOp>(nextOp))
+              break;
+          }
+          return 0;
+        };
+
+        SignalId waitSignalId = resolveSignalFromValue(callOp.getOperand(1));
+        if (waitSignalId == 0 && valueAddr == 0)
+          waitSignalId = inferSignalFromNearbyOps();
+        if (waitSignalId != 0) {
+          SensitivityList waitList;
+          waitList.addEdge(waitSignalId, waitEdge);
+          scheduler.suspendProcessForEvents(procId, waitList);
+          recordWaitSensitivitySnapshot(state, &waitList);
+          LLVM_DEBUG(llvm::dbgs()
+                     << "    wait_event signal sensitivity: signal="
+                     << waitSignalId
+                     << " edge=" << getEdgeTypeName(waitEdge) << "\n");
+          return success();
+        }
+
         if (valueAddr != 0) {
           // Set up a memory event waiter for the specified address.
           uint64_t offset = 0;
-          MemoryBlock *block = findMemoryBlockByAddress(valueAddr, procId, &offset);
+          MemoryBlock *block =
+              findMemoryBlockByAddress(valueAddr, procId, &offset);
 
           // Read current value for edge detection.
           uint64_t currentValue = 0;
@@ -26067,7 +26236,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (valueSize > 1) {
               currentValue = 0;
               for (unsigned i = 0; i < valueSize; ++i)
-                currentValue |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+                currentValue |=
+                    static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
             }
           }
 
@@ -26075,8 +26245,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           waiter.address = valueAddr;
           waiter.lastValue = currentValue;
           waiter.valueSize = valueSize;
-          // Use rising edge detection for PosEdge, otherwise any change.
-          waiter.waitForRisingEdge = (edgeKind == 1); // PosEdge
+          waiter.edgeMode = MemoryEventWaiter::EdgeMode::AnyChange;
+          if (edgeKind == 1)
+            waiter.edgeMode = MemoryEventWaiter::EdgeMode::RisingEdge;
+          else if (edgeKind == 2)
+            waiter.edgeMode = MemoryEventWaiter::EdgeMode::FallingEdge;
           memoryEventWaiters[procId] = waiter;
 
           LLVM_DEBUG(llvm::dbgs() << "    Set up memory event waiter for address 0x"
@@ -26085,26 +26258,21 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                   << " (edgeKind=" << edgeKind << ")\n");
         } else {
           // No specific address to watch. This happens when:
-          // 1. The conversion couldn't trace back to a specific memory location
-          // 2. We're waiting on a signal passed as a function argument
-          //
-          // For proper blocking, we need to wait for ANY signal change.
-          // Set up the process to be woken on any signal change by using
-          // the signal-based sensitivity mechanism.
-          //
-          // First, check if this process has any signals in its sensitivity list.
-          // If so, wait for any of them to change.
+          // 1. The conversion couldn't trace back to a specific memory location.
+          // 2. We're waiting on a signal but no ref survived lowering.
           bool hasSignalSensitivity = !state.lastSensitivityEntries.empty();
 
           if (hasSignalSensitivity) {
-            // The process already has sensitivity entries from previous waits.
-            // Keep them and wait for any signal change.
-            // The process will be woken by triggerSensitiveProcesses when
-            // any of those signals change.
-            LLVM_DEBUG(llvm::dbgs() << "    No specific address, waiting on "
-                                    << state.lastSensitivityEntries.size()
-                                    << " signal sensitivities\n");
-            // state.waiting is already true, just don't schedule
+            SensitivityList waitList;
+            for (const auto &entry : state.lastSensitivityEntries)
+              waitList.addEdge(entry.signalId, entry.edge);
+            if (!waitList.empty()) {
+              scheduler.suspendProcessForEvents(procId, waitList);
+              recordWaitSensitivitySnapshot(state, &waitList);
+              LLVM_DEBUG(llvm::dbgs() << "    No specific address, waiting on "
+                                      << waitList.size()
+                                      << " cached signal sensitivities\n");
+            }
           } else {
             // No signal sensitivities found. This can happen if we're in a
             // func.func context called from llhd.process but no signals are
@@ -28102,12 +28270,44 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         SignalId sigId = resolveSignalId(memOperand);
 
         if (sigId != 0) {
-          // Signal-backed memory
+          // Signal-backed memory. Prefer pending/backing-memory state before
+          // scheduler state to preserve procedural store visibility for
+          // ref->ptr-backed memories.
           const SignalValue &currentSV = scheduler.getSignalValue(sigId);
           unsigned totalWidth = currentSV.getWidth();
-          APInt arrayBits = currentSV.isUnknown()
-                                ? APInt(totalWidth, 0)
-                                : currentSV.getAPInt();
+          APInt arrayBits = APInt::getZero(totalWidth);
+          bool hasValue = false;
+
+          auto pendingIt = pendingEpsilonDrives.find(sigId);
+          if (pendingIt != pendingEpsilonDrives.end() && !pendingIt->second.isX()) {
+            arrayBits = adjustAPIntWidth(pendingIt->second.getAPInt(), totalWidth);
+            hasValue = true;
+          }
+
+          if (!hasValue) {
+            auto backingIt = signalBackingMemory.find(sigId);
+            if (backingIt != signalBackingMemory.end()) {
+              auto &state = processStates[backingIt->second.first];
+              auto blkIt = state.memoryBlocks.find(backingIt->second.second);
+              if (blkIt != state.memoryBlocks.end() && blkIt->second.initialized) {
+                MemoryBlock &block = blkIt->second;
+                unsigned totalBytes = (totalWidth + 7) / 8;
+                unsigned readBytes =
+                    std::min<unsigned>(totalBytes, block.data.size());
+                for (unsigned b = 0; b < readBytes && b * 8 < totalWidth; ++b) {
+                  unsigned bitsToInsert = std::min(8u, totalWidth - b * 8);
+                  APInt byteVal(bitsToInsert, block.data[b] &
+                                                  ((1u << bitsToInsert) - 1u));
+                  safeInsertBits(arrayBits, byteVal, b * 8);
+                }
+                hasValue = true;
+              }
+            }
+          }
+
+          if (!hasValue && !currentSV.isUnknown())
+            arrayBits = currentSV.getAPInt();
+
           unsigned totalElemWidth = totalWidth / numElems;
 
           for (unsigned i = 0; i < numElems; ++i) {
@@ -29240,6 +29440,24 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_ungetc ----
+    if (calleeName == "__moore_ungetc") {
+      int32_t result = -1;
+      if (callOp.getNumOperands() >= 2) {
+        int32_t c = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        result = __moore_ungetc(c, fd);
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_ungetc() = " << result
+                               << "\n");
+      return success();
+    }
+
     // ---- __moore_fgets ----
     if (calleeName == "__moore_fgets") {
       int32_t result = 0;
@@ -29266,6 +29484,145 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         setValue(procId, callOp.getResult(),
                  InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_fgets() = " << result
+                               << "\n");
+      return success();
+    }
+
+    // ---- __moore_fread ----
+    if (calleeName == "__moore_fread") {
+      static bool traceFRead = []() {
+        if (const char *env = std::getenv("CIRCT_SIM_TRACE_FREAD"))
+          return std::strcmp(env, "0") != 0;
+        return false;
+      }();
+      int32_t result = 0;
+      if (callOp.getNumOperands() >= 5) {
+        uint64_t destAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int32_t elemWidth = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int32_t elemStorageBytes = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        int32_t numElems = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(3)).getUInt64());
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(4)).getUInt64());
+
+        uint64_t totalBytes = 0;
+        if (elemStorageBytes > 0 && numElems > 0)
+          totalBytes = static_cast<uint64_t>(elemStorageBytes) *
+                       static_cast<uint64_t>(numElems);
+
+        // Prefer direct signal update when the destination pointer traces back
+        // to an LLHD signal reference through casts.
+        SignalId sigId = resolveSignalId(callOp.getOperand(0));
+        if (!sigId) {
+          if (auto castOp = callOp.getOperand(0)
+                                .getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+            for (Value input : castOp.getInputs()) {
+              sigId = resolveSignalId(input);
+              if (sigId)
+                break;
+            }
+          }
+        }
+
+        if (sigId) {
+          if (traceFRead) {
+            llvm::errs() << "[fread] signal path sigId=" << sigId
+                         << " elemWidth=" << elemWidth
+                         << " elemStorageBytes=" << elemStorageBytes
+                         << " numElems=" << numElems
+                         << " totalBytes=" << totalBytes << "\n";
+          }
+          InterpretedValue cur =
+              InterpretedValue::fromSignalValue(scheduler.getSignalValue(sigId));
+          uint64_t bitWidth = cur.getWidth();
+          size_t byteWidth = static_cast<size_t>((bitWidth + 7) / 8);
+          std::vector<uint8_t> raw(byteWidth, 0);
+          result =
+              __moore_fread(raw.data(), elemWidth, elemStorageBytes, numElems, fd);
+          if (traceFRead) {
+            llvm::errs() << "[fread] signal width=" << bitWidth
+                         << " rawBytes=" << raw.size()
+                         << " result=" << result << "\n";
+          }
+          unsigned packedWidth = static_cast<unsigned>(bitWidth);
+          llvm::APInt rawBits = llvm::APInt::getZero(packedWidth);
+          for (size_t i = 0; i < raw.size(); ++i) {
+            unsigned bitOffset = static_cast<unsigned>(i * 8);
+            if (bitOffset >= packedWidth)
+              break;
+            unsigned bitsToInsert = std::min(8u, packedWidth - bitOffset);
+            APInt byteVal(bitsToInsert,
+                          raw[i] & ((1u << bitsToInsert) - 1u));
+            safeInsertBits(rawBits, byteVal, bitOffset);
+          }
+
+          // Runtime fread writes bytes in LLVM aggregate layout. Convert into
+          // HW signal layout before driving scheduler/pending state.
+          llvm::APInt signalBits = rawBits;
+          Type signalType = getSignalValueType(sigId);
+          if (signalType && isa<hw::StructType, hw::ArrayType>(signalType))
+            signalBits = convertLLVMToHWLayoutByHWType(signalBits, signalType);
+          signalBits = adjustAPIntWidth(signalBits, packedWidth);
+
+          InterpretedValue driveVal(signalBits);
+          pendingEpsilonDrives[sigId] = driveVal;
+          scheduler.updateSignal(sigId, driveVal.toSignalValue());
+
+          // Keep ref->ptr backing storage in sync so subsequent llhd.prb fast
+          // paths that consult backing memory do not observe stale values.
+          auto backingIt = signalBackingMemory.find(sigId);
+          if (backingIt != signalBackingMemory.end()) {
+            auto &state = processStates[backingIt->second.first];
+            auto blkIt = state.memoryBlocks.find(backingIt->second.second);
+            if (blkIt != state.memoryBlocks.end()) {
+              MemoryBlock &block = blkIt->second;
+              unsigned packedBytes = (packedWidth + 7) / 8;
+              unsigned writeBytes =
+                  std::min<unsigned>(packedBytes, block.data.size());
+              for (unsigned i = 0; i < writeBytes; ++i) {
+                block.data[i] = static_cast<uint8_t>(
+                    signalBits.extractBitsAsZExtValue(
+                        std::min(8u, packedWidth - i * 8), i * 8));
+              }
+              block.initialized = true;
+            }
+          }
+        } else {
+          if (traceFRead) {
+            llvm::errs() << "[fread] pointer path elemWidth=" << elemWidth
+                         << " elemStorageBytes=" << elemStorageBytes
+                         << " numElems=" << numElems
+                         << " totalBytes=" << totalBytes << "\n";
+          }
+          uint64_t nativeOffset = 0;
+          size_t nativeSize = 0;
+          if (findNativeMemoryBlockByAddress(destAddr, &nativeOffset, &nativeSize) &&
+              nativeOffset + totalBytes <= nativeSize) {
+            auto *nativeDest =
+                reinterpret_cast<void *>(static_cast<uintptr_t>(destAddr));
+            result = __moore_fread(nativeDest, elemWidth, elemStorageBytes,
+                                   numElems, fd);
+          } else {
+            uint64_t offset = 0;
+            if (auto *block =
+                    findMemoryBlockByAddress(destAddr, procId, &offset)) {
+              if (block->initialized &&
+                  offset + totalBytes <= block->data.size()) {
+                auto *dest = block->data.data() + offset;
+                result = __moore_fread(dest, elemWidth, elemStorageBytes,
+                                       numElems, fd);
+              }
+            }
+          }
+        }
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_fread() = " << result
                                << "\n");
       return success();
     }
