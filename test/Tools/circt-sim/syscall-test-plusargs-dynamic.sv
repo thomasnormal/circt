@@ -7,6 +7,7 @@ module top;
   initial begin
     string prefix;
     string full;
+    string missing;
 
     // Static string works
     // CHECK: static_found=1
@@ -23,6 +24,21 @@ module top;
       $display("dynamic_found=1");
     else
       $display("dynamic_found=0");
+
+    // Negative test: a plusarg that does NOT exist should return 0
+    // CHECK: static_missing=0
+    if ($test$plusargs("NONEXISTENT_ARG_XYZ"))
+      $display("static_missing=1");
+    else
+      $display("static_missing=0");
+
+    // Negative test with dynamic string
+    missing = {"NO", "_SUCH_", "ARG"};
+    // CHECK: dynamic_missing=0
+    if ($test$plusargs(missing))
+      $display("dynamic_missing=1");
+    else
+      $display("dynamic_missing=0");
 
     $finish;
   end
