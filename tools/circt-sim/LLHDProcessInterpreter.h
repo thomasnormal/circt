@@ -2457,14 +2457,27 @@ private:
   };
   std::map<uint64_t, std::vector<ImpWaiter>> impWaitingProcesses;
 
-  /// Get or create the per-object RNG for the given object address.
-  /// If no RNG exists yet, creates one seeded with the object address.
-  std::mt19937 &getObjectRng(uint64_t objAddr) {
+  /// Get the per-object RNG for the given object address.
+  /// If the object was explicitly seeded (via obj.srandom()), returns its
+  /// per-object RNG.  Otherwise, per IEEE 1800-2017 §18.13, falls back to the
+  /// calling process's RNG so that process::get_randstate/set_randstate can
+  /// capture and replay the randomization sequence.
+  /// When procId is InvalidProcessId (e.g. class_get_randstate), a per-object
+  /// RNG is auto-created as a last resort.
+  std::mt19937 &getObjectRng(uint64_t objAddr,
+                              ProcessId procId = InvalidProcessId) {
     auto it = perObjectRng.find(objAddr);
     if (it != perObjectRng.end())
       return it->second;
-    // Default seed: use object address for unique per-object randomization
-    auto [insertIt, _] = perObjectRng.emplace(objAddr, std::mt19937(static_cast<uint32_t>(objAddr)));
+    // Fall back to process RNG when available (IEEE 1800-2017 §18.13)
+    if (procId != InvalidProcessId) {
+      auto procIt = processStates.find(procId);
+      if (procIt != processStates.end())
+        return procIt->second.randomGenerator;
+    }
+    // Last resort: create per-object RNG seeded with object address
+    auto [insertIt, _] = perObjectRng.emplace(
+        objAddr, std::mt19937(static_cast<uint32_t>(objAddr)));
     return insertIt->second;
   }
 

@@ -30477,7 +30477,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         // here.  Constrained rand fields will be overridden by subsequent
         // _with_range / _with_dist calls.
         if (classAddr != 0 && classSize > 0) {
-          auto &rng = getObjectRng(classAddr);
+          auto &rng = getObjectRng(classAddr, procId);
           // Fill object memory with random bytes
           uint64_t off = 0;
           auto *block = findMemoryBlockByAddress(classAddr, procId, &off);
@@ -30631,7 +30631,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           size_t byteCount = static_cast<size_t>(size);
           auto randomWord = [&]() -> uint32_t {
             if (lastRandomizeObjAddr)
-              return getObjectRng(lastRandomizeObjAddr)();
+              return getObjectRng(lastRandomizeObjAddr, procId)();
             return processStates[procId].randomGenerator();
           };
 
@@ -30766,7 +30766,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           }
 
           if (totalWeight > 0) {
-            auto &rng = getObjectRng(lastRandomizeObjAddr);
+            auto &rng = getObjectRng(lastRandomizeObjAddr, procId);
             int64_t randomWeight =
                 static_cast<int64_t>(rng()) % totalWeight;
             int64_t cumulative = 0;
@@ -30812,7 +30812,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       }
       int64_t result = minVal;
       if (maxVal > minVal) {
-        auto &rng = getObjectRng(lastRandomizeObjAddr);
+        auto &rng = getObjectRng(lastRandomizeObjAddr, procId);
         uint64_t range = static_cast<uint64_t>(maxVal - minVal) + 1;
         uint64_t randomVal = static_cast<uint64_t>(rng());
         if (range > UINT32_MAX)
@@ -30877,7 +30877,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
           if (totalSize > 0) {
             // Generate random position in [0, totalSize - 1]
-            auto &rng = getObjectRng(lastRandomizeObjAddr);
+            auto &rng = getObjectRng(lastRandomizeObjAddr, procId);
             uint64_t randomVal = static_cast<uint64_t>(rng());
             if (totalSize > UINT32_MAX)
               randomVal = (static_cast<uint64_t>(rng()) << 32) |
@@ -32676,7 +32676,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(1)).getUInt64());
         uint64_t maxVal = (bitWidth >= 64) ? UINT64_MAX
                                             : ((1ULL << bitWidth) - 1);
-        auto &rng = getObjectRng(lastRandomizeObjAddr);
+        auto &rng = getObjectRng(lastRandomizeObjAddr, procId);
         uint64_t result = static_cast<uint64_t>(rng()) & maxVal;
         setValue(procId, callOp.getResult(),
                  InterpretedValue(result, 64));
