@@ -632,3 +632,56 @@ Conclusion:
 - current evidence points away from LLVM<->HW struct layout remap as the
   primary culprit; issue is more likely monitor-side sampling/progression timing
   before conversion.
+
+### 2026-02-19 Session: relay-cascade propagation fix + detectEdge correlation
+
+Changes made:
+- File updated:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+- In `interpretLLVMStore`, refactored interface propagation so cascade hops use
+  the relay signal's current driven value, not always the original raw store
+  payload.
+- Added a shared propagation helper with source-aware tracing, then used it for
+  child->grandchild and sibling->grandchild cascades.
+
+Why:
+- The prior cascade path could convert `11 -> 10` when traversing
+  `field_2 -> field_4 -> BFM field_2`, because second-hop propagation reused the
+  original raw store context.
+
+Targeted validation:
+1. Build:
+   - `ninja -C build circt-sim` is currently blocked by unrelated tree state in
+     `LLHDProcessInterpreterCallIndirect.cpp`; rebuilt touched object and
+     manually relinked `build/bin/circt-sim`.
+2. Focused lit checks PASS:
+   - `interface-field-propagation.sv`
+   - `interface-intra-tristate-propagation.sv`
+3. Bounded relay trace:
+   - `/tmp/i3c-dedge-ifaceprop-short.log`
+   - confirms parent `sig_1.field_4` propagates `11` to target BFM
+     `sig_6.field_2` child signals (`sig=33`, `sig=47`) at `t=90000000`.
+
+Remaining blocker (root-cause refinement):
+- `detectEdge_scl` target-side loads still stay at `0` during active monitor
+  window even though relay updates are seen earlier:
+  - `/tmp/i3c-dedge-ifaceprop-short.log`
+  - target monitor loads:
+    - `sig=47` (`...sig_6.field_2`) remains `0` at `t=180..280ns`
+  - controller monitor loads toggle (`11/0`) as expected.
+- Correlated trace indicates `sig_1.field_2` stops toggling after ~`170ns`
+  while `sig_0.field_2` continues toggling; this keeps target monitor path
+  pinned.
+
+Current parity status:
+- Full-length reproduction still fails:
+  - `/tmp/i3c-long-after-relayfix2.log`
+  - `UVM_ERROR ... i3c_scoreboard.sv(162)`
+  - coverage: controller `21.43%`, target `0.00%`
+  - delta overflow still appears in long lane (`32050000000fs d2`).
+
+Next step:
+- Investigate why target-side source field (`sig_1.field_2`) stops receiving
+  runtime transitions after ~`170ns` despite continued controller-side toggles;
+  focus on signal-copy / tri-state source-of-truth path rather than additional
+  child fanout heuristics.

@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1526 - February 19, 2026
+
+### circt-sim: harden interface relay-cascade value sourcing for I3C monitor paths
+
+1. **Fixed second-hop interface propagation to use relay-driven values**
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - in `interpretLLVMStore`, cascade propagation now uses the relay signal's
+     current driven value for child->grandchild and sibling->grandchild hops,
+     rather than always reusing the original raw store payload.
+   - this avoids 4-state payload loss (`11 -> 10`) in multi-hop relay chains
+     observed in I3C interface field propagation.
+
+2. **Validation**
+   - rebuilt touched `circt-sim` object and relinked `build/bin/circt-sim`
+     (full `ninja -C build circt-sim` remains blocked by unrelated dirty-tree
+     compile error in `LLHDProcessInterpreterCallIndirect.cpp`).
+   - focused regressions:
+     - `llvm/build/bin/llvm-lit -sv build/test/Tools/circt-sim/interface-field-propagation.sv`: PASS.
+     - `llvm/build/bin/llvm-lit -sv build/test/Tools/circt-sim/interface-intra-tristate-propagation.sv`: PASS.
+   - bounded I3C trace:
+     - `/tmp/i3c-dedge-ifaceprop-short.log` confirms target-side field-2 child
+       links receive `11` via relay fanout at `t=90000000`.
+
+3. **Current status**
+   - end-to-end I3C parity is still open:
+     - target monitor `detectEdge_scl` field-2 loads remain pinned at `0`
+       later in the run window.
+     - scoreboard mismatch remains at `i3c_scoreboard.sv(162)`.
+   - next step is target-side source signal progression after ~`170ns`, not
+     additional fanout-link creation.
+
 ## Iteration 1525 - February 19, 2026
 
 ### ImportVerilog/circt-sim: close `syscall-disable` and TLUL timeout regressions

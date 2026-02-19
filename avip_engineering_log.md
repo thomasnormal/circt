@@ -2481,3 +2481,30 @@ Conclusion:
   - `I3C-CAST` traces show `in == out` at conversion points.
   - wrong values (`targetAddress=1`, `bits=0`) are already present by monitor
     sample stage, so conversion layout remap is likely not the primary fault.
+
+## 2026-02-19 Session: I3C relay-cascade propagation hardening
+
+### What changed
+- Updated `tools/circt-sim/LLHDProcessInterpreter.cpp` interface store
+  propagation so cascade hops use the relay signal's current driven value.
+- This addresses a concrete second-hop collapse in I3C relay chains where
+  four-state `11` could degrade to `10`.
+
+### Validation
+- Rebuilt touched `circt-sim` object and relinked `build/bin/circt-sim`
+  (full `ninja -C build circt-sim` remains blocked by unrelated dirty-tree
+  compile error in `LLHDProcessInterpreterCallIndirect.cpp`).
+- Lit checks PASS:
+  - `build/test/Tools/circt-sim/interface-field-propagation.sv`
+  - `build/test/Tools/circt-sim/interface-intra-tristate-propagation.sv`
+- I3C bounded trace (`/tmp/i3c-dedge-ifaceprop-short.log`) now shows target
+  BFM field-2 child links receiving `11` at `t=90000000` via relay fanout.
+
+### Remaining issue
+- End-to-end I3C parity remains open:
+  - target monitor `detectEdge_scl` field-2 loads remain `0` in active window,
+    while controller side toggles (`11/0`).
+  - long run still hits scoreboard mismatch at
+    `i3c_scoreboard.sv(162)` with target coverage `0.00%`.
+- Next work focus: why target-side source field updates stop after ~`170ns`
+  (signal-copy / tri-state source path), not child fanout linking.
