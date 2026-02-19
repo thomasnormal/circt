@@ -9169,31 +9169,11 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
                 })
           .Case("$initstate",
                 [&]() -> FailureOr<Value> {
-                  // $initstate returns 1 during the initial/reset state and 0
-                  // otherwise. IEEE 1800-2017 §20.15.
-                  // In non-initial blocks, always return 0.
-                  // In initial blocks, emit a runtime check (time == 0).
-                  bool inInitialBlock = false;
-                  if (auto *block = builder.getInsertionBlock()) {
-                    if (auto *parentOp = block->getParentOp()) {
-                      Operation *op = parentOp;
-                      while (op) {
-                        if (auto proc = dyn_cast<moore::ProcedureOp>(op)) {
-                          if (proc.getKind() ==
-                              moore::ProcedureKind::Initial)
-                            inInitialBlock = true;
-                          break;
-                        }
-                        op = op->getParentOp();
-                      }
-                    }
-                  }
-                  if (!inInitialBlock) {
-                    auto bitTy = moore::IntType::getInt(getContext(), 1);
-                    return (Value)moore::ConstantOp::create(builder, loc,
-                                                            bitTy, 0);
-                  }
-                  // Emit runtime check via InitStateBIOp.
+                  // $initstate returns 1 when simulation time == 0 and 0
+                  // afterwards. IEEE 1800-2017 §20.15.
+                  // Always emit a runtime check; the lowering compares
+                  // CurrentTime == 0 which works in any context (initial
+                  // blocks, functions called from initial blocks, etc.).
                   return (Value)moore::InitStateBIOp::create(builder, loc);
                 })
           .Case("$isunbounded",
