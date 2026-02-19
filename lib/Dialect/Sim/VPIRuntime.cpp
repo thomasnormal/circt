@@ -339,10 +339,120 @@ void VPIRuntime::buildHierarchy() {
     // Check if this signal is an unpacked array.
     std::string qualifiedName = modulePath + "." + signalName;
     const auto *arrayInfo = scheduler->getSignalArrayInfo(sigId);
+    const auto *structFields = scheduler->getSignalStructFields(sigId);
+
+    // Helper: create struct field children under a parent StructVar object.
+    // Handles array fields (field.isArray) by creating ArrayObject children
+    // with element sub-children.
+    auto createStructFieldChildren =
+        [&](uint32_t parentStructId, const std::string &parentName,
+            const std::string &parentQName, SignalId parentSigId,
+            const std::vector<ProcessScheduler::SignalStructFieldInfo> &fields,
+            uint32_t basePhysBitOffset) {
+          // HW convention: first field is in the highest bits.
+          uint32_t totalPhysWidth = 0;
+          for (const auto &f : fields)
+            totalPhysWidth += f.physicalWidth;
+          uint32_t bitOff = basePhysBitOffset + totalPhysWidth;
+          llvm::SmallVector<uint32_t, 8> fieldChildIds;
+          for (const auto &field : fields) {
+            bitOff -= field.physicalWidth;
+            std::string fieldName = field.name;
+            std::string fieldQName = parentQName + "." + fieldName;
+
+            if (field.isArray && field.numElements > 0) {
+              // This field is an unpacked array — create ArrayObject parent
+              // with element children.
+              uint32_t arrId = nextObjectId();
+              auto arrObj = std::make_unique<VPIObject>();
+              arrObj->id = arrId;
+              arrObj->type = VPIObjectType::Array;
+              arrObj->name = fieldName;
+              arrObj->fullName = fieldQName;
+              arrObj->signalId = parentSigId;
+              arrObj->width = field.logicalWidth;
+              arrObj->physWidth = field.physicalWidth;
+              arrObj->bitOffset = bitOff;
+              arrObj->parentId = parentStructId;
+              arrObj->leftBound = field.leftBound;
+              arrObj->rightBound = field.rightBound;
+              fieldChildIds.push_back(arrId);
+              nameToId[fieldQName] = arrId;
+              objects[arrId] = std::move(arrObj);
+              stats.objectsCreated++;
+
+              // Create array element children.
+              bool hasBounds = (field.rightBound != -1);
+              int32_t step =
+                  (hasBounds && field.leftBound > field.rightBound) ? -1 : 1;
+              uint32_t elemPhysW = field.elementPhysicalWidth;
+              uint32_t elemLogW = field.elementLogicalWidth;
+              llvm::SmallVector<uint32_t, 8> elemIds;
+              for (uint32_t ei = 0; ei < field.numElements; ++ei) {
+                int32_t svIdx =
+                    hasBounds ? (field.leftBound + step * (int32_t)ei)
+                              : (int32_t)ei;
+                std::string eName =
+                    fieldName + "[" + std::to_string(svIdx) + "]";
+                std::string eQName =
+                    fieldQName + "[" + std::to_string(svIdx) + "]";
+                uint32_t eBitOff =
+                    bitOff + (field.numElements - 1 - ei) * elemPhysW;
+                uint32_t eId = nextObjectId();
+                auto eObj = std::make_unique<VPIObject>();
+                eObj->id = eId;
+                eObj->type = VPIObjectType::Reg;
+                eObj->name = eName;
+                eObj->fullName = eQName;
+                eObj->signalId = parentSigId;
+                eObj->width = elemLogW;
+                eObj->physWidth = elemPhysW;
+                eObj->bitOffset = eBitOff;
+                eObj->parentId = arrId;
+                elemIds.push_back(eId);
+                nameToId[eQName] = eId;
+                objects[eId] = std::move(eObj);
+                stats.objectsCreated++;
+              }
+              auto *arrP = findById(arrId);
+              if (arrP) {
+                arrP->children.insert(arrP->children.end(), elemIds.begin(),
+                                      elemIds.end());
+              }
+            } else {
+              // Scalar field.
+              uint32_t fieldId = nextObjectId();
+              auto fieldObj = std::make_unique<VPIObject>();
+              fieldObj->id = fieldId;
+              fieldObj->type = VPIObjectType::Reg;
+              fieldObj->name = fieldName;
+              fieldObj->fullName = fieldQName;
+              fieldObj->signalId = parentSigId;
+              fieldObj->width = field.logicalWidth;
+              fieldObj->physWidth = field.physicalWidth;
+              fieldObj->bitOffset = bitOff;
+              fieldObj->parentId = parentStructId;
+              fieldChildIds.push_back(fieldId);
+              nameToId[fieldQName] = fieldId;
+              objects[fieldId] = std::move(fieldObj);
+              stats.objectsCreated++;
+            }
+          }
+          // Batch-add field children to parent.
+          auto *parentObj = findById(parentStructId);
+          if (parentObj) {
+            parentObj->children.insert(parentObj->children.end(),
+                                       fieldChildIds.begin(),
+                                       fieldChildIds.end());
+          }
+        };
+
     if (arrayInfo && arrayInfo->numElements > 1) {
       // Helper: recursively create array children.  When innerArrayInfo
       // is set on an element, that element becomes a nested Array with
       // its own sub-children (for multi-dimensional unpacked arrays).
+      // When structFields is available and this is the leaf level,
+      // elements become StructVar with field sub-children.
       std::function<void(uint32_t parentArrayId,
                          const ProcessScheduler::SignalArrayInfo &info,
                          const std::string &baseName,
@@ -370,12 +480,16 @@ void VPIRuntime::buildHierarchy() {
                           : static_cast<int32_t>(info.numElements - 1);
           }
         }
+        bool isNestedArray = info.innerArrayInfo != nullptr;
+        // Leaf-level array elements that have struct fields become StructVar.
+        bool isStructElement = !isNestedArray && structFields != nullptr;
         // Collect child IDs first, then batch-add to parent after all
         // insertions. This avoids dangling pointer issues when DenseMap
         // rehashes during object insertion.
         llvm::SmallVector<uint32_t, 8> childIds;
         llvm::SmallVector<std::pair<uint32_t, const ProcessScheduler::SignalArrayInfo *>, 4>
             nestedChildren;
+        llvm::SmallVector<uint32_t, 4> structChildren;
         for (uint32_t i = 0; i < info.numElements; ++i) {
           int32_t svIndex = hasBounds ? (leftBound + step * (int32_t)i)
                                       : (int32_t)i;
@@ -386,12 +500,12 @@ void VPIRuntime::buildHierarchy() {
           uint32_t bitOff =
               baseBitOffset + (info.numElements - 1 - i) * elemPhysW;
 
-          bool isNestedArray = info.innerArrayInfo != nullptr;
           uint32_t elemId = nextObjectId();
           auto elemObj = std::make_unique<VPIObject>();
           elemObj->id = elemId;
-          elemObj->type = isNestedArray ? VPIObjectType::Array
-                                        : VPIObjectType::Reg;
+          elemObj->type = isNestedArray    ? VPIObjectType::Array
+                          : isStructElement ? VPIObjectType::StructVar
+                                           : VPIObjectType::Reg;
           elemObj->name = elemName;
           elemObj->fullName = elemQName;
           elemObj->signalId = parentSigId;
@@ -408,6 +522,8 @@ void VPIRuntime::buildHierarchy() {
 
           if (isNestedArray) {
             nestedChildren.push_back({elemId, info.innerArrayInfo.get()});
+          } else if (isStructElement) {
+            structChildren.push_back(elemId);
           }
         }
         // Now safe to update parent — DenseMap is stable after all inserts.
@@ -424,6 +540,15 @@ void VPIRuntime::buildHierarchy() {
           uint32_t nestedBitOff = nestedObj ? nestedObj->bitOffset : 0;
           createArrayChildren(nestedId, *innerInfo, nestedName,
                               nestedQName, parentSigId, nestedBitOff);
+        }
+        // Create struct field children for struct-element arrays.
+        for (uint32_t structElemId : structChildren) {
+          auto *seObj = findById(structElemId);
+          if (!seObj)
+            continue;
+          createStructFieldChildren(structElemId, seObj->name,
+                                    seObj->fullName, parentSigId,
+                                    *structFields, seObj->bitOffset);
         }
       };
 
@@ -443,43 +568,17 @@ void VPIRuntime::buildHierarchy() {
                  << arrayInfo->numElements
                  << " elemWidth=" << arrayInfo->elementLogicalWidth
                  << (arrayInfo->innerArrayInfo ? " (nested)" : "")
-                 << "\n");
-    } else if (const auto *structFields =
-                   scheduler->getSignalStructFields(sigId)) {
+                 << (structFields ? " (struct-elements)" : "") << "\n");
+    } else if (structFields) {
       // Unpacked struct: create a StructVar parent with field children.
       uint32_t structObjId =
           registerSignal(signalName, qualifiedName, sigId, width,
                          VPIObjectType::StructVar, moduleId);
       if (nameToId.find(signalName) == nameToId.end())
         nameToId[signalName] = structObjId;
-      auto *structParent = findById(structObjId);
 
-      // HW convention: first field is in the highest bits.
-      // Accumulate physical offset from the top.
-      uint32_t totalPhysWidth = 0;
-      for (const auto &f : *structFields)
-        totalPhysWidth += f.physicalWidth;
-      uint32_t bitOff = totalPhysWidth;
-      for (const auto &field : *structFields) {
-        bitOff -= field.physicalWidth;
-        std::string fieldName = field.name;
-        std::string fieldQName = qualifiedName + "." + fieldName;
-        uint32_t fieldId = nextObjectId();
-        auto fieldObj = std::make_unique<VPIObject>();
-        fieldObj->id = fieldId;
-        fieldObj->type = VPIObjectType::Reg;
-        fieldObj->name = fieldName;
-        fieldObj->fullName = fieldQName;
-        fieldObj->signalId = sigId;
-        fieldObj->width = field.logicalWidth;
-        fieldObj->bitOffset = bitOff;
-        fieldObj->parentId = structObjId;
-        if (structParent)
-          structParent->children.push_back(fieldId);
-        nameToId[fieldQName] = fieldId;
-        objects[fieldId] = std::move(fieldObj);
-        stats.objectsCreated++;
-      }
+      createStructFieldChildren(structObjId, signalName, qualifiedName, sigId,
+                                *structFields, 0);
 
       LLVM_DEBUG(llvm::dbgs()
                  << "  Created struct '" << qualifiedName << "' id="
@@ -1845,7 +1944,9 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
   // Flush combinational logic: execute delta cycles so that downstream
   // combinational processes see the updated value. VPI-owned signals are
   // protected from stale drives during this execution.
-  scheduler->executeCurrentTime();
+  // Skip when batching ReadWrite writes — we'll flush once after all writes.
+  if (!batchingReadWriteWrites)
+    scheduler->executeCurrentTime();
 
   // For vpiForceFlag: persist forced value across time steps.
   if (flags == vpiForceFlag) {
@@ -1965,8 +2066,13 @@ uint32_t VPIRuntime::registerCb(struct t_cb_data *cbData) {
           data.reason = reason;
           data.time = &delayTime;
           data.user_data = static_cast<PLI_BYTE8 *>(userData);
+          // Env-gated VPI timing instrumentation.
+          static bool traceVpiTiming =
+              std::getenv("CIRCT_SIM_TRACE_VPI_TIMING") != nullptr;
+          auto tA = std::chrono::steady_clock::now();
           cbFunc(&data);
           stats.callbacksFired++;
+          auto tB = std::chrono::steady_clock::now();
           // Fire ReadWriteSynch callbacks after the delay callback completes.
           // cocotb 2.0.1 defers DEPOSIT writes — they are only applied when
           // a ReadWrite trigger fires (_apply_scheduled_writes). Each round
@@ -1981,22 +2087,50 @@ uint32_t VPIRuntime::registerCb(struct t_cb_data *cbData) {
           // Defer value-change callbacks during the ReadWrite phase to
           // prevent re-entrant firing. Real simulators fire cbValueChange
           // after the ReadWrite phase, not during vpi_put_value calls.
+          int rwIterCount = 0;
           for (int rwIter = 0; rwIter < 100; ++rwIter) {
             beginDeferValueChanges();
+            // Batch VPI writes: skip per-write executeCurrentTime() so
+            // ALL writes take effect before triggered processes fire.
+            batchingReadWriteWrites = true;
             fireCallbacks(cbReadWriteSynch);
+            batchingReadWriteWrites = false;
+            // Flush combinational logic ONCE after all writes applied.
+            scheduler->executeCurrentTime();
             flushDeferredValueChanges();
+            ++rwIterCount;
             if (!hasActiveCallbacks(cbReadWriteSynch))
               break;
           }
-          // Run the post-callback hook to propagate firreg changes to
-          // hw.output port signals BEFORE ReadOnlySynch.  Cocotb reads
-          // ports in ReadOnlySynch, so ports must reflect the newly-
-          // captured firreg values by that point.  Reads done earlier
-          // (e.g. immediately after RisingEdge via cbValueChange) still
-          // see the OLD port value because this hook hasn't run yet.
-          if (postCallbackHook)
-            postCallbackHook();
-          fireCallbacks(cbReadOnlySynch);
+          auto tC = std::chrono::steady_clock::now();
+          // Schedule postCallbackHook + ReadOnlySynch as a Postponed
+          // event instead of firing them directly.  This ensures NBA
+          // events (non-blocking assignments from `always @(posedge clk)`
+          // processes) are applied BEFORE cocotb reads signal values.
+          // IEEE 1800-2017 §4.7: Active → NBA → ... → Postponed.
+          // processCurrentDelta() processes regions in order, so:
+          //   Active (this callback) → NBA (signal updates) → Postponed
+          scheduler->getEventScheduler().schedule(
+              scheduler->getCurrentTime(),
+              SchedulingRegion::Postponed,
+              Event([this]() {
+                if (postCallbackHook)
+                  postCallbackHook();
+                fireCallbacks(cbReadOnlySynch);
+              }));
+          if (traceVpiTiming) {
+            static uint64_t delayCallbackCount = 0;
+            ++delayCallbackCount;
+            auto cbUs = std::chrono::duration_cast<
+                std::chrono::microseconds>(tB - tA).count();
+            auto rwUs = std::chrono::duration_cast<
+                std::chrono::microseconds>(tC - tB).count();
+            llvm::errs() << "[VPI-TIMING] #" << delayCallbackCount
+                         << " cb=" << cbUs
+                         << "us rw=" << rwUs << "us(x" << rwIterCount
+                         << ") t="
+                         << scheduler->getCurrentTime().realTime << "\n";
+          }
           if (isOneShot) {
             // Re-find after potential DenseMap rehash.
             auto eraseIt = callbacks.find(capturedId);
