@@ -3969,10 +3969,9 @@ endmodule
 // CHECK-LABEL: moore.module @TestInitstate
 module TestInitstate;
     bit b;
-    // $initstate returns 1 during the initial/reset state, 0 otherwise.
-    // In simulation it is stubbed to constant 0.
+    // $initstate returns 1 inside an initial block per IEEE 1800-2017 §20.15.
     // CHECK: moore.procedure initial {
-    // CHECK:   %[[CONST:.*]] = moore.constant 0 : i1
+    // CHECK:   %[[CONST:.*]] = moore.constant 1 : i1
     // CHECK:   moore.blocking_assign %b, %[[CONST]]
     initial begin
         b = $initstate;

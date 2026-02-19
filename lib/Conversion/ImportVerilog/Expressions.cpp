@@ -810,6 +810,25 @@ struct ExprVisitor {
       assert(constValue->size() <= 32);
 
       auto lowBit = constValue->integer().as<uint32_t>().value();
+
+      // If the constant index is out of bounds, emit a warning and produce a
+      // no-op.  For lvalues, create a temporary variable so writes are
+      // silently discarded (matching Xcelium/VCS behavior).  For rvalues,
+      // return a zero constant.
+      if (!range.containsPoint(static_cast<int32_t>(lowBit))) {
+        mlir::emitWarning(loc) << "constant index " << lowBit
+                               << " is out of bounds for range ["
+                               << range.left << ":" << range.right << "]";
+        if (isLvalue) {
+          auto tmpVar = moore::VariableOp::create(
+              builder, loc, cast<moore::RefType>(resultType),
+              builder.getStringAttr("__oob_discard__"), Value());
+          return tmpVar;
+        }
+        return moore::ConstantOp::create(builder, loc,
+                                         cast<moore::IntType>(type), 0);
+      }
+
       if (isLvalue) {
         context.captureRef(value);
         return moore::ExtractRefOp::create(builder, loc, resultType, value,
@@ -9085,10 +9104,26 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
           .Case("$initstate",
                 [&]() -> FailureOr<Value> {
                   // $initstate returns 1 during the initial/reset state and 0
-                  // otherwise. In simulation (not formal), stub it to return 0.
+                  // otherwise. IEEE 1800-2017 §20.15.
+                  // Check if we're statically inside an initial block.
                   auto bitTy = moore::IntType::getInt(getContext(), 1);
+                  int initVal = 0;
+                  if (auto *block = builder.getInsertionBlock()) {
+                    if (auto *parentOp = block->getParentOp()) {
+                      Operation *op = parentOp;
+                      while (op) {
+                        if (auto proc = dyn_cast<moore::ProcedureOp>(op)) {
+                          if (proc.getKind() ==
+                              moore::ProcedureKind::Initial)
+                            initVal = 1;
+                          break;
+                        }
+                        op = op->getParentOp();
+                      }
+                    }
+                  }
                   return (Value)moore::ConstantOp::create(builder, loc, bitTy,
-                                                          0);
+                                                          initVal);
                 })
           .Case("$isunbounded",
                 [&]() -> Value {
@@ -9452,8 +9487,21 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   value = convertToSimpleBitVector(value);
                   if (!value)
                     return failure();
-                  return (Value)moore::CountOnesBIOp::create(builder, loc,
-                                                              value);
+                  Value count =
+                      moore::CountOnesBIOp::create(builder, loc, value);
+                  // $countones returns an integer count. Keep narrow source
+                  // vectors from collapsing to 1-bit signed arithmetic by
+                  // widening to at least 32 bits before later comparisons.
+                  if (auto intTy = dyn_cast<moore::IntType>(count.getType());
+                      intTy && intTy.getWidth() < 32) {
+                    moore::IntType widenedTy =
+                        intTy.getDomain() == moore::Domain::FourValued
+                            ? moore::IntType::getLogic(getContext(), 32)
+                            : moore::IntType::getInt(getContext(), 32);
+                    count = builder.createOrFold<moore::ZExtOp>(loc, widenedTy,
+                                                                count);
+                  }
+                  return count;
                 })
           .Case("$onehot",
                 [&]() -> FailureOr<Value> {
@@ -9884,8 +9932,13 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
           .Case("$increment",
                 [&]() -> Value {
                   // For dynamic types, $increment = -1 (ascending indices).
+                  // IEEE 1800-2017 Section 7.11.1: $increment returns -1
+                  // for arrays declared with ascending range [0:N].
                   auto intTy = moore::IntType::getInt(getContext(), 32);
-                  return moore::ConstantOp::create(builder, loc, intTy, 1);
+                  return moore::ConstantOp::create(
+                      builder, loc, intTy,
+                      APInt(32, static_cast<uint64_t>(-1),
+                            /*isSigned=*/true));
                 })
           // $timeunit/$timeprecision with one arg (hierarchical ref).
           // Use current scope's timescale (slang resolves the referenced

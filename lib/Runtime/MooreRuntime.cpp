@@ -10963,6 +10963,38 @@ extern "C" int32_t __moore_feof(int32_t fd) {
   return 1; // Treat invalid fd as EOF
 }
 
+extern "C" int32_t __moore_ferror(int32_t fd, MooreString *errMsg) {
+  // $ferror(fd, str) - IEEE 1800-2017 §21.3.1
+  // Returns the OS error code for the file descriptor, or 0 if no error.
+  // Writes the error message string to errMsg.
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      int err = std::ferror(fileHandles[i]);
+      if (err && errMsg) {
+        const char *msg = std::strerror(errno);
+        size_t len = std::strlen(msg);
+        errMsg->data = static_cast<char *>(std::malloc(len));
+        std::memcpy(errMsg->data, msg, len);
+        errMsg->len = static_cast<int64_t>(len);
+      } else if (errMsg) {
+        // No error — empty string
+        errMsg->data = nullptr;
+        errMsg->len = 0;
+      }
+      return err ? errno : 0;
+    }
+  }
+  // Invalid file descriptor
+  if (errMsg) {
+    const char *msg = "invalid file descriptor";
+    size_t len = std::strlen(msg);
+    errMsg->data = static_cast<char *>(std::malloc(len));
+    std::memcpy(errMsg->data, msg, len);
+    errMsg->len = static_cast<int64_t>(len);
+  }
+  return -1;
+}
+
 extern "C" void __moore_fflush(int32_t fd) {
   if (fd == 0) {
     // Flush all open files
