@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1522 - February 19, 2026
+
+### circt-sim: queue native-pointer dispatch hardening and queue XFAIL burn-down
+
+1. **Hardened queue native/interpreter pointer classification**  
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - queue interceptors now classify native pointers using
+     `findNativeMemoryBlockByAddress(...)` range checks instead of raw
+     high-address heuristics.
+   - pointers that resolve to interpreter-owned memory blocks are always
+     treated as interpreter-managed.
+   - queue-struct native dispatch now requires a valid native range sized for
+     `sizeof(MooreQueue)` before dereference.
+
+2. **Stabilized queue element-size inference for native paths**  
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - `inferQueueElemSize(...)` now prefers explicit requested element size
+     (when provided by the lowered call), then falls back to native range-based
+     inference.
+   - this removes prior mis-inference paths that could overrun or mis-handle
+     queue payloads when native metadata was incomplete.
+
+3. **Closed queue crash cluster in required queue regressions**  
+   (`test/Tools/circt-sim/queue-{sort,reverse,operations,rsort,shuffle,unique}.sv`):
+   - validated the six queue regressions as regular pass/fail tests in the
+     current tree (non-XFAIL).
+
+4. **Validation**:
+   - manual reproducer loop for the six queue tests
+     (`circt-verilog` + `circt-sim` + `FileCheck`): all `PASS`.
+   - focused lit:
+     - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter 'queue-(sort|reverse|operations|rsort|shuffle|unique)\\.sv'`
+     - result: `Passed: 6`, `Failed: 0`, `Excluded: 502`.
+
 ## Iteration 1521 - February 19, 2026
 
 ### circt-sim: UVM run_test single-entry guard, I3C monitor-ordering regression, and broader AVIP parity recheck
