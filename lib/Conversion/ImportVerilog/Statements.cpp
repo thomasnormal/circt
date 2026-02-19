@@ -258,6 +258,48 @@ struct StmtVisitor {
     return success();
   }
 
+  moore::GlobalVariableOp getOrCreateAssertionFailMessagesEnabledGlobal() {
+    if (context.assertionFailMessagesEnabledGlobal)
+      return context.assertionFailMessagesEnabledGlobal;
+
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(context.intoModuleOp.getBody());
+
+    std::string baseName = "__circt_assert_fail_msgs_enabled";
+    std::string symName = baseName;
+    unsigned suffix = 0;
+    while (context.symbolTable.lookup(symName))
+      symName = baseName + "_" + std::to_string(++suffix);
+
+    auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+    auto globalOp = moore::GlobalVariableOp::create(
+        builder, loc, builder.getStringAttr(symName), i1Ty);
+
+    auto &initBlock = globalOp.getInitRegion().emplaceBlock();
+    builder.setInsertionPointToEnd(&initBlock);
+    auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+    moore::YieldOp::create(builder, loc, enabled);
+
+    context.assertionFailMessagesEnabledGlobal = globalOp;
+    return globalOp;
+  }
+
+  Value readAssertionFailMessagesEnabled() {
+    auto globalOp = getOrCreateAssertionFailMessagesEnabledGlobal();
+    auto globalRef = moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+    return moore::ReadOp::create(builder, loc, globalRef);
+  }
+
+  LogicalResult writeAssertionFailMessagesEnabled(Value enabled) {
+    auto globalOp = getOrCreateAssertionFailMessagesEnabledGlobal();
+    auto targetType = globalOp.getType();
+    if (enabled.getType() != targetType)
+      enabled = moore::ConversionOp::create(builder, loc, targetType, enabled);
+    auto globalRef = moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+    moore::BlockingAssignOp::create(builder, loc, globalRef, enabled);
+    return success();
+  }
+
   Value selectBool(Value cond, Value ifTrue, Value ifFalse) {
     if (ifTrue.getType() != ifFalse.getType())
       ifFalse = moore::ConversionOp::create(builder, loc, ifTrue.getType(), ifFalse);
@@ -2346,7 +2388,18 @@ struct StmtVisitor {
 
     if (stmt.ifFalse) {
       // Generate the false branch if present.
+      // Gate with assertionFailMessagesEnabled: if $assertfailoff was called,
+      // skip the fail action (else clause) entirely.
       builder.setInsertionPointToEnd(falseBlock);
+      auto failMsgsEnabled = readAssertionFailMessagesEnabled();
+      if (failMsgsEnabled) {
+        auto failMsgsLogic =
+            moore::ToBuiltinBoolOp::create(builder, loc, failMsgsEnabled);
+        Block &failBodyBlock = createBlock();
+        cf::CondBranchOp::create(builder, loc, failMsgsLogic, &failBodyBlock,
+                                 &exitBlock);
+        builder.setInsertionPointToEnd(&failBodyBlock);
+      }
       if (failed(context.convertStatement(*stmt.ifFalse)))
         return failure();
       if (!isTerminated())
@@ -2744,11 +2797,24 @@ struct StmtVisitor {
       }
       return true;
     }
-    // Keep non-core assertion-control forms as no-ops for now.
+    // $assertfailoff/$assertfailon: control assertion failure message display.
+    if (subroutine.name == "$assertfailoff") {
+      auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+      auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+      if (failed(writeAssertionFailMessagesEnabled(disabled)))
+        return failure();
+      return true;
+    }
+    if (subroutine.name == "$assertfailon") {
+      auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+      auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+      if (failed(writeAssertionFailMessagesEnabled(enabled)))
+        return failure();
+      return true;
+    }
+    // Keep other non-core assertion-control forms as no-ops for now.
     if (subroutine.name == "$assertpasson" ||
         subroutine.name == "$assertpassoff" ||
-        subroutine.name == "$assertfailon" ||
-        subroutine.name == "$assertfailoff" ||
         subroutine.name == "$assertnonvacuouson" ||
         subroutine.name == "$assertvacuousoff") {
       return true;
