@@ -6113,6 +6113,12 @@ struct RvalueExprVisitor : public ExprVisitor {
         else // prev
           found =
               moore::AssocArrayPrevOp::create(builder, loc, arrayRef, keyRef);
+        // IEEE 1800-2017 §7.8.2: these methods return int (signed i32).
+        // The Moore ops return i1; zero-extend to i32 so that the implicit
+        // signed conversion from slang does not sign-extend 1 to -1.
+        auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+        found = context.materializeConversion(i32Ty, found,
+                                              /*isSigned=*/false, loc);
         return found;
       }
     }
@@ -6297,8 +6303,12 @@ struct RvalueExprVisitor : public ExprVisitor {
     // $ferror(fd, str) returns error code and writes error message to str.
     // IEEE 1800-2017 Section 21.3.1 "File I/O system functions"
     if (subroutine.name == "$ferror" && args.size() == 2) {
-      // First argument: file descriptor (input)
+      // First argument: file descriptor (input) — convert to i32
       value = context.convertRvalueExpression(*args[0]);
+      if (!value)
+        return {};
+      auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+      value = context.materializeConversion(i32Ty, value, false, loc);
       if (!value)
         return {};
       // Second argument: string output - wrapped as AssignmentExpression
@@ -9863,10 +9873,16 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
           .Case("exists",
                 [&]() -> Value {
                   // exists() checks if a key exists in an associative array.
-                  // If not an associative array, conservatively return 0.
-                  if (isa<moore::AssocArrayType>(value1.getType()))
-                    return moore::AssocArrayExistsOp::create(builder, loc,
-                                                             value1, value2);
+                  // IEEE 1800-2017 §7.8.1: returns int (1 if found, 0 if not).
+                  // Zero-extend from i1 to i32 to avoid sign-extension to -1.
+                  if (isa<moore::AssocArrayType>(value1.getType())) {
+                    Value result = moore::AssocArrayExistsOp::create(
+                        builder, loc, value1, value2);
+                    auto i32Ty =
+                        moore::IntType::getInt(builder.getContext(), 32);
+                    return materializeConversion(i32Ty, result,
+                                                /*isSigned=*/false, loc);
+                  }
                   auto intTy = moore::IntType::getInt(builder.getContext(), 1);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })

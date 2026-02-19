@@ -4,7 +4,6 @@ module top;
   reg [7:0] mem_out [0:3];
   reg [7:0] mem_in [0:3];
   integer fd;
-  integer ch;
 
   initial begin
     // Populate memory
@@ -12,6 +11,9 @@ module top;
     mem_out[1] = 8'hAD;
     mem_out[2] = 8'hBE;
     mem_out[3] = 8'hEF;
+
+    // Allow signal values to propagate
+    #1;
 
     // Write memory to file
     $writememh("writemem_verify.dat", mem_out);

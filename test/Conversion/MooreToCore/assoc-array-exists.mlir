@@ -15,8 +15,7 @@ moore.global_variable @testAssoc : !moore.assoc_array<!moore.i32, !moore.i8>
 // CHECK: llvm.alloca {{.*}} x i8
 // CHECK: llvm.store [[KEY]], {{.*}} : i8, !llvm.ptr
 // CHECK: [[CALL:%.+]] = llvm.call @__moore_assoc_exists([[ARRAY]], {{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
-// CHECK: [[ZERO:%.+]] = llvm.mlir.constant(0 : i32) : i32
-// CHECK: [[RESULT:%.+]] = llvm.icmp "ne" [[CALL]], [[ZERO]] : i32
+// CHECK: comb.extract [[CALL]] from 0 : (i32) -> i1
 func.func @test_assoc_exists() -> !moore.i1 {
   %assoc_ref = moore.get_global_variable @testAssoc : !moore.ref<assoc_array<!moore.i32, !moore.i8>>
   %assoc = moore.read %assoc_ref : <assoc_array<!moore.i32, !moore.i8>>
