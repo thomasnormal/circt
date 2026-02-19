@@ -1,16 +1,18 @@
 // RUN: circt-sim %s --top test 2>&1 | FileCheck %s
-// Test that __moore_randomize_basic is a no-op that preserves object memory.
+// Test that __moore_randomize_basic fills the object with random bytes.
 //
-// __moore_randomize_basic no longer fills the entire object with random bytes
-// because that would corrupt non-rand metadata (class_id, vtable pointer,
-// string pointers, etc.).  Instead, each rand field is individually set by
-// subsequent __moore_randomize_with_range / _with_dist calls.
+// __moore_randomize_basic fills the entire object with random bytes.
+// The MooreToCore lowering saves non-rand fields BEFORE this call and restores
+// them AFTERWARDS, so it is safe to overwrite the entire object.  Unconstrained
+// rand fields that have no explicit __moore_randomize_with_range call get their
+// randomness from this fill.  Constrained rand fields are later overridden by
+// subsequent _with_range / _with_dist calls.
 //
 // We allocate a 16-byte block, write known values, call __moore_randomize_basic,
-// then verify the values are preserved (not overwritten with random data).
+// then verify the values were randomized (overwritten with random data).
 
 // CHECK: randomize_returned = 1
-// CHECK: values_preserved = 1
+// CHECK: values_randomized = 1
 // CHECK: [circt-sim] Simulation completed
 
 module {
@@ -27,7 +29,7 @@ module {
       %c16 = arith.constant 16 : i64
       %ptr = llvm.call @malloc(%c16) : (i64) -> !llvm.ptr
 
-      // Write known sentinel values to all 4 words
+      // Write known sentinel values to all 4 words (0x12345678)
       %sentinel = arith.constant 305419896 : i32
       %f0 = llvm.getelementptr %ptr[0, 0]
           : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i32, i32, i32, i32)>
@@ -52,25 +54,25 @@ module {
       %fmt_rc = sim.fmt.concat (%lit_rc, %d_rc, %nl)
       sim.proc.print %fmt_rc
 
-      // Load all 4 words and check they still have the sentinel value
+      // Load all 4 words and check at least one was changed (randomized)
       %v0 = llvm.load %f0 : !llvm.ptr -> i32
       %v1 = llvm.load %f1 : !llvm.ptr -> i32
       %v2 = llvm.load %f2 : !llvm.ptr -> i32
       %v3 = llvm.load %f3 : !llvm.ptr -> i32
-      %eq0 = comb.icmp eq %v0, %sentinel : i32
-      %eq1 = comb.icmp eq %v1, %sentinel : i32
-      %eq2 = comb.icmp eq %v2, %sentinel : i32
-      %eq3 = comb.icmp eq %v3, %sentinel : i32
-      %all_eq01 = comb.and %eq0, %eq1 : i1
-      %all_eq23 = comb.and %eq2, %eq3 : i1
-      %all_eq = comb.and %all_eq01, %all_eq23 : i1
+      %ne0 = comb.icmp ne %v0, %sentinel : i32
+      %ne1 = comb.icmp ne %v1, %sentinel : i32
+      %ne2 = comb.icmp ne %v2, %sentinel : i32
+      %ne3 = comb.icmp ne %v3, %sentinel : i32
+      %any_ne01 = comb.or %ne0, %ne1 : i1
+      %any_ne23 = comb.or %ne2, %ne3 : i1
+      %any_ne = comb.or %any_ne01, %any_ne23 : i1
 
       // Convert i1 to i32 for printing
       %zero32 = arith.constant 0 : i32
       %one32 = arith.constant 1 : i32
-      %result = arith.select %all_eq, %one32, %zero32 : i32
+      %result = arith.select %any_ne, %one32, %zero32 : i32
 
-      %lit_pres = sim.fmt.literal "values_preserved = "
+      %lit_pres = sim.fmt.literal "values_randomized = "
       %d_pres = sim.fmt.dec %result signed : i32
       %fmt_pres = sim.fmt.concat (%lit_pres, %d_pres, %nl)
       sim.proc.print %fmt_pres

@@ -125,6 +125,11 @@ uint32_t VPIRuntime::registerSignal(const std::string &name,
   obj->signalId = signalId;
   obj->width = width;
   obj->parentId = parentModuleId;
+  // Multi-bit Reg/Net signals have explicit ranges [width-1:0] so cocotb
+  // creates LogicArrayObject.  Single-bit signals (width=1) remain scalar
+  // (GPI_LOGIC) since cocotb expects vpiScalar=1 for 1-bit logic.
+  if ((type == VPIObjectType::Reg || type == VPIObjectType::Net) && width > 1)
+    obj->hasExplicitRange = true;
   if (parentModuleId != 0) {
     auto *parent = findById(parentModuleId);
     if (parent)
@@ -236,6 +241,15 @@ VPIObject *VPIRuntime::findByName(const std::string &fullName) {
       return findById(it->second);
   }
 
+  // Case-insensitive fallback: Verilog identifiers are case-sensitive per spec,
+  // but many testbenches (especially cocotb) use lowercase names for uppercase
+  // RTL ports.  Do a linear scan with case-folded comparison.
+  std::string lowerName = llvm::StringRef(fullName).lower();
+  for (auto &entry : nameToId) {
+    if (entry.first().lower() == lowerName)
+      return findById(entry.second);
+  }
+
   return nullptr;
 }
 
@@ -301,6 +315,11 @@ void VPIRuntime::buildHierarchy() {
     return parentId;
   };
 
+  // Track processed qualified names to skip duplicate signals.
+  // This can happen when both llhd.sig and seq.firreg register signals
+  // with the same name (the firreg drives the sig, they are the same signal).
+  llvm::StringSet<> processedQNames;
+
   for (const auto &entry : scheduler->getSignalNames()) {
     SignalId sigId = entry.first;
     llvm::StringRef fullName = entry.second;
@@ -338,6 +357,11 @@ void VPIRuntime::buildHierarchy() {
 
     // Check if this signal is an unpacked array.
     std::string qualifiedName = modulePath + "." + signalName;
+
+    // Skip duplicate signals (e.g., llhd.sig + seq.firreg for same variable).
+    if (!processedQNames.insert(qualifiedName).second)
+      continue;
+
     const auto *arrayInfo = scheduler->getSignalArrayInfo(sigId);
     const auto *structFields = scheduler->getSignalStructFields(sigId);
 
