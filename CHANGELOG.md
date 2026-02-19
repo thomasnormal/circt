@@ -1,5 +1,247 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1532 - February 19, 2026
+
+### circt-sim: two-phase firreg evaluation for correct non-blocking assignment semantics
+
+1. **Implemented two-phase firreg evaluation (IEEE 1800-2017 §10.4.2)**
+   (`include/circt/Dialect/Sim/ProcessScheduler.h`,
+    `lib/Dialect/Sim/ProcessScheduler.cpp`,
+    `tools/circt-sim/LLHDProcessInterpreter.h`,
+    `tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - Added `setPostRegionCallback(SchedulingRegion, callback)` to ProcessScheduler
+     for executing callbacks after all processes in a scheduling region complete.
+   - Firreg processes now defer signal updates to `pendingFirRegUpdates` vector
+     instead of calling `scheduler.updateSignal()` immediately.
+   - Post-NBA callback applies all pending updates atomically after all firregs
+     in the batch have evaluated using pre-update signal values.
+   - This ensures correct Verilog non-blocking assignment semantics: all RHS
+     values are sampled before any LHS updates occur.
+
+2. **Root cause**: Sequential firreg execution in the NBA region with immediate
+   signal updates caused subsequent firregs to read post-update values instead
+   of pre-edge values. For example, in gcd designs with cross-module feedback,
+   `done` would read `curr_state`'s post-update value (S1) instead of its
+   pre-edge value (S0).
+
+3. **CVDP benchmark results**: 20 PASS (up from ~10), nearly matching Xcelium's
+   21 PASS baseline. 12 new passing tests:
+   - gcd/0038, gcd/0045 (cross-module feedback)
+   - sync_serial_communication/0052 (delta overflow resolved)
+   - hill_cipher/0015 (timeout resolved)
+   - generic_nbit_counter/0039, halfband_fir/0005, IIR_filter/0019,
+     modified_booth_mul/0005, sigma_delta_audio/0007 (firreg ordering)
+   - car_parking_management/0031, Carry_Lookahead_Adder/0005 (bonus - pass
+     on circt-sim but fail on Xcelium)
+   - cellular_automata/0017 (OOB index fix from previous iteration)
+
+4. **Validation**: 527/527 lit tests pass (zero regressions).
+
+## Iteration 1531 - February 19, 2026
+
+### AVIP matrix runner: treat UVM errors/fatals as failures and parse sim-time from completed runs
+
+1. **Hardened AVIP matrix result classification**  
+   (`utils/run_avip_circt_sim.sh`):
+   - `extract_uvm_count` now:
+     - prefers explicit summary lines (`UVM_ERROR : N`, `UVM_FATAL : N`),
+     - falls back to counting message occurrences when summary is absent.
+   - `extract_sim_time_fs` now parses both:
+     - `Simulation terminated at time ... fs`,
+     - `Simulation completed at time ... fs`.
+   - when simulator exit code is `0` but UVM reports include errors/fatals,
+     matrix `sim_status` is now forced to `FAIL`.
+
+2. **Added regression for UVM-error gating**  
+   (`test/Tools/run-avip-circt-sim-uvm-error-gate.test`):
+   - fake simulator exits `0` but emits a `UVM_ERROR` line.
+   - validates matrix status is `FAIL` with `sim_exit=0`, `uvm_error=1`.
+
+3. **Validation**
+   - runner tests:
+     - `python3 llvm/llvm/utils/lit/lit.py -sv --filter 'run-avip-circt-sim-(default-mode-interpret|timeout-grace|uvm-error-gate)|run-avip-circt-sim-jit-policy-gate' build-test/test/Tools`
+     - result: `Passed: 4`, `Failed: 0`.
+   - AHB compile-mode check:
+     - `/tmp/avip-circt-sim-ahb-uvmgate-20260219-165726/matrix.tsv`
+     - `compile_status=OK`, `sim_exit=0`, `sim_status=FAIL`,
+       `uvm_error=3`, `deopt_process_rows=0`.
+
+4. **Current open parity signals**
+   - APB lane remains timeout-sensitive under host load:
+     - `/tmp/avip-circt-sim-apb-uvmgate-20260219-165915/matrix.tsv`
+     - `sim_exit=1` at wall timeout with `deopt_process_rows=0`.
+   - AHB lane now reports scoreboard mismatches as explicit matrix failures
+     instead of false `OK`.
+
+## Iteration 1530 - February 19, 2026
+
+### circt-sim: prioritize port/queue alias resolution for `item_done` in mixed-port drivers
+
+1. **Fixed `item_done` dequeue resolution order**  
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - `takeUvmDequeuedItemForDone` now resolves by explicit alias keys first
+     (`doneAddr`, owner alias, resolved queue alias), and only then falls back
+     to per-process FIFO order.
+   - this prevents mixed-port driver processes from consuming another port's
+     outstanding dequeued item when `item_done(self)` is called.
+
+2. **Added regression for cross-port ordering semantics**  
+   (`test/Tools/circt-sim/finish-item-port-specific-item-done-order.mlir`):
+   - one process dequeues from two pull ports and calls `item_done(B)` before
+     `item_done(A)`.
+   - verifies `seq2` unblocks before `seq1` and sequencer summary stays
+     drained (`done_pending=0`, `last_dequeued=0`).
+
+3. **Validation**
+   - build:
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+   - focused sequencer lit:
+     - `python3 llvm/llvm/utils/lit/lit.py -sv --filter 'finish-item-(blocks-until-item-done|multiple-outstanding-item-done|port-specific-item-done-order)|seq-get-next-item-(event-wakeup|empty-fallback-backoff)' build-test/test/Tools/circt-sim`: PASS (`5/5`).
+   - full circt-sim tools suite:
+     - `ninja -C build-test -j4 check-circt-tools-circt-sim`: PASS.
+     - totals: `Total Discovered Tests: 527`, `Passed: 527`, `Failed: 0`.
+   - AVIP compile-mode spot checks:
+     - APB lane:
+       `/tmp/avip-circt-sim-apb-portdone-20260219-152641/matrix.tsv`
+       (`compile_status=OK`, `sim_status=OK`, `deopt_process_rows=0`).
+     - AHB lane:
+       `/tmp/avip-circt-sim-ahb-portdone-20260219-153849/matrix.tsv`
+       (`compile_status=OK`, `sim_status=FAIL`, `sim_exit=1`,
+       `deopt_process_rows=0`).
+
+4. **Current open integration signal**
+   - AHB run still exits with nonzero status despite printing
+     `Simulation completed at time ...` in
+     `/tmp/avip-circt-sim-ahb-portdone-20260219-153849/ahb/sim_seed_1.log`;
+     this is now the next runtime triage target.
+
+## Iteration 1529 - February 19, 2026
+
+### circt-sim: fix false delta-overflow accounting and harden phase-hopper waiter polling
+
+1. **Fixed false `DELTA_OVERFLOW` accumulation across real-time advances**  
+   (`tools/circt-sim/circt-sim.cpp`):
+   - split same-time accounting into separate trackers for zero-delta and
+     nonzero-delta paths (`lastZeroIterTime`, `lastDeltaTime`).
+   - prevents nonzero-delta counts from accumulating across different real
+     times in alternating advance/execute loops.
+
+2. **Added bounded polling intercept for `uvm_phase_hopper::wait_for_waiters`**  
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`,
+   `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`):
+   - preserve delta polling at `t=0` (keeps UVM run-phase start rule).
+   - once `t>0`, back off to `+10ps` polling to avoid unbounded same-time
+     delta churn.
+
+3. **Added regression**  
+   (`test/Tools/circt-sim/uvm-phase-hopper-wait-for-waiters-backoff.mlir`):
+   - verifies bounded waiter polling makes progress without delta overflow.
+
+4. **Validation**
+   - build:
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+   - focused lit:
+     - `python3 llvm/llvm/utils/lit/lit.py -sv -j1 build-test/test/Tools/circt-sim/uvm-phase-hopper-wait-for-waiters-backoff.mlir`: PASS.
+     - `python3 llvm/llvm/utils/lit/lit.py -sv -j1 --filter 'uvm-phase-hopper-wait-for-waiters-backoff|seq-get-next-item-(empty-fallback-backoff|event-wakeup)|fork-disable-ready-wakeup|uvm-run-test-single-entry-guard' build-test/test/Tools/circt-sim`: PASS.
+   - APB compile-mode direct replay:
+     - `/tmp/apb-direct-deltafix-20260219-144000/sim.log`
+     - no `DELTA_OVERFLOW`; lane now exits via max-time guard at
+       `40000000000 fs`.
+     - JIT report remains deopt-clean:
+       `/tmp/apb-direct-deltafix-20260219-144000/jit-report.json`
+       (`deopt_process_rows=0`).
+
+5. **Current open parity gap**
+   - APB scoreboard mismatches remain at
+     `apb_scoreboard.sv(272/283/294/305)`; this is now isolated from the
+     former delta-overflow confounder.
+
+## Iteration 1528 - February 19, 2026
+
+### circt-sim/I3C: event-driven sequencer get wakeups (remove poll-loop hotspot)
+
+1. **Replaced empty sequencer get polling with queue waiters**
+   (`tools/circt-sim/LLHDProcessInterpreter.h`,
+   `tools/circt-sim/LLHDProcessInterpreter.cpp`,
+   `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`):
+   - empty `get/get_next_item` now blocks on queue waiters instead of repeated
+     delta/timed polling.
+   - `finish_item` push wakes a matching queue waiter (or unresolved waiter).
+   - added waiter cleanup during `finalizeProcess`.
+
+2. **Added regression coverage for wake-on-push semantics**
+   (`test/Tools/circt-sim/seq-get-next-item-event-wakeup.mlir`):
+   - with tight delta budget (`--max-deltas=8`), blocked `get_next_item`
+     resumes on `finish_item` push and does not hit overflow.
+   - updated empty-get regression description:
+     `test/Tools/circt-sim/seq-get-next-item-empty-fallback-backoff.mlir`.
+
+3. **Finalize-time ctor execution hardening**
+   (`tools/circt-sim/LLHDProcessInterpreterGlobals.cpp`):
+   - `finalizeInit()` now re-discovers ctor ops before executing global
+     constructors to avoid stale cached-op traversal.
+
+4. **Validation**
+   - build:
+     - `ninja -C build-test circt-sim`: PASS.
+   - focused lit:
+     - `lit -sv build-test/test/Tools/circt-sim/seq-get-next-item-empty-fallback-backoff.mlir build-test/test/Tools/circt-sim/seq-get-next-item-event-wakeup.mlir build-test/test/Tools/circt-sim/seq-pull-port-reconnect-cache-invalidation.mlir`: PASS (`3/3`).
+
+5. **I3C deterministic replay impact**
+   - filtered trace prior to fix identified dominant retry churn:
+     - `/tmp/i3c-calltrace-loop.log` (`proc=45` repeatedly calling
+       `uvm_seq_item_pull_port::get_next_item`).
+   - post-fix replay (`/tmp/i3c-full-after-seqwaiter.log`):
+     - sequencer-get waiter loop removed (`get_waiters=0` at overflow point),
+     - overflow moved much later (`33040000000fs`).
+   - high max-delta replay (`/tmp/i3c-full-after-seqwaiter-maxd1e8.log`):
+     - no `DELTA_OVERFLOW`; simulation completes.
+     - parity still open (`i3c_scoreboard.sv(128/162)`, target coverage `0%`).
+
+## Iteration 1527 - February 19, 2026
+
+### circt-sim/APB: compile-mode parity recheck with zero-deopt and a delta-overflow blocker
+
+1. **Revalidated recent LLHD sub-reference/four-state regression set**
+   - `python3 llvm/llvm/utils/lit/lit.py -sv -j1 --filter 'llhd-(drv-array-get-struct-field-offset|prb-subfield-pending-epsilon|drv-memory-backed-struct-array-func-arg|ref-cast-array-subfield-store-func-arg|ref-cast-subfield-store-func-arg)\\.mlir' build-test/test/Tools/circt-sim`
+   - result: `Passed=5`, `Failed=0`.
+
+2. **APB wrapper compile lane is currently blocked by top-level dump-task lowering**
+   - bounded wrapper rerun:
+     - `AVIPS=apb ... utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-apb-recheck-20260219-133448`
+   - result:
+     - `compile_status=FAIL`, `sim_status=SKIP`.
+     - compile diagnostics include:
+       `unsupported VCD dump task '$dumpfile'`
+       in `../mbit/apb_avip/src/hdl_top/hdl_top.sv`.
+
+3. **Direct APB compile-mode rerun confirms native-JIT deopt closure still holds**
+   - run artifact:
+     - `/tmp/apb-direct-oldmlir-recheck-20260219-133630/jit-report.json`
+     - `/tmp/apb-direct-oldmlir-recheck-20260219-133630/sim.log`
+   - JIT summary:
+     - `jit_deopts_total=0`.
+   - parity status:
+     - sim exits non-zero (`exit code 1`) due
+       `ERROR(DELTA_OVERFLOW)` at `32100000000 fs`,
+     - scoreboard check-phase errors remain:
+       `apb_scoreboard.sv(272/283/294/305)`.
+
+4. **APB monitor trace confirms sampling is active but does not close parity**
+   - trace artifact:
+     - `/tmp/apb-trace130-20260219-133743/sim.log`
+   - observed:
+     - master/slave `sample_data` monitor loads are active,
+     - explicit unknown encodings are preserved in trace lines
+       (for example `w=2 val=10`),
+     - run still terminates with `DELTA_OVERFLOW` and scoreboard check-phase
+       mismatches.
+
+5. **Next closure target**
+   - eliminate APB delta-cycle overflow / monitor-progress stall while keeping
+     `jit_deopts_total=0`, then rerun wrapper lane once dump-task compile
+     blocking is resolved.
+
 ## Iteration 1526 - February 19, 2026
 
 ### circt-sim: harden interface relay-cascade value sourcing for I3C monitor paths
@@ -72762,3 +73004,40 @@ See CHANGELOG.md on recent progress.
       - bounded I3C drive attribution improves (`:9799` remains released/high),
         but full deterministic I3C replay still overflows at
         `1110000000fs d138` with target coverage `0.00%`.
+77. `circt-sim` refine tri-state mirror suppression for runtime high-Z observation
+    and add passive VIF regression
+    (February 19, 2026):
+    - root cause:
+      - tri-state mirror-store suppression treated explicit high-Z (`Z`) as a
+        deterministic drive during runtime, which could starve passive
+        interface observation on shared inout nets.
+    - fix:
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - in `interpretLLVMStore`, explicit high-Z suppression is now startup-only
+        (`t=0`), while post-startup mirrored observation writes remain active.
+    - regression coverage:
+      - new:
+        - `test/Tools/circt-sim/interface-tristate-passive-observe-vif.sv`
+      - validates repeated passive low/high observation via class + virtual
+        interface topology and guards against late mirror suppression.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-sim`
+      - focused lit suites: PASS
+        - `interface-tristate-passive-observe-vif.sv`
+        - `interface-tristate-signalcopy-redirect.sv`
+        - `interface-inout-shared-wire-bidirectional.sv`
+        - `interface-tristate-suppression-cond-false.sv`
+        - `interface-inout-tristate-propagation.sv`
+        - `interface-intra-tristate-propagation.sv`
+        - `i3c-samplewrite-disable-fork-ordering.sv`
+        - `i3c-samplewrite-joinnone-disable-fork-ordering.sv`
+        - `fork-disable-ready-wakeup.sv`
+        - `seq-get-next-item-event-wakeup.mlir`
+        - `seq-get-next-item-empty-fallback-backoff.mlir`
+        - `seq-pull-port-reconnect-cache-invalidation.mlir`
+    - AVIP note:
+      - deterministic I3C replay on precompiled lane now reaches
+        `21.43% / 21.43%` coverage (controller/target) with matched tx counts,
+        but still has scoreboard mismatch at `i3c_scoreboard.sv(179)`
+        (`writeData` vectors remain empty in check-phase).

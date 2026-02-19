@@ -572,6 +572,20 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   uvmSeqQueueCacheEvictOnCap =
       envFlagEnabled("CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_EVICT_ON_CAP");
   maxFunctionOps = envUint64Value("CIRCT_SIM_MAX_FUNC_OPS", 0);
+
+  // Register a post-NBA callback to apply deferred firreg signal updates.
+  // This implements two-phase firreg evaluation: all firregs in the NBA batch
+  // evaluate their inputs using pre-update signal values (phase 1), then all
+  // pending updates are applied atomically (phase 2). This ensures correct
+  // Verilog non-blocking assignment semantics (IEEE 1800-2017 §10.4.2).
+  this->scheduler.setPostRegionCallback(SchedulingRegion::NBA, [this]() {
+    if (pendingFirRegUpdates.empty())
+      return;
+    for (auto &[sigId, val] : pendingFirRegUpdates)
+      this->scheduler.updateSignal(sigId, val);
+    pendingFirRegUpdates.clear();
+  });
+  deferFirRegUpdates = true;
 }
 
 LLHDProcessInterpreter::JitRuntimeIndirectSiteData &
@@ -1036,6 +1050,105 @@ bool LLHDProcessInterpreter::resolveUvmSequencerQueueAddress(
   return false;
 }
 
+void LLHDProcessInterpreter::enqueueUvmSequencerGetWaiter(
+    uint64_t queueAddr, ProcessId procId, Operation *retryOp) {
+  if (procId == InvalidProcessId || !retryOp)
+    return;
+
+  auto removeFromBucket = [&](uint64_t bucketAddr) {
+    auto bucketIt = sequencerGetWaitersByQueue.find(bucketAddr);
+    if (bucketIt == sequencerGetWaitersByQueue.end())
+      return;
+    auto &bucket = bucketIt->second;
+    bucket.erase(std::remove_if(bucket.begin(), bucket.end(),
+                                [&](const SequencerGetWaiter &waiter) {
+                                  return waiter.procId == procId;
+                                }),
+                 bucket.end());
+    if (bucket.empty())
+      sequencerGetWaitersByQueue.erase(bucketIt);
+  };
+
+  auto existingIt = sequencerGetWaitQueueByProc.find(procId);
+  if (existingIt != sequencerGetWaitQueueByProc.end() &&
+      existingIt->second != queueAddr)
+    removeFromBucket(existingIt->second);
+
+  auto &bucket = sequencerGetWaitersByQueue[queueAddr];
+  for (auto &waiter : bucket) {
+    if (waiter.procId == procId) {
+      waiter.retryOp = retryOp;
+      sequencerGetWaitQueueByProc[procId] = queueAddr;
+      return;
+    }
+  }
+  bucket.push_back({procId, retryOp});
+  sequencerGetWaitQueueByProc[procId] = queueAddr;
+}
+
+void LLHDProcessInterpreter::removeUvmSequencerGetWaiter(ProcessId procId) {
+  auto procIt = sequencerGetWaitQueueByProc.find(procId);
+  if (procIt == sequencerGetWaitQueueByProc.end())
+    return;
+  uint64_t queueAddr = procIt->second;
+  sequencerGetWaitQueueByProc.erase(procIt);
+
+  auto bucketIt = sequencerGetWaitersByQueue.find(queueAddr);
+  if (bucketIt == sequencerGetWaitersByQueue.end())
+    return;
+  auto &bucket = bucketIt->second;
+  bucket.erase(std::remove_if(bucket.begin(), bucket.end(),
+                              [&](const SequencerGetWaiter &waiter) {
+                                return waiter.procId == procId;
+                              }),
+               bucket.end());
+  if (bucket.empty())
+    sequencerGetWaitersByQueue.erase(bucketIt);
+}
+
+bool LLHDProcessInterpreter::wakeOneUvmSequencerGetWaiter(uint64_t queueAddr) {
+  auto bucketIt = sequencerGetWaitersByQueue.find(queueAddr);
+  if (bucketIt == sequencerGetWaitersByQueue.end())
+    return false;
+
+  auto &bucket = bucketIt->second;
+  while (!bucket.empty()) {
+    SequencerGetWaiter waiter = bucket.front();
+    bucket.pop_front();
+
+    auto procMapIt = sequencerGetWaitQueueByProc.find(waiter.procId);
+    if (procMapIt != sequencerGetWaitQueueByProc.end() &&
+        procMapIt->second == queueAddr)
+      sequencerGetWaitQueueByProc.erase(procMapIt);
+
+    auto stateIt = processStates.find(waiter.procId);
+    if (stateIt == processStates.end())
+      continue;
+    auto &state = stateIt->second;
+    if (state.halted)
+      continue;
+    if (state.waiting) {
+      state.waiting = false;
+      if (waiter.retryOp)
+        state.sequencerGetRetryCallOp = waiter.retryOp;
+      scheduler.scheduleProcess(waiter.procId, SchedulingRegion::Active);
+      if (bucket.empty())
+        sequencerGetWaitersByQueue.erase(bucketIt);
+      return true;
+    }
+  }
+
+  sequencerGetWaitersByQueue.erase(bucketIt);
+  return false;
+}
+
+void LLHDProcessInterpreter::wakeUvmSequencerGetWaiterForPush(
+    uint64_t queueAddr) {
+  if (wakeOneUvmSequencerGetWaiter(queueAddr))
+    return;
+  (void)wakeOneUvmSequencerGetWaiter(/*queueAddr=*/0);
+}
+
 void LLHDProcessInterpreter::recordUvmSequencerItemOwner(uint64_t itemAddr,
                                                          uint64_t sqrAddr) {
   if (itemAddr == 0 || sqrAddr == 0)
@@ -1062,15 +1175,23 @@ uint64_t LLHDProcessInterpreter::takeUvmSequencerItemOwner(uint64_t itemAddr) {
   return sqrAddr;
 }
 
-void LLHDProcessInterpreter::recordUvmDequeuedItem(uint64_t portAddr,
+void LLHDProcessInterpreter::recordUvmDequeuedItem(ProcessId procId,
+                                                   uint64_t portAddr,
                                                    uint64_t queueAddr,
                                                    uint64_t itemAddr) {
   if (itemAddr == 0)
     return;
-  if (portAddr != 0)
-    lastDequeuedItem[portAddr] = itemAddr;
-  if (queueAddr != 0)
-    lastDequeuedItem[queueAddr] = itemAddr;
+  lastDequeuedItemByProc[procId].push_back(itemAddr);
+  auto appendForKey = [&](uint64_t key) {
+    if (key == 0)
+      return;
+    auto &pending = lastDequeuedItem[key];
+    if (pending.empty() || pending.back() != itemAddr)
+      pending.push_back(itemAddr);
+  };
+  appendForKey(portAddr);
+  if (queueAddr != portAddr)
+    appendForKey(queueAddr);
 }
 
 uint64_t LLHDProcessInterpreter::takeUvmDequeuedItemForDone(
@@ -1078,17 +1199,43 @@ uint64_t LLHDProcessInterpreter::takeUvmDequeuedItemForDone(
   if (doneAddr == 0)
     return 0;
 
+  auto removeOneAliasForItem = [&](uint64_t itemAddr) {
+    llvm::SmallVector<uint64_t, 8> eraseAliasKeys;
+    for (auto &entry : lastDequeuedItem) {
+      auto &pending = entry.second;
+      auto match = std::find(pending.begin(), pending.end(), itemAddr);
+      if (match == pending.end())
+        continue;
+      pending.erase(match);
+      if (pending.empty())
+        eraseAliasKeys.push_back(entry.first);
+    }
+    for (uint64_t eraseKey : eraseAliasKeys)
+      lastDequeuedItem.erase(eraseKey);
+
+    llvm::SmallVector<ProcessId, 4> eraseProcKeys;
+    for (auto &entry : lastDequeuedItemByProc) {
+      auto &pending = entry.second;
+      auto match = std::find(pending.begin(), pending.end(), itemAddr);
+      if (match == pending.end())
+        continue;
+      pending.erase(match);
+      if (pending.empty())
+        eraseProcKeys.push_back(entry.first);
+    }
+    for (ProcessId eraseProc : eraseProcKeys)
+      lastDequeuedItemByProc.erase(eraseProc);
+  };
+
   auto consumeByKey = [&](uint64_t key) -> uint64_t {
     auto it = lastDequeuedItem.find(key);
-    if (it == lastDequeuedItem.end())
+    if (it == lastDequeuedItem.end() || it->second.empty())
       return 0;
-    uint64_t itemAddr = it->second;
-    llvm::SmallVector<uint64_t, 4> eraseKeys;
-    for (const auto &entry : lastDequeuedItem)
-      if (entry.second == itemAddr)
-        eraseKeys.push_back(entry.first);
-    for (uint64_t eraseKey : eraseKeys)
-      lastDequeuedItem.erase(eraseKey);
+    uint64_t itemAddr = it->second.front();
+    it->second.pop_front();
+    if (it->second.empty())
+      lastDequeuedItem.erase(it);
+    removeOneAliasForItem(itemAddr);
     return itemAddr;
   };
 
@@ -1106,6 +1253,19 @@ uint64_t LLHDProcessInterpreter::takeUvmDequeuedItemForDone(
   if (queueAddr != 0) {
     if (uint64_t itemAddr = consumeByKey(queueAddr))
       return itemAddr;
+  }
+
+  // Fallback: if alias-based resolution fails, consume oldest dequeue for this
+  // process. Keep this after alias lookups so mixed-port drivers do not
+  // incorrectly match item_done() to a different pull port's outstanding item.
+  auto procIt = lastDequeuedItemByProc.find(procId);
+  if (procIt != lastDequeuedItemByProc.end() && !procIt->second.empty()) {
+    uint64_t itemAddr = procIt->second.front();
+    procIt->second.pop_front();
+    if (procIt->second.empty())
+      lastDequeuedItemByProc.erase(procIt);
+    removeOneAliasForItem(itemAddr);
+    return itemAddr;
   }
 
   return 0;
@@ -1516,10 +1676,19 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
   uint64_t fifoItems = 0;
   for (const auto &entry : sequencerItemFifo)
     fifoItems += entry.second.size();
+  uint64_t getWaiters = 0;
+  for (const auto &entry : sequencerGetWaitersByQueue)
+    getWaiters += entry.second.size();
+  uint64_t lastDequeuedPending = 0;
+  for (const auto &entry : lastDequeuedItem)
+    lastDequeuedPending += entry.second.size();
+  for (const auto &entry : lastDequeuedItemByProc)
+    lastDequeuedPending += entry.second.size();
 
   if (uvmSeqItemOwnerStores || uvmSeqItemOwnerErases || !itemToSequencer.empty() ||
       !sequencerItemFifo.empty() || !finishItemWaiters.empty() ||
-      !itemDoneReceived.empty() || !lastDequeuedItem.empty()) {
+      !itemDoneReceived.empty() || !lastDequeuedItem.empty() ||
+      getWaiters != 0) {
     os << "[circt-sim] UVM sequencer native state: item_map_live="
        << itemToSequencer.size() << " item_map_peak=" << uvmSeqItemOwnerPeak
        << " item_map_stores=" << uvmSeqItemOwnerStores
@@ -1527,8 +1696,9 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
        << " fifo_maps=" << sequencerItemFifo.size()
        << " fifo_items=" << fifoItems
        << " waiters=" << finishItemWaiters.size()
+       << " get_waiters=" << getWaiters
        << " done_pending=" << itemDoneReceived.size()
-       << " last_dequeued=" << lastDequeuedItem.size() << "\n";
+       << " last_dequeued=" << lastDequeuedPending << "\n";
   }
 
   if (uvmSeqQueueCacheHits || uvmSeqQueueCacheMisses || uvmSeqQueueCacheInstalls ||
@@ -1896,6 +2066,33 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
     return 0;
   };
 
+  auto seedShadowSignalFromMemory = [&](SignalId fieldSigId, uint64_t fieldAddr,
+                                        unsigned fieldBitWidth,
+                                        unsigned fieldSize) {
+    if (fieldBitWidth == 0 || fieldSize == 0)
+      return;
+    uint64_t blockOffset = 0;
+    MemoryBlock *block = findBlockByAddress(fieldAddr, blockOffset);
+    if (!block || !block->initialized)
+      return;
+    if (blockOffset + fieldSize > block->size)
+      return;
+
+    APInt bits = APInt::getZero(fieldBitWidth);
+    for (unsigned i = 0; i < fieldSize && i * 8 < fieldBitWidth; ++i) {
+      unsigned insertPos = i * 8;
+      unsigned bitsToInsert = std::min(8u, fieldBitWidth - insertPos);
+      uint8_t rawByte = block->data[blockOffset + i];
+      uint64_t masked = bitsToInsert == 8
+                            ? static_cast<uint64_t>(rawByte)
+                            : (static_cast<uint64_t>(rawByte) &
+                               ((1ULL << bitsToInsert) - 1ULL));
+      APInt byteVal(fieldBitWidth, masked);
+      bits |= byteVal.shl(insertPos);
+    }
+    scheduler.updateSignal(fieldSigId, SignalValue(bits));
+  };
+
   for (auto &[sigValue, sigId] : valueToSignal) {
     auto sigOp = sigValue.getDefiningOp<llhd::SignalOp>();
     if (!sigOp)
@@ -2032,6 +2229,8 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
       interfaceFieldSignals[fieldAddr] = fieldSigId;
       fieldSignalToAddr[fieldSigId] = fieldAddr;
       fieldSignals.push_back(fieldSigId);
+      seedShadowSignalFromMemory(fieldSigId, fieldAddr, fieldBitWidth,
+                                 fieldSize);
 
       fieldOffset += fieldSize;
     }
@@ -2120,6 +2319,8 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
         interfaceFieldSignals[fieldAddr] = fieldSigId;
         fieldSignalToAddr[fieldSigId] = fieldAddr;
         fieldSignals.push_back(fieldSigId);
+        seedShadowSignalFromMemory(fieldSigId, fieldAddr, fieldBitWidth,
+                                   fieldSize);
 
         fieldOffset += fieldSize;
       }
@@ -4070,8 +4271,24 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
           auto fieldDict = cast<DictionaryAttr>(fieldAttr);
           auto fname = fieldDict.getAs<StringAttr>("name").getValue().str();
           auto fwidth = fieldDict.getAs<IntegerAttr>("width").getInt();
-          fields.push_back({fname, static_cast<uint32_t>(fwidth),
-                            static_cast<uint32_t>(fwidth * 2)});
+          ProcessScheduler::SignalStructFieldInfo fi;
+          fi.name = fname;
+          fi.logicalWidth = static_cast<uint32_t>(fwidth);
+          fi.physicalWidth = static_cast<uint32_t>(fwidth * 2);
+          if (auto isArr = fieldDict.getAs<BoolAttr>("is_array"))
+            if (isArr.getValue()) {
+              fi.isArray = true;
+              if (auto n = fieldDict.getAs<IntegerAttr>("num_elements"))
+                fi.numElements = n.getInt();
+              if (auto l = fieldDict.getAs<IntegerAttr>("left_bound"))
+                fi.leftBound = l.getInt();
+              if (auto r = fieldDict.getAs<IntegerAttr>("right_bound"))
+                fi.rightBound = r.getInt();
+              if (auto ew = fieldDict.getAs<IntegerAttr>("element_width"))
+                fi.elementLogicalWidth = ew.getInt();
+              fi.elementPhysicalWidth = fi.elementLogicalWidth * 2;
+            }
+          fields.push_back(std::move(fi));
         }
         scheduler.setSignalStructFields(sigId, std::move(fields));
       }
@@ -4892,7 +5109,13 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
     SimTime currentTime = scheduler.getCurrentTime();
     SimTime targetTime = currentTime.advanceTime(delay.realTime);
     if (delay.deltaStep > 0) {
-      targetTime.deltaStep = delay.deltaStep;
+      // Schedule NBA drives at the SAME delta step in the NBA region.
+      // Per IEEE 1800-2017 §4.7, non-blocking assignments are evaluated
+      // in the Active region and updates are scheduled in the NBA region
+      // of the SAME time slot. processCurrentDelta() processes regions in
+      // order (Active → NBA → Postponed), so the NBA event fires after
+      // all Active events at this delta complete but before Postponed.
+      targetTime.deltaStep = currentTime.deltaStep;
     }
 
     LLVM_DEBUG(llvm::dbgs() << "  Module drive: scheduling update to signal "
@@ -4987,8 +5210,17 @@ void LLHDProcessInterpreter::executeModuleDrivesForSignal(SignalId sigId) {
     SimTime delay = convertTimeValue(entry.procId, driveOp.getTime());
     SimTime currentTime = scheduler.getCurrentTime();
     SimTime targetTime = currentTime.advanceTime(delay.realTime);
-    if (delay.deltaStep > 0)
-      targetTime.deltaStep = currentTime.deltaStep + delay.deltaStep;
+    if (delay.deltaStep > 0) {
+      // Schedule NBA drives at the SAME delta step in the NBA region
+      // (not delta+1). Per IEEE 1800-2017 §4.7, non-blocking assignments
+      // are evaluated in the Active region and their updates are scheduled
+      // in the NBA region of the SAME time slot. processCurrentDelta()
+      // processes regions in order (Active → NBA → Postponed), so the NBA
+      // event fires after all Active events at this delta complete.
+      // Previously, scheduling at delta+1 caused NBA updates to be deferred
+      // past VPI ReadOnlySynch callbacks, leaving registered outputs stale.
+      targetTime.deltaStep = currentTime.deltaStep;
+    }
 
     LLVM_DEBUG(llvm::dbgs() << "  targetTime=" << targetTime.realTime
                             << " delta=" << targetTime.deltaStep << "\n");
@@ -5041,6 +5273,16 @@ void LLHDProcessInterpreter::executeInstanceOutputUpdates(ProcessId procId) {
                                        ? nullptr
                                        : &entry.inputMap);
   }
+}
+
+void LLHDProcessInterpreter::registerTopLevelOutputUpdate(
+    SignalId signalId, mlir::Value outputValue) {
+  InstanceOutputUpdate update;
+  update.signalId = signalId;
+  update.outputValue = outputValue;
+  update.instanceId = 0; // top-level
+  collectProcessIds(outputValue, update.processIds);
+  instanceOutputUpdates.push_back(update);
 }
 
 void LLHDProcessInterpreter::registerContinuousAssignments(
@@ -5953,7 +6195,11 @@ void LLHDProcessInterpreter::executeFirReg(seq::FirRegOp regOp,
     }
   }
 
-  scheduler.updateSignal(state.signalId, newVal.toSignalValue());
+  if (deferFirRegUpdates) {
+    pendingFirRegUpdates.emplace_back(state.signalId, newVal.toSignalValue());
+  } else {
+    scheduler.updateSignal(state.signalId, newVal.toSignalValue());
+  }
 }
 
 void LLHDProcessInterpreter::registerClockedAssertions(
@@ -8172,6 +8418,24 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
   ProcessExecutionState &state = it->second;
 
+  // Honor global termination/abort requests before dispatching any fast path.
+  // The per-op interval check inside the execution loop can miss short
+  // activations (e.g. periodic clock processes that quickly suspend), which
+  // would otherwise keep scheduling forever after sim.terminate.
+  bool isTempProcess = procId >= kTempProcessIdBase;
+  if (!isTempProcess) {
+    if (isAbortRequested()) {
+      finalizeProcess(procId, /*killed=*/false);
+      if (abortCallback)
+        abortCallback();
+      return;
+    }
+    if (terminationRequested && !inGlobalInit) {
+      finalizeProcess(procId, /*killed=*/false);
+      return;
+    }
+  }
+
   // Direct fast paths for known hot process loop shapes. These execute
   // without compile-budgeted thunk installation and avoid repeated
   // compile-mode missing-thunk deopts for common AVIP clock loops.
@@ -9132,6 +9396,30 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     return "Unknown";
   };
   auto procStateItForTrace = processStates.find(procId);
+  auto dropDequeuedForProc = [&]() {
+    auto procQueueIt = lastDequeuedItemByProc.find(procId);
+    if (procQueueIt == lastDequeuedItemByProc.end())
+      return;
+    llvm::SmallVector<uint64_t, 8> staleItems(procQueueIt->second.begin(),
+                                              procQueueIt->second.end());
+    lastDequeuedItemByProc.erase(procQueueIt);
+    if (staleItems.empty())
+      return;
+    llvm::SmallVector<uint64_t, 8> eraseAliasKeys;
+    for (auto &entry : lastDequeuedItem) {
+      auto &pending = entry.second;
+      pending.erase(std::remove_if(pending.begin(), pending.end(),
+                                   [&](uint64_t itemAddr) {
+                                     return llvm::is_contained(staleItems,
+                                                               itemAddr);
+                                   }),
+                    pending.end());
+      if (pending.empty())
+        eraseAliasKeys.push_back(entry.first);
+    }
+    for (uint64_t key : eraseAliasKeys)
+      lastDequeuedItem.erase(key);
+  };
   if (traceFinalize) {
     auto *traceProc = scheduler.getProcess(procId);
     std::string procName = traceProc ? traceProc->getName() : "<null>";
@@ -9151,6 +9439,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     if (proc->getState() == ProcessState::Terminated) {
       removeObjectionZeroWaiter(procId);
       removeQueueNotEmptyWaiter(procId);
+      removeUvmSequencerGetWaiter(procId);
       memoryEventWaiters.erase(procId);
       executePhaseYieldCounts.erase(procId);
       executePhaseSawPositiveObjection.erase(procId);
@@ -9163,6 +9452,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
       joinNoneDisableForkResumePollCount.erase(procId);
       disableForkDeferredToken.erase(procId);
       disableForkDeferredPollCount.erase(procId);
+      dropDequeuedForProc();
       notifyProcessAwaiters(procId);
       return;
     }
@@ -9173,6 +9463,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     directProcessFastPathKinds.erase(procId);
 
     removeObjectionZeroWaiter(procId);
+    removeUvmSequencerGetWaiter(procId);
     memoryEventWaiters.erase(procId);
     executePhaseYieldCounts.erase(procId);
     executePhaseSawPositiveObjection.erase(procId);
@@ -9264,6 +9555,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
   if (forkJoinManager.getForkGroupForChild(procId))
     forkJoinManager.markChildComplete(procId);
 
+  dropDequeuedForProc();
   scheduler.terminateProcess(procId);
   notifyProcessAwaiters(procId);
 }
@@ -13778,13 +14070,15 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
   // Get the signal ID
   SignalId sigId = getSignalId(signal);
-  // Force sigId to 0 for struct extract and array get operations so the
-  // read-modify-write handlers inside the sigId==0 block are reached.
-  // getSignalId() returns the parent signal ID for these ops (set during
+  // Force sigId to 0 for struct extract, array get, and bit extract operations
+  // so the read-modify-write handlers inside the sigId==0 block are reached.
+  // getSignalId() can return the parent signal ID for these ops (set during
   // signal registration), but we need the special handling path that reads
-  // the parent, modifies the field/element, and writes back the full value.
+  // the parent, updates only the referenced slice/field/element, and writes
+  // back the full value.
   if (signal.getDefiningOp<llhd::SigStructExtractOp>() ||
-      signal.getDefiningOp<llhd::SigArrayGetOp>()) {
+      signal.getDefiningOp<llhd::SigArrayGetOp>() ||
+      signal.getDefiningOp<llhd::SigExtractOp>()) {
     sigId = 0;
   }
   if (sigId == 0) {
@@ -13951,6 +14245,27 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           }
           block->initialized = true;
 
+          static bool traceI3CAddrBits = []() {
+            const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_ADDR_BITS");
+            return env && env[0] != '\0' && env[0] != '0';
+          }();
+          if (traceI3CAddrBits) {
+            if (auto f = driveOp->getParentOfType<func::FuncOp>()) {
+              if (f.getSymName() ==
+                  "i3c_target_driver_bfm::sample_target_address") {
+                llvm::SmallString<32> bits;
+                if (driveVal.isX())
+                  bits = "X";
+                else
+                  driveVal.getAPInt().toString(bits, 2, false);
+                llvm::errs() << "[I3C-ADDR-BIT] bit=" << memoryBitOffset
+                             << " val=" << bits << " t="
+                             << scheduler.getCurrentTime().realTime << " d="
+                             << scheduler.getCurrentTime().deltaStep << "\n";
+              }
+            }
+          }
+
           LLVM_DEBUG(llvm::dbgs()
                      << "  Drive to sig.extract memory: bit " << memoryBitOffset
                      << " offset " << (blockOffset + firstTouchedByte) << " = "
@@ -13976,8 +14291,16 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         // Drive to a bit range within an actual signal - use read-modify-write
         InterpretedValue driveVal = getValue(procId, driveOp.getValue());
 
-        const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
-        InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+        // Prefer pending epsilon state so chained bit drives in the same
+        // process accumulate correctly before the scheduled update fires.
+        InterpretedValue parentVal;
+        auto pendingIt = pendingEpsilonDrives.find(parentSigId);
+        if (pendingIt != pendingEpsilonDrives.end()) {
+          parentVal = pendingIt->second;
+        } else {
+          const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+          parentVal = InterpretedValue::fromSignalValue(parentSV);
+        }
         unsigned parentWidth = parentVal.getWidth();
 
         APInt result = parentVal.isX() ? APInt::getZero(parentWidth)
@@ -13997,7 +14320,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         SimTime currentTime = scheduler.getCurrentTime();
         SimTime targetTime = currentTime.advanceTime(delay.realTime);
         if (delay.deltaStep > 0)
-          targetTime.deltaStep = delay.deltaStep;
+          targetTime.deltaStep = currentTime.deltaStep;
 
         uint64_t driverId = (static_cast<uint64_t>(procId) << 32) |
                             static_cast<uint64_t>(parentSigId);
@@ -14010,6 +14333,11 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                                                  DriveStrength::Strong,
                                                  DriveStrength::Strong);
             }));
+
+        // Keep a pending shadow for immediate probes and additional bit updates
+        // in the same process at epsilon/zero delay.
+        if (delay.realTime == 0 && delay.deltaStep <= 1)
+          pendingEpsilonDrives[parentSigId] = InterpretedValue(result);
 
         return success();
       }
@@ -14653,7 +14981,12 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         }
         LLVM_DEBUG(llvm::dbgs()
                    << "  Error: Could not find parent signal for struct extract\n");
-        return failure();
+        // Return success() to skip the unresolvable drive (e.g., nested
+        // struct/array sub-signal paths like port_cmplx_out[1].a) instead
+        // of failure() which would halt the process and prevent it from
+        // reaching llhd.wait. This lets the always block continue executing
+        // and properly respond to subsequent clock edges.
+        return success();
       }
 
       // Get the value to drive
@@ -14758,7 +15091,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       SimTime currentTime = scheduler.getCurrentTime();
       SimTime targetTime = currentTime.advanceTime(delay.realTime);
       if (delay.deltaStep > 0)
-        targetTime.deltaStep = delay.deltaStep;
+        targetTime.deltaStep = currentTime.deltaStep;
 
       // Use the same driver-ID policy as regular llhd.drv handling so
       // procedural field writes preserve last-write semantics.
@@ -15078,7 +15411,9 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
         LLVM_DEBUG(llvm::dbgs()
                    << "  Error: Could not find parent signal for array get\n");
-        return failure();
+        // Return success() to skip the unresolvable drive instead of halting
+        // the process. See the matching fix for SigStructExtractOp above.
+        return success();
       }
 
       // Get the index value (may be dynamic)
@@ -15214,7 +15549,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       SimTime currentTime = scheduler.getCurrentTime();
       SimTime targetTime = currentTime.advanceTime(delay.realTime);
       if (delay.deltaStep > 0)
-        targetTime.deltaStep = delay.deltaStep;
+        targetTime.deltaStep = currentTime.deltaStep;
 
       // Use the same driver-ID policy as regular llhd.drv handling so
       // procedural element writes preserve last-write semantics.
@@ -15347,7 +15682,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
   SimTime currentTime = scheduler.getCurrentTime();
   SimTime targetTime = currentTime.advanceTime(delay.realTime);
   if (delay.deltaStep > 0) {
-    targetTime.deltaStep = delay.deltaStep;
+    targetTime.deltaStep = currentTime.deltaStep;
   }
 
   // Extract strength attributes if present
@@ -16969,6 +17304,39 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
+  // Intercept uvm_phase_hopper::wait_for_waiters.
+  //
+  // This wait helper is lowered through __moore_delay(0). In heavy UVM phase
+  // synchronization, unbounded delta polling can trigger DELTA_OVERFLOW at a
+  // single simulation time. Allow a short delta spin, then back off to
+  // real-time polling.
+  if (calleeName == "uvm_pkg::uvm_phase_hopper::wait_for_waiters") {
+    auto &state = processStates[procId];
+    state.waiting = true;
+    if (Process *proc = scheduler.getProcess(procId))
+      proc->setState(ProcessState::Waiting);
+
+    SimTime currentTime = scheduler.getCurrentTime();
+    constexpr int64_t kFallbackPollDelayFs = 10000; // 10 ps
+    SimTime targetTime;
+    if (currentTime.realTime == 0) {
+      // Keep UVM pre-run synchronization at time 0.
+      targetTime = currentTime.nextDelta();
+    } else {
+      targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
+    }
+
+    scheduler.getEventScheduler().schedule(
+        targetTime, SchedulingRegion::Active, Event([this, procId]() {
+          auto it = processStates.find(procId);
+          if (it == processStates.end() || it->second.halted)
+            return;
+          it->second.waiting = false;
+          scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+        }));
+    return success();
+  }
+
   // Intercept uvm_objection::m_execute_scheduled_forks.
   // This task is a forever-loop background worker that waits on internal
   // objection queues. The simulator already handles objection completion via
@@ -17515,7 +17883,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
 
     if (found && itemAddr != 0) {
-      recordUvmDequeuedItem(portAddr, seqrQueueAddr, itemAddr);
+      removeUvmSequencerGetWaiter(procId);
+      recordUvmDequeuedItem(procId, portAddr, seqrQueueAddr, itemAddr);
       uint64_t refAddr = 0;
       if (!outRefVal.isX())
         refAddr = outRefVal.getUInt64();
@@ -17550,6 +17919,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
 
     if (isTryNextItem) {
+      removeUvmSequencerGetWaiter(procId);
       uint64_t refAddr = 0;
       if (!outRefVal.isX())
         refAddr = outRefVal.getUInt64();
@@ -17583,21 +17953,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     auto &pState = processStates[procId];
     pState.waiting = true;
     pState.sequencerGetRetryCallOp = callOp.getOperation();
-    SimTime currentTime = scheduler.getCurrentTime();
-    constexpr uint32_t kMaxDeltaPolls = 1000;
-    constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
-    SimTime targetTime;
-    if (currentTime.deltaStep < kMaxDeltaPolls)
-      targetTime = currentTime.nextDelta();
-    else
-      targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
-    scheduler.getEventScheduler().schedule(
-        targetTime, SchedulingRegion::Active,
-        Event([this, procId]() {
-          auto &st = processStates[procId];
-          st.waiting = false;
-          scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-        }));
+    enqueueUvmSequencerGetWaiter(seqrQueueAddr, procId, callOp.getOperation());
+    if (traceSeq)
+      llvm::errs() << "[SEQ-FC] wait port=0x" << llvm::format_hex(portAddr, 16)
+                   << " queue=0x" << llvm::format_hex(seqrQueueAddr, 16)
+                   << "\n";
     return success();
   }
 
@@ -24270,10 +24630,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
                                                          LLVM::LoadOp loadOp) {
   auto convertFourStateToLLVMStructLayout =
       [&](InterpretedValue sourceSignalVal, SignalId sourceSigId,
-          Type targetLLVMType) -> InterpretedValue {
-    if (scheduler.getSignalEncoding(sourceSigId) !=
-        SignalEncoding::FourStateStruct)
-      return sourceSignalVal;
+          Type targetLLVMType,
+          bool allowPlainInterfaceHeuristic = false) -> InterpretedValue {
 
     auto llvmStructTy = dyn_cast<LLVM::LLVMStructType>(targetLLVMType);
     if (!llvmStructTy)
@@ -24285,6 +24643,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     unsigned valueWidth = getTypeWidth(body[0]);
     unsigned unknownWidth = getTypeWidth(body[1]);
     if (valueWidth == 0 || valueWidth != unknownWidth)
+      return sourceSignalVal;
+    bool treatAsFourState =
+        scheduler.getSignalEncoding(sourceSigId) ==
+        SignalEncoding::FourStateStruct;
+    if (!treatAsFourState && allowPlainInterfaceHeuristic) {
+      // Some interface child shadow fields are represented as plain i2
+      // signals even though the loaded LLVM type is struct<(i1,i1)>
+      // ({value,unknown}). Treat those as four-state payloads so
+      // extracting field #0 yields the value bit rather than raw packed bits.
+      treatAsFourState =
+          sourceSignalVal.getWidth() == valueWidth + unknownWidth;
+    }
+    if (!treatAsFourState)
       return sourceSignalVal;
 
     // Preserve explicit {value, unknown} semantics for fully-unknown signals
@@ -24408,18 +24779,28 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     if (fieldIt != interfaceFieldSignals.end()) {
       SignalId fieldSigId = fieldIt->second;
       const SignalValue &sv = scheduler.getSignalValue(fieldSigId);
-      InterpretedValue signalVal = InterpretedValue::fromSignalValue(sv);
+      InterpretedValue schedulerSignalVal = InterpretedValue::fromSignalValue(sv);
+      InterpretedValue signalVal = schedulerSignalVal;
+      bool usedPendingDrive = false;
 
       // Check for pending epsilon drives (not yet committed to scheduler)
       auto pendingIt = pendingEpsilonDrives.find(fieldSigId);
-      if (pendingIt != pendingEpsilonDrives.end())
+      if (pendingIt != pendingEpsilonDrives.end()) {
         signalVal = pendingIt->second;
+        usedPendingDrive = true;
+      }
 
-      signalVal =
-          convertFourStateToLLVMStructLayout(signalVal, fieldSigId, resultType);
+      InterpretedValue rawSignalVal = signalVal;
+      signalVal = convertFourStateToLLVMStructLayout(
+          signalVal, fieldSigId, resultType,
+          /*allowPlainInterfaceHeuristic=*/true);
 
       static bool traceI3CDetectEdgeValues = []() {
         const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_DETECTEDGE_VALUES");
+        return env && env[0] != '\0' && env[0] != '0';
+      }();
+      static bool traceI3CSampleLoads = []() {
+        const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_SAMPLE_LOADS");
         return env && env[0] != '\0' && env[0] != '0';
       }();
       static bool traceApbMonitorLoads = []() {
@@ -24431,7 +24812,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
         if (stIt != processStates.end()) {
           llvm::StringRef currentFunc = stIt->second.currentFuncName;
           if (currentFunc.contains("i3c_target_monitor_bfm::detectEdge_scl") ||
-              currentFunc.contains("i3c_controller_monitor_bfm::detectEdge_scl")) {
+              currentFunc.contains("i3c_controller_monitor_bfm::detectEdge_scl") ||
+              currentFunc.contains("i3c_target_driver_bfm::detectEdge_scl") ||
+              currentFunc.contains("i3c_controller_driver_bfm::detectEdge_scl")) {
             static uint64_t printed = 0;
             if (printed < 1024) {
               ++printed;
@@ -24450,6 +24833,57 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
                            << " t=" << now.realTime << " d=" << now.deltaStep
                            << " func=" << currentFunc << " sig=" << fieldSigId
                            << " name=" << sigName << " val=" << bits << "\n";
+            }
+          }
+        }
+      }
+      if (traceI3CSampleLoads) {
+        auto stIt = processStates.find(procId);
+        if (stIt != processStates.end()) {
+          llvm::StringRef currentFunc = stIt->second.currentFuncName;
+          if (currentFunc.contains("i3c_controller_monitor_bfm::sample_target_address") ||
+              currentFunc.contains("i3c_target_monitor_bfm::sample_target_address") ||
+              currentFunc.contains("i3c_target_driver_bfm::sample_target_address")) {
+            static uint64_t printed = 0;
+            if (printed < 2048) {
+              ++printed;
+              llvm::StringRef sigName = "<unknown>";
+              auto nIt = signalIdToName.find(fieldSigId);
+              if (nIt != signalIdToName.end())
+                sigName = nIt->second;
+              llvm::SmallString<64> bits;
+              if (signalVal.isX())
+                bits = "X";
+              else
+                signalVal.getAPInt().toString(bits, /*Radix=*/2,
+                                              /*Signed=*/false);
+              llvm::SmallString<64> rawBits;
+              if (rawSignalVal.isX())
+                rawBits = "X";
+              else
+                rawSignalVal.getAPInt().toString(rawBits, /*Radix=*/2,
+                                                 /*Signed=*/false);
+              llvm::SmallString<64> schedBits;
+              if (schedulerSignalVal.isX())
+                schedBits = "X";
+              else
+                schedulerSignalVal.getAPInt().toString(schedBits, /*Radix=*/2,
+                                                       /*Signed=*/false);
+              SimTime now = scheduler.getCurrentTime();
+              llvm::errs() << "[I3C-SAMPLE-LOAD] proc=" << procId
+                           << " t=" << now.realTime << " d=" << now.deltaStep
+                           << " func=" << currentFunc << " addr=0x"
+                           << llvm::format_hex(loadAddr, 16)
+                           << " sig=" << fieldSigId << " name=" << sigName
+                           << " enc="
+                           << static_cast<int>(
+                                  scheduler.getSignalEncoding(fieldSigId))
+                           << " usedPending=" << (usedPendingDrive ? 1 : 0)
+                           << " schedRaw=" << schedBits << " schedRawW="
+                           << schedulerSignalVal.getWidth()
+                           << " raw=" << rawBits << " rawW="
+                           << rawSignalVal.getWidth() << " val=" << bits
+                           << " valW=" << signalVal.getWidth() << "\n";
             }
           }
         }
@@ -24954,6 +25388,43 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           return InterpretedValue::fromSignalValue(
               scheduler.getSignalValue(sigId));
         };
+        auto normalizeForDestSignal = [&](SignalId destSigId,
+                                          InterpretedValue value)
+            -> InterpretedValue {
+          const SignalValue &destCurrent = scheduler.getSignalValue(destSigId);
+          unsigned targetWidth = destCurrent.getWidth();
+          if (value.isX())
+            return InterpretedValue::makeX(targetWidth);
+          if (value.getWidth() == targetWidth)
+            return value;
+          APInt bits = value.getAPInt();
+          if (bits.getBitWidth() < targetWidth)
+            bits = bits.zext(targetWidth);
+          else if (bits.getBitWidth() > targetWidth)
+            bits = bits.trunc(targetWidth);
+          return InterpretedValue(bits);
+        };
+        auto isExplicitHighZForSignal = [&](SignalId sigId,
+                                            InterpretedValue value) -> bool {
+          if (value.isX())
+            return false;
+          if (scheduler.getSignalEncoding(sigId) !=
+              SignalEncoding::FourStateStruct)
+            return false;
+          const SignalValue &destCurrent = scheduler.getSignalValue(sigId);
+          unsigned width = destCurrent.getWidth();
+          if (width < 2 || (width % 2) != 0)
+            return false;
+          value = normalizeForDestSignal(sigId, value);
+          if (value.isX())
+            return false;
+          APInt bits = value.getAPInt();
+          unsigned logicalWidth = width / 2;
+          APInt unknownBits = bits.extractBits(logicalWidth, 0);
+          APInt valueBits = bits.extractBits(logicalWidth, logicalWidth);
+          return unknownBits.isAllOnes() && valueBits.isAllOnes();
+        };
+        bool inStartupTime = scheduler.getCurrentTime().realTime == 0;
         bool triStateRuleCanDriveDest = false;
         for (const auto &rule : interfaceTriStateRules) {
           if (rule.destSigId != triStateMirrorFieldSigId)
@@ -24963,11 +25434,26 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
             continue;
           bool condTrue = condVal.getAPInt()[rule.condBitIndex];
           if (!condTrue) {
-            if (!rule.elseValue.isX())
+            InterpretedValue elseVal =
+                normalizeForDestSignal(rule.destSigId, rule.elseValue);
+            bool elseIsExplicitHighZ =
+                isExplicitHighZForSignal(rule.destSigId, elseVal);
+            // Keep startup behavior stable at t=0: high-Z mirror-store
+            // suppression during initialization avoids pre-run phase churn.
+            // After startup, explicit Z cannot deterministically represent the
+            // resolved shared net value, so mirror observations must not be
+            // suppressed.
+            bool canSuppressForElse =
+                !elseIsExplicitHighZ || inStartupTime;
+            if (!elseVal.isX() && canSuppressForElse)
               triStateRuleCanDriveDest = true;
           } else {
-            InterpretedValue srcVal = getRuleSignalValue(rule.srcSigId);
-            if (!srcVal.isX())
+            InterpretedValue srcVal = normalizeForDestSignal(
+                rule.destSigId, getRuleSignalValue(rule.srcSigId));
+            bool srcIsExplicitHighZ =
+                isExplicitHighZForSignal(rule.destSigId, srcVal);
+            bool canSuppressForSrc = !srcIsExplicitHighZ || inStartupTime;
+            if (!srcVal.isX() && canSuppressForSrc)
               triStateRuleCanDriveDest = true;
           }
           if (triStateRuleCanDriveDest)
@@ -25216,7 +25702,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
       }
 
       auto normalizeInterfaceStoreValue = [&](SignalId targetSigId,
-                                              InterpretedValue rawVal)
+                                              InterpretedValue rawVal,
+                                              bool sourceAlreadySignalEncoded =
+                                                  false)
           -> InterpretedValue {
         const SignalValue &targetCurrent = scheduler.getSignalValue(targetSigId);
         unsigned targetWidth = targetCurrent.getWidth();
@@ -25228,8 +25716,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         // LLVM stores for 4-state fields commonly use struct<(value, unknown)>
         // layout, while FourStateStruct signals encode bits as
         // {value(high half), unknown(low half)}. Normalize to signal encoding.
-        if (scheduler.getSignalEncoding(targetSigId) ==
-            SignalEncoding::FourStateStruct) {
+        if (!sourceAlreadySignalEncoded &&
+            scheduler.getSignalEncoding(targetSigId) ==
+                SignalEncoding::FourStateStruct) {
           bool converted = false;
           if (auto llvmStructTy = dyn_cast<LLVM::LLVMStructType>(storeLLVMType)) {
             auto body = llvmStructTy.getBody();
@@ -25291,8 +25780,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
       const SignalValue &current = scheduler.getSignalValue(fieldSigId);
       InterpretedValue currentVal = InterpretedValue::fromSignalValue(current);
 
-      InterpretedValue driveVal =
-          normalizeInterfaceStoreValue(fieldSigId, storeVal);
+      InterpretedValue driveVal = normalizeInterfaceStoreValue(
+          fieldSigId, storeVal, /*sourceAlreadySignalEncoded=*/false);
       if (suppressTriStateMirrorStoreForField) {
         driveVal = currentVal;
         bool shouldDeriveFromRule = currentVal.isX();
@@ -25383,17 +25872,23 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         return env && env[0] != '\0' && env[0] != '0';
       }();
       auto shouldTraceI3CIfaceSig = [&](SignalId sigId) -> bool {
-        auto nameIt = signalIdToName.find(sigId);
-        if (nameIt == signalIdToName.end())
-          return false;
-        llvm::StringRef name = nameIt->second;
-        return name.contains("i3c_controller_agent_bfm_0."
+            auto nameIt = signalIdToName.find(sigId);
+            if (nameIt == signalIdToName.end())
+              return false;
+            llvm::StringRef name = nameIt->second;
+            return name.contains("i3c_controller_agent_bfm_0."
+                             "i3c_controller_agent_bfm_h.sig_6.field_5") ||
+               name.contains("i3c_target_agent_bfm_0."
+                             "i3c_target_agent_bfm_h.sig_6.field_5") ||
+               name.contains("i3c_controller_agent_bfm_0."
                              "i3c_controller_agent_bfm_h.sig_6.field_2") ||
                name.contains("i3c_target_agent_bfm_0."
                              "i3c_target_agent_bfm_h.sig_6.field_2") ||
+               name.contains("sig_0.field_0") || name.contains("sig_0.field_1") ||
                name.contains("sig_0.field_2") || name.contains("sig_0.field_4") ||
+               name.contains("sig_1.field_0") || name.contains("sig_1.field_1") ||
                name.contains("sig_1.field_2") || name.contains("sig_1.field_4");
-      };
+          };
       auto traceI3CIfacePropUpdate =
           [&](llvm::StringRef tag, SignalId srcSigId, SignalId dstSigId,
               InterpretedValue oldVal, InterpretedValue newVal) {
@@ -25526,14 +26021,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           return unknownBits != 0;
         };
 
-        auto propagateRawValueToSignal = [&](SignalId sourceSigId,
-                                             SignalId targetSigId,
-                                             InterpretedValue rawPropagationVal) {
+        auto propagateRawValueToSignal =
+            [&](SignalId sourceSigId, SignalId targetSigId,
+                InterpretedValue rawPropagationVal,
+                bool sourceAlreadySignalEncoded) {
           const SignalValue &targetCurrent =
               scheduler.getSignalValue(targetSigId);
           unsigned targetW = targetCurrent.getWidth();
-          InterpretedValue targetDriveVal =
-              normalizeInterfaceStoreValue(targetSigId, rawPropagationVal);
+          InterpretedValue targetDriveVal = normalizeInterfaceStoreValue(
+              targetSigId, rawPropagationVal, sourceAlreadySignalEncoded);
           SignalValue targetNewVal = targetDriveVal.toSignalValue();
           if (targetCurrent == targetNewVal)
             return;
@@ -25576,10 +26072,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
 
         auto propagateToSignal = [&](SignalId targetSigId) {
           InterpretedValue propagationVal = storeVal;
+          bool sourceAlreadySignalEncoded = false;
           if (hasUnknownPayload(fieldSigId, driveVal) &&
-              isSameBlockParentRelay(fieldSigId, targetSigId))
+              isSameBlockParentRelay(fieldSigId, targetSigId)) {
             propagationVal = driveVal;
-          propagateRawValueToSignal(fieldSigId, targetSigId, propagationVal);
+            sourceAlreadySignalEncoded = true;
+          }
+          propagateRawValueToSignal(fieldSigId, targetSigId, propagationVal,
+                                    sourceAlreadySignalEncoded);
         };
 
         auto propagateFromSignal = [&](SignalId sourceSigId,
@@ -25591,7 +26091,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           else
             sourceVal = InterpretedValue::fromSignalValue(
                 scheduler.getSignalValue(sourceSigId));
-          propagateRawValueToSignal(sourceSigId, targetSigId, sourceVal);
+          propagateRawValueToSignal(
+              sourceSigId, targetSigId, sourceVal,
+              /*sourceAlreadySignalEncoded=*/true);
         };
 
         // Forward propagation only (no cross-sibling fan-out).
