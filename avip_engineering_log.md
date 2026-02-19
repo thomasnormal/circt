@@ -2780,3 +2780,95 @@ Working hypothesis now:
 - I3C compile-mode functional failure (scoreboard mismatch) is closed in this
   lane.
 - Remaining I3C work is now coverage depth/parity, not functional mismatch.
+
+## 2026-02-19 Session: I3C latest-Slang rerun (build_test binaries) shows coverage regression
+
+### Command
+1. Executed from `/home/thomas-ahle/circt`:
+   - `AVIPS=i3c SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_VERILOG=/home/thomas-ahle/circt/build_test/bin/circt-verilog CIRCT_SIM=/home/thomas-ahle/circt/build_test/bin/circt-sim COMPILE_TIMEOUT=300 SIM_TIMEOUT=240 SIM_TIMEOUT_GRACE=30 utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-i3c-check-20260219-2110`
+
+### Observed result
+1. Matrix:
+   - `/tmp/avip-circt-sim-i3c-check-20260219-2110/matrix.tsv`
+   - compile `OK` (`161s`), sim `OK` (`98s`), `UVM_ERROR=0`, `UVM_FATAL=0`,
+     `cov_1=0.00`, `cov_2=0.00`.
+2. Sim log:
+   - `/tmp/avip-circt-sim-i3c-check-20260219-2110/i3c/sim_seed_1.log`
+   - repeated runtime failures in interpreted function bodies:
+     - `circt-sim: Failed in func body for process ...`
+     - `Operation: "llhd.drv"(...)`
+   - 11 `Failed in func body` entries and 5 absorbed
+     `func.call ... failed internally` warnings.
+   - main loop exits at max time:
+     - `[circt-sim] Main loop exit: maxTime reached (7940000000000 >= 7940000000000 fs)`.
+3. Coverage printout in the same log reports:
+   - `i3c_controller_covergroup Overall coverage: 0.00%`
+   - `target_covergroup Overall coverage: 0.00%`
+
+### Interpretation
+1. This lane is functionally "clean" by UVM error counters, but not actually
+   healthy for AVIP goals due to zero coverage and repeated `llhd.drv`
+   execution failures.
+2. Relative to the earlier same-day lane
+   (`/tmp/avip-circt-sim-i3c-after-monitor-fork-guard-20260219-183748`),
+   this is a real regression in effective behavior.
+
+## 2026-02-19 Session: I3C state correction after rebuild + focused traces
+
+### Build/state correction
+1. Rebuilt `circt-sim`:
+   - `ninja -C build_test circt-sim`
+2. Replayed previous failing MLIR directly with:
+   - `CIRCT_SIM_TRACE_DRIVE_FAILURE=1`
+3. Result:
+   - no `Failed in func body` lines,
+   - no `[DRIVE-FAIL]` reason emissions,
+   - behavior returned to known scoreboard-mismatch state rather than 0/0
+     failure mode.
+
+### Fresh scripted baseline on rebuilt binary
+1. Lane:
+   - `/tmp/avip-circt-sim-i3c-post-rebuild-20260219-2135/matrix.tsv`
+2. Result:
+   - compile `OK` (`116s`), sim `FAIL` (`100s`, exit `0`)
+   - `UVM_ERROR=1`, `UVM_FATAL=0`
+   - coverage `21.4286 / 21.4286`
+   - failing check:
+     - `i3c_scoreboard.sv(179)` (writeData compare mismatch).
+
+### Converter/path evidence for remaining blocker
+1. Trace run:
+   - `CIRCT_SIM_TRACE_I3C_TO_CLASS_ARGS=1`
+   - log: `/tmp/i3c-toclass-fieldtrace-20260219-2140.log`
+2. `to_class*` calls at transaction time show all-zero payload/metadata:
+   - `low{ta=0x00 ... wd0=0x00 wd1=0x00 bits=0}`
+   - same for `hw{...}` decode.
+3. Scoreboard debug in same run:
+   - `ctrl_wsz=0`, `tgt_wsz=0`, `ctrl_w0=0`, `tgt_w0=0`
+   - then `UVM_ERROR ... i3c_scoreboard.sv(179)`.
+
+### JIT-report side observation
+1. Lane with report enabled:
+   - `/tmp/avip-circt-sim-i3c-jitreport-20260219-2144/matrix.tsv`
+   - `sim_status=TIMEOUT`, `sim_time_fs=0`.
+2. Report:
+   - `/tmp/avip-circt-sim-i3c-jitreport-20260219-2144/i3c/sim_seed_1.jit-report.json`
+   - heavy time at `t=0` in phase traversal (`call_indirect` hotspots),
+     `jit_deopts_total=0`.
+
+### Updated I3C blocker definition
+1. Primary remaining issue is not `llhd.drv` internal failure; it is
+   conversion/data-flow correctness where `to_class` sees zeroed transfer
+   struct content (write payload not materialized), causing scoreboard mismatch.
+
+### Additional check (`--jit-compile-budget=0`)
+1. Direct replay with JIT compile budget forced to zero:
+   - log: `/tmp/i3c-jitbudget0-20260219-2150.log`
+2. Observations:
+   - `to_class*` traces still show all-zero transfer payload fields
+     (`wd0=0`, `wd1=0`, `bits=0`) across repeated transactions.
+   - simulation slows substantially and exits with timeout-style termination
+     (`Simulation finished with exit code 1`) at sim time `4904900000 fs`.
+3. Conclusion:
+   - forcing budget `0` does not fix payload-zero behavior in this lane, and is
+     not viable as a practical AVIP runtime baseline.
