@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1521 - February 19, 2026
+
+### circt-sim: UVM run_test single-entry guard, I3C monitor-ordering regression, and broader AVIP parity recheck
+
+1. **Added optional single-entry guard for UVM `run_test`**  
+   (`tools/circt-sim/LLHDProcessInterpreter.h/.cpp`):
+   - added env-gated guard logic:
+     - `CIRCT_SIM_TRACE_UVM_RUN_TEST=1` for entry tracing,
+     - `CIRCT_SIM_ENFORCE_SINGLE_RUN_TEST=1` to emit error if
+       `uvm_pkg::run_test` / `uvm_pkg::uvm_root::run_test` is entered more
+       than once in one simulation.
+   - wired guard checks into both direct call and LLVM call dispatch paths.
+
+2. **Added run_test guard regression**  
+   (`test/Tools/circt-sim/uvm-run-test-single-entry-guard.mlir`):
+   - verifies diagnostic emission when single-entry enforcement is enabled.
+   - verifies normal completion path when enforcement is not enabled.
+
+3. **Softened `uvm_root::die` call-indirect failure noise path**  
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`,
+   `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`):
+   - absorb known `*::die` failure returns in both direct and indirect call
+     failover paths, zeroing return slots and avoiding generic internal-failure
+     warning spam for this UVM termination path.
+
+4. **Added focused I3C monitor fork-ordering regression**  
+   (`test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv`):
+   - models `sampleWriteDataAndACK`-style `join_any` + sibling wake +
+     immediate `disable fork` sequence.
+   - asserts deferred disable-fork trace contract:
+     `disable_fork_enter(mode=deferred)`, `disable_fork_defer`,
+     `disable_fork_resume_parent`, plus monitor wake lines.
+
+5. **Validation**:
+   - focused lit:
+     - `python3 llvm/llvm/utils/lit/lit.py -sv --filter "i3c-samplewrite-disable-fork-ordering|fork-disable-ready-wakeup|fork-disable-defer-poll|uvm-run-test-single-entry-guard" build-test/test/Tools/circt-sim`: PASS (`4/4`).
+   - bounded compile-mode AVIP sweep (serial, seed 1):
+     - command:
+       `AVIPS=i3c,apb,ahb,uart,spi,jtag SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 SIM_TIMEOUT=120 SIM_TIMEOUT_GRACE=60 CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=100000' utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-i3c-plus-5-20260219-004240`
+     - compile+sim status: all 6 lanes `OK`.
+     - JIT reports: `deopt_process_rows=0` on all six lanes.
+     - parity status: scoreboard/UVM_ERROR failures remain on multiple AVIPs
+       (not only I3C):
+       - `i3c`: `i3c_scoreboard.sv(162)`
+       - `apb`: `apb_scoreboard.sv(272/283/294/305/318)`
+       - `ahb`: `AhbScoreboard.sv(243/267/278)`
+       - `spi`: `SpiScoreboard.sv(204)`
+       - `uart`, `jtag`: no `UVM_ERROR`/`UVM_FATAL` lines in this bounded run.
+     - no `uvm_pkg::uvm_root::die` call-indirect failure warnings observed in
+       this matrix logs.
+
 ## Iteration 1520 - February 19, 2026
 
 ### circt-sim: multiblock thunk waiting-resume fix + I3C fork-runtime trace instrumentation

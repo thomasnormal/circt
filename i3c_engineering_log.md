@@ -37,6 +37,42 @@ Observed repeatedly in recent runs (2026-02-17 to 2026-02-19):
 
 ## Investigation Timeline
 
+### 2026-02-19: run_test guard + sampleWriteDataAndACK ordering regression + cross-AVIP parity check
+Files:
+- `tools/circt-sim/LLHDProcessInterpreter.h`
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`
+- `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+- `test/Tools/circt-sim/uvm-run-test-single-entry-guard.mlir`
+- `test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv`
+
+Key changes:
+1. Added env-gated UVM run_test single-entry guard:
+   - `CIRCT_SIM_ENFORCE_SINGLE_RUN_TEST=1` emits error on re-entry.
+   - `CIRCT_SIM_TRACE_UVM_RUN_TEST=1` traces run_test entry points.
+2. Added `sampleWriteDataAndACK`-style ordering regression for
+   `join_any + disable_fork` with `CIRCT_SIM_TRACE_I3C_FORK_RUNTIME=1`.
+3. Softened `uvm_pkg::uvm_root::die` failure handling in direct and indirect
+   call-failure paths to avoid generic internal-failure warning spam.
+
+Validation:
+- Focused lit (`4/4`) PASS:
+  - `i3c-samplewrite-disable-fork-ordering.sv`
+  - `fork-disable-ready-wakeup.sv`
+  - `fork-disable-defer-poll.sv`
+  - `uvm-run-test-single-entry-guard.mlir`
+- Bounded compile-mode AVIP matrix:
+  - `/tmp/avip-circt-sim-i3c-plus-5-20260219-004240/matrix.tsv`
+  - AVIPs: `i3c,apb,ahb,uart,spi,jtag` (seed 1).
+  - compile/sim: all six lanes `OK`.
+  - JIT: `deopt_process_rows=0` on all six lanes.
+  - parity failures are cross-AVIP, not I3C-only:
+    - `i3c_scoreboard.sv(162)`
+    - `apb_scoreboard.sv(272/283/294/305/318)`
+    - `AhbScoreboard.sv(243/267/278)`
+    - `SpiScoreboard.sv(204)`
+  - `uart`/`jtag`: no `UVM_ERROR`/`UVM_FATAL` lines in this run.
+  - no `uvm_pkg::uvm_root::die` call-indirect warning seen in this matrix.
+
 ### 2026-02-18: Trivial thunk fallback safety hardening
 Files:
 - `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp`

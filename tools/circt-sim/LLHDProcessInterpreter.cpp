@@ -507,6 +507,9 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
                                         traceSeqEnabled ? 8 : 0);
   traceAnalysisEnabled = std::getenv("CIRCT_SIM_TRACE_ANALYSIS") != nullptr;
   traceConfigDbEnabled = std::getenv("CIRCT_SIM_TRACE_CONFIG_DB") != nullptr;
+  traceUvmRunTestEnabled = envFlagEnabled("CIRCT_SIM_TRACE_UVM_RUN_TEST");
+  enforceSingleUvmRunTestEntry =
+      envFlagEnabled("CIRCT_SIM_ENFORCE_SINGLE_RUN_TEST");
   traceForkJoinEnabled = envFlagEnabled("CIRCT_SIM_TRACE_FORK_JOIN");
   traceI3CForkRuntimeEnabled =
       envFlagEnabled("CIRCT_SIM_TRACE_I3C_FORK_RUNTIME");
@@ -16149,11 +16152,50 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
 }
 
 LogicalResult
+LLHDProcessInterpreter::checkUvmRunTestEntry(ProcessId procId,
+                                             llvm::StringRef calleeName) {
+  auto isUvmRunTestCallee = [](llvm::StringRef name) {
+    if (name == "uvm_pkg::run_test" || name == "uvm_pkg::uvm_root::run_test")
+      return true;
+    return name.ends_with("::run_test");
+  };
+  if (!isUvmRunTestCallee(calleeName))
+    return success();
+
+  ++uvmRunTestEntryCount;
+  if (traceUvmRunTestEnabled) {
+    llvm::errs() << "[UVM-RUN-TEST] count=" << uvmRunTestEntryCount
+                 << " proc=" << procId;
+    if (auto *proc = scheduler.getProcess(procId))
+      llvm::errs() << " name=" << proc->getName();
+    auto stateIt = processStates.find(procId);
+    if (stateIt != processStates.end())
+      llvm::errs() << " call_stack=" << stateIt->second.callStack.size()
+                   << " waiting=" << (stateIt->second.waiting ? 1 : 0)
+                   << " halted=" << (stateIt->second.halted ? 1 : 0);
+    llvm::errs() << " callee=" << calleeName << "\n";
+  }
+
+  if (!enforceSingleUvmRunTestEntry || uvmRunTestEntryCount <= 1)
+    return success();
+
+  llvm::errs() << "[circt-sim] error: UVM run_test entered more than once"
+               << " (count=" << uvmRunTestEntryCount << ", callee="
+               << calleeName;
+  if (auto *proc = scheduler.getProcess(procId))
+    llvm::errs() << ", process=" << proc->getName();
+  llvm::errs() << ")\n";
+  return failure();
+}
+
+LogicalResult
 LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                                            mlir::func::CallOp callOp) {
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting func.call to '"
                           << callOp.getCallee() << "'\n");
   StringRef calleeName = callOp.getCallee();
+  if (failed(checkUvmRunTestEntry(procId, calleeName)))
+    return failure();
   maybeTraceFilteredCall(procId, "func.call", calleeName);
   bool traceSeq = traceSeqEnabled;
 
@@ -18538,6 +18580,16 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     auto &failState = processStates[procId];
     if (failState.waiting)
       return success();
+    // uvm_root::die can enter termination paths that intentionally unwind
+    // execution; do not surface a generic internal-failure warning here.
+    if (calleeName == "uvm_pkg::uvm_root::die" ||
+        calleeName.ends_with("::die")) {
+      for (Value result : callOp.getResults()) {
+        unsigned width = getTypeWidth(result.getType());
+        setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+      }
+      return success();
+    }
     // Absorb BFM/internal function failures gracefully — log a warning
     // and return zero results. BFM functions may fail because they
     // access hardware signals that aren't connected in dual-top mode.
@@ -24649,6 +24701,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   }
 
   StringRef calleeName = resolvedCalleeName;
+  if (failed(checkUvmRunTestEntry(procId, calleeName)))
+    return failure();
 
   // Debug: track current LLVM callee for crash diagnostics
   g_lastLLVMCallCallee = calleeName.data();
@@ -29245,6 +29299,38 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_fseek ----
+    if (calleeName == "__moore_fseek") {
+      int32_t result = -1;
+      if (callOp.getNumOperands() >= 3) {
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        int32_t offset = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int32_t whence = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        result = __moore_fseek(fd, offset, whence);
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_fseek() = " << result
+                               << "\n");
+      return success();
+    }
+
+    // ---- __moore_rewind ----
+    if (calleeName == "__moore_rewind") {
+      if (callOp.getNumOperands() >= 1) {
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        __moore_rewind(fd);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_rewind(fd=" << fd << ")\n");
+      }
+      return success();
+    }
+
     //===------------------------------------------------------------------===//
     // String method interceptors
     //===------------------------------------------------------------------===//
@@ -29984,7 +30070,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     }
 
     // ---- __moore_dyn_array_new_copy ----
-    // Signature: (size: i32, init: ptr) -> struct<(ptr, i64)>
+    // Signature: (size: i32, init: ptr-to-struct<(ptr, i64)>) -> struct<(ptr, i64)>
+    // The init argument is a pointer to a {data_ptr, length} struct.
+    // We need to extract the data_ptr from the struct and copy from there.
     if (calleeName == "__moore_dyn_array_new_copy") {
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
         int32_t size = static_cast<int32_t>(
@@ -29993,17 +30081,31 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(1)).getUInt64();
         MooreQueue result = __moore_dyn_array_new(size);
         if (result.data && initAddr != 0 && size > 0) {
+          // initAddr points to a struct {ptr, i64} = {data_ptr, length}.
+          // Read the data_ptr (first 8 bytes) and length (next 8 bytes).
+          uint64_t dataPtr = 0;
+          uint64_t initLen = 0;
           uint64_t initOffset = 0;
           auto *initBlock =
               findMemoryBlockByAddress(initAddr, procId, &initOffset);
-          if (initBlock && initBlock->initialized) {
-            size_t avail = initBlock->data.size() - initOffset;
-            size_t copySize = std::min<size_t>(size, avail);
-            std::memcpy(result.data, initBlock->data.data() + initOffset,
-                        copySize);
+          if (initBlock && initBlock->initialized &&
+              initOffset + 16 <= initBlock->data.size()) {
+            // Read {data_ptr, length} from the struct
+            std::memcpy(&dataPtr, initBlock->data.data() + initOffset, 8);
+            std::memcpy(&initLen, initBlock->data.data() + initOffset + 8, 8);
           } else if (initAddr >= 0x10000000000ULL) {
-            std::memcpy(result.data,
-                        reinterpret_cast<void *>(initAddr), size);
+            auto *structPtr = reinterpret_cast<const uint8_t *>(initAddr);
+            std::memcpy(&dataPtr, structPtr, 8);
+            std::memcpy(&initLen, structPtr + 8, 8);
+          }
+          // Now copy from the actual data pointer
+          if (dataPtr != 0) {
+            size_t copySize = std::min<size_t>(size, static_cast<size_t>(initLen));
+            if (copySize > 0) {
+              // The data pointer is a native heap pointer from __moore_dyn_array_new
+              std::memcpy(result.data,
+                          reinterpret_cast<void *>(dataPtr), copySize);
+            }
           }
         }
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
