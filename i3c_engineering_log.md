@@ -372,3 +372,263 @@ Current conclusion:
 - The struct-field clobber bug is real, fixed, and regression-protected.
 - I3C line-162 parity gap remains open; continue root-cause work on remaining
   payload divergence path.
+
+### 2026-02-19: wait_event signal-ref hardening + deterministic lane refresh
+Files:
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`
+- `test/Conversion/MooreToCore/fork-wait-event-runtime-signal-ref.mlir`
+
+Key changes:
+1. Fork-lowered `WaitEventOpConversion` now recovers signal refs through
+   `moore.read`, direct ref-typed values, conversion casts, and remapped values.
+2. `__moore_wait_event` runtime signal lookup now uses `resolveSignalId(...)`
+   so block-arg/input-mapped refs can resolve back to concrete signals.
+3. Added conversion regression locking non-null signal-pointer call wiring for
+   fork wait-event lowering.
+
+Focused validation:
+- Build PASS:
+  - `ninja -C build-test circt-opt circt-verilog circt-sim`
+- lit PASS (`2/2`):
+  - `fork-wait-event-runtime-signal-ref.mlir`
+  - `fork-struct-field-last-write.sv`
+- IR spot-check confirms `__moore_wait_event` callsites in the fork-struct test
+  now carry traced `%signal_ptr` operands instead of null pointer fallback.
+
+I3C deterministic compile lane:
+- Command:
+  - `AVIPS=i3c SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 COMPILE_TIMEOUT=180 SIM_TIMEOUT=180 MEMORY_LIMIT_GB=20 utils/run_avip_circt_sim.sh /tmp/avip-i3c-wait-event-20260219-032229`
+- Artifacts:
+  - `/tmp/avip-i3c-wait-event-20260219-032229/matrix.tsv`
+  - `/tmp/avip-i3c-wait-event-20260219-032229/i3c/sim_seed_1.log`
+- Result:
+  - compile `OK` (`32s`)
+  - sim `OK` (`68s`)
+  - parity mismatch persists:
+    - `UVM_ERROR ... i3c_scoreboard.sv(162) @ 4273 ns`
+  - coverage print remains `100% / 100%`
+
+Status:
+- This pass improves wait-event fidelity and preserves prior struct-field fix.
+- I3C scoreboard parity (line 162) remains the active blocker.
+
+### 2026-02-19: wait-sensitivity diagnostic run on compiled I3C MLIR
+Command:
+- `env CIRCT_SIM_TRACE_WAIT_SENS=1 CIRCT_UVM_ARGS='+UVM_TESTNAME=i3c_writeOperationWith8bitsData_test +ntb_random_seed=1 +UVM_VERBOSITY=UVM_LOW' build-test/bin/circt-sim /tmp/avip-i3c-wait-event-20260219-032229/i3c/i3c.mlir --top hdl_top --top hvl_top --mode=compile --timeout=180 --max-time=7940000000000 --max-wall-ms=210000`
+- log: `/tmp/i3c-wait-sens-20260219-032917.log`
+
+Observed:
+1. Runtime wait-sensitivity tracing emits repeated observed entries for core
+   signals (`clk`, `rst`, `I3C_SCL`, `I3C_SDA`).
+2. No immediate evidence of wait-event no-op starvation in this trace slice.
+3. I3C scoreboard parity issue remains open (line-162 check-phase failure still
+   reproducible in bounded compile-mode lanes).
+
+Interpretation:
+- The current mismatch is likely above raw wait-list population (transaction
+  lifecycle/conversion ordering still suspect), though wait semantics remain
+  part of the broader timing surface.
+
+### 2026-02-19: ruled-out hypothesis - basic struct->class `to_class` conversion is functional
+Reproducer:
+- `/tmp/i3c_to_class_min.sv`
+- compile: `build-test/bin/circt-verilog /tmp/i3c_to_class_min.sv --no-uvm-auto-include -o /tmp/i3c_to_class_min.mlir`
+- run: `build-test/bin/circt-sim /tmp/i3c_to_class_min.mlir --top i3c_to_class_min`
+
+Observed output:
+- `ta=68 op=0 n=1 wd0=4e`
+- `PASS`
+
+Implication:
+- The remaining I3C line-162 mismatch is unlikely to be caused by a generic
+  failure of `output class` assignment in `to_class` helpers.
+- Focus remains on monitor transaction lifecycle/order and wait/fork timing
+  interactions in the full AVIP flow.
+
+### 2026-02-19: intra-interface copy-link trial (reverted)
+
+Goal:
+- Test whether missing same-interface copy links (notably `sig_1.field_3 ->
+  sig_1.field_7`) caused stale `sda_i` sampling in target BFM.
+
+Attempt:
+- Added constrained same-interface copy-pair linking in
+  `LLHDProcessInterpreter` copy-pair resolution.
+- Used traced replay to confirm link materialization and propagation activity.
+
+Observed:
+- Traces confirmed new link presence and runtime toggles on `sig_1.field_7`.
+- Functional parity did not improve; scoreboard mismatch persisted.
+- Variant runs exposed regressions (target-side coverage collapse in some
+  deterministic lanes), indicating this was not a safe fix path.
+
+Action:
+- Reverted the change.
+- Re-validated stable baseline lane:
+  - `/tmp/avip-i3c-post-revert-20260219-1/matrix.tsv`
+  - compile `OK` (`30s`), sim `OK` (`70s`)
+  - mismatch still at `i3c_scoreboard.sv(162)`.
+
+Conclusion:
+- The primary bug is likely above raw interface shadow propagation.
+- Next pass should focus on target transaction construction/conversion ordering
+  rather than additional interface auto-link heuristics.
+
+### 2026-02-19: nested `sig.extract` memory-layout fix (struct->array->bit refs)
+
+Problem observed while chasing I3C monitor parity:
+- Nested bit drives through refs shaped like
+  `sig.extract(sig.array_get(sig.struct_extract(...)))` were not preserving
+  correct array element mapping on memory-backed refs.
+- This can corrupt/lose writes in monitor-style task code that updates bits of
+  struct array fields over waits.
+
+Minimal reproducer (outside AVIP):
+- `/tmp/inout_struct_wait_inc.sv`
+- pre-fix output on circt-sim:
+  - `no_bits=8 w0=0` (`FAIL`)
+- expected/xcelium-style behavior:
+  - `no_bits=8 w0=fb`
+
+Root cause:
+- In `LLHDProcessInterpreter` sig.extract drive handling, offset accumulation
+  for nested `sig.array_get` used HW indexing (`idx * elemWidth`) even on
+  memory-backed refs (LLVM aggregate layout requires reversed array index
+  mapping).
+- The same accumulated offset was reused across both signal-backed and
+  memory-backed paths, mixing layout rules.
+
+Fix:
+- File:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+- Changes:
+  1. Track two offsets during nested extraction tracing:
+     - `signalBitOffset` (HW signal layout)
+     - `memoryBitOffset` (LLVM memory layout)
+  2. For nested `sig.array_get`, use `computeMemoryBackedArrayBitOffset(...)`
+     when forming memory-backed offset.
+  3. For nested `sig.struct_extract`, compute signal vs memory field offsets
+     separately.
+  4. Use `memoryBitOffset` in all memory-backed sig.extract drive paths and
+     `signalBitOffset` in signal-backed path.
+
+Regression added:
+- `test/Tools/circt-sim/sig-extract-struct-array-bit-memory-layout.sv`
+- Checks:
+  - `no_bits=8 w0=fb`
+  - `PASS`
+
+Validation:
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Reproducer PASS after fix:
+   - `build-test/bin/circt-sim /tmp/inout_struct_wait_inc.mlir --top inout_struct_wait_inc`
+   - output: `no_bits=8 w0=fb`
+3. Focused regressions PASS:
+   - `sig-extract-struct-array-bit-memory-layout.sv`
+   - `timewheel-slot-collision-wait-event.mlir`
+   - `func-start-monitoring-resume-fast-path.mlir`
+   - `moore-wait-event-sensitivity-cache.mlir`
+
+I3C status after this fix:
+- Deterministic bounded replay still ends with
+  `UVM_ERROR ... i3c_scoreboard.sv(162)` and coverage `21.4286 / 21.4286`
+  (`/tmp/i3c-after-sigextract-fix.log`).
+- So this fix removes a real low-level correctness bug but does not yet close
+  the remaining I3C parity gap.
+
+### 2026-02-19: field-drive trace follow-up (post sig.extract fix)
+
+Command:
+- `env CIRCT_SIM_TRACE_I3C_FIELD_DRIVES=1 CIRCT_UVM_ARGS='+UVM_TESTNAME=i3c_writeOperationWith8bitsData_test +ntb_random_seed=1 +UVM_VERBOSITY=UVM_LOW' build-test/bin/circt-sim /tmp/avip-i3c-post-revert-20260219-1/i3c/i3c.mlir --top hdl_top --top hvl_top --mode=compile --timeout=180 --max-time=4500000000 --max-wall-ms=120000`
+- log: `/tmp/i3c-field-after-fix.log`
+
+Observed:
+1. The new nested `sig.extract` fix is active: trace shows memory-backed field
+   writes to `writeData`, `writeDataStatus`, and
+   `no_of_i3c_bits_transfer` in conversion paths (e.g. `from_class_5760`).
+2. Target monitor activity still looks incomplete in this bounded lane:
+   - repeated `i3c_target_monitor_bfm::sample_target_address` writes are present,
+   - but no trace evidence of target-monitor `sample_write_data` field writes
+     before check-phase.
+3. Scoreboard error remains unchanged:
+   - `UVM_ERROR ... i3c_scoreboard.sv(162)`
+   - coverage remains `21.4286 / 21.4286`.
+
+Interpretation:
+- Remaining I3C issue is likely in monitor sampling/lifecycle timing (target
+  monitor not progressing through expected data sampling path), not in the
+  newly fixed nested sig.extract memory-layout bug.
+
+### 2026-02-19: tri-state suppression transition gating replay
+
+Runtime change:
+1. `tools/circt-sim/LLHDProcessInterpreter.cpp/.h`
+   - kept source->destination propagation links intact under suppressed
+     mirror-store handling (removed destructive link-removal behavior).
+   - added per-destination condition tracking:
+     - `interfaceTriStateCondLastValue`
+     - `interfaceTriStateCondSeen`
+   - retained-value derivation now triggers only when:
+     - destination is `X`, or
+     - tri-state condition transitions `1 -> 0`.
+
+Rationale:
+- release-edge derivation is still needed to avoid latch-style stale drive
+  behavior in tri-state regressions.
+- repeated derivation while condition stays `0` can clobber observed values.
+
+Validation:
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Tri-state regression set PASS:
+   - `interface-tristate-suppression-cond-false.sv`
+   - `interface-tristate-signal-callback.sv`
+   - `interface-intra-tristate-propagation.sv`
+3. I3C AVIP replay:
+   - command:
+     - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build-test/bin/circt-sim AVIPS=i3c SEEDS=1 SIM_TIMEOUT=240 COMPILE_TIMEOUT=300 MEMORY_LIMIT_GB=20 MATRIX_TAG=i3c-prop-fix utils/run_avip_circt_sim.sh`
+   - matrix:
+     - `/tmp/avip-circt-sim-20260219-091053/matrix.tsv`
+   - result:
+     - compile `OK` (`32s`)
+     - sim `OK` (`162s`)
+     - coverage still `21.4286 / 21.4286`
+     - scoreboard mismatch persists:
+       - `UVM_ERROR ... i3c_scoreboard.sv(179)`
+4. Bounded traced window:
+   - command:
+     - `CIRCT_SIM_TRACE_IFACE_PROP=1 ... --max-time=340000000`
+   - log:
+     - `/tmp/i3c-bounded-340-prop.log`
+   - observed:
+     - no `I3C_SCL/I3C_SDA fanout=0` collapse in this bounded slice.
+     - data path still converges to reserved/zero transaction values.
+
+Status:
+- suppression behavior is now less destructive and trace behavior is cleaner.
+- primary I3C blocker remains transaction sampling/conversion ordering (not
+  fully resolved by suppression-path changes).
+
+### 2026-02-19: bounded cast-layout diagnostic (340ns window)
+
+Command:
+- `CIRCT_UVM_ARGS='+UVM_TESTNAME=i3c_writeOperationWith8bitsData_test +ntb_random_seed=1 +UVM_VERBOSITY=UVM_LOW' CIRCT_SIM_TRACE_I3C_CAST_LAYOUT=1 build-test/bin/circt-sim /tmp/avip-circt-sim-20260219-091053/i3c/i3c.mlir --top hdl_top --top hvl_top --max-time=340000000 --timeout=90`
+- log: `/tmp/i3c-bounded-340-cast.log`
+
+Key findings:
+1. Layout conversion itself appears stable in this slice:
+   - trace lines show `in{...} == out{...}` for controller/target monitor
+     and driver conversion points.
+2. Wrong transaction values are already present before/at monitor sampling:
+   - controller driver launch: `ta=104 bits=8` (expected command origin).
+   - monitor/target sample paths later observe `ta=1 bits=0`.
+3. Scoreboard debug at same window confirms collapsed payload:
+   - `[I3C-SBDBG] ... ctrl_wsz=0 tgt_wsz=0 ctrl_w0=0 tgt_w0=0`
+   - coverage remains `21.43%`.
+
+Conclusion:
+- current evidence points away from LLVM<->HW struct layout remap as the
+  primary culprit; issue is more likely monitor-side sampling/progression timing
+  before conversion.

@@ -279,7 +279,8 @@ static bool getMaskedUInt64(const InterpretedValue &value,
 ///   CIRCT_SIM_TRACE_CALL_FILTER=uvm_tlm_analysis_fifo::write,uvm_tlm_fifo::get
 /// If the env var is set to "1", all function calls are traced.
 static void maybeTraceFilteredCall(ProcessId procId, llvm::StringRef callKind,
-                                   llvm::StringRef calleeName) {
+                                   llvm::StringRef calleeName, int64_t nowFs,
+                                   uint64_t deltaStep) {
   static bool enabled = []() {
     if (const char *env = std::getenv("CIRCT_SIM_TRACE_CALL_FILTER"))
       return env[0] != '\0';
@@ -324,8 +325,10 @@ static void maybeTraceFilteredCall(ProcessId procId, llvm::StringRef callKind,
       return;
   }
 
-  llvm::errs() << "[CALL-TRACE] " << callKind << " proc=" << procId
-               << " callee=" << calleeName << "\n";
+  llvm::errs() << "[CALL-TRACE] " << callKind << " proc=" << procId;
+  if (nowFs >= 0)
+    llvm::errs() << " t=" << nowFs << " d=" << deltaStep;
+  llvm::errs() << " callee=" << calleeName << "\n";
 }
 
 static unsigned writeConfigDbBytesToNativeMemory(
@@ -8556,11 +8559,34 @@ void LLHDProcessInterpreter::notifyProcessAwaiters(ProcessId procId) {
 
 void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
     SignalId signal, const SignalValue &value) {
+  static bool traceIfaceProp = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_IFACE_PROP");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto signalName = [&](SignalId sigId) -> llvm::StringRef {
+    auto it = signalIdToName.find(sigId);
+    if (it != signalIdToName.end())
+      return it->second;
+    return "<unknown>";
+  };
+  auto formatValue = [](const InterpretedValue &iv) -> std::string {
+    if (iv.isX())
+      return "X";
+    llvm::SmallString<64> bits;
+    iv.getAPInt().toStringUnsigned(bits, /*Radix=*/2);
+    return std::string(bits);
+  };
+
   auto propIt = interfaceFieldPropagation.find(signal);
   if (propIt == interfaceFieldPropagation.end())
     return;
 
   InterpretedValue parentVal = InterpretedValue::fromSignalValue(value);
+  if (traceIfaceProp) {
+    llvm::errs() << "[IFACE-PROP] src sig=" << signal << " ("
+                 << signalName(signal) << ") val=" << formatValue(parentVal)
+                 << " fanout=" << propIt->second.size() << "\n";
+  }
   for (SignalId childSigId : propIt->second) {
     const SignalValue &childCurrent = scheduler.getSignalValue(childSigId);
     unsigned childW = childCurrent.getWidth();
@@ -8594,6 +8620,11 @@ void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
     // subsequent llvm.load fast-path reads do not see stale values.
     pendingEpsilonDrives[childSigId] = childDriveVal;
     scheduler.updateSignal(childSigId, childDriveVal.toSignalValue());
+    if (traceIfaceProp) {
+      llvm::errs() << "[IFACE-PROP]   -> child sig=" << childSigId << " ("
+                   << signalName(childSigId)
+                   << ") val=" << formatValue(childDriveVal) << "\n";
+    }
 
     auto childAddrIt = fieldSignalToAddr.find(childSigId);
     if (childAddrIt != fieldSignalToAddr.end()) {
@@ -8912,6 +8943,11 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
             if (childState.valueMap.find(val) == childState.valueMap.end())
               childState.valueMap[val] = iv;
           }
+          for (auto &[arg, src] : it->second.refBlockArgSources) {
+            if (childState.refBlockArgSources.find(arg) ==
+                childState.refBlockArgSources.end())
+              childState.refBlockArgSources[arg] = src;
+          }
           break; // adopt into first active child only
         }
       }
@@ -8931,6 +8967,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     // The entry itself is kept (with halted=true) so callers that check
     // the halted flag still work correctly.
     it->second.valueMap.clear();
+    it->second.refBlockArgSources.clear();
     it->second.memoryBlocks.clear();
     it->second.funcResultCache.clear();
     it->second.recursionVisited.clear();
@@ -10381,6 +10418,79 @@ arith_dispatch:
     APFloat result = *lhsFloat;
     (void)result.divide(*rhsFloat, APFloat::rmNearestTiesToEven);
     setValue(procId, arithDivFOp.getResult(),
+             encodeFloatValueBits(result, targetWidth));
+    return success();
+  }
+
+  if (auto arithExtFOp = dyn_cast<mlir::arith::ExtFOp>(op)) {
+    InterpretedValue input = getValue(procId, arithExtFOp.getIn());
+    unsigned targetWidth = getTypeWidth(arithExtFOp.getType());
+    if (input.isX()) {
+      setValue(procId, arithExtFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    auto inputFloat = decodeFloatValueBits(input, arithExtFOp.getIn().getType());
+    if (!inputFloat) {
+      setValue(procId, arithExtFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+
+    APFloat result = *inputFloat;
+    auto outTy = dyn_cast<FloatType>(arithExtFOp.getType());
+    if (!outTy) {
+      setValue(procId, arithExtFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    bool losesInfo = false;
+    APFloat::opStatus status =
+        result.convert(outTy.getFloatSemantics(),
+                       APFloat::rmNearestTiesToEven, &losesInfo);
+    if (status & APFloat::opInvalidOp) {
+      setValue(procId, arithExtFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    setValue(procId, arithExtFOp.getResult(),
+             encodeFloatValueBits(result, targetWidth));
+    return success();
+  }
+
+  if (auto arithTruncFOp = dyn_cast<mlir::arith::TruncFOp>(op)) {
+    InterpretedValue input = getValue(procId, arithTruncFOp.getIn());
+    unsigned targetWidth = getTypeWidth(arithTruncFOp.getType());
+    if (input.isX()) {
+      setValue(procId, arithTruncFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    auto inputFloat =
+        decodeFloatValueBits(input, arithTruncFOp.getIn().getType());
+    if (!inputFloat) {
+      setValue(procId, arithTruncFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+
+    APFloat result = *inputFloat;
+    auto outTy = dyn_cast<FloatType>(arithTruncFOp.getType());
+    if (!outTy) {
+      setValue(procId, arithTruncFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    bool losesInfo = false;
+    APFloat::opStatus status =
+        result.convert(outTy.getFloatSemantics(),
+                       APFloat::rmNearestTiesToEven, &losesInfo);
+    if (status & APFloat::opInvalidOp) {
+      setValue(procId, arithTruncFOp.getResult(),
+               InterpretedValue::makeX(targetWidth));
+      return success();
+    }
+    setValue(procId, arithTruncFOp.getResult(),
              encodeFloatValueBits(result, targetWidth));
     return success();
   }
@@ -12074,6 +12184,10 @@ llvm_dispatch:
         // function arguments write to signals via memory.
         if (isa<llhd::RefType>(inputType) &&
             isa<LLVM::LLVMPointerType>(outputType)) {
+          static bool traceI3CRefCasts = []() {
+            const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_REF_CASTS");
+            return env && env[0] != '\0' && env[0] != '0';
+          }();
           // Preserve sub-reference provenance when a ref to a struct/array
           // field is cast to a pointer. This avoids writing through the base
           // struct pointer when the callee does `llvm.store` via the cast.
@@ -12081,12 +12195,36 @@ llvm_dispatch:
           unsigned refBitOffset = 0;
           if (tryResolveMemoryBackedRefAddress(input, refAddr, refBitOffset)) {
             setValue(procId, output, InterpretedValue(refAddr, 64));
+            if (traceI3CRefCasts) {
+              llvm::errs() << "[I3C-REF-CAST] proc=" << procId;
+              if (const Process *proc = scheduler.getProcess(procId))
+                llvm::errs() << " name='" << proc->getName() << "'";
+              auto stateIt = processStates.find(procId);
+              if (stateIt != processStates.end())
+                llvm::errs() << " func='" << stateIt->second.currentFuncName
+                             << "'";
+              llvm::errs() << " resolved=1 addr=0x"
+                           << llvm::format_hex(refAddr, 16)
+                           << " bitOffset=" << refBitOffset
+                           << " in=" << input << " out=" << output << "\n";
+            }
             LLVM_DEBUG(llvm::dbgs()
                        << "  builtin.unrealized_conversion_cast: "
                        << "ref->ptr resolved memory-backed subref addr=0x"
                        << llvm::format_hex(refAddr, 16)
                        << " (bitOffset=" << refBitOffset << ")\n");
             continue;
+          }
+          if (traceI3CRefCasts) {
+            llvm::errs() << "[I3C-REF-CAST] proc=" << procId;
+            if (const Process *proc = scheduler.getProcess(procId))
+              llvm::errs() << " name='" << proc->getName() << "'";
+            auto stateIt = processStates.find(procId);
+            if (stateIt != processStates.end())
+              llvm::errs() << " func='" << stateIt->second.currentFuncName
+                           << "'";
+            llvm::errs() << " resolved=0 in=" << input << " out=" << output
+                         << "\n";
           }
 
           // Look up the signal for this ref
@@ -12151,11 +12289,50 @@ llvm_dispatch:
         // Handle layout conversion between LLVM struct and HW struct types
         Type inputType2 = input.getType();
         Type outputType2 = output.getType();
+        static bool traceI3CCastLayout = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_CAST_LAYOUT");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
+        auto isI3CTransferStructType = [](Type ty) -> bool {
+          auto st = dyn_cast<hw::StructType>(ty);
+          if (!st)
+            return false;
+          return st.getFieldIndex("targetAddress").has_value() &&
+                 st.getFieldIndex("operation").has_value() &&
+                 st.getFieldIndex("targetAddressStatus").has_value() &&
+                 st.getFieldIndex("no_of_i3c_bits_transfer").has_value();
+        };
+
         if (!val.isX()) {
           if ((isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(inputType2)) &&
               (isa<hw::StructType, hw::ArrayType>(outputType2))) {
             // LLVM -> HW layout conversion
-            APInt converted = convertLLVMToHWLayout(val.getAPInt(), inputType2, outputType2);
+            APInt inputBits = val.getAPInt();
+            APInt converted =
+                convertLLVMToHWLayout(inputBits, inputType2, outputType2);
+            if (traceI3CCastLayout && isI3CTransferStructType(outputType2) &&
+                inputBits.getBitWidth() >= 2353 &&
+                converted.getBitWidth() >= 2353) {
+              uint64_t inTa = inputBits.extractBits(7, 0).getZExtValue();
+              uint64_t inAck = inputBits.extractBits(1, 8).getZExtValue();
+              uint64_t inBits = inputBits.extractBits(32, 2313).getZExtValue();
+              uint64_t outTa = converted.extractBits(7, 2346).getZExtValue();
+              uint64_t outAck = converted.extractBits(1, 2344).getZExtValue();
+              uint64_t outBits = converted.extractBits(32, 8).getZExtValue();
+              llvm::errs() << "[I3C-CAST] proc=" << procId;
+              if (const Process *proc = scheduler.getProcess(procId))
+                llvm::errs() << " name='" << proc->getName() << "'";
+              auto stateIt = processStates.find(procId);
+              if (stateIt != processStates.end())
+                llvm::errs() << " func='" << stateIt->second.currentFuncName
+                             << "'";
+              llvm::errs() << " in{ta=" << inTa << " ack=" << inAck
+                           << " bits=" << inBits << "} out{ta=" << outTa
+                           << " ack=" << outAck << " bits=" << outBits
+                           << "} t=" << scheduler.getCurrentTime().realTime
+                           << " d=" << scheduler.getCurrentTime().deltaStep
+                           << "\n";
+            }
             val = InterpretedValue(converted);
           } else if ((isa<hw::StructType, hw::ArrayType>(inputType2)) &&
                      (isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(outputType2))) {
@@ -13344,18 +13521,25 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
     // Pattern: %alloca -> cast to !llhd.ref<i32> -> sig.extract -> !llhd.ref<i1>
     // This is used in uvm_oneway_hash to manipulate individual bits of local vars.
     if (auto bitExtractOp = signal.getDefiningOp<llhd::SigExtractOp>()) {
-      // Get the lowBit value
+      // Get the lowBit value.
       InterpretedValue lowBitVal = getValue(procId, bitExtractOp.getLowBit());
       unsigned lowBit = lowBitVal.isX() ? 0 : lowBitVal.getUInt64();
 
-      // Trace through to find the underlying alloca or signal
+      // Trace through to find the underlying alloca or signal.
+      // Maintain two offsets:
+      // - signalBitOffset: HW signal layout
+      // - memoryBitOffset: LLVM memory layout for alloca-backed refs
       Value parentRef = bitExtractOp.getInput();
-      // Chase through nested SigExtractOps
-      unsigned totalBitOffset = lowBit;
+      unsigned signalBitOffset = lowBit;
+      unsigned memoryBitOffset = lowBit;
+
+      // Chase through nested SigExtractOps.
       while (auto nestedExtract = parentRef.getDefiningOp<llhd::SigExtractOp>()) {
         InterpretedValue nestedLowBit =
             getValue(procId, nestedExtract.getLowBit());
-        totalBitOffset += nestedLowBit.isX() ? 0 : nestedLowBit.getUInt64();
+        unsigned nested = nestedLowBit.isX() ? 0 : nestedLowBit.getUInt64();
+        signalBitOffset += nested;
+        memoryBitOffset += nested;
         parentRef = nestedExtract.getInput();
       }
 
@@ -13372,7 +13556,15 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           auto arrayType = cast<hw::ArrayType>(
               unwrapSignalType(sigArrayGet.getInput().getType()));
           unsigned elemWidth = getTypeWidth(arrayType.getElementType());
-          totalBitOffset += idx * elemWidth;
+          // HW signal layout: element 0 at low bits.
+          signalBitOffset += idx * elemWidth;
+          // Memory-backed refs use LLVM aggregate layout where arrays are
+          // reversed relative to HW layout.
+          unsigned memArrayBitOffset = 0;
+          if (!computeMemoryBackedArrayBitOffset(arrayType, idx,
+                                                 memArrayBitOffset))
+            return success();
+          memoryBitOffset += memArrayBitOffset;
           parentRef = sigArrayGet.getInput();
           continue;
         }
@@ -13381,13 +13573,21 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           auto structType = cast<hw::StructType>(
               unwrapSignalType(structExtract.getInput().getType()));
           StringRef fieldName = structExtract.getFieldAttr().getValue();
-          unsigned fieldBitOff = 0;
-          for (auto field : structType.getElements()) {
-            if (field.name == fieldName)
-              break;
-            fieldBitOff += getTypeWidth(field.type);
-          }
-          totalBitOffset += fieldBitOff;
+          auto elements = structType.getElements();
+          auto fieldIndexOpt = structType.getFieldIndex(fieldName);
+          if (!fieldIndexOpt)
+            return success();
+          unsigned fieldIndex = *fieldIndexOpt;
+
+          unsigned signalFieldBitOff = 0;
+          for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+            signalFieldBitOff += getTypeWidth(elements[i].type);
+          signalBitOffset += signalFieldBitOff;
+
+          unsigned memoryFieldBitOff = 0;
+          for (size_t i = 0; i < fieldIndex; ++i)
+            memoryFieldBitOff += getTypeWidth(elements[i].type);
+          memoryBitOffset += memoryFieldBitOff;
           parentRef = structExtract.getInput();
           continue;
         }
@@ -13405,11 +13605,12 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           InterpretedValue driveVal = getValue(procId, driveOp.getValue());
           unsigned parentWidth = getTypeWidth(parentRef.getType());
           unsigned extractWidth = driveVal.getWidth();
-          if (totalBitOffset + extractWidth > parentWidth) {
+          if (memoryBitOffset + extractWidth > parentWidth) {
             LLVM_DEBUG(llvm::dbgs()
                        << "  Drive to sig.extract: out-of-range extract ["
-                       << totalBitOffset << ", "
-                       << (totalBitOffset + extractWidth) << ") for parentWidth "
+                       << memoryBitOffset << ", "
+                       << (memoryBitOffset + extractWidth)
+                       << ") for parentWidth "
                        << parentWidth << " -> no-op\n");
             return success();
           }
@@ -13445,8 +13646,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
           // Read-modify-write only the touched byte window so sub-byte ref
           // writes near buffer edges don't spuriously fail on full parent width.
-          unsigned firstTouchedByte = totalBitOffset / 8;
-          unsigned lastTouchedByte = (totalBitOffset + extractWidth - 1) / 8;
+          unsigned firstTouchedByte = memoryBitOffset / 8;
+          unsigned lastTouchedByte = (memoryBitOffset + extractWidth - 1) / 8;
           unsigned touchedBytes = lastTouchedByte - firstTouchedByte + 1;
           if (blockOffset + firstTouchedByte + touchedBytes > block->size) {
             LLVM_DEBUG(llvm::dbgs()
@@ -13469,7 +13670,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                                            : driveVal.getAPInt();
           if (insertVal.getBitWidth() != extractWidth)
             insertVal = insertVal.zextOrTrunc(extractWidth);
-          unsigned localBitOffset = totalBitOffset - firstTouchedByte * 8;
+          unsigned localBitOffset = memoryBitOffset - firstTouchedByte * 8;
           safeInsertBits(currentSegment, insertVal, localBitOffset);
 
           for (unsigned i = 0; i < touchedBytes; ++i) {
@@ -13480,7 +13681,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           block->initialized = true;
 
           LLVM_DEBUG(llvm::dbgs()
-                     << "  Drive to sig.extract memory: bit " << totalBitOffset
+                     << "  Drive to sig.extract memory: bit " << memoryBitOffset
                      << " offset " << (blockOffset + firstTouchedByte) << " = "
                      << (driveVal.isX() ? "X"
                                         : std::to_string(driveVal.getUInt64()))
@@ -13513,11 +13714,11 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
         unsigned extractWidth = driveVal.getWidth();
         if (!driveVal.isX() &&
-            totalBitOffset + extractWidth <= parentWidth) {
+            signalBitOffset + extractWidth <= parentWidth) {
           APInt insertVal = driveVal.getAPInt();
           if (insertVal.getBitWidth() != extractWidth)
             insertVal = insertVal.zextOrTrunc(extractWidth);
-          safeInsertBits(result,insertVal, totalBitOffset);
+          safeInsertBits(result, insertVal, signalBitOffset);
         }
 
         // Schedule the signal update
@@ -13556,17 +13757,17 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             InterpretedValue driveVal = getValue(procId, driveOp.getValue());
             unsigned parentWidth = getTypeWidth(parentRef.getType());
             unsigned extractWidth = driveVal.getWidth();
-            if (totalBitOffset + extractWidth > parentWidth) {
+            if (memoryBitOffset + extractWidth > parentWidth) {
               LLVM_DEBUG(llvm::dbgs()
                          << "  Drive to sig.extract memory-backed ref: "
-                         << "out-of-range extract [" << totalBitOffset << ", "
-                         << (totalBitOffset + extractWidth)
+                         << "out-of-range extract [" << memoryBitOffset << ", "
+                         << (memoryBitOffset + extractWidth)
                          << ") for parentWidth " << parentWidth
                          << " -> no-op\n");
               return success();
             }
-            unsigned firstTouchedByte = totalBitOffset / 8;
-            unsigned lastTouchedByte = (totalBitOffset + extractWidth - 1) / 8;
+            unsigned firstTouchedByte = memoryBitOffset / 8;
+            unsigned lastTouchedByte = (memoryBitOffset + extractWidth - 1) / 8;
             unsigned touchedBytes = lastTouchedByte - firstTouchedByte + 1;
             if (blockOffset + firstTouchedByte + touchedBytes <= block->size) {
               unsigned segmentWidth = touchedBytes * 8;
@@ -13581,8 +13782,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 APInt insertVal = driveVal.getAPInt();
                 if (insertVal.getBitWidth() != extractWidth)
                   insertVal = insertVal.zextOrTrunc(extractWidth);
-                unsigned localBitOffset = totalBitOffset - firstTouchedByte * 8;
-                safeInsertBits(currentSegment,insertVal, localBitOffset);
+                unsigned localBitOffset = memoryBitOffset - firstTouchedByte * 8;
+                safeInsertBits(currentSegment, insertVal, localBitOffset);
               }
 
               for (unsigned i = 0; i < touchedBytes; ++i) {
@@ -13594,7 +13795,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
               LLVM_DEBUG(llvm::dbgs()
                          << "  Drive to sig.extract memory-backed ref: bit "
-                         << totalBitOffset << " at addr 0x"
+                         << memoryBitOffset << " at addr 0x"
                          << llvm::format_hex(addr + firstTouchedByte, 0) << "\n");
               return success();
             }
@@ -13991,7 +14192,9 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               }();
               if (traceI3CFieldDrivesMemStructScalar && !extractChain.empty()) {
                 StringRef field = extractChain.front().getField();
-                if (field == "writeData" || field == "readData" ||
+                if (field == "targetAddress" ||
+                    field == "targetAddressStatus" || field == "operation" ||
+                    field == "writeData" || field == "readData" ||
                     field == "writeDataStatus" || field == "readDataStatus" ||
                     field == "no_of_i3c_bits_transfer") {
                   llvm::SmallString<64> bits;
@@ -14117,7 +14320,9 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               }();
               if (traceI3CFieldDrivesMemStructScalar && !extractChain.empty()) {
                 StringRef field = extractChain.front().getField();
-                if (field == "writeData" || field == "readData" ||
+                if (field == "targetAddress" ||
+                    field == "targetAddressStatus" || field == "operation" ||
+                    field == "writeData" || field == "readData" ||
                     field == "writeDataStatus" || field == "readDataStatus" ||
                     field == "no_of_i3c_bits_transfer") {
                   llvm::SmallString<64> bits;
@@ -14154,6 +14359,27 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       }
 
       if (parentSigId == 0) {
+        static bool traceRefArgResolve = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_REF_ARG_RESOLVE");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
+        if (traceRefArgResolve) {
+          llvm::errs() << "[REF-RESOLVE] drive unresolved struct parent proc="
+                       << procId;
+          if (const Process *proc = scheduler.getProcess(procId))
+            llvm::errs() << " name='" << proc->getName() << "'";
+          llvm::errs() << " value=" << parentSignal << "\n";
+          if (auto arg = dyn_cast<BlockArgument>(parentSignal)) {
+            auto srcIt = statePtr->refBlockArgSources.find(arg);
+            if (srcIt != statePtr->refBlockArgSources.end()) {
+              SignalId srcSig = resolveSignalId(srcIt->second);
+              llvm::errs() << "[REF-RESOLVE]   block-arg source="
+                           << srcIt->second << " sig=" << srcSig << "\n";
+            } else {
+              llvm::errs() << "[REF-RESOLVE]   block-arg source=<none>\n";
+            }
+          }
+        }
         LLVM_DEBUG(llvm::dbgs()
                    << "  Error: Could not find parent signal for struct extract\n");
         return failure();
@@ -14222,6 +14448,39 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         fieldValue = fieldValue.trunc(fieldWidth);
 
       safeInsertBits(result,fieldValue, bitOffset);
+
+      static bool traceI3CFieldDrivesSignalStruct = []() {
+        const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_FIELD_DRIVES");
+        return env && env[0] != '\0' && env[0] != '0';
+      }();
+      if (traceI3CFieldDrivesSignalStruct && !extractChain.empty()) {
+        StringRef field = extractChain.front().getField();
+        if (field == "targetAddress" || field == "targetAddressStatus" ||
+            field == "operation" || field == "writeData" ||
+            field == "readData" || field == "writeDataStatus" ||
+            field == "readDataStatus" ||
+            field == "no_of_i3c_bits_transfer") {
+          llvm::SmallString<64> bits;
+          if (driveVal.isX())
+            bits = "X";
+          else
+            driveVal.getAPInt().toString(bits, 16, false);
+          llvm::StringRef procName = "<unknown>";
+          if (const Process *p = scheduler.getProcess(procId))
+            procName = p->getName();
+          llvm::StringRef funcName = "<unknown>";
+          if (auto f = driveOp->getParentOfType<func::FuncOp>())
+            funcName = f.getSymName();
+          llvm::errs() << "[I3C-FIELD-DRV-SIGNAL-STRUCT] proc=" << procId
+                       << " name='" << procName << "'"
+                       << " func='" << funcName << "'"
+                       << " field=" << field << " bitOffset=" << bitOffset
+                       << " width=" << fieldWidth << " val=0x" << bits
+                       << " sig=" << parentSigId << " t="
+                       << scheduler.getCurrentTime().realTime << " d="
+                       << scheduler.getCurrentTime().deltaStep << "\n";
+        }
+      }
 
       // Get the delay time
       SimTime delay = convertTimeValue(procId, driveOp.getTime());
@@ -14843,6 +15102,24 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
   // last-write-wins semantics. Module-level continuous assignments use
   // separate per-process driver IDs for proper net resolution.
   uint64_t driverId = static_cast<uint64_t>(sigId);
+
+  static bool traceDriveSchedule = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_DRIVE_SCHEDULE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (traceDriveSchedule) {
+    auto nameIt = signalIdToName.find(sigId);
+    llvm::StringRef sigName =
+        nameIt != signalIdToName.end() ? llvm::StringRef(nameIt->second)
+                                       : llvm::StringRef("<unknown>");
+    llvm::errs() << "[DRV-SCHED] sig=" << sigId << " (" << sigName << ")"
+                 << " now=(" << currentTime.realTime << ",d"
+                 << currentTime.deltaStep << ")"
+                 << " target=(" << targetTime.realTime << ",d"
+                 << targetTime.deltaStep << ")"
+                 << " delay=(" << delay.realTime << ",d" << delay.deltaStep
+                 << ")\n";
+  }
 
   LLVM_DEBUG(llvm::dbgs() << "  Scheduling drive to signal " << sigId
                           << " at time " << targetTime.realTime << " fs"
@@ -16250,7 +16527,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   StringRef calleeName = callOp.getCallee();
   if (failed(checkUvmRunTestEntry(procId, calleeName)))
     return failure();
-  maybeTraceFilteredCall(procId, "func.call", calleeName);
+  SimTime now = scheduler.getCurrentTime();
+  maybeTraceFilteredCall(procId, "func.call", calleeName, now.realTime,
+                         now.deltaStep);
   bool traceSeq = traceSeqEnabled;
 
   LLVM_DEBUG({
@@ -17436,6 +17715,64 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   llvm::SmallVector<InterpretedValue, 4> args;
   for (Value operand : callOp.getOperands()) {
     args.push_back(getValue(procId, operand));
+  }
+
+  static bool traceI3CToClassArgs = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_TO_CLASS_ARGS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (traceI3CToClassArgs &&
+      (calleeName == "to_class" || calleeName.starts_with("to_class_")) &&
+      !args.empty()) {
+    llvm::errs() << "[I3C-TO-CLASS] callee=" << calleeName << " proc=" << procId;
+    if (Process *proc = scheduler.getProcess(procId))
+      llvm::errs() << " proc_name='" << proc->getName() << "'";
+    auto stateIt = processStates.find(procId);
+    if (stateIt != processStates.end()) {
+      llvm::errs() << " caller_func='" << stateIt->second.currentFuncName << "'";
+      if (stateIt->second.currentBlock) {
+        llvm::errs() << " caller_block_ops="
+                     << stateIt->second.currentBlock->getOperations().size();
+      }
+    }
+    llvm::errs() << " t=" << scheduler.getCurrentTime().realTime
+                 << " d=" << scheduler.getCurrentTime().deltaStep;
+    const InterpretedValue &structArg = args.front();
+    if (structArg.isX()) {
+      llvm::errs() << " struct=X";
+    } else if (structArg.getWidth() >= 2353) {
+      const APInt &bits = structArg.getAPInt();
+      // LLVM-style (low-to-high) decode.
+      uint64_t taLow = bits.extractBits(7, 0).getZExtValue();
+      uint64_t opLow = bits.extractBits(1, 7).getZExtValue();
+      uint64_t taAckLow = bits.extractBits(1, 8).getZExtValue();
+      uint64_t wd0Low = bits.extractBits(8, 265).getZExtValue();
+      uint64_t wd1Low = bits.extractBits(8, 273).getZExtValue();
+      uint64_t bitsLow = bits.extractBits(32, 2313).getZExtValue();
+      // HW-struct-style (first field in MSBs) decode.
+      uint64_t taHw = bits.extractBits(7, 2346).getZExtValue();
+      uint64_t opHw = bits.extractBits(1, 2345).getZExtValue();
+      uint64_t taAckHw = bits.extractBits(1, 2344).getZExtValue();
+      uint64_t wd0Hw = bits.extractBits(8, 1064).getZExtValue();
+      uint64_t wd1Hw = bits.extractBits(8, 1072).getZExtValue();
+      uint64_t bitsHw = bits.extractBits(32, 8).getZExtValue();
+      llvm::errs() << " low{ta=0x" << llvm::format_hex_no_prefix(taLow, 2)
+                   << " op=" << opLow << " ack=" << taAckLow
+                   << " wd0=0x" << llvm::format_hex_no_prefix(wd0Low, 2)
+                   << " wd1=0x" << llvm::format_hex_no_prefix(wd1Low, 2)
+                   << " bits=" << bitsLow << "}"
+                   << " hw{ta=0x" << llvm::format_hex_no_prefix(taHw, 2)
+                   << " op=" << opHw << " ack=" << taAckHw
+                   << " wd0=0x" << llvm::format_hex_no_prefix(wd0Hw, 2)
+                   << " wd1=0x" << llvm::format_hex_no_prefix(wd1Hw, 2)
+                   << " bits=" << bitsHw << "}";
+    } else {
+      llvm::errs() << " struct_width=" << structArg.getWidth();
+    }
+    if (args.size() >= 2 && !args[1].isX())
+      llvm::errs() << " out_ref=0x"
+                   << llvm::format_hex(args[1].getUInt64(), 10);
+    llvm::errs() << "\n";
   }
 
   if (handleBaudClkGeneratorFastPath(procId, callOp, funcOp, args, calleeName))
@@ -19820,10 +20157,15 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     Operation *op = v.getDefiningOp();
     if (!op)
       return false;
+    // Process/initial-region SSA values are runtime dynamic and must not
+    // resolve via module-init caches captured at elaboration.
+    if (op->getParentOfType<llhd::ProcessOp>() ||
+        op->getParentOfType<seq::InitialOp>())
+      return true;
     return isa<LLVM::LoadOp, LLVM::ExtractValueOp, LLVM::InsertValueOp,
                LLVM::GEPOp, mlir::UnrealizedConversionCastOp, hw::StructCreateOp,
                hw::StructExtractOp, hw::ArrayCreateOp, hw::ArrayGetOp,
-               hw::ArraySliceOp, hw::ArrayConcatOp>(op);
+               hw::ArraySliceOp, hw::ArrayConcatOp, llhd::ProbeOp>(op);
   };
 
   // Check per-instance module-level init values first (child module context).
@@ -20580,6 +20922,39 @@ LLHDProcessInterpreter::interpretProcPrint(ProcessId procId,
                                             sim::PrintFormattedProcOp printOp) {
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.proc.print\n");
 
+  if (auto monitorKind =
+          printOp->getAttrOfType<mlir::StringAttr>("circt.monitor.kind")) {
+    llvm::StringRef kind = monitorKind.getValue();
+    if (kind == "register") {
+      std::string output = evaluateFormatString(procId, printOp.getInput());
+      registeredMonitor.active = true;
+      registeredMonitor.enabled = true;
+      registeredMonitor.ownerProcId = procId;
+      registeredMonitor.message = printOp.getInput();
+      registeredMonitor.lastOutput = output;
+      llvm::outs() << output;
+      if (flushProcPrintEnabled)
+        llvm::outs().flush();
+      return success();
+    }
+    if (kind == "off") {
+      if (registeredMonitor.active)
+        registeredMonitor.enabled = false;
+      return success();
+    }
+    if (kind == "on") {
+      if (registeredMonitor.active) {
+        registeredMonitor.enabled = true;
+        invalidateFormatValueCache(registeredMonitor.ownerProcId,
+                                   registeredMonitor.message);
+        registeredMonitor.lastOutput =
+            evaluateFormatString(registeredMonitor.ownerProcId,
+                                 registeredMonitor.message);
+      }
+      return success();
+    }
+  }
+
   // Evaluate the format string and print it
   std::string output = evaluateFormatString(procId, printOp.getInput());
 
@@ -20589,6 +20964,48 @@ LLHDProcessInterpreter::interpretProcPrint(ProcessId procId,
     llvm::outs().flush();
 
   return success();
+}
+
+void LLHDProcessInterpreter::invalidateFormatValueCache(ProcessId procId,
+                                                         Value fmtValue) {
+  auto stateIt = processStates.find(procId);
+  if (stateIt == processStates.end())
+    return;
+
+  auto &valueMap = stateIt->second.valueMap;
+  llvm::SmallVector<Value, 16> stack;
+  llvm::SmallDenseSet<Value, 32> seen;
+  stack.push_back(fmtValue);
+  while (!stack.empty()) {
+    Value current = stack.pop_back_val();
+    if (!current || !seen.insert(current).second)
+      continue;
+    valueMap.erase(current);
+    if (Operation *defOp = current.getDefiningOp())
+      for (Value operand : defOp->getOperands())
+        stack.push_back(operand);
+  }
+}
+
+void LLHDProcessInterpreter::pollRegisteredMonitor() {
+  if (!registeredMonitor.active || !registeredMonitor.enabled)
+    return;
+
+  auto procIt = processStates.find(registeredMonitor.ownerProcId);
+  if (procIt == processStates.end() || procIt->second.halted)
+    return;
+
+  invalidateFormatValueCache(registeredMonitor.ownerProcId,
+                             registeredMonitor.message);
+  std::string output = evaluateFormatString(registeredMonitor.ownerProcId,
+                                            registeredMonitor.message);
+  if (output == registeredMonitor.lastOutput)
+    return;
+
+  llvm::outs() << output;
+  if (flushProcPrintEnabled)
+    llvm::outs().flush();
+  registeredMonitor.lastOutput = std::move(output);
 }
 
 // Helper: given a block argument, find the corresponding operand from a
@@ -21198,7 +21615,9 @@ void LLHDProcessInterpreter::traceI3CForkRuntimeEvent(
     }
   };
 
-  llvm::errs() << "[I3C-FORK-RUNTIME] tag=" << tag << " fork=" << forkId;
+  SimTime now = scheduler.getCurrentTime();
+  llvm::errs() << "[I3C-FORK-RUNTIME] tag=" << tag << " fork=" << forkId
+               << " t=" << now.realTime << " d=" << now.deltaStep;
   if (!mode.empty())
     llvm::errs() << " mode=" << mode;
   emitProc("parent", parentProcId);
@@ -21619,6 +22038,11 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
     // This allows child processes to access parent's local variables
     auto &parentState = processStates[procId];
     childState.valueMap = parentState.valueMap;
+    // Preserve ref argument provenance across forked execution. Children may
+    // continue running after parent frames clean up temporary valueToSignal
+    // entries, so resolveSignalId must be able to trace block-arg refs back
+    // through the parent's call-argument chain.
+    childState.refBlockArgSources = parentState.refBlockArgSources;
 
     // Share parent-scope allocas via the parent pointer chain instead of
     // deep-copying.  Only allocas defined WITHIN the fork body region are
@@ -21945,11 +22369,14 @@ bool LLHDProcessInterpreter::shouldDeferDisableFork(ProcessId procId,
       if (!childProc)
         continue;
       ProcessState childSchedState = childProc->getState();
-      // Defer only for children that have pending runnable work (ready or
-      // suspended with a pending wake). Deferring pure waiting children can
-      // overrun monitor sampling loops before disable_fork takes effect.
+      // Defer for children that may still consume a pending wakeup:
+      // Ready/Suspended are runnable, while Waiting can represent a wake that
+      // has not yet been promoted into scheduler state in this delta.
+      // Waiting is handled with a tighter defer poll budget in
+      // fireDeferredDisableFork to avoid over-deferring long wait loops.
       if (childSchedState != ProcessState::Ready &&
-          childSchedState != ProcessState::Suspended)
+          childSchedState != ProcessState::Suspended &&
+          childSchedState != ProcessState::Waiting)
         continue;
       deferChildId = childId;
       deferForkId = forkId;
@@ -22001,7 +22428,10 @@ void LLHDProcessInterpreter::fireDeferredDisableFork(ProcessId procId,
   unsigned pollCount = disableForkDeferredPollCount[procId];
   bool shouldContinueDeferring = shouldDeferDisableFork(
       procId, deferChildId, deferForkId, deferChildSchedState);
-  unsigned pollLimit = kMaxDisableForkDeferredPolls;
+  // Waiting children get a short grace window to consume a pending wakeup
+  // without letting disable_fork defer through extended wait loops.
+  unsigned pollLimit = (deferChildSchedState == ProcessState::Waiting) ? 1
+                                                                        : kMaxDisableForkDeferredPolls;
   if (shouldContinueDeferring && pollCount < pollLimit) {
     ++disableForkDeferredPollCount[procId];
     if (traceDisableFork) {
@@ -22259,21 +22689,94 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     out += "]";
     return out;
   };
+  auto addDetectEdgeToWaitList = [&](SensitivityList &list, SignalId sigId,
+                                     moore::Edge edge) {
+    switch (edge) {
+    case moore::Edge::PosEdge:
+      list.addPosedge(sigId);
+      break;
+    case moore::Edge::NegEdge:
+      list.addNegedge(sigId);
+      break;
+    case moore::Edge::BothEdges:
+      list.addEdge(sigId, EdgeType::AnyEdge);
+      break;
+    case moore::Edge::AnyChange:
+    default:
+      list.addLevel(sigId);
+      break;
+    }
+  };
+  auto expandInterfaceFieldPropagation = [&](SensitivityList &list) {
+    if (interfaceFieldPropagation.empty())
+      return;
+    SensitivityList expanded;
+    for (const auto &entry : list.getEntries()) {
+      expanded.addEdge(entry.signalId, entry.edge);
+      auto propIt = interfaceFieldPropagation.find(entry.signalId);
+      if (propIt != interfaceFieldPropagation.end()) {
+        for (SignalId propagatedSigId : propIt->second)
+          expanded.addEdge(propagatedSigId, entry.edge);
+      }
+    }
+    list = std::move(expanded);
+  };
+  auto canonicalizeSensitivityEntries =
+      [](llvm::ArrayRef<SensitivityEntry> entries) {
+        llvm::SmallVector<std::pair<SignalId, unsigned>, 8> canonical;
+        canonical.reserve(entries.size());
+        for (const auto &entry : entries)
+          canonical.emplace_back(entry.signalId,
+                                 static_cast<unsigned>(entry.edge));
+        llvm::sort(canonical);
+        canonical.erase(std::unique(canonical.begin(), canonical.end()),
+                        canonical.end());
+        return canonical;
+      };
+  auto sensitivityEntriesEquivalent = [&](llvm::ArrayRef<SensitivityEntry> lhs,
+                                          llvm::ArrayRef<SensitivityEntry> rhs) {
+    return canonicalizeSensitivityEntries(lhs) ==
+           canonicalizeSensitivityEntries(rhs);
+  };
+  SensitivityList directResolvedWaitList;
+  bool hasDirectResolvedWaitList = true;
+  waitEventOp.getBody().walk([&](moore::DetectEventOp detectOp) {
+    if (!hasDirectResolvedWaitList)
+      return;
+    SignalId sigId = resolveSignalId(detectOp.getInput());
+    if (sigId == 0) {
+      hasDirectResolvedWaitList = false;
+      return;
+    }
+    addDetectEdgeToWaitList(directResolvedWaitList, sigId, detectOp.getEdge());
+  });
+  if (hasDirectResolvedWaitList) {
+    if (directResolvedWaitList.empty()) {
+      hasDirectResolvedWaitList = false;
+    } else {
+      expandInterfaceFieldPropagation(directResolvedWaitList);
+    }
+  }
 
   // Reuse cached signal sensitivity for hot wait_event loops.
   // This avoids repeatedly walking the detect_event body and tracing dynamic
   // value chains on every wakeup when the resolved sensitivity is stable.
   auto cacheIt = state.waitSensitivityCache.find(waitEventOp.getOperation());
-  if (cacheIt != state.waitSensitivityCache.end() && !cacheIt->second.empty()) {
+  if (cacheIt != state.waitSensitivityCache.end() &&
+      !cacheIt->second.empty() && hasDirectResolvedWaitList) {
     SensitivityList cachedWaitList;
     for (const auto &entry : cacheIt->second)
       cachedWaitList.addEdge(entry.signalId, entry.edge);
-    if (!cachedWaitList.empty()) {
+    if (!cachedWaitList.empty() &&
+        sensitivityEntriesEquivalent(cachedWaitList.getEntries(),
+                                     directResolvedWaitList.getEntries())) {
       state.waiting = true;
       scheduler.suspendProcessForEvents(procId, cachedWaitList);
       ++state.waitSensitivityCacheHits;
       if (traceWaitEventCache) {
+        SimTime now = scheduler.getCurrentTime();
         llvm::errs() << "[WAIT-EVENT-CACHE] hit proc=" << procId
+                     << " t=" << now.realTime << " d=" << now.deltaStep
                      << " entries=" << cachedWaitList.size()
                      << " op=0x"
                      << llvm::format_hex(reinterpret_cast<uintptr_t>(
@@ -22285,6 +22788,13 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
       }
       return success();
     }
+  }
+  if (!hasDirectResolvedWaitList &&
+      cacheIt != state.waitSensitivityCache.end()) {
+    // Dynamic wait_event inputs (runtime pointer tracing, unresolved refs, etc.)
+    // can resolve to different source signals across activations. Avoid stale
+    // cache hits by dropping op-scoped cache entries for such waits.
+    state.waitSensitivityCache.erase(waitEventOp.getOperation());
   }
 
   // Helper: getValue with parent-chain fallback for forked child processes.
@@ -22369,17 +22879,16 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
       if (depth > 10)
         return 0; // Prevent infinite recursion
 
-      // Check if this value is a signal reference
-      SignalId sigId = getSignalId(value);
+      // Check if this value is a signal reference.
+      SignalId sigId = resolveSignalId(value);
       if (sigId != 0)
         return sigId;
 
       // Try to trace through the defining operation
       if (Operation *defOp = value.getDefiningOp()) {
         // For probe operations, get the signal being probed
-        if (auto probeOp = dyn_cast<llhd::ProbeOp>(defOp)) {
-          return getSignalId(probeOp.getSignal());
-        }
+        if (auto probeOp = dyn_cast<llhd::ProbeOp>(defOp))
+          return resolveSignalId(probeOp.getSignal());
 
         // For struct extract, trace the struct
         if (auto extractOp = dyn_cast<hw::StructExtractOp>(defOp)) {
@@ -22574,44 +23083,25 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     if (sigId != 0) {
       // Respect the edge type from the detect_event op so that
       // @(posedge clk) only wakes on posedges, not any change.
-      switch (detectOp.getEdge()) {
-      case moore::Edge::PosEdge:
-        waitList.addPosedge(sigId);
-        break;
-      case moore::Edge::NegEdge:
-        waitList.addNegedge(sigId);
-        break;
-      case moore::Edge::BothEdges:
-        waitList.addEdge(sigId, EdgeType::AnyEdge);
-        break;
-      case moore::Edge::AnyChange:
-      default:
-        waitList.addLevel(sigId);
-        break;
-      }
+      addDetectEdgeToWaitList(waitList, sigId, detectOp.getEdge());
     }
   });
 
   // If we found signals to wait on, suspend the process
   if (!waitList.empty()) {
-    if (!interfaceFieldPropagation.empty()) {
-      SensitivityList expanded;
-      for (const auto &entry : waitList.getEntries()) {
-        expanded.addEdge(entry.signalId, entry.edge);
-        auto propIt = interfaceFieldPropagation.find(entry.signalId);
-        if (propIt != interfaceFieldPropagation.end()) {
-          for (SignalId propagatedSigId : propIt->second)
-            expanded.addEdge(propagatedSigId, entry.edge);
-        }
-      }
-      waitList = std::move(expanded);
-    }
+    expandInterfaceFieldPropagation(waitList);
 
     bool insertedWaitCache = false;
-    if (cacheIt == state.waitSensitivityCache.end()) {
-      auto inserted = state.waitSensitivityCache.try_emplace(
+    if (hasDirectResolvedWaitList) {
+      auto [cachePos, inserted] = state.waitSensitivityCache.try_emplace(
           waitEventOp.getOperation(), waitList.getEntries());
-      insertedWaitCache = inserted.second;
+      bool waitCacheChanged =
+          !inserted &&
+          !sensitivityEntriesEquivalent(cachePos->second, waitList.getEntries());
+      if (waitCacheChanged)
+        cachePos->second.assign(waitList.getEntries().begin(),
+                                waitList.getEntries().end());
+      insertedWaitCache = inserted || waitCacheChanged;
     }
     state.waiting = true;
 
@@ -22622,7 +23112,9 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     // Register the wait sensitivity with the scheduler
     scheduler.suspendProcessForEvents(procId, waitList);
     if (traceWaitEventCache && insertedWaitCache) {
+      SimTime now = scheduler.getCurrentTime();
       llvm::errs() << "[WAIT-EVENT-CACHE] store proc=" << procId
+                   << " t=" << now.realTime << " d=" << now.deltaStep
                    << " entries=" << waitList.size() << " op=0x"
                    << llvm::format_hex(
                           reinterpret_cast<uintptr_t>(waitEventOp.getOperation()),
@@ -23474,28 +23966,29 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
   };
 
   auto convertFourStateToLLVMStructLayout =
-      [&](InterpretedValue signalVal, SignalId sourceSigId,
+      [&](InterpretedValue sourceSignalVal, SignalId sourceSigId,
           Type targetLLVMType) -> InterpretedValue {
-    if (signalVal.isX())
-      return signalVal;
-    if (scheduler.getSignalEncoding(sourceSigId) != SignalEncoding::FourStateStruct)
-      return signalVal;
+    if (sourceSignalVal.isX())
+      return sourceSignalVal;
+    if (scheduler.getSignalEncoding(sourceSigId) !=
+        SignalEncoding::FourStateStruct)
+      return sourceSignalVal;
 
     auto llvmStructTy = dyn_cast<LLVM::LLVMStructType>(targetLLVMType);
     if (!llvmStructTy)
-      return signalVal;
+      return sourceSignalVal;
     auto body = llvmStructTy.getBody();
     if (body.size() != 2)
-      return signalVal;
+      return sourceSignalVal;
 
     unsigned valueWidth = getTypeWidth(body[0]);
     unsigned unknownWidth = getTypeWidth(body[1]);
     if (valueWidth == 0 || valueWidth != unknownWidth)
-      return signalVal;
-    if (valueWidth + unknownWidth != signalVal.getWidth())
-      return signalVal;
+      return sourceSignalVal;
+    if (valueWidth + unknownWidth != sourceSignalVal.getWidth())
+      return sourceSignalVal;
 
-    APInt bits = signalVal.getAPInt();
+    APInt bits = sourceSignalVal.getAPInt();
     APInt unknownBits = bits.extractBits(unknownWidth, 0);
     APInt valueBits = bits.extractBits(valueWidth, unknownWidth);
     APInt llvmBits = APInt::getZero(valueWidth + unknownWidth);
@@ -23533,8 +24026,29 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
       }
     }
     Type llvmType = loadOp.getType();
-    signalVal = convertFourStateToLLVMStructLayout(signalVal, sigId, llvmType);
-    if (!signalVal.isX() && signalType &&
+    bool convertedFourStateStructLayout = false;
+    if (!signalVal.isX() &&
+        scheduler.getSignalEncoding(sigId) == SignalEncoding::FourStateStruct) {
+      if (auto llvmStructTy = dyn_cast<LLVM::LLVMStructType>(llvmType)) {
+        auto body = llvmStructTy.getBody();
+        if (body.size() == 2) {
+          unsigned valueWidth = getTypeWidth(body[0]);
+          unsigned unknownWidth = getTypeWidth(body[1]);
+          if (valueWidth != 0 && valueWidth == unknownWidth &&
+              valueWidth + unknownWidth == signalVal.getWidth()) {
+            APInt bits = signalVal.getAPInt();
+            APInt unknownBits = bits.extractBits(unknownWidth, 0);
+            APInt valueBits = bits.extractBits(valueWidth, unknownWidth);
+            APInt llvmBits = APInt::getZero(valueWidth + unknownWidth);
+            safeInsertBits(llvmBits, valueBits, 0);
+            safeInsertBits(llvmBits, unknownBits, valueWidth);
+            signalVal = InterpretedValue(llvmBits);
+            convertedFourStateStructLayout = true;
+          }
+        }
+      }
+    }
+    if (!convertedFourStateStructLayout && !signalVal.isX() && signalType &&
         (isa<hw::StructType, hw::ArrayType>(signalType)) &&
         (isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(llvmType))) {
       APInt converted =
@@ -24053,24 +24567,35 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           triStateMirrorSrcSigId != triStateMirrorFieldSigId &&
           isTriStateDestSignal(triStateMirrorFieldSigId)) {
         // Only suppress mirrored probe-copy writes once the corresponding
-        // tri-state rule can already drive the destination from known inputs.
+        // tri-state rule can already drive the destination deterministically.
         // During early init some designs seed interface fields via probe-copy
-        // before src/cond settle; suppressing too early can latch X and block
+        // before cond settles; suppressing too early can latch X and block
         // later bus activity.
+        auto getRuleSignalValue = [&](SignalId sigId) -> InterpretedValue {
+          auto pendingIt = pendingEpsilonDrives.find(sigId);
+          if (pendingIt != pendingEpsilonDrives.end())
+            return pendingIt->second;
+          return InterpretedValue::fromSignalValue(
+              scheduler.getSignalValue(sigId));
+        };
         bool triStateRuleCanDriveDest = false;
         for (const auto &rule : interfaceTriStateRules) {
           if (rule.destSigId != triStateMirrorFieldSigId)
             continue;
-          InterpretedValue condVal =
-              InterpretedValue::fromSignalValue(scheduler.getSignalValue(
-                  rule.condSigId));
-          InterpretedValue srcVal =
-              InterpretedValue::fromSignalValue(scheduler.getSignalValue(
-                  rule.srcSigId));
-          if (!condVal.isX() && !srcVal.isX()) {
-            triStateRuleCanDriveDest = true;
-            break;
+          InterpretedValue condVal = getRuleSignalValue(rule.condSigId);
+          if (condVal.isX() || rule.condBitIndex >= condVal.getWidth())
+            continue;
+          bool condTrue = condVal.getAPInt()[rule.condBitIndex];
+          if (!condTrue) {
+            if (!rule.elseValue.isX())
+              triStateRuleCanDriveDest = true;
+          } else {
+            InterpretedValue srcVal = getRuleSignalValue(rule.srcSigId);
+            if (!srcVal.isX())
+              triStateRuleCanDriveDest = true;
           }
+          if (triStateRuleCanDriveDest)
+            break;
         }
         suppressTriStateMirrorStoreWrite = triStateRuleCanDriveDest;
       }
@@ -24272,24 +24797,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
             addedDynamicCopyLink = true;
           }
         };
-        auto removeDynamicLink = [&](SignalId destSigId) {
-          auto srcIt = interfaceFieldPropagation.find(copySrcSigId);
-          if (srcIt == interfaceFieldPropagation.end())
-            return;
-          auto &children = srcIt->second;
-          children.erase(std::remove(children.begin(), children.end(), destSigId),
-                         children.end());
-        };
-        if (suppressTriStateMirrorStoreForField &&
-            useAggressiveTriStateMirrorSuppression) {
-          // Once suppression becomes active, source->dest propagation is
-          // unsafe: mirrored net reads can overwrite the tri-state destination
-          // and keep stale drive values alive after OE release.
-          removeDynamicLink(fieldSigId);
-          auto mirrorIt = interfaceFieldPropagation.find(fieldSigId);
-          if (mirrorIt != interfaceFieldPropagation.end()) {
-            for (SignalId mirrorSigId : mirrorIt->second)
-              addDynamicLink(mirrorSigId);
+        if (suppressTriStateMirrorStoreForField) {
+          // Keep existing source->dest links intact. The suppression logic
+          // already skips mirrored writes and derives retained values from
+          // tri-state rule state; destructively removing links can leave
+          // source fanout empty in long-running monitor loops.
+          if (useAggressiveTriStateMirrorSuppression) {
+            auto mirrorIt = interfaceFieldPropagation.find(fieldSigId);
+            if (mirrorIt != interfaceFieldPropagation.end()) {
+              for (SignalId mirrorSigId : mirrorIt->second)
+                addDynamicLink(mirrorSigId);
+            }
           }
         } else {
           addDynamicLink(fieldSigId);
@@ -24395,50 +24913,74 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         }
       });
       const SignalValue &current = scheduler.getSignalValue(fieldSigId);
+      InterpretedValue currentVal = InterpretedValue::fromSignalValue(current);
 
       InterpretedValue driveVal =
           normalizeInterfaceStoreValue(fieldSigId, storeVal);
       if (suppressTriStateMirrorStoreForField) {
-        driveVal = InterpretedValue::fromSignalValue(current);
-        if (useAggressiveTriStateMirrorSuppression) {
-          // In flat topologies, derive the retained destination value directly
-          // from tri-state cond/src state to avoid stale bus-mirror latching.
-          auto getSignalValueForRule = [&](SignalId sigId) -> InterpretedValue {
-            auto pendingIt = pendingEpsilonDrives.find(sigId);
-            if (pendingIt != pendingEpsilonDrives.end())
-              return pendingIt->second;
-            return InterpretedValue::fromSignalValue(
-                scheduler.getSignalValue(sigId));
-          };
-          auto normalizeRuleValue = [&](InterpretedValue value)
-              -> InterpretedValue {
-            unsigned targetWidth = current.getWidth();
-            if (value.isX())
-              return InterpretedValue::makeX(targetWidth);
-            if (value.getWidth() == targetWidth)
-              return value;
-            APInt bits = value.getAPInt();
-            if (bits.getBitWidth() < targetWidth)
-              bits = bits.zext(targetWidth);
-            else if (bits.getBitWidth() > targetWidth)
-              bits = bits.trunc(targetWidth);
-            return InterpretedValue(bits);
-          };
+        driveVal = currentVal;
+        bool shouldDeriveFromRule = currentVal.isX();
+        // Derive the retained destination value directly from tri-state
+        // cond/src state when possible to avoid stale bus-mirror latching.
+        // Apply rule-derivation when the destination is unknown, or when the
+        // tri-state condition just transitioned from driving (1) to released
+        // (0). Re-deriving on every suppressed mirror store while cond stays 0
+        // can clobber externally observed bus values.
+        auto getSignalValueForRule = [&](SignalId sigId) -> InterpretedValue {
+          auto pendingIt = pendingEpsilonDrives.find(sigId);
+          if (pendingIt != pendingEpsilonDrives.end())
+            return pendingIt->second;
+          return InterpretedValue::fromSignalValue(
+              scheduler.getSignalValue(sigId));
+        };
+        auto normalizeRuleValue = [&](InterpretedValue value)
+            -> InterpretedValue {
+          unsigned targetWidth = current.getWidth();
+          if (value.isX())
+            return InterpretedValue::makeX(targetWidth);
+          if (value.getWidth() == targetWidth)
+            return value;
+          APInt bits = value.getAPInt();
+          if (bits.getBitWidth() < targetWidth)
+            bits = bits.zext(targetWidth);
+          else if (bits.getBitWidth() > targetWidth)
+            bits = bits.trunc(targetWidth);
+          return InterpretedValue(bits);
+        };
 
-          for (const auto &rule : interfaceTriStateRules) {
-            if (rule.destSigId != fieldSigId)
-              continue;
-            InterpretedValue condVal = getSignalValueForRule(rule.condSigId);
-            bool condTrue = false;
-            if (!condVal.isX() && rule.condBitIndex < condVal.getWidth())
-              condTrue = condVal.getAPInt()[rule.condBitIndex];
-            InterpretedValue selectedVal =
-                condTrue ? getSignalValueForRule(rule.srcSigId)
-                         : rule.elseValue;
-            driveVal = normalizeRuleValue(selectedVal);
+        bool derivedFromRule = false;
+        bool requestRuleDerivation = shouldDeriveFromRule;
+        for (const auto &rule : interfaceTriStateRules) {
+          if (rule.destSigId != fieldSigId)
+            continue;
+          InterpretedValue condVal = getSignalValueForRule(rule.condSigId);
+          if (condVal.isX() || rule.condBitIndex >= condVal.getWidth())
+            continue;
+          bool condTrue = condVal.getAPInt()[rule.condBitIndex];
+          bool hadPrevCond = interfaceTriStateCondSeen.count(fieldSigId) != 0;
+          bool prevCondTrue =
+              hadPrevCond ? interfaceTriStateCondLastValue.lookup(fieldSigId)
+                          : true;
+          bool condTransitionToFalse =
+              !condTrue && (!hadPrevCond || prevCondTrue);
+          interfaceTriStateCondLastValue[fieldSigId] = condTrue;
+          interfaceTriStateCondSeen.insert(fieldSigId);
+          if (condTransitionToFalse)
+            requestRuleDerivation = true;
+
+          if (!requestRuleDerivation)
             break;
-          }
-        } else if (driveVal.isX() && block) {
+
+          InterpretedValue selectedVal =
+              condTrue ? getSignalValueForRule(rule.srcSigId) : rule.elseValue;
+          driveVal = normalizeRuleValue(selectedVal);
+          derivedFromRule = true;
+          break;
+        }
+
+        if (requestRuleDerivation && !derivedFromRule &&
+            !useAggressiveTriStateMirrorSuppression &&
+            driveVal.isX() && block) {
           // Preserve legacy behavior for instance-scoped topologies.
           unsigned targetWidth = current.getWidth();
           unsigned numBytes = (targetWidth + 7) / 8;
@@ -25536,6 +26078,21 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    if (calleeName == "__moore_covergroup_get_inst_coverage") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      double coverage = __moore_covergroup_get_inst_coverage(cg);
+      if (callOp.getNumResults() >= 1) {
+        uint64_t bits;
+        std::memcpy(&bits, &coverage, sizeof(bits));
+        setValue(procId, callOp.getResult(), InterpretedValue(bits, 64));
+      }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_covergroup_get_inst_coverage("
+                 << cg << ") -> " << coverage << "%\n");
+      return success();
+    }
+
     // $get_coverage() / $coverage_get() -> total coverage percentage
     if (calleeName == "__moore_coverage_get_total") {
       double coverage = __moore_coverage_get_total();
@@ -25592,6 +26149,26 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                  << "  llvm.call: __moore_coverpoint_add_ignore_bin("
                  << cg << ", " << cpIdx << ", \"" << name << "\", "
                  << lo << ", " << hi << ")\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverpoint_add_bin") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t cpIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      const char *name = readCStringFromPtr(callOp.getOperand(2));
+      int32_t binType = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(3)).getUInt64());
+      int64_t lo = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(4)).getUInt64());
+      int64_t hi = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(5)).getUInt64());
+      __moore_coverpoint_add_bin(cg, cpIdx, name, binType, lo, hi);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_coverpoint_add_bin("
+                 << cg << ", " << cpIdx << ", \"" << name << "\", "
+                 << binType << ", " << lo << ", " << hi << ")\n");
       return success();
     }
 
@@ -25834,12 +26411,20 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (objPtr: ptr, seed: i32) -> void
     if (calleeName == "__moore_class_srandom") {
       if (callOp.getNumOperands() >= 2) {
+        static bool traceRandomize = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_RANDOMIZE");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
         uint64_t objAddr =
             getValue(procId, callOp.getOperand(0)).getUInt64();
         uint32_t seed = static_cast<uint32_t>(
             getValue(procId, callOp.getOperand(1)).getUInt64());
         // Create or reseed the per-object RNG
         perObjectRng[objAddr] = std::mt19937(seed);
+        if (traceRandomize)
+          llvm::errs() << "[RAND] class_srandom obj=0x"
+                       << llvm::format_hex(objAddr, 16) << " seed=" << seed
+                       << "\n";
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.call: __moore_class_srandom(0x"
                    << llvm::format_hex(objAddr, 16)
@@ -26132,8 +26717,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (!value || !seen.insert(value).second)
               continue;
 
-            Value remapped = this->remapRefBlockArgSource(value);
-            if (SignalId sigId = getSignalId(remapped); sigId != 0)
+            if (SignalId sigId = resolveSignalId(value); sigId != 0)
               return sigId;
 
             Operation *defOp = value.getDefiningOp();
@@ -26173,46 +26757,18 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               stack.push_back(arrayGet.getInput());
               continue;
             }
+            for (Value operand : defOp->getOperands())
+              stack.push_back(operand);
           }
 
-          return 0;
-        };
-
-        auto inferSignalFromNearbyOps = [&]() -> SignalId {
-          auto it = mlir::Block::iterator(callOp.getOperation());
-          auto end = callOp->getBlock()->end();
-          unsigned budget = 24;
-          while (budget-- > 0) {
-            ++it;
-            if (it == end)
-              break;
-            Operation &nextOp = *it;
-            if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(nextOp)) {
-              for (Value input : castOp.getInputs()) {
-                if (SignalId sigId = resolveSignalFromValue(input);
-                    sigId != 0)
-                  return sigId;
-              }
-            }
-            if (auto loadOp = dyn_cast<LLVM::LoadOp>(nextOp)) {
-              if (SignalId sigId = resolveSignalFromValue(loadOp.getAddr());
-                  sigId != 0)
-                return sigId;
-            }
-            if (isa<cf::BranchOp, cf::CondBranchOp>(nextOp))
-              break;
-          }
           return 0;
         };
 
         SignalId waitSignalId = resolveSignalFromValue(callOp.getOperand(1));
-        if (waitSignalId == 0 && valueAddr == 0)
-          waitSignalId = inferSignalFromNearbyOps();
         if (waitSignalId != 0) {
           SensitivityList waitList;
           waitList.addEdge(waitSignalId, waitEdge);
           scheduler.suspendProcessForEvents(procId, waitList);
-          recordWaitSensitivitySnapshot(state, &waitList);
           LLVM_DEBUG(llvm::dbgs()
                      << "    wait_event signal sensitivity: signal="
                      << waitSignalId
@@ -26268,7 +26824,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               waitList.addEdge(entry.signalId, entry.edge);
             if (!waitList.empty()) {
               scheduler.suspendProcessForEvents(procId, waitList);
-              recordWaitSensitivitySnapshot(state, &waitList);
               LLVM_DEBUG(llvm::dbgs() << "    No specific address, waiting on "
                                       << waitList.size()
                                       << " cached signal sensitivities\n");
@@ -26719,9 +27274,49 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
 
-        // Read key from interpreter memory into a local buffer
+        // Read key bytes from interpreter/global/native memory.
         uint64_t keyOffset = 0;
         auto *keyBlock = findMemoryBlockByAddress(keyAddr, procId, &keyOffset);
+        auto readKeyBytes = [&](uint8_t *dst, size_t dstSize) -> size_t {
+          if (!dst || dstSize == 0 || keyAddr == 0)
+            return 0;
+
+          if (keyBlock && keyBlock->initialized && keyOffset < keyBlock->data.size()) {
+            size_t maxCopy =
+                std::min(dstSize, keyBlock->data.size() - static_cast<size_t>(keyOffset));
+            std::memcpy(dst, keyBlock->data.data() + keyOffset, maxCopy);
+            return maxCopy;
+          }
+
+          uint64_t globalOffset = 0;
+          if (auto *globalBlock = findBlockByAddress(keyAddr, globalOffset)) {
+            if (globalBlock->initialized && globalOffset < globalBlock->data.size()) {
+              size_t maxCopy = std::min(
+                  dstSize, globalBlock->data.size() - static_cast<size_t>(globalOffset));
+              std::memcpy(dst, globalBlock->data.data() + globalOffset, maxCopy);
+              return maxCopy;
+            }
+          }
+
+          uint64_t nativeOffset = 0;
+          size_t nativeSize = 0;
+          if (findNativeMemoryBlockByAddress(keyAddr, &nativeOffset, &nativeSize) &&
+              nativeOffset < nativeSize) {
+            size_t maxCopy = std::min(
+                dstSize, nativeSize - static_cast<size_t>(nativeOffset));
+            std::memcpy(dst, reinterpret_cast<const void *>(keyAddr), maxCopy);
+            return maxCopy;
+          }
+
+          // Some compile-mode temporaries are native stack pointers and not
+          // tracked in nativeMemoryBlocks. Guard with a high-address heuristic.
+          if (keyAddr >= 0x10000000000ULL) {
+            std::memcpy(dst, reinterpret_cast<const void *>(keyAddr), dstSize);
+            return dstSize;
+          }
+
+          return 0;
+        };
 
         // We need to read the key data and pass a pointer to it.
         // For string keys: {ptr, i64} (16 bytes)
@@ -26732,56 +27327,45 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         MooreString keyString = {nullptr, 0};
         std::string keyStorage;
 
-        if (keyBlock && keyBlock->initialized) {
-          // Copy up to 16 bytes of key data
-          // Safety check: make sure we don't underflow
-          if (keyOffset > keyBlock->data.size()) {
-            setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
-            return success();
-          }
-          size_t maxCopy = std::min<size_t>(16, keyBlock->data.size() - keyOffset);
-          std::memcpy(keyBuffer, keyBlock->data.data() + keyOffset, maxCopy);
-
-          // Check if this looks like a string key ({ptr, len} struct)
-          // by reading the header and checking keySize
-          if (arrayPtr) {
-            auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
-            if (header->type == AssocArrayType_StringKey) {
-              // For string keys, interpret as MooreString
-              uint64_t strPtrVal = 0;
-              int64_t strLen = 0;
-              for (int i = 0; i < 8; ++i) {
-                strPtrVal |= static_cast<uint64_t>(keyBuffer[i]) << (i * 8);
-                strLen |= static_cast<int64_t>(keyBuffer[8 + i]) << (i * 8);
-              }
-              if (!tryReadStringKey(procId, strPtrVal, strLen, keyStorage)) {
-                LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref "
-                                           "string key not readable\n");
-                setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
-                return success();
-              }
-              keyString.data = keyStorage.data();
-              keyString.len = keyStorage.size();
-              keyPtr = &keyString;
-
-              LLVM_DEBUG({
-                llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref string key: ptr=0x"
-                            << llvm::format_hex(strPtrVal, 16) << " len=" << strLen;
-                if (keyString.data && keyString.len > 0) {
-                  llvm::dbgs() << " = \"";
-                  llvm::dbgs().write(keyString.data, std::min<int64_t>(keyString.len, 100));
-                  llvm::dbgs() << "\"";
-                }
-                llvm::dbgs() << "\n";
-              });
-            } else {
-              // Integer key - keyBuffer already contains the value
-              LLVM_DEBUG({
-                int64_t intKey = 0;
-                std::memcpy(&intKey, keyBuffer, std::min<size_t>(8, maxCopy));
-                llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref int key: " << intKey << "\n";
-              });
+        size_t maxCopy = readKeyBytes(keyBuffer, sizeof(keyBuffer));
+        if (maxCopy > 0 && arrayPtr) {
+          auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+          if (header->type == AssocArrayType_StringKey) {
+            // For string keys, interpret as MooreString
+            uint64_t strPtrVal = 0;
+            int64_t strLen = 0;
+            for (int i = 0; i < 8; ++i) {
+              strPtrVal |= static_cast<uint64_t>(keyBuffer[i]) << (i * 8);
+              strLen |= static_cast<int64_t>(keyBuffer[8 + i]) << (i * 8);
             }
+            if (!tryReadStringKey(procId, strPtrVal, strLen, keyStorage)) {
+              LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref "
+                                         "string key not readable\n");
+              setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+              return success();
+            }
+            keyString.data = keyStorage.data();
+            keyString.len = keyStorage.size();
+            keyPtr = &keyString;
+
+            LLVM_DEBUG({
+              llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref string key: ptr=0x"
+                           << llvm::format_hex(strPtrVal, 16) << " len=" << strLen;
+              if (keyString.data && keyString.len > 0) {
+                llvm::dbgs() << " = \"";
+                llvm::dbgs().write(
+                    keyString.data, std::min<int64_t>(keyString.len, 100));
+                llvm::dbgs() << "\"";
+              }
+              llvm::dbgs() << "\n";
+            });
+          } else {
+            // Integer key - keyBuffer already contains the value
+            LLVM_DEBUG({
+              int64_t intKey = 0;
+              std::memcpy(&intKey, keyBuffer, std::min<size_t>(8, maxCopy));
+              llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref int key: " << intKey << "\n";
+            });
           }
         }
 
@@ -26834,38 +27418,72 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
 
-        // Read key from interpreter memory
+        // Read key bytes from interpreter/global/native memory.
         uint64_t keyOffset = 0;
         auto *keyBlock = findMemoryBlockByAddress(keyAddr, procId, &keyOffset);
+        auto readKeyBytes = [&](uint8_t *dst, size_t dstSize) -> size_t {
+          if (!dst || dstSize == 0 || keyAddr == 0)
+            return 0;
+
+          if (keyBlock && keyBlock->initialized && keyOffset < keyBlock->data.size()) {
+            size_t maxCopy =
+                std::min(dstSize, keyBlock->data.size() - static_cast<size_t>(keyOffset));
+            std::memcpy(dst, keyBlock->data.data() + keyOffset, maxCopy);
+            return maxCopy;
+          }
+
+          uint64_t globalOffset = 0;
+          if (auto *globalBlock = findBlockByAddress(keyAddr, globalOffset)) {
+            if (globalBlock->initialized && globalOffset < globalBlock->data.size()) {
+              size_t maxCopy = std::min(
+                  dstSize, globalBlock->data.size() - static_cast<size_t>(globalOffset));
+              std::memcpy(dst, globalBlock->data.data() + globalOffset, maxCopy);
+              return maxCopy;
+            }
+          }
+
+          uint64_t nativeOffset = 0;
+          size_t nativeSize = 0;
+          if (findNativeMemoryBlockByAddress(keyAddr, &nativeOffset, &nativeSize) &&
+              nativeOffset < nativeSize) {
+            size_t maxCopy = std::min(
+                dstSize, nativeSize - static_cast<size_t>(nativeOffset));
+            std::memcpy(dst, reinterpret_cast<const void *>(keyAddr), maxCopy);
+            return maxCopy;
+          }
+
+          if (keyAddr >= 0x10000000000ULL) {
+            std::memcpy(dst, reinterpret_cast<const void *>(keyAddr), dstSize);
+            return dstSize;
+          }
+
+          return 0;
+        };
 
         uint8_t keyBuffer[16] = {0};
         void *keyPtr = keyBuffer;
         MooreString keyString = {nullptr, 0};
         std::string keyStorage;
 
-        if (keyBlock && keyBlock->initialized) {
-          size_t maxCopy = std::min<size_t>(16, keyBlock->data.size() - keyOffset);
-          std::memcpy(keyBuffer, keyBlock->data.data() + keyOffset, maxCopy);
-
-          if (arrayPtr) {
-            auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
-            if (header->type == AssocArrayType_StringKey) {
-              uint64_t strPtrVal = 0;
-              int64_t strLen = 0;
-              for (int i = 0; i < 8; ++i) {
-                strPtrVal |= static_cast<uint64_t>(keyBuffer[i]) << (i * 8);
-                strLen |= static_cast<int64_t>(keyBuffer[8 + i]) << (i * 8);
-              }
-              if (!tryReadStringKey(procId, strPtrVal, strLen, keyStorage)) {
-                LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_exists "
-                                           "string key not readable\n");
-                setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
-                return success();
-              }
-              keyString.data = keyStorage.data();
-              keyString.len = keyStorage.size();
-              keyPtr = &keyString;
+        size_t maxCopy = readKeyBytes(keyBuffer, sizeof(keyBuffer));
+        if (maxCopy > 0 && arrayPtr) {
+          auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+          if (header->type == AssocArrayType_StringKey) {
+            uint64_t strPtrVal = 0;
+            int64_t strLen = 0;
+            for (int i = 0; i < 8; ++i) {
+              strPtrVal |= static_cast<uint64_t>(keyBuffer[i]) << (i * 8);
+              strLen |= static_cast<int64_t>(keyBuffer[8 + i]) << (i * 8);
             }
+            if (!tryReadStringKey(procId, strPtrVal, strLen, keyStorage)) {
+              LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_exists "
+                                         "string key not readable\n");
+              setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
+              return success();
+            }
+            keyString.data = keyStorage.data();
+            keyString.len = keyStorage.size();
+            keyPtr = &keyString;
           }
         }
 
@@ -28647,6 +29265,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // calls.  We only track the object address and advance the RNG seed.
     if (calleeName == "__moore_randomize_basic") {
       if (callOp.getNumOperands() >= 2) {
+        static bool traceRandomize = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_RANDOMIZE");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
         uint64_t classAddr =
             getValue(procId, callOp.getOperand(0)).getUInt64();
         int64_t classSize = static_cast<int64_t>(
@@ -28785,9 +29407,111 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                    << "  llvm.call: __moore_randomize_basic(0x"
                    << llvm::format_hex(classAddr, 16)
                    << ", " << classSize << ") = 1\n");
+        if (traceRandomize)
+          llvm::errs() << "[RAND] basic obj=0x"
+                       << llvm::format_hex(classAddr, 16)
+                       << " size=" << classSize << " rc=1\n";
       }
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, 1)));
+      return success();
+    }
+
+    // ---- __moore_randomize_bytes ----
+    // Signature: (dataPtr: ptr, size: i64) -> i32
+    // Randomizes an arbitrary byte range. This is used for dynamic-array
+    // payload initialization and must not apply class-header skipping rules.
+    if (calleeName == "__moore_randomize_bytes") {
+      int32_t rc = 0;
+      if (callOp.getNumOperands() >= 2) {
+        static bool traceRandomize = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_RANDOMIZE");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
+        uint64_t dataAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t size = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        if (dataAddr != 0 && size > 0) {
+          size_t byteCount = static_cast<size_t>(size);
+          auto randomWord = [&]() -> uint32_t {
+            if (lastRandomizeObjAddr)
+              return getObjectRng(lastRandomizeObjAddr)();
+            return processStates[procId].randomGenerator();
+          };
+
+          uint64_t off = 0;
+          auto *blk = findMemoryBlockByAddress(dataAddr, procId, &off);
+          if (!blk)
+            blk = findBlockByAddress(dataAddr, off);
+          if (blk && blk->initialized && off <= blk->data.size()) {
+            if (byteCount <= blk->data.size() - static_cast<size_t>(off)) {
+              auto *dst = blk->data.data() + off;
+              size_t i = 0;
+              for (; i + 4 <= byteCount; i += 4) {
+                uint32_t word = randomWord();
+                std::memcpy(dst + i, &word, 4);
+              }
+              if (i < byteCount) {
+                uint32_t word = randomWord();
+                std::memcpy(dst + i, &word, byteCount - i);
+              }
+              rc = 1;
+            }
+          } else {
+            uint64_t nativeOff = 0;
+            size_t nativeSize = 0;
+            if (findNativeMemoryBlockByAddress(dataAddr, &nativeOff, &nativeSize) &&
+                nativeOff <= nativeSize &&
+                byteCount <= nativeSize - static_cast<size_t>(nativeOff)) {
+              auto *dst = reinterpret_cast<uint8_t *>(dataAddr);
+              size_t i = 0;
+              for (; i + 4 <= byteCount; i += 4) {
+                uint32_t word = randomWord();
+                std::memcpy(dst + i, &word, 4);
+              }
+              if (i < byteCount) {
+                uint32_t word = randomWord();
+                std::memcpy(dst + i, &word, byteCount - i);
+              }
+              rc = 1;
+            } else if (dataAddr >= 0x10000000000ULL) {
+              rc = __moore_randomize_bytes(reinterpret_cast<void *>(dataAddr),
+                                           size);
+            }
+          }
+        }
+        if (traceRandomize) {
+          int firstByte = -1;
+          if (rc != 0 && size > 0 && dataAddr != 0) {
+            uint64_t off = 0;
+            auto *blk = findMemoryBlockByAddress(dataAddr, procId, &off);
+            if (!blk)
+              blk = findBlockByAddress(dataAddr, off);
+            if (blk && blk->initialized && off < blk->data.size()) {
+              firstByte = blk->data[off];
+            } else {
+              uint64_t nativeOff = 0;
+              size_t nativeSize = 0;
+              if (findNativeMemoryBlockByAddress(dataAddr, &nativeOff, &nativeSize) &&
+                  nativeOff < nativeSize)
+                firstByte = *reinterpret_cast<const uint8_t *>(dataAddr);
+              else if (dataAddr >= 0x10000000000ULL)
+                firstByte = *reinterpret_cast<const uint8_t *>(dataAddr);
+            }
+          }
+          llvm::errs() << "[RAND] bytes ptr=0x"
+                       << llvm::format_hex(dataAddr, 16) << " size=" << size
+                       << " rc=" << rc << " b0=" << firstByte << "\n";
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_randomize_bytes(0x"
+                   << llvm::format_hex(dataAddr, 16) << ", " << size
+                   << ") = " << rc << "\n");
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(rc))));
       return success();
     }
 
@@ -28880,6 +29604,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (min: i64, max: i64) -> i64
     // Returns a uniformly random value in [min, max] using per-object RNG.
     if (calleeName == "__moore_randomize_with_range") {
+      static bool traceRandomize = []() {
+        const char *env = std::getenv("CIRCT_SIM_TRACE_RANDOMIZE");
+        return env && env[0] != '\0' && env[0] != '0';
+      }();
       int64_t minVal = 0, maxVal = 0;
       if (callOp.getNumOperands() >= 2) {
         minVal = static_cast<int64_t>(
@@ -28900,6 +29628,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       LLVM_DEBUG(llvm::dbgs()
                  << "  llvm.call: __moore_randomize_with_range(min="
                  << minVal << ", max=" << maxVal << ") = " << result << "\n");
+      if (traceRandomize)
+        llvm::errs() << "[RAND] range obj=0x"
+                     << llvm::format_hex(lastRandomizeObjAddr, 16)
+                     << " min=" << minVal << " max=" << maxVal
+                     << " -> " << result << "\n";
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(),
                  InterpretedValue(static_cast<uint64_t>(result), 64));
@@ -30376,17 +31109,55 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
         if (arrayAddr != 0 && validAssocArrayAddresses.contains(arrayAddr)) {
           void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
-          // Read key from interpreter memory
+          // Read key bytes from interpreter/global/native memory.
           uint64_t keyOffset = 0;
           auto *keyBlock = findMemoryBlockByAddress(keyAddr, procId, &keyOffset);
+          auto readKeyBytes = [&](uint8_t *dst, size_t dstSize) -> size_t {
+            if (!dst || dstSize == 0 || keyAddr == 0)
+              return 0;
+
+            if (keyBlock && keyBlock->initialized && keyOffset < keyBlock->data.size()) {
+              size_t maxCopy = std::min(
+                  dstSize, keyBlock->data.size() - static_cast<size_t>(keyOffset));
+              std::memcpy(dst, keyBlock->data.data() + keyOffset, maxCopy);
+              return maxCopy;
+            }
+
+            uint64_t globalOffset = 0;
+            if (auto *globalBlock = findBlockByAddress(keyAddr, globalOffset)) {
+              if (globalBlock->initialized && globalOffset < globalBlock->data.size()) {
+                size_t maxCopy = std::min(
+                    dstSize,
+                    globalBlock->data.size() - static_cast<size_t>(globalOffset));
+                std::memcpy(dst, globalBlock->data.data() + globalOffset, maxCopy);
+                return maxCopy;
+              }
+            }
+
+            uint64_t nativeOffset = 0;
+            size_t nativeSize = 0;
+            if (findNativeMemoryBlockByAddress(keyAddr, &nativeOffset, &nativeSize) &&
+                nativeOffset < nativeSize) {
+              size_t maxCopy = std::min(
+                  dstSize, nativeSize - static_cast<size_t>(nativeOffset));
+              std::memcpy(dst, reinterpret_cast<const void *>(keyAddr), maxCopy);
+              return maxCopy;
+            }
+
+            if (keyAddr >= 0x10000000000ULL) {
+              std::memcpy(dst, reinterpret_cast<const void *>(keyAddr), dstSize);
+              return dstSize;
+            }
+
+            return 0;
+          };
           uint8_t keyBuffer[16] = {0};
           void *keyPtr = keyBuffer;
           MooreString keyString = {nullptr, 0};
           std::string keyStorage;
 
-          if (keyBlock && keyBlock->initialized) {
-            size_t maxCopy = std::min<size_t>(16, keyBlock->data.size() - keyOffset);
-            std::memcpy(keyBuffer, keyBlock->data.data() + keyOffset, maxCopy);
+          size_t maxCopy = readKeyBytes(keyBuffer, sizeof(keyBuffer));
+          if (maxCopy > 0) {
 
             auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
             if (header->type == AssocArrayType_StringKey) {
@@ -32962,6 +33733,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_display(\"" << message
                                 << "\")\n");
       }
+      return success();
+    }
+
+    // ---- __moore_printtimescale ----
+    if (calleeName == "__moore_printtimescale") {
+      __moore_printtimescale();
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_printtimescale()\n");
       return success();
     }
 

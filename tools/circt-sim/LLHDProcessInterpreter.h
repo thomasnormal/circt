@@ -758,6 +758,9 @@ public:
     return false;
   }
 
+  /// Poll the active $monitor registration and emit output on value changes.
+  void pollRegisteredMonitor();
+
   /// Set a callback to check if abort has been requested (e.g., by timeout).
   void setShouldAbortCallback(std::function<bool()> callback) {
     shouldAbortCallback = std::move(callback);
@@ -1329,6 +1332,10 @@ private:
   /// Evaluate a format string operation to produce output string.
   std::string evaluateFormatString(ProcessId procId, mlir::Value fmtValue);
 
+  /// Drop cached SSA values reachable from a format expression so subsequent
+  /// evaluateFormatString calls observe fresh signal/probe values.
+  void invalidateFormatValueCache(ProcessId procId, mlir::Value fmtValue);
+
   //===--------------------------------------------------------------------===//
   // Seq Dialect Operation Handlers
   //===--------------------------------------------------------------------===//
@@ -1721,15 +1728,21 @@ private:
   /// Used for UVM events stored as boolean fields in class instances where
   /// no signal is available to wait on.
   struct MemoryEventWaiter {
+    enum class EdgeMode : uint8_t {
+      AnyChange = 0,
+      RisingEdge = 1,
+      FallingEdge = 2,
+    };
+
     /// The address of the memory location to poll.
     uint64_t address = 0;
     /// The last seen value at this address.
     uint64_t lastValue = 0;
     /// The size of the value in bytes (1 for bool/i1).
     unsigned valueSize = 1;
-    /// True if we're waiting for a rising edge (0→1) trigger.
-    /// For event types (!moore.event), we only wake on 0→1 transitions.
-    bool waitForRisingEdge = false;
+    /// Edge trigger policy for this waiter.
+    /// Event types (!moore.event) use RisingEdge semantics.
+    EdgeMode edgeMode = EdgeMode::AnyChange;
   };
 
   /// Map from process IDs to their memory event waiters.
@@ -1993,6 +2006,17 @@ private:
   /// CIRCT_SIM_FLUSH_PROC_PRINT=1 for interactive debugging.
   bool flushProcPrintEnabled = false;
 
+  struct RegisteredMonitorState {
+    bool active = false;
+    bool enabled = true;
+    ProcessId ownerProcId = InvalidProcessId;
+    mlir::Value message;
+    std::string lastOutput;
+  };
+
+  /// Active $monitor registration (SystemVerilog allows one active monitor).
+  RegisteredMonitorState registeredMonitor;
+
   /// Track a UVM fast-path hit and evaluate hotness-gated promotion hooks.
   void noteUvmFastPathActionHit(llvm::StringRef actionKey);
 
@@ -2141,6 +2165,12 @@ private:
   /// Reverse map to quickly find tri-state rules affected by a source update.
   llvm::DenseMap<SignalId, llvm::SmallVector<unsigned, 2>>
       interfaceTriStateRulesBySource;
+
+  /// Last observed condition bit per tri-state destination field. Used by
+  /// suppressed mirror-store handling to apply rule-derived release values only
+  /// on cond true->false transitions (or first known false).
+  llvm::DenseMap<SignalId, bool> interfaceTriStateCondLastValue;
+  llvm::DenseSet<SignalId> interfaceTriStateCondSeen;
 
   /// Reverse map: childFieldAddr → parentFieldAddr, for setting up propagation.
   llvm::DenseMap<uint64_t, uint64_t> childToParentFieldAddr;
