@@ -778,6 +778,13 @@ private:
   /// vpi_put_value is called from within cbReadWriteSynch callbacks.
   bool deferringValueChanges = false;
 
+  /// When true, putValue() skips the per-write executeCurrentTime() call.
+  /// This ensures ALL VPI writes in a ReadWrite phase take effect before
+  /// any triggered LLHD processes fire. Without this, the first write
+  /// (e.g. clk=1) can trigger a posedge process that reads stale data
+  /// inputs because subsequent writes haven't been applied yet.
+  bool batchingReadWriteWrites = false;
+
   /// Signal IDs queued during deferred mode.
   llvm::SmallVector<SignalId, 8> deferredValueChangeSignals;
 

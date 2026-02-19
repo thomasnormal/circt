@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1533 - February 19, 2026
+
+### cocotb VPI: Fix NBA timing and ReadOnlySynch ordering (47/50 → 49/50)
+
+1. **Fix NBA drive scheduling to same delta step** (`LLHDProcessInterpreter.cpp`):
+   - Non-blocking assignments (`llhd.drv ... after <0ns, 1d, 0e>`) were scheduling
+     NBA events at absolute delta step 1 (`targetTime.deltaStep = delay.deltaStep`).
+   - cocotb's ReadOnlySynch read signals at delta step 0, before the NBA fired.
+   - Fix: changed all 4 occurrences to `targetTime.deltaStep = currentTime.deltaStep`,
+     so NBA drives fire in the NBA region of the SAME delta step (IEEE 1800-2017 §4.7).
+
+2. **Defer ReadOnlySynch to Postponed region** (`VPIRuntime.cpp`):
+   - `fireCallbacks(cbReadOnlySynch)` was called directly in Active-region callback.
+   - Fix: schedule as Postponed-region event so processCurrentDelta() processes
+     Active → NBA → Postponed in order.
+
+3. **Batched ReadWriteSynch writes** (`VPIRuntime.cpp`, `VPIRuntime.h`):
+   - Added `batchingReadWriteWrites` flag so `putValue()` skips per-write
+     `executeCurrentTime()` during the ReadWrite callback loop.
+
+4. **Return success() for unresolvable struct/array drives** (`LLHDProcessInterpreter.cpp`):
+   - Drives to struct/array signals that can't resolve signal ID now return
+     `success()` instead of `failure()`, preventing process crashes.
+
+5. **Validation**:
+   - cocotb: **49/50** pass (was 47/50). Remaining: `test_string_ansi_color`
+     (string-type LLHD signal limitation).
+   - circt-sim: **527/527** pass (100%, no regressions).
+
 ## Iteration 1532 - February 19, 2026
 
 ### circt-sim: two-phase firreg evaluation for correct non-blocking assignment semantics
