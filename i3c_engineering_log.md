@@ -228,3 +228,38 @@ build lock contention):
 Note:
 - This validates the cleanup regression set only; it does not yet close the
   I3C scoreboard parity gap.
+
+### 2026-02-19: Refresh lane after recent runtime/import changes
+Command:
+- `AVIPS=i3c SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 COMPILE_TIMEOUT=300 SIM_TIMEOUT=240 SIM_TIMEOUT_GRACE=30 utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-i3c-refresh-20260219-004123`
+
+Primary artifacts:
+- Matrix: `/tmp/avip-circt-sim-i3c-refresh-20260219-004123/matrix.tsv`
+- Sim log: `/tmp/avip-circt-sim-i3c-refresh-20260219-004123/i3c/sim_seed_1.log`
+
+Observed result:
+- Compile: `OK` (`32s`)
+- Sim: `OK` exit (`75s` wall)
+- Main-loop termination: `maxTime reached (7940000000000 fs)`
+- Scoreboard mismatch persists:
+  - `UVM_ERROR ... i3c_scoreboard.sv(162)` occurred once
+- No re-entrant lifecycle fatal in this run:
+  - `uvm_test_top already exists` occurrences: `0`
+- Coverage printout from covergroups in this run:
+  - `i3c_controller_covergroup`: `100.00%`
+  - `target_covergroup`: `100.00%`
+
+Interpretation:
+- Current I3C blocker remains functional parity (scoreboard data mismatch), not compile viability.
+- The severe `run_test` re-entry fatal is not deterministic in every lane; keep separate tracking, but current failure is still line-162 mismatch.
+
+Additional focused check from this session:
+- `test/Tools/circt-sim/task-output-struct-default.sv` passes and prints:
+  - `count=0 data=42`
+- This confirms baseline `output` argument defaulting behavior in a minimal task case.
+- However, that minimal pass does not close the I3C scoreboard gap.
+
+Next debugging step (root-cause oriented):
+1. Build a narrow reproducer around I3C target-side write-data conversion path (`to_class`/`from_class`) and compare controller-vs-target payload at first divergence.
+2. Add a dedicated regression that fails on first mismatched writeData sample (without full AVIP runtime).
+3. Re-run deterministic lane and require: no line-162 mismatch and no lifecycle re-entry fatal.

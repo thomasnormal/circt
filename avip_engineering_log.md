@@ -2085,3 +2085,89 @@ File: `tools/circt-sim/LLHDProcessInterpreter.cpp`
 - New dominant hotspot is `fork_18_branch_0` (`sim.fork`) in long bounds.
 - Remaining UART blocker appears functional/progress-related on Rx side
   (`UartRxCovergroup` still 0%), not purely baud-loop throughput.
+
+## 2026-02-18 Session: Workspace Cleanup + Non-Conflicting Parity Track
+
+### Cleanup performed
+- Removed generated scratch artifacts from repo root (temporary `*.dat`,
+  `test_timing.sdf`, `tmp.txt`, and transient OpenTitan sim logs).
+- Kept source-level and test-level in-flight work from other agents intact to
+  avoid cross-agent loss.
+
+### Scope adjustment
+- Shifted to a non-conflicting track while another agent is actively working on
+  broad JIT changes.
+- Current focus: AVIP parity closure, reproducible regressions, and targeted
+  runtime semantics fixes with minimal overlap.
+
+### Targeted runtime cleanup in progress
+Files touched:
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`
+- `test/Tools/circt-sim/fork-disable-defer-poll.sv`
+
+Changes:
+1. Refined `disable_fork` deferral eligibility:
+   - defer only when child scheduler state is `Ready` or `Suspended`;
+   - do **not** defer pure `Waiting` children.
+2. Reduced redundant work in disable loops:
+   - skip already-halted children in both immediate and deferred kill paths.
+3. Updated regression intent for waiting-child path:
+   - `fork-disable-defer-poll.sv` now expects immediate kill semantics.
+
+### Validation status
+- Focused lit run caught a regression during intermediate state
+  (`fork-disable-ready-wakeup.sv` failed), and the gate was corrected to include
+  `Suspended`.
+- Final focused re-run is currently pending because concurrent ninja jobs from
+  other agents are holding the same build lock.
+
+### Next step (short)
+1. Re-run:
+   - `fork-disable-ready-wakeup.sv`
+   - `fork-disable-defer-poll.sv`
+   - `disable-fork-halt.mlir`
+2. If green, re-run deterministic I3C compile lane and record scoreboard,
+   coverage, and runtime deltas.
+
+### 2026-02-18 Verification Addendum (post-lock workaround)
+To avoid shared `ninja` lock contention, the fork-disable regressions were
+validated via direct `circt-verilog`/`circt-sim` + `FileCheck` invocations.
+
+Pass results:
+- `test/Tools/circt-sim/fork-disable-ready-wakeup.sv`
+- `test/Tools/circt-sim/fork-disable-defer-poll.sv`
+- `test/Tools/circt-sim/disable-fork-halt.mlir`
+
+Command outcome: `OK` (strict `set -euo pipefail`).
+
+## 2026-02-19 Session: I3C refresh + log sync
+
+### Commands run
+- Rebuild:
+  - `ninja -C build-test circt-verilog circt-sim`
+- Focused semantics check:
+  - `build-test/bin/circt-verilog test/Tools/circt-sim/task-output-struct-default.sv --no-uvm-auto-include -o /tmp/...mlir`
+  - `build-test/bin/circt-sim /tmp/...mlir --top top`
+- Deterministic I3C compile lane:
+  - `AVIPS=i3c SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 COMPILE_TIMEOUT=300 SIM_TIMEOUT=240 SIM_TIMEOUT_GRACE=30 utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-i3c-refresh-20260219-004123`
+
+### Results
+- Build succeeded.
+- Focused output-arg test passes (`count=0 data=42`).
+- I3C lane status (seed 1, compile mode):
+  - Compile `OK` in `32s`
+  - Sim exits `OK` in `75s`
+  - Still functional mismatch:
+    - `UVM_ERROR ... i3c_scoreboard.sv(162)`
+  - No `uvm_test_top already exists` fatal in this specific run.
+  - Coverage printout in sim log: `100.00% / 100.00%`
+
+### Current blocker summary
+- I3C is still not parity-clean despite stable compile execution.
+- Primary blocker remains writeData mismatch at scoreboard check-phase line 162.
+- Runtime/JIT stability has improved enough to complete bounded lane; now needs correctness closure rather than only throughput tuning.
+
+### Immediate next actions
+1. Add a minimal I3C-oriented reproducer for first writeData divergence in controller-vs-target comparison path.
+2. Add regression coverage for the reproducer (fast lane, non-AVIP full runtime).
+3. Re-run deterministic I3C lane after each fix until line-162 mismatch is eliminated.
