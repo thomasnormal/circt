@@ -2508,3 +2508,25 @@ Conclusion:
     `i3c_scoreboard.sv(162)` with target coverage `0.00%`.
 - Next work focus: why target-side source field updates stop after ~`170ns`
   (signal-copy / tri-state source path), not child fanout linking.
+
+## 2026-02-19 Session: I3C target-side progression diagnosis (post relay fix)
+
+Follow-up diagnostics (all reverted experiments):
+- tried peer-linking top-level probe-copy fields that share the same source
+  signal; this introduced early `X` churn and regressed bounded lane behavior.
+- tried bidirectional signal-copy links (`signal->field` and `field->signal`);
+  this did not move target monitor `field_2` off zero.
+
+Useful evidence retained:
+- `/tmp/i3c-dedge-ifaceprop-short.log`:
+  - target BFM `field_2` fanout receives `11` at `t=90000000`.
+  - later target `detectEdge_scl` loads still read `field_2=0`.
+- `/tmp/i3c-trirule-300.log`:
+  - sustained tri-state rule churn on controller-side `sig_0` fields.
+  - target-side `sig_1` tri-state rule activity largely disappears after
+    startup in bounded window.
+
+Working hypothesis now:
+- target child fanout is not the primary blocker; remaining I3C mismatch comes
+  from target-side source/tri-state progression not being rescheduled in lockstep
+  with controller-side runtime drive changes.

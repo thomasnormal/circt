@@ -685,3 +685,53 @@ Next step:
   runtime transitions after ~`170ns` despite continued controller-side toggles;
   focus on signal-copy / tri-state source-of-truth path rather than additional
   child fanout heuristics.
+
+### 2026-02-19 Session: failed link experiments + tri-state rule evidence
+
+Objective:
+- explain why target monitor `detectEdge_scl` keeps reading
+  `...sig_6.field_2 == 0` while controller side toggles.
+
+What was tested:
+1. **Peer-link top-level probe-copy fields sharing same source**
+   - temporary change in `interpretLLVMStore` dynamic copy-link path:
+     - linked top-level peers (e.g. `sig_0.field_2 <-> sig_1.field_2`)
+       when both copied from same `copySrc` signal.
+   - result:
+     - bounded lane regressed (early `X` churn, 0/0 coverage at 300ns).
+   - action:
+     - reverted.
+
+2. **Bidirectional signal-copy links (`src->field` plus `field->src`)**
+   - temporary change in `interfaceSignalCopyPairs` setup.
+   - result:
+     - no improvement in target `detectEdge` values (target field-2 still
+       pinned at `0` in active window).
+   - action:
+     - reverted.
+
+Stable evidence collected:
+- Combined trace (`CIRCT_SIM_TRACE_I3C_DETECTEDGE_VALUES=1`
+  + `CIRCT_SIM_TRACE_IFACE_PROP=1`):
+  - `/tmp/i3c-dedge-ifaceprop-short.log`
+  - target BFM field-2 links (`sig=33/47`) do receive `11` at `t=90000000`.
+  - later monitor loads still read `sig=47 ... field_2 val=0` at
+    `t=180..280ns`.
+
+- Tri-state rule trace (`CIRCT_SIM_TRACE_INTERFACE_TRISTATE=1`):
+  - `/tmp/i3c-trirule-300.log`
+  - frequent rule activity on controller-side group (`sig_0.*`), with
+    `dest=sig_0.field_2` toggling between driven and `11`.
+  - only startup rule activity on target-side group (`sig_1.*`), then no
+    sustained `sig_1` tri-rule trigger stream in this window.
+
+Interpretation:
+- Child fanout from target parent fields is present.
+- The remaining divergence is upstream: target-side source progression
+  (`sig_1` tri-state/source path) is not tracking controller-side runtime
+  drive progression after early startup.
+
+Next focused step:
+- instrument rule trigger/dependency chains for target-side `sig_1` rule
+  sources/conds (`field_5/field_6` and `field_8/field_9`) to identify where
+  updates stop being scheduled, then fix scheduling/source ownership there.
