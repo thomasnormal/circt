@@ -579,11 +579,23 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   // pending updates are applied atomically (phase 2). This ensures correct
   // Verilog non-blocking assignment semantics (IEEE 1800-2017 §10.4.2).
   this->scheduler.setPostRegionCallback(SchedulingRegion::NBA, [this]() {
-    if (pendingFirRegUpdates.empty())
+    if (pendingFirRegUpdates.empty()) {
+      processConditionalDriveSignals.clear();
       return;
-    for (auto &[sigId, val] : pendingFirRegUpdates)
+    }
+    for (auto &[sigId, val] : pendingFirRegUpdates) {
+      // When a process conditionally drove this signal in the same NBA batch,
+      // skip the firreg update.  The process drive carries the explicit write
+      // from the always block that assigned to the register; the firreg only
+      // holds the retention value (the old captured value before any NBA
+      // events fired).  Applying the firreg update would overwrite the
+      // process's correct new value with the stale retention value.
+      if (processConditionalDriveSignals.contains(sigId))
+        continue;
       this->scheduler.updateSignal(sigId, val);
+    }
     pendingFirRegUpdates.clear();
+    processConditionalDriveSignals.clear();
   });
   deferFirRegUpdates = true;
 }
@@ -4389,10 +4401,20 @@ llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayout(
       auto llvmBody = llvmStructType.getBody();
       size_t count = std::min(hwElements.size(), llvmBody.size());
 
+      // Use the same field-width logic as insertvalue/extractvalue:
+      // scalars use getTypeWidth (bit-packed), nested aggregates use
+      // getMemoryLayoutBitWidth (byte-aligned).  This ensures the
+      // extraction positions match where insertvalue placed the data.
+      auto getLLVMFieldWidth = [&](Type type) -> unsigned {
+        return isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(type)
+                   ? getMemoryLayoutBitWidth(type)
+                   : getTypeWidth(type);
+      };
+
       unsigned llvmOffset = 0;
       unsigned hwOffset = hwWidth;
       for (size_t i = 0; i < count; ++i) {
-        unsigned llvmFieldWidth = getMemoryLayoutBitWidth(llvmBody[i]);
+        unsigned llvmFieldWidth = getLLVMFieldWidth(llvmBody[i]);
         unsigned hwFieldWidth = getTypeWidth(hwElements[i].type);
         hwOffset -= hwFieldWidth;
         APInt fieldBits = value.extractBits(llvmFieldWidth, llvmOffset);
@@ -4408,8 +4430,13 @@ llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayout(
 
   if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(llvmType)) {
     if (auto hwArrayType = dyn_cast<hw::ArrayType>(hwType)) {
+      auto getLLVMFieldWidth = [&](Type type) -> unsigned {
+        return isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(type)
+                   ? getMemoryLayoutBitWidth(type)
+                   : getTypeWidth(type);
+      };
       unsigned llvmElemWidth =
-          getMemoryLayoutBitWidth(llvmArrayType.getElementType());
+          getLLVMFieldWidth(llvmArrayType.getElementType());
       unsigned hwElemWidth = getTypeWidth(hwArrayType.getElementType());
       unsigned numElements = hwArrayType.getNumElements();
       unsigned llvmElements = llvmArrayType.getNumElements();
@@ -4449,11 +4476,20 @@ llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayout(
       auto llvmBody = llvmStructType.getBody();
       size_t count = std::min(hwElements.size(), llvmBody.size());
 
+      // Use the same field-width logic as insertvalue/extractvalue:
+      // scalars use getTypeWidth (bit-packed), nested aggregates use
+      // getMemoryLayoutBitWidth (byte-aligned).
+      auto getLLVMFieldWidth = [&](Type type) -> unsigned {
+        return isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(type)
+                   ? getMemoryLayoutBitWidth(type)
+                   : getTypeWidth(type);
+      };
+
       unsigned hwOffset = hwWidth;
       unsigned llvmOffset = 0;
       for (size_t i = 0; i < count; ++i) {
         unsigned hwFieldWidth = getTypeWidth(hwElements[i].type);
-        unsigned llvmFieldWidth = getMemoryLayoutBitWidth(llvmBody[i]);
+        unsigned llvmFieldWidth = getLLVMFieldWidth(llvmBody[i]);
         hwOffset -= hwFieldWidth;
         APInt fieldBits = value.extractBits(hwFieldWidth, hwOffset);
         APInt converted = convertHWToLLVMLayout(
@@ -4469,8 +4505,13 @@ llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayout(
   if (auto hwArrayType = dyn_cast<hw::ArrayType>(hwType)) {
     if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(llvmType)) {
       unsigned hwElemWidth = getTypeWidth(hwArrayType.getElementType());
+      auto getLLVMFieldWidth = [&](Type type) -> unsigned {
+        return isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(type)
+                   ? getMemoryLayoutBitWidth(type)
+                   : getTypeWidth(type);
+      };
       unsigned llvmElemWidth =
-          getMemoryLayoutBitWidth(llvmArrayType.getElementType());
+          getLLVMFieldWidth(llvmArrayType.getElementType());
       unsigned numElements = hwArrayType.getNumElements();
       unsigned llvmElements = llvmArrayType.getNumElements();
       size_t count = std::min(numElements, llvmElements);
@@ -5085,11 +5126,35 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
       continue;
     }
 
+    // If this is an unconditional drive and a conditional process drive
+    // already claimed this signal in the current NBA batch, skip it.
+    // This implements Verilog multi-driver semantics: when two always blocks
+    // drive the same register, only the block that explicitly assigns in a
+    // given cycle should take effect.  The firreg (retention) driver must
+    // yield to the explicit conditional write.
+    static bool traceMultiDrv = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_MULTI_DRV");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+    if (!driveOp.getEnable() &&
+        processConditionalDriveSignals.contains(sigId)) {
+      if (traceMultiDrv) {
+        llvm::errs() << "[MULTI-DRV] suppressed unconditional drive to sig="
+                     << sigId << " (conditional already claimed)\n";
+      }
+      continue;
+    }
+
     // Check enable condition if present.
     bool releaseDisabledDrive = false;
     InterpretedValue driveVal;
     if (driveOp.getEnable()) {
       InterpretedValue enableVal = getValue(procId, driveOp.getEnable());
+      if (traceMultiDrv && sigId == 7) {
+        llvm::errs() << "[MULTI-DRV] conditional drive to sig=" << sigId
+                     << " enable=" << (enableVal.isX() ? "X" : std::to_string(enableVal.getUInt64()))
+                     << " t=" << scheduler.getCurrentTime().realTime << "\n";
+      }
       if (enableVal.isX() || enableVal.getUInt64() == 0) {
         if (!distinctContinuousDriverSignals.contains(sigId) ||
             scheduler.getSignalEncoding(sigId) !=
@@ -5159,6 +5224,13 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
                             ? getDistinctContinuousDriverId(driveOp,
                                                             activeInstanceId)
                             : static_cast<uint64_t>(sigId);
+
+    // When a conditional process drive fires (enable is true), record the
+    // signal so the post-NBA firreg callback can yield to it.  This prevents
+    // the firreg's captured old value from overwriting the process's new value
+    // when two always blocks drive the same register.
+    if (driveOp.getEnable() && !releaseDisabledDrive)
+      processConditionalDriveSignals.insert(sigId);
 
     // Keep module-level drives in the scheduler to preserve NBA ordering
     // against other same-time updates (for example, init-time llhd.sig drives).
@@ -14101,6 +14173,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
   // Handle arith.select on ref types (e.g., !llhd.ref<!hw.struct<...>>)
   // by evaluating the condition and selecting the appropriate ref.
   Value signal = driveOp.getSignal();
+  Value originalSignal = signal;
   remapRefBlockArgSource(signal);
   while (auto selectOp = signal.getDefiningOp<arith::SelectOp>()) {
     InterpretedValue cond = getValue(procId, selectOp.getCondition());
@@ -14110,6 +14183,29 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
     }
     signal = cond.getUInt64() != 0 ? selectOp.getTrueValue() : selectOp.getFalseValue();
     remapRefBlockArgSource(signal);
+  }
+
+  static bool traceArrayDrive = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_ARRAY_DRIVE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (traceArrayDrive && isa<BlockArgument>(originalSignal)) {
+    llvm::errs() << "[ARRAY-DRV] blockarg→";
+    if (signal == originalSignal)
+      llvm::errs() << "UNRESOLVED";
+    else if (signal.getDefiningOp<llhd::SigArrayGetOp>())
+      llvm::errs() << "SigArrayGet";
+    else if (auto defOp = signal.getDefiningOp())
+      llvm::errs() << defOp->getName().getStringRef();
+    else
+      llvm::errs() << "otherBlockArg";
+    llvm::errs() << " sigId=" << getSignalId(signal);
+    if (auto sagOp = signal.getDefiningOp<llhd::SigArrayGetOp>()) {
+      llvm::errs() << " parentSigId=" << getSignalId(sagOp.getInput());
+      InterpretedValue idx = getValue(procId, sagOp.getIndex());
+      llvm::errs() << " idx=" << (idx.isX() ? "X" : std::to_string(idx.getUInt64()));
+    }
+    llvm::errs() << "\n";
   }
 
   // Get the signal ID
@@ -15628,6 +15724,25 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                  << "  Drive to array element[" << index << "] at offset "
                  << bitOffset << " width " << elementWidth << " in signal "
                  << parentSigId << "\n");
+
+      if (traceArrayDrive) {
+        llvm::SmallString<64> elemBits, resBits;
+        elementValue.toString(elemBits, 16, false);
+        if (result.getBitWidth() <= 256)
+          result.toString(resBits, 16, false);
+        else
+          resBits = "(wide)";
+        llvm::errs() << "[ARRAY-DRV-SCHED] sig=" << parentSigId
+                     << " idx=" << index << " off=" << bitOffset
+                     << " elemW=" << elementWidth
+                     << " elemVal=0x" << elemBits
+                     << " driveVal=" << (driveVal.isX() ? "X" : "known")
+                     << " parentW=" << parentWidth
+                     << " resW=" << result.getBitWidth()
+                     << " delay.rt=" << delay.realTime
+                     << " delay.d=" << delay.deltaStep
+                     << "\n";
+      }
 
       // Schedule the signal update
       SignalValue newVal(result);
