@@ -191,6 +191,18 @@ static uint64_t getDistinctContinuousDriverId(llhd::DriveOp driveOp,
       static_cast<uint64_t>(instanceId)));
 }
 
+// Continuous assignments lowered from tri-state behavior use drive enables.
+// When disabled on strength-resolved nets, the driver must release (high-Z)
+// instead of holding the last driven value.
+static InterpretedValue
+getDisabledContinuousDriveValue(const ProcessScheduler &scheduler,
+                                SignalId signalId) {
+  unsigned width = scheduler.getSignalValue(signalId).getWidth();
+  if (scheduler.getSignalEncoding(signalId) == SignalEncoding::FourStateStruct)
+    return InterpretedValue(llvm::APInt::getAllOnes(width));
+  return InterpretedValue::makeX(width);
+}
+
 namespace circt::sim {
 
 struct ScopedInstanceContext {
@@ -4841,17 +4853,28 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
       continue;
     }
 
-    // Check enable condition if present
+    // Check enable condition if present.
+    bool releaseDisabledDrive = false;
+    InterpretedValue driveVal;
     if (driveOp.getEnable()) {
       InterpretedValue enableVal = getValue(procId, driveOp.getEnable());
       if (enableVal.isX() || enableVal.getUInt64() == 0) {
-        LLVM_DEBUG(llvm::dbgs() << "  Module drive disabled\n");
-        continue;
+        if (!distinctContinuousDriverSignals.contains(sigId) ||
+            scheduler.getSignalEncoding(sigId) !=
+                SignalEncoding::FourStateStruct) {
+          LLVM_DEBUG(llvm::dbgs() << "  Module drive disabled\n");
+          continue;
+        }
+        releaseDisabledDrive = true;
+        driveVal = getDisabledContinuousDriveValue(scheduler, sigId);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Module drive disabled, releasing driver\n");
       }
     }
 
-    // Get the value to drive from the process result
-    InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+    // Get the value to drive from the process result.
+    if (!releaseDisabledDrive)
+      driveVal = getValue(procId, driveOp.getValue());
 
     // Get the delay time
     SimTime delay = convertTimeValue(procId, driveOp.getTime());
@@ -4882,7 +4905,12 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
     if (auto s1Attr = driveOp.getStrength1Attr())
       strength1 = static_cast<DriveStrength>(
           static_cast<uint8_t>(s1Attr.getValue()));
-    normalizeImplicitZDriveStrength(sigId, driveVal, strength0, strength1);
+    if (releaseDisabledDrive) {
+      strength0 = DriveStrength::HighZ;
+      strength1 = DriveStrength::HighZ;
+    } else {
+      normalizeImplicitZDriveStrength(sigId, driveVal, strength0, strength1);
+    }
 
     // Strength-sensitive nets (e.g. pullups/open-drain) require distinct
     // continuous-assignment drivers for proper resolution. Keep the legacy
@@ -4925,14 +4953,23 @@ void LLHDProcessInterpreter::executeModuleDrivesForSignal(SignalId sigId) {
     if (dstSigId == 0)
       continue;
 
-    // Check enable condition if present
+    // Check enable condition if present.
+    bool releaseDisabledDrive = false;
+    InterpretedValue driveVal;
     if (driveOp.getEnable()) {
       InterpretedValue enableVal = evaluateContinuousValue(driveOp.getEnable());
-      if (enableVal.isX() || enableVal.getUInt64() == 0)
-        continue;
+      if (enableVal.isX() || enableVal.getUInt64() == 0) {
+        if (!distinctContinuousDriverSignals.contains(dstSigId) ||
+            scheduler.getSignalEncoding(dstSigId) !=
+                SignalEncoding::FourStateStruct)
+          continue;
+        releaseDisabledDrive = true;
+        driveVal = getDisabledContinuousDriveValue(scheduler, dstSigId);
+      }
     }
 
-    InterpretedValue driveVal = evaluateContinuousValue(driveOp.getValue());
+    if (!releaseDisabledDrive)
+      driveVal = evaluateContinuousValue(driveOp.getValue());
     LLVM_DEBUG(llvm::dbgs() << "  driveVal="
                             << (driveVal.isX() ? "X" : std::to_string(driveVal.getUInt64()))
                             << " dstSig=" << dstSigId << " procId=" << entry.procId << "\n");
@@ -4954,7 +4991,12 @@ void LLHDProcessInterpreter::executeModuleDrivesForSignal(SignalId sigId) {
     if (auto s1Attr = driveOp.getStrength1Attr())
       strength1 =
           static_cast<DriveStrength>(static_cast<uint8_t>(s1Attr.getValue()));
-    normalizeImplicitZDriveStrength(dstSigId, driveVal, strength0, strength1);
+    if (releaseDisabledDrive) {
+      strength0 = DriveStrength::HighZ;
+      strength1 = DriveStrength::HighZ;
+    } else {
+      normalizeImplicitZDriveStrength(dstSigId, driveVal, strength0, strength1);
+    }
 
     uint64_t driverId = distinctContinuousDriverSignals.contains(dstSigId)
                             ? getDistinctContinuousDriverId(driveOp,
@@ -5077,10 +5119,17 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
 
     bool isMultiDriven = drives.size() > 1;
 
-    // Signals with explicit non-default strengths (e.g. pullups/open-drain)
-    // require true multi-driver resolution with distinct driver identities.
+    bool targetSupportsHighZ =
+        scheduler.getSignalEncoding(targetSigId) ==
+        SignalEncoding::FourStateStruct;
+    // Four-state drives with enable conditions and/or explicit non-default
+    // strengths require true multi-driver resolution with distinct driver
+    // identities. Grouped sequential execution cannot model per-driver release
+    // when an enable deasserts (tri-state behavior).
     bool requiresDistinctDrivers = llvm::any_of(
-        drives, [](DriveInfo &info) {
+        drives, [targetSupportsHighZ, isMultiDriven](DriveInfo &info) {
+          if (targetSupportsHighZ && isMultiDriven && info.driveOp.getEnable())
+            return true;
           DriveStrength s0 = DriveStrength::Strong;
           DriveStrength s1 = DriveStrength::Strong;
           if (auto s0Attr = info.driveOp.getStrength0Attr())
@@ -6050,14 +6099,25 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
   // Evaluate the drive value by interpreting the defining operation chain
   // We use process ID 0 as a dummy since continuous assignments don't have
   // their own process state - they evaluate values directly from signal state
+  bool releaseDisabledDrive = false;
   if (driveOp.getEnable()) {
     InterpretedValue enableVal = evaluateContinuousValue(driveOp.getEnable());
     if (enableVal.isX() || enableVal.getUInt64() == 0) {
-      LLVM_DEBUG(llvm::dbgs() << "  Continuous assignment disabled\n");
-      return;
+      if (!distinctContinuousDriverSignals.contains(targetSigId) ||
+          scheduler.getSignalEncoding(targetSigId) !=
+              SignalEncoding::FourStateStruct) {
+        LLVM_DEBUG(llvm::dbgs() << "  Continuous assignment disabled\n");
+        return;
+      }
+      releaseDisabledDrive = true;
+      LLVM_DEBUG(
+          llvm::dbgs() << "  Continuous assignment disabled, releasing driver\n");
     }
   }
-  InterpretedValue driveVal = evaluateContinuousValue(driveOp.getValue());
+  InterpretedValue driveVal =
+      releaseDisabledDrive
+          ? getDisabledContinuousDriveValue(scheduler, targetSigId)
+          : evaluateContinuousValue(driveOp.getValue());
 
   {
     static bool traceContExec = []() {
@@ -6120,9 +6180,16 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
             bits = "X";
           else
             driveVal.getAPInt().toString(bits, 2, false);
+          llvm::StringRef funcName = "-";
+          if (activeProcessState && !activeProcessState->currentFuncName.empty())
+            funcName = activeProcessState->currentFuncName;
+          ProcessId traceProcId = activeProcessId;
           llvm::errs() << "[I3C-DRV] t=" << currentTime.realTime << " d="
                        << currentTime.deltaStep << " sig=" << targetSigId
-                       << " (" << sigName << ") val=" << bits << "\n";
+                       << " (" << sigName << ") val=" << bits
+                       << " proc=" << traceProcId << " func=" << funcName
+                       << " inst=" << activeInstanceId
+                       << "\n";
         }
       }
     }
@@ -6143,7 +6210,13 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
     strength1 = static_cast<DriveStrength>(
         static_cast<uint8_t>(s1Attr.getValue()));
 
-  normalizeImplicitZDriveStrength(targetSigId, driveVal, strength0, strength1);
+  if (releaseDisabledDrive) {
+    strength0 = DriveStrength::HighZ;
+    strength1 = DriveStrength::HighZ;
+  } else {
+    normalizeImplicitZDriveStrength(targetSigId, driveVal, strength0,
+                                    strength1);
+  }
 
   // Strength-sensitive nets (e.g. pullups/open-drain) need per-drive IDs so
   // multiple continuous assignments resolve correctly. Keep legacy
@@ -6152,6 +6225,32 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
       distinctContinuousDriverSignals.contains(targetSigId)
           ? getDistinctContinuousDriverId(driveOp, activeInstanceId)
           : static_cast<uint64_t>(targetSigId);
+
+  {
+    static bool traceI3CDrives = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_DRIVES");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+    if (traceI3CDrives) {
+      auto nameIt = scheduler.getSignalNames().find(targetSigId);
+      if (nameIt != scheduler.getSignalNames().end()) {
+        llvm::StringRef sigName = nameIt->second;
+        if (sigName.contains("I3C_SCL") || sigName.contains("I3C_SDA")) {
+          llvm::SmallString<64> bits;
+          if (driveVal.isX())
+            bits = "X";
+          else
+            driveVal.getAPInt().toString(bits, 2, false);
+          llvm::errs() << "[I3C-DRV-ID] t=" << currentTime.realTime << " d="
+                       << currentTime.deltaStep << " sig=" << targetSigId
+                       << " (" << sigName << ") val=" << bits
+                       << " driver=" << driverId
+                       << " inst=" << activeInstanceId
+                       << " loc=" << driveOp.getLoc() << "\n";
+        }
+      }
+    }
+  }
 
   scheduler.getEventScheduler().schedule(
       targetTime, SchedulingRegion::Active,

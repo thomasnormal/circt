@@ -2530,3 +2530,58 @@ Working hypothesis now:
 - target child fanout is not the primary blocker; remaining I3C mismatch comes
   from target-side source/tri-state progression not being rescheduled in lockstep
   with controller-side runtime drive changes.
+
+## 2026-02-19 Session: I3C mirror-drive attribution diagnostics
+
+- Added diagnostic tracing in `circt-sim` (`CIRCT_SIM_TRACE_I3C_DRIVES=1`) to
+  emit per-drive driver-id + MLIR location for `I3C_SCL`/`I3C_SDA`.
+- Bounded I3C evidence (`/tmp/i3c-drvid-loc-220.log`) shows:
+  - two mirrored `I3C_SCL` drives (`i3c.mlir:9746:5`, `i3c.mlir:9799:5`),
+  - one toggles (`11/0`), one is often `0`, pinning the resolved net low,
+  - pull-up driver (`i3c.mlir:9707:5`) is present but overpowered.
+- This explains why target monitor detectEdge remains pinned while controller
+  side toggles locally.
+- Broad propagation-side tri-state reapply experiments were attempted and
+  reverted due regressions/zero-time delta churn.
+- Focus is now narrowed to mirror-drive ownership semantics for the two
+  `I3C_SCL` drive ops in generated MLIR.
+
+## 2026-02-19 Session: continuous-drive release correctness increment (I3C-adjacent)
+
+### Change set
+1. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - fixed release semantics for disabled continuous drives on four-state,
+     strength-resolved nets (`llhd.drv ... if %enable`):
+     - `executeContinuousAssignment`
+     - `executeModuleDrives`
+     - `executeModuleDrivesForSignal`
+   - narrowed distinct-driver promotion for enable-driven nets to
+     four-state + multi-driven targets.
+2. Added regression:
+   - `test/Tools/circt-sim/module-drive-enable-release-strength.mlir`
+
+### Validation
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Focused regressions PASS:
+   - `module-drive-enable-release-strength.mlir`
+   - `module-drive-enable.mlir`
+   - `interface-tristate-suppression-cond-false.sv`
+   - `interface-intra-tristate-propagation.sv`
+
+### AVIP/I3C replay status
+1. Bounded trace lane (`--max-time=220000000`):
+   - `/tmp/i3c-drvid-loc-220-after-enable-release.log`
+   - drive attribution still maps to `i3c.mlir:9707`, `:9746`, `:9799`.
+2. Full deterministic I3C replay on precompiled lane remains failing:
+   - `/tmp/i3c-full-after-enable-release-v2.log`
+   - `ERROR(DELTA_OVERFLOW)` at `740000000fs d433`
+   - target coverage still `0.00%`.
+3. Scripted AVIP compile attempt (`utils/run_avip_circt_sim.sh`) still blocked
+   by known source-side compile limitation in this lane:
+   - unsupported `$dumpfile` in `i3c_avip/src/hdl_top/hdl_top.sv`.
+
+### Current assessment
+- This landing improves simulator correctness and guards a concrete bug class,
+  but I3C parity/coverage closure is still blocked by a deeper runtime issue
+  (target-side progression + delta-overflow).
