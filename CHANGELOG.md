@@ -1,5 +1,104 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1538 - February 19, 2026
+
+### circt-sim: fix 9 syscall/feature bugs across force/release, randomize, plusargs, coverage, and VCD dump
+
+1. **Fixed force/release semantics** (`lib/Dialect/LLHD/Transforms/Mem2Reg.cpp`,
+   `lib/Dialect/LLHD/Transforms/HoistSignals.cpp`,
+   `tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - Mem2Reg: reject DriveOps with `circt.force`/`circt.release` attributes
+     from slot promotion to prevent merging force/release drives.
+   - HoistSignals: skip signals with force/release-attributed drives to
+     preserve them for the interpreter.
+   - Interpreter: track forced signal saved values and restore on release.
+
+2. **Fixed $initstate** (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   returns 1 inside initial blocks, 0 at runtime (was hardcoded to 0).
+
+3. **Fixed $get_initial_random_seed** (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   returns the actual process random seed (was hardcoded to 0).
+
+4. **Fixed $coverage_start/stop/max** (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   return non-zero values matching IEEE 1800-2017 semantics (were returning 0).
+
+5. **Fixed $test$plusargs with dynamic strings**
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   check `dynamicStrings` map before falling back to memory blocks, so
+   runtime-constructed string arguments are properly resolved.
+
+6. **Fixed $save/$restart warnings** (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   emit IEEE-compliant warnings instead of silently ignoring.
+
+7. **Fixed randomize: fill object with random bytes**
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   `__moore_randomize_basic` now fills the object memory with random bytes
+   so unconstrained rand fields get random values (MooreToCore saves/restores
+   non-rand fields around this call).
+
+8. **Fixed randstate replay** (`tools/circt-sim/LLHDProcessInterpreter.h`,
+   `tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   per IEEE 1800-2017 §18.13, `obj.randomize()` falls back to the calling
+   process's RNG when the object hasn't been explicitly seeded, so
+   `process::get_randstate()`/`set_randstate()` can capture and replay
+   randomization sequences.
+
+9. **Fixed $dumpfile diagnostic** (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   emits a diagnostic message with the requested filename instead of silently
+   dropping the call.
+
+10. **Validation**: all 11 syscall tests pass:
+    - `syscall-force-release.sv`: forced=99, released=42
+    - `syscall-initstate.sv`: initstate_initial=1, initstate_runtime=0
+    - `syscall-get-initial-random-seed.sv`: seed_nonzero=1
+    - `syscall-coverage-returns.sv`: all coverage values correct
+    - `syscall-save-restart-warning.sv`: warnings emitted
+    - `syscall-constraint-mode-effect.sv`: constraint effects correct
+    - `syscall-test-plusargs-dynamic.sv`: dynamic/static found/missing correct
+    - `syscall-ferror-nonexist.sv`: ferror returns correct
+    - `syscall-randstate-replay.sv`: replay_match=1
+    - `syscall-dumpvars-output.sv`: filename appears in output
+    - `syscall-dumpvars.sv`: dump tasks accepted
+
+## Iteration 1537 - February 19, 2026
+
+### circt-sim: unblock AHB compile-mode lanes by hardening memory-backed struct-field drives; extend AHB bind rewrite coverage
+
+1. **Fixed non-fatal handling for memory-backed struct-field `llhd.drv` through
+   function-argument refs**  
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - in the `llhd.sig.struct_extract` alloca-backed drive path, added
+     address-based memory-block fallback (`findMemoryBlockByAddress`) when
+     direct alloca lookup misses.
+   - threaded `blockOffset` through read/write accesses in that path.
+   - changed memory-miss / bounds-miss outcomes in this fallback branch from
+     hard `failure()` to non-fatal `success()` to avoid aborting the process.
+
+2. **Extended AHB bind rewrite helper to cover slave BFM binds too**  
+   (`utils/run_avip_circt_verilog.sh`):
+   - now rewrites both `AhbMasterAgentBFM.sv` and `AhbSlaveAgentBFM.sv`
+     bind blocks, removing `ahbInterface.` prefixes inside bind argument lists.
+
+3. **Updated runner regression coverage for AHB bind rewrites**  
+   (`test/Tools/run-avip-circt-verilog-ahb-bind-rewrites.test`,
+   `test/Tools/Inputs/avip-mini-ahb/sim/ahb_compile.f`,
+   `test/Tools/Inputs/avip-mini-ahb/src/hdlTop/slaveAgentBFM/AhbSlaveAgentBFM.sv`):
+   - fixture now includes both master and slave BFM files.
+   - test asserts both patched tmp files are generated and rewritten correctly.
+
+4. **Validation**
+   - build:
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+   - focused runner lit:
+     - `python3 llvm/llvm/utils/lit/lit.py -sv --filter 'run-avip-circt-verilog-ahb-bind-rewrites|run-avip-circt-verilog-(axi4lite|jtag|spi-include-rewrites|filelist-updir|ir-hw)' build-test/test/Tools`
+     - PASS (`6/6`).
+   - bounded AHB compile-mode lane:
+     - `/home/thomas-ahle/circt/.tmp/avip-ahb-postdrvfix-20260219-205956/matrix.tsv`
+     - `compile=OK`, `sim_exit=0`, `sim_status=FAIL`, `uvm_error=3`.
+   - JIT telemetry:
+     - `python3 utils/summarize_circt_sim_jit_reports.py .../sim_seed_1.jit-report.json`
+     - `deopt_process_rows=0`.
+
 ## Iteration 1536 - February 19, 2026
 
 ### circt-sim: recover I3C compile-mode parity by guarding monitor sample fork children from unsafe native-thunk promotion
