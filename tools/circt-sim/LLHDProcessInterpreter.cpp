@@ -191,6 +191,13 @@ static uint64_t getDistinctContinuousDriverId(llhd::DriveOp driveOp,
       static_cast<uint64_t>(instanceId)));
 }
 
+static uint64_t getTriStateDriveSourceCacheKey(llhd::DriveOp driveOp,
+                                               InstanceId instanceId) {
+  return static_cast<uint64_t>(llvm::hash_combine(
+      reinterpret_cast<uintptr_t>(driveOp.getOperation()),
+      static_cast<uint64_t>(instanceId), 0x5452495354415445ULL));
+}
+
 // Continuous assignments lowered from tri-state behavior use drive enables.
 // When disabled on strength-resolved nets, the driver must release (high-Z)
 // instead of holding the last driven value.
@@ -4873,8 +4880,10 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
     }
 
     // Get the value to drive from the process result.
-    if (!releaseDisabledDrive)
-      driveVal = getValue(procId, driveOp.getValue());
+    if (!releaseDisabledDrive) {
+      if (!tryEvaluateTriStateDestDriveValue(driveOp, sigId, driveVal))
+        driveVal = getValue(procId, driveOp.getValue());
+    }
 
     // Get the delay time
     SimTime delay = convertTimeValue(procId, driveOp.getTime());
@@ -4968,8 +4977,10 @@ void LLHDProcessInterpreter::executeModuleDrivesForSignal(SignalId sigId) {
       }
     }
 
-    if (!releaseDisabledDrive)
-      driveVal = evaluateContinuousValue(driveOp.getValue());
+    if (!releaseDisabledDrive) {
+      if (!tryEvaluateTriStateDestDriveValue(driveOp, dstSigId, driveVal))
+        driveVal = evaluateContinuousValue(driveOp.getValue());
+    }
     LLVM_DEBUG(llvm::dbgs() << "  driveVal="
                             << (driveVal.isX() ? "X" : std::to_string(driveVal.getUInt64()))
                             << " dstSig=" << dstSigId << " procId=" << entry.procId << "\n");
@@ -6086,6 +6097,101 @@ void LLHDProcessInterpreter::normalizeImplicitZDriveStrength(
   }
 }
 
+SignalId LLHDProcessInterpreter::resolveTriStateDriveSourceFieldSignal(
+    llhd::DriveOp driveOp, InstanceId instanceId) {
+  uint64_t cacheKey = getTriStateDriveSourceCacheKey(driveOp, instanceId);
+  auto cacheIt = triStateDriveSourceFieldCache.find(cacheKey);
+  if (cacheIt != triStateDriveSourceFieldCache.end())
+    return cacheIt->second;
+
+  ProcessExecutionState tempState;
+  ProcessId tempProcId = nextTempProcId++;
+  while (processStates.count(tempProcId) || tempProcId == InvalidProcessId)
+    tempProcId = nextTempProcId++;
+  processStates[tempProcId] = std::move(tempState);
+
+  auto cleanup = llvm::make_scope_exit([&]() { processStates.erase(tempProcId); });
+  auto &tmpState = processStates[tempProcId];
+  tmpState.valueMap = moduleInitValueMap;
+  if (activeProcessId != InvalidProcessId) {
+    auto activeIt = processStates.find(activeProcessId);
+    if (activeIt != processStates.end()) {
+      for (const auto &entry : activeIt->second.valueMap)
+        tmpState.valueMap.try_emplace(entry.first, entry.second);
+    }
+  }
+
+  auto resolveAddr = [&](Value addrValue) -> uint64_t {
+    InterpretedValue addrVal = getValue(tempProcId, addrValue);
+    if (addrVal.isX())
+      return 0;
+    return addrVal.getUInt64();
+  };
+
+  SignalId sourceFieldSigId = 0;
+  uint64_t sourceAddr = 0;
+  if (matchFourStateStructCreateLoad(driveOp.getValue(), resolveAddr,
+                                     sourceAddr) &&
+      sourceAddr != 0) {
+    auto fieldIt = interfaceFieldSignals.find(sourceAddr);
+    if (fieldIt != interfaceFieldSignals.end())
+      sourceFieldSigId = fieldIt->second;
+  }
+
+  triStateDriveSourceFieldCache[cacheKey] = sourceFieldSigId;
+  return sourceFieldSigId;
+}
+
+bool LLHDProcessInterpreter::tryEvaluateTriStateDestDriveValue(
+    llhd::DriveOp driveOp, SignalId targetSigId, InterpretedValue &driveVal) {
+  if (interfaceTriStateRules.empty())
+    return false;
+
+  SignalId sourceFieldSigId =
+      resolveTriStateDriveSourceFieldSignal(driveOp, activeInstanceId);
+  if (sourceFieldSigId == 0)
+    return false;
+
+  const InterfaceTriStateRule *rule = nullptr;
+  for (const auto &candidate : interfaceTriStateRules) {
+    if (candidate.destSigId == sourceFieldSigId) {
+      rule = &candidate;
+      break;
+    }
+  }
+  if (!rule)
+    return false;
+
+  auto getSignalValue = [&](SignalId sigId) -> InterpretedValue {
+    auto pendingIt = pendingEpsilonDrives.find(sigId);
+    if (pendingIt != pendingEpsilonDrives.end())
+      return pendingIt->second;
+    return InterpretedValue::fromSignalValue(scheduler.getSignalValue(sigId));
+  };
+
+  InterpretedValue condVal = getSignalValue(rule->condSigId);
+  bool condTrue = false;
+  if (!condVal.isX() && rule->condBitIndex < condVal.getWidth())
+    condTrue = condVal.getAPInt()[rule->condBitIndex];
+
+  InterpretedValue selectedVal =
+      condTrue ? getSignalValue(rule->srcSigId) : rule->elseValue;
+
+  unsigned targetWidth = scheduler.getSignalValue(targetSigId).getWidth();
+  if (selectedVal.isX()) {
+    driveVal = InterpretedValue::makeX(targetWidth);
+    return true;
+  }
+
+  APInt bits = selectedVal.getAPInt();
+  if (bits.getBitWidth() < targetWidth)
+    bits = bits.zext(targetWidth);
+  else if (bits.getBitWidth() > targetWidth)
+    bits = bits.trunc(targetWidth);
+  driveVal = InterpretedValue(bits);
+  return true;
+}
+
 void LLHDProcessInterpreter::executeContinuousAssignment(
     llhd::DriveOp driveOp) {
   // Get the signal being driven
@@ -6117,7 +6223,13 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
   InterpretedValue driveVal =
       releaseDisabledDrive
           ? getDisabledContinuousDriveValue(scheduler, targetSigId)
-          : evaluateContinuousValue(driveOp.getValue());
+          : [&]() {
+              InterpretedValue triStateDriveVal;
+              if (tryEvaluateTriStateDestDriveValue(driveOp, targetSigId,
+                                                    triStateDriveVal))
+                return triStateDriveVal;
+              return evaluateContinuousValue(driveOp.getValue());
+            }();
 
   {
     static bool traceContExec = []() {

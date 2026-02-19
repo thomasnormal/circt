@@ -2622,3 +2622,44 @@ Working hypothesis now:
   regression test.
 - End-to-end I3C parity is still open; additional loop source(s) remain in
   forked run-phase paths.
+
+## 2026-02-19 Session: I3C tri-state mirror clobber mitigation
+
+### Change set
+1. `tools/circt-sim/LLHDProcessInterpreter.{h,cpp}`
+   - added tri-state-backed drive-intent evaluation path:
+     - resolve interface-field source for drive value,
+     - when field is a tri-state destination, derive drive from tri-state
+       `cond/src/else` rule state instead of mirrored destination storage.
+   - added cached source-field resolution per `(driveOp, instance)`.
+2. Added regression:
+   - `test/Tools/circt-sim/interface-tristate-signalcopy-redirect.sv`
+
+### Validation
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Focused regressions PASS:
+   - `interface-tristate-signalcopy-redirect.sv`
+   - `interface-inout-shared-wire-bidirectional.sv`
+   - `interface-tristate-suppression-cond-false.sv`
+   - `interface-inout-tristate-propagation.sv`
+   - `module-drive-enable-release-strength.mlir`
+   - `seq-get-next-item-empty-fallback-backoff.mlir`
+
+### AVIP/I3C replay status
+1. Bounded deterministic lane (`--max-time=240000000`):
+   - `/tmp/i3c-bounded-trace-240-after-tri-fix.log`
+   - `I3C_SCL` mirror drive at `i3c.mlir:9799:5` stays at `11` in windows
+     where it previously collapsed to `0`.
+   - `i3c.mlir:9746:5` still toggles low and remains active contributor.
+2. Full deterministic replay:
+   - `/tmp/i3c-full-after-tri-fix.log`
+   - still fails with `ERROR(DELTA_OVERFLOW)` at `1110000000fs d138`.
+   - coverage unchanged:
+     - controller covergroup: `21.43%`
+     - target covergroup: `0.00%`
+
+### Current status
+- landed targeted correctness improvement + regression coverage.
+- I3C remains open; next work stays on target progression and residual
+  delta-overflow loop sources in run-phase fork paths.
