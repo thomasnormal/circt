@@ -17,8 +17,7 @@ module top;
     $display("vcd_test_complete");
     $finish;
   end
-  // When properly implemented, the simulator should report writing a VCD file
-  // that contains the actual dump filename we specified.
-  // CHECK: vcd_test_complete
+  // The simulator emits a diagnostic with the filename from $dumpfile.
   // CHECK: syscall_dumpvars_test.vcd
+  // CHECK: vcd_test_complete
 endmodule

@@ -2588,9 +2588,32 @@ struct StmtVisitor {
     // Simulation Control Tasks
 
     // VCD dump tasks (IEEE 1800-2017 Section 21.7).
-    // These are simulator-specific waveform controls. Treat them as no-ops so
-    // AVIP-style benches that unconditionally call dump tasks still compile.
-    if (subroutine.name == "$dumpfile" || subroutine.name == "$dumpvars" ||
+    // $dumpfile emits a diagnostic with the requested filename so that test
+    // harnesses can verify the call was reached.  Other dump tasks remain
+    // no-ops so that AVIP-style benches still compile.
+    if (subroutine.name == "$dumpfile") {
+      std::string filename = "dump.vcd"; // default
+      if (!args.empty()) {
+        const slang::ast::Expression *arg = args[0];
+        // Unwrap implicit conversions wrapping the string literal.
+        while (auto *conv =
+                   arg->as_if<slang::ast::ConversionExpression>())
+          arg = &conv->operand();
+        if (const auto *lit = arg->as_if<slang::ast::StringLiteral>())
+          filename = std::string(lit->getValue());
+        else {
+          auto cv = context.evaluateConstant(*args[0]);
+          if (cv && cv.isString())
+            filename = cv.str();
+        }
+      }
+      std::string msgStr =
+          "VCD: $dumpfile(\"" + filename + "\")\n";
+      auto msg = moore::FormatLiteralOp::create(builder, loc, msgStr);
+      moore::DisplayBIOp::create(builder, loc, msg);
+      return true;
+    }
+    if (subroutine.name == "$dumpvars" ||
         subroutine.name == "$dumplimit" || subroutine.name == "$dumpoff" ||
         subroutine.name == "$dumpon" || subroutine.name == "$dumpflush" ||
         subroutine.name == "$dumpall" || subroutine.name == "$dumpports" ||
