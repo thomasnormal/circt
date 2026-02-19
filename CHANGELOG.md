@@ -72279,3 +72279,37 @@ See CHANGELOG.md on recent progress.
       - full tools suite: PASS
         - `ninja -C build-test -j4 check-circt-tools-circt-sim`
         - totals: `Passed=456`, `XFAIL=46`, `Failed=0`, `XPASS=0`.
+69. `circt-sim` fix signal-backed struct/array subfield drive driver-id
+    semantics for forked procedural updates
+    (February 19, 2026):
+    - root cause:
+      - subfield writeback paths for signal-backed
+        `llhd.sig.struct_extract` / `llhd.sig.array_get` used per-process
+        driver IDs, which incorrectly introduced multi-driver resolution
+        behavior (`X`) for procedural updates across fork children.
+      - this clobbered sibling struct fields in a minimal reproducer mirroring
+        I3C write-data handling.
+    - fix:
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - align subfield writeback driver-id selection with regular `llhd.drv`:
+        use `sigId` by default and only use distinct IDs for
+        `distinctContinuousDriverSignals`.
+    - regression coverage:
+      - new:
+        - `test/Tools/circt-sim/fork-struct-field-last-write.sv`
+      - retained focused fork ordering checks:
+        - `fork-disable-ready-wakeup.sv`
+        - `fork-disable-defer-poll.sv`
+        - `disable-fork-halt.mlir`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-sim circt-verilog`
+      - focused lit set: PASS (4/4)
+      - minimal reproducer parity:
+        - pre-fix `circt-sim`: `addr=0 op=0 no=7 wd0=4e` (`FAIL`)
+        - post-fix `circt-sim`: `addr=68 op=0 no=8 wd0=4e` (`PASS`)
+        - xcelium baseline: `addr=68 op=0 no=8 wd0=4e` (`PASS`)
+    - AVIP impact:
+      - removes one deep I3C-analog correctness bug and improves stability.
+      - remaining I3C scoreboard mismatch at
+        `i3c_scoreboard.sv(162)` is still open and tracked separately.

@@ -14182,9 +14182,12 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       if (delay.deltaStep > 0)
         targetTime.deltaStep = delay.deltaStep;
 
-      // Use the same driver ID scheme
-      uint64_t driverId = (static_cast<uint64_t>(procId) << 32) |
-                          static_cast<uint64_t>(parentSigId);
+      // Use the same driver-ID policy as regular llhd.drv handling so
+      // procedural field writes preserve last-write semantics.
+      uint64_t driverId =
+          distinctContinuousDriverSignals.contains(parentSigId)
+              ? getDistinctContinuousDriverId(driveOp, activeInstanceId)
+              : static_cast<uint64_t>(parentSigId);
 
       LLVM_DEBUG(llvm::dbgs()
                  << "  Drive to struct field at offset " << bitOffset
@@ -14635,9 +14638,12 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       if (delay.deltaStep > 0)
         targetTime.deltaStep = delay.deltaStep;
 
-      // Use the same driver ID scheme
-      uint64_t driverId = (static_cast<uint64_t>(procId) << 32) |
-                          static_cast<uint64_t>(parentSigId);
+      // Use the same driver-ID policy as regular llhd.drv handling so
+      // procedural element writes preserve last-write semantics.
+      uint64_t driverId =
+          distinctContinuousDriverSignals.contains(parentSigId)
+              ? getDistinctContinuousDriverId(driveOp, activeInstanceId)
+              : static_cast<uint64_t>(parentSigId);
 
       LLVM_DEBUG(llvm::dbgs()
                  << "  Drive to array element[" << index << "] at offset "

@@ -2171,3 +2171,57 @@ Command outcome: `OK` (strict `set -euo pipefail`).
 1. Add a minimal I3C-oriented reproducer for first writeData divergence in controller-vs-target comparison path.
 2. Add regression coverage for the reproducer (fast lane, non-AVIP full runtime).
 3. Re-run deterministic I3C lane after each fix until line-162 mismatch is eliminated.
+
+## 2026-02-19 Session: I3C struct-field driver-id bug fixed
+
+### Root cause found
+- A focused reproducer (`/tmp/i3c_struct_inout_nested.sv`) showed a semantic
+  mismatch in `circt-sim` vs Xcelium for nested `inout struct` updates inside
+  `fork/join_none` with `disable fork`.
+- Pre-fix behavior:
+  - `circt-sim`: `addr=0 op=0 no=7 wd0=4e` (`FAIL`)
+  - Xcelium: `addr=68 op=0 no=8 wd0=4e` (`PASS`)
+- Trace instrumentation in `LLHDProcessInterpreter` showed subfield drives
+  taking per-process driver IDs, which incorrectly forced multi-driver
+  resolution semantics (`X`) for procedural updates.
+
+### Fix implemented
+- Updated signal-backed subfield drive paths in
+  `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+  - `llhd.sig.struct_extract` writeback path
+  - `llhd.sig.array_get` writeback path
+- Both now use the same driver-id policy as normal `llhd.drv`:
+  - shared signal driver ID by default
+  - distinct ID only for `distinctContinuousDriverSignals`
+- Added regression:
+  - `test/Tools/circt-sim/fork-struct-field-last-write.sv`
+
+### Validation
+- Rebuild:
+  - `ninja -C build-test circt-sim circt-verilog` (`PASS`)
+- Focused regressions:
+  - `fork-disable-ready-wakeup.sv` (`PASS`)
+  - `fork-disable-defer-poll.sv` (`PASS`)
+  - `disable-fork-halt.mlir` (`PASS`)
+  - `fork-struct-field-last-write.sv` (`PASS`)
+- Reproducer after fix:
+  - `/tmp/i3c_struct_inout_nested.afterfix.log`
+  - Output: `addr=68 op=0 no=8 wd0=4e` (`PASS`)
+
+### I3C AVIP status after fix
+- Run 1 (default guard):
+  - `/tmp/avip-circt-sim-i3c-after-struct-driver-fix-20260219-010837/matrix.tsv`
+  - compile `OK` (`142s`), sim `FAIL` due RSS guard:
+    `RSS 4625 MB exceeded limit 4096 MB`
+- Run 2 (`CIRCT_MAX_RSS_MB=8192`):
+  - `/tmp/avip-circt-sim-i3c-after-struct-driver-fix-rss8g-20260219-011323/matrix.tsv`
+  - compile `OK` (`165s`), sim exits `OK` (`300s`)
+  - scoreboard mismatch persists:
+    `UVM_ERROR ... i3c_scoreboard.sv(162)`
+  - coverage printout remains `100% / 100%`
+
+### Interpretation
+- This closes one deep correctness bug (struct subfield drive semantics), with
+  regression coverage.
+- I3C scoreboard parity at line 162 is still open and remains the primary
+  functional blocker.
