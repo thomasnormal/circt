@@ -630,6 +630,14 @@ const SignalValue &ProcessScheduler::getSignalValue(SignalId signalId) const {
   return it->second.getCurrentValue();
 }
 
+const SignalValue &
+ProcessScheduler::getSignalPreviousValue(SignalId signalId) const {
+  auto it = signalStates.find(signalId);
+  if (it == signalStates.end())
+    return unknownSignal;
+  return it->second.getPreviousValue();
+}
+
 bool ProcessScheduler::isAbortRequested() const {
   return shouldAbortCallback && shouldAbortCallback();
 }

@@ -99,6 +99,7 @@
 #include <sys/resource.h>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -766,8 +767,15 @@ LogicalResult SimulationContext::initialize(
           llhdInterpreter->executeModuleDrivesForSignal(signal);
         }
         // Fire VPI cbValueChange callbacks for cocotb RisingEdge/FallingEdge.
-        if (!vpiLibrary.empty())
-          VPIRuntime::getInstance().fireValueChangeCallbacks(signal);
+        // Suppress callbacks when the previous value was X (unknown).  Standard
+        // simulators don't fire cbValueChange for the initial X→known
+        // transition; since VPI returns 0 for X in vpiIntVal format, cocotb
+        // would misinterpret X→1 as 0→1 (= spurious rising edge at t=0).
+        if (!vpiLibrary.empty()) {
+          const SignalValue &prev = scheduler.getSignalPreviousValue(signal);
+          if (!prev.isUnknown())
+            VPIRuntime::getInstance().fireValueChangeCallbacks(signal);
+        }
       });
 
   if (traceAll || !traceSignals.empty())
@@ -856,16 +864,17 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       scheduler.setSignalLogicalWidth(signalId, logicalWidth);
 
     // Detect unpacked array types and record array info for VPI.
-    // Only create array info when the signal has unpacked dimensions
-    // (listed in vpi.array_bounds).  Fully-packed multi-dimensional arrays
-    // (e.g., logic [2:0][2:0]) should appear as flat Reg signals in VPI,
-    // not as ArrayObjects.
+    // Only arrays with explicit vpi.array_bounds entries are unpacked —
+    // packed multi-dimensional arrays (e.g., logic [3:0][7:0]) are
+    // lowered to hw::ArrayType but should appear as flat vectors in VPI.
     if (auto arrayType = dyn_cast<hw::ArrayType>(portInfo.type)) {
       auto boundsDict =
           hwModule->getAttrOfType<DictionaryAttr>("vpi.array_bounds");
       auto sigBounds = boundsDict
           ? boundsDict.getAs<DictionaryAttr>(portInfo.getName())
           : DictionaryAttr();
+      // Only create SignalArrayInfo for signals with explicit unpacked
+      // bounds. Signals without bounds are packed arrays — treat as flat.
       if (sigBounds) {
         uint32_t numElems = arrayType.getNumElements();
         mlir::Type elemType = arrayType.getElementType();
@@ -874,10 +883,16 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
         uint32_t elemLogW =
             LLHDProcessInterpreter::getLogicalWidth(elemType);
         ProcessScheduler::SignalArrayInfo info{numElems, elemPhysW, elemLogW};
-        if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
-          info.leftBound = leftAttr.getInt();
-        if (auto rightAttr = sigBounds.getAs<IntegerAttr>("right"))
-          info.rightBound = rightAttr.getInt();
+        if (sigBounds) {
+          if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
+            info.leftBound = leftAttr.getInt();
+          if (auto rightAttr = sigBounds.getAs<IntegerAttr>("right"))
+            info.rightBound = rightAttr.getInt();
+        } else {
+          // No explicit bounds; default to 0-based indexing.
+          info.leftBound = 0;
+          info.rightBound = static_cast<int32_t>(numElems - 1);
+        }
 
         // Check for nested unpacked dimensions (e.g., logic x [3][3]).
         // If the element type is also hw::ArrayType and the signal has
@@ -892,8 +907,9 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
         }
         if (unpackedDepth >= 2) {
           // Read inner dimension bounds from vpi.array_bounds attribute.
-          ArrayAttr innerBoundsAttr =
-              sigBounds.getAs<ArrayAttr>("inner_bounds");
+          ArrayAttr innerBoundsAttr = sigBounds
+              ? sigBounds.getAs<ArrayAttr>("inner_bounds")
+              : ArrayAttr();
           // Build nested inner array info by peeling hw::ArrayType layers.
           auto buildInner =
               [&innerBoundsAttr](mlir::Type type, int depth, int dimIdx,
@@ -946,9 +962,24 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
           auto fieldDict = cast<DictionaryAttr>(fieldAttr);
           auto name = fieldDict.getAs<StringAttr>("name").getValue().str();
           auto width = fieldDict.getAs<IntegerAttr>("width").getInt();
-          // Physical width is 2x logical for 4-state encoding.
-          fields.push_back({name, static_cast<uint32_t>(width),
-                            static_cast<uint32_t>(width * 2)});
+          ProcessScheduler::SignalStructFieldInfo fi;
+          fi.name = name;
+          fi.logicalWidth = static_cast<uint32_t>(width);
+          fi.physicalWidth = static_cast<uint32_t>(width * 2);
+          if (auto isArr = fieldDict.getAs<BoolAttr>("is_array"))
+            if (isArr.getValue()) {
+              fi.isArray = true;
+              if (auto n = fieldDict.getAs<IntegerAttr>("num_elements"))
+                fi.numElements = n.getInt();
+              if (auto l = fieldDict.getAs<IntegerAttr>("left_bound"))
+                fi.leftBound = l.getInt();
+              if (auto r = fieldDict.getAs<IntegerAttr>("right_bound"))
+                fi.rightBound = r.getInt();
+              if (auto ew = fieldDict.getAs<IntegerAttr>("element_width"))
+                fi.elementLogicalWidth = ew.getInt();
+              fi.elementPhysicalWidth = fi.elementLogicalWidth * 2;
+            }
+          fields.push_back(std::move(fi));
         }
         scheduler.setSignalStructFields(signalId, std::move(fields));
       }
@@ -1155,6 +1186,17 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
               });
 
           hwOutputProcessIds.push_back(procId);
+
+          // Register a top-level output update so that when the
+          // llhd.process yields fresh values, executeInstanceOutputUpdates
+          // immediately re-evaluates and drives the output signal.  This
+          // is critical for multi-block process CFGs where the inline
+          // combinational evaluation falls back to reading the process
+          // valueMap — without this, the hw_output_* process may read a
+          // stale valueMap if it runs before the process in the same
+          // delta cycle.
+          llhdInterpreter->registerTopLevelOutputUpdate(outSigId,
+                                                        outputValue);
 
           auto *proc = scheduler.getProcess(procId);
           if (proc) {
@@ -1547,6 +1589,161 @@ LogicalResult SimulationContext::run() {
         for (auto attr : realVars)
           if (auto strAttr = mlir::dyn_cast<mlir::StringAttr>(attr))
             vpiRuntime.addRealVar(strAttr.getValue().str());
+      }
+    }
+
+    // Register synthetic ProcessScheduler signals for module-level variables
+    // that were removed by Sig2Reg (zero users) but still need to be
+    // discoverable via VPI.  We do this BEFORE buildHierarchy() so that
+    // array elements are automatically created.
+    {
+      // Build a set of existing signal names for dedup.
+      llvm::StringSet<> existingSignals;
+      for (const auto &entry : scheduler.getSignalNames())
+        existingSignals.insert(entry.second);
+
+      for (auto hwMod : topHWModules) {
+        if (!hwMod)
+          continue;
+        auto allVars =
+            hwMod->getAttrOfType<mlir::DictionaryAttr>("vpi.all_vars");
+        if (!allVars)
+          continue;
+        auto boundsDict =
+            hwMod->getAttrOfType<mlir::DictionaryAttr>("vpi.array_bounds");
+        auto depthDict =
+            hwMod->getAttrOfType<mlir::DictionaryAttr>("vpi.unpacked_depth");
+
+        for (auto namedAttr : allVars) {
+          llvm::StringRef varName = namedAttr.getName().getValue();
+          // Skip if already registered as a real signal.
+          if (existingSignals.count(varName))
+            continue;
+
+          uint32_t logicalWidth = 0;
+          if (auto intAttr =
+                  dyn_cast<mlir::IntegerAttr>(namedAttr.getValue()))
+            logicalWidth = intAttr.getInt();
+          if (logicalWidth == 0)
+            continue;
+
+          // Register a 4-state signal in ProcessScheduler.
+          uint32_t physWidth = logicalWidth * 2;
+          auto signalId = scheduler.registerSignal(
+              varName.str(), physWidth, SignalEncoding::FourStateStruct);
+          scheduler.setSignalLogicalWidth(signalId, logicalWidth);
+
+          // Set up array info if this is an unpacked array.
+          auto sigBounds = boundsDict
+              ? boundsDict.getAs<DictionaryAttr>(varName)
+              : DictionaryAttr();
+          if (sigBounds) {
+            int32_t left = 0, right = 0;
+            if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
+              left = leftAttr.getInt();
+            if (auto rightAttr = sigBounds.getAs<IntegerAttr>("right"))
+              right = rightAttr.getInt();
+            uint32_t numElems =
+                static_cast<uint32_t>(std::abs(right - left) + 1);
+            uint32_t elemLogW =
+                (numElems > 0) ? logicalWidth / numElems : logicalWidth;
+            uint32_t elemPhysW = elemLogW * 2;
+            ProcessScheduler::SignalArrayInfo info{numElems, elemPhysW,
+                                                   elemLogW};
+            info.leftBound = left;
+            info.rightBound = right;
+
+            // Handle nested unpacked dimensions.
+            int unpackedDepth = 1;
+            if (depthDict) {
+              if (auto depthAttr = depthDict.getAs<IntegerAttr>(varName))
+                unpackedDepth = depthAttr.getInt();
+            }
+            if (unpackedDepth >= 2) {
+              ArrayAttr innerBoundsAttr =
+                  sigBounds.getAs<ArrayAttr>("inner_bounds");
+              auto buildInner =
+                  [&innerBoundsAttr](
+                      uint32_t totalLogW, int depth, int dimIdx,
+                      auto &self)
+                  -> std::shared_ptr<ProcessScheduler::SignalArrayInfo> {
+                if (depth <= 0 || totalLogW == 0)
+                  return nullptr;
+                // Use inner bounds to compute dimension size.
+                int32_t iLeft = 0, iRight = 0;
+                if (innerBoundsAttr &&
+                    dimIdx < static_cast<int>(innerBoundsAttr.size())) {
+                  auto dimBounds =
+                      cast<DictionaryAttr>(innerBoundsAttr[dimIdx]);
+                  if (auto l = dimBounds.getAs<IntegerAttr>("left"))
+                    iLeft = l.getInt();
+                  if (auto r = dimBounds.getAs<IntegerAttr>("right"))
+                    iRight = r.getInt();
+                }
+                uint32_t n = static_cast<uint32_t>(
+                    std::abs(iRight - iLeft) + 1);
+                if (n == 0)
+                  return nullptr;
+                auto inner = std::make_shared<
+                    ProcessScheduler::SignalArrayInfo>();
+                inner->numElements = n;
+                uint32_t innerElemLogW = totalLogW / n;
+                inner->elementLogicalWidth = innerElemLogW;
+                inner->elementPhysWidth = innerElemLogW * 2;
+                inner->leftBound = iLeft;
+                inner->rightBound = iRight;
+                inner->innerArrayInfo =
+                    self(innerElemLogW, depth - 1, dimIdx + 1, self);
+                return inner;
+              };
+              info.innerArrayInfo =
+                  buildInner(elemLogW, unpackedDepth - 1, 0, buildInner);
+            }
+
+            scheduler.setSignalArrayInfo(signalId, info);
+          }
+
+          // Set struct field info for synthetic signals if available.
+          auto structFieldsDict =
+              hwMod->getAttrOfType<mlir::DictionaryAttr>("vpi.struct_fields");
+          if (structFieldsDict) {
+            if (auto fieldListAttr =
+                    structFieldsDict.getAs<ArrayAttr>(varName)) {
+              std::vector<ProcessScheduler::SignalStructFieldInfo> fields;
+              for (auto fieldAttr : fieldListAttr) {
+                auto fieldDict = cast<DictionaryAttr>(fieldAttr);
+                auto name =
+                    fieldDict.getAs<StringAttr>("name").getValue().str();
+                auto width = fieldDict.getAs<IntegerAttr>("width").getInt();
+                ProcessScheduler::SignalStructFieldInfo fi;
+                fi.name = name;
+                fi.logicalWidth = static_cast<uint32_t>(width);
+                fi.physicalWidth = static_cast<uint32_t>(width * 2);
+                if (auto isArr = fieldDict.getAs<BoolAttr>("is_array"))
+                  if (isArr.getValue()) {
+                    fi.isArray = true;
+                    if (auto n =
+                            fieldDict.getAs<IntegerAttr>("num_elements"))
+                      fi.numElements = n.getInt();
+                    if (auto l =
+                            fieldDict.getAs<IntegerAttr>("left_bound"))
+                      fi.leftBound = l.getInt();
+                    if (auto r =
+                            fieldDict.getAs<IntegerAttr>("right_bound"))
+                      fi.rightBound = r.getInt();
+                    if (auto ew =
+                            fieldDict.getAs<IntegerAttr>("element_width"))
+                      fi.elementLogicalWidth = ew.getInt();
+                    fi.elementPhysicalWidth = fi.elementLogicalWidth * 2;
+                  }
+                fields.push_back(std::move(fi));
+              }
+              scheduler.setSignalStructFields(signalId, std::move(fields));
+            }
+          }
+
+          existingSignals.insert(varName);
+        }
       }
     }
 
@@ -2076,7 +2273,8 @@ LogicalResult SimulationContext::run() {
   auto startWallTime = std::chrono::steady_clock::now();
 
   // Track consecutive zero-delta iterations at the same time for loop detection
-  uint64_t lastSimTime = 0;
+  uint64_t lastZeroIterTime = std::numeric_limits<uint64_t>::max();
+  uint64_t lastDeltaTime = std::numeric_limits<uint64_t>::max();
   uint64_t zeroIterationsAtSameTime = 0;
   uint64_t deltaCyclesAtSameTime = 0;
   constexpr uint64_t maxZeroIterations = 1000;
@@ -2116,10 +2314,24 @@ LogicalResult SimulationContext::run() {
 
     // Execute delta cycles
     size_t deltasExecuted;
+    static bool traceExec =
+        std::getenv("CIRCT_SIM_TRACE_VPI_TIMING") != nullptr;
+    auto execStart = std::chrono::steady_clock::now();
     if (parallelScheduler) {
       deltasExecuted = parallelScheduler->executeCurrentTimeParallel();
     } else {
       deltasExecuted = scheduler.executeCurrentTime();
+    }
+    if (traceExec) {
+      auto execEnd = std::chrono::steady_clock::now();
+      auto execUs = std::chrono::duration_cast<
+          std::chrono::microseconds>(execEnd - execStart).count();
+      if (execUs > 100000 || loopIterations <= 5) { // > 100ms or first 5
+        llvm::errs() << "[MAIN-EXEC] iter=" << loopIterations
+                     << " execTime=" << execUs << "us deltas="
+                     << deltasExecuted << " t="
+                     << currentTime.realTime << "\n";
+      }
     }
 
     LLVM_DEBUG({
@@ -2142,19 +2354,34 @@ LogicalResult SimulationContext::run() {
     // deltasExecuted > 0 — to ensure deferred writes are flushed.
     if (!vpiLibrary.empty()) {
       auto &vpi = VPIRuntime::getInstance();
-      // cocotb 2.0.1 defers DEPOSIT writes — they are only applied when a
-      // ReadWrite trigger fires. Each round of ReadWriteSynch may cause
-      // signal changes that wake coroutines which defer MORE writes,
-      // registering new cbReadWriteSynch callbacks. Loop until all deferred
-      // writes are flushed before entering ReadOnly (IEEE 1800-2017 §4.4).
-      // Note: putValue() calls executeCurrentTime() internally, so
-      // combinational propagation happens within each write.
+      static bool traceMainVpi =
+          std::getenv("CIRCT_SIM_TRACE_VPI_TIMING") != nullptr;
+      auto mRwStart = std::chrono::steady_clock::now();
+      int mRwCount = 0;
       for (int rwIter = 0; rwIter < 100; ++rwIter) {
         vpi.fireCallbacks(cbReadWriteSynch);
+        ++mRwCount;
         if (!vpi.hasActiveCallbacks(cbReadWriteSynch))
           break;
       }
+      auto mRwEnd = std::chrono::steady_clock::now();
       vpi.fireCallbacks(cbReadOnlySynch);
+      auto mRoEnd = std::chrono::steady_clock::now();
+      if (traceMainVpi) {
+        static uint64_t mainVpiCount = 0;
+        ++mainVpiCount;
+        auto rwUs = std::chrono::duration_cast<
+            std::chrono::microseconds>(mRwEnd - mRwStart).count();
+        auto roUs = std::chrono::duration_cast<
+            std::chrono::microseconds>(mRoEnd - mRwEnd).count();
+        if (mainVpiCount <= 20 || rwUs + roUs > 1000) {
+          llvm::errs() << "[MAIN-VPI] #" << mainVpiCount
+                       << " rw=" << rwUs << "us(x" << mRwCount
+                       << ") ro=" << roUs << "us t="
+                       << scheduler.getCurrentTime().realTime
+                       << " deltas=" << deltasExecuted << "\n";
+        }
+      }
     }
 
     if (llhdInterpreter)
@@ -2186,7 +2413,7 @@ LogicalResult SimulationContext::run() {
 
     if (deltasExecuted == 0) {
       // Track zero-delta iterations at the same time for loop detection
-      if (currentTime.realTime == lastSimTime) {
+      if (currentTime.realTime == lastZeroIterTime) {
         ++zeroIterationsAtSameTime;
         if (zeroIterationsAtSameTime >= maxZeroIterations) {
           // Print diagnostic information
@@ -2215,11 +2442,11 @@ LogicalResult SimulationContext::run() {
           break;
         }
       } else {
-        lastSimTime = currentTime.realTime;
+        lastZeroIterTime = currentTime.realTime;
         zeroIterationsAtSameTime = 0;
       }
     } else {
-      if (currentTime.realTime == lastSimTime) {
+      if (currentTime.realTime == lastDeltaTime) {
         deltaCyclesAtSameTime += deltasExecuted;
       } else {
         deltaCyclesAtSameTime = deltasExecuted;
@@ -2238,7 +2465,8 @@ LogicalResult SimulationContext::run() {
 
       // Reset counter when we actually execute deltas
       zeroIterationsAtSameTime = 0;
-      lastSimTime = currentTime.realTime;
+      lastZeroIterTime = currentTime.realTime;
+      lastDeltaTime = currentTime.realTime;
     }
 
     if (!hasReadyProcesses) {
