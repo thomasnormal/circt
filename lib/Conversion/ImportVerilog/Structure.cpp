@@ -2930,21 +2930,403 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
       if (auto *paramSym =
               member.as_if<slang::ast::ParameterSymbol>()) {
         const auto &constVal = paramSym->getValue();
-        if (!constVal || !constVal.isInteger())
+        if (!constVal)
           continue;
-        const auto &svint = constVal.integer();
-        auto maybeVal = svint.as<int64_t>();
-        if (!maybeVal)
-          continue;
-        auto intAttr = builder.getIntegerAttr(
-            builder.getIntegerType(svint.getBitWidth()), *maybeVal);
-        paramEntries.push_back(
-            builder.getNamedAttr(paramSym->name, intAttr));
+        // Check if the parameter's initializer is a string literal.
+        // Per IEEE 1800-2017 § 5.9, implicit-typed parameters assigned a
+        // string literal are converted to integer, but VPI should still
+        // report them as vpiStringConst.
+        bool isStringParam = false;
+        if (const auto *initExpr = paramSym->getInitializer()) {
+          const slang::ast::Expression *inner = initExpr;
+          while (inner->kind == slang::ast::ExpressionKind::Conversion)
+            inner = &inner->as<slang::ast::ConversionExpression>()
+                         .operand();
+          if (inner->kind == slang::ast::ExpressionKind::StringLiteral)
+            isStringParam = true;
+        }
+        if (isStringParam && constVal.isInteger()) {
+          // Store as StringAttr so VPI can report vpiStringConst.
+          const auto &svint = constVal.integer();
+          auto maybeVal = svint.as<uint64_t>();
+          if (maybeVal) {
+            // Decode the integer back to a string (big-endian ASCII).
+            uint64_t v = *maybeVal;
+            unsigned bitWidth = svint.getBitWidth();
+            unsigned byteWidth = (bitWidth + 7) / 8;
+            std::string decoded;
+            for (int i = byteWidth - 1; i >= 0; --i) {
+              char c = static_cast<char>((v >> (i * 8)) & 0xFF);
+              if (c)
+                decoded.push_back(c);
+            }
+            paramEntries.push_back(builder.getNamedAttr(
+                paramSym->name, builder.getStringAttr(decoded)));
+          }
+        } else if (constVal.isInteger()) {
+          const auto &svint = constVal.integer();
+          auto maybeVal = svint.as<int64_t>();
+          if (!maybeVal)
+            continue;
+          auto intAttr = builder.getIntegerAttr(
+              builder.getIntegerType(svint.getBitWidth()), *maybeVal);
+          paramEntries.push_back(
+              builder.getNamedAttr(paramSym->name, intAttr));
+        } else if (constVal.isReal()) {
+          auto floatAttr = builder.getF64FloatAttr(constVal.real());
+          paramEntries.push_back(
+              builder.getNamedAttr(paramSym->name, floatAttr));
+        }
       }
     }
     if (!paramEntries.empty())
       lowering.op->setAttr("vpi.parameters",
                            builder.getDictionaryAttr(paramEntries));
+  }
+
+  // Collect generate scope hierarchy and generate-scoped parameters
+  // so that VPI can expose generate blocks and their localparams.
+  {
+    SmallVector<NamedAttribute> genScopeEntries;
+    SmallVector<NamedAttribute> genScopeParamEntries;
+    SmallVector<NamedAttribute> gateInstEntries;
+    unsigned unnamedGenIdx = 1; // VPI convention: genblk1, genblk2, ...
+
+    // Helper to collect generate-scoped localparams recursively.
+    std::function<void(const slang::ast::Scope &, llvm::StringRef)>
+        collectGenScope = [&](const slang::ast::Scope &scope,
+                              llvm::StringRef prefix) {
+      for (auto &member : scope.members()) {
+        if (auto *paramSym =
+                member.as_if<slang::ast::ParameterSymbol>()) {
+          const auto &constVal = paramSym->getValue();
+          if (!constVal || !constVal.isInteger())
+            continue;
+          const auto &svint = constVal.integer();
+          auto maybeVal = svint.as<int64_t>();
+          if (!maybeVal)
+            continue;
+          std::string qualName =
+              (prefix + paramSym->name).str();
+          genScopeParamEntries.push_back(builder.getNamedAttr(
+              qualName,
+              builder.getIntegerAttr(
+                  builder.getIntegerType(svint.getBitWidth()),
+                  *maybeVal)));
+        }
+        // Recurse into nested generate blocks.
+        if (auto *genBlock =
+                member.as_if<slang::ast::GenerateBlockSymbol>()) {
+          if (genBlock->isUninstantiated)
+            continue;
+          std::string childPrefix =
+              (prefix + genBlock->getExternalName() + ".").str();
+          collectGenScope(*genBlock, childPrefix);
+        }
+        // Recurse into nested generate arrays.
+        if (auto *nestedArr =
+                member.as_if<slang::ast::GenerateBlockArraySymbol>()) {
+          for (const auto *entry : nestedArr->entries) {
+            int32_t idx = 0;
+            if (entry->arrayIndex)
+              idx = entry->arrayIndex->as<int32_t>().value_or(
+                  entry->constructIndex);
+            else
+              idx = entry->constructIndex;
+            std::string childPrefix =
+                (prefix + std::string(nestedArr->getExternalName()) +
+                 "[" + std::to_string(idx) + "].")
+                    .str();
+            collectGenScope(
+                entry->asSymbol()
+                    .as<slang::ast::GenerateBlockSymbol>(),
+                childPrefix);
+          }
+        }
+      }
+    };
+
+    for (auto &member : module->members()) {
+      if (auto *genArr =
+              member.as_if<slang::ast::GenerateBlockArraySymbol>()) {
+        // Named generate array: record scope name and bounds.
+        std::string scopeName = std::string(genArr->getExternalName());
+        int32_t minIdx = INT32_MAX, maxIdx = INT32_MIN;
+        for (const auto *entry : genArr->entries) {
+          int32_t idx = 0;
+          if (entry->arrayIndex)
+            idx = entry->arrayIndex->as<int32_t>().value_or(
+                entry->constructIndex);
+          else
+            idx = entry->constructIndex;
+          minIdx = std::min(minIdx, idx);
+          maxIdx = std::max(maxIdx, idx);
+          // Collect localparams inside each iteration.
+          std::string iterPrefix =
+              scopeName + "[" + std::to_string(idx) + "].";
+          collectGenScope(entry->asSymbol()
+                              .as<slang::ast::GenerateBlockSymbol>(),
+                          iterPrefix);
+        }
+        SmallVector<NamedAttribute> scopeAttrs;
+        scopeAttrs.push_back(builder.getNamedAttr(
+            "type", builder.getStringAttr("array")));
+        scopeAttrs.push_back(builder.getNamedAttr(
+            "left", builder.getI32IntegerAttr(minIdx)));
+        scopeAttrs.push_back(builder.getNamedAttr(
+            "right", builder.getI32IntegerAttr(maxIdx)));
+        genScopeEntries.push_back(builder.getNamedAttr(
+            scopeName, builder.getDictionaryAttr(scopeAttrs)));
+      } else if (auto *genBlock =
+                     member.as_if<slang::ast::GenerateBlockSymbol>()) {
+        if (genBlock->isUninstantiated)
+          continue;
+        // Named or unnamed conditional generate scope.
+        std::string scopeName = std::string(genBlock->getExternalName());
+        if (scopeName.empty()) {
+          scopeName = "genblk" + std::to_string(unnamedGenIdx);
+        }
+        SmallVector<NamedAttribute> scopeAttrs;
+        scopeAttrs.push_back(builder.getNamedAttr(
+            "type", builder.getStringAttr("scope")));
+        genScopeEntries.push_back(builder.getNamedAttr(
+            scopeName, builder.getDictionaryAttr(scopeAttrs)));
+        // Collect localparams.
+        collectGenScope(*genBlock, scopeName + ".");
+      } else if (member.kind ==
+                 slang::ast::SymbolKind::PrimitiveInstance) {
+        // Gate primitive instances.
+        auto &prim =
+            member.as<slang::ast::PrimitiveInstanceSymbol>();
+        if (!prim.name.empty()) {
+          gateInstEntries.push_back(builder.getNamedAttr(
+              llvm::StringRef(prim.name.data(), prim.name.size()),
+              builder.getStringAttr(
+                  llvm::StringRef(prim.primitiveType.name.data(),
+                                  prim.primitiveType.name.size()))));
+        }
+      }
+      unnamedGenIdx++;
+    }
+    if (!genScopeEntries.empty())
+      lowering.op->setAttr("vpi.gen_scopes",
+                           builder.getDictionaryAttr(genScopeEntries));
+    if (!genScopeParamEntries.empty())
+      lowering.op->setAttr("vpi.gen_scope_params",
+                           builder.getDictionaryAttr(genScopeParamEntries));
+    if (!gateInstEntries.empty())
+      lowering.op->setAttr("vpi.gate_instances",
+                           builder.getDictionaryAttr(gateInstEntries));
+  }
+
+  // Collect interface instances and arrays for VPI discovery.
+  {
+    SmallVector<NamedAttribute> ifaceArrayEntries;
+    SmallVector<NamedAttribute> ifaceInstEntries;
+    llvm::StringMap<bool> ifaceDefsSeen;
+    SmallVector<NamedAttribute> ifaceDefEntries;
+
+    // Helper to collect interface definition signals.
+    auto collectIfaceDef =
+        [&](const slang::ast::InstanceBodySymbol &body) {
+          std::string defName =
+              std::string(body.getDefinition().name);
+          if (ifaceDefsSeen.count(defName))
+            return;
+          ifaceDefsSeen[defName] = true;
+          SmallVector<NamedAttribute> signals;
+          for (auto &m : body.members()) {
+            unsigned width = 0;
+            std::string_view sigName;
+            if (auto *varSym =
+                    m.as_if<slang::ast::VariableSymbol>()) {
+              sigName = varSym->name;
+              width = varSym->getType().getBitWidth();
+            } else if (auto *netSym =
+                           m.as_if<slang::ast::NetSymbol>()) {
+              sigName = netSym->name;
+              width = netSym->getType().getBitWidth();
+            }
+            if (!sigName.empty() && width > 0) {
+              signals.push_back(builder.getNamedAttr(
+                  llvm::StringRef(sigName.data(), sigName.size()),
+                  builder.getI32IntegerAttr(width)));
+            }
+          }
+          if (!signals.empty())
+            ifaceDefEntries.push_back(builder.getNamedAttr(
+                defName, builder.getDictionaryAttr(signals)));
+        };
+
+    for (auto &member : module->members()) {
+      // Interface arrays.
+      if (auto *instArr =
+              member.as_if<slang::ast::InstanceArraySymbol>()) {
+        if (instArr->elements.empty())
+          continue;
+        auto *firstElem = instArr->elements[0];
+        if (!firstElem)
+          continue;
+        auto *firstInst =
+            firstElem->as_if<slang::ast::InstanceSymbol>();
+        if (!firstInst)
+          continue;
+        if (firstInst->body.getDefinition().definitionKind !=
+            slang::ast::DefinitionKind::Interface)
+          continue;
+        std::string arrName = std::string(instArr->name);
+        std::string defName =
+            std::string(firstInst->body.getDefinition().name);
+        SmallVector<NamedAttribute> attrs;
+        attrs.push_back(builder.getNamedAttr(
+            "def", builder.getStringAttr(defName)));
+        attrs.push_back(builder.getNamedAttr(
+            "left",
+            builder.getI32IntegerAttr(instArr->range.left)));
+        attrs.push_back(builder.getNamedAttr(
+            "right",
+            builder.getI32IntegerAttr(instArr->range.right)));
+        ifaceArrayEntries.push_back(builder.getNamedAttr(
+            arrName, builder.getDictionaryAttr(attrs)));
+        collectIfaceDef(firstInst->body);
+      }
+      // Single interface instances.
+      if (auto *instSym =
+              member.as_if<slang::ast::InstanceSymbol>()) {
+        if (instSym->body.getDefinition().definitionKind !=
+            slang::ast::DefinitionKind::Interface)
+          continue;
+        std::string instName = std::string(instSym->name);
+        std::string defName =
+            std::string(instSym->body.getDefinition().name);
+        ifaceInstEntries.push_back(builder.getNamedAttr(
+            instName, builder.getStringAttr(defName)));
+        collectIfaceDef(instSym->body);
+      }
+    }
+    if (!ifaceArrayEntries.empty())
+      lowering.op->setAttr("vpi.interface_arrays",
+                           builder.getDictionaryAttr(ifaceArrayEntries));
+    if (!ifaceInstEntries.empty())
+      lowering.op->setAttr("vpi.interface_instances",
+                           builder.getDictionaryAttr(ifaceInstEntries));
+    if (!ifaceDefEntries.empty())
+      lowering.op->setAttr("vpi.interface_defs",
+                           builder.getDictionaryAttr(ifaceDefEntries));
+  }
+
+  // Collect compilation-level packages and their parameters/constants
+  // for VPI package discovery (cocotb.packages.*).
+  {
+    SmallVector<NamedAttribute> packageEntries;
+    for (auto *pkg : compilation.getPackages()) {
+      if (!pkg || pkg->name.empty())
+        continue;
+      // Skip built-in std package.
+      if (pkg->name == "std")
+        continue;
+      std::string pkgName = std::string(pkg->name);
+      SmallVector<NamedAttribute> paramEntries;
+      for (auto &member : pkg->members()) {
+        if (auto *paramSym =
+                member.as_if<slang::ast::ParameterSymbol>()) {
+          const auto &constVal = paramSym->getValue();
+          if (!constVal || !constVal.isInteger())
+            continue;
+          const auto &svint = constVal.integer();
+          unsigned bitWidth = svint.getBitWidth();
+          // For large values, use APInt directly.
+          if (bitWidth > 64) {
+            llvm::SmallVector<uint64_t> words;
+            unsigned numWords = (bitWidth + 63) / 64;
+            for (unsigned w = 0; w < numWords; ++w) {
+              uint64_t word = 0;
+              for (unsigned b = 0; b < 64 && (w * 64 + b) < bitWidth;
+                   ++b) {
+                if (bool(svint[w * 64 + b]))
+                  word |= (1ULL << b);
+              }
+              words.push_back(word);
+            }
+            llvm::APInt apVal(bitWidth, words);
+            paramEntries.push_back(builder.getNamedAttr(
+                llvm::StringRef(paramSym->name.data(),
+                                paramSym->name.size()),
+                builder.getIntegerAttr(
+                    builder.getIntegerType(bitWidth), apVal)));
+          } else {
+            auto maybeVal = svint.as<int64_t>();
+            if (!maybeVal)
+              continue;
+            paramEntries.push_back(builder.getNamedAttr(
+                llvm::StringRef(paramSym->name.data(),
+                                paramSym->name.size()),
+                builder.getIntegerAttr(
+                    builder.getIntegerType(bitWidth), *maybeVal)));
+          }
+        }
+        // Also collect variables (int, logic, etc.) declared in packages.
+        if (auto *varSym =
+                member.as_if<slang::ast::VariableSymbol>()) {
+          if (!varSym->getType().isIntegral())
+            continue;
+          const auto *initExpr = varSym->getInitializer();
+          if (!initExpr)
+            continue;
+          slang::ast::EvalContext evalContext(
+              slang::ast::ASTContext(*pkg,
+                                     slang::ast::LookupLocation::max),
+              slang::ast::EvalFlags::CacheResults |
+                  slang::ast::EvalFlags::SpecparamsAllowed);
+          auto initVal = initExpr->eval(evalContext);
+          if (!initVal || !initVal.isInteger())
+            continue;
+          const auto &svint = initVal.integer();
+          auto maybeVal = svint.as<int64_t>();
+          if (!maybeVal)
+            continue;
+          paramEntries.push_back(builder.getNamedAttr(
+              llvm::StringRef(varSym->name.data(),
+                              varSym->name.size()),
+              builder.getIntegerAttr(
+                  builder.getIntegerType(svint.getBitWidth()),
+                  *maybeVal)));
+        }
+      }
+      if (!paramEntries.empty())
+        packageEntries.push_back(builder.getNamedAttr(
+            pkgName, builder.getDictionaryAttr(paramEntries)));
+    }
+    // Also collect $unit-scope parameters (compilation unit symbols).
+    {
+      SmallVector<NamedAttribute> unitParams;
+      for (auto *cu : compilation.getCompilationUnits()) {
+        for (auto &member : cu->members()) {
+          if (auto *paramSym =
+                  member.as_if<slang::ast::ParameterSymbol>()) {
+            const auto &constVal = paramSym->getValue();
+            if (!constVal || !constVal.isInteger())
+              continue;
+            const auto &svint = constVal.integer();
+            auto maybeVal = svint.as<int64_t>();
+            if (!maybeVal)
+              continue;
+            unitParams.push_back(builder.getNamedAttr(
+                llvm::StringRef(paramSym->name.data(),
+                                paramSym->name.size()),
+                builder.getIntegerAttr(
+                    builder.getIntegerType(svint.getBitWidth()),
+                    *maybeVal)));
+          }
+        }
+      }
+      if (!unitParams.empty())
+        packageEntries.push_back(builder.getNamedAttr(
+            "$unit", builder.getDictionaryAttr(unitParams)));
+    }
+    if (!packageEntries.empty())
+      lowering.op->setAttr("vpi.packages",
+                           builder.getDictionaryAttr(packageEntries));
   }
 
   // Collect unpacked array bounds and attach as vpi.array_bounds so that
@@ -2973,6 +3355,27 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
         SmallVector<NamedAttribute> rangeAttrs;
         rangeAttrs.push_back(builder.getNamedAttr("left", leftAttr));
         rangeAttrs.push_back(builder.getNamedAttr("right", rightAttr));
+        // Collect inner dimension bounds for nested unpacked arrays.
+        SmallVector<Attribute> innerBoundsList;
+        const slang::ast::Type *innerT =
+            &arr.elementType.getCanonicalType();
+        while (innerT->kind ==
+               slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+          auto &innerArr =
+              innerT->as<slang::ast::FixedSizeUnpackedArrayType>();
+          SmallVector<NamedAttribute> innerAttrs;
+          innerAttrs.push_back(builder.getNamedAttr(
+              "left", builder.getIntegerAttr(i32Ty, innerArr.range.left)));
+          innerAttrs.push_back(builder.getNamedAttr(
+              "right",
+              builder.getIntegerAttr(i32Ty, innerArr.range.right)));
+          innerBoundsList.push_back(
+              builder.getDictionaryAttr(innerAttrs));
+          innerT = &innerArr.elementType.getCanonicalType();
+        }
+        if (!innerBoundsList.empty())
+          rangeAttrs.push_back(builder.getNamedAttr(
+              "inner_bounds", builder.getArrayAttr(innerBoundsList)));
         boundsEntries.push_back(builder.getNamedAttr(
             llvm::StringRef(memberName.data(), memberName.size()),
             builder.getDictionaryAttr(rangeAttrs)));
@@ -2995,6 +3398,27 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
         SmallVector<NamedAttribute> rangeAttrs;
         rangeAttrs.push_back(builder.getNamedAttr("left", leftAttr));
         rangeAttrs.push_back(builder.getNamedAttr("right", rightAttr));
+        // Collect inner dimension bounds for nested unpacked arrays.
+        SmallVector<Attribute> innerBoundsList;
+        const slang::ast::Type *innerT =
+            &arr.elementType.getCanonicalType();
+        while (innerT->kind ==
+               slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+          auto &innerArr =
+              innerT->as<slang::ast::FixedSizeUnpackedArrayType>();
+          SmallVector<NamedAttribute> innerAttrs;
+          innerAttrs.push_back(builder.getNamedAttr(
+              "left", builder.getIntegerAttr(i32Ty, innerArr.range.left)));
+          innerAttrs.push_back(builder.getNamedAttr(
+              "right",
+              builder.getIntegerAttr(i32Ty, innerArr.range.right)));
+          innerBoundsList.push_back(
+              builder.getDictionaryAttr(innerAttrs));
+          innerT = &innerArr.elementType.getCanonicalType();
+        }
+        if (!innerBoundsList.empty())
+          rangeAttrs.push_back(builder.getNamedAttr(
+              "inner_bounds", builder.getArrayAttr(innerBoundsList)));
         std::string portName(port->name);
         // Only add if not already present from members.
         bool found = false;
@@ -3133,12 +3557,31 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
     SmallVector<mlir::Attribute> intNames;
     SmallVector<mlir::Attribute> strNames;
     SmallVector<mlir::Attribute> realNames;
+    SmallVector<NamedAttribute> strVarValues;
     auto checkVarType = [&](std::string_view name,
-                            const slang::ast::Type &type) {
+                            const slang::ast::Type &type,
+                            const slang::ast::Expression *initExpr) {
       auto &ct = type.getCanonicalType();
       if (ct.isString()) {
         strNames.push_back(builder.getStringAttr(
             llvm::StringRef(name.data(), name.size())));
+        // Try to capture the initial string value for VPI discovery.
+        // Walk through conversions to find the underlying string literal.
+        if (initExpr) {
+          const slang::ast::Expression *inner = initExpr;
+          while (inner->kind == slang::ast::ExpressionKind::Conversion) {
+            inner = &inner->as<slang::ast::ConversionExpression>()
+                         .operand();
+          }
+          if (inner->kind == slang::ast::ExpressionKind::StringLiteral) {
+            auto &strLit = inner->as<slang::ast::StringLiteral>();
+            auto val = strLit.getValue();
+            strVarValues.push_back(builder.getNamedAttr(
+                llvm::StringRef(name.data(), name.size()),
+                builder.getStringAttr(
+                    llvm::StringRef(val.data(), val.size()))));
+          }
+        }
       } else if (ct.isFloating()) {
         realNames.push_back(builder.getStringAttr(
             llvm::StringRef(name.data(), name.size())));
@@ -3152,15 +3595,16 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
     };
     for (auto &member : module->members()) {
       if (auto *varSym = member.as_if<slang::ast::VariableSymbol>())
-        checkVarType(varSym->name, varSym->getType());
+        checkVarType(varSym->name, varSym->getType(),
+                     varSym->getInitializer());
       else if (auto *netSym = member.as_if<slang::ast::NetSymbol>())
-        checkVarType(netSym->name, netSym->getType());
+        checkVarType(netSym->name, netSym->getType(), nullptr);
     }
     for (auto *portSym : module->getPortList()) {
       if (!portSym)
         continue;
       if (auto *port = portSym->as_if<slang::ast::PortSymbol>())
-        checkVarType(port->name, port->getType());
+        checkVarType(port->name, port->getType(), nullptr);
     }
     if (!intNames.empty())
       lowering.op->setAttr("vpi.integer_vars",
@@ -3168,6 +3612,9 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
     if (!strNames.empty())
       lowering.op->setAttr("vpi.string_vars",
                            builder.getArrayAttr(strNames));
+    if (!strVarValues.empty())
+      lowering.op->setAttr("vpi.string_var_values",
+                           builder.getDictionaryAttr(strVarValues));
     if (!realNames.empty())
       lowering.op->setAttr("vpi.real_vars",
                            builder.getArrayAttr(realNames));
@@ -4405,11 +4852,41 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   unsigned numImplicitArgs = (isMethod || isInterfaceMethod) ? 1 : 0;
   auto valInputs = llvm::ArrayRef<Type>(inputs).drop_front(numImplicitArgs);
 
+  using slang::ast::ArgumentDirection;
   for (auto [astArg, type] : llvm::zip(astArgs, valInputs)) {
     auto loc = convertLocation(astArg->location);
     auto blockArg = block.addArgument(type, loc);
 
     if (isa<moore::RefType>(type)) {
+      // IEEE 1800-2017 §13.3.2: output arguments start with default values.
+      // Zero-initialize ref-typed output args at the start of the function body.
+      if (astArg->direction == ArgumentDirection::Out) {
+        auto nestedType =
+            cast<moore::RefType>(type).getNestedType();
+        if (auto intTy = dyn_cast<moore::IntType>(nestedType)) {
+          OpBuilder::InsertionGuard g(builder);
+          builder.setInsertionPointToEnd(&block);
+          auto zero = moore::ConstantOp::create(builder, loc, intTy, 0);
+          moore::BlockingAssignOp::create(builder, loc, blockArg, zero);
+        } else if (auto structTy =
+                       dyn_cast<moore::UnpackedStructType>(nestedType)) {
+          // Zero-initialize each field of the struct.
+          OpBuilder::InsertionGuard g(builder);
+          builder.setInsertionPointToEnd(&block);
+          for (auto &field : structTy.getMembers()) {
+            if (auto fieldIntTy =
+                    dyn_cast<moore::IntType>(field.type)) {
+              auto fieldRefTy = moore::RefType::get(
+                  cast<moore::UnpackedType>(fieldIntTy));
+              auto fieldRef = moore::StructExtractRefOp::create(
+                  builder, loc, fieldRefTy, field.name, blockArg);
+              auto zero =
+                  moore::ConstantOp::create(builder, loc, fieldIntTy, 0);
+              moore::BlockingAssignOp::create(builder, loc, fieldRef, zero);
+            }
+          }
+        }
+      }
       valueSymbols.insert(astArg, blockArg);
     } else {
       OpBuilder::InsertionGuard g(builder);
@@ -6142,17 +6619,35 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
               break;
             }
 
-            // Collect bin values as integer attributes.
+            // Collect bin values.
+            // Single values are stored as i64 attrs.
+            // Ranges are stored as [low, high] array attrs.
             SmallVector<mlir::Attribute> valueAttrs;
             auto binValues = bin->getValues();
             for (const auto *valExpr : binValues) {
-              // Try to evaluate the expression as a constant.
+              if (valExpr->kind == slang::ast::ExpressionKind::ValueRange) {
+                auto &rangeExpr = valExpr->as<slang::ast::ValueRangeExpression>();
+                auto leftVal = evaluateConstant(rangeExpr.left());
+                auto rightVal = evaluateConstant(rangeExpr.right());
+                if (leftVal.isInteger() && rightVal.isInteger()) {
+                  auto leftInt = leftVal.integer().as<int64_t>();
+                  auto rightInt = rightVal.integer().as<int64_t>();
+                  if (leftInt && rightInt) {
+                    valueAttrs.push_back(builder.getArrayAttr(
+                        {builder.getI64IntegerAttr(*leftInt),
+                         builder.getI64IntegerAttr(*rightInt)}));
+                  }
+                }
+                continue;
+              }
+
               auto result = evaluateConstant(*valExpr);
-              if (result.isInteger()) {
-                auto intVal = result.integer().as<int64_t>();
-                if (intVal)
-                  valueAttrs.push_back(
-                      builder.getI64IntegerAttr(intVal.value()));
+              if (!result.isInteger())
+                continue;
+              auto intVal = result.integer().as<int64_t>();
+              if (intVal) {
+                valueAttrs.push_back(
+                    builder.getI64IntegerAttr(intVal.value()));
               }
             }
 

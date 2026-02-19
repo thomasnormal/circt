@@ -669,8 +669,7 @@ struct SimplifyAndOpPattern : public OpRewritePattern<AndOp> {
       return success();
     }
 
-    llvm::SmallDenseSet<Value, 16> termSet;
-    termSet.reserve(filtered.size());
+    llvm::SmallDenseSet<Value, 8> termSet;
     for (Value term : filtered)
       termSet.insert(stripUnrealizedCast(term));
 
@@ -784,8 +783,7 @@ struct SimplifyOrOpPattern : public OpRewritePattern<OrOp> {
       return success();
     }
 
-    llvm::SmallDenseSet<Value, 16> termSet;
-    termSet.reserve(filtered.size());
+    llvm::SmallDenseSet<Value, 8> termSet;
     for (Value term : filtered)
       termSet.insert(stripUnrealizedCast(term));
 
@@ -1971,6 +1969,18 @@ struct SVModuleOpConversion : public OpConversionPattern<SVModuleOp> {
     if (auto vpiGateInstances =
             op->getAttrOfType<DictionaryAttr>("vpi.gate_instances"))
       hwModuleOp->setAttr("vpi.gate_instances", vpiGateInstances);
+    if (auto vpiIfaceArrays =
+            op->getAttrOfType<DictionaryAttr>("vpi.interface_arrays"))
+      hwModuleOp->setAttr("vpi.interface_arrays", vpiIfaceArrays);
+    if (auto vpiIfaceInsts =
+            op->getAttrOfType<DictionaryAttr>("vpi.interface_instances"))
+      hwModuleOp->setAttr("vpi.interface_instances", vpiIfaceInsts);
+    if (auto vpiIfaceDefs =
+            op->getAttrOfType<DictionaryAttr>("vpi.interface_defs"))
+      hwModuleOp->setAttr("vpi.interface_defs", vpiIfaceDefs);
+    if (auto vpiPackages =
+            op->getAttrOfType<DictionaryAttr>("vpi.packages"))
+      hwModuleOp->setAttr("vpi.packages", vpiPackages);
     // Make hw.module have the same visibility as the moore.module.
     // The entry/top level module is public, otherwise is private.
     SymbolTable::setSymbolVisibility(hwModuleOp,
@@ -2409,6 +2419,69 @@ struct WaitEventOpConversion : public OpConversionPattern<WaitEventOp> {
       auto fn =
           getOrCreateRuntimeFunc(mod, rewriter, "__moore_wait_event", fnTy);
 
+      auto traceDetectSignalRef = [&](Value seed) -> Value {
+        llvm::SmallVector<Value, 8> stack;
+        llvm::SmallDenseSet<Value, 16> seen;
+        stack.push_back(seed);
+        while (!stack.empty()) {
+          Value value = stack.pop_back_val();
+          if (!value || !seen.insert(value).second)
+            continue;
+          if (Value remapped = rewriter.getRemappedValue(value);
+              remapped && remapped != value)
+            stack.push_back(remapped);
+          if (isa<llhd::RefType, RefType>(value.getType()))
+            return value;
+          Operation *defOp = value.getDefiningOp();
+          if (!defOp)
+            continue;
+          if (auto readOp = dyn_cast<ReadOp>(defOp)) {
+            stack.push_back(readOp.getInput());
+            continue;
+          }
+          if (auto probeOp = dyn_cast<llhd::ProbeOp>(defOp))
+            return probeOp.getSignal();
+          if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
+            for (Value input : castOp.getInputs())
+              stack.push_back(input);
+            continue;
+          }
+          if (auto structExtract = dyn_cast<hw::StructExtractOp>(defOp)) {
+            stack.push_back(structExtract.getInput());
+            continue;
+          }
+          if (auto arrayGet = dyn_cast<hw::ArrayGetOp>(defOp)) {
+            stack.push_back(arrayGet.getInput());
+            continue;
+          }
+          for (Value operand : defOp->getOperands())
+            stack.push_back(operand);
+        }
+        return Value();
+      };
+      auto materializeSignalPtr = [&](Value signalRef) -> Value {
+        if (!signalRef)
+          return Value();
+        if (signalRef.getType() == ptrTy)
+          return signalRef;
+        if (typeConverter) {
+          if (Value converted = typeConverter->materializeTargetConversion(
+                  rewriter, loc, ptrTy, signalRef))
+            return converted;
+          if (Value remapped = rewriter.getRemappedValue(signalRef);
+              remapped && remapped != signalRef) {
+            if (remapped.getType() == ptrTy)
+              return remapped;
+            if (Value converted = typeConverter->materializeTargetConversion(
+                    rewriter, loc, ptrTy, remapped))
+              return converted;
+          }
+        }
+        return UnrealizedConversionCastOp::create(rewriter, loc, ptrTy,
+                                                  signalRef)
+            .getResult(0);
+      };
+
       // For each detect_event op, emit a __moore_wait_event call.
       for (auto detectOp : op.getBody().getOps<DetectEventOp>()) {
         rewriter.setInsertionPoint(op);
@@ -2429,12 +2502,13 @@ struct WaitEventOpConversion : public OpConversionPattern<WaitEventOp> {
         }
         Value edgeVal = LLVM::ConstantOp::create(
             rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(edgeKind));
-        // Pass a null pointer - the interpreter will use SSA tracing to find
-        // the signal from the call context.
-        Value nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+        Value signalPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+        Value signalRef = traceDetectSignalRef(detectOp.getInput());
+        if (Value convertedSignalPtr = materializeSignalPtr(signalRef))
+          signalPtr = convertedSignalPtr;
         LLVM::CallOp::create(rewriter, loc, TypeRange{},
                              SymbolRefAttr::get(fn),
-                             ValueRange{edgeVal, nullPtr});
+                             ValueRange{edgeVal, signalPtr});
       }
       rewriter.eraseOp(op);
       return success();
@@ -4472,8 +4546,14 @@ struct CovergroupDeclOpConversion
             mod, rewriter, "__moore_coverpoint_init", initCpFnTy);
 
         // Get or create illegal/ignore bin functions
-        // __moore_coverpoint_add_illegal_bin(cg, cp_index, name, low, high)
         auto i64Ty = IntegerType::get(ctx, 64);
+        // __moore_coverpoint_add_bin(cg, cp_index, name, type, low, high)
+        auto addBinFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, ptrTy, i32Ty, i64Ty, i64Ty});
+        auto addBinFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_coverpoint_add_bin", addBinFnTy);
+
+        // __moore_coverpoint_add_illegal_bin(cg, cp_index, name, low, high)
         auto addIllegalBinFnTy =
             LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, ptrTy, i64Ty, i64Ty});
         auto addIllegalBinFn = getOrCreateRuntimeFunc(
@@ -4521,7 +4601,8 @@ struct CovergroupDeclOpConversion
               continue;
 
             auto kind = bin.getKind();
-            if (kind != CoverageBinKind::IllegalBins &&
+            if (kind != CoverageBinKind::Bins &&
+                kind != CoverageBinKind::IllegalBins &&
                 kind != CoverageBinKind::IgnoreBins)
               continue;
 
@@ -4540,9 +4621,11 @@ struct CovergroupDeclOpConversion
             // Process each value/range in the bin
             for (auto valAttr : *valuesAttr) {
               int64_t low = 0, high = 0;
+              int32_t binType = 0; // MOORE_BIN_VALUE
               if (auto intAttr = dyn_cast<IntegerAttr>(valAttr)) {
                 // Single value: low = high = value
                 low = high = intAttr.getInt();
+                binType = 0; // MOORE_BIN_VALUE
               } else if (auto arrAttr = dyn_cast<ArrayAttr>(valAttr)) {
                 // Range: [low, high]
                 if (arrAttr.size() >= 2) {
@@ -4550,15 +4633,23 @@ struct CovergroupDeclOpConversion
                     low = lowAttr.getInt();
                   if (auto highAttr = dyn_cast<IntegerAttr>(arrAttr[1]))
                     high = highAttr.getInt();
+                  binType = 1; // MOORE_BIN_RANGE
                 }
               }
 
+              auto binTypeConst = LLVM::ConstantOp::create(
+                  rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(binType));
               auto lowConst = LLVM::ConstantOp::create(
                   rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(low));
               auto highConst = LLVM::ConstantOp::create(
                   rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(high));
 
-              if (kind == CoverageBinKind::IllegalBins) {
+              if (kind == CoverageBinKind::Bins) {
+                LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                                     SymbolRefAttr::get(addBinFn),
+                                     ValueRange{cgHandle, idxConst, binNamePtr,
+                                                binTypeConst, lowConst, highConst});
+              } else if (kind == CoverageBinKind::IllegalBins) {
                 LLVM::CallOp::create(rewriter, loc, TypeRange{},
                                      SymbolRefAttr::get(addIllegalBinFn),
                                      ValueRange{cgHandle, idxConst, binNamePtr,
@@ -5177,6 +5268,34 @@ struct CovergroupGetCoverageOpConversion
                                        SymbolRefAttr::get(getCovFn),
                                        ValueRange{cgHandle});
 
+    rewriter.replaceOp(op, callOp.getResult());
+    return success();
+  }
+};
+
+/// Lowering for CovergroupGetInstCoverageOp.
+/// Calls __moore_covergroup_get_inst_coverage and returns instance coverage.
+struct CovergroupGetInstCoverageOpConversion
+    : public OpConversionPattern<CovergroupGetInstCoverageOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(CovergroupGetInstCoverageOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto f64Ty = Float64Type::get(ctx);
+
+    auto getInstCovFnTy = LLVM::LLVMFunctionType::get(f64Ty, {ptrTy});
+    auto getInstCovFn = getOrCreateRuntimeFunc(
+        mod, rewriter, "__moore_covergroup_get_inst_coverage", getInstCovFnTy);
+
+    auto callOp = LLVM::CallOp::create(rewriter, loc, TypeRange{f64Ty},
+                                       SymbolRefAttr::get(getInstCovFn),
+                                       ValueRange{adaptor.getCovergroup()});
     rewriter.replaceOp(op, callOp.getResult());
     return success();
   }
@@ -12692,6 +12811,83 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
         return success();
       }
 
+      // For dynamic arrays and queues, SystemVerilog assignment is a value
+      // copy, not pointer aliasing. Lowering this as a raw struct store
+      // creates shared {ptr,len} storage and causes later mutations of the
+      // source object to corrupt copied transactions (e.g. UVM analysis FIFO
+      // entries). Deep-copy the payload via runtime helper.
+      if (isa<QueueType, OpenUnpackedArrayType>(srcMooreType)) {
+        auto *ctx = op.getContext();
+        auto mod = op->template getParentOfType<ModuleOp>();
+        auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+        auto i32Ty = IntegerType::get(ctx, 32);
+        auto i64Ty = IntegerType::get(ctx, 64);
+        auto dynArrayTy = LLVM::LLVMStructType::getLiteral(
+            ctx, {ptrTy, i64Ty});
+
+        // Determine element byte size for byte-count allocation/copy.
+        Type elemType;
+        if (auto queueTy = dyn_cast<QueueType>(srcMooreType))
+          elemType = queueTy.getElementType();
+        else
+          elemType =
+              cast<OpenUnpackedArrayType>(srcMooreType).getElementType();
+        int64_t elemByteSize = 1;
+        if (Type llvmElemType = this->getTypeConverter()->convertType(elemType))
+          elemByteSize = std::max<int64_t>(
+              1, static_cast<int64_t>(getTypeSizeSafe(llvmElemType, mod)));
+
+        // source: {data_ptr, len_elems}
+        Value srcPtr = LLVM::ExtractValueOp::create(
+            rewriter, loc, ptrTy, storeVal, ArrayRef<int64_t>{0});
+        Value srcLenElems = LLVM::ExtractValueOp::create(
+            rewriter, loc, i64Ty, storeVal, ArrayRef<int64_t>{1});
+
+        // Convert element count to byte count for allocation/copy.
+        Value srcLenBytes = srcLenElems;
+        if (elemByteSize > 1) {
+          auto elemSizeI64 = LLVM::ConstantOp::create(
+              rewriter, loc, rewriter.getI64IntegerAttr(elemByteSize));
+          srcLenBytes = LLVM::MulOp::create(rewriter, loc, i64Ty, srcLenElems,
+                                            elemSizeI64);
+        }
+
+        // Build temporary init queue struct with byte-length semantics.
+        Value initStruct = LLVM::UndefOp::create(rewriter, loc, dynArrayTy);
+        initStruct = LLVM::InsertValueOp::create(rewriter, loc, initStruct,
+                                                 srcPtr,
+                                                 ArrayRef<int64_t>{0});
+        initStruct = LLVM::InsertValueOp::create(rewriter, loc, initStruct,
+                                                 srcLenBytes,
+                                                 ArrayRef<int64_t>{1});
+        auto one = LLVM::ConstantOp::create(
+            rewriter, loc, rewriter.getI64IntegerAttr(1));
+        auto initAlloca =
+            LLVM::AllocaOp::create(rewriter, loc, ptrTy, dynArrayTy, one);
+        LLVM::StoreOp::create(rewriter, loc, initStruct, initAlloca);
+
+        // __moore_dyn_array_new_copy(size_bytes, &initStructBytes)
+        auto copyFnTy = LLVM::LLVMFunctionType::get(dynArrayTy, {i32Ty, ptrTy});
+        auto copyFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                             "__moore_dyn_array_new_copy",
+                                             copyFnTy);
+        auto sizeBytesI32 =
+            arith::TruncIOp::create(rewriter, loc, i32Ty, srcLenBytes);
+        Value copied = LLVM::CallOp::create(
+                           rewriter, loc, TypeRange{dynArrayTy},
+                           SymbolRefAttr::get(copyFn),
+                           ValueRange{sizeBytesI32, initAlloca})
+                           .getResult();
+
+        // Restore element-count semantics for arr.size().
+        copied = LLVM::InsertValueOp::create(rewriter, loc, copied,
+                                             srcLenElems,
+                                             ArrayRef<int64_t>{1});
+        LLVM::StoreOp::create(rewriter, loc, copied, llvmPtrDst);
+        rewriter.eraseOp(op);
+        return success();
+      }
+
       LLVM::StoreOp::create(rewriter, op.getLoc(), storeVal, llvmPtrDst);
       rewriter.eraseOp(op);
       return success();
@@ -13812,8 +14008,12 @@ struct MonitorBIOpConversion : public OpConversionPattern<MonitorBIOp> {
   LogicalResult
   matchAndRewrite(MonitorBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
-        op, adaptor.getMessage());
+    auto monitorPrint =
+        sim::PrintFormattedProcOp::create(rewriter, op.getLoc(),
+                                          adaptor.getMessage());
+    monitorPrint->setAttr("circt.monitor.kind",
+                          rewriter.getStringAttr("register"));
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -13841,6 +14041,11 @@ struct MonitorOnBIOpConversion : public OpConversionPattern<MonitorOnBIOp> {
   LogicalResult
   matchAndRewrite(MonitorOnBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto marker = sim::FormatLiteralOp::create(rewriter, op.getLoc(),
+                                               "__circt_monitor_on__");
+    auto monitorOn =
+        sim::PrintFormattedProcOp::create(rewriter, op.getLoc(), marker);
+    monitorOn->setAttr("circt.monitor.kind", rewriter.getStringAttr("on"));
     rewriter.eraseOp(op);
     return success();
   }
@@ -13854,13 +14059,18 @@ struct MonitorOffBIOpConversion : public OpConversionPattern<MonitorOffBIOp> {
   LogicalResult
   matchAndRewrite(MonitorOffBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto marker = sim::FormatLiteralOp::create(rewriter, op.getLoc(),
+                                               "__circt_monitor_off__");
+    auto monitorOff =
+        sim::PrintFormattedProcOp::create(rewriter, op.getLoc(), marker);
+    monitorOff->setAttr("circt.monitor.kind", rewriter.getStringAttr("off"));
     rewriter.eraseOp(op);
     return success();
   }
 };
 
-/// Conversion for moore.builtin.printtimescale -> erase (no-op)
-/// $printtimescale prints timescale info (stub)
+/// Conversion for moore.builtin.printtimescale -> runtime function call.
+/// $printtimescale prints timescale info.
 struct PrintTimescaleBIOpConversion
     : public OpConversionPattern<PrintTimescaleBIOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -13868,6 +14078,16 @@ struct PrintTimescaleBIOpConversion
   LogicalResult
   matchAndRewrite(PrintTimescaleBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_printtimescale", fnTy);
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{});
     rewriter.eraseOp(op);
     return success();
   }
@@ -13896,35 +14116,76 @@ struct UngetCBIOpConversion : public OpConversionPattern<UngetCBIOp> {
   LogicalResult
   matchAndRewrite(UngetCBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Return the input character (the pushed-back value)
-    rewriter.replaceOp(op, adaptor.getC());
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty, i32Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_ungetc", fnTy);
+
+    Value c = adaptor.getC();
+    if (isFourStateStructType(c.getType()))
+      c = extractFourStateValue(rewriter, loc, c);
+    if (c.getType() != i32Ty)
+      c = LLVM::TruncOp::create(rewriter, loc, i32Ty, c);
+
+    Value fd = adaptor.getFd();
+    if (isFourStateStructType(fd.getType()))
+      fd = extractFourStateValue(rewriter, loc, fd);
+    if (fd.getType() != i32Ty)
+      fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(fn), ValueRange{c, fd});
+    rewriter.replaceOp(op, call.getResult());
     return success();
   }
 };
 
-/// Conversion for moore.builtin.fseek -> constant 0 (success stub)
-/// $fseek sets file position
+/// Conversion for moore.builtin.fseek -> runtime function call.
+/// $fseek sets file position (IEEE 1800-2017 §21.3.3).
 struct FSeekBIOpConversion : public OpConversionPattern<FSeekBIOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(FSeekBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Return 0 (success) as a stub
-    auto i32Ty = rewriter.getI32Type();
-    rewriter.replaceOpWithNewOp<hw::ConstantOp>(op, i32Ty, 0);
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty, i32Ty, i32Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_fseek", fnTy);
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(fn),
+        ValueRange{adaptor.getFd(), adaptor.getOffset(), adaptor.getWhence()});
+    rewriter.replaceOp(op, call.getResult());
     return success();
   }
 };
 
-/// Conversion for moore.builtin.rewind -> erase (no-op)
-/// $rewind resets file position
+/// Conversion for moore.builtin.rewind -> runtime function call.
+/// $rewind resets file position to beginning (IEEE 1800-2017 §21.3.3).
 struct RewindBIOpConversion : public OpConversionPattern<RewindBIOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(RewindBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {i32Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_rewind", fnTy);
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{adaptor.getFd()});
     rewriter.eraseOp(op);
     return success();
   }
@@ -13938,9 +14199,79 @@ struct FReadBIOpConversion : public OpConversionPattern<FReadBIOp> {
   LogicalResult
   matchAndRewrite(FReadBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Return 0 (bytes read) as a stub
-    auto i32Ty = rewriter.getI32Type();
-    rewriter.replaceOpWithNewOp<hw::ConstantOp>(op, i32Ty, 0);
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto mooreDestRefType = dyn_cast<moore::RefType>(op.getDest().getType());
+    if (!mooreDestRefType)
+      return rewriter.notifyMatchFailure(op, "fread destination is not a ref");
+
+    Type mooreElemType = mooreDestRefType.getNestedType();
+    int32_t numElems = 1;
+    if (auto arrayTy = dyn_cast<moore::UnpackedArrayType>(mooreElemType)) {
+      numElems = static_cast<int32_t>(arrayTy.getSize());
+      mooreElemType = arrayTy.getElementType();
+    }
+
+    int32_t elemBitWidth = 0;
+    if (auto packedType = dyn_cast<moore::PackedType>(mooreElemType)) {
+      auto elemBitSizeOpt = packedType.getBitSize();
+      if (!elemBitSizeOpt)
+        return rewriter.notifyMatchFailure(
+            op, "fread packed element type has no bit size");
+      elemBitWidth = static_cast<int32_t>(*elemBitSizeOpt);
+    } else {
+      Type convertedLogicalType = getTypeConverter()->convertType(mooreElemType);
+      int64_t logicalBits = hw::getBitWidth(convertedLogicalType);
+      if (logicalBits <= 0)
+        return rewriter.notifyMatchFailure(op,
+                                           "fread element type has no width");
+      elemBitWidth = static_cast<int32_t>(logicalBits);
+    }
+
+    Type convertedElemType = getTypeConverter()->convertType(mooreElemType);
+    int64_t elemStorageBits = hw::getBitWidth(convertedElemType);
+    if (elemStorageBits <= 0)
+      elemStorageBits = elemBitWidth;
+    int32_t elemStorageBytes =
+        static_cast<int32_t>((elemStorageBits + 7) / 8);
+
+    // __moore_fread(dest_ptr, elem_bit_width, elem_storage_bytes, num_elems, fd)
+    auto fnTy =
+        LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i32Ty, i32Ty, i32Ty, i32Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_fread", fnTy);
+
+    Value destPtr;
+    if (isa<LLVM::LLVMPointerType>(adaptor.getDest().getType())) {
+      destPtr = adaptor.getDest();
+    } else {
+      destPtr = UnrealizedConversionCastOp::create(rewriter, loc, ptrTy,
+                                                   adaptor.getDest())
+                    .getResult(0);
+    }
+
+    Value fd = adaptor.getFd();
+    if (isFourStateStructType(fd.getType()))
+      fd = extractFourStateValue(rewriter, loc, fd);
+    if (fd.getType() != i32Ty)
+      fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
+
+    Value elemWidthConst = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(elemBitWidth));
+    Value elemStorageBytesConst = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(elemStorageBytes));
+    Value numElemsConst = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(numElems));
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(fn),
+        ValueRange{destPtr, elemWidthConst, elemStorageBytesConst, numElemsConst,
+                   fd});
+    rewriter.replaceOp(op, call.getResult());
     return success();
   }
 };
@@ -14778,9 +15109,18 @@ struct FGetSBIOpConversion : public OpConversionPattern<FGetSBIOp> {
     auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i32Ty});
     auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_fgets", fnTy);
 
-    // Get the string reference (already a ptr) and file descriptor
+    // Get the destination reference and file descriptor.
     Value strRef = adaptor.getStr();
+    Value strPtr;
+    if (isa<LLVM::LLVMPointerType>(strRef.getType())) {
+      strPtr = strRef;
+    } else {
+      strPtr = UnrealizedConversionCastOp::create(rewriter, loc, ptrTy, strRef)
+                   .getResult(0);
+    }
     Value fd = adaptor.getFd();
+    if (isFourStateStructType(fd.getType()))
+      fd = extractFourStateValue(rewriter, loc, fd);
     if (fd.getType() != i32Ty) {
       fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
     }
@@ -14788,7 +15128,7 @@ struct FGetSBIOpConversion : public OpConversionPattern<FGetSBIOp> {
     // Call __moore_fgets(str_ptr, fd)
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
                                      SymbolRefAttr::get(fn),
-                                     ValueRange{strRef, fd});
+                                     ValueRange{strPtr, fd});
 
     rewriter.replaceOp(op, call.getResult());
     return success();
@@ -20975,13 +21315,11 @@ struct AssocArrayExistsOpConversion
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
                                      SymbolRefAttr::get(fn),
                                      ValueRange{adaptor.getArray(), keyAlloca});
-    // The runtime returns i32, but .exists() should return i1 (bool)
-    auto i1Ty = IntegerType::get(ctx, 1);
-    auto zero = LLVM::ConstantOp::create(rewriter, loc,
-                                         rewriter.getI32IntegerAttr(0));
-    auto result = LLVM::ICmpOp::create(rewriter, loc, i1Ty,
-                                       LLVM::ICmpPredicate::ne,
-                                       call.getResult(), zero);
+    // The runtime returns i32 (0 or 1). The Moore op returns TwoValuedI1.
+    // Use extract to get the low bit (equivalent to truncate, avoids
+    // sign-extension issues when the i1 is later widened back to i32).
+    auto result = comb::ExtractOp::create(rewriter, loc, call.getResult(),
+                                          /*lowBit=*/0, /*resultWidth=*/1);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -24203,11 +24541,53 @@ extractInlineRangeConstraints(Region &inlineRegion,
   };
   DenseMap<StringRef, InlineBoundInfo> varBounds;
 
+  auto isKnownBoolConst = [&](Value v, bool expected) -> bool {
+    auto constOp = v.getDefiningOp<ConstantOp>();
+    if (!constOp)
+      return false;
+    FVInt fvVal = constOp.getValue();
+    if (fvVal.hasUnknown())
+      return false;
+    APInt bits = fvVal.getRawValue();
+    if (bits.getBitWidth() != 1)
+      return false;
+    return bits.getZExtValue() == (expected ? 1u : 0u);
+  };
+
   // Helper: try to extract range bounds from a single comparison op.
   // Returns true if the op was matched and bounds were updated.
-  auto tryExtractInlineComparisonBounds =
-      [&](Operation *defOp,
-          bool isSoft) -> bool {
+  std::function<bool(Operation *, bool)> tryExtractInlineComparisonBounds;
+  tryExtractInlineComparisonBounds = [&](Operation *defOp,
+                                        bool isSoft) -> bool {
+    if (auto condOp = dyn_cast<ConditionalOp>(defOp)) {
+      auto getYieldedValue = [](Region &region) -> Value {
+        if (region.empty())
+          return {};
+        auto yieldOp = dyn_cast<YieldOp>(region.front().getTerminator());
+        if (!yieldOp)
+          return {};
+        return yieldOp.getResult();
+      };
+
+      Value trueVal = getYieldedValue(condOp.getTrueRegion());
+      Value falseVal = getYieldedValue(condOp.getFalseRegion());
+      if (!trueVal || !falseVal)
+        return false;
+
+      // Slang lowers short-circuit `a && b` to:
+      //   moore.conditional %a -> i1 { yield %b } { yield %false }
+      // Treat this as two conjunctive comparisons and collect both bounds.
+      if (!isKnownBoolConst(falseVal, /*expected=*/false))
+        return false;
+
+      bool matched = false;
+      matched |= tryExtractInlineComparisonBounds(
+          condOp.getCondition().getDefiningOp(), isSoft);
+      matched |=
+          tryExtractInlineComparisonBounds(trueVal.getDefiningOp(), isSoft);
+      return matched;
+    }
+
     if (!defOp || defOp->getNumOperands() != 2)
       return false;
     Value lhs = defOp->getOperand(0);
@@ -26095,6 +26475,10 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         auto dynNewFnTy = LLVM::LLVMFunctionType::get(dynArrayTy, {i32Ty});
         auto dynNewFn = getOrCreateRuntimeFunc(
             mod, rewriter, "__moore_dyn_array_new", dynNewFnTy);
+        auto randomizeBytesFnTy =
+            LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i64Ty});
+        auto randomizeBytesFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_randomize_bytes", randomizeBytesFnTy);
 
         auto lookupPropertyType = [&](StringRef propName) -> Type {
           if (!classDecl)
@@ -26165,7 +26549,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           Value allocBytesI64 =
               arith::ExtSIOp::create(rewriter, loc, i64Ty, allocBytes);
           LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
-                               SymbolRefAttr::get(basicFn),
+                               SymbolRefAttr::get(randomizeBytesFn),
                                ValueRange{arrayDataPtr, allocBytesI64});
           Value elemCount64 =
               arith::ExtSIOp::create(rewriter, loc, i64Ty, requestedElems);
@@ -28105,6 +28489,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<CovergroupInstOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CovergroupSampleOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CovergroupGetCoverageOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<CovergroupGetInstCoverageOpConversion>(typeConverter,
+                                                      patterns.getContext());
   patterns.add<GetCoverageBIOpConversion>(typeConverter, patterns.getContext());
 
   // Constraint patterns (processed during RandomizeOp lowering, then erased).

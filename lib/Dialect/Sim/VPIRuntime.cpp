@@ -130,7 +130,26 @@ uint32_t VPIRuntime::registerSignal(const std::string &name,
     if (parent)
       parent->children.push_back(id);
   }
-  nameToId[fullName] = id;
+  {
+    auto it = nameToId.find(fullName);
+    if (it != nameToId.end()) {
+      auto *prevObj = findById(it->second);
+      // Don't overwrite a more-specific type (Array, StructVar) with a plain
+      // Reg.  When the same signal name exists for both an llhd.sig and a
+      // seq.firreg (or port), the Array/StructVar registration carries the
+      // child hierarchy and must be preserved.
+      if (prevObj &&
+          (prevObj->type == VPIObjectType::Array ||
+           prevObj->type == VPIObjectType::StructVar) &&
+          (type == VPIObjectType::Reg || type == VPIObjectType::Net)) {
+        // Keep the existing structured entry; skip overwriting nameToId.
+      } else {
+        nameToId[fullName] = id;
+      }
+    } else {
+      nameToId[fullName] = id;
+    }
+  }
   signalToObjectIds[signalId].push_back(id);
   objects[id] = std::move(obj);
   stats.objectsCreated++;
@@ -188,9 +207,36 @@ uint32_t VPIRuntime::registerStringVariable(const std::string &name,
 
 VPIObject *VPIRuntime::findByName(const std::string &fullName) {
   auto it = nameToId.find(fullName);
-  if (it == nameToId.end())
-    return nullptr;
-  return findById(it->second);
+  if (it != nameToId.end())
+    return findById(it->second);
+
+  // Try normalizing Verilog escaped identifiers.
+  // Escaped identifiers are written as \name<space> in VPI calls.
+  // Our internal names store just the bare name without \ and trailing space.
+  // Handle both bare names (\name ) and qualified (scope.\name ).
+  if (fullName.find('\\') != std::string::npos) {
+    std::string normalized;
+    normalized.reserve(fullName.size());
+    size_t i = 0;
+    while (i < fullName.size()) {
+      if (fullName[i] == '\\') {
+        // Skip the backslash, copy until trailing space.
+        ++i;
+        while (i < fullName.size() && fullName[i] != ' ')
+          normalized += fullName[i++];
+        // Skip the trailing space.
+        if (i < fullName.size() && fullName[i] == ' ')
+          ++i;
+      } else {
+        normalized += fullName[i++];
+      }
+    }
+    it = nameToId.find(normalized);
+    if (it != nameToId.end())
+      return findById(it->second);
+  }
+
+  return nullptr;
 }
 
 VPIObject *VPIRuntime::findById(uint32_t id) {
@@ -315,13 +361,21 @@ void VPIRuntime::buildHierarchy() {
         int32_t rightBound = info.rightBound;
         bool hasBounds = (rightBound != -1);
         int32_t step = (hasBounds && leftBound > rightBound) ? -1 : 1;
-        auto *parentObj = findById(parentArrayId);
-        if (parentObj) {
-          parentObj->leftBound = hasBounds ? leftBound : 0;
-          parentObj->rightBound =
-              hasBounds ? rightBound
-                        : static_cast<int32_t>(info.numElements - 1);
+        {
+          auto *parentObj = findById(parentArrayId);
+          if (parentObj) {
+            parentObj->leftBound = hasBounds ? leftBound : 0;
+            parentObj->rightBound =
+                hasBounds ? rightBound
+                          : static_cast<int32_t>(info.numElements - 1);
+          }
         }
+        // Collect child IDs first, then batch-add to parent after all
+        // insertions. This avoids dangling pointer issues when DenseMap
+        // rehashes during object insertion.
+        llvm::SmallVector<uint32_t, 8> childIds;
+        llvm::SmallVector<std::pair<uint32_t, const ProcessScheduler::SignalArrayInfo *>, 4>
+            nestedChildren;
         for (uint32_t i = 0; i < info.numElements; ++i) {
           int32_t svIndex = hasBounds ? (leftBound + step * (int32_t)i)
                                       : (int32_t)i;
@@ -345,8 +399,7 @@ void VPIRuntime::buildHierarchy() {
           elemObj->physWidth = elemPhysW;
           elemObj->bitOffset = bitOff;
           elemObj->parentId = parentArrayId;
-          if (parentObj)
-            parentObj->children.push_back(elemId);
+          childIds.push_back(elemId);
           nameToId[elemQName] = elemId;
           if (nameToId.find(elemName) == nameToId.end())
             nameToId[elemName] = elemId;
@@ -354,9 +407,23 @@ void VPIRuntime::buildHierarchy() {
           stats.objectsCreated++;
 
           if (isNestedArray) {
-            createArrayChildren(elemId, *info.innerArrayInfo, elemName,
-                                elemQName, parentSigId, bitOff);
+            nestedChildren.push_back({elemId, info.innerArrayInfo.get()});
           }
+        }
+        // Now safe to update parent — DenseMap is stable after all inserts.
+        auto *parentObj = findById(parentArrayId);
+        if (parentObj) {
+          parentObj->children.insert(parentObj->children.end(),
+                                     childIds.begin(), childIds.end());
+        }
+        // Process nested arrays after parent children are linked.
+        for (auto &[nestedId, innerInfo] : nestedChildren) {
+          auto *nestedObj = findById(nestedId);
+          std::string nestedName = nestedObj ? nestedObj->name : "";
+          std::string nestedQName = nestedObj ? nestedObj->fullName : "";
+          uint32_t nestedBitOff = nestedObj ? nestedObj->bitOffset : 0;
+          createArrayChildren(nestedId, *innerInfo, nestedName,
+                              nestedQName, parentSigId, nestedBitOff);
         }
       };
 
@@ -796,10 +863,18 @@ uint32_t VPIRuntime::handleByName(const char *name, uint32_t scopeId) {
   std::string fullName;
   if (scopeId != 0) {
     auto *scope = findById(scopeId);
-    if (scope)
+    if (scope) {
       fullName = scope->fullName + "." + name;
-    else
+      // For packages, also try :: separator.
+      if (scope->type == VPIObjectType::Package) {
+        std::string pkgPath = scope->fullName + "::" + name;
+        auto *pkgObj = findByName(pkgPath);
+        if (pkgObj)
+          return pkgObj->id;
+      }
+    } else {
       fullName = name;
+    }
   } else {
     fullName = name;
   }
@@ -850,11 +925,13 @@ uint32_t VPIRuntime::handle(int32_t type, uint32_t refId) {
     return obj->parentId;
   }
 
-  // Return range bound handles for arrays and GenScopeArrays. cocotb calls
-  // vpi_handle(vpiLeftRange, array) then vpi_get_value() on the result.
+  // Return range bound handles for arrays, GenScopeArrays, and signals with
+  // explicit ranges. cocotb calls vpi_handle(vpiLeftRange, obj) then
+  // vpi_get_value() on the result.
   if ((type == vpiLeftRange || type == vpiRightRange) &&
       (obj->type == VPIObjectType::Array ||
-       obj->type == VPIObjectType::GenScopeArray)) {
+       obj->type == VPIObjectType::GenScopeArray ||
+       obj->hasExplicitRange)) {
     // Look up or lazily create the range bound parameter object.
     std::string boundName =
         obj->name + (type == vpiLeftRange ? ".__left" : ".__right");
@@ -882,6 +959,12 @@ uint32_t VPIRuntime::handle(int32_t type, uint32_t refId) {
         }
       }
       boundValue = type == vpiLeftRange ? minIdx : maxIdx;
+    } else if (obj->hasExplicitRange) {
+      // Signals with explicit type ranges: [width-1:0].
+      boundValue = type == vpiLeftRange
+                       ? static_cast<int64_t>(obj->width > 0 ? obj->width - 1
+                                                              : 0)
+                       : 0;
     } else {
       // Use stored SV bounds if available.
       boundValue = type == vpiLeftRange
@@ -905,6 +988,8 @@ uint32_t VPIRuntime::iterate(int32_t type, uint32_t refId) {
     // Iterate top-level modules/instances.
     if (type == vpiModule || type == vpiInstance) {
       elements.append(rootModules.begin(), rootModules.end());
+    } else if (type == vpiPackage) {
+      elements.append(packageIds.begin(), packageIds.end());
     }
   } else {
     auto *obj = findById(refId);
@@ -947,8 +1032,9 @@ uint32_t VPIRuntime::iterate(int32_t type, uint32_t refId) {
         if (child && child->type == VPIObjectType::StructVar)
           elements.push_back(childId);
       }
-    } else if (type == vpiNet || type == vpiReg || type == vpiIntegerVar ||
-               type == vpiStringVar || type == vpiRealVar) {
+    } else if (type == vpiNet || type == vpiReg || type == vpiRegArray ||
+               type == vpiIntegerVar || type == vpiStringVar ||
+               type == vpiRealVar) {
       // Return child signals filtered by requested type.
       // cocotb iterates each type separately and creates type-specific handle
       // objects (e.g., RealObject for vpiRealVar, LogicArrayObject for vpiReg).
@@ -963,8 +1049,10 @@ uint32_t VPIRuntime::iterate(int32_t type, uint32_t refId) {
           match = (child->type == VPIObjectType::Net);
           break;
         case vpiReg:
-          match = (child->type == VPIObjectType::Reg ||
-                   child->type == VPIObjectType::Array);
+          match = (child->type == VPIObjectType::Reg);
+          break;
+        case vpiRegArray:
+          match = (child->type == VPIObjectType::Array);
           break;
         case vpiIntegerVar:
           match = (child->type == VPIObjectType::Integer);
@@ -989,13 +1077,6 @@ uint32_t VPIRuntime::iterate(int32_t type, uint32_t refId) {
           if (child)
             elements.push_back(childId);
         }
-      }
-    } else if (type == vpiRegArray) {
-      // Return child arrays only.
-      for (uint32_t childId : obj->children) {
-        auto *child = findById(childId);
-        if (child && child->type == VPIObjectType::Array)
-          elements.push_back(childId);
       }
     } else if (type == vpiParameter) {
       // Return child parameters.
@@ -1075,6 +1156,8 @@ int32_t VPIRuntime::getProperty(int32_t property, uint32_t objectId) {
       result = vpiStringVar; break;
     case VPIObjectType::RealVar:
       result = vpiRealVar; break;
+    case VPIObjectType::Package:
+      result = vpiPackage; break;
     default:
       result = vpiUndefined; break;
     }
@@ -1105,12 +1188,14 @@ int32_t VPIRuntime::getProperty(int32_t property, uint32_t objectId) {
     if (obj->type == VPIObjectType::RealVar ||
         obj->type == VPIObjectType::StringVar)
       return 0;
-    return obj->width > 1 ? 1 : 0;
+    // Signals with explicit ranges (e.g., package members) are vectors
+    // even if 1-bit, so cocotb creates LogicArrayObject.
+    return (obj->width > 1 || obj->hasExplicitRange) ? 1 : 0;
   case vpiScalar:
     if (obj->type == VPIObjectType::RealVar ||
         obj->type == VPIObjectType::StringVar)
       return 0;
-    return obj->width == 1 ? 1 : 0;
+    return (obj->width == 1 && !obj->hasExplicitRange) ? 1 : 0;
   case vpiSigned:
     // Integer types are signed per IEEE 1800-2017.
     return (obj->type == VPIObjectType::Integer) ? 1 : 0;
@@ -1176,6 +1261,9 @@ const char *VPIRuntime::getStrProperty(int32_t property, uint32_t objectId) {
     case VPIObjectType::RealVar:
       strBuffer = "vpiRealVar";
       break;
+    case VPIObjectType::Package:
+      strBuffer = "vpiPackage";
+      break;
     default:
       strBuffer = "vpiUndefined";
     }
@@ -1203,34 +1291,19 @@ void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
 
   // Handle string variables: return the stored string value.
   // Works for both signal-backed (signalId != 0) and synthetic (signalId == 0)
-  // string vars.  For signal-backed strings, if no VPI-written value exists,
-  // try to read the string from the backing signal's struct<(ptr, i64)>.
+  // string vars.  For signal-backed strings, use the VPI-stored value.
   if (obj->type == VPIObjectType::StringVar) {
-    // First try VPI-written value, then try backing signal.
-    std::string result;
-    if (!obj->stringValue.empty()) {
-      result = obj->stringValue;
-    } else if (obj->signalId && scheduler) {
-      const SignalValue &sv = scheduler->getSignalValue(obj->signalId);
-      const llvm::APInt &raw = sv.getAPInt();
-      // String is struct<(ptr, i64)> = 128 bits: lower 64 = ptr, upper 64 = len
-      if (raw.getBitWidth() >= 128) {
-        uint64_t ptr = raw.extractBitsAsZExtValue(64, 0);
-        uint64_t len = raw.extractBitsAsZExtValue(64, 64);
-        if (ptr && len > 0 && len < 1048576) {
-          result.assign(reinterpret_cast<const char *>(ptr), len);
-        }
-      }
-    }
     if (value->format == vpiStringVal) {
-      strBuffer = result;
+      strBuffer = obj->stringValue;
       value->value.str = const_cast<PLI_BYTE8 *>(strBuffer.c_str());
     } else if (value->format == vpiIntVal) {
+      // Convert string to integer (atoi-style).
       value->value.integer = 0;
-      if (!result.empty())
-        value->value.integer = std::atoi(result.c_str());
+      if (!obj->stringValue.empty())
+        value->value.integer = std::atoi(obj->stringValue.c_str());
     } else {
-      strBuffer = result;
+      // Default: return string representation.
+      strBuffer = obj->stringValue;
       value->value.str = const_cast<PLI_BYTE8 *>(strBuffer.c_str());
     }
     return;
@@ -1278,6 +1351,64 @@ void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
     }
     default:
       value->value.integer = static_cast<PLI_INT32>(obj->paramValue);
+      break;
+    }
+    return;
+  }
+
+  // Handle constant-backed signals (e.g., package members with no backing
+  // signal): the hex value is stored in stringValue.
+  if (!obj->signalId && !obj->stringValue.empty() &&
+      (obj->type == VPIObjectType::Net ||
+       obj->type == VPIObjectType::Reg)) {
+    uint32_t w = obj->width > 0 ? obj->width : 32;
+    llvm::APInt apVal(w, obj->stringValue, 16);
+
+    switch (value->format) {
+    case vpiIntVal:
+      value->value.integer = static_cast<PLI_INT32>(
+          apVal.zextOrTrunc(32).getZExtValue());
+      break;
+    case vpiVectorVal: {
+      uint32_t numWords = (w + 31) / 32;
+      static thread_local std::vector<s_vpi_vecval> vecBuf;
+      vecBuf.resize(numWords);
+      for (uint32_t i = 0; i < numWords; ++i) {
+        uint32_t lo = i * 32;
+        uint32_t hi = std::min(lo + 32, w);
+        uint32_t mask = (hi - lo == 32) ? ~0u : ((1u << (hi - lo)) - 1);
+        vecBuf[i].aval = static_cast<PLI_UINT32>(
+            apVal.extractBits(hi - lo, lo).getZExtValue()) & mask;
+        vecBuf[i].bval = 0;
+      }
+      value->value.vector = vecBuf.data();
+      break;
+    }
+    case vpiBinStrVal: {
+      strBuffer.clear();
+      strBuffer.reserve(w);
+      for (int i = static_cast<int>(w) - 1; i >= 0; --i)
+        strBuffer.push_back(apVal[i] ? '1' : '0');
+      value->value.str = const_cast<PLI_BYTE8 *>(strBuffer.c_str());
+      break;
+    }
+    case vpiHexStrVal: {
+      llvm::SmallString<128> hexStr;
+      apVal.toStringUnsigned(hexStr, 16);
+      strBuffer = std::string(hexStr.begin(), hexStr.end());
+      value->value.str = const_cast<PLI_BYTE8 *>(strBuffer.c_str());
+      break;
+    }
+    case vpiDecStrVal: {
+      llvm::SmallString<128> decStr;
+      apVal.toStringUnsigned(decStr, 10);
+      strBuffer = std::string(decStr.begin(), decStr.end());
+      value->value.str = const_cast<PLI_BYTE8 *>(strBuffer.c_str());
+      break;
+    }
+    default:
+      value->value.integer = static_cast<PLI_INT32>(
+          apVal.zextOrTrunc(32).getZExtValue());
       break;
     }
     return;
@@ -1451,18 +1582,6 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
   if (obj->type == VPIObjectType::StringVar) {
     if (value->format == vpiStringVal && value->value.str) {
       obj->stringValue = value->value.str;
-      // For signal-backed strings, also update the backing signal so
-      // HDL reads pick up the new value.
-      if (obj->signalId && scheduler) {
-        size_t len = std::strlen(value->value.str);
-        char *buf = static_cast<char *>(std::malloc(len + 1));
-        std::memcpy(buf, value->value.str, len + 1);
-        // struct<(ptr, i64)>: lower 64 bits = ptr, upper 64 bits = len
-        llvm::APInt sigVal(128, 0);
-        sigVal.insertBits(llvm::APInt(64, reinterpret_cast<uint64_t>(buf)), 0);
-        sigVal.insertBits(llvm::APInt(64, len), 64);
-        scheduler->updateSignal(obj->signalId, SignalValue(sigVal));
-      }
     }
     return objectId;
   }
@@ -1491,6 +1610,14 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
         }
       }
     }
+    return objectId;
+  }
+
+  // If this signal is currently forced and the write is not a force (or
+  // release), silently ignore the deposit.  IEEE 1364 §27.26: a forced
+  // signal retains its forced value until released; normal deposits have no
+  // effect while the force is active.
+  if (flags != vpiForceFlag && forcedSignals.count(obj->signalId)) {
     return objectId;
   }
 
@@ -1812,13 +1939,13 @@ uint32_t VPIRuntime::registerCb(struct t_cb_data *cbData) {
           auto it = callbacks.find(capturedId);
           if (it == callbacks.end() || !it->second->active)
             return;
-          // Clear VPI signal ownership at the start of each cbAfterDelay
-          // cycle. putValue() will re-establish ownership for any signals
-          // written during this tick.
-          if (scheduler)
-            scheduler->clearVpiOwnership();
-          // Re-assert forced signals after clearing ownership. Forced values
-          // persist until explicitly released via vpiReleaseFlag.
+          // VPI signal ownership persists across time steps. Each VPI-written
+          // signal stays owned (HDL drives suppressed) until:
+          // - A new VPI write to the same signal (putValue clears then re-marks)
+          // - An explicit VPI release (vpiReleaseFlag)
+          // This ensures port-input signals driven by constant-zero module port
+          // arguments don't overwrite VPI-written values at each clock edge.
+          // Forced signals are re-asserted separately for value persistence.
           reAssertForcedSignals();
           // Capture fields before calling cbFunc, which may modify callbacks
           // DenseMap (via vpi_register_cb/vpi_remove_cb) and invalidate `it`.
