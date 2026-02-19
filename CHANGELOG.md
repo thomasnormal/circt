@@ -1,5 +1,95 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1525 - February 19, 2026
+
+### ImportVerilog/circt-sim: close `syscall-disable` and TLUL timeout regressions
+
+1. **Fixed four-state LLVM load conversion double-remap in circt-sim**  
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - `interpretLLVMLoad` no longer applies both four-state struct remap and
+     generic HW->LLVM layout remap on the same value.
+   - this restores correct task-local variable evolution for ref->ptr signal
+     accesses in loop/return-heavy code paths.
+
+2. **Lowered named-block `disable` directly to CFG branches in ImportVerilog**  
+   (`lib/Conversion/ImportVerilog/ImportVerilogInternals.h`,
+   `lib/Conversion/ImportVerilog/Statements.cpp`):
+   - added a disable-target stack for named sequential blocks.
+   - named `begin : block` lowering now records an explicit exit block.
+   - `disable <block>` now emits `cf.br` to the matching exit block when
+     resolvable, instead of leaving a runtime `moore.disable` op.
+
+3. **Regression coverage updates**  
+   (`test/Conversion/ImportVerilog/disable-statement.sv`,
+   `test/Tools/circt-sim/syscall-disable.sv`):
+   - added a new ImportVerilog conversion regression ensuring named-block
+     disable lowers without `moore.disable`.
+   - removed stale TODO from `syscall-disable.sv` now that expected values are
+     met.
+
+4. **Stabilized disable-fork deferred wakeup gating after load-path fix**  
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - widened `shouldDeferDisableFork` scheduler-state gating to include
+     `ProcessState::Waiting` in addition to `Ready`/`Suspended`.
+   - this restores deferred-kill behavior when the child wakeup is still being
+     promoted in the current delta, closing the `fork-disable-ready-wakeup`
+     regression seen in broad lit.
+
+5. **Validation**:
+   - build:
+     - `ninja -C build-test -j4 circt-verilog circt-sim`: PASS.
+   - focused regressions:
+     - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/disable-statement.sv`: PASS.
+     - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/syscall-disable.sv`: PASS.
+     - `llvm/build/bin/llvm-lit -sv --timeout=120 build-test/test/Tools/circt-sim --filter 'syscall-(coverage|covergroup|disable|isunbounded|monitor|printtimescale|random|randomize-with|shortrealtobits|strobe|wait)\\.sv|tlul-bfm-a-ready-timeout-short-circuit\\.sv'`: PASS (`12/12`).
+     - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build-test/test/Tools/circt-sim/fork-disable-defer-poll.sv build-test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv`: PASS (`3/3`).
+   - broad suite:
+     - `ninja -C build-test -j4 check-circt-tools-circt-sim`: PASS (`Passed=501`, `Expectedly Failed=11`, `Failed=0`).
+
+## Iteration 1524 - February 19, 2026
+
+### MooreToCore/circt-sim: wait_event signal-ref tracing hardening for fork/runtime paths
+
+1. **Hardened fork-lowered `moore.wait_event` signal-ref extraction**  
+   (`lib/Conversion/MooreToCore/MooreToCore.cpp`):
+   - `WaitEventOpConversion` inside-fork lowering now:
+     - traces through `moore.read` explicitly,
+     - accepts ref-typed values directly (`!moore.ref` / `!llhd.ref`),
+     - follows remapped values (`rewriter.getRemappedValue(...)`) while
+       tracing.
+   - `__moore_wait_event` pointer argument materialization now retries on
+     remapped refs and falls back to cast materialization only when needed.
+   - effect: runtime calls now carry real signal pointers in fork wait-event
+     shapes that previously lowered to null.
+
+2. **Switched runtime wait-event signal lookup to mapped resolution semantics**  
+   (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - `__moore_wait_event` signal tracing now uses `resolveSignalId(...)` (not
+     only `getSignalId(...)`), enabling lookup through block-arg/input mapping
+     and ref source chains.
+   - synchronized the direct `moore.wait_event` signal-trace helper to use
+     `resolveSignalId(...)` for consistency.
+
+3. **Added regression coverage for fork wait-event pointer wiring**  
+   (`test/Conversion/MooreToCore/fork-wait-event-runtime-signal-ref.mlir`):
+   - verifies conversion emits `llvm.call @__moore_wait_event` with a traced
+     signal pointer cast, not null fallback.
+
+4. **Validation**:
+   - build:
+     - `ninja -C build-test circt-opt circt-verilog circt-sim`: PASS.
+   - focused lit:
+     - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/MooreToCore/fork-wait-event-runtime-signal-ref.mlir build-test/test/Tools/circt-sim/fork-struct-field-last-write.sv`: PASS (`2/2`).
+   - IR spot-check:
+     - `fork-struct-field-last-write.sv` now lowers wait calls as
+       `llvm.call @__moore_wait_event(..., %signal_ptr)` (no longer all-null
+       pointer arguments for those sites).
+   - bounded I3C compile lane:
+     - `AVIPS=i3c SEEDS=1 CIRCT_SIM_MODE=compile ... utils/run_avip_circt_sim.sh /tmp/avip-i3c-wait-event-20260219-032229`
+     - compile `OK` (`32s`), sim `OK` (`68s`), mismatch remains:
+       `UVM_ERROR ... i3c_scoreboard.sv(162) @ 4273 ns`, coverage print
+       `100% / 100%`.
+
 ## Iteration 1523 - February 19, 2026
 
 ### ImportVerilog: immediate assertion runtime control for `$asserton/$assertoff/$assertkill/$assertcontrol`
@@ -72452,3 +72542,72 @@ See CHANGELOG.md on recent progress.
         - remaining failures (12):
           `syscall-{coverage,covergroup,disable,isunbounded,monitor,printtimescale,random,randomize-with,shortrealtobits,strobe,wait}.sv` and
           `tlul-bfm-a-ready-timeout-short-circuit.sv`.
+71. `circt-sim` fix nested `sig.extract` offset layout for memory-backed
+    struct/array bit refs and add regression
+    (February 19, 2026):
+    - root cause:
+      - in nested drive paths shaped like
+        `sig.extract(sig.array_get(sig.struct_extract(...)))`, offset
+        accumulation mixed layout rules, using HW-style array indexing for
+        memory-backed refs.
+      - this corrupted writes to struct array elements when driven via bit
+        extracts across waits.
+    - fix:
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - track separate nested offsets for:
+        - signal-backed refs (`signalBitOffset`, HW layout)
+        - memory-backed refs (`memoryBitOffset`, LLVM layout)
+      - use `computeMemoryBackedArrayBitOffset(...)` for memory-backed nested
+        array steps.
+      - apply memory vs signal offsets consistently in sig.extract drive paths.
+    - regression coverage:
+      - new:
+        - `test/Tools/circt-sim/sig-extract-struct-array-bit-memory-layout.sv`
+      - verifies nested bit drives preserve expected struct array data:
+        `no_bits=8 w0=fb`.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-sim`
+      - reproducer: PASS
+        - `/tmp/inout_struct_wait_inc.mlir` now prints
+          `no_bits=8 w0=fb` and `PASS`
+      - focused regressions: PASS
+        - `timewheel-slot-collision-wait-event.mlir`
+        - `func-start-monitoring-resume-fast-path.mlir`
+        - `moore-wait-event-sensitivity-cache.mlir`
+    - AVIP note:
+      - bounded I3C deterministic replay still reports
+        `i3c_scoreboard.sv(162)` (`21.4286%/21.4286%`), so parity closure
+        remains open, but this removes a confirmed low-level runtime bug.
+72. `circt-sim` refine tri-state mirror suppression to avoid destructive
+    propagation-map mutation
+    (February 19, 2026):
+    - root cause:
+      - suppressed mirror-store handling removed source->destination links from
+        interface propagation maps at runtime.
+      - repeated suppression in long monitor loops could destabilize
+        propagation topology and clobber retained values.
+    - fix:
+      - `tools/circt-sim/LLHDProcessInterpreter.{h,cpp}`
+      - keep source->destination links intact under suppression.
+      - track last tri-state condition per destination field:
+        - `interfaceTriStateCondLastValue`
+        - `interfaceTriStateCondSeen`
+      - derive rule-retained value only when destination is `X` or condition
+        transitions `1 -> 0` (release edge), avoiding repeated clobbering while
+        condition remains `0`.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-sim`
+      - focused regressions: PASS
+        - `interface-tristate-suppression-cond-false.sv`
+        - `interface-tristate-signal-callback.sv`
+        - `interface-intra-tristate-propagation.sv`
+      - bounded/full I3C replay:
+        - matrix: `/tmp/avip-circt-sim-20260219-091053/matrix.tsv`
+        - compile `OK` (`32s`), sim `OK` (`162s`)
+        - mismatch still present:
+          `i3c_scoreboard.sv(179)`, coverage `21.4286%/21.4286%`
+      - bounded traced I3C slice:
+        - `/tmp/i3c-bounded-340-prop.log`
+        - `I3C_SCL/I3C_SDA` fanout stayed non-zero in this window.

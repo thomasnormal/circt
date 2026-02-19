@@ -2225,3 +2225,259 @@ Command outcome: `OK` (strict `set -euo pipefail`).
   regression coverage.
 - I3C scoreboard parity at line 162 is still open and remains the primary
   functional blocker.
+
+## 2026-02-19 Session: wait_event signal-ref hardening (fork/runtime) + bounded I3C recheck
+
+### Why this pass
+In fork-lowered `wait_event` paths, some `__moore_wait_event` calls were still
+receiving a null pointer argument. That forces fallback polling/memory paths and
+can skew wake ordering in monitor-heavy code.
+
+### Changes
+1. `lib/Conversion/MooreToCore/MooreToCore.cpp`
+   - `WaitEventOpConversion` (inside fork) now traces signal refs through:
+     - direct ref-typed values (`!moore.ref`, `!llhd.ref`),
+     - `moore.read`,
+     - `UnrealizedConversionCastOp`,
+     - struct/array extract chains,
+     - remapped values (`rewriter.getRemappedValue`).
+   - improved pointer materialization for runtime call argument with remap
+     retry before fallback cast.
+2. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - `__moore_wait_event` signal tracing now uses `resolveSignalId(...)`
+     (instead of only `getSignalId(...)`).
+   - synchronized direct `moore.wait_event` tracing helper to use
+     `resolveSignalId(...)` as well.
+3. New regression:
+   - `test/Conversion/MooreToCore/fork-wait-event-runtime-signal-ref.mlir`
+   - locks non-null signal-pointer wiring into `__moore_wait_event`.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-opt circt-verilog circt-sim` PASS.
+2. Focused lit PASS (`2/2`):
+   - `test/Conversion/MooreToCore/fork-wait-event-runtime-signal-ref.mlir`
+   - `test/Tools/circt-sim/fork-struct-field-last-write.sv`
+3. IR spot-check:
+   - `fork-struct-field-last-write.sv` now emits
+     `llvm.call @__moore_wait_event(..., %signal_ptr)` callsites instead of
+     all-null pointer wait arguments.
+
+### Bounded I3C lane (compile mode)
+Command:
+- `AVIPS=i3c SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 COMPILE_TIMEOUT=180 SIM_TIMEOUT=180 MEMORY_LIMIT_GB=20 utils/run_avip_circt_sim.sh /tmp/avip-i3c-wait-event-20260219-032229`
+
+Result:
+- compile: `OK` (`32s`)
+- sim: `OK` (`68s`)
+- persistent mismatch:
+  - `UVM_ERROR ... i3c_scoreboard.sv(162) @ 4273 ns`
+- coverage print in log remains `100% / 100%`
+
+### Remaining limitation
+I3C parity is still open; this pass improves wait-event signal fidelity but does
+not yet eliminate the scoreboard mismatch path.
+
+## 2026-02-19 Session: I3C interface mirror-link experiment (reverted)
+
+### Hypothesis tested
+- The target-side `sda_i` path was stale because same-interface copy pairs
+  (`field_3 -> field_7`) were intentionally skipped in copy-pair linking.
+
+### Implementation attempted
+- Added constrained same-interface copy-pair linking in
+  `tools/circt-sim/LLHDProcessInterpreter.cpp` during
+  `childModuleCopyPairs` resolution.
+- Verified via trace that links like `sig_1.field_3 -> sig_1.field_7` were
+  created and active.
+
+### Validation outcome
+- Deterministic I3C lane (`SEEDS=1`, compile mode) did not clear scoreboard
+  mismatch.
+- Additional targeted run variants showed regressions (target-side activity
+  collapse / coverage drop in some flows).
+
+### Decision
+- Reverted the mirror-link change to restore stable baseline behavior.
+- Current known-good baseline remains:
+  - `/tmp/avip-i3c-post-revert-20260219-1/matrix.tsv`
+  - compile `OK` (`30s`), sim `OK` (`70s`)
+  - persistent mismatch at `i3c_scoreboard.sv(162)` with coverage
+    `21.4286 / 21.4286` for that lane.
+
+### Next root-cause direction
+- Keep interface propagation behavior unchanged.
+- Focus next on transaction conversion/lifecycle ordering in target path
+  (`*_seq_item_converter`, class conversion timing, and check-phase feed path).
+
+## 2026-02-19 Session: Time-wheel slot-collision root cause for missed I3C edges
+
+### Problem
+I3C monitor/task waits could miss expected signal edges and stall transaction
+progress. A focused reproducer showed:
+- first `moore.wait_event` wakeup on `clkA` worked,
+- second wait on `clkB` never woke,
+- `clkB` value still appeared as `1` via pending epsilon state,
+- callback-driven signal update (`SIG-DRV`) for `clkB` never fired.
+
+### Root cause
+`TimeWheel::schedule` stored a single `slot.baseTime` per wheel slot. If two
+absolute times hashed to the same slot (e.g. 20ns and 30ns in default config),
+a later schedule overwrote `slot.baseTime`, effectively retiming earlier events.
+
+This caused delay-wakeup/drive callbacks to run at wrong time (or miss intended
+wake ordering), which matches the observed I3C monitor behavior.
+
+### Fix
+1. `lib/Dialect/Sim/EventQueue.cpp`
+   - In `TimeWheel::schedule`, detect same-slot/different-time collisions:
+     - if `slot.hasEvents && slot.baseTime != targetTime`, route new event to
+       `overflow[targetTime]` instead of overwriting slot timing metadata.
+
+2. Added regression:
+   - `test/Tools/circt-sim/timewheel-slot-collision-wait-event.mlir`
+   - locks ordering/correctness for 10ns/20ns/30ns wait-event scenario.
+
+### Validation
+1. Build PASS:
+   - `ninja -C build circt-sim`
+2. Reproducer PASS after fix:
+   - `/tmp/moore-wait-two-inline-print.mlir`
+   - output now: `done=1 clkA=1 clkB=1`
+3. New regression PASS:
+   - `build/bin/circt-sim test/Tools/circt-sim/timewheel-slot-collision-wait-event.mlir --max-time=50000000`
+   - output includes:
+     - `driveA`
+     - `driveB`
+     - `done=1 clkA=1 clkB=1`
+4. Existing wait-event cache/fast-path smoke checks still PASS:
+   - `test/Tools/circt-sim/moore-wait-event-sensitivity-cache.mlir`
+   - `test/Tools/circt-sim/func-start-monitoring-resume-fast-path.mlir`
+5. I3C bounded replay improved from prior zero-like behavior:
+   - `/tmp/avip-i3c-post-revert-20260219-1/i3c/i3c.mlir`
+   - now shows non-zero coverage (`21.43%`) and transaction activity.
+
+### Remaining limitation
+I3C is improved but not fully correct yet:
+- persistent scoreboard mismatch remains at
+  `i3c_scoreboard.sv(162)` in bounded lanes.
+- continue root-cause work in target transaction conversion/lifecycle ordering.
+
+## 2026-02-19 Session: nested sig.extract memory-layout fix + regression
+
+### Problem
+While continuing I3C root-cause work, a simulator correctness bug was isolated
+in nested bit drives through signal refs:
+- pattern: `sig.extract(sig.array_get(sig.struct_extract(...)))`
+- memory-backed refs were using HW-style array indexing during offset
+  accumulation, which is wrong for LLVM aggregate layout.
+
+### Fix
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`
+  - split nested sig.extract offset tracking into:
+    - `signalBitOffset` (HW signal layout)
+    - `memoryBitOffset` (LLVM memory-backed layout)
+  - for nested `sig.array_get`, use
+    `computeMemoryBackedArrayBitOffset(...)` for memory-backed path.
+  - apply memory-vs-signal offsets consistently in drive subpaths.
+
+### New regression
+- `test/Tools/circt-sim/sig-extract-struct-array-bit-memory-layout.sv`
+- locks expected behavior:
+  - `no_bits=8 w0=fb`
+  - `PASS`
+
+### Validation
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Reproducer PASS post-fix:
+   - `/tmp/inout_struct_wait_inc.mlir` now prints `no_bits=8 w0=fb`
+3. Focused checks remain PASS:
+   - `timewheel-slot-collision-wait-event.mlir`
+   - `func-start-monitoring-resume-fast-path.mlir`
+   - `moore-wait-event-sensitivity-cache.mlir`
+
+### I3C parity snapshot
+- Bounded deterministic replay remains open:
+  - `UVM_ERROR ... i3c_scoreboard.sv(162)`
+  - coverage: `21.4286 / 21.4286`
+  - log: `/tmp/i3c-after-sigextract-fix.log`
+- Conclusion: this closes a real runtime bug and improves JIT/runtime maturity,
+  but line-162 I3C scoreboard parity still needs additional root-cause work.
+
+## 2026-02-19 Session: I3C field-drive trace after sig.extract fix
+
+Ran bounded deterministic I3C replay with:
+- `CIRCT_SIM_TRACE_I3C_FIELD_DRIVES=1`
+- log: `/tmp/i3c-field-after-fix.log`
+
+Key findings:
+1. Fixed nested sig.extract path is exercised (writeData/writeDataStatus/
+   no_of_i3c_bits_transfer writes are visible in conversion/from_class traces).
+2. Target monitor still appears to under-sample data path in this bounded lane:
+   traces repeatedly show `i3c_target_monitor_bfm::sample_target_address`, but
+   not corresponding target-monitor `sample_write_data` field writes before
+   check-phase.
+3. Scoreboard/coverage status unchanged:
+   - `i3c_scoreboard.sv(162)` persists,
+   - `21.4286 / 21.4286` coverage.
+
+Conclusion:
+- Next root-cause step should focus on target monitor progression and
+  sampling-order timing, not nested sig.extract memory-layout handling.
+
+## 2026-02-19 Session: tri-state mirror suppression transition gating + I3C replay
+
+### Runtime changes
+1. `tools/circt-sim/LLHDProcessInterpreter.cpp/.h`
+   - In suppressed mirror-store handling, keep source->destination propagation
+     links intact (do not destructively remove them).
+   - Add per-destination tri-state condition state:
+     - `interfaceTriStateCondLastValue`
+     - `interfaceTriStateCondSeen`
+   - Apply rule-derived retained value only when:
+     - current destination is unknown (`X`), or
+     - condition transitions `1 -> 0` (release edge).
+   - Keep known values on repeated suppressed stores while condition remains `0`.
+
+### Validation
+1. Build PASS:
+   - `ninja -C build-test circt-sim`
+2. Focused interface tri-state regressions PASS:
+   - `interface-tristate-suppression-cond-false.sv`
+   - `interface-tristate-signal-callback.sv`
+   - `interface-intra-tristate-propagation.sv`
+3. Bounded/full I3C AVIP lane:
+   - command:
+     - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build-test/bin/circt-sim AVIPS=i3c SEEDS=1 SIM_TIMEOUT=240 COMPILE_TIMEOUT=300 MEMORY_LIMIT_GB=20 MATRIX_TAG=i3c-prop-fix utils/run_avip_circt_sim.sh`
+   - outputs:
+     - `/tmp/avip-circt-sim-20260219-091053/matrix.tsv`
+     - `/tmp/avip-circt-sim-20260219-091053/i3c/sim_seed_1.log`
+   - result:
+     - compile: `OK` (`32s`)
+     - sim: `OK` (`162s`)
+     - coverage: `21.4286 / 21.4286`
+     - mismatch persists:
+       - `UVM_ERROR ... i3c_scoreboard.sv(179)`
+4. Bounded traced I3C window:
+   - command:
+     - `CIRCT_SIM_TRACE_IFACE_PROP=1 ... circt-sim ... --max-time=340000000`
+   - log:
+     - `/tmp/i3c-bounded-340-prop.log`
+   - observation:
+     - `I3C_SCL` / `I3C_SDA` fanout remained non-zero in this window.
+     - transaction payload fields still collapse to reserved/zero values in
+       scoreboard debug (`TARGET_ADDR=1`, write/read payload zeros).
+
+### Current status
+- This pass hardens suppression semantics and avoids destructive propagation-map
+  mutation during repeated suppressed mirror stores.
+- I3C parity is still open at the same functional mismatch point; next step is
+  target transaction construction/sampling ordering (not raw fanout collapse).
+
+### Additional bounded diagnostic (same session)
+- `CIRCT_SIM_TRACE_I3C_CAST_LAYOUT=1` replay on 340ns window:
+  - log: `/tmp/i3c-bounded-340-cast.log`
+  - `I3C-CAST` traces show `in == out` at conversion points.
+  - wrong values (`targetAddress=1`, `bits=0`) are already present by monitor
+    sample stage, so conversion layout remap is likely not the primary fault.
