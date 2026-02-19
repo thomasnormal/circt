@@ -2598,9 +2598,10 @@ struct StmtVisitor {
         subroutine.name == "$dumpportson" ||
         subroutine.name == "$dumpportsflush" ||
         subroutine.name == "$dumpportsall") {
-      // VCD waveform dump tasks are simulator-specific and not implemented.
-      // Silent no-op; does not affect simulation correctness.
-      return true;
+      mlir::emitError(loc) << "unsupported VCD dump task '" << subroutine.name
+                           << "'; VCD waveform dumping requires signal "
+                              "monitoring infrastructure not yet implemented";
+      return failure();
     }
 
     // Time formatting task (IEEE 1800-2017 Section 20.4.3)
