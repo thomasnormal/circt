@@ -2389,6 +2389,11 @@ private:
   std::map<ProcessId, uint64_t> joinNoneDisableForkResumeToken;
   std::map<ProcessId, unsigned> joinNoneDisableForkResumePollCount;
 
+  /// Snapshot of the parent function name when a fork child is created.
+  /// Used by native-thunk policy to keep known-sensitive monitor sampling
+  /// fork branches on the interpreter path.
+  std::map<ProcessId, std::string> forkSpawnParentFunctionName;
+
   /// Deferred disable_fork state for children that may still be consuming
   /// pending wakeups in scheduler/interpreter state.
   std::map<ProcessId, uint64_t> disableForkDeferredToken;

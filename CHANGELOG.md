@@ -1,5 +1,78 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1536 - February 19, 2026
+
+### circt-sim: recover I3C compile-mode parity by guarding monitor sample fork children from unsafe native-thunk promotion
+
+1. **Added stable fork-origin metadata for policy decisions**  
+   (`tools/circt-sim/LLHDProcessInterpreter.h`,
+   `tools/circt-sim/LLHDProcessInterpreter.cpp`):
+   - record `forkSpawnParentFunctionName[childProcId]` at `sim.fork`
+     creation.
+   - preserves the parent function context even if parent state later advances.
+
+2. **Added native-thunk install guard for monitor sample-write fork branches**  
+   (`tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`):
+   - in `tryInstallProcessThunk`, fork-child processes spawned from
+     `*_monitor_bfm::sampleWriteDataAndACK` are kept on interpreter path.
+   - deopt telemetry detail:
+     `monitor_sample_write_data_fork_child_interpreter_fallback`.
+   - rationale: these branches still have native-thunk parity gaps in I3C
+     monitor sampling (writeData collapsing to zero under promotion).
+
+3. **Added regression test for the policy path**  
+   (`test/Tools/circt-sim/jit-monitor-sample-fork-policy.sv`):
+   - checks functional result (`writeData=fb`) in compile mode.
+   - checks JIT report contains the fallback detail.
+
+4. **Validation**
+   - build:
+     - `ninja -C build-test circt-sim`: PASS.
+   - focused tests:
+     - `jit-monitor-sample-fork-policy.sv`: PASS.
+     - `task-inout-output-copy-back.sv` (compile mode): PASS.
+   - I3C budget boundary replay:
+     - before: budget `145` reproduced scoreboard mismatch.
+     - after: budget `145` PASS (`ctrl_w0=fb`, no `UVM_ERROR`).
+   - full AVIP compile-mode lane:
+     - `/tmp/avip-circt-sim-i3c-after-monitor-fork-guard-20260219-183748/matrix.tsv`
+     - `compile=OK (31s)`, `sim=OK (31s)`,
+       `uvm_fatal=0`, `uvm_error=0`, coverage `40.4762 / 40.4762`.
+
+## Iteration 1535 - February 19, 2026
+
+### circt-sim: reduce `uvm_phase_hopper::wait_for_waiters` poll churn to close AHB wall-time timeout lane
+
+1. **Aligned `func.call_indirect` phase-hopper waiter polling with the
+   existing `func.call` path**  
+   (`tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`):
+   - `uvm_phase_hopper::wait_for_waiters` fallback polling after `t>0` now
+     uses `100ps` (`100000 fs`) in the call-indirect intercept.
+   - `t==0` delta polling behavior is unchanged.
+   - goal: cut excessive wakeups/step churn in long UVM phase loops while
+     preserving zero-deopt compile-mode behavior.
+
+2. **Strengthened regression guard for backoff cost**  
+   (`test/Tools/circt-sim/uvm-phase-hopper-wait-for-waiters-backoff.mlir`):
+   - added a second RUN line with `--max-process-steps=40`.
+   - checks no `ERROR(PROCESS_STEP_OVERFLOW)` for the bounded 2ns scenario.
+
+3. **Validation**
+   - build:
+     - `ninja -C build-test -j4 circt-sim`: PASS.
+   - focused lit (phase-hopper + sequencer regression set): PASS (`7/7`).
+   - bounded AVIP compile-mode sweep (`AVIPS=apb,ahb`, `SIM_TIMEOUT=120`):
+     - `/home/thomas-ahle/circt/.tmp/avip-apb-ahb-100ps-20260219-180406/matrix.tsv`
+     - `apb`: `sim_status=OK`, `sim_sec=24`, `uvm_error=0`.
+     - `ahb`: `sim_status=FAIL`, `sim_exit=0`, `sim_sec=68`,
+       `sim_time_fs=20620000000000`, `uvm_error=3`.
+     - key change: AHB lane now reaches its max-time bound without
+       wall-time timeout; remaining failure is parity (scoreboard mismatch),
+       not timeout starvation.
+   - JIT reports:
+     - `python3 utils/summarize_circt_sim_jit_reports.py ...`
+     - `reports_scanned=2`, `deopt_process_rows=0`.
+
 ## Iteration 1534 - February 19, 2026
 
 ### Test coverage: 12 failing tests for syscall/feature bugs

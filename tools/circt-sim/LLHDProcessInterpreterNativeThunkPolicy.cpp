@@ -728,6 +728,25 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
   if (!jitCompileManager)
     return ProcessThunkInstallResult::MissingThunk;
 
+  // Known-safe guard: keep forked monitor sampling branches interpreted.
+  // These fork children can carry parent-scope ref/aggregate interactions that
+  // still have native-thunk parity gaps in I3C monitor sampling paths.
+  if (auto *proc = scheduler.getProcess(procId)) {
+    llvm::StringRef procName = proc->getName();
+    if (procName.starts_with("fork_") && procName.contains("_branch_")) {
+      auto spawnIt = forkSpawnParentFunctionName.find(procId);
+      if (spawnIt != forkSpawnParentFunctionName.end()) {
+        llvm::StringRef parentFunc = spawnIt->second;
+        if (parentFunc.contains("_monitor_bfm::sampleWriteDataAndACK")) {
+          if (deoptDetail)
+            *deoptDetail =
+                "monitor_sample_write_data_fork_child_interpreter_fallback";
+          return ProcessThunkInstallResult::MissingThunk;
+        }
+      }
+    }
+  }
+
   auto traceUnsupported = []() {
     const char *env =
         std::getenv("CIRCT_SIM_TRACE_JIT_UNSUPPORTED_SHAPES");
