@@ -2741,11 +2741,66 @@ struct StmtVisitor {
       return true;
     }
 
+    // $showvars — display variable names and values (IEEE 1800-2017 §21.2)
+    if (subroutine.name == "$showvars") {
+      SmallVector<Value> fragments;
+      for (const auto *arg : args) {
+        std::string varName = "?";
+        if (auto *named =
+                arg->as_if<slang::ast::NamedValueExpression>())
+          varName = std::string(named->symbol.name);
+        auto rvalue = context.convertRvalueExpression(*arg);
+        if (!rvalue)
+          return failure();
+        auto value = context.convertToSimpleBitVector(rvalue);
+        if (!value)
+          return failure();
+        fragments.push_back(moore::FormatLiteralOp::create(
+            builder, loc, ("  " + varName + " = ")));
+        fragments.push_back(moore::FormatIntOp::create(
+            builder, loc, value, moore::IntFormat::Decimal,
+            moore::IntAlign::Left, moore::IntPadding::Space,
+            IntegerAttr(), /*isSigned=*/true));
+        fragments.push_back(
+            moore::FormatLiteralOp::create(builder, loc, "\n"));
+      }
+      if (!fragments.empty()) {
+        Value msg;
+        if (fragments.size() == 1)
+          msg = fragments[0];
+        else
+          msg = moore::FormatConcatOp::create(builder, loc, fragments)
+                    .getResult();
+        moore::DisplayBIOp::create(builder, loc, msg);
+      }
+      return true;
+    }
+
+    // $stacktrace — print the scope hierarchy (IEEE 1800-2017 §21.2)
+    if (subroutine.name == "$stacktrace") {
+      SmallVector<StringRef> scopeNames;
+      for (auto *scope = context.currentScope; scope;) {
+        const auto &sym = scope->asSymbol();
+        if (sym.kind == slang::ast::SymbolKind::Root ||
+            sym.kind == slang::ast::SymbolKind::CompilationUnit)
+          break;
+        if (!sym.name.empty())
+          scopeNames.push_back(sym.name);
+        scope = sym.getParentScope();
+      }
+      std::string traceStr;
+      for (const auto &name : scopeNames)
+        traceStr += std::string(name) + "\n";
+      if (!traceStr.empty()) {
+        auto msg = moore::FormatLiteralOp::create(builder, loc, traceStr);
+        moore::DisplayBIOp::create(builder, loc, msg);
+      }
+      return true;
+    }
+
     // Debug/PLI tasks (IEEE 1800-2017 Sections 21.2, 21.9)
-    // These are interactive simulator commands. Stub as no-ops.
-    if (subroutine.name == "$stacktrace" ||
-        subroutine.name == "$showscopes" ||
-        subroutine.name == "$showvars" ||
+    // These are interactive simulator commands not feasible in compiled mode.
+    if (subroutine.name == "$showscopes" ||
         subroutine.name == "$input" ||
         subroutine.name == "$key" ||
         subroutine.name == "$nokey" ||
