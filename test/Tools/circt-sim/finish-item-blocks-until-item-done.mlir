@@ -1,5 +1,4 @@
 // RUN: circt-sim %s --max-time 100000000 2>&1 | FileCheck %s
-// XFAIL: *
 // RUN: env CIRCT_SIM_PROFILE_SUMMARY_AT_EXIT=1 circt-sim %s --max-time 100000000 2>&1 | FileCheck %s --check-prefix=CHECK-SUMMARY
 //
 // Test that finish_item blocks until the driver calls item_done.

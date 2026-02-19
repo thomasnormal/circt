@@ -3958,9 +3958,9 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
     scheduler.setSignalLogicalWidth(sigId, logicalWidth);
 
   // Detect unpacked array types and record array info for VPI.
-  // Only create array info when the signal has unpacked dimensions
-  // (listed in vpi.array_bounds).  Fully-packed multi-dimensional arrays
-  // should appear as flat Reg signals in VPI.
+  // All hw::ArrayType signals get SignalArrayInfo so cocotb can index
+  // them as unpacked arrays.  Explicit bounds from vpi.array_bounds are
+  // used when available; otherwise 0-based bounds are inferred.
   if (auto arrayType = dyn_cast<hw::ArrayType>(innerType)) {
     if (auto hwMod = sigOp->getParentOfType<hw::HWModuleOp>()) {
       auto boundsDict =
@@ -3968,16 +3968,22 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
       auto sigBounds = boundsDict
           ? boundsDict.getAs<DictionaryAttr>(name)
           : DictionaryAttr();
-      if (sigBounds) {
+      {
         uint32_t numElems = arrayType.getNumElements();
         mlir::Type elemType = arrayType.getElementType();
         uint32_t elemPhysW = getTypeWidth(elemType);
         uint32_t elemLogW = getLogicalWidth(elemType);
         ProcessScheduler::SignalArrayInfo info{numElems, elemPhysW, elemLogW};
-        if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
-          info.leftBound = leftAttr.getInt();
-        if (auto rightAttr = sigBounds.getAs<IntegerAttr>("right"))
-          info.rightBound = rightAttr.getInt();
+        if (sigBounds) {
+          if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
+            info.leftBound = leftAttr.getInt();
+          if (auto rightAttr = sigBounds.getAs<IntegerAttr>("right"))
+            info.rightBound = rightAttr.getInt();
+        } else {
+          // No explicit bounds; default to 0-based indexing.
+          info.leftBound = 0;
+          info.rightBound = static_cast<int32_t>(numElems - 1);
+        }
 
         // Check for nested unpacked dimensions (e.g., logic x [3][3]).
         auto depthDict =
@@ -3989,8 +3995,9 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
         }
         if (unpackedDepth >= 2) {
           // Read inner dimension bounds from vpi.array_bounds attribute.
-          ArrayAttr innerBoundsAttr =
-              sigBounds.getAs<ArrayAttr>("inner_bounds");
+          ArrayAttr innerBoundsAttr = sigBounds
+              ? sigBounds.getAs<ArrayAttr>("inner_bounds")
+              : ArrayAttr();
           auto buildInner =
               [&innerBoundsAttr](mlir::Type type, int depth, int dimIdx,
                  auto &self)
@@ -8614,22 +8621,40 @@ void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
   if (propIt == interfaceFieldPropagation.end())
     return;
 
+  SignalEncoding parentEncoding = scheduler.getSignalEncoding(signal);
   InterpretedValue parentVal = InterpretedValue::fromSignalValue(value);
   if (traceIfaceProp) {
+    SimTime now = scheduler.getCurrentTime();
     llvm::errs() << "[IFACE-PROP] src sig=" << signal << " ("
                  << signalName(signal) << ") val=" << formatValue(parentVal)
-                 << " fanout=" << propIt->second.size() << "\n";
+                 << " fanout=" << propIt->second.size()
+                 << " t=" << now.realTime << " d=" << now.deltaStep << "\n";
   }
   for (SignalId childSigId : propIt->second) {
     const SignalValue &childCurrent = scheduler.getSignalValue(childSigId);
     unsigned childW = childCurrent.getWidth();
+    SignalEncoding childEncoding = scheduler.getSignalEncoding(childSigId);
     InterpretedValue childDriveVal = parentVal;
     if (childDriveVal.isX()) {
       childDriveVal = InterpretedValue::makeX(childW);
     } else {
       APInt apVal = childDriveVal.getAPInt();
-      if (scheduler.getSignalEncoding(childSigId) ==
-          SignalEncoding::FourStateStruct) {
+      // Four-state shadow signals encode unknown bits in the low half and
+      // value bits in the high half. When driving a two-state child from a
+      // four-state parent, decode only when widths match a true 2x->1x
+      // representation change. Equal-width edges must preserve layout bits.
+      if (parentEncoding == SignalEncoding::FourStateStruct &&
+          childEncoding != SignalEncoding::FourStateStruct &&
+          apVal.getBitWidth() == childW * 2) {
+        unsigned logicalW = childW;
+        APInt unknownBits = apVal.extractBits(logicalW, 0);
+        APInt valueBits = apVal.extractBits(logicalW, logicalW);
+        // Two-state sinks collapse X/Z to 0.
+        if (!unknownBits.isZero())
+          valueBits = valueBits & ~unknownBits;
+        apVal = valueBits;
+      }
+      if (childEncoding == SignalEncoding::FourStateStruct) {
         unsigned logicalW = childW / 2;
         if (apVal.getBitWidth() <= logicalW) {
           // Scalar known value -> four-state struct encoding:
@@ -8654,9 +8679,11 @@ void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
     pendingEpsilonDrives[childSigId] = childDriveVal;
     scheduler.updateSignal(childSigId, childDriveVal.toSignalValue());
     if (traceIfaceProp) {
+      SimTime now = scheduler.getCurrentTime();
       llvm::errs() << "[IFACE-PROP]   -> child sig=" << childSigId << " ("
                    << signalName(childSigId)
-                   << ") val=" << formatValue(childDriveVal) << "\n";
+                   << ") val=" << formatValue(childDriveVal)
+                   << " t=" << now.realTime << " d=" << now.deltaStep << "\n";
     }
 
     auto childAddrIt = fieldSignalToAddr.find(childSigId);
@@ -15287,11 +15314,17 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
       SignalId drivenId = getSignalId(entry.driveOp.getSignal());
       if (drivenId != 0)
         selfDrivenSignals.insert(drivenId);
-      // Collect transitive dependencies from the drive value expression.
-      llvm::SmallVector<SignalId, 4> transitiveSignals;
-      collectSignalIds(entry.driveOp.getValue(), transitiveSignals);
-      for (SignalId sigId : transitiveSignals)
-        selfDrivenSignals.insert(sigId);
+      // Collect transitive dependencies from the drive value expression,
+      // but only for non-process drive values. When the drive value comes
+      // from a ProcessOp, collectSignalIds walks the entire process body
+      // and finds ALL signals the process reads, which incorrectly marks
+      // them all as "self-driven". Only the directly driven signal matters.
+      if (!entry.driveOp.getValue().getDefiningOp<llhd::ProcessOp>()) {
+        llvm::SmallVector<SignalId, 4> transitiveSignals;
+        collectSignalIds(entry.driveOp.getValue(), transitiveSignals);
+        for (SignalId sigId : transitiveSignals)
+          selfDrivenSignals.insert(sigId);
+      }
     }
 
     if (selfDrivenSignals.empty())
@@ -16564,6 +16597,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   maybeTraceFilteredCall(procId, "func.call", calleeName, now.realTime,
                          now.deltaStep);
   bool traceSeq = traceSeqEnabled;
+  static bool traceI3CConfigHandles = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_CONFIG_HANDLES");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
 
   LLVM_DEBUG({
     if (calleeName.contains("driver_bfm::") || calleeName.contains("monitor_bfm::")) {
@@ -17462,6 +17499,21 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         }
 
         if (it != configDbEntries.end()) {
+          if (traceI3CConfigHandles &&
+              fieldName.find("i3c_") != std::string::npos) {
+            uint64_t ptrPayload = 0;
+            unsigned copyBytes =
+                std::min<unsigned>(8, static_cast<unsigned>(it->second.size()));
+            for (unsigned i = 0; i < copyBytes; ++i)
+              ptrPayload |= static_cast<uint64_t>(it->second[i]) << (i * 8);
+            InterpretedValue outRefVal = getValue(procId, callOp.getOperand(3));
+            uint64_t outRefAddr = outRefVal.isX() ? 0 : outRefVal.getUInt64();
+            llvm::errs() << "[I3C-CFG] get callee=" << callee
+                         << " key=\"" << it->first << "\" value_ptr=0x"
+                         << llvm::format_hex(ptrPayload, 10)
+                         << " out_ref=0x" << llvm::format_hex(outRefAddr, 10)
+                         << " field=\"" << fieldName << "\"\n";
+          }
           if (traceConfigDbEnabled) {
             llvm::errs() << "[CFG-FC-GET] hit key=\"" << it->first
                          << "\" bytes=" << it->second.size() << "\n";
@@ -17564,6 +17616,14 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         llvm::errs() << "[CFG-FC-SET] callee=" << callee
                      << " key=\"" << key << "\" valueBytes=" << valueBytes
                      << " entries=" << configDbEntries.size() << "\n";
+      }
+      if (traceI3CConfigHandles &&
+          fieldName.find("i3c_") != std::string::npos) {
+        uint64_t ptrPayload = valueArg.isX() ? 0 : valueArg.getUInt64();
+        llvm::errs() << "[I3C-CFG] set callee=" << callee
+                     << " key=\"" << key << "\" value_ptr=0x"
+                     << llvm::format_hex(ptrPayload, 10)
+                     << " field=\"" << fieldName << "\"\n";
       }
       LLVM_DEBUG(llvm::dbgs()
                  << "  func.call @" << callee
@@ -17748,6 +17808,31 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   llvm::SmallVector<InterpretedValue, 4> args;
   for (Value operand : callOp.getOperands()) {
     args.push_back(getValue(procId, operand));
+  }
+
+  if (traceI3CConfigHandles && !args.empty() && !args.front().isX() &&
+      calleeName.contains("i3c_") && calleeName.contains("_bfm::") &&
+      (calleeName.contains("detectEdge_scl") ||
+       calleeName.contains("sample_data") ||
+       calleeName.contains("drive_data") ||
+       calleeName.contains("sample_target_address") ||
+       calleeName.contains("sample_operation") ||
+       calleeName.contains("sampleWriteDataAnd") ||
+       calleeName.contains("sampleReadDataAnd"))) {
+    static uint64_t printed = 0;
+    if (printed < 512) {
+      ++printed;
+      SimTime now = scheduler.getCurrentTime();
+      llvm::errs() << "[I3C-HANDLE] call proc=" << procId
+                   << " t=" << now.realTime << " d=" << now.deltaStep
+                   << " callee=" << calleeName
+                   << " self=0x" << llvm::format_hex(args.front().getUInt64(), 10);
+      if (args.size() >= 2 && !args[1].isX())
+        llvm::errs() << " arg1=0x" << llvm::format_hex(args[1].getUInt64(), 10);
+      if (Process *proc = scheduler.getProcess(procId))
+        llvm::errs() << " proc_name='" << proc->getName() << "'";
+      llvm::errs() << "\n";
+    }
   }
 
   static bool traceI3CToClassArgs = []() {
@@ -20198,7 +20283,8 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     return isa<LLVM::LoadOp, LLVM::ExtractValueOp, LLVM::InsertValueOp,
                LLVM::GEPOp, mlir::UnrealizedConversionCastOp, hw::StructCreateOp,
                hw::StructExtractOp, hw::ArrayCreateOp, hw::ArrayGetOp,
-               hw::ArraySliceOp, hw::ArrayConcatOp, llhd::ProbeOp>(op);
+               hw::ArraySliceOp, hw::ArrayConcatOp, llhd::ProbeOp,
+               seq::FirRegOp>(op);
   };
 
   // Check per-instance module-level init values first (child module context).
@@ -23971,38 +24057,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
 
 LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
                                                          LLVM::LoadOp loadOp) {
-  auto isAllocaDerivedPtr = [&](Value ptr) {
-    llvm::SmallVector<Value, 8> worklist;
-    llvm::SmallDenseSet<Value, 8> visited;
-    worklist.push_back(ptr);
-    while (!worklist.empty()) {
-      Value current = worklist.pop_back_val();
-      if (!visited.insert(current).second)
-        continue;
-      if (current.getDefiningOp<LLVM::AllocaOp>())
-        return true;
-      if (auto gepOp = current.getDefiningOp<LLVM::GEPOp>()) {
-        worklist.push_back(gepOp.getBase());
-        continue;
-      }
-      if (auto bitcastOp = current.getDefiningOp<LLVM::BitcastOp>()) {
-        worklist.push_back(bitcastOp.getArg());
-        continue;
-      }
-      if (auto castOp =
-              current.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
-        for (Value input : castOp.getInputs())
-          worklist.push_back(input);
-      }
-    }
-    return false;
-  };
-
   auto convertFourStateToLLVMStructLayout =
       [&](InterpretedValue sourceSignalVal, SignalId sourceSigId,
           Type targetLLVMType) -> InterpretedValue {
-    if (sourceSignalVal.isX())
-      return sourceSignalVal;
     if (scheduler.getSignalEncoding(sourceSigId) !=
         SignalEncoding::FourStateStruct)
       return sourceSignalVal;
@@ -24018,6 +24075,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     unsigned unknownWidth = getTypeWidth(body[1]);
     if (valueWidth == 0 || valueWidth != unknownWidth)
       return sourceSignalVal;
+
+    // Preserve explicit {value, unknown} semantics for fully-unknown signals
+    // instead of collapsing to a scalar X sentinel.
+    if (sourceSignalVal.isX()) {
+      APInt llvmBits = APInt::getZero(valueWidth + unknownWidth);
+      APInt unknownBits = APInt::getAllOnes(unknownWidth);
+      safeInsertBits(llvmBits, unknownBits, valueWidth);
+      return InterpretedValue(llvmBits);
+    }
     if (valueWidth + unknownWidth != sourceSignalVal.getWidth())
       return sourceSignalVal;
 
@@ -24120,14 +24186,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
   Type resultType = loadOp.getType();
   unsigned bitWidth = getTypeWidth(resultType);
   unsigned loadSize = getLLVMTypeSize(resultType);
-  bool addrIsAllocaDerived = isAllocaDerivedPtr(loadOp.getAddr());
 
   // Check if this load targets an interface field that has a shadow signal.
   // BFM tasks read interface ports via llvm.load on the struct, but the
   // signal value is driven by the DUT and only exists in the signal domain.
   // Return the signal value directly so BFMs see live hardware values.
-  if (!ptrVal.isX() && !interfaceFieldSignals.empty() &&
-      !addrIsAllocaDerived) {
+  if (!ptrVal.isX() && !interfaceFieldSignals.empty()) {
     uint64_t loadAddr = ptrVal.getUInt64();
     auto fieldIt = interfaceFieldSignals.find(loadAddr);
     if (fieldIt != interfaceFieldSignals.end()) {
@@ -24142,6 +24206,74 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
 
       signalVal =
           convertFourStateToLLVMStructLayout(signalVal, fieldSigId, resultType);
+
+      static bool traceI3CDetectEdgeValues = []() {
+        const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_DETECTEDGE_VALUES");
+        return env && env[0] != '\0' && env[0] != '0';
+      }();
+      static bool traceApbMonitorLoads = []() {
+        const char *env = std::getenv("CIRCT_SIM_TRACE_APB_MONITOR_LOADS");
+        return env && env[0] != '\0' && env[0] != '0';
+      }();
+      if (traceI3CDetectEdgeValues) {
+        auto stIt = processStates.find(procId);
+        if (stIt != processStates.end()) {
+          llvm::StringRef currentFunc = stIt->second.currentFuncName;
+          if (currentFunc.contains("i3c_target_monitor_bfm::detectEdge_scl") ||
+              currentFunc.contains("i3c_controller_monitor_bfm::detectEdge_scl")) {
+            static uint64_t printed = 0;
+            if (printed < 1024) {
+              ++printed;
+              llvm::StringRef sigName = "<unknown>";
+              auto nIt = signalIdToName.find(fieldSigId);
+              if (nIt != signalIdToName.end())
+                sigName = nIt->second;
+              llvm::SmallString<64> bits;
+              if (signalVal.isX())
+                bits = "X";
+              else
+                signalVal.getAPInt().toString(bits, /*Radix=*/2,
+                                              /*Signed=*/false);
+              SimTime now = scheduler.getCurrentTime();
+              llvm::errs() << "[I3C-DETECTEDGE-LOAD] proc=" << procId
+                           << " t=" << now.realTime << " d=" << now.deltaStep
+                           << " func=" << currentFunc << " sig=" << fieldSigId
+                           << " name=" << sigName << " val=" << bits << "\n";
+            }
+          }
+        }
+      }
+      if (traceApbMonitorLoads) {
+        auto stIt = processStates.find(procId);
+        if (stIt != processStates.end()) {
+          llvm::StringRef currentFunc = stIt->second.currentFuncName;
+          if (currentFunc.contains("apb_master_monitor_bfm::sample_data") ||
+              currentFunc.contains("apb_slave_monitor_bfm::sample_data")) {
+            static uint64_t printed = 0;
+            if (printed < 2048) {
+              ++printed;
+              llvm::StringRef sigName = "<unknown>";
+              auto nIt = signalIdToName.find(fieldSigId);
+              if (nIt != signalIdToName.end())
+                sigName = nIt->second;
+              llvm::SmallString<64> bits;
+              if (signalVal.isX())
+                bits = "X";
+              else
+                signalVal.getAPInt().toString(bits, /*Radix=*/2,
+                                              /*Signed=*/false);
+              SimTime now = scheduler.getCurrentTime();
+              llvm::errs() << "[APB-MON-LOAD] proc=" << procId
+                           << " t=" << now.realTime << " d=" << now.deltaStep
+                           << " func=" << currentFunc << " addr=0x"
+                           << llvm::format_hex(loadAddr, 16)
+                           << " sig=" << fieldSigId << " name=" << sigName
+                           << " w=" << signalVal.getWidth()
+                           << " val=" << bits << "\n";
+            }
+          }
+        }
+      }
 
       // If this signal is a struct pointer with known field signals,
       // reconstruct the struct value from individual field signal values.
@@ -25035,6 +25167,59 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
       // Only drive if the value actually changed — prevents zero-delta loops
       // in always_comb processes that copy interface fields bidirectionally.
       SignalValue newSigVal = driveVal.toSignalValue();
+      static bool traceI3CIfaceProp = []() {
+        const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_IFACE_PROP");
+        return env && env[0] != '\0' && env[0] != '0';
+      }();
+      auto shouldTraceI3CIfaceSig = [&](SignalId sigId) -> bool {
+        auto nameIt = signalIdToName.find(sigId);
+        if (nameIt == signalIdToName.end())
+          return false;
+        llvm::StringRef name = nameIt->second;
+        return name.contains("i3c_controller_agent_bfm_0."
+                             "i3c_controller_agent_bfm_h.sig_6.field_2") ||
+               name.contains("i3c_target_agent_bfm_0."
+                             "i3c_target_agent_bfm_h.sig_6.field_2") ||
+               name.contains("sig_0.field_2") || name.contains("sig_0.field_4") ||
+               name.contains("sig_1.field_2") || name.contains("sig_1.field_4");
+      };
+      auto traceI3CIfacePropUpdate =
+          [&](llvm::StringRef tag, SignalId srcSigId, SignalId dstSigId,
+              InterpretedValue oldVal, InterpretedValue newVal) {
+            if (!traceI3CIfaceProp)
+              return;
+            if (!shouldTraceI3CIfaceSig(srcSigId) &&
+                !shouldTraceI3CIfaceSig(dstSigId))
+              return;
+            static uint64_t printed = 0;
+            if (printed >= 4096)
+              return;
+            ++printed;
+            auto formatBits = [](InterpretedValue value,
+                                 llvm::SmallString<64> &out) {
+              if (value.isX()) {
+                out = "X";
+                return;
+              }
+              value.getAPInt().toString(out, /*Radix=*/2, /*Signed=*/false);
+            };
+            llvm::SmallString<64> oldBits;
+            llvm::SmallString<64> newBits;
+            formatBits(oldVal, oldBits);
+            formatBits(newVal, newBits);
+            auto srcNameIt = signalIdToName.find(srcSigId);
+            auto dstNameIt = signalIdToName.find(dstSigId);
+            llvm::StringRef srcName =
+                srcNameIt != signalIdToName.end() ? srcNameIt->second : "?";
+            llvm::StringRef dstName =
+                dstNameIt != signalIdToName.end() ? dstNameIt->second : "?";
+            SimTime now = scheduler.getCurrentTime();
+            llvm::errs() << "[I3C-IFACE-PROP] " << tag << " proc=" << procId
+                         << " t=" << now.realTime << " d=" << now.deltaStep
+                         << " src=" << srcSigId << " (" << srcName << ")"
+                         << " dst=" << dstSigId << " (" << dstName << ")"
+                         << " old=" << oldBits << " new=" << newBits << "\n";
+          };
       if (current == newSigVal) {
         if (traceInterfaceStore) {
           llvm::StringRef sigName = "<unknown>";
@@ -25084,6 +25269,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         }
         pendingEpsilonDrives[fieldSigId] = driveVal;
         scheduler.updateSignal(fieldSigId, newSigVal);
+        traceI3CIfacePropUpdate("direct", fieldSigId, fieldSigId,
+                                InterpretedValue::fromSignalValue(current),
+                                driveVal);
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.store: drove interface shadow signal "
                    << fieldSigId << " at 0x"
@@ -25092,18 +25280,60 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         // Propagate to linked child BFM interface field signals.
         // Also update backing memory so that loads from the struct see
         // the new value (not just signals).
-        auto propagateToSignal = [&](SignalId targetSigId) {
+        auto isSameBlockParentRelay = [&](SignalId srcSigId,
+                                          SignalId dstSigId) -> bool {
+          auto srcAddrIt = fieldSignalToAddr.find(srcSigId);
+          auto dstAddrIt = fieldSignalToAddr.find(dstSigId);
+          if (srcAddrIt == fieldSignalToAddr.end() ||
+              dstAddrIt == fieldSignalToAddr.end())
+            return false;
+          uint64_t srcOff = 0, dstOff = 0;
+          MemoryBlock *srcBlk = findBlockByAddress(srcAddrIt->second, srcOff);
+          MemoryBlock *dstBlk = findBlockByAddress(dstAddrIt->second, dstOff);
+          if (!srcBlk || !dstBlk || srcBlk != dstBlk)
+            return false;
+          auto srcPropIt = interfaceFieldPropagation.find(srcSigId);
+          auto dstPropIt = interfaceFieldPropagation.find(dstSigId);
+          if (srcPropIt == interfaceFieldPropagation.end() ||
+              dstPropIt == interfaceFieldPropagation.end() ||
+              dstPropIt->second.empty())
+            return false;
+          return true;
+        };
+
+        auto hasUnknownPayload = [&](SignalId sourceSigId,
+                                     InterpretedValue value) -> bool {
+          if (value.isX())
+            return false;
+          if (scheduler.getSignalEncoding(sourceSigId) !=
+              SignalEncoding::FourStateStruct)
+            return false;
+          if (value.getWidth() < 2 || (value.getWidth() % 2) != 0)
+            return false;
+          unsigned logicalWidth = value.getWidth() / 2;
+          APInt unknownBits = value.getAPInt().extractBits(logicalWidth, 0);
+          return unknownBits != 0;
+        };
+
+        auto propagateRawValueToSignal = [&](SignalId sourceSigId,
+                                             SignalId targetSigId,
+                                             InterpretedValue rawPropagationVal) {
           const SignalValue &targetCurrent =
               scheduler.getSignalValue(targetSigId);
           unsigned targetW = targetCurrent.getWidth();
           InterpretedValue targetDriveVal =
-              normalizeInterfaceStoreValue(targetSigId, storeVal);
+              normalizeInterfaceStoreValue(targetSigId, rawPropagationVal);
           SignalValue targetNewVal = targetDriveVal.toSignalValue();
+          if (targetCurrent == targetNewVal)
+            return;
           pendingEpsilonDrives[targetSigId] = targetDriveVal;
 
           // Synchronous update: immediately set the signal value and trigger
           // any processes that have already set up their event waits.
           scheduler.updateSignal(targetSigId, targetNewVal);
+          traceI3CIfacePropUpdate("prop", sourceSigId, targetSigId,
+                                  InterpretedValue::fromSignalValue(targetCurrent),
+                                  targetDriveVal);
 
           // Write to backing memory (synchronous — needed for llvm.load).
           auto tgtAddrIt = fieldSignalToAddr.find(targetSigId);
@@ -25133,6 +25363,26 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           }
         };
 
+        auto propagateToSignal = [&](SignalId targetSigId) {
+          InterpretedValue propagationVal = storeVal;
+          if (hasUnknownPayload(fieldSigId, driveVal) &&
+              isSameBlockParentRelay(fieldSigId, targetSigId))
+            propagationVal = driveVal;
+          propagateRawValueToSignal(fieldSigId, targetSigId, propagationVal);
+        };
+
+        auto propagateFromSignal = [&](SignalId sourceSigId,
+                                       SignalId targetSigId) {
+          InterpretedValue sourceVal;
+          auto pendingIt = pendingEpsilonDrives.find(sourceSigId);
+          if (pendingIt != pendingEpsilonDrives.end())
+            sourceVal = pendingIt->second;
+          else
+            sourceVal = InterpretedValue::fromSignalValue(
+                scheduler.getSignalValue(sourceSigId));
+          propagateRawValueToSignal(sourceSigId, targetSigId, sourceVal);
+        };
+
         // Forward propagation only (no cross-sibling fan-out).
         // Cross-sibling propagation was removed because auto-linked
         // entries in interfaceFieldPropagation can contain cross-field
@@ -25147,13 +25397,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           // reverse propagation handler below, so cascading them here
           // would cause double-propagation and corrupt edge detection.
           for (SignalId childSigId : propIt->second) {
-            if (!intraLinkedSignals.count(childSigId))
+            bool parentRelayCascade =
+                isSameBlockParentRelay(fieldSigId, childSigId);
+            if (!intraLinkedSignals.count(childSigId) && !parentRelayCascade)
               continue;
             auto childPropIt = interfaceFieldPropagation.find(childSigId);
             if (childPropIt != interfaceFieldPropagation.end()) {
               for (SignalId grandchildId : childPropIt->second) {
                 if (grandchildId != fieldSigId)
-                  propagateToSignal(grandchildId);
+                  propagateFromSignal(childSigId, grandchildId);
               }
             }
           }
@@ -25200,7 +25452,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
                       for (SignalId grandchildId : sibPropIt->second) {
                         if (grandchildId != fieldSigId &&
                             grandchildId != parentFieldSigId)
-                          propagateToSignal(grandchildId);
+                          propagateFromSignal(siblingId, grandchildId);
                       }
                     }
                   }

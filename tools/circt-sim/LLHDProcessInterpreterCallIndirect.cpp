@@ -210,6 +210,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     ProcessId procId, mlir::func::CallIndirectOp callIndirectOp) {
     // The callee is the first operand (function pointer)
     Value calleeValue = callIndirectOp.getCallee();
+    ModuleOp callSiteModule = callIndirectOp->getParentOfType<ModuleOp>();
     InterpretedValue funcPtrVal = getValue(procId, calleeValue);
     bool traceSeq = traceSeqEnabled;
     bool sawResolvedTarget = false;
@@ -665,6 +666,49 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
         if (methodIndex < 0)
           break;
+
+        // Alternative: vtable GEP base is llvm.mlir.addressof (direct vtable
+        // reference, not loaded from object). Use circt.vtable_entries metadata
+        // to resolve the function name without reading vtable memory.
+        if (auto addrOfOp =
+                vtableGEP.getBase().getDefiningOp<LLVM::AddressOfOp>()) {
+          Operation *foundSymbol = mlir::SymbolTable::lookupNearestSymbolFrom(
+              callIndirectOp.getOperation(), addrOfOp.getGlobalNameAttr());
+          auto vtableGlobal = dyn_cast_or_null<LLVM::GlobalOp>(foundSymbol);
+          if (vtableGlobal) {
+            auto vtableEntriesAttr = dyn_cast_or_null<ArrayAttr>(
+                vtableGlobal->getAttr("circt.vtable_entries"));
+            if (vtableEntriesAttr) {
+              for (Attribute entryAttr : vtableEntriesAttr) {
+                auto entryArray = dyn_cast<ArrayAttr>(entryAttr);
+                if (!entryArray || entryArray.size() < 2)
+                  continue;
+                auto indexAttr = dyn_cast<IntegerAttr>(entryArray[0]);
+                auto symbolAttr = dyn_cast<FlatSymbolRefAttr>(entryArray[1]);
+                if (!indexAttr || !symbolAttr)
+                  continue;
+                if (indexAttr.getInt() == methodIndex) {
+                  StringRef resolvedName = symbolAttr.getValue();
+                  noteResolvedTarget(resolvedName);
+                  // Use a unique synthetic address per vtable+slot to avoid
+                  // collisions in the addressToFunction map.
+                  uint64_t syntheticAddr =
+                      llvm::hash_combine(addrOfOp.getGlobalName(),
+                                         methodIndex) |
+                      0x8000000000000000ULL;
+                  addressToFunction[syntheticAddr] = resolvedName;
+                  it = addressToFunction.find(syntheticAddr);
+                  staticResolved = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (staticResolved)
+            break;
+          break;
+        }
+
         auto vtablePtrLoad =
             vtableGEP.getBase().getDefiningOp<LLVM::LoadOp>();
         if (!vtablePtrLoad)
@@ -3024,6 +3068,21 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           itemAddr = fifoIt->second.front();
           fifoIt->second.pop_front();
           found = true;
+        }
+      }
+      // Fallback: when the port-to-sequencer resolution fails (no UVM
+      // connection chain), scan all FIFOs for any available item. This
+      // handles simple test cases with a single sequencer-driver pair.
+      if (!found && seqrQueueAddr == 0) {
+        for (auto &[qAddr, fifo] : sequencerItemFifo) {
+          if (!fifo.empty()) {
+            seqrQueueAddr = qAddr;
+            itemAddr = fifo.front();
+            fifo.pop_front();
+            found = true;
+            fromFallbackSearch = true;
+            break;
+          }
         }
       }
       if (found && itemAddr != 0) {
