@@ -30468,16 +30468,25 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           pendingSrandomSeed.reset();
         }
 
-        // Do NOT fill the entire object with random bytes.  The object
-        // contains non-rand metadata (class_id, vtable pointer, UVM base
-        // class fields like m_sequencer, m_parent, m_name, etc.) that must
-        // be preserved.  Each rand field gets its own constrained random
-        // value from __moore_randomize_with_range / _with_dist calls that
-        // follow this basic call.  Advance the RNG once to maintain
-        // deterministic sequencing.
+        // Fill the object with random bytes.  The MooreToCore lowering
+        // saves all non-rand fields BEFORE this call and restores them
+        // AFTERWARDS, so it is safe to overwrite the entire object.
+        // This is necessary because unconstrained rand fields (e.g.,
+        // `rand int y` with no constraint) do not get explicit
+        // __moore_randomize_with_range calls, so they must be randomized
+        // here.  Constrained rand fields will be overridden by subsequent
+        // _with_range / _with_dist calls.
         if (classAddr != 0 && classSize > 0) {
           auto &rng = getObjectRng(classAddr);
-          (void)rng(); // Advance RNG for determinism
+          // Fill object memory with random bytes
+          uint64_t off = 0;
+          auto *block = findMemoryBlockByAddress(classAddr, procId, &off);
+          if (block && block->initialized) {
+            size_t fillEnd = std::min(off + static_cast<size_t>(classSize),
+                                      block->data.size());
+            for (size_t i = off; i < fillEnd; ++i)
+              block->data[i] = static_cast<uint8_t>(rng());
+          }
 
           // The Moore compiler does not generate __moore_randomize_with_range
           // or __moore_dyn_array_new calls for rand dynamic array fields
