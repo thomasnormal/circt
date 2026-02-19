@@ -219,10 +219,10 @@ typedef struct t_cb_data *p_cb_data;
 #define vpiRegArray 116
 #endif
 #ifndef vpiStringVar
-#define vpiStringVar 612
+#define vpiStringVar 616
 #endif
 #ifndef vpiRealVar
-#define vpiRealVar 29
+#define vpiRealVar 47
 #endif
 #ifndef vpiStructVar
 #define vpiStructVar 618
@@ -265,6 +265,18 @@ typedef struct t_cb_data *p_cb_data;
 #endif
 #ifndef vpiRealVal
 #define vpiRealVal 7
+#endif
+#ifndef vpiConstType
+#define vpiConstType 40
+#endif
+#ifndef vpiDecConst
+#define vpiDecConst 1
+#endif
+#ifndef vpiRealConst
+#define vpiRealConst 2
+#endif
+#ifndef vpiStringVal
+#define vpiStringVal 8
 #endif
 #ifndef vpiVectorVal
 #define vpiVectorVal 9
@@ -339,6 +351,27 @@ typedef struct t_cb_data *p_cb_data;
 #define vpiGenScopeArray 133
 #endif
 
+#ifndef vpiPackage
+#define vpiPackage 600
+#endif
+
+// VPI put_value flags (IEEE 1800-2017 Table 36-7)
+#ifndef vpiNoDelay
+#define vpiNoDelay 1
+#endif
+#ifndef vpiInertialDelay
+#define vpiInertialDelay 2
+#endif
+#ifndef vpiPureTransportDelay
+#define vpiPureTransportDelay 3
+#endif
+#ifndef vpiForceFlag
+#define vpiForceFlag 5
+#endif
+#ifndef vpiReleaseFlag
+#define vpiReleaseFlag 6
+#endif
+
 namespace circt {
 namespace sim {
 
@@ -361,6 +394,7 @@ enum class VPIObjectType : uint8_t {
   StructVar = 10,
   StringVar = 12,
   RealVar = 13,
+  Package = 14,
 };
 
 //===----------------------------------------------------------------------===//
@@ -398,7 +432,15 @@ struct VPIObject {
   int32_t direction = 0;
 
   /// For parameters: the elaborated constant value.
+  /// For real params, the raw bits of the double are stored here.
   int64_t paramValue = 0;
+
+  /// For parameters: the VPI constant type (vpiDecConst, vpiRealConst, etc.).
+  int32_t paramConstType = 1; // vpiDecConst
+
+  /// For string variables: the current string value.
+  /// Stored here since string vars don't have backing signals.
+  std::string stringValue;
 
   /// For array element sub-signals: bit offset within the parent signal.
   /// Used to read/write the correct slice of the parent signal's bits.
@@ -407,6 +449,11 @@ struct VPIObject {
   /// For Array objects: SV-declared left and right bounds.
   int32_t leftBound = 0;
   int32_t rightBound = 0;
+
+  /// True if the signal has explicit range bounds (e.g., package members).
+  /// When set, vpi_handle(vpiLeftRange/vpiRightRange) returns range handles
+  /// so cocotb creates LogicArrayObject instead of LogicObject for 1-bit types.
+  bool hasExplicitRange = false;
 
   /// Parent object ID (0 = no parent / root).
   uint32_t parentId = 0;
@@ -512,6 +559,12 @@ public:
                              const std::string &fullName,
                              int64_t value, uint32_t width,
                              uint32_t parentModuleId = 0);
+
+  /// Register a synthetic string variable (no signal backing).
+  uint32_t registerStringVariable(const std::string &name,
+                                  const std::string &fullName,
+                                  const std::string &initialValue,
+                                  uint32_t parentModuleId = 0);
 
   /// Look up an object by full hierarchical name.
   VPIObject *findByName(const std::string &fullName);
@@ -677,6 +730,9 @@ private:
   /// Root module IDs.
   llvm::SmallVector<uint32_t, 4> rootModules;
 
+  /// Package object IDs (for vpi_iterate(vpiPackage, NULL)).
+  llvm::SmallVector<uint32_t, 4> packageIds;
+
   /// Top module names from --top CLI flags.
   llvm::SmallVector<std::string, 4> topModuleNames;
 
@@ -716,6 +772,42 @@ private:
   std::vector<std::string> vlogArgs;
   /// C-string pointers for vpi_get_vlog_info (kept in sync with vlogArgs).
   mutable std::vector<char *> vlogArgvPtrs;
+
+  /// When true, fireValueChangeCallbacks queues signal IDs instead of
+  /// firing immediately. This prevents re-entrant callback firing when
+  /// vpi_put_value is called from within cbReadWriteSynch callbacks.
+  bool deferringValueChanges = false;
+
+  /// Signal IDs queued during deferred mode.
+  llvm::SmallVector<SignalId, 8> deferredValueChangeSignals;
+
+  /// Signals currently forced via vpi_put_value with vpiForceFlag.
+  /// Forced values persist across time steps until explicitly released.
+  llvm::DenseMap<SignalId, SignalValue> forcedSignals;
+
+public:
+  /// Begin deferring value-change callbacks.
+  void beginDeferValueChanges() { deferringValueChanges = true; }
+
+  /// Flush deferred value-change callbacks and stop deferring.
+  void flushDeferredValueChanges();
+
+  /// Re-assert all forced signal values and re-mark VPI ownership.
+  /// Called after clearVpiOwnership to maintain force semantics.
+  void reAssertForcedSignals();
+
+  /// Set a hook that runs at the end of each cbAfterDelay, after all VPI
+  /// callbacks (ReadWriteSynch, ReadOnlySynch) have completed. This allows
+  /// deferred re-evaluation of combinational processes (e.g., hw.output)
+  /// that depend on firreg values — ensuring cocotb reads old port values
+  /// during RisingEdge callbacks, then ports update afterward.
+  void setPostCallbackHook(std::function<void()> hook) {
+    postCallbackHook = std::move(hook);
+  }
+
+private:
+  /// Optional hook called at the end of each cbAfterDelay cycle.
+  std::function<void()> postCallbackHook;
 };
 
 } // namespace sim

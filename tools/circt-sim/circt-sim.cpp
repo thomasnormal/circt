@@ -641,6 +641,12 @@ private:
   std::mutex abortMutex;
   std::string abortReason;
   std::thread watchdogThread;
+
+  // hw.output process IDs for deferred re-evaluation after VPI callbacks.
+  // Firreg changes are NOT wired to hw.output via sensitivity (would cause
+  // race conditions with cocotb). Instead, these processes are explicitly
+  // re-evaluated at the end of each cbAfterDelay cycle.
+  llvm::SmallVector<ProcessId, 8> hwOutputProcessIds;
 };
 
 LogicalResult SimulationContext::initialize(
@@ -749,12 +755,15 @@ LogicalResult SimulationContext::initialize(
       [this](SignalId signal, const SignalValue &value) {
         recordValueChange(signal, value);
         if (llhdInterpreter) {
+          // Forward-propagate parent interface signal changes to child BFM copies.
+          llhdInterpreter->forwardPropagateOnSignalChange(signal, value);
+          // Re-evaluate synthetic interface tri-state rules when their source
+          // or condition signals change (including non-store updates).
+          llhdInterpreter->reevaluateInterfaceTriState(signal);
           // Re-evaluate combinational module drives that depend on this signal.
           // Critical for VPI: when cocotb writes an input via vpi_put_value,
           // continuous assignments must re-compute dependent outputs.
           llhdInterpreter->executeModuleDrivesForSignal(signal);
-          // Forward-propagate parent interface signal changes to child BFM copies.
-          llhdInterpreter->forwardPropagateOnSignalChange(signal, value);
         }
         // Fire VPI cbValueChange callbacks for cocotb RisingEdge/FallingEdge.
         if (!vpiLibrary.empty())
@@ -1111,6 +1120,13 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
           if (sigId != 0)
             internalSigIds.push_back(sigId);
         });
+        // NOTE: firreg signal IDs are NOT added to the sensitivity list.
+        // Making hw.output sensitive to firreg causes race conditions with
+        // cocotb's RisingEdge callbacks: firreg captures the new value and
+        // hw.output updates the port in the same executeCurrentTime() call
+        // as the clock write, before cocotb reads the port. Instead, firreg
+        // changes are propagated to ports via a post-callback hook that runs
+        // AFTER all VPI callbacks for the current time step.
 
         // Build output port name → signal ID mapping
         auto outputPorts = hwModule.getPortList();
@@ -1138,6 +1154,8 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
                 scheduler.updateSignal(outSigId, val.toSignalValue());
               });
 
+          hwOutputProcessIds.push_back(procId);
+
           auto *proc = scheduler.getProcess(procId);
           if (proc) {
             proc->setCombinational(true);
@@ -1151,6 +1169,24 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
           ++outputIdx;
         }
       }
+    }
+
+    // Execute hw.output processes once after registration to set initial
+    // output values. The module-level llhd.drv ops schedule changes for 1
+    // epsilon during initialize(), but the hw_output processes are registered
+    // AFTER initialize() returns, so they miss the initial signal changes.
+    // Without this, output ports stay at their uninitialized values (Z/X)
+    // until an input actually changes (which never happens if VPI writes
+    // the same value the signal was initialized to).
+    if (!hwOutputProcessIds.empty()) {
+      // First, flush any pending drives from module-level initialization.
+      scheduler.executeCurrentTime();
+      for (ProcessId pid : hwOutputProcessIds) {
+        auto *proc = scheduler.getProcess(pid);
+        if (proc)
+          proc->execute();
+      }
+      scheduler.executeCurrentTime();
     }
   } else {
     // For modules without LLHD processes, register combinational processes
@@ -1538,7 +1574,12 @@ LogicalResult SimulationContext::run() {
           int64_t paramValue = 0;
           uint32_t paramWidth = 32;
           bool isRealParam = false;
-          if (auto intAttr = dyn_cast<mlir::IntegerAttr>(valueAttr)) {
+          bool isStringParam = false;
+          std::string stringParamValue;
+          if (auto strAttr = dyn_cast<mlir::StringAttr>(valueAttr)) {
+            isStringParam = true;
+            stringParamValue = strAttr.getValue().str();
+          } else if (auto intAttr = dyn_cast<mlir::IntegerAttr>(valueAttr)) {
             paramValue = intAttr.getValue().getSExtValue();
             paramWidth = intAttr.getValue().getBitWidth();
           } else if (auto floatAttr = dyn_cast<mlir::FloatAttr>(valueAttr)) {
@@ -1548,12 +1589,21 @@ LogicalResult SimulationContext::run() {
             isRealParam = true;
           }
           std::string qualifiedName = modName + "." + paramName.str();
+          if (isStringParam) {
+            // Register as a string variable so VPI reports vpiStringVar.
+            uint32_t paramId = vpiRuntime.registerStringVariable(
+                paramName.str(), qualifiedName, stringParamValue, modId);
+            auto *paramObj = vpiRuntime.findById(paramId);
+            if (paramObj)
+              paramObj->paramConstType = 3; // vpiStringConst
+          } else {
           uint32_t paramId = vpiRuntime.registerParameter(
               paramName.str(), qualifiedName, paramValue, paramWidth, modId);
           if (isRealParam) {
             auto *paramObj = vpiRuntime.findById(paramId);
             if (paramObj)
               paramObj->paramConstType = 2; // vpiRealConst
+          }
           }
           // Also register under unqualified name for vpi_handle_by_name.
           auto *existingUnqual = vpiRuntime.findByName(paramName.str());
@@ -1614,6 +1664,375 @@ LogicalResult SimulationContext::run() {
               varName.str(), qualifiedName, initVal, modId);
         }
       }
+
+      // Register generate scopes from vpi.gen_scopes attribute.
+      if (auto genScopes = hwMod->getAttrOfType<mlir::DictionaryAttr>(
+              "vpi.gen_scopes")) {
+        for (auto namedAttr : genScopes) {
+          llvm::StringRef scopeName = namedAttr.getName().getValue();
+          auto dictAttr =
+              dyn_cast<mlir::DictionaryAttr>(namedAttr.getValue());
+          if (!dictAttr)
+            continue;
+          std::string scopeType;
+          if (auto typeAttr = dictAttr.getAs<mlir::StringAttr>("type"))
+            scopeType = typeAttr.getValue().str();
+
+          std::string qualifiedName = modName + "." + scopeName.str();
+          // Skip if already created by buildHierarchy from signal names.
+          if (vpiRuntime.findByName(qualifiedName))
+            continue;
+
+          if (scopeType == "array") {
+            // Generate array (for-generate): create GenScopeArray + children.
+            int32_t left = 0, right = 0;
+            if (auto leftAttr = dictAttr.getAs<mlir::IntegerAttr>("left"))
+              left = leftAttr.getInt();
+            if (auto rightAttr = dictAttr.getAs<mlir::IntegerAttr>("right"))
+              right = rightAttr.getInt();
+            uint32_t arrayId = vpiRuntime.registerModule(
+                scopeName.str(), qualifiedName, modId);
+            auto *arrayObj = vpiRuntime.findById(arrayId);
+            if (arrayObj) {
+              arrayObj->type = VPIObjectType::GenScopeArray;
+              arrayObj->leftBound = left;
+              arrayObj->rightBound = right;
+            }
+            // Create GenScope children for each index.
+            int32_t lo = std::min(left, right);
+            int32_t hi = std::max(left, right);
+            for (int32_t idx = lo; idx <= hi; ++idx) {
+              std::string childName =
+                  scopeName.str() + "[" + std::to_string(idx) + "]";
+              std::string childFull = modName + "." + childName;
+              if (!vpiRuntime.findByName(childFull)) {
+                uint32_t childId = vpiRuntime.registerModule(
+                    childName, childFull, arrayId);
+                auto *childObj = vpiRuntime.findById(childId);
+                if (childObj)
+                  childObj->type = VPIObjectType::GenScope;
+              }
+            }
+          } else {
+            // Conditional generate scope: create single GenScope.
+            uint32_t scopeId = vpiRuntime.registerModule(
+                scopeName.str(), qualifiedName, modId);
+            auto *scopeObj = vpiRuntime.findById(scopeId);
+            if (scopeObj)
+              scopeObj->type = VPIObjectType::GenScope;
+          }
+        }
+      }
+
+      // Register parameters inside generate scopes from
+      // vpi.gen_scope_params.
+      if (auto genParams = hwMod->getAttrOfType<mlir::DictionaryAttr>(
+              "vpi.gen_scope_params")) {
+        for (auto namedAttr : genParams) {
+          // Qualified name like "cond_scope.scoped_param" or
+          // "outer_scope[1].outer_param".
+          llvm::StringRef qualParamName = namedAttr.getName().getValue();
+          std::string fullParamName =
+              modName + "." + qualParamName.str();
+          if (vpiRuntime.findByName(fullParamName))
+            continue;
+
+          int64_t paramValue = 0;
+          uint32_t paramWidth = 32;
+          if (auto intAttr =
+                  dyn_cast<mlir::IntegerAttr>(namedAttr.getValue())) {
+            paramValue = intAttr.getValue().getSExtValue();
+            paramWidth = intAttr.getValue().getBitWidth();
+          }
+
+          // Find the parent scope: everything before the last '.'.
+          // Auto-create intermediate scopes if they don't exist
+          // (handles nested generate arrays like
+          // outer_scope[1].inner_scope[1]).
+          auto lastDot = qualParamName.rfind('.');
+          uint32_t parentScopeId = modId;
+          if (lastDot != llvm::StringRef::npos) {
+            llvm::StringRef parentPath =
+                qualParamName.substr(0, lastDot);
+            std::string parentFull =
+                modName + "." + parentPath.str();
+            auto *parentObj = vpiRuntime.findByName(parentFull);
+            if (!parentObj) {
+              // Auto-create intermediate scope hierarchy.
+              uint32_t curParent = modId;
+              llvm::SmallVector<llvm::StringRef> parts;
+              parentPath.split(parts, '.');
+              std::string accumulated = modName;
+              for (auto part : parts) {
+                accumulated += "." + part.str();
+                auto *existing = vpiRuntime.findByName(accumulated);
+                if (existing) {
+                  curParent = existing->id;
+                } else {
+                  // Check if this looks like a GenScopeArray parent.
+                  auto bracket = part.find('[');
+                  if (bracket != llvm::StringRef::npos) {
+                    // Ensure array parent exists.
+                    llvm::StringRef arrayName = part.substr(0, bracket);
+                    std::string arrayFull =
+                        accumulated.substr(
+                            0, accumulated.size() - part.size()) +
+                        arrayName.str();
+                    auto *arrObj =
+                        vpiRuntime.findByName(arrayFull);
+                    uint32_t arrId = curParent;
+                    if (!arrObj) {
+                      arrId = vpiRuntime.registerModule(
+                          arrayName.str(), arrayFull, curParent);
+                      auto *a = vpiRuntime.findById(arrId);
+                      if (a)
+                        a->type = VPIObjectType::GenScopeArray;
+                    } else {
+                      arrId = arrObj->id;
+                    }
+                    curParent = vpiRuntime.registerModule(
+                        part.str(), accumulated, arrId);
+                    auto *s = vpiRuntime.findById(curParent);
+                    if (s)
+                      s->type = VPIObjectType::GenScope;
+                  } else {
+                    curParent = vpiRuntime.registerModule(
+                        part.str(), accumulated, curParent);
+                    auto *s = vpiRuntime.findById(curParent);
+                    if (s)
+                      s->type = VPIObjectType::GenScope;
+                  }
+                }
+              }
+              parentScopeId = curParent;
+            } else {
+              parentScopeId = parentObj->id;
+            }
+          }
+
+          llvm::StringRef shortName = qualParamName;
+          if (lastDot != llvm::StringRef::npos)
+            shortName = qualParamName.substr(lastDot + 1);
+
+          vpiRuntime.registerParameter(shortName.str(), fullParamName,
+                                       paramValue, paramWidth,
+                                       parentScopeId);
+        }
+      }
+
+      // Register gate primitive instances from vpi.gate_instances.
+      // These appear as named hierarchy objects accessible via
+      // vpi_handle_by_name.
+      if (auto gateInsts = hwMod->getAttrOfType<mlir::DictionaryAttr>(
+              "vpi.gate_instances")) {
+        for (auto namedAttr : gateInsts) {
+          llvm::StringRef gateName = namedAttr.getName().getValue();
+          std::string qualifiedName = modName + "." + gateName.str();
+          if (vpiRuntime.findByName(qualifiedName))
+            continue;
+          // Register as a GenScope so it appears in hierarchy iteration.
+          uint32_t gateId = vpiRuntime.registerModule(
+              gateName.str(), qualifiedName, modId);
+          auto *gateObj = vpiRuntime.findById(gateId);
+          if (gateObj)
+            gateObj->type = VPIObjectType::GenScope;
+        }
+      }
+
+      // Register interface instance arrays from vpi.interface_arrays.
+      // cocotb expects these as GenScopeArray + GenScope children,
+      // similar to generate arrays.
+      if (auto ifaceArrays = hwMod->getAttrOfType<mlir::DictionaryAttr>(
+              "vpi.interface_arrays")) {
+        for (auto namedAttr : ifaceArrays) {
+          llvm::StringRef arrName = namedAttr.getName().getValue();
+          std::string qualifiedName = modName + "." + arrName.str();
+          if (vpiRuntime.findByName(qualifiedName))
+            continue;
+          auto dictAttr =
+              dyn_cast<mlir::DictionaryAttr>(namedAttr.getValue());
+          if (!dictAttr)
+            continue;
+          int32_t left = 0, right = 0;
+          if (auto leftAttr = dictAttr.getAs<mlir::IntegerAttr>("left"))
+            left = leftAttr.getInt();
+          if (auto rightAttr =
+                  dictAttr.getAs<mlir::IntegerAttr>("right"))
+            right = rightAttr.getInt();
+
+          uint32_t arrayId = vpiRuntime.registerModule(
+              arrName.str(), qualifiedName, modId);
+          auto *arrayObj = vpiRuntime.findById(arrayId);
+          if (arrayObj) {
+            arrayObj->type = VPIObjectType::GenScopeArray;
+            arrayObj->leftBound = left;
+            arrayObj->rightBound = right;
+          }
+          // Create GenScope children for each index.
+          int32_t lo = std::min(left, right);
+          int32_t hi = std::max(left, right);
+          for (int32_t idx = lo; idx <= hi; ++idx) {
+            std::string childName =
+                arrName.str() + "[" + std::to_string(idx) + "]";
+            std::string childFull = modName + "." + childName;
+            if (!vpiRuntime.findByName(childFull)) {
+              uint32_t childId = vpiRuntime.registerModule(
+                  childName, childFull, arrayId);
+              auto *childObj = vpiRuntime.findById(childId);
+              if (childObj)
+                childObj->type = VPIObjectType::GenScope;
+            }
+          }
+        }
+      }
+
+      // Read interface definitions (signal names/widths) for creating
+      // synthetic signal children under interface scope objects.
+      mlir::DictionaryAttr ifaceDefsAttr =
+          hwMod->getAttrOfType<mlir::DictionaryAttr>("vpi.interface_defs");
+
+      // Helper: register synthetic signal children for an interface scope.
+      auto registerIfaceSignals = [&](uint32_t scopeId,
+                                      const std::string &scopeFull,
+                                      llvm::StringRef defName) {
+        if (!ifaceDefsAttr)
+          return;
+        auto defAttr = ifaceDefsAttr.getAs<mlir::DictionaryAttr>(defName);
+        if (!defAttr)
+          return;
+        for (auto sigAttr : defAttr) {
+          llvm::StringRef sigName = sigAttr.getName().getValue();
+          uint32_t sigWidth = 1;
+          if (auto intAttr =
+                  dyn_cast<mlir::IntegerAttr>(sigAttr.getValue()))
+            sigWidth = intAttr.getInt();
+          std::string sigFull = scopeFull + "." + sigName.str();
+          if (!vpiRuntime.findByName(sigFull)) {
+            // Register as a zero-backed signal (no simulation backing).
+            vpiRuntime.registerSignal(
+                sigName.str(), sigFull, /*signalId=*/0, sigWidth,
+                VPIObjectType::Net, scopeId);
+          }
+        }
+      };
+
+      // Register single interface instances.
+      if (auto ifaceInsts = hwMod->getAttrOfType<mlir::DictionaryAttr>(
+              "vpi.interface_instances")) {
+        for (auto namedAttr : ifaceInsts) {
+          llvm::StringRef instName = namedAttr.getName().getValue();
+          std::string qualifiedName = modName + "." + instName.str();
+          if (vpiRuntime.findByName(qualifiedName))
+            continue;
+          uint32_t scopeId = vpiRuntime.registerModule(
+              instName.str(), qualifiedName, modId);
+          auto *scopeObj = vpiRuntime.findById(scopeId);
+          if (scopeObj)
+            scopeObj->type = VPIObjectType::GenScope;
+
+          // Register signal children from interface definition.
+          if (auto defStr =
+                  dyn_cast<mlir::StringAttr>(namedAttr.getValue()))
+            registerIfaceSignals(scopeId, qualifiedName,
+                                 defStr.getValue());
+        }
+      }
+
+      // Add signal children to interface array elements.
+      if (auto ifaceArrays = hwMod->getAttrOfType<mlir::DictionaryAttr>(
+              "vpi.interface_arrays")) {
+        for (auto namedAttr : ifaceArrays) {
+          auto dictAttr =
+              dyn_cast<mlir::DictionaryAttr>(namedAttr.getValue());
+          if (!dictAttr)
+            continue;
+          llvm::StringRef arrName = namedAttr.getName().getValue();
+          llvm::StringRef defName;
+          if (auto defAttr = dictAttr.getAs<mlir::StringAttr>("def"))
+            defName = defAttr.getValue();
+          if (defName.empty())
+            continue;
+          int32_t left = 0, right = 0;
+          if (auto leftAttr =
+                  dictAttr.getAs<mlir::IntegerAttr>("left"))
+            left = leftAttr.getInt();
+          if (auto rightAttr =
+                  dictAttr.getAs<mlir::IntegerAttr>("right"))
+            right = rightAttr.getInt();
+          int32_t lo = std::min(left, right);
+          int32_t hi = std::max(left, right);
+          for (int32_t idx = lo; idx <= hi; ++idx) {
+            std::string childFull = modName + "." + arrName.str() +
+                                    "[" + std::to_string(idx) + "]";
+            auto *childObj = vpiRuntime.findByName(childFull);
+            if (childObj)
+              registerIfaceSignals(childObj->id, childFull, defName);
+          }
+        }
+      }
+
+      // Register VPI packages from vpi.packages attribute.
+      // Packages are top-level objects accessible via
+      // vpi_iterate(vpiPackage, NULL) and their members via
+      // vpi_handle_by_name with :: separator.
+      if (auto pkgsAttr = hwMod->getAttrOfType<mlir::DictionaryAttr>(
+              "vpi.packages")) {
+        for (auto pkgAttr : pkgsAttr) {
+          llvm::StringRef pkgName = pkgAttr.getName().getValue();
+          auto membersDict =
+              dyn_cast<mlir::DictionaryAttr>(pkgAttr.getValue());
+          if (!membersDict)
+            continue;
+          // Skip if already registered.
+          if (vpiRuntime.findByName(pkgName.str()))
+            continue;
+          // Register the package object (no parent).
+          uint32_t pkgId = vpiRuntime.registerModule(
+              pkgName.str(), pkgName.str(), /*parentId=*/0);
+          auto *pkgObj = vpiRuntime.findById(pkgId);
+          if (pkgObj)
+            pkgObj->type = VPIObjectType::Package;
+
+          // Register each member as a Net (LogicArrayObject in cocotb).
+          // Store the constant value as a hex string for getValue.
+          for (auto memberAttr : membersDict) {
+            llvm::StringRef memberName =
+                memberAttr.getName().getValue();
+            // Use :: separator for full path.
+            std::string memberFull =
+                pkgName.str() + "::" + memberName.str();
+            // Also register with . separator for handleByName.
+            std::string memberDot =
+                pkgName.str() + "." + memberName.str();
+
+            uint32_t width = 32;
+            std::string hexValue = "0";
+            if (auto intAttr = dyn_cast<mlir::IntegerAttr>(
+                    memberAttr.getValue())) {
+              width = intAttr.getValue().getBitWidth();
+              // Store unsigned hex representation.
+              llvm::SmallString<128> hexStr;
+              intAttr.getValue().toStringUnsigned(hexStr, 16);
+              hexValue = std::string(hexStr.begin(), hexStr.end());
+            }
+
+            // Register as Net so cocotb creates LogicArrayObject.
+            uint32_t sigId = vpiRuntime.registerSignal(
+                memberName.str(), memberFull, /*signalId=*/0,
+                width, VPIObjectType::Net, pkgId);
+            auto *sigObj = vpiRuntime.findById(sigId);
+            if (sigObj) {
+              // Store hex value in stringValue for getValue.
+              sigObj->stringValue = hexValue;
+              // Package members always have explicit type ranges, so cocotb
+              // creates LogicArrayObject (not LogicObject) even for 1-bit.
+              sigObj->hasExplicitRange = true;
+            }
+            // Also add . mapping for handleByName lookup.
+            vpiRuntime.addNameMapping(memberDot, sigId);
+          }
+        }
+      }
     }
 
     vpiRuntime.installDispatchTable();
@@ -1623,6 +2042,30 @@ LogicalResult SimulationContext::run() {
       return failure();
     }
     vpiRuntime.fireStartOfSimulation();
+
+    // Set up the post-callback hook to propagate firreg changes to hw.output
+    // port signals. This runs AFTER all VPI callbacks for each cbAfterDelay,
+    // ensuring cocotb reads old port values during RisingEdge handlers before
+    // ports are updated with newly captured firreg values.
+    //
+    // Keep this opt-in because enabling it globally can perturb existing
+    // non-cocotb scheduling behavior.
+    bool enablePostCallbackHwOutputHook =
+        std::getenv("CIRCT_SIM_ENABLE_POST_CALLBACK_HW_OUTPUT_HOOK") != nullptr;
+    if (enablePostCallbackHwOutputHook && !hwOutputProcessIds.empty()) {
+      vpiRuntime.setPostCallbackHook([this]() {
+        static bool traceHook = std::getenv("CIRCT_TRACE_POST_HOOK");
+        if (traceHook) {
+          SimTime now = scheduler.getCurrentTime();
+          llvm::errs() << "[postCallbackHook] t=" << now.realTime
+                       << " re-eval " << hwOutputProcessIds.size()
+                       << " hw.output processes\n";
+        }
+        for (ProcessId procId : hwOutputProcessIds)
+          scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+        scheduler.executeCurrentTime();
+      });
+    }
   }
 
   llvm::outs() << "[circt-sim] Starting simulation\n";
@@ -1668,6 +2111,9 @@ LogicalResult SimulationContext::run() {
       break;
     }
 
+    if (llhdInterpreter)
+      llhdInterpreter->pollRegisteredMonitor();
+
     // Execute delta cycles
     size_t deltasExecuted;
     if (parallelScheduler) {
@@ -1710,6 +2156,9 @@ LogicalResult SimulationContext::run() {
       }
       vpi.fireCallbacks(cbReadOnlySynch);
     }
+
+    if (llhdInterpreter)
+      llhdInterpreter->pollRegisteredMonitor();
 
     // Check if simulation was terminated during execution (e.g., $finish called).
     // This must be checked immediately after executeCurrentTime() to ensure
