@@ -136,6 +136,16 @@ void TimeWheel::schedule(const SimTime &time, SchedulingRegion region,
   size_t slotIndex = getSlotIndex(targetTime, level);
   auto &slot = levels[level].slots[slotIndex];
 
+  // A wheel slot can host multiple deltas/regions for ONE absolute time.
+  // If another absolute time hashes to the same slot while it's occupied,
+  // storing it in-place would overwrite slot.baseTime and retime existing
+  // events. Defer such collisions to overflow to preserve ordering.
+  if (slot.hasEvents && slot.baseTime != targetTime) {
+    overflow[targetTime].schedule(region, std::move(event));
+    ++totalEvents;
+    return;
+  }
+
   // Determine the delta step to use.
   // If scheduling at current real time, use the requested delta step, but at
   // minimum use the current delta step (can't schedule in the past).

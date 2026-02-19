@@ -2433,6 +2433,8 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
     }
     unsigned resolvedPairs = 0;
     unsigned unresolvedSrc = 0, unresolvedDest = 0;
+    llvm::SmallVector<std::pair<SignalId, SignalId>, 8>
+        deferredSameInterfaceLinks;
     for (auto &[srcAddr, destAddr] : childModuleCopyPairs) {
       auto srcIt = interfaceFieldSignals.find(srcAddr);
       auto destIt = interfaceFieldSignals.find(destAddr);
@@ -2463,8 +2465,10 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
       if (hasInstanceScopedInterfaceFieldSignals)
         if (auto srcBase = getTopLevelIfaceBase(parentSigId))
           if (auto destBase = getTopLevelIfaceBase(childSigId))
-            if (*srcBase == *destBase)
+            if (*srcBase == *destBase) {
+              deferredSameInterfaceLinks.emplace_back(parentSigId, childSigId);
               continue;
+            }
       if (parentSigId == childSigId) {
         // Propagate childToParentFieldAddr entries for self-link pairs
         // so grandchild addresses inherit parent mappings.
@@ -2492,12 +2496,41 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
                      << ")\n";
       }
     }
+    // Recover safe intra-interface mirror links. These arise from top-level
+    // interface field copies (e.g. field_2 -> field_4) that feed child BFMs.
+    // Reintroduce only when the source has no outgoing links and destination
+    // already fans out, avoiding broad same-interface cycles.
+    unsigned resolvedDeferredSameInterface = 0;
+    for (auto [srcSigId, destSigId] : deferredSameInterfaceLinks) {
+      auto destFanoutIt = interfaceFieldPropagation.find(destSigId);
+      if (destFanoutIt == interfaceFieldPropagation.end() ||
+          destFanoutIt->second.empty())
+        continue;
+      auto &srcFanout = interfaceFieldPropagation[srcSigId];
+      if (!srcFanout.empty())
+        continue;
+
+      if (!llvm::is_contained(srcFanout, destSigId))
+        srcFanout.push_back(destSigId);
+
+      if (!srcFanout.empty()) {
+        ++resolvedDeferredSameInterface;
+        if (traceInterfacePropagation) {
+          llvm::errs() << "[circt-sim] Deferred same-interface link: signal "
+                       << srcSigId << " -> signal " << destSigId
+                       << "\n";
+        }
+      }
+    }
     if (traceInterfacePropagation) {
       llvm::errs() << "[circt-sim] childModuleCopyPairs: "
                    << childModuleCopyPairs.size() << " total, "
                    << resolvedPairs << " resolved, "
                    << unresolvedSrc << " unresolved-src, "
                    << unresolvedDest << " unresolved-dest\n";
+      if (resolvedDeferredSameInterface > 0)
+        llvm::errs() << "[circt-sim] same-interface deferred links: "
+                     << resolvedDeferredSameInterface << " resolved\n";
       llvm::errs() << "[circt-sim] childToParentFieldAddr has "
                    << childToParentFieldAddr.size() << " entries, "
                    << "interfaceFieldPropagation has "

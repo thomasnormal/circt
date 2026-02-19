@@ -119,6 +119,20 @@ bool sensitivityTriggered(const SensitivityList &list, SignalId signalId,
   }
   return false;
 }
+
+bool isVpiOwnershipSuppressionEnabled() {
+  // VPI ownership suppression is ON by default. When enabled, VPI-written
+  // signals are protected from stale HDL drives (e.g., seq.firreg presets,
+  // module-level llhd.drv) until ownership is cleared at the next time step.
+  // The vpiOwnedSignals set is empty when VPI is not loaded, so this has
+  // zero overhead for non-VPI simulations.
+  // Set CIRCT_SIM_DISABLE_VPI_OWNERSHIP_SUPPRESS=1 to disable.
+  static bool disabled = []() {
+    const char *env = std::getenv("CIRCT_SIM_DISABLE_VPI_OWNERSHIP_SUPPRESS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return !disabled;
+}
 } // namespace
 
 // Static member initialization
@@ -352,6 +366,12 @@ void ProcessScheduler::setMaxDeltaCycles(size_t maxDeltaCycles) {
 
 void ProcessScheduler::updateSignal(SignalId signalId,
                                     const SignalValue &newValue) {
+  // Suppress non-VPI drives to VPI-owned signals. VPI putValue marks signals
+  // as owned after its direct updateSignal call, so this guard only blocks
+  // subsequent stale drives (e.g., init-time EventScheduler events).
+  if (isVpiOwnershipSuppressionEnabled() && vpiOwnedSignals.count(signalId))
+    return;
+
   auto it = signalStates.find(signalId);
   if (it == signalStates.end()) {
     LLVM_DEBUG(llvm::dbgs() << "Warning: updating unknown signal " << signalId
@@ -416,6 +436,10 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
                                                 const SignalValue &newValue,
                                                 DriveStrength strength0,
                                                 DriveStrength strength1) {
+  // Suppress non-VPI drives to VPI-owned signals.
+  if (isVpiOwnershipSuppressionEnabled() && vpiOwnedSignals.count(signalId))
+    return;
+
   auto it = signalStates.find(signalId);
   if (it == signalStates.end()) {
     LLVM_DEBUG(llvm::dbgs() << "Warning: updating unknown signal " << signalId
@@ -613,6 +637,10 @@ bool ProcessScheduler::isAbortRequested() const {
 void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
                                                  const SignalValue &oldVal,
                                                  const SignalValue &newVal) {
+  static bool traceI3CSignal31 = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_SIGNAL31");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
   auto it = signalToProcesses.find(signalId);
   if (it == signalToProcesses.end())
     return;
@@ -622,10 +650,27 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
   if (actualEdge == EdgeType::None)
     return;
 
+  bool traceI3CSignal = traceI3CSignal31 && (signalId == 31 || signalId == 45);
+  if (traceI3CSignal) {
+    llvm::errs() << "[I3C-SIG31] edge=" << getEdgeTypeName(actualEdge)
+                 << " waiters=" << it->second.size() << " [";
+    for (size_t idx = 0; idx < it->second.size(); ++idx) {
+      if (idx)
+        llvm::errs() << ",";
+      llvm::errs() << it->second[idx];
+    }
+    llvm::errs() << "]\n";
+  }
+
   for (ProcessId procId : it->second) {
     Process *proc = getProcess(procId);
     if (!proc)
       continue;
+    if (traceI3CSignal) {
+      llvm::errs() << "[I3C-SIG31] check proc=" << procId
+                   << " state=" << getProcessStateName(proc->getState())
+                   << "\n";
+    }
 
     // Check if process state allows triggering
     if (proc->getState() != ProcessState::Suspended &&
@@ -640,6 +685,9 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
         proc->clearWaiting();
         recordTriggerSignal(procId, signalId);
         scheduleProcess(procId, proc->getPreferredRegion());
+        if (traceI3CSignal)
+          llvm::errs() << "[I3C-SIG31] trigger waiting proc=" << procId
+                       << "\n";
         LLVM_DEBUG(llvm::dbgs()
                    << "Process " << procId << " triggered from waiting state\n");
       }
@@ -651,6 +699,8 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
                              actualEdge)) {
       recordTriggerSignal(procId, signalId);
       scheduleProcess(procId, proc->getPreferredRegion());
+      if (traceI3CSignal)
+        llvm::errs() << "[I3C-SIG31] trigger sens proc=" << procId << "\n";
       LLVM_DEBUG(llvm::dbgs() << "Process " << procId << " triggered\n");
     }
   }

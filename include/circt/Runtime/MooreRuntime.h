@@ -654,6 +654,15 @@ int32_t __moore_random_seeded(int32_t seed);
 /// @return 1 on success, 0 on failure (e.g., null pointer)
 int32_t __moore_randomize_basic(void *classPtr, int64_t classSize);
 
+/// Randomize an arbitrary byte buffer.
+/// Unlike `__moore_randomize_basic`, this does not skip any object header and
+/// is suitable for dynamic-array payload initialization.
+///
+/// @param dataPtr Pointer to the byte buffer to randomize
+/// @param size Size of the buffer in bytes
+/// @return 1 on success, 0 on failure (e.g., null pointer)
+int32_t __moore_randomize_bytes(void *dataPtr, int64_t size);
+
 /// Generate the next randc value for a field.
 /// Uses a per-field cycle for small bit widths; larger widths fall back to
 /// random values.
@@ -2908,12 +2917,30 @@ void __moore_fclose(int32_t fd);
 /// @return The character read, or EOF (-1) on error or end-of-file
 int32_t __moore_fgetc(int32_t fd);
 
+/// Push a character back into a file stream.
+/// Implements the SystemVerilog $ungetc system function.
+/// @param c Character to push back
+/// @param fd File descriptor
+/// @return The pushed character on success, or EOF (-1) on failure
+int32_t __moore_ungetc(int32_t c, int32_t fd);
+
 /// Read a line from a file into a string.
 /// Implements the SystemVerilog $fgets system function.
 /// @param str Pointer to the destination string structure
 /// @param fd File descriptor to read from
 /// @return The number of characters read, or 0 on error or end-of-file
 int32_t __moore_fgets(MooreString *str, int32_t fd);
+
+/// Read binary data from a file into a destination buffer.
+/// Implements the SystemVerilog $fread system function.
+/// @param dest Destination buffer pointer
+/// @param elemWidth Logical element width in bits
+/// @param elemStorageBytes Physical bytes per destination element
+/// @param numElems Number of destination elements
+/// @param fd File descriptor to read from
+/// @return Number of bytes read
+int32_t __moore_fread(void *dest, int32_t elemWidth, int32_t elemStorageBytes,
+                      int32_t numElems, int32_t fd);
 
 /// Check if end-of-file has been reached.
 /// Implements the SystemVerilog $feof system function.
@@ -2931,6 +2958,19 @@ void __moore_fflush(int32_t fd);
 /// @param fd File descriptor
 /// @return Current file position, or -1 on error
 int32_t __moore_ftell(int32_t fd);
+
+/// Implements the SystemVerilog $fseek system function.
+/// Sets the file position for the file specified by the file descriptor.
+/// @param fd File descriptor
+/// @param offset Byte offset
+/// @param whence 0=SEEK_SET, 1=SEEK_CUR, 2=SEEK_END
+/// @return 0 on success, -1 on error
+int32_t __moore_fseek(int32_t fd, int32_t offset, int32_t whence);
+
+/// Implements the SystemVerilog $rewind system task.
+/// Resets the file position to the beginning of the file.
+/// @param fd File descriptor
+void __moore_rewind(int32_t fd);
 
 //===----------------------------------------------------------------------===//
 // Display System Tasks
@@ -3015,6 +3055,11 @@ void __moore_strobe_flush(void);
 /// Check and execute monitor callback if values changed.
 /// Called by the simulation scheduler after each delta cycle.
 void __moore_monitor_check(void);
+
+/// Implements the SystemVerilog $printtimescale task.
+/// Current runtime prints the default imported timescale when module-specific
+/// timescale metadata is unavailable at runtime.
+void __moore_printtimescale(void);
 
 //===----------------------------------------------------------------------===//
 // Simulation Control Tasks

@@ -891,6 +891,8 @@ public:
     uint32_t elementLogicalWidth;
     int32_t leftBound = 0;   // SV left bound (e.g., 7 for [7:4])
     int32_t rightBound = -1; // SV right bound; -1 = use 0-based default
+    /// For nested unpacked arrays: info about each element's inner array.
+    std::shared_ptr<SignalArrayInfo> innerArrayInfo;
   };
 
   /// Set array info for a signal (for unpacked array types).
@@ -937,12 +939,40 @@ public:
                                 DriveStrength strength0,
                                 DriveStrength strength1);
 
+  /// Mark a signal as VPI-owned. While owned, updateSignal and
+  /// updateSignalWithStrength calls from non-VPI sources (i.e., module drives
+  /// and EventScheduler events) are suppressed to prevent stale init-time
+  /// drives from overwriting VPI-written values.
+  void markVpiOwned(SignalId signalId) { vpiOwnedSignals.insert(signalId); }
+
+  /// Remove VPI ownership for a single signal. Called before VPI writes so
+  /// that the VPI's own updateSignal call is not suppressed.
+  void clearVpiOwned(SignalId signalId) { vpiOwnedSignals.erase(signalId); }
+
+  /// Clear all VPI signal ownership. Call at the start of each cbAfterDelay
+  /// cycle so that VPI re-establishes ownership for the current tick's writes.
+  void clearVpiOwnership() { vpiOwnedSignals.clear(); }
+
+  /// Check if a signal is currently VPI-owned.
+  bool isVpiOwned(SignalId signalId) const {
+    return vpiOwnedSignals.count(signalId);
+  }
+
   /// Get the current value of a signal.
   const SignalValue &getSignalValue(SignalId signalId) const;
 
   /// Get the registered signal names map.
   const llvm::DenseMap<SignalId, std::string> &getSignalNames() const {
     return signalNames;
+  }
+
+  /// Find a signal by name. Returns 0 if not found.
+  SignalId findSignalByName(llvm::StringRef name) const {
+    for (const auto &entry : signalNames) {
+      if (entry.second == name)
+        return entry.first;
+    }
+    return 0;
   }
 
   //===--------------------------------------------------------------------===//
@@ -1106,6 +1136,10 @@ private:
 
   // Optional signal change callback for waveform tracing.
   std::function<void(SignalId, const SignalValue &)> signalChangeCallback;
+
+  // Signals currently owned by VPI (putValue). While owned, non-VPI drives
+  // are suppressed to prevent stale init events from corrupting VPI values.
+  llvm::DenseSet<SignalId> vpiOwnedSignals;
 
   // Initialization flag
   bool initialized = false;

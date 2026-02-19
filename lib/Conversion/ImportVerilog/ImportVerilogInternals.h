@@ -101,6 +101,15 @@ struct LoopFrame {
   Block *breakBlock;
 };
 
+/// Information about a disable target relevant while lowering nested
+/// statements.
+struct DisableFrame {
+  /// The named block symbol that may be targeted by `disable <name>`.
+  const slang::ast::Symbol *symbol;
+  /// The block to jump to when this target is disabled.
+  Block *targetBlock;
+};
+
 /// Hierarchical path information.
 /// The "hierName" means a different hierarchical name at different module
 /// levels.
@@ -553,6 +562,9 @@ struct Context {
   /// Global variables indexed by their fully qualified symbol name for
   /// deduplication across parameterized class specializations.
   DenseMap<mlir::StringAttr, moore::GlobalVariableOp> globalVariablesByName;
+  /// Synthetic global that tracks runtime enablement of procedural immediate
+  /// assertions controlled by $asserton/$assertoff/$assertcontrol.
+  moore::GlobalVariableOp proceduralAssertionsEnabledGlobal;
   /// A set of static class properties that are currently being converted.
   /// This is used to detect and handle recursive conversions when a property's
   /// type conversion triggers conversion of classes whose methods reference
@@ -629,6 +641,10 @@ struct Context {
   /// its exit block onto this stack. A 'return' statement within a randsequence
   /// production branches to this block to exit the entire randsequence.
   SmallVector<Block *> randSequenceReturnStack;
+
+  /// A stack of disable targets for named begin/end blocks.
+  /// `disable <name>` branches to the innermost matching target block.
+  SmallVector<DisableFrame> disableStack;
 
   /// A stack of break target blocks for randsequence productions. A 'break'
   /// statement within a randsequence production code block branches to this

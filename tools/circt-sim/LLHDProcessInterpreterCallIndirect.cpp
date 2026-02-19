@@ -31,7 +31,8 @@ using namespace circt::sim;
 //   CIRCT_SIM_TRACE_CALL_FILTER=uvm_tlm_analysis_fifo::write,uvm_tlm_fifo::get
 // If the env var is set to "1", all function calls are traced.
 static void maybeTraceFilteredCall(ProcessId procId, llvm::StringRef callKind,
-                                   llvm::StringRef calleeName) {
+                                   llvm::StringRef calleeName, int64_t nowFs,
+                                   uint64_t deltaStep) {
   static bool enabled = []() {
     if (const char *env = std::getenv("CIRCT_SIM_TRACE_CALL_FILTER"))
       return env[0] != '\0';
@@ -76,8 +77,10 @@ static void maybeTraceFilteredCall(ProcessId procId, llvm::StringRef callKind,
       return;
   }
 
-  llvm::errs() << "[CALL-TRACE] " << callKind << " proc=" << procId
-               << " callee=" << calleeName << "\n";
+  llvm::errs() << "[CALL-TRACE] " << callKind << " proc=" << procId;
+  if (nowFs >= 0)
+    llvm::errs() << " t=" << nowFs << " d=" << deltaStep;
+  llvm::errs() << " callee=" << calleeName << "\n";
 }
 
 static unsigned writeConfigDbBytesToNativeMemory(
@@ -1598,7 +1601,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     } while (false);
 
     noteResolvedTarget(calleeName);
-    maybeTraceFilteredCall(procId, "func.call_indirect", calleeName);
+    SimTime now = scheduler.getCurrentTime();
+    maybeTraceFilteredCall(procId, "func.call_indirect", calleeName,
+                           now.realTime, now.deltaStep);
 
     if (traceConfigDbEnabled && calleeName.contains("config_db")) {
       llvm::errs() << "[CFG-CI-DISPATCH] callee=" << calleeName
