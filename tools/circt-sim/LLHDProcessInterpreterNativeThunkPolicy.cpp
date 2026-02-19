@@ -540,6 +540,7 @@ static bool isSafeSingleBlockTerminatingPreludeOp(
         calleeName == "__moore_string_itoa" ||
         calleeName == "__moore_string_concat" ||
         calleeName == "__moore_randomize_basic" ||
+        calleeName == "__moore_randomize_bytes" ||
         calleeName == "__moore_randomize_with_range" ||
         calleeName == "__moore_randomize_with_ranges" ||
         calleeName == "__moore_randomize_with_dist" ||
@@ -718,29 +719,6 @@ static std::string formatUnsupportedProcessOpDetail(Operation &op) {
     return "first_op:func.call_indirect";
   }
   return (Twine("first_op:") + op.getName().getStringRef()).str();
-}
-
-static const Region *
-resolveNativeThunkProcessRegion(const ProcessExecutionState &state) {
-  auto processOp = state.getProcessOp();
-  if (!processOp)
-    return nullptr;
-  const Region *region = &processOp.getBody();
-  // Saved call stacks resume back into process control flow; avoid classifying
-  // against transient callee regions while frames are pending.
-  if (state.parentProcessId != InvalidProcessId && state.currentBlock &&
-      state.callStack.empty()) {
-    const Region *activeRegion = state.currentBlock->getParent();
-    if (activeRegion && activeRegion != region)
-      region = activeRegion;
-  }
-  return region;
-}
-
-static Region *resolveNativeThunkProcessRegion(ProcessExecutionState &state) {
-  return const_cast<Region *>(
-      resolveNativeThunkProcessRegion(static_cast<const ProcessExecutionState &>(
-          state)));
 }
 
 LLHDProcessInterpreter::ProcessThunkInstallResult
@@ -1157,8 +1135,9 @@ bool LLHDProcessInterpreter::isSingleBlockTerminatingNativeThunkCandidate(
     const {
   NativeThunkSuspendAnalysisContext ctx =
       buildSuspendAnalysisContext(this, procId, profileGuardSpecs);
-  Region *bodyRegion =
-      resolveNativeThunkProcessRegion(const_cast<ProcessExecutionState &>(state));
+  Region *bodyRegion = const_cast<LLHDProcessInterpreter *>(this)
+                           ->resolveNativeThunkProcessRegion(
+                               const_cast<ProcessExecutionState &>(state));
   if (!bodyRegion || !bodyRegion->hasOneBlock())
     return false;
 
@@ -1184,8 +1163,9 @@ bool LLHDProcessInterpreter::isMultiBlockTerminatingNativeThunkCandidate(
     const {
   NativeThunkSuspendAnalysisContext ctx =
       buildSuspendAnalysisContext(this, procId, profileGuardSpecs);
-  Region *bodyRegion =
-      resolveNativeThunkProcessRegion(const_cast<ProcessExecutionState &>(state));
+  Region *bodyRegion = const_cast<LLHDProcessInterpreter *>(this)
+                           ->resolveNativeThunkProcessRegion(
+                               const_cast<ProcessExecutionState &>(state));
   if (!bodyRegion || bodyRegion->empty() || bodyRegion->hasOneBlock())
     return false;
 
@@ -1295,8 +1275,9 @@ bool LLHDProcessInterpreter::isResumableMultiblockWaitNativeThunkCandidate(
     const {
   NativeThunkSuspendAnalysisContext ctx =
       buildSuspendAnalysisContext(this, procId, profileGuardSpecs);
-  Region *bodyRegion =
-      resolveNativeThunkProcessRegion(const_cast<ProcessExecutionState &>(state));
+  Region *bodyRegion = const_cast<LLHDProcessInterpreter *>(this)
+                           ->resolveNativeThunkProcessRegion(
+                               const_cast<ProcessExecutionState &>(state));
   if (!bodyRegion || bodyRegion->empty())
     return false;
 

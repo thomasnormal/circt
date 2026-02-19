@@ -14,6 +14,7 @@
 #include "LLHDProcessInterpreter.h"
 
 #include "circt/Dialect/Comb/CombOps.h"
+#include "circt/Dialect/HW/HWOps.h"
 #include "circt/Runtime/MooreRuntime.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -142,6 +143,8 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
     worklist.push_back(condValue);
 
     Operation *restartOp = nullptr;
+    llvm::SmallVector<Operation *, 4> externalProbeOps;
+    llvm::SmallPtrSet<Operation *, 8> seenExternalProbeOps;
     uint64_t queueWaitAddr = 0;
     llvm::SmallDenseMap<uint64_t, unsigned, 4> waitConditionLoadAddrs;
     unsigned tracedBlockArgs = 0;
@@ -214,8 +217,15 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
         continue;
 
       // Keep tracing local to the same function body as the wait call.
-      if (defOp->getParentOp() != callOp->getParentOp())
+      // If dependency CSE/hoisting moved probe ops outside this function body,
+      // track them and refresh those probe results on each wait poll.
+      if (defOp->getParentOp() != callOp->getParentOp()) {
+        if (isa<llhd::ProbeOp>(defOp) && seenExternalProbeOps.insert(defOp).second) {
+          externalProbeOps.push_back(defOp);
+          markInvalidate(v);
+        }
         continue;
+      }
 
       // Load/probe/call operations are potential restart points.
       if (isa<LLVM::LoadOp, llhd::ProbeOp, LLVM::CallOp>(defOp)) {
@@ -264,6 +274,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
                          isa<LLVM::ICmpOp, LLVM::TruncOp, LLVM::BitcastOp>(defOp) ||
                          isa<comb::AddOp, comb::SubOp, comb::AndOp>(defOp) ||
                          isa<comb::OrOp, comb::XorOp>(defOp) ||
+                         isa<hw::StructExtractOp, hw::ArrayGetOp>(defOp) ||
                          isa<comb::ExtractOp, LLVM::ExtractValueOp>(defOp) ||
                          isa<arith::TruncIOp, arith::ExtSIOp, arith::ExtUIOp>(defOp) ||
                          isa<arith::CmpIOp, arith::AddIOp, arith::SubIOp>(defOp) ||
@@ -272,6 +283,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
                          isa<LLVM::CallOp>(defOp);
       if (shouldTrace) {
         markInvalidate(v);
+        maybeChooseRestartOp(defOp);
         for (Value operand : defOp->getOperands()) {
           if (operand == v)
             continue;
@@ -421,7 +433,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
       waiter.address = memoryWaitAddr;
       waiter.lastValue = 0;
       waiter.valueSize = memoryWaitSize;
-      waiter.waitForRisingEdge = false;
+      waiter.edgeMode = MemoryEventWaiter::EdgeMode::AnyChange;
 
       uint64_t offset = 0;
       if (MemoryBlock *block =
@@ -470,6 +482,9 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
                    << objectionWaitHandle
                    << " blockArgs=" << tracedBlockArgs
                    << " blockArgEdges=" << tracedBlockArgEdges
+                   << " invalidates="
+                   << state.waitConditionValuesToInvalidate.size()
+                   << " externalProbes=" << externalProbeOps.size()
                    << " restart="
                    << (restartOp ? restartOp->getName().getStringRef()
                                  : StringRef("llvm.call"))
@@ -489,12 +504,16 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
     uint64_t pollToken = ++state.waitConditionPollToken;
     uint64_t scheduledQueueWaitAddr = state.waitConditionQueueAddr;
     int64_t scheduledObjectionWaitHandle = objectionWaitHandle;
+    auto scheduledExternalProbeOps = externalProbeOps;
+    bool scheduledTraceWaitCondition = traceWaitCondition;
 
     // Schedule the process to resume after the delay
     scheduler.getEventScheduler().schedule(
         targetTime, SchedulingRegion::Active,
         Event([this, procId, pollToken, scheduledQueueWaitAddr,
-               scheduledObjectionWaitHandle]() {
+               scheduledObjectionWaitHandle,
+               scheduledExternalProbeOps,
+               scheduledTraceWaitCondition]() {
           auto stIt = processStates.find(procId);
           if (stIt == processStates.end())
             return;
@@ -506,6 +525,29 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
           if (scheduledQueueWaitAddr != 0 &&
               st.waitConditionQueueAddr != scheduledQueueWaitAddr)
             return;
+
+          // Recompute any probe values that were hoisted outside the wait
+          // function body so condition re-evaluation can observe latest signals.
+          for (Operation *probeOp : scheduledExternalProbeOps) {
+            (void)interpretOperation(procId, probeOp);
+            if (scheduledTraceWaitCondition) {
+              SimTime now = scheduler.getCurrentTime();
+              if (now.realTime != 0) {
+                if (auto probe = dyn_cast<llhd::ProbeOp>(probeOp)) {
+                  InterpretedValue probeVal = getValue(procId, probe.getResult());
+                  llvm::errs() << "[WAITCOND] proc=" << procId
+                               << " refresh_probe_at_fs=" << now.realTime
+                               << " val=";
+                  if (probeVal.isX())
+                    llvm::errs() << "X";
+                  else
+                    llvm::errs() << probeVal.getUInt64();
+                  llvm::errs() << "\n";
+                }
+              }
+            }
+          }
+
           if (st.waitConditionQueueAddr != 0)
             removeQueueNotEmptyWaiter(procId);
           if (scheduledObjectionWaitHandle !=

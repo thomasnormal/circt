@@ -36,7 +36,7 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
   // Walk the module body (but not inside processes) and execute LLVM ops.
   for (Operation &op : hwModule.getBody().front()) {
     if (isa<llhd::ProcessOp, seq::InitialOp, llhd::CombinationalOp,
-            llhd::SignalOp, hw::InstanceOp, hw::OutputOp>(&op))
+            llhd::SignalOp, hw::InstanceOp, hw::OutputOp, llhd::DriveOp>(&op))
       continue;
 
     if (auto allocaOp = dyn_cast<LLVM::AllocaOp>(&op)) {
@@ -149,6 +149,13 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
       }
       if (!handled)
         (void)interpretOperation(tempProcId, &op);
+      // Register sv.namehint as a signal alias for VPI discovery.
+      if (auto hint = probeOp->getAttrOfType<mlir::StringAttr>(
+              "sv.namehint")) {
+        SignalId probedSigId = valueToSignal.lookup(sig);
+        if (probedSigId)
+          scheduler.registerSignalAlias(probedSigId, hint.getValue().str());
+      }
       ++opsExecuted;
     } else if (isa<LLVM::InsertValueOp, LLVM::ExtractValueOp>(&op)) {
       (void)interpretOperation(tempProcId, &op);

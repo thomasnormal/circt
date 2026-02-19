@@ -18,6 +18,7 @@
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/syntax/AllSyntax.h"
+#include <string>
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "mlir/IR/IRMapping.h"
@@ -202,6 +203,78 @@ struct StmtVisitor {
     auto block = std::make_unique<Block>();
     block->insertAfter(builder.getInsertionBlock());
     return *block.release();
+  }
+
+  Block *lookupDisableTarget(const slang::ast::Symbol *symbol) const {
+    if (!symbol)
+      return nullptr;
+    for (auto it = context.disableStack.rbegin();
+         it != context.disableStack.rend(); ++it) {
+      if (it->symbol == symbol)
+        return it->targetBlock;
+    }
+    return nullptr;
+  }
+
+  moore::GlobalVariableOp getOrCreateProceduralAssertionsEnabledGlobal() {
+    if (context.proceduralAssertionsEnabledGlobal)
+      return context.proceduralAssertionsEnabledGlobal;
+
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(context.intoModuleOp.getBody());
+
+    std::string baseName = "__circt_proc_assertions_enabled";
+    std::string symName = baseName;
+    unsigned suffix = 0;
+    while (context.symbolTable.lookup(symName))
+      symName = baseName + "_" + std::to_string(++suffix);
+
+    auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+    auto globalOp = moore::GlobalVariableOp::create(
+        builder, loc, builder.getStringAttr(symName), i1Ty);
+
+    auto &initBlock = globalOp.getInitRegion().emplaceBlock();
+    builder.setInsertionPointToEnd(&initBlock);
+    auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+    moore::YieldOp::create(builder, loc, enabled);
+
+    context.proceduralAssertionsEnabledGlobal = globalOp;
+    return globalOp;
+  }
+
+  Value readProceduralAssertionsEnabled() {
+    auto globalOp = getOrCreateProceduralAssertionsEnabledGlobal();
+    auto globalRef = moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+    return moore::ReadOp::create(builder, loc, globalRef);
+  }
+
+  LogicalResult writeProceduralAssertionsEnabled(Value enabled) {
+    auto globalOp = getOrCreateProceduralAssertionsEnabledGlobal();
+    auto targetType = globalOp.getType();
+    if (enabled.getType() != targetType)
+      enabled = moore::ConversionOp::create(builder, loc, targetType, enabled);
+    auto globalRef = moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+    moore::BlockingAssignOp::create(builder, loc, globalRef, enabled);
+    return success();
+  }
+
+  Value selectBool(Value cond, Value ifTrue, Value ifFalse) {
+    if (ifTrue.getType() != ifFalse.getType())
+      ifFalse = moore::ConversionOp::create(builder, loc, ifTrue.getType(), ifFalse);
+    cond = context.convertToBool(cond);
+    if (!cond)
+      return {};
+    auto conditional =
+        moore::ConditionalOp::create(builder, loc, ifTrue.getType(), cond);
+    auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
+    auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
+
+    OpBuilder::InsertionGuard g(builder);
+    builder.setInsertionPointToStart(&trueBlock);
+    moore::YieldOp::create(builder, loc, ifTrue);
+    builder.setInsertionPointToStart(&falseBlock);
+    moore::YieldOp::create(builder, loc, ifFalse);
+    return conditional.getResult();
   }
 
   /// Handle foreach loops for queues and dynamic arrays.
@@ -548,9 +621,31 @@ struct StmtVisitor {
 
   // Handle `begin ... end` blocks and `fork ... join` blocks.
   LogicalResult visit(const slang::ast::BlockStatement &stmt) {
-    // For sequential blocks, just inline into the parent.
-    if (stmt.blockKind == slang::ast::StatementBlockKind::Sequential)
-      return context.convertStatement(stmt.body);
+    // For sequential blocks, inline unnamed blocks into the parent.
+    // Named blocks get explicit exit blocks so `disable <name>` can branch
+    // directly to the correct continuation point.
+    if (stmt.blockKind == slang::ast::StatementBlockKind::Sequential) {
+      auto *blockSym = stmt.blockSymbol;
+      if (!blockSym || blockSym->name.empty())
+        return context.convertStatement(stmt.body);
+
+      auto &exitBlock = createBlock();
+      context.disableStack.push_back({blockSym, &exitBlock});
+      auto done = llvm::make_scope_exit([&] { context.disableStack.pop_back(); });
+
+      if (failed(context.convertStatement(stmt.body)))
+        return failure();
+      if (!isTerminated())
+        cf::BranchOp::create(builder, loc, &exitBlock);
+
+      if (exitBlock.hasNoPredecessors()) {
+        exitBlock.erase();
+        setTerminated();
+      } else {
+        builder.setInsertionPointToEnd(&exitBlock);
+      }
+      return success();
+    }
 
     // For fork blocks (join, join_any, join_none), create a ForkOp.
     // Each statement in the fork body becomes a separate parallel branch.
@@ -2086,7 +2181,16 @@ struct StmtVisitor {
       return failure();
     }
 
-    // Get the symbol name as the target for the disable operation
+    // Lower disable directly to a branch when we can resolve a named block
+    // target in the current lexical stack.
+    if (Block *targetBlock = lookupDisableTarget(ase->symbol)) {
+      cf::BranchOp::create(builder, loc, targetBlock);
+      setTerminated();
+      return success();
+    }
+
+    // Fallback to explicit moore.disable when target resolution isn't
+    // available at import time.
     StringRef targetName = ase->symbol->name;
     moore::DisableOp::create(builder, loc, builder.getStringAttr(targetName));
     return success();
@@ -2176,9 +2280,18 @@ struct StmtVisitor {
     cond = context.convertToBool(cond);
     if (!cond)
       return failure();
+    auto assertionsEnabled = readProceduralAssertionsEnabled();
+    if (!assertionsEnabled)
+      return failure();
 
     // Handle assertion statements that don't have an action block.
     if (stmt.ifTrue && stmt.ifTrue->as_if<slang::ast::EmptyStatement>()) {
+      // Disabled assertions are treated as vacuous pass for immediate
+      // assertion checks without action blocks.
+      auto assertionsDisabled =
+          moore::NotOp::create(builder, loc, assertionsEnabled);
+      auto gatedCond =
+          createUnifiedOrOp(builder, loc, cond, assertionsDisabled);
       auto defer = moore::DeferAssert::Immediate;
       if (stmt.isFinal)
         defer = moore::DeferAssert::Final;
@@ -2187,16 +2300,16 @@ struct StmtVisitor {
 
       switch (stmt.assertionKind) {
       case slang::ast::AssertionKind::Assert:
-        moore::AssertOp::create(builder, loc, defer, cond, StringAttr{});
+        moore::AssertOp::create(builder, loc, defer, gatedCond, StringAttr{});
         return success();
       case slang::ast::AssertionKind::Assume:
-        moore::AssumeOp::create(builder, loc, defer, cond, StringAttr{});
+        moore::AssumeOp::create(builder, loc, defer, gatedCond, StringAttr{});
         return success();
       case slang::ast::AssertionKind::CoverProperty:
-        moore::CoverOp::create(builder, loc, defer, cond, StringAttr{});
+        moore::CoverOp::create(builder, loc, defer, gatedCond, StringAttr{});
         return success();
       case slang::ast::AssertionKind::Expect:
-        moore::AssertOp::create(builder, loc, defer, cond, StringAttr{});
+        moore::AssertOp::create(builder, loc, defer, gatedCond, StringAttr{});
         return success();
       default:
         break;
@@ -2207,13 +2320,21 @@ struct StmtVisitor {
     }
 
     // Regard assertion statements with an action block as the "if-else".
-    cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+    auto condLogic = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+    auto enabledLogic =
+        moore::ToBuiltinBoolOp::create(builder, loc, assertionsEnabled);
 
     // Create the blocks for the true and false branches, and the exit block.
     Block &exitBlock = createBlock();
     Block *falseBlock = stmt.ifFalse ? &createBlock() : nullptr;
     Block &trueBlock = createBlock();
-    cf::CondBranchOp::create(builder, loc, cond, &trueBlock,
+    Block &enabledBlock = createBlock();
+    cf::CondBranchOp::create(builder, loc, enabledLogic, &enabledBlock,
+                             &exitBlock);
+
+    // Evaluate assertion condition only while assertion checks are enabled.
+    builder.setInsertionPointToEnd(&enabledBlock);
+    cf::CondBranchOp::create(builder, loc, condLogic, &trueBlock,
                              falseBlock ? falseBlock : &exitBlock);
 
     // Generate the true branch.
@@ -2555,12 +2676,54 @@ struct StmtVisitor {
     }
 
     // Assertion control tasks (IEEE 1800-2017 Section 20.12)
-    // These control assertion evaluation at runtime. Stub as no-ops.
-    if (subroutine.name == "$assertcontrol" ||
-        subroutine.name == "$asserton" ||
-        subroutine.name == "$assertoff" ||
-        subroutine.name == "$assertkill" ||
-        subroutine.name == "$assertpasson" ||
+    // $asserton/$assertoff/$assertkill and $assertcontrol(3/4/5) control
+    // immediate assertion checking at runtime.
+    if (subroutine.name == "$assertoff" || subroutine.name == "$assertkill") {
+      auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+      auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+      if (failed(writeProceduralAssertionsEnabled(disabled)))
+        return failure();
+      return true;
+    }
+    if (subroutine.name == "$asserton") {
+      auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+      auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+      if (failed(writeProceduralAssertionsEnabled(enabled)))
+        return failure();
+      return true;
+    }
+    if (subroutine.name == "$assertcontrol") {
+      auto currentEnabled = readProceduralAssertionsEnabled();
+      if (!currentEnabled)
+        return failure();
+      if (!args.empty()) {
+        auto controlType = context.convertRvalueExpression(*args[0]);
+        if (!controlType)
+          return failure();
+        auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+        if (controlType.getType() != i32Ty)
+          controlType = moore::ConversionOp::create(builder, loc, i32Ty, controlType);
+
+        auto c3 = moore::ConstantOp::create(builder, loc, i32Ty, 3);
+        auto c4 = moore::ConstantOp::create(builder, loc, i32Ty, 4);
+        auto c5 = moore::ConstantOp::create(builder, loc, i32Ty, 5);
+        auto isOff = moore::EqOp::create(builder, loc, controlType, c3);
+        auto isOn = moore::EqOp::create(builder, loc, controlType, c4);
+        auto isKill = moore::EqOp::create(builder, loc, controlType, c5);
+        auto offOrKill = createUnifiedOrOp(builder, loc, isOff, isKill);
+
+        auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+        auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+        auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+        auto afterOff = selectBool(offOrKill, disabled, currentEnabled);
+        auto nextState = selectBool(isOn, enabled, afterOff);
+        if (failed(writeProceduralAssertionsEnabled(nextState)))
+          return failure();
+      }
+      return true;
+    }
+    // Keep non-core assertion-control forms as no-ops for now.
+    if (subroutine.name == "$assertpasson" ||
         subroutine.name == "$assertpassoff" ||
         subroutine.name == "$assertfailon" ||
         subroutine.name == "$assertfailoff" ||
@@ -2774,6 +2937,10 @@ struct StmtVisitor {
       auto fd = context.convertRvalueExpression(*args[0]);
       if (!fd)
         return failure();
+      // Convert 4-state l32 fd to 2-state i32 if needed.
+      auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+      if (fd.getType() != intTy)
+        fd = moore::ConversionOp::create(builder, loc, intTy, fd);
       moore::FCloseBIOp::create(builder, loc, fd);
       return true;
     }
@@ -2813,6 +2980,9 @@ struct StmtVisitor {
       auto fd = context.convertRvalueExpression(*args[0]);
       if (!fd)
         return failure();
+      auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+      if (fd.getType() != intTy)
+        fd = moore::ConversionOp::create(builder, loc, intTy, fd);
 
       // Convert the remaining arguments as format string
       auto formatArgs = args.subspan(1);
@@ -2836,6 +3006,10 @@ struct StmtVisitor {
       } else {
         fd = context.convertRvalueExpression(*args[0]);
         if (!fd) return failure();
+        // Convert 4-state l32 fd to 2-state i32 if needed.
+        auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+        if (fd.getType() != intTy)
+          fd = moore::ConversionOp::create(builder, loc, intTy, fd);
       }
       moore::FFlushBIOp::create(builder, loc, fd);
       return true;
@@ -2850,6 +3024,12 @@ struct StmtVisitor {
       auto fd = context.convertRvalueExpression(*args[0]);
       if (!fd)
         return failure();
+      // Convert 4-state l32 fd to 2-state i32 if needed.
+      {
+        auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+        if (fd.getType() != intTy)
+          fd = moore::ConversionOp::create(builder, loc, intTy, fd);
+      }
       moore::RewindBIOp::create(builder, loc, fd);
       return true;
     }
@@ -3036,10 +3216,27 @@ struct StmtVisitor {
       else isStrobe = false;
     }
     if (isStrobe) {
+      // `$strobe` evaluates/prints at the end of the current time step.
+      // Lower it as a detached `fork ... join_none` branch that waits `#0`
+      // before formatting/printing, so argument values are sampled late.
+      auto forkOp = moore::ForkOp::create(builder, loc, moore::JoinType::JoinNone,
+                                          StringAttr{}, /*numBranches=*/1);
+      auto &region = forkOp.getBranches().front();
+      if (region.empty())
+        region.emplaceBlock();
+
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToEnd(&region.front());
+
+      auto zeroDelay = moore::ConstantTimeOp::create(builder, loc, 0);
+      moore::WaitDelayOp::create(builder, loc, zeroDelay);
+
       auto msg = context.convertFormatString(args, loc, fmtStrobe, true);
-      if (failed(msg)) return failure();
-      if (*msg == Value{}) return true;
-      moore::StrobeBIOp::create(builder, loc, *msg);
+      if (failed(msg))
+        return failure();
+      if (*msg != Value{})
+        moore::DisplayBIOp::create(builder, loc, *msg);
+      moore::ForkTerminatorOp::create(builder, loc);
       return true;
     }
 
@@ -3058,6 +3255,9 @@ struct StmtVisitor {
       if (args.empty()) return mlir::emitError(loc, "$fstrobe requires fd");
       auto fd = context.convertRvalueExpression(*args[0]);
       if (!fd) return failure();
+      auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+      if (fd.getType() != intTy)
+        fd = moore::ConversionOp::create(builder, loc, intTy, fd);
       auto msg = context.convertFormatString(args.subspan(1), loc, fmtFS, true);
       if (failed(msg)) return failure();
       if (*msg == Value{}) return true;
@@ -3100,6 +3300,9 @@ struct StmtVisitor {
       if (args.empty()) return mlir::emitError(loc, "$fmonitor requires fd");
       auto fd = context.convertRvalueExpression(*args[0]);
       if (!fd) return failure();
+      auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+      if (fd.getType() != intTy)
+        fd = moore::ConversionOp::create(builder, loc, intTy, fd);
       auto msg = context.convertFormatString(args.subspan(1), loc, fmtFM, true);
       if (failed(msg)) return failure();
       if (*msg == Value{}) return true;

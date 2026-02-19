@@ -3780,6 +3780,14 @@ struct RvalueExprVisitor : public ExprVisitor {
                                                       covergroupInstance);
       }
 
+      if (subroutine->name == "get_inst_coverage") {
+        // get_inst_coverage() returns per-instance coverage as a real (64-bit)
+        auto realTy =
+            moore::RealType::get(context.getContext(), moore::RealWidth::f64);
+        return moore::CovergroupGetInstCoverageOp::create(
+            builder, loc, realTy, covergroupInstance);
+      }
+
       // For other covergroup methods, emit a warning and fall through
       // to normal function call handling
       mlir::emitWarning(loc) << "covergroup method '" << subroutine->name
@@ -6350,9 +6358,13 @@ struct RvalueExprVisitor : public ExprVisitor {
       value = context.convertRvalueExpression(*args[1]);
       if (!value)
         return {};
+      auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+      value = context.materializeConversion(i32Ty, value, false, loc);
+      if (!value)
+        return {};
       // Create the fgets operation
-      auto intTy = moore::IntType::getInt(context.getContext(), 32);
-      auto charCount = moore::FGetSBIOp::create(builder, loc, intTy, strLhs, value);
+      auto charCount =
+          moore::FGetSBIOp::create(builder, loc, i32Ty, strLhs, value);
       auto ty = context.convertType(*expr.type);
       return context.materializeConversion(ty, charCount, expr.type->isSigned(), loc);
     }
@@ -6371,6 +6383,15 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (!operation)
         return {};
       auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      fd = context.materializeConversion(intTy, fd, false, loc);
+      if (!fd)
+        return {};
+      offset = context.materializeConversion(intTy, offset, false, loc);
+      if (!offset)
+        return {};
+      operation = context.materializeConversion(intTy, operation, false, loc);
+      if (!operation)
+        return {};
       auto result = moore::FSeekBIOp::create(builder, loc, intTy, fd, offset, operation);
       auto ty = context.convertType(*expr.type);
       return context.materializeConversion(ty, result, expr.type->isSigned(), loc);
@@ -6395,9 +6416,13 @@ struct RvalueExprVisitor : public ExprVisitor {
       value = context.convertRvalueExpression(*args[1]);
       if (!value)
         return {};
+      auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+      value = context.materializeConversion(i32Ty, value, false, loc);
+      if (!value)
+        return {};
       // Create the fread operation
-      auto intTy = moore::IntType::getInt(context.getContext(), 32);
-      auto bytesRead = moore::FReadBIOp::create(builder, loc, intTy, destLhs, value);
+      auto bytesRead =
+          moore::FReadBIOp::create(builder, loc, i32Ty, destLhs, value);
       auto ty = context.convertType(*expr.type);
       return context.materializeConversion(ty, bytesRead, expr.type->isSigned(), loc);
     }
@@ -6599,6 +6624,71 @@ struct RvalueExprVisitor : public ExprVisitor {
     for (auto *arg : args)
       if (!isEmptyArg(arg))
         ++effectiveArity;
+
+    // $random(seed) / $urandom(seed): update the seed argument as an inout.
+    // Slang may wrap inout-style args in an AssignmentExpression; unwrap it
+    // to get the real lvalue.
+    if (effectiveArity == 1 &&
+        (subroutine.name == "$random" || subroutine.name == "$urandom")) {
+      const slang::ast::Expression *seedArgExpr = nullptr;
+      for (auto *arg : args) {
+        if (!isEmptyArg(arg)) {
+          seedArgExpr = arg;
+          break;
+        }
+      }
+
+      if (seedArgExpr) {
+        const slang::ast::Expression *seedLValueExpr = seedArgExpr;
+        if (auto *assignExpr =
+                seedArgExpr->as_if<slang::ast::AssignmentExpression>())
+          seedLValueExpr = &assignExpr->left();
+        while (auto *convExpr =
+                   seedLValueExpr->as_if<slang::ast::ConversionExpression>())
+          seedLValueExpr = &convExpr->operand();
+
+        Value seedRef = context.convertLvalueExpression(*seedLValueExpr);
+        if (seedRef) {
+          auto refTy = dyn_cast<moore::RefType>(seedRef.getType());
+          if (!refTy)
+            seedRef = {};
+          if (!seedRef)
+            goto seeded_random_fallback;
+
+          Value seedValue = context.convertRvalueExpression(*seedLValueExpr);
+          if (!seedValue)
+            return {};
+
+          auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+          seedValue = context.materializeConversion(
+              i32Ty, seedValue, seedLValueExpr->type->isSigned(), loc);
+          if (!seedValue)
+            return {};
+
+          Value randomResult =
+              (subroutine.name == "$random")
+                  ? static_cast<Value>(
+                        moore::RandomBIOp::create(builder, loc, seedValue))
+                  : static_cast<Value>(
+                        moore::UrandomBIOp::create(builder, loc, seedValue));
+
+          Value seedNext = context.materializeConversion(
+              refTy.getNestedType(), randomResult,
+              seedLValueExpr->type->isSigned(), loc);
+          if (!seedNext)
+            return {};
+          auto assignOp =
+              moore::BlockingAssignOp::create(builder, loc, seedRef, seedNext);
+          if (context.variableAssignCallback)
+            context.variableAssignCallback(assignOp);
+
+          auto ty = context.convertType(*expr.type);
+          return context.materializeConversion(ty, randomResult,
+                                               expr.type->isSigned(), loc);
+        }
+      }
+    }
+  seeded_random_fallback:
 
     // Call the conversion function with the appropriate arity. These return one
     // of the following:
@@ -9080,6 +9170,10 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                          << v.getType();
     return {};
   };
+  auto toI32 = [&](Value v) -> Value {
+    auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+    return materializeConversion(i32Ty, v, /*isSigned=*/false, loc);
+  };
 
   auto systemCallRes =
       llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
@@ -9689,19 +9783,28 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                 [&]() -> Value {
                   // $feof(fd) - check if end-of-file has been reached
                   // IEEE 1800-2017 Section 21.3.3
-                  return moore::FEofBIOp::create(builder, loc, value);
+                  auto fd = toI32(value);
+                  if (!fd)
+                    return {};
+                  return moore::FEofBIOp::create(builder, loc, fd);
                 })
           .Case("$fgetc",
                 [&]() -> Value {
                   // $fgetc(fd) - read a single character from file
                   // IEEE 1800-2017 Section 21.3.3
-                  return moore::FGetCBIOp::create(builder, loc, value);
+                  auto fd = toI32(value);
+                  if (!fd)
+                    return {};
+                  return moore::FGetCBIOp::create(builder, loc, fd);
                 })
           .Case("$ftell",
                 [&]() -> Value {
                   // $ftell(fd) - get current file position
                   // IEEE 1800-2017 Section 21.3.3
-                  return moore::FTellBIOp::create(builder, loc, value);
+                  auto fd = toI32(value);
+                  if (!fd)
+                    return {};
+                  return moore::FTellBIOp::create(builder, loc, fd);
                 })
           .Case("index",
                 [&]() -> FailureOr<Value> {
@@ -9849,6 +9952,10 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
 FailureOr<Value>
 Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                                  Location loc, Value value1, Value value2) {
+  auto toI32 = [&](Value v) -> Value {
+    auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+    return materializeConversion(i32Ty, v, /*isSigned=*/false, loc);
+  };
   auto systemCallRes =
       llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
           .Case("getc",
@@ -9940,8 +10047,13 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                   // $ungetc(c, fd) pushes character c back to file stream fd
                   // IEEE 1800-2017 Section 21.3.4 "File positioning functions"
                   auto intTy = moore::IntType::getInt(builder.getContext(), 32);
-                  return moore::UngetCBIOp::create(builder, loc, intTy, value1,
-                                                   value2);
+                  auto ch = toI32(value1);
+                  if (!ch)
+                    return {};
+                  auto fd = toI32(value2);
+                  if (!fd)
+                    return {};
+                  return moore::UngetCBIOp::create(builder, loc, intTy, ch, fd);
                 })
           // $dist_chi_square, $dist_exponential, $dist_t, $dist_poisson:
           // Handled by the generic DistBIOp path in visitSystemCall above.

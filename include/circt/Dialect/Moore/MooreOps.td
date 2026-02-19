@@ -4166,6 +4166,29 @@ def CovergroupGetCoverageOp : MooreOp<"covergroup.get_coverage", [Pure]> {
   }];
 }
 
+def CovergroupGetInstCoverageOp
+    : MooreOp<"covergroup.get_inst_coverage", [Pure]> {
+  let summary = "Get instance coverage percentage of a covergroup";
+  let description = [{
+    Returns the current instance coverage percentage (0.0 to 100.0) of a
+    covergroup handle.
+
+    Example:
+    ```mlir
+    %coverage = moore.covergroup.get_inst_coverage %cg_inst : !moore.covergroup<@cg> -> !moore.real
+    ```
+
+    This corresponds to SystemVerilog `cg_inst.get_inst_coverage()`.
+
+    See IEEE 1800-2017 Section 19.8.1 "Coverage methods".
+  }];
+  let arguments = (ins CovergroupHandleType:$covergroup);
+  let results = (outs RealType:$result);
+  let assemblyFormat = [{
+    $covergroup attr-dict `:` type($covergroup) `->` type($result)
+  }];
+}
+
 def GetCoverageBIOp : Builtin<"get_coverage"> {
   let summary = "Get total coverage percentage from runtime";
   let description = [{

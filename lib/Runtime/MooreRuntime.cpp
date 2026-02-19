@@ -2176,6 +2176,25 @@ extern "C" int32_t __moore_random_seeded(int32_t seed) {
 // Randomization Operations
 //===----------------------------------------------------------------------===//
 
+static void randomizeByteBuffer(uint8_t *data, int64_t size) {
+  if (!data || size <= 0)
+    return;
+
+  int64_t fullWords = size / 4;
+  int64_t remainingBytes = size % 4;
+
+  auto *wordPtr = reinterpret_cast<uint32_t *>(data);
+  for (int64_t i = 0; i < fullWords; ++i)
+    wordPtr[i] = __moore_urandom();
+
+  if (remainingBytes > 0) {
+    uint32_t lastWord = __moore_urandom();
+    uint8_t *remainingPtr = data + fullWords * 4;
+    for (int64_t i = 0; i < remainingBytes; ++i)
+      remainingPtr[i] = static_cast<uint8_t>((lastWord >> (i * 8)) & 0xFF);
+  }
+}
+
 extern "C" int32_t __moore_randomize_basic(void *classPtr, int64_t classSize) {
   // Validate inputs
   if (!classPtr || classSize <= 0)
@@ -2187,29 +2206,26 @@ extern "C" int32_t __moore_randomize_basic(void *classPtr, int64_t classSize) {
   if (classSize <= kHeaderSize)
     return 1; // Nothing to randomize beyond the header.
 
-  // Fill the class memory (after the header) with random values using
-  // __moore_urandom. Process in 4-byte chunks for efficiency.
   auto *data = static_cast<uint8_t *>(classPtr) + kHeaderSize;
-  int64_t randomizeSize = classSize - kHeaderSize;
-  int64_t fullWords = randomizeSize / 4;
-  int64_t remainingBytes = randomizeSize % 4;
-
-  // Fill 4-byte words
-  auto *wordPtr = reinterpret_cast<uint32_t *>(data);
-  for (int64_t i = 0; i < fullWords; ++i) {
-    wordPtr[i] = __moore_urandom();
-  }
-
-  // Fill remaining bytes (if any)
-  if (remainingBytes > 0) {
-    uint32_t lastWord = __moore_urandom();
-    uint8_t *remainingPtr = data + fullWords * 4;
-    for (int64_t i = 0; i < remainingBytes; ++i) {
-      remainingPtr[i] = static_cast<uint8_t>((lastWord >> (i * 8)) & 0xFF);
-    }
-  }
+  randomizeByteBuffer(data, classSize - kHeaderSize);
 
   return 1; // Success
+}
+
+extern "C" int32_t __moore_randomize_bytes(void *dataPtr, int64_t size) {
+  if (!dataPtr || size <= 0)
+    return 0;
+  randomizeByteBuffer(static_cast<uint8_t *>(dataPtr), size);
+  static bool traceRandomizeBytes = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_RANDOMIZE_BYTES");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (traceRandomizeBytes) {
+    auto *bytes = static_cast<uint8_t *>(dataPtr);
+    std::fprintf(stderr, "[RAND-BYTES] ptr=%p size=%lld b0=0x%02x\n", dataPtr,
+                 static_cast<long long>(size), static_cast<unsigned>(bytes[0]));
+  }
+  return 1;
 }
 
 extern "C" int64_t __moore_randc_next(void *fieldPtr, int64_t bitWidth) {
@@ -11198,6 +11214,13 @@ extern "C" void __moore_monitor_check(void) {
     std::fputc('\n', stdout);
     std::fflush(stdout);
   }
+}
+
+extern "C" void __moore_printtimescale(void) {
+  // Runtime currently does not carry per-module timescale metadata through
+  // to this call site; emit the default imported timescale.
+  std::fputs("1ns / 1ps\n", stdout);
+  std::fflush(stdout);
 }
 
 //===----------------------------------------------------------------------===//
