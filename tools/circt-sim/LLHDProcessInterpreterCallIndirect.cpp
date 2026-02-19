@@ -3275,6 +3275,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                                 << " -- treating as suspension\n");
         return success();
       }
+      // uvm_root::die can intentionally unwind through termination/fatal
+      // paths. Treat this as an absorbed terminal call, not an internal
+      // virtual-dispatch failure warning.
+      if (calleeName == "uvm_pkg::uvm_root::die" ||
+          calleeName.ends_with("::die")) {
+        for (Value result : callIndirectOp.getResults()) {
+          unsigned width = getTypeWidth(result.getType());
+          setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+        }
+        return success();
+      }
       // Don't propagate internal failures from virtual method calls.
       // During UVM phase traversal, individual component methods may fail
       // (e.g., unimplemented sequencer interfaces, missing config_db entries).

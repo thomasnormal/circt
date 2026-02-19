@@ -1264,6 +1264,11 @@ private:
                     mlir::Block *resumeBlock = nullptr,
                     mlir::Block::iterator resumeOp = {});
 
+  /// Guard accidental re-entry to UVM run_test call paths.
+  /// Returns failure when the single-entry policy is enabled and violated.
+  mlir::LogicalResult checkUvmRunTestEntry(ProcessId procId,
+                                           llvm::StringRef calleeName);
+
   //===--------------------------------------------------------------------===//
   // Sim Dialect Operation Handlers
   //===--------------------------------------------------------------------===//
@@ -1968,6 +1973,10 @@ private:
   /// Cached env flag for config_db tracing (CIRCT_SIM_TRACE_CONFIG_DB).
   /// When enabled, prints set/get keys and hit/miss outcomes.
   bool traceConfigDbEnabled = false;
+  /// Cached env flag for UVM run_test entry diagnostics.
+  bool traceUvmRunTestEnabled = false;
+  /// Cached env flag to enforce at-most-once UVM run_test entry.
+  bool enforceSingleUvmRunTestEntry = false;
 
   /// Cached env flag for fork/join diagnostics (CIRCT_SIM_TRACE_FORK_JOIN).
   bool traceForkJoinEnabled = false;
@@ -2479,6 +2488,9 @@ private:
 
   /// Depth of m_uvm_get_root calls (0 = not in get_root, >1 = re-entrant).
   size_t uvmGetRootDepth = 0;
+
+  /// Count of observed UVM run_test entries this simulation.
+  uint64_t uvmRunTestEntryCount = 0;
 
 
   /// The uvm_root instance being constructed (simulated address).
