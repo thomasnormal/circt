@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1534 - February 19, 2026
+
+### Test coverage: 12 failing tests for syscall/feature bugs
+
+Added 12 tests that expose known bugs in circt-sim syscall implementations.
+All tests are designed to FAIL on current code, providing regression targets:
+
+1. **syscall-ferror-nonexist.sv**: $ferror returns 0 for invalid file descriptors
+2. **syscall-initstate.sv**: $initstate returns 0 inside initial blocks (should be 1)
+3. **syscall-force-release.sv**: release is a no-op (forced value persists)
+4. **syscall-dumpvars-output.sv**: $dumpfile/$dumpvars produce no VCD output
+5. **syscall-save-restart-warning.sv**: $save silently dropped (no warning)
+6. **syscall-coverage-returns.sv**: $coverage_control/$coverage_get_max return 0
+7. **syscall-get-initial-random-seed.sv**: $get_initial_random_seed returns 0
+8. **syscall-rand-mode-effect.sv**: unconstrained randomize() is a no-op
+9. **syscall-constraint-mode-effect.sv**: constraint_mode(0) doesn't disable constraints
+10. **syscall-randstate-replay.sv**: set_randstate doesn't restore RNG state
+11. **syscall-assertfailoff.sv**: $assertfailoff is a no-op
+12. **syscall-test-plusargs-dynamic.sv**: $test$plusargs with runtime string returns 0
+
+Note: $increment (bug #3 in original list) was verified to work correctly
+and no failing test could be written for it.
+
 ## Iteration 1533 - February 19, 2026
 
 ### cocotb VPI: Fix NBA timing and ReadOnlySynch ordering (47/50 → 49/50)
