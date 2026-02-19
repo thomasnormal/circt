@@ -57,6 +57,16 @@ public:
                             ProcessThunkExecutionState &thunkState) {
     interpreter.executeTrivialNativeThunk(procId, thunkState);
   }
+  static void
+  initializeNativeThunkRootRegion(LLHDProcessInterpreter &interpreter,
+                                  ProcessExecutionState &state) {
+    interpreter.initializeNativeThunkRootRegion(state);
+  }
+  static const Region *resolveNativeThunkProcessRegion(
+      LLHDProcessInterpreter &interpreter,
+      const ProcessExecutionState &state) {
+    return interpreter.resolveNativeThunkProcessRegion(state);
+  }
   static Type getSignalValueType(LLHDProcessInterpreter &interpreter,
                                  SignalId sigId) {
     return interpreter.getSignalValueType(sigId);
@@ -1820,6 +1830,36 @@ module {
 }
 )MLIR";
 
+static constexpr llvm::StringLiteral
+    kMultiBlockThunkWaitingCallStackResumeIR = R"MLIR(
+module {
+  func.func @helper(%x: i32) -> i32 {
+    %c1 = arith.constant 1 : i32
+    %sum = arith.addi %x, %c1 : i32
+    return %sum : i32
+  }
+
+  hw.module @test() {
+    %c0 = arith.constant 0 : i32
+    %true = hw.constant true
+    llhd.process {
+      cf.br ^bb1
+    ^bb1:
+      cf.cond_br %true, ^bb2, ^bb3
+    ^bb2:
+      %r = func.call @helper(%c0) : (i32) -> i32
+      %sum = arith.addi %r, %c0 : i32
+      cf.br ^bb4
+    ^bb3:
+      cf.br ^bb4
+    ^bb4:
+      llhd.halt
+    }
+    hw.output
+  }
+}
+)MLIR";
+
 TEST(LLHDProcessInterpreterToolTest, DriveRefInFuncCall) {
   MLIRContext context;
   context.loadDialect<hw::HWDialect, llhd::LLHDDialect, comb::CombDialect,
@@ -1968,6 +2008,119 @@ TEST(LLHDProcessInterpreterToolTest,
   EXPECT_FALSE(thunkState.deoptRequested);
   EXPECT_TRUE(state.halted);
   EXPECT_TRUE(state.callStack.empty());
+}
+
+TEST(LLHDProcessInterpreterToolTest,
+     MultiBlockThunkResumesSavedCallStackWhenWaiting) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, llhd::LLHDDialect, comb::CombDialect,
+                      arith::ArithDialect, mlir::cf::ControlFlowDialect,
+                      mlir::func::FuncDialect>();
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(
+      kMultiBlockThunkWaitingCallStackResumeIR, &context);
+  ASSERT_TRUE(module);
+
+  SymbolTable symbols(*module);
+  auto hwModule = symbols.lookup<hw::HWModuleOp>("test");
+  auto helperFunc = symbols.lookup<mlir::func::FuncOp>("helper");
+  ASSERT_TRUE(hwModule);
+  ASSERT_TRUE(helperFunc);
+
+  ProcessScheduler scheduler;
+  LLHDProcessInterpreter interpreter(scheduler);
+  ASSERT_TRUE(succeeded(interpreter.initialize(hwModule)));
+
+  llhd::ProcessOp procOp;
+  hwModule.walk([&](llhd::ProcessOp op) { procOp = op; });
+  ASSERT_TRUE(procOp);
+
+  mlir::func::CallOp callOp;
+  procOp.walk([&](mlir::func::CallOp op) {
+    if (!callOp)
+      callOp = op;
+  });
+  ASSERT_TRUE(callOp);
+
+  ProcessId procId =
+      LLHDProcessInterpreterTest::getProcessId(interpreter, procOp);
+  ASSERT_NE(procId, InvalidProcessId);
+
+  auto &states = LLHDProcessInterpreterTest::getProcessStates(interpreter);
+  auto stateIt = states.find(procId);
+  ASSERT_NE(stateIt, states.end());
+  auto &state = stateIt->second;
+
+  Block &helperBlock = helperFunc.getBody().front();
+  auto resumeIt = helperBlock.begin();
+  while (resumeIt != helperBlock.end() &&
+         !isa<mlir::func::ReturnOp>(*resumeIt))
+    ++resumeIt;
+  ASSERT_NE(resumeIt, helperBlock.end());
+
+  state.currentBlock = callOp->getBlock();
+  state.currentOp = callOp->getIterator();
+  state.waiting = true;
+  state.halted = false;
+  state.callStack.clear();
+  state.callStack.emplace_back(helperFunc, &helperBlock, resumeIt,
+                               callOp.getOperation());
+  state.callStack.back().args.push_back(InterpretedValue(APInt(32, 0)));
+
+  ProcessThunkExecutionState thunkState;
+  LLHDProcessInterpreterTest::executeTrivialNativeThunk(interpreter, procId,
+                                                        thunkState);
+
+  EXPECT_FALSE(thunkState.deoptRequested);
+  EXPECT_TRUE(state.halted);
+  EXPECT_TRUE(state.callStack.empty());
+}
+
+TEST(LLHDProcessInterpreterToolTest, NativeThunkRegionAnchorDoesNotDrift) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, llhd::LLHDDialect, comb::CombDialect,
+                      arith::ArithDialect, mlir::cf::ControlFlowDialect,
+                      mlir::func::FuncDialect>();
+
+  OwningOpRef<ModuleOp> module =
+      parseSourceString<ModuleOp>(kTrivialThunkWaitingCallStackResumeIR,
+                                  &context);
+  ASSERT_TRUE(module);
+
+  SymbolTable symbols(*module);
+  auto hwModule = symbols.lookup<hw::HWModuleOp>("test");
+  auto helperFunc = symbols.lookup<mlir::func::FuncOp>("helper");
+  ASSERT_TRUE(hwModule);
+  ASSERT_TRUE(helperFunc);
+
+  ProcessScheduler scheduler;
+  LLHDProcessInterpreter interpreter(scheduler);
+  ASSERT_TRUE(succeeded(interpreter.initialize(hwModule)));
+
+  llhd::ProcessOp procOp;
+  hwModule.walk([&](llhd::ProcessOp op) { procOp = op; });
+  ASSERT_TRUE(procOp);
+
+  ProcessId procId =
+      LLHDProcessInterpreterTest::getProcessId(interpreter, procOp);
+  ASSERT_NE(procId, InvalidProcessId);
+
+  auto &states = LLHDProcessInterpreterTest::getProcessStates(interpreter);
+  auto it = states.find(procId);
+  ASSERT_NE(it, states.end());
+  auto &state = it->second;
+
+  state.parentProcessId = 1;
+  LLHDProcessInterpreterTest::initializeNativeThunkRootRegion(interpreter,
+                                                              state);
+  ASSERT_EQ(state.nativeThunkRootRegion, &procOp.getBody());
+
+  state.currentBlock = &helperFunc.getBody().front();
+  state.currentOp = state.currentBlock->begin();
+  const Region *resolved =
+      LLHDProcessInterpreterTest::resolveNativeThunkProcessRegion(interpreter,
+                                                                  state);
+  EXPECT_EQ(resolved, &procOp.getBody());
 }
 
 } // namespace

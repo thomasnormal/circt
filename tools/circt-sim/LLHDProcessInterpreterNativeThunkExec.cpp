@@ -97,29 +97,6 @@ static size_t countRegionOps(mlir::Region &region) {
   return count;
 }
 
-static const Region *
-resolveNativeThunkProcessRegion(const ProcessExecutionState &state) {
-  auto processOp = state.getProcessOp();
-  if (!processOp)
-    return nullptr;
-  const Region *region = &processOp.getBody();
-  // When resuming a saved call stack, keep thunk dispatch anchored on the
-  // process body; currentBlock may temporarily point into a callee function.
-  if (state.parentProcessId != InvalidProcessId && state.currentBlock &&
-      state.callStack.empty()) {
-    const Region *activeRegion = state.currentBlock->getParent();
-    if (activeRegion && activeRegion != region)
-      region = activeRegion;
-  }
-  return region;
-}
-
-static Region *resolveNativeThunkProcessRegion(ProcessExecutionState &state) {
-  return const_cast<Region *>(
-      resolveNativeThunkProcessRegion(static_cast<const ProcessExecutionState &>(
-          state)));
-}
-
 bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
     ProcessId procId, ProcessExecutionState &state) {
   auto toFastPathMask = [](DirectProcessFastPathKind kind) -> uint8_t {
@@ -942,26 +919,31 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
     normalizeDestResumeState(state);
   }
   if (state.waiting) {
-    if (isAwaitingProcessCompletion(procId)) {
+    if (!state.callStack.empty()) {
+      // Suspension through nested call/call_indirect replay can schedule this
+      // process with waiting still set. Mirror single-block thunk behavior and
+      // resume from the saved call-stack frame.
+      state.waiting = false;
+    } else if (state.sequencerGetRetryCallOp) {
+      // Sequencer retries are resumed by rewinding to the saved call op.
+      state.waiting = false;
+    } else if (isAwaitingProcessCompletion(procId)) {
       thunkState.halted = state.halted;
       thunkState.waiting = state.waiting;
       thunkState.resumeToken = state.jitThunkResumeToken;
       return true;
-    }
-    if (isWaitingOnForkJoinChildren(state)) {
+    } else if (isWaitingOnForkJoinChildren(state)) {
       thunkState.halted = state.halted;
       thunkState.waiting = state.waiting;
       thunkState.resumeToken = state.jitThunkResumeToken;
       return true;
-    }
-    if (isWaitingOnObjectionWaitFor(procId, state)) {
+    } else if (isWaitingOnObjectionWaitFor(procId, state)) {
       // wait_for-style objection polling is resumed by scheduled callbacks.
       thunkState.halted = state.halted;
       thunkState.waiting = state.waiting;
       thunkState.resumeToken = state.jitThunkResumeToken;
       return true;
-    }
-    if (isResumingAfterForkJoinWait(state)) {
+    } else if (isResumingAfterForkJoinWait(state)) {
       // resumeProcess in ForkJoinManager only touches scheduler state.
       state.waiting = false;
     } else {
@@ -1012,6 +994,12 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
   bool waitingOnForkJoinChildren = isWaitingOnForkJoinChildren(post->second);
   bool waitingOnObjectionWaitFor =
       isWaitingOnObjectionWaitFor(procId, post->second);
+  bool waitingOnSavedCallStack =
+      post->second.waiting && !post->second.callStack.empty() &&
+      !post->second.halted;
+  bool waitingOnSequencerRetry =
+      post->second.waiting && post->second.sequencerGetRetryCallOp &&
+      !post->second.halted;
   bool waitingOnProcessAwaitQueue =
       post->second.waiting && !post->second.halted &&
       isAwaitingProcessCompletion(procId);
@@ -1023,13 +1011,15 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
       post->second.currentBlock == post->second.destBlock &&
       post->second.currentOp != post->second.currentBlock->end();
   if (!post->second.halted && !waitingOnForkJoinChildren &&
-      !waitingOnObjectionWaitFor && !waitingOnProcessAwaitQueue &&
+      !waitingOnObjectionWaitFor && !waitingOnSavedCallStack &&
+      !waitingOnSequencerRetry && !waitingOnProcessAwaitQueue &&
       !waitingOnSemaphoreGet) {
     requestDeopt("post_exec_not_halted", /*restoreSnapshot=*/false);
     return true;
   }
   if (post->second.waiting && !waitingOnForkJoinChildren &&
-      !waitingOnObjectionWaitFor && !waitingOnProcessAwaitQueue &&
+      !waitingOnObjectionWaitFor && !waitingOnSavedCallStack &&
+      !waitingOnSequencerRetry && !waitingOnProcessAwaitQueue &&
       !waitingOnSemaphoreGet) {
     requestDeopt("post_exec_waiting_without_fork_wait",
                  /*restoreSnapshot=*/false);
