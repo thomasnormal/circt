@@ -1,5 +1,4 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// TODO: $writememb with start/finish address range — readback is all zeros.
 // Test $writememb with start/finish address range
 module top;
   reg [7:0] mem [0:7];
