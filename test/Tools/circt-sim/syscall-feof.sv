@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// TODO: Comprehensive file I/O test — individual ops work but combined sequence fails.
 // Test $feof, $fgetc, $fgets, $ftell, $fseek, $rewind, $fflush
 module top;
   integer fd, c, pos, count;

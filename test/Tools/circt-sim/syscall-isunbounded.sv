@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// TODO: $isunbounded with class type parameters — compilation or runtime failure.
 module top;
   // $isunbounded returns 1 if the argument is $ (unbounded), 0 otherwise
   // The $ literal is only valid in certain type parameter contexts

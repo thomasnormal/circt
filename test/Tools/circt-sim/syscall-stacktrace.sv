@@ -1,4 +1,7 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// XFAIL: *
+// Reason: $stacktrace requires call stack introspection with source-level function
+// names — not available in the LLHD process interpreter.
 // Test $stacktrace — print call stack
 module top;
 

@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// TODO: randomize() with inline constraints — data_constrained=0, constraint not applied.
 // Test randomize() with inline constraints
 module top;
   class packet;

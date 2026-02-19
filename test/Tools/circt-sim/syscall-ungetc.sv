@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// TODO: $ungetc returns 66 ('B') instead of 65 ('A') — pushback not working correctly.
 // Test $ungetc — push character back to file stream
 module top;
   integer fd, c;

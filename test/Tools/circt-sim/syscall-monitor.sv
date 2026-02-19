@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// TODO: $monitor fires only once (val=0) — value-change callback not re-triggering.
 // Test $monitor and $monitoroff / $monitoron
 module top;
   reg [7:0] val;

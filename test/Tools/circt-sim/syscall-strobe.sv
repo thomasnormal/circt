@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// TODO: $strobe shows val=10 (immediate) instead of val=20 (end-of-timestep).
 // Test $strobe — like $display but prints at end of time step
 module top;
   reg [7:0] val;
