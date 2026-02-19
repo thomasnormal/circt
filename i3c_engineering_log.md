@@ -1163,3 +1163,109 @@ Current status:
 - Compile-mode I3C scoreboard regression is closed for this deterministic lane.
 - Remaining parity gap vs earlier `100/100` coverage printouts is now isolated
   to coverage behavior/expectation, not a functional scoreboard mismatch.
+
+## 2026-02-19 Session: latest-Slang I3C recheck regressed to 0/0 coverage
+
+Objective:
+- Re-validate current I3C status on the rebuilt latest-Slang toolchain using
+  explicit `build_test` binaries.
+
+Run:
+1. Command:
+   - `AVIPS=i3c SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_VERILOG=/home/thomas-ahle/circt/build_test/bin/circt-verilog CIRCT_SIM=/home/thomas-ahle/circt/build_test/bin/circt-sim COMPILE_TIMEOUT=300 SIM_TIMEOUT=240 SIM_TIMEOUT_GRACE=30 utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-i3c-check-20260219-2110`
+2. Matrix:
+   - `/tmp/avip-circt-sim-i3c-check-20260219-2110/matrix.tsv`
+   - compile `OK` (`161s`), sim `OK` (`98s`), `UVM_ERROR=0`, `UVM_FATAL=0`,
+     coverage `0.00 / 0.00`.
+
+Key evidence:
+1. Sim log:
+   - `/tmp/avip-circt-sim-i3c-check-20260219-2110/i3c/sim_seed_1.log`
+2. Contains repeated runtime failures in function bodies at `llhd.drv`:
+   - 11 occurrences of `Failed in func body for process ...`
+   - 5 absorbed `func.call ... failed internally` warnings.
+3. Simulation ends by max-time boundary:
+   - `[circt-sim] Main loop exit: maxTime reached (7940000000000 >= 7940000000000 fs)`.
+4. Final coverage report in the same log:
+   - controller covergroup `0.00%`
+   - target covergroup `0.00%`.
+
+Status update:
+- This confirms I3C is currently regressed again in effective behavior on this
+  lane: no UVM hard errors, but no functional coverage progress.
+
+## 2026-02-19 Session: post-rebuild correction + converter-zero evidence
+
+Objective:
+- Re-verify whether the `0/0` coverage + `llhd.drv` internal-failure mode is a
+  stable runtime bug or a stale-binary artifact.
+
+Build/state correction:
+1. Rebuilt simulator:
+   - `ninja -C build_test circt-sim`
+2. Replayed same generated I3C MLIR with drive-failure tracing:
+   - `CIRCT_SIM_TRACE_DRIVE_FAILURE=1`
+   - `/tmp/i3c-drive-fail-trace-20260219-2129.log`
+3. Result:
+   - no `Failed in func body` entries,
+   - no `[DRIVE-FAIL]` entries,
+   - run returns to known scoreboard mismatch state:
+     - `UVM_ERROR ... i3c_scoreboard.sv(179)`
+     - coverage `21.43 / 21.43`.
+
+Fresh scripted lane on rebuilt binary:
+1. `/tmp/avip-circt-sim-i3c-post-rebuild-20260219-2135/matrix.tsv`
+2. compile `OK` (`116s`), sim `FAIL` (`100s`, exit `0`),
+   `UVM_ERROR=1`, `UVM_FATAL=0`,
+   coverage `21.4286 / 21.4286`.
+
+Focused trace evidence for remaining root cause:
+1. Ran with converter trace:
+   - `CIRCT_SIM_TRACE_I3C_TO_CLASS_ARGS=1`
+   - log: `/tmp/i3c-toclass-fieldtrace-20260219-2140.log`
+2. `to_class*` conversion calls near transaction time show struct payload fields
+   already zero:
+   - `ta=0`, `wd0=0`, `wd1=0`, `bits=0` (both low/hw decode paths).
+3. Same run scoreboard debug:
+   - `ctrl_wsz=0`, `tgt_wsz=0`, `ctrl_w0=0`, `tgt_w0=0`,
+   - then `UVM_ERROR ... i3c_scoreboard.sv(179)`.
+
+Additional throughput observation:
+1. JIT-report-enabled lane timed out at sim time `0fs`:
+   - `/tmp/avip-circt-sim-i3c-jitreport-20260219-2144/matrix.tsv`
+   - `sim_status=TIMEOUT`, `sim_exit=1`
+2. Report confirms phase-traversal call-indirect hot loop at t=0 with no
+   deopts:
+   - `/tmp/avip-circt-sim-i3c-jitreport-20260219-2144/i3c/sim_seed_1.jit-report.json`
+   - `jit_deopts_total=0`.
+
+Current status:
+- The transient `llhd.drv` failure mode is not reproduced after rebuild.
+- The real outstanding I3C defect is conversion/dataflow correctness: transfer
+  payload arrives at `to_class` as zeros, causing scoreboard mismatch.
+
+## 2026-02-19 Session: compile-budget-0 check (negative result)
+
+Objective:
+- Validate whether disabling compile-path promotion (`--jit-compile-budget=0`)
+  restores non-zero transfer payloads.
+
+Run:
+1. Direct replay on generated I3C MLIR:
+   - `CIRCT_SIM_TRACE_I3C_TO_CLASS_ARGS=1`
+   - `--mode=compile --jit-compile-budget=0`
+   - log: `/tmp/i3c-jitbudget0-20260219-2150.log`
+
+Result:
+1. `to_class*` traces still decode zeroed payload/metadata (`wd0=0`, `wd1=0`,
+   `bits=0`) through repeated controller/target transactions.
+2. Scoreboard debug remains structurally bad:
+   - repeated `ctrl_wsz=0`, `tgt_wsz=0`.
+3. Runtime cost is high; run ends via timeout-style termination:
+   - `Simulation finished with exit code 1`
+   - main-loop stop at `4904900000 fs`.
+
+Conclusion:
+- This lane does not support the hypothesis that simply disabling compile-path
+  promotions fixes I3C data correctness. The zero-payload issue persists and
+  throughput degrades.
