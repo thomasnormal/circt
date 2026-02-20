@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Building an Open-Source Verilog Simulator with AI: 580K Lines in 43 Days</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --text: #1a1a2e;
+    --text-secondary: #4a4a6a;
+    --accent: #2563eb;
+    --accent-light: #eff6ff;
+    --border: #e5e7eb;
+    --code-bg: #f8f9fc;
+    --code-border: #e2e4e9;
+    --heading: #0f172a;
+    --max-width: 720px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.7;
+    font-size: 17px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .hero {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+    color: #fff;
+    padding: 80px 24px 64px;
+    text-align: center;
+  }
+  .hero h1 {
+    font-size: clamp(28px, 4.5vw, 44px);
+    font-weight: 800;
+    line-height: 1.15;
+    max-width: 800px;
+    margin: 0 auto 20px;
+    letter-spacing: -0.02em;
+  }
+  .hero .subtitle {
+    font-size: 18px;
+    color: #94a3b8;
+    max-width: 600px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
+  .hero .meta {
+    margin-top: 24px;
+    font-size: 14px;
+    color: #64748b;
+  }
+  .hero .meta a { color: #60a5fa; text-decoration: none; }
+  .hero .meta a:hover { text-decoration: underline; }
+
+  .stats-bar {
+    background: #f8fafc;
+    border-bottom: 1px solid var(--border);
+    padding: 20px 24px;
+  }
+  .stats-bar .inner {
+    max-width: 900px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: center;
+    gap: 48px;
+    flex-wrap: wrap;
+  }
+  .stat {
+    text-align: center;
+  }
+  .stat .number {
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--accent);
+    letter-spacing: -0.02em;
+  }
+  .stat .label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 2px;
+  }
+
+  article {
+    max-width: var(--max-width);
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+
+  h2 {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--heading);
+    margin: 56px 0 20px;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+  }
+  h2:first-of-type { margin-top: 0; }
+
+  h3 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--heading);
+    margin: 36px 0 12px;
+  }
+
+  p {
+    margin-bottom: 16px;
+    color: var(--text);
+  }
+
+  a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  a:hover { text-decoration: underline; }
+
+  strong { font-weight: 600; }
+  em { font-style: italic; }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 48px 0;
+  }
+
+  ul, ol {
+    margin: 0 0 16px 24px;
+  }
+  li {
+    margin-bottom: 6px;
+  }
+  li strong {
+    color: var(--heading);
+  }
+
+  .timeline-block {
+    margin: 20px 0;
+  }
+  .timeline-block p {
+    font-weight: 600;
+    color: var(--heading);
+    margin-bottom: 6px;
+  }
+  .timeline-block ul {
+    margin-top: 4px;
+  }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--code-border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    overflow-x: auto;
+    margin: 16px 0 20px;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  code {
+    font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
+    font-size: 0.9em;
+  }
+  p code, li code {
+    background: var(--code-bg);
+    border: 1px solid var(--code-border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.85em;
+  }
+
+  figure {
+    margin: 28px 0;
+  }
+  figure img {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    display: block;
+  }
+  figure figcaption {
+    text-align: center;
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-top: 8px;
+  }
+
+  /* Wide figures that break out of the text column */
+  figure.wide {
+    max-width: 900px;
+    margin-left: calc((var(--max-width) - 900px) / 2);
+    margin-right: calc((var(--max-width) - 900px) / 2);
+  }
+  @media (max-width: 948px) {
+    figure.wide {
+      max-width: 100%;
+      margin-left: -24px;
+      margin-right: -24px;
+    }
+    figure.wide img {
+      border-radius: 0;
+      border-left: none;
+      border-right: none;
+    }
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0 24px;
+    font-size: 15px;
+  }
+  thead th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--heading);
+    padding: 10px 12px;
+    border-bottom: 2px solid var(--border);
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  tbody tr:last-child td {
+    border-bottom: none;
+  }
+  tbody tr:hover {
+    background: var(--accent-light);
+  }
+
+  .callout {
+    background: var(--accent-light);
+    border-left: 4px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    padding: 16px 20px;
+    margin: 20px 0;
+  }
+  .callout p { margin: 0; }
+
+  .footer-note {
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    font-size: 15px;
+    color: var(--text-secondary);
+    font-style: italic;
+  }
+
+  @media (max-width: 600px) {
+    body { font-size: 16px; }
+    .hero { padding: 48px 16px 40px; }
+    .hero h1 { font-size: 26px; }
+    article { padding: 32px 16px 48px; }
+    h2 { font-size: 24px; margin-top: 40px; }
+    .stats-bar .inner { gap: 24px; }
+    .stat .number { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>Building an Open-Source Verilog Simulator with AI: 580K Lines in 43 Days</h1>
+  <p class="subtitle">
+    How one engineer used Claude and Codex to build a practical verification stack on top of CIRCT &mdash;
+    simulation, formal verification, mutation testing, and more.
+  </p>
+  <p class="meta">
+    Thomas Ahle &middot; February 2026 &middot;
+    <a href="https://github.com/thomasnormal/circt">github.com/thomasnormal/circt</a>
+  </p>
+</div>
+
+<div class="stats-bar">
+  <div class="inner">
+    <div class="stat"><div class="number">2,968</div><div class="label">Commits</div></div>
+    <div class="stat"><div class="number">580K</div><div class="label">Lines Added</div></div>
+    <div class="stat"><div class="number">43</div><div class="label">Days</div></div>
+    <div class="stat"><div class="number">4,229</div><div class="label">Test Files</div></div>
+    <div class="stat"><div class="number">40</div><div class="label">Regression Lanes</div></div>
+  </div>
+</div>
+
+<article>
+
+<p>
+  Commercial Verilog simulators like Cadence Xcelium and Synopsys VCS cost hundreds of thousands of dollars per seat per year.
+  For most hardware teams, these tools are the single largest line item in their EDA budget &mdash; and yet the core algorithms are well-understood, the specifications are public (IEEE 1800-2017), and open-source compiler infrastructure like <a href="https://circt.llvm.org/">CIRCT</a> already exists.
+</p>
+
+<p>What if you could close the gap with agentic AI?</p>
+
+<p>
+  Over 43 days in January and February 2026, I used Claude and Codex to land <strong>2,968 commits</strong> on a CIRCT fork &mdash;
+  adding a full event-driven simulator, VPI/cocotb integration, UVM runtime support, bounded model checking, logic equivalence checking, and mutation testing.
+  The result is a practical, open-source verification stack that can simulate real-world protocol testbenches end-to-end.
+</p>
+
+<p>This post is a technical account of what happened, what the numbers look like, and what I think it means.</p>
+
+<hr>
+
+<h2>What is CIRCT, and What Was Missing?</h2>
+
+<p>
+  <a href="https://circt.llvm.org/">CIRCT</a> (Circuit IR Compilers and Tools) is an LLVM/MLIR-based infrastructure for hardware design and verification.
+  It provides a rich set of intermediate representations &mdash; HW, Comb, Seq, LLHD, Moore &mdash; and tools for parsing Verilog (<code>circt-verilog</code>, powered by <a href="https://github.com/MikePopoloski/slang">slang</a>), optimizing IR (<code>circt-opt</code>), and basic formal checking (<code>circt-bmc</code>, <code>circt-lec</code>).
+</p>
+
+<p>
+  What it did <em>not</em> have was a practical simulation runtime.
+  You could parse Verilog into MLIR and lower it through various dialects, but you couldn't actually <em>run</em> a testbench.
+  There was no event-driven scheduler, no VPI layer, no UVM support, no waveform output, no cocotb integration.
+  The gap between &ldquo;we can compile Verilog&rdquo; and &ldquo;we can simulate a design&rdquo; was enormous.
+</p>
+
+<p>
+  Bridging that gap is exactly the kind of task where agentic AI shines: the specification is known (IEEE 1800), the interfaces are well-defined, and the work is largely <em>volume</em> &mdash; thousands of op handlers, system calls, edge cases &mdash; rather than fundamental research.
+</p>
+
+<hr>
+
+<h2>By the Numbers</h2>
+
+<p>
+  The fork adds <strong>580,430 lines</strong> across 3,846 files, with only 10,985 lines removed from upstream.
+  The chart below shows the full story: cumulative lines of code (blue), test file count (purple), and weekly commit velocity (orange numbers along the bottom), with color-coded development phases and milestone annotations.
+</p>
+
+<figure class="wide">
+  <img src="chart_timeline.png" alt="Dense development timeline showing lines of code, test files, commits per week, and feature milestones over 43 days">
+  <figcaption>Development timeline: LOC growth, test file count, weekly commit velocity, and feature milestones. Phase bands show the progression from foundation through hardening.</figcaption>
+</figure>
+
+<p>
+  The pace started at ~25 commits/day in week 1 and peaked at <strong>124 commits/day</strong> in week 7 (Feb 10&ndash;16).
+  This isn't because the AI got faster &mdash; it's because the later work was more mechanical (regression infrastructure, test harnesses, quality gates) while the earlier work required more design iteration.
+  Test files grew from 987 (upstream baseline) to <strong>4,229</strong> &mdash; a 4.3x increase, with a sharp inflection around Feb 6 when formal and mutation suites came online.
+</p>
+
+<h3>Where the Work Went</h3>
+
+<p>Every one of the 2,968 commits is accounted for in a named category:</p>
+
+<figure class="wide">
+  <img src="chart_work_areas.png" alt="All 2,968 commits broken down into 14 categories, with formal verification (652) as the largest">
+  <figcaption>Full commit breakdown. Formal verification leads at 652 commits, followed by docs/iteration logs (521), Verilog frontend (461), mutation testing (372), and simulation engine (367).</figcaption>
+</figure>
+
+<p>
+  Formal verification (BMC + LEC) and mutation testing together account for over 1,000 commits &mdash; 34% of the total.
+  The &ldquo;Docs &amp; iteration logs&rdquo; category (521) reflects the project&rsquo;s 1,554-iteration engineering log, which tracked every AI interaction cycle.
+  The Verilog frontend (461 commits) covers <code>ImportVerilog</code> and <code>MooreToCore</code>, the two major lowering passes that convert parsed Verilog into simulatable IR.
+</p>
+
+<hr>
+
+<h2>The Timeline</h2>
+
+<p>
+  The fork diverged from upstream CIRCT on <strong>January 9, 2026</strong> with a commit adding four-state logic support to the Arc dialect.
+  The last commit at time of writing is from <strong>February 20</strong> &mdash; 43 days later.
+  Here&rsquo;s how the features landed, week by week:
+</p>
+
+<div class="timeline-block">
+  <p>Week 1 (Jan 9&ndash;12): Foundation</p>
+  <ul>
+    <li><strong><code>circt-sim</code> event-driven simulation driver</strong> &mdash; the core tool that takes MLIR generated by <code>circt-verilog</code> and executes it with IEEE 1800 scheduling semantics (active, inactive, NBA, observed, reactive regions).</li>
+    <li><strong>Four-state (0/1/X/Z) type system</strong> &mdash; Verilog has four logic values, not two. Every signal, every operation, every comparison had to handle unknown (X) and high-impedance (Z) states correctly, or UVM testbenches produce garbage.</li>
+    <li><strong>Coverage dialect</strong> &mdash; a new MLIR dialect for instrumenting simulation with functional coverage points, enabling coverage-driven verification workflows.</li>
+    <li><strong>DPI-C runtime infrastructure</strong> &mdash; the foreign function interface that lets SystemVerilog call C code and vice versa, required for any real-world testbench that uses imported C functions.</li>
+    <li><strong>UVM randomization ops</strong> &mdash; MLIR operations for constrained random generation, the foundation of UVM&rsquo;s stimulus generation where you declare constraints and the solver produces valid random values.</li>
+  </ul>
+</div>
+
+<div class="timeline-block">
+  <p>Week 2 (Jan 13&ndash;19): UVM Parity Push</p>
+  <ul>
+    <li><strong>UVM mailbox/semaphore primitives</strong> &mdash; inter-process communication channels that UVM sequences use to pass transactions between driver, monitor, and scoreboard components.</li>
+    <li><strong><code>randomize()</code> method support</strong> &mdash; the SystemVerilog built-in that triggers constraint solving on class objects, called thousands of times per testbench run to generate stimulus.</li>
+    <li><strong>Constraint expressions</strong> &mdash; support for <code>constraint</code> blocks with <code>inside</code>, <code>dist</code>, implication, and iterative constraints that define the legal space of random values.</li>
+    <li><strong>AVIP (protocol verification IP) baseline</strong> &mdash; all 9 industry-standard protocol testbenches (APB, AHB, AXI4, SPI, JTAG, I2S, I3C) compiling successfully through the frontend for the first time.</li>
+    <li><strong>Z3/JIT linking for BMC/LEC</strong> &mdash; connecting the Z3 SMT solver to CIRCT&rsquo;s formal verification tools, enabling them to actually prove or disprove assertions rather than just lowering them.</li>
+  </ul>
+</div>
+
+<div class="timeline-block">
+  <p>Weeks 3&ndash;4 (Jan 20&ndash;Feb 2): SystemVerilog Completeness</p>
+  <ul>
+    <li><strong>Hierarchical net resolution</strong> &mdash; support for cross-module references like <code>top.dut.clk</code>, which UVM monitors use to observe signals deep inside the design hierarchy without explicit port connections.</li>
+    <li><strong><code>force</code>/<code>release</code>/<code>deassign</code> procedural statements</strong> &mdash; simulation-time overrides that let testbenches inject faults or override driver outputs, essential for testing error recovery paths.</li>
+    <li><strong>UVM sequence/sequencer infrastructure</strong> &mdash; the runtime machinery that lets UVM sequences generate transactions, arbitrate between multiple sequences, and deliver items to drivers in the correct order.</li>
+    <li><strong>sv-tests integration</strong> &mdash; connecting to the <a href="https://github.com/chipsalliance/sv-tests">sv-tests</a> community test suite, starting at 22 passing tests and rapidly growing as frontend gaps were filled.</li>
+    <li><strong>OpenTitan <code>gpio_reg_top</code> end-to-end</strong> &mdash; the first real-world SoC module (from Google&rsquo;s <a href="https://opentitan.org/">OpenTitan</a> project) to simulate successfully from Verilog source to completion.</li>
+    <li><strong>Verilator verification suite, yosys SVA at 78%</strong> &mdash; running CIRCT&rsquo;s formal tools against third-party test suites to measure how well we handle real-world SystemVerilog assertions.</li>
+  </ul>
+</div>
+
+<div class="timeline-block">
+  <p>Week 5 (Feb 3&ndash;9): Formal Verification + Mutation</p>
+  <ul>
+    <li><strong>BMC with k-induction and JIT compilation</strong> &mdash; extending bounded model checking from simple unrolling to k-induction (which can prove unbounded properties) and compiling the check to native code for 10x speedup.</li>
+    <li><strong>Unified formal regression harness</strong> &mdash; a single <code>run_formal_all.sh</code> script that runs BMC, LEC, sv-tests, verilator verification, yosys SVA, and OpenTitan checks with quality gates and baseline tracking.</li>
+    <li><strong>Mutation testing framework (<code>circt-mut</code>)</strong> &mdash; a tool that systematically mutates designs (flipping operators, changing constants, removing assignments) to measure whether your tests can detect each fault.</li>
+    <li><strong>MCY integration</strong> &mdash; connecting to the <a href="https://github.com/YosysHQ/mcy">Mutation Coverage with Yosys</a> framework for standardized mutation generation and classification workflows.</li>
+    <li><strong>800+ formal verification tests</strong> &mdash; comprehensive regression suite covering SVA properties, clock domain assertions, memory correctness, and arithmetic overflow checks.</li>
+  </ul>
+</div>
+
+<div class="timeline-block">
+  <p>Weeks 6&ndash;7 (Feb 10&ndash;20): Cocotb, VPI, and Hardening</p>
+  <ul>
+    <li><strong>VPI C API implementation (IEEE 1364/1800)</strong> &mdash; the standard programming interface that external tools use to interact with a running simulation, implementing signal discovery, value access, time callbacks, and simulation control.</li>
+    <li><strong>Cocotb integration with four-state signal support</strong> &mdash; enabling Python-based testbenches via <a href="https://www.cocotb.org/">cocotb</a>, the most popular open-source verification framework, with proper X/Z handling.</li>
+    <li><strong>Arcilator behavioral lowering</strong> &mdash; an alternative simulation backend that compiles CIRCT IR to native code via LLVM, trading interpretation overhead for faster execution of compute-heavy designs.</li>
+    <li><strong>Unified regression orchestrator (40 lanes)</strong> &mdash; a manifest-driven system that runs all test suites (AVIP, sv-tests, verilator, yosys, cocotb, CVDP) across smoke/nightly/full profiles with retry logic and parity checking.</li>
+  </ul>
+</div>
+
+<hr>
+
+<h2>How We Worked with AI</h2>
+
+<p>
+  Every commit in this fork was written by one person &mdash; me.
+  But every commit was also co-authored by an AI system.
+</p>
+
+<figure>
+  <img src="chart_ai_attribution.png" alt="AI attribution: 40% Claude Opus 4.5, 14% Claude Opus 4.6, 46% Codex" style="max-width: 420px; margin: 0 auto;">
+</figure>
+
+<p>
+  <strong>Claude</strong> (Anthropic) handled 54% of commits, primarily through Claude Code &mdash; an agentic coding tool that can read files, run tests, and iterate on implementations autonomously.
+  The split between Opus 4.5 (40%) and Opus 4.6 (14%) reflects model availability over the project timeline.
+</p>
+
+<p><strong>Codex</strong> (OpenAI) handled the remaining 46%, working in a complementary role.</p>
+
+<p>
+  The workflow was not &ldquo;generate code, paste it in.&rdquo;
+  It was closer to pair programming with a very fast, very patient partner.
+  A typical iteration looked like:
+</p>
+
+<ol>
+  <li>I describe what needs to happen (<em>&ldquo;implement <code>$dumpvars</code> with VCD output&rdquo;</em>)</li>
+  <li>The AI reads the relevant code, proposes an implementation, writes tests</li>
+  <li>Tests fail, the AI reads the failure output, iterates</li>
+  <li>Eventually the tests pass, I review the diff, commit</li>
+</ol>
+
+<p>
+  The project log records <strong>1,554 iterations</strong> of this cycle.
+  Many features took 3&ndash;5 iterations from first attempt to passing tests.
+  Some &mdash; particularly UVM sequencer integration and VPI callback handling &mdash; took 20+.
+</p>
+
+<h3>What AI Was Good At</h3>
+
+<ul>
+  <li><strong>Op handlers</strong>: CIRCT has dozens of MLIR operations that need lowering to simulation behavior.
+    Writing the 50th <code>hw::ArrayGetOp</code> handler is tedious but well-specified.
+    AI handles this effortlessly.</li>
+  <li><strong>Test generation</strong>: Given a feature spec and existing test patterns, AI generates thorough test cases faster than I could enumerate them.
+    The 3,200+ new test files are almost entirely AI-generated.</li>
+  <li><strong>Regression infrastructure</strong>: Shell scripts for running test suites, parsing results, tracking baselines, retrying flaky tests.
+    This is exactly the kind of boilerplate that AI produces reliably.</li>
+  <li><strong>Debugging from error output</strong>: When a test fails, the AI can read the MLIR dump, compare expected vs actual, and often identify the root cause faster than manual inspection.</li>
+</ul>
+
+<h3>What AI Was Bad At</h3>
+
+<ul>
+  <li><strong>Architectural decisions</strong>: The AI would happily implement whatever I asked for, even if the design was wrong.
+    Choosing <em>where</em> to put the VPI layer, how to structure the event queue, when to use interpret vs JIT &mdash; these required human judgment.</li>
+  <li><strong>Cross-cutting invariants</strong>: When a change in the process scheduler affected both the VPI callback order and the UVM phase sequencer, the AI would fix one and break the other.
+    Maintaining consistency across subsystems required constant human oversight.</li>
+  <li><strong>Performance</strong>: The AI optimizes for correctness, not speed.
+    Several early implementations had O(n&sup2;) behavior that only surfaced on larger designs.</li>
+</ul>
+
+<hr>
+
+<h2>What Works Today</h2>
+
+<p>Here's what you can actually <em>do</em> with this fork that you can't do with upstream CIRCT:</p>
+
+<h3>Simulate a SystemVerilog Design</h3>
+
+<pre><code><span style="color:#6b7280"># Compile Verilog to MLIR</span>
+circt-verilog mydesign.sv -o mydesign.mlir
+
+<span style="color:#6b7280"># Run event-driven simulation</span>
+circt-sim mydesign.mlir --top top_module --max-time 10000000</code></pre>
+
+<p>
+  Upstream CIRCT can parse the Verilog, but has no production simulator.
+  This fork provides a full IEEE 1800-2017 event-driven simulator with four-state logic, VCD waveform output, and DPI-C support.
+</p>
+
+<h3>Run cocotb Testbenches</h3>
+
+<pre><code><span style="color:#6b7280"># Run with cocotb via VPI</span>
+COCOTB_TEST_MODULES="my_test" \
+COCOTB_TOPLEVEL="dut" \
+circt-sim mydesign.mlir --top dut \
+  --vpi "$COCOTB_ROOT/libs/libcocotbvpi_ius.so"</code></pre>
+
+<p>
+  The VPI layer implements enough of the IEEE 1364/1800 C API for cocotb to discover signals, schedule callbacks, read/write values, and drive test sequences.
+  The cocotb regression suite covers 50+ test scenarios.
+</p>
+
+<h3>Run UVM Testbenches (AVIP Protocol Suites)</h3>
+
+<p>
+  The fork can run real UVM testbenches &mdash; not toy examples, but full protocol verification IP.
+  To put the results in context, here&rsquo;s how circt-sim compares to Cadence Xcelium on the same AVIP testbenches:
+</p>
+
+<figure class="wide">
+  <img src="chart_avip_comparison.png" alt="AVIP protocol coverage comparison between circt-sim and Xcelium across 7 protocols">
+  <figcaption>Coverage comparison across 7 AVIP protocols. circt-sim exceeds Xcelium on APB and SPI, matches on I3C, and falls short on AHB. AXI4 and JTAG fail to compile.</figcaption>
+</figure>
+
+<p>
+  APB is the standout: circt-sim achieves <strong>55% coverage vs Xcelium&rsquo;s 25%</strong> &mdash; the open-source simulator actually exercises more of the protocol space.
+  SPI shows a similar pattern (38% vs 19%).
+  AHB is the biggest gap: Xcelium hits 86% while circt-sim stalls at 50% due to a monitor that never sees transactions advance past IDLE state.
+  AXI4 and JTAG fail at compile time (the frontend produces empty MLIR files for these particular testbenches).
+</p>
+
+<h3>The Speed Gap</h3>
+
+<p>
+  Let&rsquo;s be honest about performance.
+  circt-sim is an interpreter, not a compiled simulator.
+  The speed difference is dramatic:
+</p>
+
+<figure class="wide">
+  <img src="chart_speed_comparison.png" alt="Performance comparison showing circt-sim is 1,500x to 60,000x slower than Xcelium on simulation">
+  <figcaption>Left: compile time (25&ndash;35s vs 1s). Right: simulation wall time on log scale, showing 1,500x&ndash;60,000x slowdown.</figcaption>
+</figure>
+
+<p>
+  Compilation takes 25&ndash;35 seconds per AVIP (vs ~1 second for Xcelium), and simulation is <strong>1,500x to 60,000x slower</strong> depending on the protocol.
+  The I3C protocol is worst at 60,000x because its deep state machine triggers the most interpreter overhead.
+  This is the primary area where the JIT compilation backend (currently experimental) will need to close the gap.
+</p>
+
+<h3>Formal Verification</h3>
+
+<pre><code><span style="color:#6b7280"># Run bounded model checking on sv-tests suite</span>
+utils/run_sv_tests_circt_bmc.sh ~/sv-tests
+
+<span style="color:#6b7280"># Run logic equivalence checking</span>
+utils/run_sv_tests_circt_lec.sh ~/sv-tests
+
+<span style="color:#6b7280"># Full formal regression with quality gates</span>
+utils/run_formal_all.sh --strict-gate --fail-on-diff</code></pre>
+
+<p>The fork includes a complete formal verification harness with:</p>
+<ul>
+  <li>Bounded model checking (BMC) with k-induction</li>
+  <li>Logic equivalence checking (LEC)</li>
+  <li>Z3 SMT solver integration</li>
+  <li>Contract fingerprinting and baseline tracking</li>
+  <li>OpenTitan connectivity verification</li>
+</ul>
+
+<p>
+  The formal suite runs against <strong>sv-tests</strong> (the CHIPS Alliance SystemVerilog test suite),
+  <strong>verilator-verification</strong> (Verilator&rsquo;s own assertion test suite), and
+  <strong>yosys SVA</strong> (Yosys&rsquo;s SystemVerilog assertion tests).
+  These are the same test suites used by other open-source EDA tools, providing direct comparability.
+</p>
+
+<h3>Mutation Testing</h3>
+
+<pre><code><span style="color:#6b7280"># Run mutation coverage on MCY examples</span>
+utils/run_mutation_mcy_examples.sh \
+  --examples-root ~/mcy/examples \
+  --out-dir ./mut-results \
+  --jobs 4</code></pre>
+
+<p>
+  The mutation framework generates design mutations (via yosys or native operators), runs differential formal verification, and classifies mutations as killed or surviving &mdash; measuring test quality rather than just code coverage.
+</p>
+
+<h3>Unified Regression</h3>
+
+<p>All of these capabilities are tied together by a <strong>unified regression orchestrator</strong> that manages 40 test lanes across 6 suites:</p>
+
+<pre><code><span style="color:#6b7280"># Run smoke regression (bounded subsets of everything)</span>
+utils/run_regression_unified.sh --profile smoke --out-dir ./results
+
+<span style="color:#6b7280"># Run full regression</span>
+utils/run_regression_unified.sh --profile full --jobs 4 --out-dir ./results</code></pre>
+
+<p>
+  The orchestrator handles lane selection, retry logic, parity checking (circt vs. Xcelium), and result aggregation.
+</p>
+
+<hr>
+
+<h2>What This Means for EDA</h2>
+
+<p>
+  The EDA industry has operated for decades on a simple assumption: verification tools are too complex for anything but large, well-funded teams to build.
+  Xcelium and VCS represent millions of person-years of engineering effort.
+</p>
+
+<p>That assumption may no longer hold.</p>
+
+<p>
+  This fork is not a replacement for Xcelium &mdash; it's slower, less complete, and hasn't been hardened by decades of production use.
+  But it demonstrates something important: <strong>a single engineer with AI assistance can build a functional verification stack in weeks, not years.</strong>
+</p>
+
+<p>
+  The 580,000 lines of code in this fork are not all high-quality production code.
+  Some of it is test infrastructure, some is scaffolding, and some will need significant rework.
+  But the <em>capability surface</em> &mdash; simulation, VPI, UVM, formal, mutation &mdash; covers ground that would traditionally require a team of 20+ specialized engineers.
+</p>
+
+<p>I think this pattern will repeat across EDA:</p>
+<ol>
+  <li>Open-source infrastructure (CIRCT, MLIR) provides the foundation</li>
+  <li>AI provides the volume &mdash; implementing specs, writing tests, building harnesses</li>
+  <li>Human engineers provide the judgment &mdash; architecture, trade-offs, quality</li>
+</ol>
+
+<p>
+  The cost of building verification tools is dropping by an order of magnitude.
+  Whether that leads to better open-source tools, more specialized commercial tools, or something else entirely &mdash; I don't know.
+  But the gap between &ldquo;possible&rdquo; and &ldquo;practical&rdquo; just got a lot smaller.
+</p>
+
+<p class="footer-note">
+  The fork is at <a href="https://github.com/thomasnormal/circt">github.com/thomasnormal/circt</a>.
+  Charts and data used in this post are in the <code>blog_data/</code> directory.
+</p>
+
+</article>
+
+</body>
+</html>
