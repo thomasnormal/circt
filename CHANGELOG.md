@@ -73320,3 +73320,34 @@ See CHANGELOG.md on recent progress.
         - `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --circt-mut build-test/bin/circt-mut --mutations-backend native --require-native-backend --native-tests-mode real --native-real-tests-strict`
         - `bitcnt`: `7/8` (`87.50%`)
         - `picorv32_primes`: `8/8` (`100.00%`)
+80. `run_mutation_mcy_examples` add native no-op fallback governance
+    for strict mutation quality gating
+    (February 20, 2026):
+    - feature:
+      - `utils/run_mutation_mcy_examples.sh`
+      - added `--fail-on-native-noop-fallback` to fail examples when native
+        mutation generation records a no-op fallback rewrite.
+      - added env policy toggle:
+        `CIRCT_MUT_FAIL_ON_NATIVE_NOOP_FALLBACK=1` (strict `0|1` parsing).
+      - option is constrained to `--mutations-backend native`.
+    - implementation:
+      - native mutation helper now records fallback labels through
+        `CIRCT_MUT_NATIVE_NOOP_FALLBACK_MARKER`.
+      - example worker checks the marker and appends
+        `native_noop_fallback` to gate failures under strict mode.
+      - fixed worker command status handling to correctly preserve command
+        exit codes for timeout/retry/error classification.
+    - regression coverage:
+      - new:
+        - `test/Tools/run-mutation-mcy-examples-native-noop-fallback-pass.test`
+        - `test/Tools/run-mutation-mcy-examples-native-noop-fallback-fail.test`
+      - validates default permissive behavior and strict failure behavior.
+    - validation:
+      - lit (focused): PASS
+        - `run-mutation-mcy-examples-(native-noop-fallback-pass|native-noop-fallback-fail|require-native-backend-pass|native-backend-no-yosys-pass)`
+      - lit (suite): PASS
+        - `run-mutation-mcy-examples`
+      - real examples (native backend, real harness): PASS
+        - `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --example bitcnt --example picorv32_primes --mutations-backend native --require-native-backend --native-tests-mode real --generate-count 16 --mutation-limit 16 --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_native_real_<timestamp>`
+        - `bitcnt`: `13/16` (`81.25%`)
+        - `picorv32_primes`: `16/16` (`100.00%`)
