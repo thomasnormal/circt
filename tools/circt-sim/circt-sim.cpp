@@ -1409,8 +1409,16 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       scheduler.executeCurrentTime();
       for (ProcessId pid : hwOutputProcessIds) {
         auto *proc = scheduler.getProcess(pid);
-        if (proc)
+        if (proc) {
           proc->execute();
+          // After the initial execution, set the process to Suspended so
+          // triggerSensitiveProcesses() can re-trigger it when input signals
+          // change.  Without this, the process stays in Uninitialized state
+          // and the guard in triggerSensitiveProcesses (which only allows
+          // Suspended/Waiting/Ready) would skip it forever, causing output
+          // ports to stay at their initial values even after VPI writes.
+          proc->setState(ProcessState::Suspended);
+        }
       }
       scheduler.executeCurrentTime();
     }
