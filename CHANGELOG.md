@@ -73295,3 +73295,28 @@ See CHANGELOG.md on recent progress.
         - `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --circt-mut build-test/bin/circt-mut --mutations-backend native --native-tests-mode real --native-real-tests-strict`
         - `bitcnt`: `7/8` (`87.50%`)
         - `picorv32_primes`: `8/8` (`100.00%`)
+79. `run_mutation_mcy_examples` add native-backend enforcement gate
+    for no-Yosys mutation governance
+    (February 20, 2026):
+    - feature:
+      - `utils/run_mutation_mcy_examples.sh`
+      - added `--require-native-backend` to fail fast unless
+        `--mutations-backend native` is selected.
+      - added env policy toggle:
+        `CIRCT_MUT_REQUIRE_NATIVE_BACKEND=1`.
+      - env parsing is strict (`0|1` only) to avoid silent policy bypass.
+    - regression coverage:
+      - new:
+        - `test/Tools/run-mutation-mcy-examples-require-native-backend-missing-native.test`
+        - `test/Tools/run-mutation-mcy-examples-require-native-backend-pass.test`
+        - `test/Tools/run-mutation-mcy-examples-require-native-backend-env-invalid.test`
+      - validates fail-fast guardrail, strict env parsing, and native-backend success path.
+    - validation:
+      - lit (focused): PASS
+        - `run-mutation-mcy-examples-(native-backend-no-yosys-pass|native-tests-mode-invalid|require-native-backend-missing-native|require-native-backend-pass|require-native-backend-env-invalid)`
+      - lit (suite): PASS
+        - `run-mutation-mcy-examples`
+      - real examples (native backend + enforcement): PASS
+        - `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --circt-mut build-test/bin/circt-mut --mutations-backend native --require-native-backend --native-tests-mode real --native-real-tests-strict`
+        - `bitcnt`: `7/8` (`87.50%`)
+        - `picorv32_primes`: `8/8` (`100.00%`)
