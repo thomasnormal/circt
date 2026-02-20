@@ -53,6 +53,9 @@ Options:
                            yosys|native (default: yosys)
   --require-native-backend  Fail unless --mutations-backend=native
                            (or CIRCT_MUT_REQUIRE_NATIVE_BACKEND=1)
+  --fail-on-native-noop-fallback
+                           Fail if native mutation generation falls back to a
+                           no-op mutation rewrite for any mutant
   --native-tests-mode MODE   Test harness mode when using native backend:
                            synthetic|real (default: synthetic)
   --native-real-tests-strict
@@ -348,6 +351,7 @@ CIRCT_MUT=""
 YOSYS_BIN="${YOSYS:-yosys}"
 MUTATIONS_BACKEND="yosys"
 REQUIRE_NATIVE_BACKEND="${CIRCT_MUT_REQUIRE_NATIVE_BACKEND:-0}"
+FAIL_ON_NATIVE_NOOP_FALLBACK="${CIRCT_MUT_FAIL_ON_NATIVE_NOOP_FALLBACK:-0}"
 NATIVE_TESTS_MODE="synthetic"
 NATIVE_REAL_TESTS_STRICT=0
 NATIVE_MUTATION_OPS=""
@@ -2752,6 +2756,7 @@ run_example_worker() {
   local native_real_harness_args_spec="$NATIVE_REAL_HARNESS_ARGS"
   local native_real_harness_args_suffix=""
   local native_mutation_ops_spec="$NATIVE_MUTATION_OPS"
+  local native_noop_fallback_marker=""
 
   if [[ -n "${EXAMPLE_TO_GENERATE_COUNT[$example_id]+x}" ]]; then
     example_generate_count="${EXAMPLE_TO_GENERATE_COUNT[$example_id]}"
@@ -3038,6 +3043,8 @@ EOS
     else
       mutations_file="${helper_dir}/native.mutations.txt"
       native_create_mutated="${helper_dir}/native_create_mutated.py"
+      native_noop_fallback_marker="${helper_dir}/native_noop_fallback.labels"
+      rm -f "$native_noop_fallback_marker"
       : > "$mutations_file"
       native_ops_all=(
         EQ_TO_NEQ
@@ -3130,6 +3137,7 @@ EOS
       cat > "$native_create_mutated" <<'EOS'
 #!/usr/bin/env python3
 import argparse
+import os
 import re
 from pathlib import Path
 
@@ -3207,6 +3215,10 @@ if not changed:
 
 if not changed:
     text += f"\n// native_mutation_noop_fallback {label}\n"
+    marker_path = os.environ.get("CIRCT_MUT_NATIVE_NOOP_FALLBACK_MARKER", "")
+    if marker_path:
+        with open(marker_path, "a", encoding="utf-8") as marker:
+            marker.write(f"{label}\n")
 
 Path(args.output).write_text(text, encoding='utf-8')
 EOS
@@ -3225,12 +3237,19 @@ EOS
   while true; do
     rm -f "$metrics_file"
     set +e
+    if [[ -n "$native_noop_fallback_marker" ]]; then
+      export CIRCT_MUT_NATIVE_NOOP_FALLBACK_MARKER="$native_noop_fallback_marker"
+    else
+      unset CIRCT_MUT_NATIVE_NOOP_FALLBACK_MARKER
+    fi
     if [[ "$example_timeout_sec" -gt 0 ]]; then
       "$TIMEOUT_RESOLVED" "$example_timeout_sec" "${cmd[@]}" >"$run_log" 2>&1
+      rc=$?
     else
       "${cmd[@]}" >"$run_log" 2>&1
+      rc=$?
     fi
-    rc=$?
+    unset CIRCT_MUT_NATIVE_NOOP_FALLBACK_MARKER
     set -e
 
     if [[ "$rc" -eq 0 ]]; then
@@ -3276,6 +3295,14 @@ EOS
       coverage="$(awk -v d="$detected" -v r="$relevant" 'BEGIN { printf "%.2f", (100.0 * d) / r }')"
       coverage_for_gate="$coverage"
     fi
+  fi
+
+  if [[ "$FAIL_ON_NATIVE_NOOP_FALLBACK" == "1" && -n "$native_noop_fallback_marker" && -s "$native_noop_fallback_marker" ]]; then
+    status="FAIL"
+    if [[ -n "$gate_failure" ]]; then
+      gate_failure+=","
+    fi
+    gate_failure+="native_noop_fallback"
   fi
 
   if [[ "$detected" -lt "$MIN_DETECTED" ]]; then
@@ -3404,6 +3431,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --require-native-backend)
       REQUIRE_NATIVE_BACKEND=1
+      shift
+      ;;
+    --fail-on-native-noop-fallback)
+      FAIL_ON_NATIVE_NOOP_FALLBACK=1
       shift
       ;;
     --native-tests-mode)
@@ -3824,6 +3855,14 @@ if [[ "$REQUIRE_NATIVE_BACKEND" != "0" && "$REQUIRE_NATIVE_BACKEND" != "1" ]]; t
 fi
 if [[ "$REQUIRE_NATIVE_BACKEND" == "1" && "$MUTATIONS_BACKEND" != "native" ]]; then
   echo "--require-native-backend requires --mutations-backend native" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_NATIVE_NOOP_FALLBACK" != "0" && "$FAIL_ON_NATIVE_NOOP_FALLBACK" != "1" ]]; then
+  echo "CIRCT_MUT_FAIL_ON_NATIVE_NOOP_FALLBACK must be 0 or 1: $FAIL_ON_NATIVE_NOOP_FALLBACK" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_NATIVE_NOOP_FALLBACK" == "1" && "$MUTATIONS_BACKEND" != "native" ]]; then
+  echo "--fail-on-native-noop-fallback requires --mutations-backend native" >&2
   exit 1
 fi
 if [[ "$NATIVE_TESTS_MODE" != "synthetic" && "$NATIVE_TESTS_MODE" != "real" ]]; then
