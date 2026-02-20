@@ -28,6 +28,11 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+_THIS_DIR = Path(__file__).resolve().parent
+_FORMAL_LIB_DIR = _THIS_DIR / "formal" / "lib"
+if _FORMAL_LIB_DIR.is_dir():
+    sys.path.insert(0, str(_FORMAL_LIB_DIR))
+
 
 SCHEMA_MARKER = "#opentitan_compile_contract_schema_version=1"
 
@@ -259,6 +264,15 @@ def case_status_to_solver_result(case_status: str) -> str:
     }.get(case_status, "ERROR")
 
 
+def project_objective_reason(case_reason: str) -> str:
+    token = case_reason.strip()
+    if not token:
+        return ""
+    if token.startswith("projected_case_"):
+        return token
+    return f"projected_case_{token}"
+
+
 def evaluate_case(
     *,
     contract: ContractRow,
@@ -409,6 +423,66 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+try:
+    from runner_common import (
+        parse_exit_codes as _shared_parse_exit_codes,
+        parse_nonnegative_float as _shared_parse_nonnegative_float,
+        parse_nonnegative_int as _shared_parse_nonnegative_int,
+        run_command_logged as _shared_run_command_logged,
+    )
+except Exception:
+    _HAS_SHARED_FORMAL_HELPERS = False
+else:
+    _HAS_SHARED_FORMAL_HELPERS = True
+
+if _HAS_SHARED_FORMAL_HELPERS:
+
+    def parse_nonnegative_int(raw: str, name: str) -> int:
+        return _shared_parse_nonnegative_int(raw, name, fail)
+
+    def run_with_log(
+        cmd: list[str],
+        log_path: Path,
+        timeout_secs: int,
+        *,
+        out_path: Path | None = None,
+    ) -> str:
+        retry_attempts = _shared_parse_nonnegative_int(
+            os.environ.get("FORMAL_LAUNCH_RETRY_ATTEMPTS", "1"),
+            "FORMAL_LAUNCH_RETRY_ATTEMPTS",
+            fail,
+        )
+        retry_backoff_secs = _shared_parse_nonnegative_float(
+            os.environ.get("FORMAL_LAUNCH_RETRY_BACKOFF_SECS", "0.2"),
+            "FORMAL_LAUNCH_RETRY_BACKOFF_SECS",
+            fail,
+        )
+        retryable_exit_codes = _shared_parse_exit_codes(
+            os.environ.get("FORMAL_LAUNCH_RETRYABLE_EXIT_CODES", "126,127"),
+            "FORMAL_LAUNCH_RETRYABLE_EXIT_CODES",
+            fail,
+        )
+        retryable_patterns_raw = os.environ.get(
+            "FORMAL_LAUNCH_RETRYABLE_PATTERNS",
+            "text file busy,resource temporarily unavailable,stale file handle",
+        )
+        retryable_patterns = [
+            token.strip()
+            for token in retryable_patterns_raw.split(",")
+            if token.strip()
+        ]
+        return _shared_run_command_logged(
+            cmd,
+            log_path,
+            timeout_secs=timeout_secs,
+            out_path=out_path,
+            retry_attempts=retry_attempts,
+            retry_backoff_secs=retry_backoff_secs,
+            retryable_exit_codes=retryable_exit_codes,
+            retryable_output_patterns=retryable_patterns,
+        )
+
+
 def main() -> int:
     args = parse_args()
 
@@ -495,11 +569,11 @@ def main() -> int:
         cover_results_path.parent.mkdir(parents=True, exist_ok=True)
         cover_results_path.write_text("", encoding="utf-8")
 
-    circt_verilog = os.environ.get("CIRCT_VERILOG", "build/bin/circt-verilog")
+    circt_verilog = os.environ.get("CIRCT_VERILOG", "build-test/bin/circt-verilog")
     circt_verilog_args = shlex.split(os.environ.get("CIRCT_VERILOG_ARGS", ""))
-    circt_opt = os.environ.get("CIRCT_OPT", "build/bin/circt-opt")
+    circt_opt = os.environ.get("CIRCT_OPT", "build-test/bin/circt-opt")
     circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
-    circt_lec = os.environ.get("CIRCT_LEC", "build/bin/circt-lec")
+    circt_lec = os.environ.get("CIRCT_LEC", "build-test/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
     timeout_secs = parse_nonnegative_int(
         os.environ.get("CIRCT_TIMEOUT_SECS", "300"), "CIRCT_TIMEOUT_SECS"
@@ -575,6 +649,7 @@ def main() -> int:
             )
         )
         solver_result = case_status_to_solver_result(case_status.status)
+        projected_reason = project_objective_reason(case_status.reason)
         for objective in case_objectives:
             if objective.kind == "assertion":
                 projected = project_assertion_status(case_status.status, objective.bmc_status)
@@ -586,7 +661,7 @@ def main() -> int:
                         objective.objective_id,
                         objective.objective_label,
                         solver_result,
-                        case_status.reason,
+                        projected_reason,
                     )
                 )
             else:
@@ -599,7 +674,7 @@ def main() -> int:
                         objective.objective_id,
                         objective.objective_label,
                         solver_result,
-                        case_status.reason,
+                        projected_reason,
                     )
                 )
 

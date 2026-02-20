@@ -22,6 +22,16 @@ import sys
 import tempfile
 from pathlib import Path
 
+_THIS_DIR = Path(__file__).resolve().parent
+_FORMAL_LIB_DIR = _THIS_DIR / "formal" / "lib"
+if _FORMAL_LIB_DIR.is_dir():
+    sys.path.insert(0, str(_FORMAL_LIB_DIR))
+
+
+def fail(msg: str) -> None:
+    print(msg, file=sys.stderr)
+    raise SystemExit(1)
+
 
 def replace_text(src: Path, dst: Path, replacements: list[tuple[str, str]]) -> None:
     data = src.read_text()
@@ -126,6 +136,62 @@ def run_and_log(
     return result.stdout
 
 
+try:
+    from runner_common import (
+        parse_exit_codes as _shared_parse_exit_codes,
+        parse_nonnegative_float as _shared_parse_nonnegative_float,
+        parse_nonnegative_int as _shared_parse_nonnegative_int,
+        run_command_logged as _shared_run_command_logged,
+        write_log as _shared_write_log,
+    )
+except Exception:
+    _HAS_SHARED_FORMAL_HELPERS = False
+else:
+    _HAS_SHARED_FORMAL_HELPERS = True
+
+if _HAS_SHARED_FORMAL_HELPERS:
+
+    def write_log(path: Path, stdout: str, stderr: str) -> None:
+        _shared_write_log(path, stdout, stderr)
+
+    def run_and_log(
+        cmd: list[str], log_path: Path, out_path: Path | None = None
+    ) -> str:
+        retry_attempts = _shared_parse_nonnegative_int(
+            os.environ.get("FORMAL_LAUNCH_RETRY_ATTEMPTS", "1"),
+            "FORMAL_LAUNCH_RETRY_ATTEMPTS",
+            fail,
+        )
+        retry_backoff_secs = _shared_parse_nonnegative_float(
+            os.environ.get("FORMAL_LAUNCH_RETRY_BACKOFF_SECS", "0.2"),
+            "FORMAL_LAUNCH_RETRY_BACKOFF_SECS",
+            fail,
+        )
+        retryable_exit_codes = _shared_parse_exit_codes(
+            os.environ.get("FORMAL_LAUNCH_RETRYABLE_EXIT_CODES", "126,127"),
+            "FORMAL_LAUNCH_RETRYABLE_EXIT_CODES",
+            fail,
+        )
+        retryable_patterns_raw = os.environ.get(
+            "FORMAL_LAUNCH_RETRYABLE_PATTERNS",
+            "text file busy,resource temporarily unavailable,stale file handle",
+        )
+        retryable_patterns = [
+            token.strip()
+            for token in retryable_patterns_raw.split(",")
+            if token.strip()
+        ]
+        return _shared_run_command_logged(
+            cmd,
+            log_path,
+            out_path=out_path,
+            retry_attempts=retry_attempts,
+            retry_backoff_secs=retry_backoff_secs,
+            retryable_exit_codes=retryable_exit_codes,
+            retryable_output_patterns=retryable_patterns,
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run OpenTitan AES S-Box LEC checks with circt-lec."
@@ -222,11 +288,11 @@ def main() -> int:
         print("No AES S-Box implementations selected.", file=sys.stderr)
         return 1
 
-    circt_verilog = os.environ.get("CIRCT_VERILOG", "build/bin/circt-verilog")
+    circt_verilog = os.environ.get("CIRCT_VERILOG", "build-test/bin/circt-verilog")
     circt_verilog_args = shlex.split(os.environ.get("CIRCT_VERILOG_ARGS", ""))
-    circt_opt = os.environ.get("CIRCT_OPT", "build/bin/circt-opt")
+    circt_opt = os.environ.get("CIRCT_OPT", "build-test/bin/circt-opt")
     circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
-    circt_lec = os.environ.get("CIRCT_LEC", "build/bin/circt-lec")
+    circt_lec = os.environ.get("CIRCT_LEC", "build-test/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
     # OpenTitan S-Box parity is evaluated with x-optimistic equivalence by
     # default to avoid classifying known-input-equivalent implementations as

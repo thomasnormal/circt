@@ -7,6 +7,11 @@ BOUND="${BOUND:-10}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=utils/formal_toolchain_resolve.sh
 source "$SCRIPT_DIR/formal_toolchain_resolve.sh"
+COMMON_SH="$SCRIPT_DIR/lib/common.sh"
+if [[ -f "$COMMON_SH" ]]; then
+  # shellcheck source=utils/lib/common.sh
+  source "$COMMON_SH"
+fi
 
 # Memory limit settings to prevent system hangs
 CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
@@ -15,6 +20,10 @@ CIRCT_MEMORY_LIMIT_KB=$((CIRCT_MEMORY_LIMIT_GB * 1024 * 1024))
 
 # Run a command with memory limit
 run_limited() {
+  if declare -F circt_common_run_with_limits >/dev/null 2>&1; then
+    circt_common_run_with_limits "$CIRCT_MEMORY_LIMIT_KB" "$CIRCT_TIMEOUT_SECS" "$@"
+    return
+  fi
   (
     ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
     timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
@@ -23,6 +32,10 @@ run_limited() {
 
 is_retryable_launch_failure_log() {
   local log_file="$1"
+  if declare -F circt_common_is_retryable_launch_failure_log >/dev/null 2>&1; then
+    circt_common_is_retryable_launch_failure_log "$log_file"
+    return
+  fi
   if [[ ! -s "$log_file" ]]; then
     return 1
   fi
@@ -40,6 +53,10 @@ compute_retry_backoff_secs() {
 classify_retryable_launch_failure_reason() {
   local log_file="$1"
   local exit_code="$2"
+  if declare -F circt_common_classify_retryable_launch_failure_reason >/dev/null 2>&1; then
+    circt_common_classify_retryable_launch_failure_reason "$log_file" "$exit_code"
+    return
+  fi
   if [[ -s "$log_file" ]] && grep -Eiq "Text file busy|ETXTBSY" "$log_file"; then
     echo "etxtbsy"
     return 0
@@ -126,36 +143,77 @@ BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-0}"
 FAIL_ON_DROP_REMARKS="${FAIL_ON_DROP_REMARKS:-0}"
 DROP_REMARK_PATTERN="${DROP_REMARK_PATTERN:-will be dropped during lowering}"
 
+is_nonneg_int() {
+  local value="$1"
+  if declare -F circt_common_is_nonneg_int >/dev/null 2>&1; then
+    circt_common_is_nonneg_int "$value"
+    return
+  fi
+  [[ "$value" =~ ^[0-9]+$ ]]
+}
+
+is_nonneg_decimal() {
+  local value="$1"
+  if declare -F circt_common_is_nonneg_decimal >/dev/null 2>&1; then
+    circt_common_is_nonneg_decimal "$value"
+    return
+  fi
+  [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+is_bool_01() {
+  local value="$1"
+  if declare -F circt_common_is_bool_01 >/dev/null 2>&1; then
+    circt_common_is_bool_01 "$value"
+    return
+  fi
+  [[ "$value" == "0" || "$value" == "1" ]]
+}
+
 if [[ ! -d "$VERIF_DIR/tests" ]]; then
   echo "verilator-verification directory not found: $VERIF_DIR" >&2
   exit 1
 fi
 
 if [[ -z "$TEST_FILTER" ]]; then
-  echo "must set TEST_FILTER explicitly (no default filter)" >&2
-  exit 1
+  if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
+    TEST_FILTER="."
+  else
+    echo "must set TEST_FILTER explicitly (no default filter)" >&2
+    exit 1
+  fi
 fi
-if ! [[ "$BMC_LAUNCH_RETRY_ATTEMPTS" =~ ^[0-9]+$ ]]; then
+if ! is_nonneg_int "$BMC_LAUNCH_RETRY_ATTEMPTS"; then
   echo "invalid BMC_LAUNCH_RETRY_ATTEMPTS: $BMC_LAUNCH_RETRY_ATTEMPTS" >&2
   exit 1
 fi
-if ! [[ "$BMC_LAUNCH_RETRY_BACKOFF_SECS" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+if ! is_nonneg_decimal "$BMC_LAUNCH_RETRY_BACKOFF_SECS"; then
   echo "invalid BMC_LAUNCH_RETRY_BACKOFF_SECS: $BMC_LAUNCH_RETRY_BACKOFF_SECS" >&2
   exit 1
 fi
-if [[ "$BMC_LAUNCH_COPY_FALLBACK" != "0" && "$BMC_LAUNCH_COPY_FALLBACK" != "1" ]]; then
+if ! is_bool_01 "$BMC_LAUNCH_COPY_FALLBACK"; then
   echo "invalid BMC_LAUNCH_COPY_FALLBACK: $BMC_LAUNCH_COPY_FALLBACK" >&2
   exit 1
 fi
 
 if [[ "$BMC_RUN_SMTLIB" == "1" && "$BMC_SMOKE_ONLY" != "1" ]]; then
   if [[ -z "$Z3_BIN" ]]; then
-    if command -v z3 >/dev/null 2>&1; then
-      Z3_BIN="z3"
-    elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
-      Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
-    elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
-      Z3_BIN="/home/thomas-ahle/z3/build/z3"
+    if declare -F circt_common_resolve_tool >/dev/null 2>&1; then
+      if circt_common_resolve_tool z3 >/dev/null 2>&1; then
+        Z3_BIN="z3"
+      elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
+      elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3/build/z3"
+      fi
+    else
+      if command -v z3 >/dev/null 2>&1; then
+        Z3_BIN="z3"
+      elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
+      elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3/build/z3"
+      fi
     fi
   fi
   if [[ -z "$Z3_BIN" ]]; then

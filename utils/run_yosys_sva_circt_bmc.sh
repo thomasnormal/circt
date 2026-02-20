@@ -220,8 +220,12 @@ if [[ ! -d "$YOSYS_SVA_DIR" ]]; then
 fi
 
 if [[ -z "$TEST_FILTER" ]]; then
-  echo "must set TEST_FILTER explicitly (no default filter)" >&2
-  exit 1
+  if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
+    TEST_FILTER="."
+  else
+    echo "must set TEST_FILTER explicitly (no default filter)" >&2
+    exit 1
+  fi
 fi
 if ! [[ "$BMC_LAUNCH_RETRY_ATTEMPTS" =~ ^[0-9]+$ ]]; then
   echo "invalid BMC_LAUNCH_RETRY_ATTEMPTS: $BMC_LAUNCH_RETRY_ATTEMPTS" >&2

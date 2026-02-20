@@ -47,8 +47,8 @@ run_sim_limited() {
 
 # Simulation max-time in femtoseconds (default: 10us = 10^13 fs)
 MAX_SIM_TIME="${MAX_SIM_TIME:-10000000000000}"
-CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
-CIRCT_SIM="${CIRCT_SIM:-build/bin/circt-sim}"
+CIRCT_VERILOG="${CIRCT_VERILOG:-build-test/bin/circt-verilog}"
+CIRCT_SIM="${CIRCT_SIM:-build-test/bin/circt-sim}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 CIRCT_SIM_ARGS="${CIRCT_SIM_ARGS:-}"
 TAG_REGEX="${TAG_REGEX:-}"

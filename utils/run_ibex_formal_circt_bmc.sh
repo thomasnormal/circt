@@ -113,6 +113,7 @@ INCLUDE_DIRS=(
   "-I" "$IBEX_ROOT/rtl"
   "-I" "$LOWRISC_IP_DIR/ip/prim/rtl"
   "-I" "$LOWRISC_IP_DIR/ip/prim_generic/rtl"
+  "-I" "$LOWRISC_IP_DIR/dv/sv/dv_utils"
 )
 
 # BMC targets: module names with SVA assertions worth checking.
