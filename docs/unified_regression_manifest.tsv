@@ -1,0 +1,98 @@
+# suite_id	profiles	circt_cmd	xcelium_cmd	suite_root	circt_adapter	xcelium_adapter	adapter_args
+# profiles: comma-separated subset of smoke,nightly,full,all
+# Use '-' for explicit command columns when lane command should be generated
+# from adapter catalog entries.
+#
+# Adapter resolution:
+# - lane command is generated only when explicit command is '-' or empty.
+# - generated form is: <catalog command_prefix> <suite_root> <adapter_args>
+# - xcelium_adapter defaults to circt_adapter when omitted.
+#
+# Example explicit commands:
+# avip_apb_explicit	smoke,nightly,full	utils/run_avip_circt_sim.sh ~/mbit/apb_avip	utils/run_avip_xcelium_reference.sh ~/mbit/apb_avip	-	-	-	-
+#
+# Example adapter-driven commands:
+# avip_apb	smoke,nightly,full	-	-	~/mbit/apb_avip	avip_sim	avip_sim	--jobs 2
+# sv_tests_bmc	nightly,full	-	-	~/sv-tests	sv_tests_bmc	-	--jobs 4
+# opentitan_smoke	smoke,nightly	-	-	~/opentitan	opentitan_sim	-	--jobs 2
+# ibex_smoke	smoke,nightly	-	-	~/opentitan/hw/vendor/lowrisc_ibex	ibex_sim	-	--jobs 2
+# mcy_examples	nightly,full	-	-	~/mcy/examples	mcy_examples_native_real	-	--jobs 2 --example-retries 1
+#
+# --- AVIP simulation (explicit commands; $1=out_dir, env vars for config) ---
+avip_sim_smoke	smoke	AVIP_SET=core8 SEEDS=1 utils/run_avip_circt_sim.sh /tmp/unified-avip-smoke	AVIP_SET=core8 SEEDS=1 utils/run_avip_xcelium_reference.sh /tmp/unified-avip-xcelium-smoke	-	-	-	-
+avip_sim_nightly	nightly,full	AVIP_SET=all9 SEEDS=1,2,3 utils/run_avip_circt_sim.sh /tmp/unified-avip-nightly	AVIP_SET=all9 SEEDS=1,2,3 utils/run_avip_xcelium_reference.sh /tmp/unified-avip-xcelium-nightly	-	-	-	-
+avip_verilog_smoke	smoke	AVIP_SET=core8 utils/run_avip_circt_verilog.sh ~/mbit/apb_avip	-	-	-	-	-
+avip_verilog_nightly	nightly,full	AVIP_SET=all9 utils/run_avip_circt_verilog.sh ~/mbit/apb_avip	-	-	-	-	-
+#
+# --- sv-tests (explicit commands; $1=suite_root) ---
+sv_tests_bmc	nightly,full	utils/run_sv_tests_circt_bmc.sh ~/sv-tests	-	-	-	-	-
+sv_tests_lec	nightly,full	utils/run_sv_tests_circt_lec.sh ~/sv-tests	-	-	-	-	-
+sv_tests_sim	smoke,nightly,full	utils/run_sv_tests_circt_sim.sh ~/sv-tests	-	-	-	-	-
+sv_tests_bmc_smoke	smoke	BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh ~/sv-tests	-	-	-	-	-
+sv_tests_lec_smoke	smoke	LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh ~/sv-tests	-	-	-	-	-
+#
+# --- verilator-verification (explicit commands; $1=suite_root) ---
+verilator_bmc	nightly,full	utils/run_verilator_verification_circt_bmc.sh ~/verilator-verification	-	-	-	-	-
+verilator_lec	nightly,full	utils/run_verilator_verification_circt_lec.sh ~/verilator-verification	-	-	-	-	-
+verilator_bmc_smoke	smoke	BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh ~/verilator-verification	-	-	-	-	-
+verilator_lec_smoke	smoke	LEC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh ~/verilator-verification	-	-	-	-	-
+#
+# --- yosys SVA (explicit commands; $1=suite_root) ---
+yosys_bmc	nightly,full	utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva	-	-	-	-	-
+yosys_lec	nightly,full	utils/run_yosys_sva_circt_lec.sh ~/yosys/tests/sva	-	-	-	-	-
+yosys_bmc_smoke	smoke	BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva	-	-	-	-	-
+yosys_lec_smoke	smoke	LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh ~/yosys/tests/sva	-	-	-	-	-
+#
+# --- OpenTitan formal: AES S-Box BMC ---
+opentitan_bmc	nightly,full	python3 utils/run_opentitan_circt_bmc.py --opentitan-root ~/opentitan	-	-	-	-	-
+#
+# --- OpenTitan formal: AES S-Box LEC ---
+opentitan_lec	nightly,full	python3 utils/run_opentitan_circt_lec.py --opentitan-root ~/opentitan	-	-	-	-	-
+#
+# --- OpenTitan formal: FPV BMC (via run_formal_all.sh) ---
+opentitan_fpv_bmc	nightly,full	utils/run_formal_all.sh --opentitan ~/opentitan --out-dir /tmp/unified-opentitan-fpv-bmc --with-opentitan-fpv-bmc --opentitan-fpv-cfg ~/opentitan/hw/top_earlgrey/formal/top_earlgrey_fpv_ip_cfgs.hjson --opentitan-fpv-cfg ~/opentitan/hw/top_earlgrey/formal/top_earlgrey_fpv_prim_cfgs.hjson --opentitan-fpv-cfg ~/opentitan/hw/top_earlgrey/formal/top_earlgrey_fpv_sec_cm_cfgs.hjson --opentitan-fpv-allow-unfiltered	-	-	-	-	-
+#
+# --- OpenTitan formal: connectivity BMC/LEC (via run_formal_all.sh) ---
+opentitan_connectivity_bmc	nightly,full	utils/run_formal_all.sh --opentitan ~/opentitan --out-dir /tmp/unified-opentitan-connectivity-bmc --with-opentitan-connectivity-bmc --opentitan-connectivity-cfg ~/opentitan/hw/top_earlgrey/formal/chip_conn_cfg.hjson	-	-	-	-	-
+opentitan_connectivity_lec	nightly,full	utils/run_formal_all.sh --opentitan ~/opentitan --out-dir /tmp/unified-opentitan-connectivity-lec --with-opentitan-connectivity-lec --opentitan-connectivity-cfg ~/opentitan/hw/top_earlgrey/formal/chip_conn_cfg.hjson	-	-	-	-	-
+#
+# --- OpenTitan e2e: compile + sim + LEC (uses run_opentitan_formal_e2e.sh) ---
+opentitan_e2e_smoke	smoke	utils/run_opentitan_formal_e2e.sh --opentitan-root ~/opentitan --out-dir /tmp/unified-opentitan-e2e-smoke --sim-targets gpio,uart --verilog-targets gpio,uart,spi_device	-	-	-	-	-
+opentitan_e2e_nightly	nightly,full	utils/run_opentitan_formal_e2e.sh --opentitan-root ~/opentitan --out-dir /tmp/unified-opentitan-e2e-nightly --sim-targets gpio,uart,usbdev,i2c --verilog-targets gpio,uart,spi_device,usbdev,i2c,dma,keymgr_dpe	-	-	-	-	-
+#
+# --- OpenTitan sim: individual targets via circt-sim ---
+opentitan_sim_smoke	smoke	utils/run_opentitan_circt_sim.sh prim_fifo_sync	-	-	-	-	-
+opentitan_sim_nightly	nightly,full	utils/run_opentitan_formal_e2e.sh --opentitan-root ~/opentitan --out-dir /tmp/unified-opentitan-sim-nightly --skip-verilog --skip-lec	-	-	-	-	-
+#
+# --- OpenTitan compile: parse targets via circt-verilog ---
+opentitan_verilog_smoke	smoke	utils/run_opentitan_circt_verilog.sh gpio	-	-	-	-	-
+opentitan_verilog_nightly	nightly,full	utils/run_opentitan_formal_e2e.sh --opentitan-root ~/opentitan --out-dir /tmp/unified-opentitan-verilog-nightly --skip-sim --skip-lec	-	-	-	-	-
+#
+# --- Ibex formal: BMC against RTL assertions ---
+ibex_formal_bmc	nightly,full	utils/run_ibex_formal_circt_bmc.sh /tmp/unified-ibex-formal-bmc	-	-	-	-	-
+ibex_formal_bmc_smoke	smoke	BMC_BOUND=5 TIMEOUT=60 utils/run_ibex_formal_circt_bmc.sh /tmp/unified-ibex-formal-bmc-smoke	-	-	-	-	-
+#
+# --- Ibex UVM: full testbench simulation via circt-sim ---
+ibex_uvm_sim	nightly,full	utils/run_ibex_uvm_circt_sim.sh /tmp/unified-ibex-uvm-sim	-	-	-	-	-
+ibex_uvm_compile	smoke,nightly,full	COMPILE_ONLY=1 utils/run_ibex_uvm_circt_sim.sh /tmp/unified-ibex-uvm-compile	-	-	-	-	-
+#
+# --- MCY mutation examples ---
+mcy_examples	nightly,full	utils/run_mutation_mcy_examples_native_real.sh --examples-root ~/mcy/examples --out-dir /tmp/unified-mcy-examples	-	-	-	-	-
+#
+# --- Cocotb upstream VPI test suite ---
+cocotb_vpi	smoke,nightly,full	utils/run_cocotb_tests.sh	-	-	-	-	-
+#
+# --- CVDP: cocotb functional tests (non-commercial dataset, 302 entries) ---
+cvdp_cocotb_noncommercial	smoke,nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl -o /tmp/unified-cvdp-noncommercial	-	-	-	-	-
+cvdp_cocotb_noncommercial_smoke25	smoke,nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl -n 25 -o /tmp/unified-cvdp-noncommercial-smoke25	-	-	-	-	-
+cvdp_cocotb_noncommercial_compileonly	nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl --compile-only -o /tmp/unified-cvdp-noncommercial-compileonly	-	-	-	-	-
+#
+# --- CVDP: cocotb functional tests (commercial dataset, 187 entries) ---
+cvdp_cocotb_commercial	nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -o /tmp/unified-cvdp-commercial	-	-	-	-	-
+cvdp_cocotb_commercial_smoke25	smoke,nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -n 25 -o /tmp/unified-cvdp-commercial-smoke25	-	-	-	-	-
+cvdp_cocotb_commercial_compileonly	nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl --compile-only -o /tmp/unified-cvdp-commercial-compileonly	-	-	-	-	-
+#
+# --- CVDP: golden RTL smoke tests (commercial dataset, 103 entries with golden RTL) ---
+cvdp_golden_smoke	smoke,nightly,full	python3 ~/cvdp_benchmark/run_circt_golden_smoke.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -o /tmp/unified-cvdp-golden-smoke	-	-	-	-	-
+cvdp_golden_commercial_smoke25	smoke,nightly,full	python3 ~/cvdp_benchmark/run_circt_golden_smoke.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -n 25 -o /tmp/unified-cvdp-golden-commercial-smoke25	-	-	-	-	-
+cvdp_golden_noncommercial_smoke25	smoke,nightly,full	python3 ~/cvdp_benchmark/run_circt_golden_smoke.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl -n 25 -o /tmp/unified-cvdp-golden-noncommercial-smoke25	-	-	-	-	-
