@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <ctime>
 #include <functional>
 #include <map>
@@ -38,6 +39,7 @@
 #include <random>
 #include <regex>
 #include <set>
+#include <sstream>
 #include <thread>
 #include <unordered_map>
 #include <string>
@@ -2033,21 +2035,39 @@ extern "C" void __moore_process_await(int64_t /*handle*/) {
   // In the interpreter, this suspends until process completion.
 }
 
+// Per-thread RNG for process::srandom/get_randstate/set_randstate.
+// In compiled simulation there is no multi-process scheduler, so a single
+// thread-local RNG per thread mirrors the per-process RNG in the interpreter.
+namespace {
+thread_local std::mt19937 processRng(std::random_device{}());
+} // namespace
+
 extern "C" MooreString __moore_process_get_randstate(int64_t /*handle*/) {
-  // Stub implementation for process::get_randstate().
-  // Return empty string in compiled simulation.
-  return MooreString{nullptr, 0};
+  // Serialize the process RNG state to a string.
+  std::ostringstream oss;
+  oss << processRng;
+  std::string stateStr = oss.str();
+  if (stateStr.empty())
+    return MooreString{nullptr, 0};
+  MooreString result = allocateString(static_cast<int64_t>(stateStr.size()));
+  if (result.data)
+    std::memcpy(result.data, stateStr.data(), stateStr.size());
+  return result;
 }
 
 extern "C" void __moore_process_set_randstate(int64_t /*handle*/,
-                                              MooreString /*state*/) {
-  // Stub implementation for process::set_randstate().
-  // No-op in compiled simulation.
+                                              MooreString state) {
+  // Deserialize the RNG state from the string.
+  if (!state.data || state.len <= 0)
+    return;
+  std::string stateStr(state.data, static_cast<size_t>(state.len));
+  std::istringstream iss(stateStr);
+  iss >> processRng;
 }
 
-extern "C" void __moore_process_srandom(int64_t /*handle*/, int32_t /*seed*/) {
-  // Stub implementation for process::srandom().
-  // No-op in compiled simulation.
+extern "C" void __moore_process_srandom(int64_t /*handle*/, int32_t seed) {
+  // Seed the per-thread process RNG.
+  processRng.seed(static_cast<uint32_t>(seed));
 }
 
 /// Global initial random seed, set once at startup.
@@ -2078,51 +2098,101 @@ extern "C" int32_t __moore_get_initial_random_seed(void) {
 // Mailbox Operations (Stubs)
 //===----------------------------------------------------------------------===//
 //
-// These are stub implementations for the mailbox runtime functions.
-// The actual implementation is in SyncPrimitivesManager, accessed via
-// DPI hooks in the interpreter. These stubs exist for:
-// 1. Link compatibility when compiling SystemVerilog to native code
-// 2. Documentation of the expected function signatures
+// Mailbox runtime — in-memory bounded queues for compiled/JIT simulation.
+// IEEE 1800-2017 Section 15.4: mailbox is a built-in class providing
+// inter-process communication via bounded or unbounded FIFO queues.
 //
 
+namespace {
+struct RuntimeMailbox {
+  int32_t bound; // 0 = unbounded
+  std::deque<int64_t> queue;
+  std::mutex mtx;
+};
+static std::mutex mailboxRegistryMutex;
+static std::unordered_map<int64_t, std::unique_ptr<RuntimeMailbox>>
+    mailboxRegistry;
+static int64_t nextMailboxId = 1;
+} // namespace
+
 extern "C" int64_t __moore_mailbox_create(int32_t bound) {
-  // Stub: In compiled simulation, this would allocate a real mailbox.
-  // The interpreter handles this via SyncPrimitivesManager.
-  (void)bound;
-  return 0; // Invalid mailbox ID
+  std::lock_guard<std::mutex> lock(mailboxRegistryMutex);
+  int64_t id = nextMailboxId++;
+  auto mbox = std::make_unique<RuntimeMailbox>();
+  mbox->bound = bound;
+  mailboxRegistry[id] = std::move(mbox);
+  return id;
 }
 
 extern "C" bool __moore_mailbox_tryput(int64_t mbox_id, int64_t msg) {
-  // Stub: Non-blocking put - returns false (mailbox full/invalid)
-  (void)mbox_id;
-  (void)msg;
-  return false;
+  std::lock_guard<std::mutex> lock(mailboxRegistryMutex);
+  auto it = mailboxRegistry.find(mbox_id);
+  if (it == mailboxRegistry.end())
+    return false;
+  auto &mbox = *it->second;
+  std::lock_guard<std::mutex> mLock(mbox.mtx);
+  if (mbox.bound > 0 &&
+      static_cast<int32_t>(mbox.queue.size()) >= mbox.bound)
+    return false; // full
+  mbox.queue.push_back(msg);
+  return true;
 }
 
 extern "C" bool __moore_mailbox_tryget(int64_t mbox_id, int64_t *msg_out) {
-  // Stub: Non-blocking get - returns false (mailbox empty/invalid)
-  (void)mbox_id;
-  (void)msg_out;
-  return false;
+  std::lock_guard<std::mutex> lock(mailboxRegistryMutex);
+  auto it = mailboxRegistry.find(mbox_id);
+  if (it == mailboxRegistry.end())
+    return false;
+  auto &mbox = *it->second;
+  std::lock_guard<std::mutex> mLock(mbox.mtx);
+  if (mbox.queue.empty())
+    return false;
+  if (msg_out)
+    *msg_out = mbox.queue.front();
+  mbox.queue.pop_front();
+  return true;
 }
 
 extern "C" bool __moore_mailbox_trypeek(int64_t mbox_id, int64_t *msg_out) {
-  // Stub: Non-blocking peek - returns false (mailbox empty/invalid)
-  (void)mbox_id;
-  (void)msg_out;
-  return false;
+  std::lock_guard<std::mutex> lock(mailboxRegistryMutex);
+  auto it = mailboxRegistry.find(mbox_id);
+  if (it == mailboxRegistry.end())
+    return false;
+  auto &mbox = *it->second;
+  std::lock_guard<std::mutex> mLock(mbox.mtx);
+  if (mbox.queue.empty())
+    return false;
+  if (msg_out)
+    *msg_out = mbox.queue.front();
+  return true;
 }
 
 extern "C" int64_t __moore_mailbox_num(int64_t mbox_id) {
-  // Stub: Returns 0 (empty or invalid mailbox)
-  (void)mbox_id;
-  return 0;
+  std::lock_guard<std::mutex> lock(mailboxRegistryMutex);
+  auto it = mailboxRegistry.find(mbox_id);
+  if (it == mailboxRegistry.end())
+    return 0;
+  auto &mbox = *it->second;
+  std::lock_guard<std::mutex> mLock(mbox.mtx);
+  return static_cast<int64_t>(mbox.queue.size());
 }
 
 extern "C" void __moore_mailbox_peek(int64_t mbox_id, int64_t *msg_out) {
-  // Stub: Blocking peek - no-op in compiled simulation.
-  (void)mbox_id;
-  (void)msg_out;
+  // Blocking peek — in compiled simulation without a scheduler, poll once.
+  // If empty, writes 0 to msg_out (best-effort without suspension).
+  std::lock_guard<std::mutex> lock(mailboxRegistryMutex);
+  auto it = mailboxRegistry.find(mbox_id);
+  if (it == mailboxRegistry.end()) {
+    if (msg_out)
+      *msg_out = 0;
+    return;
+  }
+  auto &mbox = *it->second;
+  std::lock_guard<std::mutex> mLock(mbox.mtx);
+  if (!mbox.queue.empty() && msg_out)
+    *msg_out = mbox.queue.front();
+  else if (msg_out)
+    *msg_out = 0;
 }
 
 //===----------------------------------------------------------------------===//
