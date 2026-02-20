@@ -579,23 +579,44 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   // pending updates are applied atomically (phase 2). This ensures correct
   // Verilog non-blocking assignment semantics (IEEE 1800-2017 §10.4.2).
   this->scheduler.setPostRegionCallback(SchedulingRegion::NBA, [this]() {
-    if (pendingFirRegUpdates.empty()) {
-      processConditionalDriveSignals.clear();
-      return;
+    static bool traceMultiDrv = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_MULTI_DRV");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+    if (traceMultiDrv && !processConditionalDriveValues.empty()) {
+      llvm::errs() << "[MULTI-DRV-POST-NBA] conditional signals: {";
+      for (auto &[s, v] : processConditionalDriveValues)
+        llvm::errs() << s << ",";
+      llvm::errs() << "} pendingFirRegs=" << pendingFirRegUpdates.size()
+                   << " t=" << this->scheduler.getCurrentTime().realTime << "\n";
+    }
+    // Apply conditional process drive values.  These replace the firreg's
+    // stale captured value for signals where a process explicitly assigned
+    // in this cycle.  Applied here (during executeCurrentTime) so the new
+    // value is visible before cbValueChange callbacks fire.
+    for (auto &[sigId, driveVal] : processConditionalDriveValues) {
+      if (traceMultiDrv) {
+        llvm::SmallString<64> hexBuf;
+        driveVal.getAPInt().toString(hexBuf, 16, false);
+        llvm::errs() << "[MULTI-DRV-POST-NBA] applying conditional drive for sig="
+                     << sigId << " w=" << driveVal.getWidth()
+                     << " isX=" << driveVal.isUnknown()
+                     << " val=0x" << hexBuf << "\n";
+      }
+      this->scheduler.updateSignal(sigId, driveVal);
     }
     for (auto &[sigId, val] : pendingFirRegUpdates) {
-      // When a process conditionally drove this signal in the same NBA batch,
-      // skip the firreg update.  The process drive carries the explicit write
-      // from the always block that assigned to the register; the firreg only
-      // holds the retention value (the old captured value before any NBA
-      // events fired).  Applying the firreg update would overwrite the
-      // process's correct new value with the stale retention value.
-      if (processConditionalDriveSignals.contains(sigId))
+      if (processConditionalDriveValues.count(sigId)) {
+        if (traceMultiDrv) {
+          llvm::errs() << "[MULTI-DRV-POST-NBA] SKIPPED firreg update for sig="
+                       << sigId << "\n";
+        }
         continue;
+      }
       this->scheduler.updateSignal(sigId, val);
     }
     pendingFirRegUpdates.clear();
-    processConditionalDriveSignals.clear();
+    processConditionalDriveValues.clear();
   });
   deferFirRegUpdates = true;
 }
@@ -2550,6 +2571,9 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Register combinational processes for static module-level drives
   // (continuous assignments like port connections).
   registerContinuousAssignments(hwModule, 0, InstanceInputMapping{});
+
+  // Build alloca -> signal mapping for fork-child write propagation.
+  buildAllocaToSignalMapping(hwModule);
 
   // Discover global ops once, shared between initializeGlobals and
   // executeGlobalConstructors to avoid duplicate module walks.
@@ -5089,6 +5113,164 @@ void LLHDProcessInterpreter::registerModuleDrive(
   }
 }
 
+void LLHDProcessInterpreter::buildAllocaToSignalMapping(
+    hw::HWModuleOp hwModule) {
+  // Scan for the pattern: llhd.process yields a value loaded from an alloca,
+  // and a module-level llhd.drv drives a signal with the process result.
+  // This establishes: alloca -> signal mapping so that fork-child writes
+  // to the alloca can also propagate to the backing signal.
+  for (auto &op : *hwModule.getBodyBlock()) {
+    auto driveOp = dyn_cast<llhd::DriveOp>(&op);
+    if (!driveOp)
+      continue;
+
+    // Find the signal being driven
+    Value signal = driveOp.getSignal();
+    SignalId sigId = getSignalId(signal);
+    if (sigId == 0)
+      continue;
+
+    // Check if the drive value comes from a process result
+    Value driveValue = driveOp.getValue();
+    auto processResult = dyn_cast<mlir::OpResult>(driveValue);
+    if (!processResult)
+      continue;
+
+    auto processOp = dyn_cast<llhd::ProcessOp>(processResult.getOwner());
+    if (!processOp)
+      continue;
+
+    unsigned resultIdx = processResult.getResultNumber();
+
+    // Scan the process body for llhd.wait yield operations.
+    // Trace the yield operand back through conversions and loads to an alloca.
+    processOp.getBody().walk([&](llhd::WaitOp waitOp) {
+      auto yieldOps = waitOp.getYieldOperands();
+      if (resultIdx >= yieldOps.size())
+        return;
+
+      Value yieldVal = yieldOps[resultIdx];
+
+      // Trace through unrealized_conversion_cast
+      if (auto cast =
+              yieldVal.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+        if (cast.getInputs().size() == 1)
+          yieldVal = cast.getInputs()[0];
+      }
+
+      // Trace through llvm.load
+      if (auto loadOp = yieldVal.getDefiningOp<LLVM::LoadOp>()) {
+        Value ptr = loadOp.getAddr();
+        if (auto allocaOp = ptr.getDefiningOp<LLVM::AllocaOp>()) {
+          allocaBackingSignal[allocaOp.getResult()] = sigId;
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Built alloca->signal mapping: alloca -> signal "
+                     << sigId << " (" << getSignalName(sigId) << ")\n");
+        }
+      }
+    });
+
+    // Also scan for llhd.halt yield operands (same pattern).
+    processOp.getBody().walk([&](llhd::HaltOp haltOp) {
+      auto yieldOps = haltOp.getOperands();
+      if (resultIdx >= yieldOps.size())
+        return;
+
+      Value yieldVal = yieldOps[resultIdx];
+
+      if (auto cast =
+              yieldVal.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+        if (cast.getInputs().size() == 1)
+          yieldVal = cast.getInputs()[0];
+      }
+
+      if (auto loadOp = yieldVal.getDefiningOp<LLVM::LoadOp>()) {
+        Value ptr = loadOp.getAddr();
+        if (auto allocaOp = ptr.getDefiningOp<LLVM::AllocaOp>()) {
+          allocaBackingSignal[allocaOp.getResult()] = sigId;
+        }
+      }
+    });
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Built "
+                          << allocaBackingSignal.size()
+                          << " alloca->signal mappings\n");
+}
+
+void LLHDProcessInterpreter::propagateAllocaWriteToBackingSignal(
+    MemoryBlock *block, uint64_t blockOffset, unsigned parentWidth,
+    Value parentSignal, ArrayRef<llhd::SigStructExtractOp> extractChain,
+    ProcessId procId) {
+  if (!block || allocaBackingSignal.empty())
+    return;
+
+  // Lazily populate the backing signal ID on the memory block.
+  if (block->backingSignalId == 0) {
+    // Walk the process parent chain to find which alloca owns this block.
+    ProcessId cur = procId;
+    while (cur != InvalidProcessId) {
+      auto stateIt = processStates.find(cur);
+      if (stateIt == processStates.end())
+        break;
+      for (auto &[val, mb] : stateIt->second.memoryBlocks) {
+        if (&mb == block) {
+          auto it = allocaBackingSignal.find(val);
+          if (it != allocaBackingSignal.end())
+            block->backingSignalId = it->second;
+          goto doneSearch;
+        }
+      }
+      cur = stateIt->second.parentProcessId;
+    }
+  doneSearch:;
+  }
+
+  if (block->backingSignalId == 0)
+    return;
+
+  SignalId backingSigId = block->backingSignalId;
+  unsigned sigWidth = scheduler.getSignalValue(backingSigId).getWidth();
+
+  // Re-read the full struct value from alloca memory.
+  unsigned storeBytes = (parentWidth + 7) / 8;
+  APInt allocaVal = APInt::getZero(parentWidth);
+  for (unsigned i = 0; i < storeBytes && i * 8 < parentWidth; ++i) {
+    unsigned bitsToInsert = std::min(8u, parentWidth - i * 8);
+    APInt byteVal(bitsToInsert,
+                  block->data[blockOffset + i] & ((1u << bitsToInsert) - 1));
+    safeInsertBits(allocaVal, byteVal, i * 8);
+  }
+
+  // Convert from LLVM layout to HW layout for the signal.
+  // Determine the HW type of the signal being backed.
+  Type sigType = parentSignal.getType();
+  if (auto refType = dyn_cast<llhd::RefType>(sigType))
+    sigType = refType.getNestedType();
+  if (!extractChain.empty()) {
+    // Copy the op wrapper to strip const from ArrayRef element.
+    llhd::SigStructExtractOp lastExtract = extractChain.back();
+    sigType = lastExtract.getInput().getType();
+    if (auto refType = dyn_cast<llhd::RefType>(sigType))
+      sigType = refType.getNestedType();
+  }
+
+  APInt hwValue = allocaVal;
+  if (isa<hw::StructType, hw::ArrayType>(sigType))
+    hwValue = convertLLVMToHWLayoutByHWType(allocaVal, sigType);
+
+  if (hwValue.getBitWidth() < sigWidth)
+    hwValue = hwValue.zext(sigWidth);
+  else if (hwValue.getBitWidth() > sigWidth)
+    hwValue = hwValue.trunc(sigWidth);
+
+  SignalValue newSigVal(hwValue);
+  scheduler.updateSignal(backingSigId, newSigVal);
+  pendingEpsilonDrives[backingSigId] = InterpretedValue(hwValue);
+  LLVM_DEBUG(llvm::dbgs() << "  Propagated alloca write to backing signal "
+                           << backingSigId << "\n");
+}
+
 void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
   // Recursion guard - prevent re-entrant calls during value evaluation
   static thread_local llvm::DenseSet<ProcessId> inProgress;
@@ -5126,6 +5308,18 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
       continue;
     }
 
+    // Suppress continuous assignment drives to forced signals
+    // (IEEE 1800-2017 §10.6: force overrides all drivers).
+    // Update the saved value so release restores the latest driver value.
+    if (forcedSignals.contains(sigId)) {
+      LLVM_DEBUG(llvm::dbgs() << "  Module drive suppressed: signal " << sigId
+                              << " is forced\n");
+      // Evaluate the would-be drive value and update saved value for release.
+      InterpretedValue suppressedVal = getValue(procId, driveOp.getValue());
+      forcedSignalSavedValues[sigId] = suppressedVal;
+      continue;
+    }
+
     // If this is an unconditional drive and a conditional process drive
     // already claimed this signal in the current NBA batch, skip it.
     // This implements Verilog multi-driver semantics: when two always blocks
@@ -5137,7 +5331,7 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
       return env && env[0] != '\0' && env[0] != '0';
     }();
     if (!driveOp.getEnable() &&
-        processConditionalDriveSignals.contains(sigId)) {
+        processConditionalDriveValues.count(sigId)) {
       if (traceMultiDrv) {
         llvm::errs() << "[MULTI-DRV] suppressed unconditional drive to sig="
                      << sigId << " (conditional already claimed)\n";
@@ -5225,18 +5419,42 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
                                                             activeInstanceId)
                             : static_cast<uint64_t>(sigId);
 
-    // When a conditional process drive fires (enable is true), record the
-    // signal so the post-NBA firreg callback can yield to it.  This prevents
-    // the firreg's captured old value from overwriting the process's new value
-    // when two always blocks drive the same register.
-    if (driveOp.getEnable() && !releaseDisabledDrive)
-      processConditionalDriveSignals.insert(sigId);
+    // When a conditional process drive fires (enable is true), store the
+    // value so the post-NBA callback can apply it alongside firreg updates.
+    // This is critical: the post-NBA callback runs during executeCurrentTime()
+    // (before cbValueChange fires), whereas TimeWheel NBA events run later
+    // (after the VPI callback returns).  Without this, cocotb would read the
+    // stale firreg value via cbValueChange before the TimeWheel NBA event
+    // has a chance to update the signal.
+    if (driveOp.getEnable() && !releaseDisabledDrive) {
+      processConditionalDriveValues[sigId] = newVal;
+      if (traceMultiDrv && sigId == 7) {
+        llvm::SmallString<64> hexBuf;
+        newVal.getAPInt().toString(hexBuf, 16, false);
+        llvm::errs() << "[MULTI-DRV] stored conditional drive for sig=" << sigId
+                     << " t=" << scheduler.getCurrentTime().realTime
+                     << " w=" << newVal.getWidth()
+                     << " isX=" << newVal.isUnknown()
+                     << " nonzero=" << (newVal.getAPInt() != 0)
+                     << " val=0x" << hexBuf << "\n";
+      }
+      // Do NOT skip TimeWheel scheduling: the post-NBA callback only fires
+      // when processes are executed in the NBA region. If the NBA queue is
+      // empty (only TimeWheel events), the callback does not fire and the
+      // drive would be lost. Schedule normally — the post-NBA callback
+      // applies it earlier when possible for cocotb timing.
+    }
 
     // Keep module-level drives in the scheduler to preserve NBA ordering
     // against other same-time updates (for example, init-time llhd.sig drives).
     scheduler.getEventScheduler().schedule(
         targetTime, SchedulingRegion::NBA,
         Event([this, sigId, driverId, newVal, strength0, strength1]() {
+          if (forcedSignals.contains(sigId)) {
+            forcedSignalSavedValues[sigId] =
+                InterpretedValue::fromSignalValue(newVal);
+            return;
+          }
           scheduler.updateSignalWithStrength(sigId, driverId, newVal,
                                              strength0, strength1);
         }));
@@ -5264,6 +5482,14 @@ void LLHDProcessInterpreter::executeModuleDrivesForSignal(SignalId sigId) {
     SignalId dstSigId = getSignalId(driveOp.getSignal());
     if (dstSigId == 0)
       continue;
+
+    // Suppress continuous assignment drives to forced signals.
+    // Evaluate and save the would-be value so release restores it.
+    if (forcedSignals.contains(dstSigId)) {
+      InterpretedValue suppressedVal = evaluateContinuousValue(driveOp.getValue());
+      forcedSignalSavedValues[dstSigId] = suppressedVal;
+      continue;
+    }
 
     // Check enable condition if present.
     bool releaseDisabledDrive = false;
@@ -5329,6 +5555,11 @@ void LLHDProcessInterpreter::executeModuleDrivesForSignal(SignalId sigId) {
     scheduler.getEventScheduler().schedule(
         targetTime, SchedulingRegion::NBA,
         Event([this, dstSigId, driverId, newVal, strength0, strength1]() {
+          if (forcedSignals.contains(dstSigId)) {
+            forcedSignalSavedValues[dstSigId] =
+                InterpretedValue::fromSignalValue(newVal);
+            return;
+          }
           scheduler.updateSignalWithStrength(dstSigId, driverId, newVal,
                                              strength0, strength1);
         }));
@@ -6533,6 +6764,16 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
     return;
   }
 
+  // Suppress continuous assignments to forced signals (IEEE 1800-2017 §10.6.2)
+  // Evaluate and save the would-be value so release restores it.
+  if (forcedSignals.contains(targetSigId)) {
+    InterpretedValue suppressedVal = evaluateContinuousValue(driveOp.getValue());
+    forcedSignalSavedValues[targetSigId] = suppressedVal;
+    LLVM_DEBUG(llvm::dbgs() << "  Continuous assignment suppressed: signal "
+                            << targetSigId << " is forced\n");
+    return;
+  }
+
   // Evaluate the drive value by interpreting the defining operation chain
   // We use process ID 0 as a dummy since continuous assignments don't have
   // their own process state - they evaluate values directly from signal state
@@ -6698,6 +6939,12 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
   scheduler.getEventScheduler().schedule(
       targetTime, SchedulingRegion::Active,
       Event([this, targetSigId, driverId, newVal, strength0, strength1]() {
+        if (forcedSignals.contains(targetSigId)) {
+          forcedSignalSavedValues[targetSigId] =
+              InterpretedValue::fromSignalValue(newVal);
+          pendingEpsilonDrives.erase(targetSigId);
+          return;
+        }
         scheduler.updateSignalWithStrength(targetSigId, driverId, newVal,
                                            strength0, strength1);
         // Clear any stale pending epsilon drive so future probes see
@@ -14829,19 +15076,23 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 }
                 unsigned fieldIndex = *fieldIndexOpt;
 
-                // For LLVM struct layout: fields are at low-to-high bits.
-                // Field 0 starts at bit 0, field 1 starts after field 0, etc.
+                // For LLVM struct layout: fields are packed at raw bit widths.
+                // Field 0 starts at bit 0, field 1 starts after field 0's
+                // raw width, etc. This matches the alloca's packed layout
+                // (getLLVMTypeSize sums raw widths, NOT byte-padded widths).
                 unsigned fieldOffset = 0;
                 for (size_t i = 0; i < fieldIndex; ++i)
-                  fieldOffset += getMemoryLayoutBitWidth(elements[i].type);
+                  fieldOffset += getTypeWidth(elements[i].type);
 
                 bitOffset += fieldOffset;
                 currentType = elements[fieldIndex].type;
               }
 
               unsigned fieldWidth = getTypeWidth(currentType);
-              unsigned parentWidth =
-                  getMemoryLayoutBitWidth(parentSignal.getType());
+              // Use raw (packed) bit width to match the alloca's memory layout.
+              // getMemoryLayoutBitWidth pads sub-byte fields to byte boundaries
+              // but alloca uses getLLVMTypeSize which packs at raw bit widths.
+              unsigned parentWidth = getTypeWidth(parentSignal.getType());
               unsigned storeSize = (parentWidth + 7) / 8;
 
               if (blockOffset + storeSize > block->size) {
@@ -14979,6 +15230,16 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               LLVM_DEBUG(llvm::dbgs()
                          << "  Drive to struct field in alloca at offset "
                          << bitOffset << " width " << fieldWidth << "\n");
+
+              // Also set up the backing signal lazily since we have allocaOp.
+              if (block->backingSignalId == 0) {
+                auto it = allocaBackingSignal.find(allocaOp.getResult());
+                if (it != allocaBackingSignal.end())
+                  block->backingSignalId = it->second;
+              }
+              propagateAllocaWriteToBackingSignal(
+                  block, blockOffset, parentWidth, parentSignal, extractChain,
+                  procId);
               return success();
             }
           }
@@ -15017,14 +15278,14 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               unsigned fieldIndex = *fieldIndexOpt;
               unsigned fieldOff = 0;
               for (size_t i = 0; i < fieldIndex; ++i)
-                fieldOff += getMemoryLayoutBitWidth(elements[i].type);
+                fieldOff += getTypeWidth(elements[i].type);
               bitOffset += fieldOff;
               currentType = elements[fieldIndex].type;
             }
 
             unsigned fieldWidth = getTypeWidth(currentType);
-            unsigned parentWidth =
-                getMemoryLayoutBitWidth(parentSignal.getType());
+            // Use raw (packed) bit width to match the alloca's memory layout.
+            unsigned parentWidth = getTypeWidth(parentSignal.getType());
             unsigned storeSize = (parentWidth + 7) / 8;
 
             if (blockOffset + storeSize <= block->size) {
@@ -15111,6 +15372,10 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                          << "  Drive to struct field in memory-backed ref at "
                             "offset "
                          << bitOffset << " width " << fieldWidth << "\n");
+
+              propagateAllocaWriteToBackingSignal(
+                  block, blockOffset, parentWidth, parentSignal, extractChain,
+                  procId);
               return success();
             }
           }
@@ -15868,6 +16133,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       forcedSignalSavedValues[sigId] =
           InterpretedValue::fromSignalValue(scheduler.getSignalValue(sigId));
     }
+    forcedSignals.insert(sigId);
     LLVM_DEBUG(llvm::dbgs() << "  Force: saved pre-force value for signal "
                             << sigId << "\n");
   }
@@ -15878,6 +16144,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
   if (isRelease) {
     // On release, restore the saved pre-force value instead of the
     // probed current value (which would be the forced value).
+    forcedSignals.erase(sigId);
     auto savedIt = forcedSignalSavedValues.find(sigId);
     if (savedIt != forcedSignalSavedValues.end()) {
       driveVal = savedIt->second;
@@ -15888,6 +16155,16 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       LLVM_DEBUG(llvm::dbgs() << "  Release: no saved value for signal "
                               << sigId << ", using current\n");
     }
+  }
+
+  // If the signal is currently forced and this is NOT a force/release drive,
+  // suppress the actual signal update. Instead, update the saved value so
+  // that release restores the last driven value (IEEE 1800-2017 §10.6.2).
+  if (!isForce && !isRelease && forcedSignals.contains(sigId)) {
+    forcedSignalSavedValues[sigId] = driveVal;
+    LLVM_DEBUG(llvm::dbgs() << "  Drive suppressed: signal " << sigId
+                            << " is forced, updated saved value\n");
+    return success();
   }
 
   // Get the delay time
@@ -15948,6 +16225,17 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                           << " strength(" << getDriveStrengthName(strength0)
                           << ", " << getDriveStrengthName(strength1) << ")\n");
 
+  // For force/release, update the signal immediately (bypass multi-driver
+  // resolution and event scheduling). IEEE 1800-2017 §10.6: force overrides
+  // all drivers. We update immediately because the event scheduler may have
+  // already processed the current delta step.
+  if (isForce || isRelease) {
+    SignalValue newVal = driveVal.toSignalValue();
+    scheduler.updateSignal(sigId, newVal);
+    pendingEpsilonDrives[sigId] = driveVal;
+    return success();
+  }
+
   // For epsilon/zero delays, also store in pending drives for immediate reads.
   // This enables blocking assignment semantics where a subsequent probe in the
   // same process sees the value immediately rather than waiting for the event.
@@ -15960,6 +16248,14 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
   scheduler.getEventScheduler().schedule(
       targetTime, SchedulingRegion::NBA,
       Event([this, sigId, driverId, newVal, strength0, strength1]() {
+        // Suppress drives to forced signals (IEEE 1800-2017 §10.6).
+        // Save the would-be value so release restores the latest driver value.
+        if (forcedSignals.contains(sigId)) {
+          forcedSignalSavedValues[sigId] =
+              InterpretedValue::fromSignalValue(newVal);
+          pendingEpsilonDrives.erase(sigId);
+          return;
+        }
         scheduler.updateSignalWithStrength(sigId, driverId, newVal, strength0,
                                            strength1);
         // Clear the pending epsilon drive now that the scheduler has been
