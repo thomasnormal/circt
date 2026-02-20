@@ -84,15 +84,7 @@ ax2.set_ylabel('Test files', fontsize=10, color=PURPLE)
 ax2.tick_params(axis='y', colors=PURPLE)
 ax2.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f'{x/1000:.1f}K'))
 
-# Line overlay for weekly commits
-weekly_midpoints = [wd + timedelta(days=3) for wd in weekly_dates]
-ax3 = ax1.twinx()
-ax3.spines['right'].set_position(('axes', 1.08))
-ax3.plot(weekly_midpoints, weekly_counts, color=ORANGE, linewidth=1.8,
-         marker='o', markersize=5, zorder=6, label='Commits/week')
-ax3.set_ylabel('Commits / week', fontsize=10, color=ORANGE)
-ax3.tick_params(axis='y', colors=ORANGE)
-ax3.set_ylim(0, max(weekly_counts) * 1.5)
+# (commits/week overlay removed for cleaner chart)
 
 # Annotated milestones with colored phase bands
 phases = [
@@ -138,11 +130,9 @@ ax1.set_ylim(-45000, max(net_lines) * 1.2)
 ax2.set_ylim(0, max(test_files) * 1.35)
 
 # Legend
-from matplotlib.lines import Line2D
 blue_line = mpatches.Patch(color=BLUE, alpha=0.4, label='Net lines added')
 purple_line = mpatches.Patch(color=PURPLE, alpha=0.3, label='Test files')
-orange_line = Line2D([0], [0], color=ORANGE, linewidth=1.8, marker='o', markersize=4, label='Commits/week')
-ax1.legend(handles=[blue_line, purple_line, orange_line], loc='upper left', fontsize=8,
+ax1.legend(handles=[blue_line, purple_line], loc='upper left', fontsize=8,
            framealpha=0.9, edgecolor=GRAY_LIGHT)
 
 ax1.set_title('Development Timeline: 2,968 commits over 43 days', fontsize=14, fontweight='bold', pad=12)
@@ -322,6 +312,30 @@ plt.suptitle('Performance: circt-sim vs Xcelium', fontsize=13, fontweight='bold'
 plt.tight_layout()
 plt.savefig('blog_data/chart_speed_comparison.svg', format='svg', dpi=150)
 plt.savefig('blog_data/chart_speed_comparison.png', format='png', dpi=150)
+plt.close()
+
+# ── Chart 7: sv-tests Comparison ──
+fig, ax = plt.subplots(figsize=(9, 5))
+tools = ['Slang\n(circt parser)', 'Verilator', 'Icarus\nVerilog', 'circt-sim']
+passes = [1610, 1527, 1165, 127]
+totals = [1610, 1614, 1614, 1498]
+rates = [p/t*100 for p, t in zip(passes, totals)]
+colors_sv = ['#8b5cf6', '#22c55e', '#f59e0b', BLUE]
+
+bars = ax.bar(tools, rates, color=colors_sv, alpha=0.85, edgecolor='white', width=0.6)
+for bar, p, t, r in zip(bars, passes, totals, rates):
+    ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 1.5,
+            f'{r:.1f}%\n({p}/{t})', ha='center', va='bottom', fontsize=9, fontweight='bold',
+            color=SLATE, linespacing=1.4)
+
+ax.set_ylabel('Pass rate (%)', fontsize=11)
+ax.set_title('sv-tests Compliance (IEEE 1800-2017)', fontsize=13, fontweight='bold')
+ax.set_ylim(0, 115)
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+plt.tight_layout()
+plt.savefig('blog_data/chart_sv_tests.svg', format='svg', dpi=150)
+plt.savefig('blog_data/chart_sv_tests.png', format='png', dpi=150)
 plt.close()
 
 print("All charts generated in blog_data/")
