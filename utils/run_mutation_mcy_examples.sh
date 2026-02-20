@@ -51,6 +51,8 @@ Options:
   --yosys PATH             yosys binary (default: yosys)
   --mutations-backend MODE  Mutation generation backend in non-smoke mode:
                            yosys|native (default: yosys)
+  --require-native-backend  Fail unless --mutations-backend=native
+                           (or CIRCT_MUT_REQUIRE_NATIVE_BACKEND=1)
   --native-tests-mode MODE   Test harness mode when using native backend:
                            synthetic|real (default: synthetic)
   --native-real-tests-strict
@@ -345,6 +347,7 @@ OUT_DIR="${PWD}/mutation-mcy-examples-results"
 CIRCT_MUT=""
 YOSYS_BIN="${YOSYS:-yosys}"
 MUTATIONS_BACKEND="yosys"
+REQUIRE_NATIVE_BACKEND="${CIRCT_MUT_REQUIRE_NATIVE_BACKEND:-0}"
 NATIVE_TESTS_MODE="synthetic"
 NATIVE_REAL_TESTS_STRICT=0
 NATIVE_MUTATION_OPS=""
@@ -3399,6 +3402,10 @@ while [[ $# -gt 0 ]]; do
       MUTATIONS_BACKEND="$2"
       shift 2
       ;;
+    --require-native-backend)
+      REQUIRE_NATIVE_BACKEND=1
+      shift
+      ;;
     --native-tests-mode)
       NATIVE_TESTS_MODE="$2"
       shift 2
@@ -3809,6 +3816,14 @@ if ! is_pos_int "$MUTATION_LIMIT"; then
 fi
 if [[ "$MUTATIONS_BACKEND" != "yosys" && "$MUTATIONS_BACKEND" != "native" ]]; then
   echo "--mutations-backend must be one of: yosys|native" >&2
+  exit 1
+fi
+if [[ "$REQUIRE_NATIVE_BACKEND" != "0" && "$REQUIRE_NATIVE_BACKEND" != "1" ]]; then
+  echo "CIRCT_MUT_REQUIRE_NATIVE_BACKEND must be 0 or 1: $REQUIRE_NATIVE_BACKEND" >&2
+  exit 1
+fi
+if [[ "$REQUIRE_NATIVE_BACKEND" == "1" && "$MUTATIONS_BACKEND" != "native" ]]; then
+  echo "--require-native-backend requires --mutations-backend native" >&2
   exit 1
 fi
 if [[ "$NATIVE_TESTS_MODE" != "synthetic" && "$NATIVE_TESTS_MODE" != "real" ]]; then

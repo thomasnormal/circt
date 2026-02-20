@@ -1,0 +1,3 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples.sh --require-native-backend --smoke 2>&1 | FileCheck %s
+
+// CHECK: --require-native-backend requires --mutations-backend native
