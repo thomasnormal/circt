@@ -14538,7 +14538,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
           unsigned memoryFieldBitOff = 0;
           for (size_t i = 0; i < fieldIndex; ++i)
-            memoryFieldBitOff += getMemoryLayoutBitWidth(elements[i].type);
+            memoryFieldBitOff += getTypeWidth(elements[i].type);
           memoryBitOffset += memoryFieldBitOff;
           parentRef = structExtract.getInput();
           continue;
@@ -14555,7 +14555,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           // This handles both alloca-backed refs (local variables) and
           // GEP-backed refs (class properties like JTAG coverage fields).
           InterpretedValue driveVal = getValue(procId, driveOp.getValue());
-          unsigned parentWidth = getMemoryLayoutBitWidth(parentRef.getType());
+          // Use raw (packed) bit width to match alloca memory layout.
+          unsigned parentWidth = getTypeWidth(parentRef.getType());
           unsigned extractWidth = driveVal.getWidth();
           if (memoryBitOffset + extractWidth > parentWidth) {
             LLVM_DEBUG(llvm::dbgs()
@@ -14741,8 +14742,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               findMemoryBlockByAddress(addr, procId, &blockOffset);
           if (block) {
             InterpretedValue driveVal = getValue(procId, driveOp.getValue());
-            unsigned parentWidth =
-                getMemoryLayoutBitWidth(parentRef.getType());
+            // Use raw (packed) bit width to match alloca memory layout.
+            unsigned parentWidth = getTypeWidth(parentRef.getType());
             unsigned extractWidth = driveVal.getWidth();
             if (memoryBitOffset + extractWidth > parentWidth) {
               LLVM_DEBUG(llvm::dbgs()
@@ -15713,7 +15714,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                     break;
                   unsigned fieldOff = 0;
                   for (size_t i = 0; i < *fidx; ++i)
-                    fieldOff += getMemoryLayoutBitWidth(elems[i].type);
+                    fieldOff += getTypeWidth(elems[i].type);
                   structBitOffset += fieldOff;
                   curType = elems[*fidx].type;
                 }
@@ -15741,9 +15742,9 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                   InterpretedValue driveVal =
                       getValue(procId, driveOp.getValue());
 
-                  // Read-modify-write the memory block
-                  unsigned rootWidth =
-                      getMemoryLayoutBitWidth(traceVal.getType());
+                  // Read-modify-write the memory block.
+                  // Use raw (packed) bit width to match alloca memory layout.
+                  unsigned rootWidth = getTypeWidth(traceVal.getType());
                   unsigned storeSize = (rootWidth + 7) / 8;
 
                   if (blockOffset + storeSize <= block->size) {
