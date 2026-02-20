@@ -3,3 +3,7 @@
 	url = https://github.com/llvm/llvm-project.git
 	shallow = true
 	branch = main
+[submodule "uvm-core"]
+	path = lib/Runtime/uvm-core
+	url = https://github.com/accellera-official/uvm-core.git
+	shallow = true
