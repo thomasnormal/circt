@@ -316,11 +316,11 @@ plt.close()
 
 # ── Chart 7: sv-tests Comparison ──
 fig, ax = plt.subplots(figsize=(9, 5))
-tools = ['Slang\n(circt parser)', 'Verilator', 'Icarus\nVerilog', 'circt-sim']
-passes = [1610, 1527, 1165, 127]
-totals = [1610, 1614, 1614, 1498]
+tools = ['Slang\n(circt parser)', 'circt', 'Verilator', 'Icarus\nVerilog']
+passes = [1610, 1580, 1527, 1165]
+totals = [1610, 1622, 1614, 1614]
 rates = [p/t*100 for p, t in zip(passes, totals)]
-colors_sv = ['#8b5cf6', '#22c55e', '#f59e0b', BLUE]
+colors_sv = ['#8b5cf6', BLUE, '#22c55e', '#f59e0b']
 
 bars = ax.bar(tools, rates, color=colors_sv, alpha=0.85, edgecolor='white', width=0.6)
 for bar, p, t, r in zip(bars, passes, totals, rates):

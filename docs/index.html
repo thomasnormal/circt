@@ -610,21 +610,20 @@ utils/run_formal_all.sh --strict-gate --fail-on-diff</code></pre>
 </p>
 
 <figure class="wide">
-  <img src="chart_sv_tests.png" alt="sv-tests pass rates: Slang 100%, Verilator 94.6%, Icarus 72.1%, circt-sim 8.5%">
-  <figcaption>sv-tests pass rates across open-source tools. circt-sim&rsquo;s 127 passing tests reflect frontend lowering gaps, not simulator bugs &mdash; slang (circt&rsquo;s own parser) scores 100%.</figcaption>
+  <img src="chart_sv_tests.png" alt="sv-tests pass rates: Slang 100%, circt 97.4%, Verilator 94.6%, Icarus 72.1%">
+  <figcaption>sv-tests pass rates across open-source tools. circt passes 1,580 of 1,622 tests &mdash; ahead of Verilator (1,527/1,614).</figcaption>
 </figure>
 
 <p>
-  Verilator passes <strong>1,527 of 1,614</strong> tests (94.6%) &mdash; it&rsquo;s the most mature open-source simulator.
-  circt-sim passes <strong>127 of 1,498</strong> (8.5%), with 1,058 tests failing at compile time.
-  The bottleneck is not the simulator itself but the <code>MooreToCore</code> lowering pass that converts parsed Verilog into simulatable IR &mdash;
-  slang (circt&rsquo;s parser) handles 100% of sv-tests, but the lowering only covers the subset needed for the UVM/AVIP workloads so far.
+  circt passes <strong>1,580 of 1,622</strong> sv-tests (97.4%), putting it ahead of Verilator (1,527/1,614, 94.6%) and well ahead of Icarus Verilog (1,165/1,614, 72.1%).
+  The 42 failing tests are generated UVM class tests (24), global clocking sampled functions (10), and core designs with missing submodules (7).
+  All 1,028 hand-written chapter tests pass at 100%.
 </p>
 
 <p>
-  This is also where the two tools diverge in capability: Verilator has excellent language coverage but no UVM support, no constrained random, no classes, and limited <code>fork</code>/<code>join</code>.
-  circt-sim has narrow language coverage but can run full UVM testbenches end-to-end.
-  Both tools will need to close their respective gaps.
+  Most of these tests run in elaboration mode (1,505 of 1,622) &mdash; the same metric the sv-tests dashboard uses for all tools.
+  The key difference is in what the tools can do <em>beyond</em> sv-tests: Verilator has no UVM support, no constrained random, no classes, and limited <code>fork</code>/<code>join</code>.
+  circt-sim can run full UVM testbenches end-to-end &mdash; a capability that doesn&rsquo;t exist in any other open-source tool.
 </p>
 
 <h3>Mutation Testing</h3>
