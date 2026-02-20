@@ -73265,3 +73265,33 @@ See CHANGELOG.md on recent progress.
         `21.43% / 21.43%` coverage (controller/target) with matched tx counts,
         but still has scoreboard mismatch at `i3c_scoreboard.sv(179)`
         (`writeData` vectors remain empty in check-phase).
+78. `run_mutation_mcy_examples` harden native real harness arg quoting semantics
+    and add quoted-arg regression coverage
+    (February 20, 2026):
+    - fix:
+      - `utils/run_mutation_mcy_examples.sh`
+      - `validate_native_real_harness_args_spec` now validates shell-parseability
+        (`shlex.split`) when python is available, and reports a dedicated
+        invalid-quoting diagnostic for malformed inputs.
+      - `render_native_real_harness_args_suffix` now canonicalizes with
+        `shlex.split` + `shlex.join` (python path), preserving safe forwarding
+        for quoted and metachar-containing tokens.
+    - regression coverage:
+      - new:
+        - `test/Tools/run-mutation-mcy-examples-native-real-harness-args-quoted-pass.test`
+        - `test/Tools/run-mutation-mcy-examples-native-real-harness-args-quote-invalid.test`
+      - updated:
+        - `test/Tools/run-mutation-mcy-examples-native-real-harness-args-shell-escape-pass.test`
+      - validates:
+        - quoted token forwarding for `--native-real-harness-args`
+        - malformed quote rejection with explicit error contract
+        - shell metachar forwarding remains escaped/safe
+    - validation:
+      - lit (focused): PASS
+        - `run-mutation-mcy-examples-native-real-harness-args-(quoted-pass|quote-invalid|manifest-override-pass|cli-pass|invalid|shell-escape-pass|policy-fingerprint-canonical-pass)`
+      - lit (suite): PASS
+        - `run-mutation-mcy-examples`
+      - real examples (native backend, strict real-tests): PASS
+        - `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --jobs 2 --example-retries 1 --circt-mut build-test/bin/circt-mut --mutations-backend native --native-tests-mode real --native-real-tests-strict`
+        - `bitcnt`: `7/8` (`87.50%`)
+        - `picorv32_primes`: `8/8` (`100.00%`)
