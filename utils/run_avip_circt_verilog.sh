@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CIRCT_ROOT="${CIRCT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 <avip_dir> [filelist...]" >&2
   exit 1
@@ -39,7 +42,7 @@ if [[ -n "$FILELIST_BASE" && ! -d "$FILELIST_BASE" ]]; then
   exit 1
 fi
 
-CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
+CIRCT_VERILOG="${CIRCT_VERILOG:-$CIRCT_ROOT/build-test/bin/circt-verilog}"
 UVM_DIR="${UVM_DIR:-/home/thomas-ahle/uvm-core/src}"
 OUT="${OUT:-$PWD/avip-circt-verilog.log}"
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
@@ -167,19 +170,38 @@ def is_spi_avip(avip_root: pathlib.Path, filelists):
             return True
     return False
 
-def is_jtag_avip(avip_root: pathlib.Path, filelists):
-    if avip_root and "jtag" in avip_root.name.lower():
+def is_ahb_avip(avip_root: pathlib.Path, filelists):
+    if avip_root and "ahb" in avip_root.name.lower():
         return True
     for fl in filelists:
-        if "jtag" in fl.name.lower():
+        if "ahb" in fl.name.lower():
             return True
         try:
             text = fl.read_text()
         except OSError:
             continue
-        if "jtag" in text.lower():
+        if "ahb" in text.lower():
             return True
     return False
+
+def is_i3c_avip(avip_root: pathlib.Path, filelists):
+    if avip_root and "i3c" in avip_root.name.lower():
+        return True
+    for fl in filelists:
+        if "i3c" in fl.name.lower():
+            return True
+        try:
+            text = fl.read_text()
+        except OSError:
+            continue
+        if "i3c" in text.lower():
+            return True
+    return False
+
+def append_after_once(text: str, anchor: str, block: str):
+    if anchor not in text:
+        return text, False
+    return text.replace(anchor, anchor + block, 1), True
 
 def drop_nested_block_comments(text: str):
     lines = text.splitlines()
@@ -219,24 +241,144 @@ def rewrite_spi_text(path: pathlib.Path, text: str):
         if new_text != text:
             text = new_text
             changed = True
-    return text, changed
-
-def rewrite_jtag_text(path: pathlib.Path, text: str):
-    changed = False
-    if path.name == "JtagControllerDeviceAgentBfm.sv":
-        new_text = text.replace(
-            "bind jtagControllerDeviceMonitorBfm ",
-            "bind JtagControllerDeviceMonitorBfm ",
-        )
-        if new_text != text:
+    if path.name == "SpiMasterMonitorProxy.sv":
+        anchor = "    spiMasterMonitorBFM.sampleData(masterPacketStruct, masterConfigStruct);"
+        block = """
+    if ((masterPacketStruct.noOfMosiBitsTransfer == 0) ||
+        (masterPacketStruct.noOfMisoBitsTransfer == 0)) begin
+      `uvm_warning("CIRCT_SPI_MONDBG",
+                   $sformatf("master zero transfer width mosi_bits=%0d miso_bits=%0d cpol=%0d cpha=%0d",
+                             masterPacketStruct.noOfMosiBitsTransfer,
+                             masterPacketStruct.noOfMisoBitsTransfer,
+                             masterConfigStruct.cpol, masterConfigStruct.cpha))
+    end
+"""
+        new_text, did_change = append_after_once(text, anchor, block)
+        if did_change:
             text = new_text
             changed = True
-    if path.name == "JtagTargetDeviceDriverBfm.sv":
-        new_text = text.replace(
-            "registerBank[instructionRegister]",
-            "registerBank[JtagInstructionOpcodeEnum'(instructionRegister)]",
+    if path.name == "SpiSlaveMonitorProxy.sv":
+        anchor = "    spiSlaveMonitorBFM.sampleData(slavePacketStruct, slaveConfigStruct);"
+        block = """
+    if ((slavePacketStruct.noOfMosiBitsTransfer == 0) ||
+        (slavePacketStruct.noOfMisoBitsTransfer == 0)) begin
+      `uvm_warning("CIRCT_SPI_MONDBG",
+                   $sformatf("slave zero transfer width mosi_bits=%0d miso_bits=%0d cpol=%0d cpha=%0d",
+                             slavePacketStruct.noOfMosiBitsTransfer,
+                             slavePacketStruct.noOfMisoBitsTransfer,
+                             slaveConfigStruct.cpol, slaveConfigStruct.cpha))
+    end
+"""
+        new_text, did_change = append_after_once(text, anchor, block)
+        if did_change:
+            text = new_text
+            changed = True
+    return text, changed
+
+def rewrite_ahb_text(path: pathlib.Path, text: str):
+    changed = False
+    if path.name in ("AhbMasterAgentBFM.sv", "AhbSlaveAgentBFM.sv"):
+        bind_starts = (
+            "bind AhbMasterMonitorBFM AhbMasterAssertion",
+            "bind AhbMasterMonitorBFM AhbMasterCoverProperty",
+            "bind AhbSlaveMonitorBFM AhbSlaveAssertion",
+            "bind AhbSlaveMonitorBFM AhbSlaveCoverProperty",
         )
-        if new_text != text:
+
+        lines = text.splitlines()
+        out = []
+        in_bind = False
+        local_changed = False
+        for line in lines:
+            stripped = line.strip()
+            if any(stripped.startswith(prefix) for prefix in bind_starts):
+                in_bind = True
+            if in_bind:
+                new_line = line.replace("ahbInterface.", "")
+                if new_line != line:
+                    local_changed = True
+                line = new_line
+                if ");" in stripped:
+                    in_bind = False
+            out.append(line)
+        if local_changed:
+            text = "\n".join(out) + "\n"
+            changed = True
+
+    if path.name == "AhbMasterMonitorProxy.sv":
+        anchor = "    ahbMasterMonitorBFM.sampleData (structDataPacket,  structConfigPacket);"
+        block = """
+    if ((structDataPacket.htrans == 2'b00) || (structDataPacket.hready != 1'b1)) begin
+      static int circtAhbMonDbgWarnCount = 0;
+      if ((circtAhbMonDbgWarnCount < 8) ||
+          ((circtAhbMonDbgWarnCount % 128) == 0)) begin
+        `uvm_warning("CIRCT_AHB_MONDBG",
+                     $sformatf("master inactive sample htrans=%0d hwrite=%0d hready=%0d haddr=%0h warn_count=%0d",
+                               structDataPacket.htrans, structDataPacket.hwrite,
+                               structDataPacket.hready, structDataPacket.haddr,
+                               circtAhbMonDbgWarnCount))
+      end
+      circtAhbMonDbgWarnCount++;
+    end
+"""
+        new_text, did_change = append_after_once(text, anchor, block)
+        if did_change:
+            text = new_text
+            changed = True
+
+    if path.name == "AhbSlaveMonitorProxy.sv":
+        anchor = "    ahbSlaveMonitorBFM.slaveSampleData (structDataPacket, structConfigPacket);"
+        block = """
+    if ((structDataPacket.htrans == 2'b00) || (structDataPacket.hreadyout != 1'b1)) begin
+      static int circtAhbMonDbgWarnCount = 0;
+      if ((circtAhbMonDbgWarnCount < 8) ||
+          ((circtAhbMonDbgWarnCount % 128) == 0)) begin
+        `uvm_warning("CIRCT_AHB_MONDBG",
+                     $sformatf("slave inactive sample htrans=%0d hwrite=%0d hreadyout=%0d haddr=%0h warn_count=%0d",
+                               structDataPacket.htrans, structDataPacket.hwrite,
+                               structDataPacket.hreadyout, structDataPacket.haddr,
+                               circtAhbMonDbgWarnCount))
+      end
+      circtAhbMonDbgWarnCount++;
+    end
+"""
+        new_text, did_change = append_after_once(text, anchor, block)
+        if did_change:
+            text = new_text
+            changed = True
+    return text, changed
+
+def rewrite_i3c_text(path: pathlib.Path, text: str):
+    changed = False
+    if path.name == "i3c_controller_monitor_proxy.sv":
+        anchor = "    i3c_controller_mon_bfm_h.sample_data(struct_packet,struct_cfg);"
+        block = """
+    if ((struct_packet.operation == 1'b0) &&
+        (struct_packet.no_of_i3c_bits_transfer == 0)) begin
+      `uvm_warning("CIRCT_I3C_MONDBG",
+                   $sformatf("controller zero write payload op=%0d addr_ack=%0d bits=%0d target=0x%0h",
+                             struct_packet.operation, struct_packet.targetAddressStatus,
+                             struct_packet.no_of_i3c_bits_transfer, struct_packet.targetAddress))
+    end
+"""
+        new_text, did_change = append_after_once(text, anchor, block)
+        if did_change:
+            text = new_text
+            changed = True
+
+    if path.name == "i3c_target_monitor_proxy.sv":
+        anchor = "    i3c_target_mon_bfm_h.sample_data(struct_packet,struct_cfg);"
+        block = """
+    if ((struct_packet.operation == 1'b0) &&
+        (struct_packet.no_of_i3c_bits_transfer == 0)) begin
+      `uvm_warning("CIRCT_I3C_MONDBG",
+                   $sformatf("target zero write payload op=%0d addr_ack=%0d bits=%0d target=0x%0h",
+                             struct_packet.operation, struct_packet.targetAddressStatus,
+                             struct_packet.no_of_i3c_bits_transfer, struct_packet.targetAddress))
+    end
+"""
+        new_text, did_change = append_after_once(text, anchor, block)
+        if did_change:
             text = new_text
             changed = True
     return text, changed
@@ -308,16 +450,44 @@ needs_spi = is_spi_avip(avip_dir, filelists)
 if needs_spi:
     tmp_dir = out_path.parent / ".avip_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
+    spi_patch_names = {
+        "SpiMasterAssertions.sv",
+        "SpiSlaveAssertions.sv",
+        "SpiMasterSeqItemConverter.sv",
+        "SpiSlaveSeqItemConverter.sv",
+        "SpiMasterAgentConfig.sv",
+        "SpiSimpleFdRandTest.sv",
+        "SpiMasterMonitorProxy.sv",
+        "SpiSlaveMonitorProxy.sv",
+    }
+    spi_passthrough_names = {
+        "SpiMasterPkg.sv",
+        "SpiSlavePkg.sv",
+    }
+    file_idx_by_name = {}
+    for idx, path_str in enumerate(files):
+        name = pathlib.Path(path_str).name
+        if name in spi_patch_names and name not in file_idx_by_name:
+            file_idx_by_name[name] = idx
+
+    # Copy package files into tmp so local `include` lookup can resolve against
+    # patched include-only files emitted in the same directory.
     for idx, path_str in enumerate(list(files)):
         path = pathlib.Path(path_str)
-        if path.name not in (
-            "SpiMasterAssertions.sv",
-            "SpiSlaveAssertions.sv",
-            "SpiMasterSeqItemConverter.sv",
-            "SpiSlaveSeqItemConverter.sv",
-            "SpiMasterAgentConfig.sv",
-            "SpiSimpleFdRandTest.sv",
-        ):
+        if path.name not in spi_passthrough_names:
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        tmp_path = tmp_dir / path.name
+        tmp_path.write_text(text)
+        files[idx] = str(tmp_path.resolve())
+
+    # Patch filelist entries directly when present.
+    for idx, path_str in enumerate(list(files)):
+        path = pathlib.Path(path_str)
+        if path.name not in spi_patch_names:
             continue
         try:
             text = path.read_text()
@@ -330,27 +500,166 @@ if needs_spi:
         tmp_path.write_text(new_text)
         files[idx] = str(tmp_path.resolve())
 
-needs_jtag = is_jtag_avip(avip_dir, filelists)
-if needs_jtag:
+    # Patch include-only SPI sources and prepend tmp dir in include search path.
+    if avip_root and avip_root.exists():
+        include_only_patched = False
+        for name in spi_patch_names:
+            if name in file_idx_by_name:
+                continue
+            for path in avip_root.rglob(name):
+                try:
+                    text = path.read_text()
+                except OSError:
+                    continue
+                new_text, changed = rewrite_spi_text(path, text)
+                if not changed:
+                    continue
+                tmp_path = tmp_dir / path.name
+                tmp_path.write_text(new_text)
+                include_only_patched = True
+                break
+        if include_only_patched:
+            includes.insert(0, str(tmp_dir.resolve()))
+
+needs_ahb = is_ahb_avip(avip_dir, filelists)
+if needs_ahb:
     tmp_dir = out_path.parent / ".avip_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
+    ahb_patch_names = {
+        "AhbMasterAgentBFM.sv",
+        "AhbSlaveAgentBFM.sv",
+        "AhbMasterMonitorProxy.sv",
+        "AhbSlaveMonitorProxy.sv",
+    }
+    ahb_passthrough_names = {
+        "AhbMasterPackage.sv",
+        "AhbSlavePackage.sv",
+    }
+    file_idx_by_name = {}
+    for idx, path_str in enumerate(files):
+        name = pathlib.Path(path_str).name
+        if name in ahb_patch_names and name not in file_idx_by_name:
+            file_idx_by_name[name] = idx
+
+    # Copy package files into tmp so local `include` lookup can resolve against
+    # patched include-only files emitted in the same directory.
     for idx, path_str in enumerate(list(files)):
         path = pathlib.Path(path_str)
-        if path.name not in (
-            "JtagControllerDeviceAgentBfm.sv",
-            "JtagTargetDeviceDriverBfm.sv",
-        ):
+        if path.name not in ahb_passthrough_names:
             continue
         try:
             text = path.read_text()
         except OSError:
             continue
-        new_text, changed = rewrite_jtag_text(path, text)
+        tmp_path = tmp_dir / path.name
+        tmp_path.write_text(text)
+        files[idx] = str(tmp_path.resolve())
+
+    # Patch filelist entries directly when present.
+    for idx, path_str in enumerate(list(files)):
+        path = pathlib.Path(path_str)
+        if path.name not in ahb_patch_names:
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        new_text, changed = rewrite_ahb_text(path, text)
         if not changed:
             continue
         tmp_path = tmp_dir / path.name
         tmp_path.write_text(new_text)
         files[idx] = str(tmp_path.resolve())
+
+    # Patch include-only AHB sources and prepend tmp dir in include search path.
+    if avip_root and avip_root.exists():
+        include_only_patched = False
+        for name in ahb_patch_names:
+            if name in file_idx_by_name:
+                continue
+            for path in avip_root.rglob(name):
+                try:
+                    text = path.read_text()
+                except OSError:
+                    continue
+                new_text, changed = rewrite_ahb_text(path, text)
+                if not changed:
+                    continue
+                tmp_path = tmp_dir / path.name
+                tmp_path.write_text(new_text)
+                include_only_patched = True
+                break
+        if include_only_patched:
+            includes.insert(0, str(tmp_dir.resolve()))
+
+needs_i3c = is_i3c_avip(avip_dir, filelists)
+if needs_i3c:
+    tmp_dir = out_path.parent / ".avip_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    i3c_patch_names = {
+        "i3c_controller_monitor_proxy.sv",
+        "i3c_target_monitor_proxy.sv",
+    }
+    i3c_passthrough_names = {
+        "i3c_controller_pkg.sv",
+        "i3c_target_pkg.sv",
+    }
+    file_idx_by_name = {}
+    for idx, path_str in enumerate(files):
+        name = pathlib.Path(path_str).name
+        if name in i3c_patch_names and name not in file_idx_by_name:
+            file_idx_by_name[name] = idx
+
+    # Copy package files into tmp so local `include` lookup can resolve against
+    # patched include-only files emitted in the same directory.
+    for idx, path_str in enumerate(list(files)):
+        path = pathlib.Path(path_str)
+        if path.name not in i3c_passthrough_names:
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        tmp_path = tmp_dir / path.name
+        tmp_path.write_text(text)
+        files[idx] = str(tmp_path.resolve())
+
+    # Patch filelist entries directly when present.
+    for idx, path_str in enumerate(list(files)):
+        path = pathlib.Path(path_str)
+        if path.name not in i3c_patch_names:
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        new_text, changed = rewrite_i3c_text(path, text)
+        if not changed:
+            continue
+        tmp_path = tmp_dir / path.name
+        tmp_path.write_text(new_text)
+        files[idx] = str(tmp_path.resolve())
+
+    # Patch include-only I3C sources and prepend tmp dir in include search path.
+    if avip_root and avip_root.exists():
+        include_only_patched = False
+        for name in i3c_patch_names:
+            if name in file_idx_by_name:
+                continue
+            for path in avip_root.rglob(name):
+                try:
+                    text = path.read_text()
+                except OSError:
+                    continue
+                new_text, changed = rewrite_i3c_text(path, text)
+                if not changed:
+                    continue
+                tmp_path = tmp_dir / path.name
+                tmp_path.write_text(new_text)
+                include_only_patched = True
+                break
+        if include_only_patched:
+            includes.insert(0, str(tmp_dir.resolve()))
 
 cmd = [circt_verilog, f"--ir-{ir_mode}"]
 if disable_auto:

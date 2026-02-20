@@ -43,8 +43,12 @@ if [[ ! -d "$VERIF_DIR/tests" ]]; then
 fi
 
 if [[ -z "$TEST_FILTER" ]]; then
-  echo "must set TEST_FILTER explicitly (no default filter)" >&2
-  exit 1
+  if [[ "$LEC_SMOKE_ONLY" == "1" ]]; then
+    TEST_FILTER="."
+  else
+    echo "must set TEST_FILTER explicitly (no default filter)" >&2
+    exit 1
+  fi
 fi
 
 if [[ -z "$Z3_BIN" ]]; then

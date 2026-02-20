@@ -94,9 +94,9 @@ done
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CIRCT_DIR="${CIRCT_DIR:-$(dirname "$SCRIPT_DIR")}"
-CIRCT_VERILOG="${CIRCT_VERILOG:-$CIRCT_DIR/build/bin/circt-verilog}"
-CIRCT_SIM="${CIRCT_SIM:-$CIRCT_DIR/build/bin/circt-sim}"
-CIRCT_OPT="${CIRCT_OPT:-$CIRCT_DIR/build/bin/circt-opt}"
+CIRCT_VERILOG="${CIRCT_VERILOG:-$CIRCT_DIR/build-test/bin/circt-verilog}"
+CIRCT_SIM="${CIRCT_SIM:-$CIRCT_DIR/build-test/bin/circt-sim}"
+CIRCT_OPT="${CIRCT_OPT:-$CIRCT_DIR/build-test/bin/circt-opt}"
 OUT_DIR="${OUT_DIR:-$PWD}"
 OPENTITAN_DIR="${OPENTITAN_DIR:-$HOME/opentitan}"
 

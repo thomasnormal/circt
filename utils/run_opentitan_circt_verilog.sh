@@ -92,7 +92,7 @@ done
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENTITAN_DIR="${OPENTITAN_DIR:-$HOME/opentitan}"
-CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
+CIRCT_VERILOG="${CIRCT_VERILOG:-build-test/bin/circt-verilog}"
 OUT_DIR="${OUT_DIR:-$PWD}"
 TIMESCALE="${TIMESCALE:-1ns/1ps}"
 

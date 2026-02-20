@@ -1486,11 +1486,11 @@ def main() -> int:
         print("No pairwise BMC cases selected.", file=sys.stderr)
         return 1
 
-    circt_verilog = os.environ.get("CIRCT_VERILOG", "build/bin/circt-verilog")
+    circt_verilog = os.environ.get("CIRCT_VERILOG", "build-test/bin/circt-verilog")
     circt_verilog_args = shlex.split(os.environ.get("CIRCT_VERILOG_ARGS", ""))
-    circt_opt = os.environ.get("CIRCT_OPT", "build/bin/circt-opt")
+    circt_opt = os.environ.get("CIRCT_OPT", "build-test/bin/circt-opt")
     circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
-    circt_bmc = os.environ.get("CIRCT_BMC", "build/bin/circt-bmc")
+    circt_bmc = os.environ.get("CIRCT_BMC", "build-test/bin/circt-bmc")
     circt_bmc_args = shlex.split(os.environ.get("CIRCT_BMC_ARGS", ""))
     verilog_single_unit_mode = os.environ.get(
         "BMC_VERILOG_SINGLE_UNIT_MODE", "auto"

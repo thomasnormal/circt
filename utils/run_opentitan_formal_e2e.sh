@@ -10,7 +10,7 @@ Options:
   --opentitan-root DIR     OpenTitan checkout root (default: ~/opentitan)
   --out-dir DIR            Output directory for logs/results (default: ./opentitan-formal-e2e)
   --results-file FILE      TSV output file (default: <out-dir>/results.tsv)
-  --circt-verilog PATH     circt-verilog binary (default: build/bin/circt-verilog)
+  --circt-verilog PATH     circt-verilog binary (default: build-test/bin/circt-verilog)
   --sim-targets LIST       Comma-separated OpenTitan sim targets
                            (default: gpio,uart,usbdev,i2c)
   --verilog-targets LIST   Comma-separated OpenTitan parse targets
@@ -36,7 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENTITAN_ROOT="${HOME}/opentitan"
 OUT_DIR="${PWD}/opentitan-formal-e2e"
 RESULTS_FILE=""
-CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
+CIRCT_VERILOG="${CIRCT_VERILOG:-build-test/bin/circt-verilog}"
 SIM_TARGETS="gpio,uart,usbdev,i2c"
 VERILOG_TARGETS="gpio,uart,spi_device,usbdev,i2c,dma,keymgr_dpe"
 SIM_TIMEOUT=180

@@ -6,6 +6,11 @@ TAG_REGEX="${TAG_REGEX:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=utils/formal_toolchain_resolve.sh
 source "$SCRIPT_DIR/formal_toolchain_resolve.sh"
+COMMON_SH="$SCRIPT_DIR/lib/common.sh"
+if [[ -f "$COMMON_SH" ]]; then
+  # shellcheck source=utils/lib/common.sh
+  source "$COMMON_SH"
+fi
 
 # Memory limit settings to prevent system hangs
 CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
@@ -15,6 +20,10 @@ CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS="${CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS:-
 
 # Run a command with memory limit
 run_limited() {
+  if declare -F circt_common_run_with_limits >/dev/null 2>&1; then
+    circt_common_run_with_limits "$CIRCT_MEMORY_LIMIT_KB" "$CIRCT_TIMEOUT_SECS" "$@"
+    return
+  fi
   (
     ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
     timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
@@ -77,8 +86,12 @@ if [[ ! -d "$SV_TESTS_DIR/tests" ]]; then
 fi
 
 if [[ -z "$TAG_REGEX" && -z "$TEST_FILTER" ]]; then
-  echo "must set TAG_REGEX or TEST_FILTER explicitly (no default filter)" >&2
-  exit 1
+  if [[ "$LEC_SMOKE_ONLY" == "1" ]]; then
+    TEST_FILTER="."
+  else
+    echo "must set TAG_REGEX or TEST_FILTER explicitly (no default filter)" >&2
+    exit 1
+  fi
 fi
 
 if [[ "$LEC_SMOKE_ONLY" != "1" ]]; then
@@ -88,17 +101,34 @@ if [[ "$LEC_SMOKE_ONLY" != "1" ]]; then
         echo "z3 not found or not executable: $Z3_BIN" >&2
         exit 1
       fi
-    elif ! command -v "$Z3_BIN" >/dev/null 2>&1; then
-      echo "z3 not found in PATH: $Z3_BIN" >&2
-      exit 1
+    else
+      if declare -F circt_common_resolve_tool >/dev/null 2>&1; then
+        if ! circt_common_resolve_tool "$Z3_BIN" >/dev/null 2>&1; then
+          echo "z3 not found in PATH: $Z3_BIN" >&2
+          exit 1
+        fi
+      elif ! command -v "$Z3_BIN" >/dev/null 2>&1; then
+        echo "z3 not found in PATH: $Z3_BIN" >&2
+        exit 1
+      fi
     fi
   else
-    if command -v z3 >/dev/null 2>&1; then
-      Z3_BIN="z3"
-    elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
-      Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
-    elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
-      Z3_BIN="/home/thomas-ahle/z3/build/z3"
+    if declare -F circt_common_resolve_tool >/dev/null 2>&1; then
+      if circt_common_resolve_tool z3 >/dev/null 2>&1; then
+        Z3_BIN="z3"
+      elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
+      elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3/build/z3"
+      fi
+    else
+      if command -v z3 >/dev/null 2>&1; then
+        Z3_BIN="z3"
+      elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
+      elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3/build/z3"
+      fi
     fi
   fi
 
@@ -192,6 +222,10 @@ record_drop_remark_case() {
 classify_retryable_launch_failure_reason() {
   local log_file="$1"
   local exit_code="$2"
+  if declare -F circt_common_classify_retryable_launch_failure_reason >/dev/null 2>&1; then
+    circt_common_classify_retryable_launch_failure_reason "$log_file" "$exit_code"
+    return
+  fi
   if [[ -s "$log_file" ]] && grep -Eiq "Text file busy|ETXTBSY" "$log_file"; then
     echo "etxtbsy"
     return 0
@@ -225,6 +259,10 @@ classify_retryable_launch_failure_reason() {
 
 is_retryable_launch_failure_log() {
   local log_file="$1"
+  if declare -F circt_common_is_retryable_launch_failure_log >/dev/null 2>&1; then
+    circt_common_is_retryable_launch_failure_log "$log_file"
+    return
+  fi
   [[ -s "$log_file" ]] && grep -Eiq \
     "Text file busy|ETXTBSY|posix_spawn failed|Permission denied|resource temporarily unavailable|stale file handle|ESTALE|too many open files|EMFILE|ENFILE|cannot allocate memory|ENOMEM" \
     "$log_file"
@@ -275,6 +313,14 @@ normalize_paths() {
 
 hash_key() {
   local payload="$1"
+  local digest=""
+  if declare -F circt_common_hash_stdin >/dev/null 2>&1; then
+    digest="$(printf "%s" "$payload" | circt_common_hash_stdin 2>/dev/null || true)"
+    if [[ -n "$digest" ]]; then
+      printf "%s\n" "$digest"
+      return 0
+    fi
+  fi
   if command -v sha256sum >/dev/null 2>&1; then
     printf "%s" "$payload" | sha256sum | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
@@ -286,6 +332,17 @@ hash_key() {
 
 hash_file() {
   local path="$1"
+  local digest=""
+  if declare -F circt_common_sha256_of >/dev/null 2>&1; then
+    digest="$(circt_common_sha256_of "$path")"
+    case "$digest" in
+      "<missing>"|"<unavailable>") ;;
+      *)
+        printf "%s\n" "$digest"
+        return 0
+        ;;
+    esac
+  fi
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$path" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
@@ -297,7 +354,14 @@ hash_file() {
 
 compute_contract_fingerprint() {
   local payload="$1"
-  local digest
+  local digest=""
+  if declare -F circt_common_hash_stdin >/dev/null 2>&1; then
+    digest="$(printf "%s" "$payload" | circt_common_hash_stdin 2>/dev/null || true)"
+    if [[ -n "$digest" ]]; then
+      printf "%s\n" "${digest:0:16}"
+      return 0
+    fi
+  fi
   if command -v sha256sum >/dev/null 2>&1; then
     digest="$(printf "%s" "$payload" | sha256sum | awk '{print $1}')"
   elif command -v shasum >/dev/null 2>&1; then

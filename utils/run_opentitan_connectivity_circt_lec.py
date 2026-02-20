@@ -30,6 +30,11 @@ from typing import Any
 
 import yaml
 
+_THIS_DIR = Path(__file__).resolve().parent
+_FORMAL_LIB_DIR = _THIS_DIR / "formal" / "lib"
+if _FORMAL_LIB_DIR.is_dir():
+    sys.path.insert(0, str(_FORMAL_LIB_DIR))
+
 
 @dataclass(frozen=True)
 class ConnectivityTarget:
@@ -684,6 +689,102 @@ def compute_contract_fingerprint(fields: list[str]) -> str:
     return hashlib.sha256(payload).hexdigest()[:16]
 
 
+try:
+    from runner_common import (
+        is_allowlisted as _shared_is_allowlisted,
+        load_allowlist as _shared_load_allowlist,
+        parse_exit_codes as _shared_parse_exit_codes,
+        parse_nonnegative_float as _shared_parse_nonnegative_float,
+        parse_nonnegative_int as _shared_parse_nonnegative_int,
+        read_status_summary as _shared_read_status_summary,
+        run_command_logged as _shared_run_command_logged,
+        write_log as _shared_write_log,
+        write_status_drift as _shared_write_status_drift,
+        write_status_summary as _shared_write_status_summary,
+    )
+except Exception:
+    _HAS_SHARED_FORMAL_HELPERS = False
+else:
+    _HAS_SHARED_FORMAL_HELPERS = True
+
+if _HAS_SHARED_FORMAL_HELPERS:
+
+    def parse_nonnegative_int(raw: str, name: str) -> int:
+        return _shared_parse_nonnegative_int(raw, name, fail)
+
+    def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
+        return _shared_load_allowlist(path, fail)
+
+    def is_allowlisted(
+        token: str, exact: set[str], prefixes: list[str], regex_rules: list[re.Pattern[str]]
+    ) -> bool:
+        return _shared_is_allowlisted(token, (exact, prefixes, regex_rules))
+
+    def write_connectivity_lec_status_summary(
+        path: Path,
+        by_rule: dict[str, dict[str, int]],
+    ) -> None:
+        _shared_write_status_summary(path, CONNECTIVITY_LEC_STATUS_FIELDS, by_rule)
+
+    def read_connectivity_lec_status_summary(path: Path) -> dict[str, dict[str, str]]:
+        return _shared_read_status_summary(
+            path,
+            CONNECTIVITY_LEC_STATUS_FIELDS,
+            "connectivity LEC status summary",
+            fail,
+        )
+
+    def write_connectivity_lec_status_drift(
+        path: Path,
+        rows: list[tuple[str, str, str, str, str]],
+    ) -> None:
+        _shared_write_status_drift(path, rows)
+
+    def write_log(path: Path, stdout: str, stderr: str) -> None:
+        _shared_write_log(path, stdout, stderr)
+
+    def run_and_log(
+        cmd: list[str],
+        log_path: Path,
+        timeout_secs: int,
+        out_path: Path | None = None,
+    ) -> str:
+        retry_attempts = _shared_parse_nonnegative_int(
+            os.environ.get("FORMAL_LAUNCH_RETRY_ATTEMPTS", "1"),
+            "FORMAL_LAUNCH_RETRY_ATTEMPTS",
+            fail,
+        )
+        retry_backoff_secs = _shared_parse_nonnegative_float(
+            os.environ.get("FORMAL_LAUNCH_RETRY_BACKOFF_SECS", "0.2"),
+            "FORMAL_LAUNCH_RETRY_BACKOFF_SECS",
+            fail,
+        )
+        retryable_exit_codes = _shared_parse_exit_codes(
+            os.environ.get("FORMAL_LAUNCH_RETRYABLE_EXIT_CODES", "126,127"),
+            "FORMAL_LAUNCH_RETRYABLE_EXIT_CODES",
+            fail,
+        )
+        retryable_patterns_raw = os.environ.get(
+            "FORMAL_LAUNCH_RETRYABLE_PATTERNS",
+            "text file busy,resource temporarily unavailable,stale file handle",
+        )
+        retryable_patterns = [
+            token.strip()
+            for token in retryable_patterns_raw.split(",")
+            if token.strip()
+        ]
+        return _shared_run_command_logged(
+            cmd,
+            log_path,
+            timeout_secs=timeout_secs,
+            out_path=out_path,
+            retry_attempts=retry_attempts,
+            retry_backoff_secs=retry_backoff_secs,
+            retryable_exit_codes=retryable_exit_codes,
+            retryable_output_patterns=retryable_patterns,
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run OpenTitan connectivity rules through CIRCT LEC."
@@ -944,11 +1045,11 @@ def main() -> int:
     if shutil.which(args.fusesoc_bin) is None and not Path(args.fusesoc_bin).exists():
         fail(f"fusesoc executable not found: {args.fusesoc_bin}")
 
-    circt_verilog = os.environ.get("CIRCT_VERILOG", "build/bin/circt-verilog")
+    circt_verilog = os.environ.get("CIRCT_VERILOG", "build-test/bin/circt-verilog")
     circt_verilog_args = shlex.split(os.environ.get("CIRCT_VERILOG_ARGS", ""))
-    circt_opt = os.environ.get("CIRCT_OPT", "build/bin/circt-opt")
+    circt_opt = os.environ.get("CIRCT_OPT", "build-test/bin/circt-opt")
     circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
-    circt_lec = os.environ.get("CIRCT_LEC", "build/bin/circt-lec")
+    circt_lec = os.environ.get("CIRCT_LEC", "build-test/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
     timeout_secs = parse_nonnegative_int(
         os.environ.get("CIRCT_TIMEOUT_SECS", "300"), "CIRCT_TIMEOUT_SECS"
