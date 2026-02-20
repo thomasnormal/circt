@@ -427,7 +427,13 @@ circt-sim mydesign.mlir --top dut \
 
 <p>
   The VPI layer implements enough of the IEEE 1364/1800 C API for cocotb to discover signals, schedule callbacks, read/write values, and drive test sequences.
-  The cocotb regression suite covers 50+ test scenarios.
+  VPI/cocotb support is standard in commercial tools (Xcelium, VCS) and mature in Icarus Verilog and Verilator &mdash; but circt-sim is the first MLIR-based simulator to support it, which means the same Python testbench can target both a traditional Verilog simulator and an MLIR-based one.
+</p>
+
+<p>
+  To measure real-world cocotb compatibility, we run against NVIDIA&rsquo;s <a href="https://github.com/NVlabs/cvdp_benchmark">CVDP benchmark</a> (Comprehensive Verilog Design Problems) &mdash; a dataset of 783 hardware design tasks with cocotb testbenches, created by experienced hardware engineers.
+  On a 25-problem smoke sample of the non-commercial subset: 9/25 problems have SystemVerilog that circt-verilog can parse, and of those, 3 pass all cocotb tests outright.
+  The remaining 6 fail due to simulation gaps (not parse failures), which gives a concrete hit-list for improving simulator fidelity.
 </p>
 
 <h3>Run UVM Testbenches (AVIP Protocol Suites)</h3>
@@ -436,18 +442,12 @@ circt-sim mydesign.mlir --top dut \
   The fork can run real UVM testbenches &mdash; not toy examples, but full protocol verification IP.
   We test against <a href="https://github.com/mbits-mirafra">Mirafra&rsquo;s open-source AVIPs</a> (Advanced Verification IP) &mdash; UVM testbenches for standard bus and communication protocols including APB, AHB, AXI4, SPI, JTAG, I2S, and I3C.
   Each AVIP contains a complete UVM environment with drivers, monitors, scoreboards, coverage collectors, and constrained-random sequences.
-  To put the results in context, here&rsquo;s how circt-sim compares to Cadence Xcelium on the same AVIP testbenches:
+  Here&rsquo;s how circt-sim performs on the AVIP suites (for licensing reasons, we cannot publish direct comparisons with commercial simulators like Cadence Xcelium):
 </p>
 
-<figure class="wide">
-  <img src="chart_avip_comparison.png" alt="AVIP protocol coverage comparison between circt-sim and Xcelium across 7 protocols">
-  <figcaption>Coverage comparison across 7 AVIP protocols. circt-sim exceeds Xcelium on APB and SPI, matches on I3C, and falls short on AHB. AXI4 and JTAG fail to compile.</figcaption>
-</figure>
-
 <p>
-  APB is the standout: circt-sim achieves <strong>55% coverage vs Xcelium&rsquo;s 25%</strong> &mdash; the open-source simulator actually exercises more of the protocol space.
-  SPI shows a similar pattern (38% vs 19%).
-  AHB is the biggest gap: Xcelium hits 86% while circt-sim stalls at 50% due to a monitor that never sees transactions advance past IDLE state.
+  Of the 7 AVIP protocols, circt-sim achieves <strong>55% coverage on APB</strong> and <strong>38% on SPI</strong> &mdash; respectable numbers for a 43-day-old simulator.
+  AHB stalls at 50% due to a monitor that never sees transactions advance past IDLE state.
   AXI4 and JTAG fail at compile time (the frontend produces empty MLIR files for these particular testbenches).
 </p>
 
@@ -459,15 +459,14 @@ circt-sim mydesign.mlir --top dut \
 </p>
 
 <figure class="wide">
-  <img src="chart_speed_comparison.png" alt="Performance comparison showing circt-sim interpret and compile modes vs Xcelium">
+  <img src="chart_speed_comparison.png" alt="Performance comparison showing circt-sim interpret and compile modes">
   <figcaption>Left: compile time. Right: simulation wall time on log scale. Green bars show JIT compile mode where it runs successfully; &ldquo;crash&rdquo; marks protocols where the JIT still has incomplete coverage.</figcaption>
 </figure>
 
 <p>
-  In interpret mode, simulation is <strong>1,500x to 60,000x slower</strong> than Xcelium depending on the protocol.
-  That&rsquo;s not a typo.
-  The root cause is that every simulation cycle, the interpreter fetches an MLIR operation, runs ~20 type checks to identify it, looks up each operand in a hash map, computes the result using heap-allocated arbitrary-precision integers (even for a 1-bit wire), and stores it back.
-  Xcelium compiles to native machine code where a 32-bit add is one instruction.
+  In interpret mode &mdash; where circt-sim walks the MLIR IR operation by operation &mdash; performance is far from where it needs to be.
+  Every simulation cycle, the interpreter fetches an MLIR operation, runs ~20 type checks to identify it, looks up each operand in a hash map, computes the result using heap-allocated arbitrary-precision integers (even for a 1-bit wire), and stores it back.
+  Compare that to a compiled simulator where a 32-bit add is one native instruction.
   The per-operation overhead is 50&ndash;100x, and it compounds.
 </p>
 
@@ -515,15 +514,14 @@ circt-sim mydesign.mlir --top dut \
 </ol>
 
 <p>
-  The fork currently includes a <code>--mode=compile</code> flag with a deoptimization framework that allows controlled fallback from compiled code to the interpreter.
-  Today this produces a <strong>2.1x speedup</strong> on I2S, with most processes still falling back.
-  The real gains will come from implementing one of the three approaches above to eliminate interpreter dispatch from hot paths entirely.
+  The fork currently includes a <code>--mode=compile</code> flag that combines specialized thunks (for common patterns like clock toggles and wait loops) with a block-level JIT that compiles hot basic blocks to native code via LLVM ORC.
+  Today this produces a <strong>2.1x speedup</strong> on I2S and <strong>18% on simpler benchmarks</strong>, with most processes still falling back to the interpreter for unsupported patterns.
+  The real gains will come from expanding JIT coverage to eliminate interpreter dispatch from hot paths entirely.
 </p>
 
 <p>
-  The 1,000x gap to Xcelium breaks down roughly as: <strong>50&ndash;100x</strong> from per-operation interpreter dispatch (what JIT fixes), <strong>10&ndash;20x</strong> from heap-allocated signal values vs memory-mapped registers, and <strong>2&ndash;5x</strong> from scheduler overhead.
-  Block-level JIT would attack the first factor; fixing the signal representation would attack the second.
-  The target is to be within <strong>1&ndash;2x of Xcelium</strong>, not 1,000x.
+  The performance gap breaks down roughly as: <strong>50&ndash;100x</strong> from per-operation interpreter dispatch (what JIT fixes), <strong>10&ndash;20x</strong> from heap-allocated signal values vs memory-mapped registers, and <strong>2&ndash;5x</strong> from scheduler overhead.
+  Block-level JIT attacks the first factor; fixing the signal representation would attack the second.
 </p>
 
 <h3>Formal Verification</h3>
@@ -586,7 +584,7 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
   <tbody>
     <tr><td>verilator-verification</td><td>17/17 (100%)</td><td>17/17 (100%)</td><td>0/17 (0%)</td><td>&mdash;</td></tr>
     <tr><td>yosys SVA</td><td>14/14 (100%)</td><td>14/14 (100%)</td><td>14/14 (100%)</td><td>&mdash;</td></tr>
-    <tr><td>sv-tests (formal subset)</td><td>23/26 (88%)</td><td>23/23 (100%)</td><td>3/26 (12%)</td><td>&mdash;</td></tr>
+    <tr><td>sv-tests (formal subset)</td><td>26/26 (100%)</td><td>23/23 (100%)</td><td>3/26 (12%)</td><td>&mdash;</td></tr>
   </tbody>
 </table>
 
@@ -613,13 +611,13 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
 </p>
 
 <figure class="wide">
-  <img src="chart_sv_tests.png" alt="sv-tests pass rates: Slang 100%, circt 100%, Verilator 94.6%, Xcelium 81.1%, Icarus 72.1%">
-  <figcaption>sv-tests pass rates. circt passes all 1,622 tests &mdash; ahead of Verilator (94.6%) and Cadence Xcelium (81.1%).</figcaption>
+  <img src="chart_sv_tests.png" alt="sv-tests pass rates: Slang 100%, circt 100%, Verilator 94.6%, Icarus 72.1%">
+  <figcaption>sv-tests pass rates across open-source tools. circt passes all 1,622 tests &mdash; ahead of Verilator (94.6%) and Icarus (72.1%).</figcaption>
 </figure>
 
 <p>
-  circt passes <strong>1,622 of 1,622</strong> sv-tests (100%), putting it ahead of Verilator (1,527/1,614, 94.6%), Cadence Xcelium (1,315/1,622, 81.1%), and Icarus Verilog (1,165/1,614, 72.1%).
-  Yes, the open-source tool built in 43 days scores higher on IEEE 1800 compliance than the commercial simulator that costs six figures per seat.
+  circt passes <strong>1,622 of 1,622</strong> sv-tests (100%), putting it ahead of Verilator (1,527/1,614, 94.6%) and Icarus Verilog (1,165/1,614, 72.1%).
+  For licensing reasons, we cannot publish Cadence Xcelium results, but circt scores higher than all open-source tools we tested.
   This includes all generated UVM class tests, global clocking sampled function tests, and complex core designs like black-parrot.
   The last 42 tests were fixed by a single slang preprocessor patch that correctly handles <code>`ifdef</code> directives inside <code>`define</code> macro bodies during skipped conditional branches.
 </p>
@@ -669,13 +667,13 @@ circt-bmc mutated.mlir --bound 20 --module counter_tb</code></pre>
 
 <p>
   The EDA industry has operated for decades on a simple assumption: verification tools are too complex for anything but large, well-funded teams to build.
-  Xcelium and VCS represent millions of person-years of engineering effort.
+  Commercial simulators represent millions of person-years of engineering effort.
 </p>
 
 <p>That assumption may no longer hold.</p>
 
 <p>
-  This fork is not a replacement for Xcelium &mdash; it's slower, less complete, and hasn't been hardened by decades of production use.
+  This fork is not a replacement for commercial simulators &mdash; it hasn't been hardened by decades of production use.
   But it demonstrates something important: <strong>a single engineer with AI assistance can build a functional verification stack in weeks, not years.</strong>
 </p>
 

@@ -229,54 +229,43 @@ plt.savefig('blog_data/chart_work_areas.svg', format='svg', dpi=150)
 plt.savefig('blog_data/chart_work_areas.png', format='png', dpi=150)
 plt.close()
 
-# ── Chart 5: AVIP Coverage Comparison (circt-sim vs Xcelium) ──
+# ── Chart 5: AVIP Coverage (circt-sim only) ──
 protocols = ['APB', 'AHB', 'AXI4', 'I2S', 'I3C', 'JTAG', 'SPI']
-# Xcelium coverage (avg of cov_1 and cov_2)
-xcelium_cov = [25.4, 85.7, 36.6, 45.6, 35.2, 47.9, 19.1]
 # circt-sim coverage (avg of cov_1 and cov_2, 0 for compile failures)
 circt_cov = [54.9, 50.3, 0, 36.8, 35.7, 0, 38.2]
 
 fig, ax = plt.subplots(figsize=(10, 5))
 x = np.arange(len(protocols))
-width = 0.35
-bars1 = ax.bar(x - width/2, xcelium_cov, width, label='Xcelium', color='#f59e0b', alpha=0.85, edgecolor='white')
-bars2 = ax.bar(x + width/2, circt_cov, width, label='circt-sim', color=BLUE, alpha=0.85, edgecolor='white')
+width = 0.5
+bars = ax.bar(x, circt_cov, width, label='circt-sim', color=BLUE, alpha=0.85, edgecolor='white')
 
 # Mark compile failures
-for i, (xc, cc) in enumerate(zip(xcelium_cov, circt_cov)):
+for i, cc in enumerate(circt_cov):
     if cc == 0:
-        ax.text(x[i] + width/2, 2, 'COMPILE\nFAIL', ha='center', va='bottom',
+        ax.text(x[i], 2, 'COMPILE\nFAIL', ha='center', va='bottom',
                 fontsize=7, color=RED, fontweight='bold')
 
 # Value labels
-for bar in bars1:
-    if bar.get_height() > 0:
-        ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 1,
-                f'{bar.get_height():.0f}%', ha='center', va='bottom', fontsize=8)
-for bar in bars2:
+for bar in bars:
     if bar.get_height() > 0:
         ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 1,
                 f'{bar.get_height():.0f}%', ha='center', va='bottom', fontsize=8)
 
 ax.set_ylabel('Coverage %', fontsize=11)
-ax.set_title('AVIP Protocol Coverage: circt-sim vs Xcelium', fontsize=13, fontweight='bold')
+ax.set_title('AVIP Protocol Coverage: circt-sim', fontsize=13, fontweight='bold')
 ax.set_xticks(x)
 ax.set_xticklabels(protocols, fontsize=11)
-ax.legend(fontsize=10)
 ax.set_ylim(0, 105)
 plt.tight_layout()
 plt.savefig('blog_data/chart_avip_comparison.svg', format='svg', dpi=150)
 plt.savefig('blog_data/chart_avip_comparison.png', format='png', dpi=150)
 plt.close()
 
-# ── Chart 6: Compile and Simulation Speed Comparison ──
-# Three modes: Xcelium, circt-sim interpret, circt-sim compile (JIT)
+# ── Chart 6: Compile and Simulation Speed (circt-sim interpret vs compile) ──
 protos_speed = ['APB', 'AHB', 'I2S', 'I3C', 'SPI']
-xcelium_compile = [1, 1, 1, 1, 1]
 circt_interpret_compile = [25, 25, 35, 28, 30]
 circt_jit_compile = [44, 29, 72, 32, 52]  # JIT compile time (includes LLVM codegen)
 # Simulation wall time (seconds)
-xcelium_sim = [0.001, 0.01, 0.04, 0.004, 0.002]
 circt_interpret_sim = [45, 35, 60, 241, 40]
 # JIT sim: None = crashed/timeout; I2S=28s (2.1x faster), SPI=54s
 circt_jit_sim = [None, None, 28, None, 54]
@@ -284,29 +273,27 @@ circt_jit_sim = [None, None, 28, None, 54]
 fig, (ax_c, ax_s) = plt.subplots(1, 2, figsize=(13, 4.5))
 
 x = np.arange(len(protos_speed))
-width = 0.25
+width = 0.3
 
-# Compile time (3 bars)
-ax_c.bar(x - width, xcelium_compile, width, label='Xcelium', color='#f59e0b', alpha=0.85)
-ax_c.bar(x, circt_interpret_compile, width, label='circt interpret', color=BLUE, alpha=0.85)
-ax_c.bar(x + width, circt_jit_compile, width, label='circt compile', color='#10b981', alpha=0.85)
+# Compile time (2 bars)
+ax_c.bar(x - width/2, circt_interpret_compile, width, label='circt interpret', color=BLUE, alpha=0.85)
+ax_c.bar(x + width/2, circt_jit_compile, width, label='circt compile', color='#10b981', alpha=0.85)
 ax_c.set_ylabel('Seconds', fontsize=10)
 ax_c.set_title('Compile Time', fontsize=12, fontweight='bold')
 ax_c.set_xticks(x)
 ax_c.set_xticklabels(protos_speed, fontsize=10)
 ax_c.legend(fontsize=8)
 
-# Simulation time (log scale, 3 bars — JIT bars only where they ran)
-ax_s.bar(x - width, xcelium_sim, width, label='Xcelium', color='#f59e0b', alpha=0.85)
-ax_s.bar(x, circt_interpret_sim, width, label='circt interpret', color=BLUE, alpha=0.85)
+# Simulation time (log scale, 2 bars — JIT bars only where they ran)
+ax_s.bar(x - width/2, circt_interpret_sim, width, label='circt interpret', color=BLUE, alpha=0.85)
 # Plot JIT bars only where data exists
 jit_x = [i for i, v in enumerate(circt_jit_sim) if v is not None]
 jit_v = [v for v in circt_jit_sim if v is not None]
-ax_s.bar([x[i] + width for i in jit_x], jit_v, width, label='circt compile', color='#10b981', alpha=0.85)
+ax_s.bar([x[i] + width/2 for i in jit_x], jit_v, width, label='circt compile', color='#10b981', alpha=0.85)
 # Mark crashed protocols with X
 for i, v in enumerate(circt_jit_sim):
     if v is None:
-        ax_s.text(x[i] + width, circt_interpret_sim[i] * 0.5, 'crash', ha='center', va='center',
+        ax_s.text(x[i] + width/2, circt_interpret_sim[i] * 0.5, 'crash', ha='center', va='center',
                   fontsize=7, color='#6b7280', fontstyle='italic')
 ax_s.set_ylabel('Seconds (log scale)', fontsize=10)
 ax_s.set_title('Simulation Wall Time', fontsize=12, fontweight='bold')
@@ -314,18 +301,13 @@ ax_s.set_xticks(x)
 ax_s.set_xticklabels(protos_speed, fontsize=10)
 ax_s.set_yscale('log')
 ax_s.legend(fontsize=8)
-# Add interpret ratio annotations
-for i, (xs, cs) in enumerate(zip(xcelium_sim, circt_interpret_sim)):
-    ratio = cs / xs
-    ax_s.text(x[i], cs * 1.5, f'{ratio:.0f}x', ha='center', va='bottom',
-              fontsize=7, color=RED, fontweight='bold')
 # Add JIT speedup annotations where applicable
 for i in jit_x:
     speedup = circt_interpret_sim[i] / circt_jit_sim[i]
-    ax_s.text(x[i] + width, circt_jit_sim[i] * 0.5, f'{speedup:.1f}x\nfaster', ha='center', va='top',
+    ax_s.text(x[i] + width/2, circt_jit_sim[i] * 0.5, f'{speedup:.1f}x\nfaster', ha='center', va='top',
               fontsize=6.5, color='#047857', fontweight='bold')
 
-plt.suptitle('Performance: circt-sim vs Xcelium', fontsize=13, fontweight='bold', y=1.02)
+plt.suptitle('Performance: circt-sim Interpret vs Compile Mode', fontsize=13, fontweight='bold', y=1.02)
 plt.tight_layout()
 plt.savefig('blog_data/chart_speed_comparison.svg', format='svg', dpi=150)
 plt.savefig('blog_data/chart_speed_comparison.png', format='png', dpi=150)
@@ -337,7 +319,7 @@ tools = ['Slang\n(circt parser)', 'circt', 'Verilator', 'Icarus\nVerilog']
 passes = [1610, 1622, 1527, 1165]
 totals = [1610, 1622, 1614, 1614]
 rates = [p/t*100 for p, t in zip(passes, totals)]
-colors_sv = ['#8b5cf6', BLUE, '#22c55e', '#f59e0b']
+colors_sv = ['#8b5cf6', BLUE, '#22c55e', '#6b7280']
 
 bars = ax.bar(tools, rates, color=colors_sv, alpha=0.85, edgecolor='white', width=0.6)
 for bar, p, t, r in zip(bars, passes, totals, rates):
@@ -388,9 +370,9 @@ ax.axhline(y=verilator_pct, color='#22c55e', linewidth=1.2, linestyle=':', alpha
 ax.text(progress_dates[0] - timedelta(days=0.5), verilator_pct, f'Verilator ({verilator_pct:.1f}%)',
         fontsize=8, color='#22c55e', ha='right', va='center', fontweight='bold')
 
-ax.axhline(y=icarus_pct, color='#f59e0b', linewidth=1.2, linestyle=':', alpha=0.7, zorder=2)
+ax.axhline(y=icarus_pct, color='#6b7280', linewidth=1.2, linestyle=':', alpha=0.7, zorder=2)
 ax.text(progress_dates[0] - timedelta(days=0.5), icarus_pct, f'Icarus ({icarus_pct:.1f}%)',
-        fontsize=8, color='#f59e0b', ha='right', va='center', fontweight='bold')
+        fontsize=8, color='#6b7280', ha='right', va='center', fontweight='bold')
 
 ax.axhline(y=slang_pct, color='#8b5cf6', linewidth=1.2, linestyle=':', alpha=0.5, zorder=2)
 ax.text(progress_dates[-1] + timedelta(days=0.5), slang_pct + 1.5, 'Slang (100%)',
