@@ -3,7 +3,7 @@
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SURVIVED > result.txt\n' > %t/examples/hooks/real_unknown.sh
 // RUN: chmod +x %t/examples/hooks/real_unknown.sh
 // RUN: { printf 'unknown\tunknown/unknown.v\tunknown'; for _ in $(seq 1 24); do printf '\t-'; done; printf '\thooks/real_unknown.sh\n'; } > %t/manifest.tsv
-// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nmanifest=""\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --tests-manifest) manifest="$2"; shift 2 ;;\n    --tests-manifest=*) manifest="${1#*=}"; shift ;;\n    --work-dir) work_dir="$2"; shift 2 ;;\n    --work-dir=*) work_dir="${1#*=}"; shift ;;\n    *) shift ;;\n  esac\ndone\nif [[ -z "$manifest" ]]; then\n  echo "missing tests manifest" >&2\n  exit 8\nfi\ncmd_field="$(cut -f2 "$manifest")"\nif ! python3 -c "import shlex,sys; a=shlex.split(sys.argv[1]); assert a[-3:] == sys.argv[2:]" "$cmd_field" "../mutant.v" "--mode" "bad;echo"; then\n  echo "expected shell-safe args forwarding" >&2\n  cat "$manifest" >&2\n  exit 6\nfi\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t1\\nrelevant_mutants\\t2\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsubcmd="$1"\nshift\nif [[ "$subcmd" != "cover" ]]; then\n  echo "expected cover subcommand" >&2\n  exit 9\nfi\nmanifest=""\nwork_dir=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --tests-manifest) manifest="$2"; shift 2 ;;\n    --tests-manifest=*) manifest="${1#*=}"; shift ;;\n    --work-dir) work_dir="$2"; shift 2 ;;\n    --work-dir=*) work_dir="${1#*=}"; shift ;;\n    *) shift ;;\n  esac\ndone\nif [[ -z "$manifest" ]]; then\n  echo "missing tests manifest" >&2\n  exit 8\nfi\nline="$(cat "$manifest")"\nif [[ "$line" != *"--label"* || "$line" != *"a b"* || "$line" != *"--mode strict"* ]]; then\n  echo "expected quoted args forwarding" >&2\n  cat "$manifest" >&2\n  exit 6\nfi\nmkdir -p "$work_dir"\nprintf "detected_mutants\\t1\\nrelevant_mutants\\t2\\nerrors\\t0\\n" > "$work_dir/metrics.tsv"\n' > %t/bin/circt-mut
 // RUN: chmod +x %t/bin/circt-mut
 
 // RUN: %S/../../utils/run_mutation_mcy_examples.sh \
@@ -13,7 +13,7 @@
 // RUN:   --circt-mut %t/bin/circt-mut \
 // RUN:   --mutations-backend native \
 // RUN:   --native-tests-mode real \
-// RUN:   --native-real-harness-args "--mode bad;echo" \
+// RUN:   --native-real-harness-args '--label "a b" --mode strict' \
 // RUN:   --out-dir %t/out
 
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
