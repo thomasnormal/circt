@@ -782,6 +782,16 @@ public:
     abortCallback = std::move(callback);
   }
 
+  /// Set a callback for $dumpfile to create a VCD file at runtime.
+  void setDumpfileCallback(std::function<void(llvm::StringRef)> callback) {
+    dumpfileCallback = std::move(callback);
+  }
+
+  /// Set a callback for $dumpvars to start VCD tracing at runtime.
+  void setDumpvarsCallback(std::function<void()> callback) {
+    dumpvarsCallback = std::move(callback);
+  }
+
   /// Check if abort has been requested (calls the shouldAbortCallback).
   bool isAbortRequested() const {
     return shouldAbortCallback && shouldAbortCallback();
@@ -1855,6 +1865,12 @@ private:
 
   /// Callback to invoke when abort is triggered.
   std::function<void()> abortCallback;
+
+  /// Callback for $dumpfile (VCD file creation).
+  std::function<void(llvm::StringRef)> dumpfileCallback;
+
+  /// Callback for $dumpvars (start VCD tracing).
+  std::function<void()> dumpvarsCallback;
 
   /// Flag indicating if termination has been requested.
   bool terminationRequested = false;

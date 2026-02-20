@@ -2641,9 +2641,8 @@ struct StmtVisitor {
     // Simulation Control Tasks
 
     // VCD dump tasks (IEEE 1800-2017 Section 21.7).
-    // $dumpfile emits a diagnostic with the requested filename so that test
-    // harnesses can verify the call was reached.  Other dump tasks remain
-    // no-ops so that AVIP-style benches still compile.
+    // $dumpfile opens a VCD file; $dumpvars starts tracing.
+    // Other dump tasks ($dumpoff, $dumpon, etc.) are no-ops for now.
     if (subroutine.name == "$dumpfile") {
       std::string filename = "dump.vcd"; // default
       if (!args.empty()) {
@@ -2660,14 +2659,27 @@ struct StmtVisitor {
             filename = cv.str();
         }
       }
+      // Emit a print with circt.dumpfile attribute so the interpreter
+      // can open the VCD file at runtime.  The format string must be
+      // non-empty to survive dead-code elimination.
       std::string msgStr =
           "VCD: $dumpfile(\"" + filename + "\")\n";
       auto msg = moore::FormatLiteralOp::create(builder, loc, msgStr);
-      moore::DisplayBIOp::create(builder, loc, msg);
+      auto displayOp = moore::DisplayBIOp::create(builder, loc, msg);
+      displayOp->setAttr("circt.dumpfile",
+                         builder.getStringAttr(filename));
       return true;
     }
-    if (subroutine.name == "$dumpvars" ||
-        subroutine.name == "$dumplimit" || subroutine.name == "$dumpoff" ||
+    if (subroutine.name == "$dumpvars") {
+      // Emit a print with circt.dumpvars attribute so the interpreter
+      // can start VCD tracing at runtime.
+      auto msg = moore::FormatLiteralOp::create(builder, loc,
+                                                 "VCD: $dumpvars\n");
+      auto displayOp = moore::DisplayBIOp::create(builder, loc, msg);
+      displayOp->setAttr("circt.dumpvars", builder.getUnitAttr());
+      return true;
+    }
+    if (subroutine.name == "$dumplimit" || subroutine.name == "$dumpoff" ||
         subroutine.name == "$dumpon" || subroutine.name == "$dumpflush" ||
         subroutine.name == "$dumpall" || subroutine.name == "$dumpports" ||
         subroutine.name == "$dumpportslimit" ||
