@@ -62,6 +62,7 @@
 #include "mlir/Bytecode/BytecodeReader.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -88,6 +89,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
+#include "mlir/IR/Dominance.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -144,6 +146,141 @@ extern PLI_INT32 vpi_control(PLI_INT32, ...);
     reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(&vpi_control)),
 };
 // NOLINTEND(cert-dcl50-cpp)
+
+//===----------------------------------------------------------------------===//
+// Loop Partial-Width NBA Accumulation Fix
+//===----------------------------------------------------------------------===//
+//
+// When a partial-width non-blocking assignment (NBA) occurs inside a for-loop:
+//   for (i = 0; i < N; i++)
+//     reg[i*W +: W] <= data[i];
+// the MooreToCore conversion emits a read-modify-write pattern:
+//   base = llhd.prb %reg        // read current signal value
+//   new = insert(base, data, shift)  // modify
+//   llhd.drv %reg, new              // write
+// After llhd-mem2reg, the drive value is threaded through block arguments,
+// but the probe (which gives the stale pre-edge value) is still used as the
+// base for each iteration's insert. This means only the LAST iteration's
+// slice survives (last-write-wins).
+//
+// The fix: in loop bodies, replace uses of the probe with the loop header's
+// block argument that carries the accumulated value from previous iterations.
+
+/// Get the operand that a branch terminator passes to a specific block argument
+/// of a given successor block.
+static Value getBranchArgForSuccessor(Block *predBlock, Block *succBlock,
+                                      unsigned argIdx) {
+  auto *terminator = predBlock->getTerminator();
+  if (auto brOp = dyn_cast<mlir::cf::BranchOp>(terminator)) {
+    if (brOp.getDest() == succBlock)
+      return brOp.getDestOperands()[argIdx];
+  } else if (auto condBr = dyn_cast<mlir::cf::CondBranchOp>(terminator)) {
+    if (condBr.getTrueDest() == succBlock)
+      return condBr.getTrueDestOperands()[argIdx];
+    if (condBr.getFalseDest() == succBlock)
+      return condBr.getFalseDestOperands()[argIdx];
+  }
+  return {};
+}
+
+/// Fix loop partial-width NBA accumulation in all processes in the module.
+/// Returns the number of fixes applied.
+static int fixLoopPartialDriveAccumulation(Operation *moduleOp) {
+  int fixCount = 0;
+  moduleOp->walk([&](llhd::ProcessOp processOp) {
+    Region &body = processOp.getBody();
+    if (body.empty())
+      return;
+
+    // Build dominance info for this process.
+    DominanceInfo domInfo(processOp);
+
+    // Find loop headers: blocks where at least one predecessor is dominated
+    // by the block itself (back-edge).
+    for (Block &block : body) {
+      if (block.getNumArguments() == 0)
+        continue;
+
+      // Collect back-edge and entry predecessors.
+      SmallVector<Block *> backEdgePreds, entryPreds;
+      for (Block *pred : block.getPredecessors()) {
+        if (domInfo.dominates(&block, pred))
+          backEdgePreds.push_back(pred);
+        else
+          entryPreds.push_back(pred);
+      }
+      if (backEdgePreds.empty() || entryPreds.empty())
+        continue;
+
+      // For each block argument, check if initial value is a probe.
+      for (unsigned argIdx = 0; argIdx < block.getNumArguments(); argIdx++) {
+        Value blockArg = block.getArgument(argIdx);
+
+        // Check: do all entry predecessors provide the same probe value?
+        llhd::ProbeOp commonProbe;
+        bool allSameProbe = true;
+        for (Block *entry : entryPreds) {
+          Value initVal = getBranchArgForSuccessor(entry, &block, argIdx);
+          if (!initVal) {
+            allSameProbe = false;
+            break;
+          }
+          auto probeOp = initVal.getDefiningOp<llhd::ProbeOp>();
+          if (!probeOp) {
+            allSameProbe = false;
+            break;
+          }
+          if (!commonProbe) {
+            commonProbe = probeOp;
+          } else if (commonProbe != probeOp) {
+            allSameProbe = false;
+            break;
+          }
+        }
+        if (!allSameProbe || !commonProbe)
+          continue;
+
+        // Check: do back-edge predecessors provide a computed value (not the
+        // probe) for this argument?  This confirms it's an accumulator pattern.
+        bool isAccumulator = false;
+        for (Block *latch : backEdgePreds) {
+          Value backVal = getBranchArgForSuccessor(latch, &block, argIdx);
+          if (backVal && backVal != commonProbe.getResult())
+            isAccumulator = true;
+        }
+        if (!isAccumulator)
+          continue;
+
+        // Find uses of the probe result in blocks dominated by this loop
+        // header (i.e., inside the loop body).
+        SmallVector<OpOperand *> usesToReplace;
+        for (OpOperand &use : commonProbe.getResult().getUses()) {
+          Block *useBlock = use.getOwner()->getBlock();
+          // Only replace uses strictly inside the loop (dominated by header,
+          // but not in the header itself — the header's condition check may
+          // legitimately use the probe).
+          if (useBlock != &block &&
+              domInfo.properlyDominates(&block, useBlock)) {
+            usesToReplace.push_back(&use);
+          }
+        }
+        if (usesToReplace.empty())
+          continue;
+
+        // Replace the probe uses with the loop-carried block argument.
+        LLVM_DEBUG(llvm::dbgs()
+                   << "[fix-loop-nba] Replacing " << usesToReplace.size()
+                   << " uses of probe " << commonProbe
+                   << " with block arg #" << argIdx << " in loop at "
+                   << block.front().getLoc() << "\n");
+        for (OpOperand *use : usesToReplace)
+          use->set(blockArg);
+        fixCount += usesToReplace.size();
+      }
+    }
+  });
+  return fixCount;
+}
 
 //===----------------------------------------------------------------------===//
 // Command Line Arguments
@@ -1094,6 +1231,53 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
             if (code == 0 && control.getErrorCount() > 0)
               code = 1;
             control.finish(code);
+          });
+
+      // Set up $dumpfile callback to create VCD file at runtime.
+      llhdInterpreter->setDumpfileCallback(
+          [this](llvm::StringRef filename) {
+            if (vcdWriter) return; // already open
+            vcdWriter = std::make_unique<VCDWriter>(std::string(filename));
+            if (!vcdWriter->open()) {
+              llvm::errs() << "[circt-sim] Warning: $dumpfile could not open '"
+                           << filename << "'\n";
+              vcdWriter.reset();
+            }
+          });
+
+      // Set up $dumpvars callback to register signals and write VCD header.
+      llhdInterpreter->setDumpvarsCallback(
+          [this]() {
+            if (!vcdWriter || vcdReady) return;
+            // Register all signals for tracing.
+            const auto &signalNames = scheduler.getSignalNames();
+            for (const auto &entry : signalNames)
+              registerTracedSignal(entry.first, entry.second);
+            // Write VCD header.
+            std::string vcdTopName =
+                topModuleNames.empty() ? "top" : topModuleNames[0];
+            vcdWriter->writeHeader(vcdTopName);
+            for (auto &traced : tracedSignals) {
+              auto it = signalNames.find(traced.first);
+              if (it == signalNames.end()) continue;
+              const auto &value = scheduler.getSignalValue(traced.first);
+              vcdWriter->declareSignal(it->second, value.getWidth(),
+                                       traced.second);
+            }
+            vcdWriter->endHeader();
+            vcdWriter->writeTime(0);
+            lastVCDTime = 0;
+            vcdTimeInitialized = true;
+            for (auto &traced : tracedSignals) {
+              const auto &value = scheduler.getSignalValue(traced.first);
+              if (value.isUnknown())
+                vcdWriter->writeUnknown(traced.second, value.getWidth());
+              else
+                vcdWriter->writeValue(traced.second, value.getValue(),
+                                      value.getWidth());
+            }
+            vcdWriter->endDumpVars();
+            vcdReady = true;
           });
     }
 
@@ -3147,6 +3331,16 @@ static LogicalResult processInput(MLIRContext &context,
 
   reportStage("passes");
   if (!skipPasses) {
+    // Fix loop partial-width NBA accumulation before running passes.
+    // This corrects a compiler lowering issue where partial-width non-blocking
+    // assignments in for-loops (e.g., reg[i*W +: W] <= data[i]) don't
+    // accumulate correctly because the read-modify-write base is a stale
+    // signal probe instead of the loop-carried accumulated value.
+    int loopFixes = fixLoopPartialDriveAccumulation(module->getOperation());
+    LLVM_DEBUG(if (loopFixes) llvm::dbgs()
+               << "[circt-sim] Fixed " << loopFixes
+               << " loop partial-drive accumulation issues\n");
+
     // Run preprocessing passes if needed
     PassManager pm(&context);
     pm.enableVerifier(verifyPasses);

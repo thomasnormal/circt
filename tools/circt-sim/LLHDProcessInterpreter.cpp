@@ -7034,7 +7034,8 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
           }();
           auto combIt = combSignalDriveMap.find(sigId);
           if (combIt != combSignalDriveMap.end() &&
-              !continuousEvalVisitedSignals.count(sigId)) {
+              !continuousEvalVisitedSignals.count(sigId) &&
+              !scheduler.isVpiOwned(sigId)) {
             continuousEvalVisitedSignals.insert(sigId);
             const auto &driveInfo = combIt->second;
             ScopedInstanceContext instScope(*this, driveInfo.instanceId);
@@ -7249,7 +7250,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         // Skip if we're already evaluating this signal (cycle detection).
         auto combIt = combSignalDriveMap.find(sigId);
         if (combIt != combSignalDriveMap.end() &&
-            !continuousEvalVisitedSignals.count(sigId)) {
+            !continuousEvalVisitedSignals.count(sigId) &&
+            !scheduler.isVpiOwned(sigId)) {
           continuousEvalVisitedSignals.insert(sigId);
           const auto &driveInfo = combIt->second;
           ScopedInstanceContext instScope(*this, driveInfo.instanceId);
@@ -7472,9 +7474,12 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
           // wires (a_ack, wr_req, etc.) haven't propagated through their
           // epsilon-delay chain yet when an outer expression needs them.
           // Skip if we're already evaluating this signal (cycle detection).
+          // Also skip if the signal is VPI-owned (externally written by
+          // cocotb), since the signal store has the correct VPI value.
           auto combIt = combSignalDriveMap.find(sigId);
           if (combIt != combSignalDriveMap.end() &&
-              !continuousEvalVisitedSignals.count(sigId)) {
+              !continuousEvalVisitedSignals.count(sigId) &&
+              !scheduler.isVpiOwned(sigId)) {
             continuousEvalVisitedSignals.insert(sigId);
             const auto &driveInfo = combIt->second;
             ScopedInstanceContext instScope(*this, driveInfo.instanceId);
@@ -16211,7 +16216,13 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
     llvm::StringRef sigName =
         nameIt != signalIdToName.end() ? llvm::StringRef(nameIt->second)
                                        : llvm::StringRef("<unknown>");
+    llvm::SmallString<64> valBits;
+    if (driveVal.isX())
+      valBits = "X";
+    else
+      driveVal.getAPInt().toString(valBits, 16, false);
     llvm::errs() << "[DRV-SCHED] sig=" << sigId << " (" << sigName << ")"
+                 << " val=0x" << valBits
                  << " now=(" << currentTime.realTime << ",d"
                  << currentTime.deltaStep << ")"
                  << " target=(" << targetTime.realTime << ",d"
@@ -22140,6 +22151,21 @@ LogicalResult
 LLHDProcessInterpreter::interpretProcPrint(ProcessId procId,
                                             sim::PrintFormattedProcOp printOp) {
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.proc.print\n");
+
+  // Handle $dumpfile: open a VCD file for waveform output.
+  if (auto dumpfileAttr =
+          printOp->getAttrOfType<mlir::StringAttr>("circt.dumpfile")) {
+    if (dumpfileCallback)
+      dumpfileCallback(dumpfileAttr.getValue());
+    // Fall through to print the diagnostic message.
+  }
+
+  // Handle $dumpvars: start VCD tracing.
+  if (printOp->hasAttr("circt.dumpvars")) {
+    if (dumpvarsCallback)
+      dumpvarsCallback();
+    // Fall through to print the diagnostic message.
+  }
 
   if (auto monitorKind =
           printOp->getAttrOfType<mlir::StringAttr>("circt.monitor.kind")) {

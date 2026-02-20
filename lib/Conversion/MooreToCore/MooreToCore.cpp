@@ -13009,7 +13009,31 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       if (sliceWidth <= 0 || sliceWidth > baseWidth)
         return failure();
 
-      Value baseStruct = llhd::ProbeOp::create(rewriter, loc, baseRef);
+      // When multiple bit-indexed assignments target the same signal in the
+      // same block (e.g. CA_out[15] <= q1; CA_out[14] <= q2; ...), we must
+      // accumulate the modifications into a single DriveOp. Otherwise each
+      // DriveOp independently reads the old signal value and modifies one bit,
+      // and the HoistSignals pass keeps only the last one (losing all others).
+      //
+      // Search backwards in the current block for an existing DriveOp to the
+      // same base signal. If found, use its drive value as the base for the
+      // new bit modification, and update it in-place.
+      Value baseStruct;
+      llhd::DriveOp existingDrive;
+      if (Block *insertBlock = rewriter.getInsertionBlock()) {
+        for (auto &existingOp : llvm::reverse(*insertBlock)) {
+          if (auto driveOp = dyn_cast<llhd::DriveOp>(&existingOp)) {
+            if (driveOp.getSignal() == baseRef && !driveOp.getEnable()) {
+              existingDrive = driveOp;
+              baseStruct = driveOp.getValue();
+              break;
+            }
+          }
+        }
+      }
+      if (!baseStruct)
+        baseStruct = llhd::ProbeOp::create(rewriter, loc, baseRef);
+
       Value baseValue = extractFourStateValue(rewriter, loc, baseStruct);
       Value baseUnknown = extractFourStateUnknown(rewriter, loc, baseStruct);
 
@@ -13069,8 +13093,16 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
 
       Value newStruct =
           createFourStateStruct(rewriter, loc, newValue, newUnknown);
-      llhd::DriveOp::create(rewriter, loc, baseRef, newStruct, delay, Value{},
-                            llhdStrength0, llhdStrength1);
+      if (existingDrive) {
+        // Update the existing DriveOp's value to incorporate this bit
+        // modification on top of the accumulated value. Move the DriveOp
+        // after the new operations to maintain SSA dominance.
+        existingDrive.getValueMutable().assign(newStruct);
+        existingDrive->moveAfter(newStruct.getDefiningOp());
+      } else {
+        llhd::DriveOp::create(rewriter, loc, baseRef, newStruct, delay, Value{},
+                              llhdStrength0, llhdStrength1);
+      }
       rewriter.eraseOp(op);
       return success();
     };
@@ -13968,8 +14000,13 @@ struct DisplayBIOpConversion : public OpConversionPattern<DisplayBIOp> {
   LogicalResult
   matchAndRewrite(DisplayBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
+    auto newOp = rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
         op, adaptor.getMessage());
+    // Propagate VCD dump attributes for $dumpfile/$dumpvars support.
+    if (auto dumpfile = op->getAttrOfType<StringAttr>("circt.dumpfile"))
+      newOp->setAttr("circt.dumpfile", dumpfile);
+    if (op->hasAttr("circt.dumpvars"))
+      newOp->setAttr("circt.dumpvars", rewriter.getUnitAttr());
     return success();
   }
 };
