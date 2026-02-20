@@ -595,11 +595,45 @@ bool __moore_mailbox_trypeek(int64_t mbox_id, int64_t *msg_out);
 /// @return Number of messages currently in the mailbox
 int64_t __moore_mailbox_num(int64_t mbox_id);
 
+/// Put a message into a mailbox (blocking).
+/// Implements SystemVerilog `mailbox.put(msg)`.
+/// In compiled mode without a scheduler, behaves like tryput (best-effort).
+/// @param mbox_id Mailbox identifier from __moore_mailbox_create
+/// @param msg The message to put (as 64-bit value/handle)
+void __moore_mailbox_put(int64_t mbox_id, int64_t msg);
+
+/// Get a message from a mailbox (blocking).
+/// Implements SystemVerilog `mailbox.get(msg)`.
+/// In compiled mode without a scheduler, behaves like tryget (best-effort).
+/// @param mbox_id Mailbox identifier from __moore_mailbox_create
+/// @param msg_out Pointer to store the retrieved message
+void __moore_mailbox_get(int64_t mbox_id, int64_t *msg_out);
+
 /// Peek a message from a mailbox (blocking, does not remove).
 /// Implements SystemVerilog `mailbox.peek(msg)`.
 /// @param mbox_id Mailbox identifier from __moore_mailbox_create
 /// @param msg_out Pointer to store the peeked message
 void __moore_mailbox_peek(int64_t mbox_id, int64_t *msg_out);
+
+//===----------------------------------------------------------------------===//
+// Plusargs (IEEE 1800-2017 Section 21.6)
+//===----------------------------------------------------------------------===//
+
+/// Check if a plusarg matching the given pattern exists.
+/// Implements SystemVerilog `$test$plusargs(pattern)`.
+/// @param pattern Pointer to the pattern string
+/// @param len Length of the pattern string
+/// @return 1 if a matching plusarg exists, 0 otherwise
+int32_t __moore_test_plusargs(const char *pattern, int64_t len);
+
+/// Check for a plusarg matching the given format and extract its value.
+/// Implements SystemVerilog `$value$plusargs(format, variable)`.
+/// @param format Pointer to the format string (e.g., "WIDTH=%d")
+/// @param fmtLen Length of the format string
+/// @param outVal Pointer to store the extracted value
+/// @return 1 if a matching plusarg was found and value extracted, 0 otherwise
+int32_t __moore_value_plusargs(const char *format, int64_t fmtLen,
+                               int64_t *outVal);
 
 //===----------------------------------------------------------------------===//
 // Simulation Control Operations

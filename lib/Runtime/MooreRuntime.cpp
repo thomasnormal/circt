@@ -2177,6 +2177,43 @@ extern "C" int64_t __moore_mailbox_num(int64_t mbox_id) {
   return static_cast<int64_t>(mbox.queue.size());
 }
 
+extern "C" void __moore_mailbox_put(int64_t mbox_id, int64_t msg) {
+  // Blocking put — in compiled simulation without a scheduler, behaves
+  // like tryput (best-effort, no suspension on full bounded mailbox).
+  std::lock_guard<std::mutex> lock(mailboxRegistryMutex);
+  auto it = mailboxRegistry.find(mbox_id);
+  if (it == mailboxRegistry.end())
+    return;
+  auto &mbox = *it->second;
+  std::lock_guard<std::mutex> mLock(mbox.mtx);
+  // For unbounded mailbox or not-yet-full bounded mailbox, enqueue.
+  // For full bounded mailbox, silently drop (no scheduler to block on).
+  if (mbox.bound <= 0 ||
+      static_cast<int32_t>(mbox.queue.size()) < mbox.bound)
+    mbox.queue.push_back(msg);
+}
+
+extern "C" void __moore_mailbox_get(int64_t mbox_id, int64_t *msg_out) {
+  // Blocking get — in compiled simulation without a scheduler, poll once.
+  // If empty, writes 0 to msg_out (best-effort without suspension).
+  std::lock_guard<std::mutex> lock(mailboxRegistryMutex);
+  auto it = mailboxRegistry.find(mbox_id);
+  if (it == mailboxRegistry.end()) {
+    if (msg_out)
+      *msg_out = 0;
+    return;
+  }
+  auto &mbox = *it->second;
+  std::lock_guard<std::mutex> mLock(mbox.mtx);
+  if (!mbox.queue.empty()) {
+    if (msg_out)
+      *msg_out = mbox.queue.front();
+    mbox.queue.pop_front();
+  } else if (msg_out) {
+    *msg_out = 0;
+  }
+}
+
 extern "C" void __moore_mailbox_peek(int64_t mbox_id, int64_t *msg_out) {
   // Blocking peek — in compiled simulation without a scheduler, poll once.
   // If empty, writes 0 to msg_out (best-effort without suspension).
@@ -2193,6 +2230,81 @@ extern "C" void __moore_mailbox_peek(int64_t mbox_id, int64_t *msg_out) {
     *msg_out = mbox.queue.front();
   else if (msg_out)
     *msg_out = 0;
+}
+
+//===----------------------------------------------------------------------===//
+// Plusargs (IEEE 1800-2017 Section 21.6)
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// Collect plusargs from environment variables and cache them.
+/// Checks CIRCT_UVM_ARGS and UVM_ARGS (space-separated plusargs).
+std::vector<std::string> &getPlusargs() {
+  static std::vector<std::string> plusargs = []() {
+    std::vector<std::string> args;
+    for (const char *envName : {"CIRCT_UVM_ARGS", "UVM_ARGS"}) {
+      const char *env = std::getenv(envName);
+      if (!env)
+        continue;
+      std::string s(env);
+      size_t pos = 0;
+      while (pos < s.size()) {
+        while (pos < s.size() && s[pos] == ' ')
+          ++pos;
+        size_t end = s.find(' ', pos);
+        if (end == std::string::npos)
+          end = s.size();
+        if (end > pos)
+          args.push_back(s.substr(pos, end - pos));
+        pos = end;
+      }
+    }
+    return args;
+  }();
+  return plusargs;
+}
+} // namespace
+
+extern "C" int32_t __moore_test_plusargs(const char *pattern, int64_t len) {
+  if (!pattern || len <= 0)
+    return 0;
+  std::string pat(pattern, static_cast<size_t>(len));
+  for (const auto &arg : getPlusargs()) {
+    // Plusargs start with '+', match if arg starts with '+' + pattern
+    std::string candidate = arg;
+    if (!candidate.empty() && candidate[0] == '+')
+      candidate = candidate.substr(1);
+    if (candidate.substr(0, pat.size()) == pat)
+      return 1;
+  }
+  return 0;
+}
+
+extern "C" int32_t __moore_value_plusargs(const char *format, int64_t fmtLen,
+                                          int64_t *outVal) {
+  if (!format || fmtLen <= 0)
+    return 0;
+  std::string fmt(format, static_cast<size_t>(fmtLen));
+  // Extract the prefix before the format specifier (e.g., "WIDTH=" from "WIDTH=%d")
+  size_t pctPos = fmt.find('%');
+  if (pctPos == std::string::npos)
+    return 0;
+  std::string prefix = fmt.substr(0, pctPos);
+
+  for (const auto &arg : getPlusargs()) {
+    std::string candidate = arg;
+    if (!candidate.empty() && candidate[0] == '+')
+      candidate = candidate.substr(1);
+    if (candidate.substr(0, prefix.size()) == prefix) {
+      std::string valStr = candidate.substr(prefix.size());
+      if (outVal) {
+        char *end = nullptr;
+        *outVal = std::strtol(valStr.c_str(), &end, 0);
+      }
+      return 1;
+    }
+  }
+  return 0;
 }
 
 //===----------------------------------------------------------------------===//
@@ -2274,15 +2386,17 @@ static void randomizeByteBuffer(uint8_t *data, int64_t size) {
   if (!data || size <= 0)
     return;
 
+  // Use processRng so that process::get_randstate/set_randstate can
+  // capture and replay the randomization sequence (IEEE 1800-2017 §18.13).
   int64_t fullWords = size / 4;
   int64_t remainingBytes = size % 4;
 
   auto *wordPtr = reinterpret_cast<uint32_t *>(data);
   for (int64_t i = 0; i < fullWords; ++i)
-    wordPtr[i] = __moore_urandom();
+    wordPtr[i] = processRng();
 
   if (remainingBytes > 0) {
-    uint32_t lastWord = __moore_urandom();
+    uint32_t lastWord = processRng();
     uint8_t *remainingPtr = data + fullWords * 4;
     for (int64_t i = 0; i < remainingBytes; ++i)
       remainingPtr[i] = static_cast<uint8_t>((lastWord >> (i * 8)) & 0xFF);
