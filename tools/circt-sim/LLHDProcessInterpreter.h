@@ -200,6 +200,10 @@ struct MemoryBlock {
   /// Whether the memory has been initialized.
   bool initialized = false;
 
+  /// If non-zero, the signal ID that this alloca backs (for fork-child
+  /// write propagation).  Populated lazily by the drive interpreter.
+  SignalId backingSignalId = 0;
+
   MemoryBlock() = default;
   MemoryBlock(size_t sz, unsigned elemBits)
       : data(sz, 0), size(sz), elementBitWidth(elemBits), initialized(false) {}
@@ -856,6 +860,18 @@ private:
   /// Register a module-level drive operation.
   void registerModuleDrive(llhd::DriveOp driveOp, InstanceId instanceId,
                            const InstanceInputMapping &inputMap);
+
+  /// Build the allocaBackingSignal mapping by scanning process yields and
+  /// their corresponding module-level drives.
+  void buildAllocaToSignalMapping(hw::HWModuleOp hwModule);
+
+  /// After a memory-backed struct field write, propagate the updated alloca
+  /// contents to the backing signal so probes see the new value.
+  void propagateAllocaWriteToBackingSignal(
+      MemoryBlock *block, uint64_t blockOffset, unsigned parentWidth,
+      mlir::Value parentSignal,
+      llvm::ArrayRef<llhd::SigStructExtractOp> extractChain,
+      ProcessId procId);
 
   /// Execute module-level drives for a process after it yields.
   void executeModuleDrives(ProcessId procId);
@@ -1590,6 +1606,11 @@ private:
   /// Map from MLIR signal values to signal IDs.
   llvm::DenseMap<mlir::Value, SignalId> valueToSignal;
 
+  /// Map from alloca Values to the signal IDs they back.
+  /// Built during initialization by scanning process yield/drive patterns.
+  /// Used to propagate fork-child alloca writes to the backing signal.
+  llvm::DenseMap<mlir::Value, SignalId> allocaBackingSignal;
+
   /// Map from instance IDs to per-instance signal maps.
   llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Value, SignalId>>
       instanceValueToSignal;
@@ -1653,7 +1674,14 @@ private:
 
   /// Map from signal IDs to pre-force saved values. When a signal is forced,
   /// we save the current value here so we can restore it on release.
+  /// The saved value is updated by procedural drives during force, so that
+  /// release restores the LAST driven value (IEEE 1800-2017 §10.6.2).
   llvm::DenseMap<SignalId, InterpretedValue> forcedSignalSavedValues;
+
+  /// Set of signal IDs currently under force. Normal drives (continuous and
+  /// procedural) are suppressed while a signal is in this set. Procedural
+  /// drives update forcedSignalSavedValues instead. Cleared on release.
+  llvm::DenseSet<SignalId> forcedSignals;
 
   /// Map from signal IDs to {procId, Value key} for backing memory blocks.
   /// Allocated when unrealized_conversion_cast converts !llhd.ref<T> to
@@ -1802,6 +1830,16 @@ private:
   /// When true, executeFirReg defers signal updates to pendingFirRegUpdates
   /// instead of calling scheduler.updateSignal immediately.
   bool deferFirRegUpdates = false;
+
+  /// Signals that were conditionally driven by a process in the current NBA
+  /// batch, with their drive values.  When two always blocks drive the same
+  /// register, only the block that explicitly assigns should take effect
+  /// (Verilog last-write-wins).  The firreg (register-retention driver) must
+  /// yield to the conditional process drive; otherwise the firreg's captured
+  /// old value overwrites the process's new value.  The value is applied in
+  /// the post-NBA callback alongside firreg updates so it is visible before
+  /// cbValueChange callbacks fire (e.g. cocotb RisingEdge).
+  llvm::DenseMap<SignalId, SignalValue> processConditionalDriveValues;
 
   /// Registered clocked assertion state keyed by op.
   llvm::DenseMap<mlir::Operation *, ClockedAssertionState> clockedAssertionStates;
