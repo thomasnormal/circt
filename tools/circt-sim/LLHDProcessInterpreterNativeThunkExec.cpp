@@ -116,7 +116,8 @@ bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
   auto kindIt = directProcessFastPathKinds.find(procId);
   if (kindIt == directProcessFastPathKinds.end()) {
     PeriodicToggleClockThunkSpec periodicSpec;
-    if (tryBuildPeriodicToggleClockThunkSpec(state, periodicSpec)) {
+    if (tryBuildPeriodicToggleClockThunkSpec(state, periodicSpec) ||
+        tryBuildYieldBasedToggleClockThunkSpec(state, periodicSpec)) {
       periodicToggleClockThunkSpecs[procId] = std::move(periodicSpec);
       kindMask |= toFastPathMask(DirectProcessFastPathKind::PeriodicToggleClock);
     } else {
@@ -1859,6 +1860,180 @@ bool LLHDProcessInterpreter::tryBuildPeriodicToggleClockThunkSpec(
   return true;
 }
 
+/// Try to build a yield-based periodic toggle clock thunk spec.
+/// This handles the pattern where the clock value is carried through block
+/// arguments and yielded, with an external llhd.drv consuming the yield:
+///   ^entry: br ^loop(%init)
+///   ^loop(%val): int_to_time, wait yield(%val), delay, ^toggle
+///   ^toggle: %inv = xor %val, const; br ^loop(%inv)
+/// The signal is found by tracing the process result to its llhd.drv user.
+bool LLHDProcessInterpreter::tryBuildYieldBasedToggleClockThunkSpec(
+    const ProcessExecutionState &state,
+    PeriodicToggleClockThunkSpec &spec) const {
+  auto processOp = state.getProcessOp();
+  if (!processOp)
+    return false;
+  Region &bodyRegion = processOp.getBody();
+  if (bodyRegion.empty())
+    return false;
+
+  spec = PeriodicToggleClockThunkSpec{};
+
+  Block &entry = bodyRegion.front();
+  if (entry.empty())
+    return false;
+
+  // Entry block: cf.br ^loop(%init : i1) — branch with one initial constant.
+  auto entryIt = entry.begin();
+  auto entryBr = dyn_cast<mlir::cf::BranchOp>(*entryIt);
+  if (!entryBr || std::next(entryIt) != entry.end())
+    return false;
+  if (entryBr.getDestOperands().size() != 1)
+    return false;
+
+  Block *loopBlock = entryBr.getDest();
+  if (!loopBlock || loopBlock == &entry)
+    return false;
+  // loopBlock has 1 block arg (the clock value).
+  if (loopBlock->getNumArguments() != 1)
+    return false;
+
+  // loopBlock: exactly 2 ops: int_to_time + wait.
+  if (!llvm::hasNItemsOrMore(*loopBlock, 2) ||
+      llvm::hasNItemsOrMore(*loopBlock, 3))
+    return false;
+
+  auto loopIt = loopBlock->begin();
+  auto intToTimeOp = dyn_cast<llhd::IntToTimeOp>(*loopIt++);
+  auto waitOp = dyn_cast<llhd::WaitOp>(*loopIt);
+  if (!intToTimeOp || !waitOp)
+    return false;
+  if (waitOp.getDelay() != intToTimeOp.getResult())
+    return false;
+  if (!waitOp.getObserved().empty())
+    return false;
+  // Must have exactly 1 yield operand (the clock value).
+  if (waitOp.getYieldOperands().size() != 1)
+    return false;
+  if (waitOp.getYieldOperands()[0] != loopBlock->getArgument(0))
+    return false;
+  // No dest operands.
+  if (!waitOp.getDestOperands().empty())
+    return false;
+
+  // Extract delay constant.
+  auto extractConstU64 = [](Value value, uint64_t &out) -> bool {
+    out = 0;
+    if (auto hwConst = value.getDefiningOp<hw::ConstantOp>()) {
+      out = hwConst.getValue().getZExtValue();
+      return true;
+    }
+    if (auto arithConst = value.getDefiningOp<arith::ConstantOp>()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(arithConst.getValue())) {
+        out = intAttr.getValue().getZExtValue();
+        return true;
+      }
+    }
+    if (auto llvmConst = value.getDefiningOp<LLVM::ConstantOp>()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(llvmConst.getValue())) {
+        out = intAttr.getValue().getZExtValue();
+        return true;
+      }
+    }
+    return false;
+  };
+
+  uint64_t delayFs = 0;
+  if (!extractConstU64(intToTimeOp.getInput(), delayFs) || delayFs == 0)
+    return false;
+
+  // Toggle block: exactly 2 ops: xor + br back to loop.
+  Block *toggleBlock = waitOp.getDest();
+  if (!toggleBlock || toggleBlock == loopBlock)
+    return false;
+  if (!llvm::hasNItemsOrMore(*toggleBlock, 2) ||
+      llvm::hasNItemsOrMore(*toggleBlock, 3))
+    return false;
+
+  auto toggleIt = toggleBlock->begin();
+  Operation *toggleOp = &*toggleIt++;
+  auto toggleBr = dyn_cast<mlir::cf::BranchOp>(*toggleIt);
+  if (!toggleBr || std::next(toggleIt) != toggleBlock->end())
+    return false;
+  if (toggleBr.getDest() != loopBlock)
+    return false;
+  // Branch must carry the toggled value back to loop.
+  if (toggleBr.getDestOperands().size() != 1)
+    return false;
+  if (toggleOp->getNumResults() != 1 ||
+      toggleBr.getDestOperands()[0] != toggleOp->getResult(0))
+    return false;
+
+  // toggleOp must be an XOR of the block arg with a constant.
+  if (!isa<comb::XorOp>(toggleOp) || toggleOp->getNumOperands() != 2)
+    return false;
+  // One operand should be the loop block arg, the other a constant.
+  Value clkVal = loopBlock->getArgument(0);
+  Value constOperand;
+  if (toggleOp->getOperand(0) == clkVal)
+    constOperand = toggleOp->getOperand(1);
+  else if (toggleOp->getOperand(1) == clkVal)
+    constOperand = toggleOp->getOperand(0);
+  else
+    return false;
+
+  uint64_t xorConst = 0;
+  if (!extractConstU64(constOperand, xorConst))
+    return false;
+
+  // Now find the signal driven by this process's yield output.
+  // The process result (processOp.getResult(0)) should be used by an
+  // llhd.drv op at the module level.
+  if (processOp.getNumResults() < 1)
+    return false;
+  Value processResult = processOp.getResult(0);
+
+  SignalId sigId = 0;
+  llhd::ConstantTimeOp drvTimeOp = nullptr;
+  for (Operation *user : processResult.getUsers()) {
+    auto drvOp = dyn_cast<llhd::DriveOp>(user);
+    if (!drvOp)
+      continue;
+    sigId = getSignalId(drvOp.getSignal());
+    if (sigId != 0) {
+      if (drvOp.getTime())
+        drvTimeOp = drvOp.getTime().getDefiningOp<llhd::ConstantTimeOp>();
+      break;
+    }
+  }
+
+  // Fill in the spec. We set the yield-based flag and leave probeOp/toggleDriveOp
+  // as their default (null) values. The execution path checks isYieldBased.
+  spec.isYieldBased = true;
+  spec.intToTimeResult = intToTimeOp.getResult();
+  spec.waitOp = waitOp;
+  spec.waitDestBlock = toggleBlock;
+  spec.toggleOp = toggleOp;
+  spec.delayFs = delayFs;
+
+  // Pre-resolve signal info.
+  if (sigId != 0) {
+    spec.signalId = sigId;
+    spec.signalWidth = scheduler.getSignalValue(sigId).getWidth();
+    spec.toggleXorConstant = xorConst;
+    // Extract drive delay from the external llhd.drv.
+    if (drvTimeOp) {
+      SimTime driveDelay = convertTime(drvTimeOp.getValueAttr());
+      spec.driveRealFs = driveDelay.realTime;
+      spec.driveDelta = driveDelay.deltaStep;
+      spec.driveEpsilon = 0;
+    }
+    spec.nativePathAvailable = (spec.signalWidth <= 64);
+  }
+
+  return true;
+}
+
 bool LLHDProcessInterpreter::executeJITCompiledBlockNativeThunk(
     ProcessId procId, ProcessExecutionState &state,
     ProcessThunkExecutionState &thunkState) {
@@ -2008,6 +2183,18 @@ bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(
       thunkState.deoptRequested = true;
       return true;
     }
+    // For yield-based clocks, set the initial block argument value before
+    // the first wait. The entry branch `cf.br ^loop(%init)` carries the
+    // initial value — we need to populate it so interpretWait can yield it.
+    if (spec.isYieldBased) {
+      auto processOp = state.getProcessOp();
+      Block &entry = processOp.getBody().front();
+      auto entryBr = cast<mlir::cf::BranchOp>(entry.front());
+      Value initOperand = entryBr.getDestOperands()[0];
+      Block *loopBlock = entryBr.getDest();
+      setValue(procId, loopBlock->getArgument(0),
+              getValue(procId, initOperand));
+    }
     (void)scheduleNextWait();
     return true;
   }
@@ -2028,7 +2215,10 @@ bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(
     // Lazy resolution: if signalId wasn't resolved at spec-build time
     // (common in compile mode where thunks install before signal registration),
     // resolve it now on first use.
-    if (!spec.nativePathAvailable && spec.signalId == 0) {
+    // NOTE: yield-based clocks pre-resolve their signal ID in the matcher
+    // (from the external llhd.drv user), so skip lazy resolution for them.
+    if (!spec.nativePathAvailable && spec.signalId == 0 &&
+        !spec.isYieldBased) {
       spec.signalId = getSignalId(spec.probeOp.getSignal());
       if (spec.signalId != 0) {
         spec.signalWidth =
@@ -2153,6 +2343,11 @@ bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(
     }
 
     // Fallback: use interpreter for non-XOR toggle ops or unresolved signals.
+    // Yield-based clocks have no probeOp/toggleDriveOp — must deopt.
+    if (spec.isYieldBased) {
+      thunkState.deoptRequested = true;
+      return true;
+    }
     if (failed(interpretProbe(procId, spec.probeOp)) ||
         failed(interpretOperation(procId, spec.toggleOp)) ||
         failed(interpretDrive(procId, spec.toggleDriveOp))) {

@@ -357,3 +357,257 @@ across 4096 half-cycles instead of paying it every time.
 
 ### Test Suite
 564/578 pass (14 pre-existing failures, zero new regressions)
+
+---
+
+## Phase 6: Profile Analysis — Where Does Time Go? (In Progress)
+
+### Date: 2026-02-21
+
+### APB Clock Benchmark: 72ms Breakdown
+
+The 72ms wall time is NOT simulation — it's almost entirely process startup:
+
+| Component | Time | Notes |
+|-----------|------|-------|
+| Process startup | ~55ms | OS process creation, shared library loading |
+| parse | 0ms | MLIR parse (small file) |
+| passes | 1ms | Lowering passes |
+| init | 13ms | Signal/process registration, UVM init |
+| **Simulation** | **<1ms** | ~14.8M instructions, batched |
+| Coverage report | ~3ms | Empty report generation |
+
+The simulation engine itself is so fast (~5 instructions per half-cycle) that startup dominates.
+With 100ms sim time (10x more work): wall time increases by only ~0ms — still startup-dominated.
+
+### UART Clock Benchmark: Batching Does NOT Activate
+
+**UART** (`uart-clock-reset.mlir`): 100ps half-period, 10ms sim time = 100M half-cycles
+
+| Metric | APB (batched) | UART (unbatched) | Ratio |
+|--------|--------------|------------------|-------|
+| Instructions | 14.8M | 113.6B | 7,676x |
+| Wall time | 72ms | 30.3s | 421x |
+| Per half-cycle | ~5 insns | ~1,136 insns | 227x |
+
+**Root cause**: The UART clock uses a different IR pattern that doesn't match the
+PeriodicToggleClock thunk. The thunk requires:
+```
+^loopBlock: wait (no yield), ^toggleBlock
+^toggleBlock: prb, xor, drv, br ^loopBlock
+```
+
+But UART has:
+```
+%0 = llhd.process -> i1 {
+  ^bb1(%clk_val): wait yield(%clk_val), ^bb2
+  ^bb2: %inv = xor %clk_val; br ^bb1(%inv)
+}
+llhd.drv %clk, %0 after %eps   // drive is OUTSIDE the process
+```
+
+Differences:
+1. `wait` has yield operands (carries clock value through block args)
+2. No `llhd.prb` / `llhd.drv` inside the process body
+3. Drive is an external `llhd.drv` connected to the process yield value
+
+The thunk matcher at `tryBuildPeriodicToggleClockThunkSpec()` line 1757 rejects
+processes where `waitOp.getYieldOperands()` is non-empty.
+
+### Impact Assessment
+
+The batching optimization works spectacularly for the APB pattern but doesn't help
+at all for UART-style clocks. The UART pattern is actually the more common pattern
+in CIRCT's LLHD lowering (the process yields its value, and the drive is structural).
+
+### Next Steps
+1. Extend thunk matcher to handle yield-based clock patterns
+2. Profile non-clock workloads (UVM testbench with concurrent processes)
+3. Consider generalizing the batching to ANY process that runs alone
+
+---
+
+## Phase 7: UVM Workload Profiling (The Real Challenge)
+
+### Date: 2026-02-21
+
+### Setup
+Profiled the AVIP APB UVM test — a real-world SystemVerilog/UVM verification environment
+with clock generation, master/slave BFMs, sequencer, driver, monitor, scoreboard.
+
+**Workload**: AVIP APB `apb_base_test`, 2260ns sim time, ~452K iterations
+
+### Key Numbers
+
+| Metric | Simple clock (APB) | Real UVM (AVIP APB) | Ratio |
+|--------|-------------------|---------------------|-------|
+| Instructions | 14.4M | 2,468B (2.47T) | 171,000x |
+| Wall time | 0.03s | 13s | 433x |
+| Iters/sec | ~33M | ~34.8K | 947x |
+| Insns/iter | ~14 | ~5.5M | 392,000x |
+
+**The 1000x clock batching optimization has ZERO effect on UVM workloads** because
+`activeProcessCount > 1` (multiple UVM processes are active). The real perf gap is
+**~1000x per delta cycle** between the simple benchmark and UVM.
+
+### Profile: Top Functions (perf record, 200ns sim time)
+
+| % | Function | Category |
+|---|----------|----------|
+| 9.28% | clock_gettime (vdso) | **Wall-clock checking** |
+| 9.09% | EventScheduler::schedule | **Event scheduling** |
+| 8.58% | TimeWheel::processCurrentDelta | **Delta processing** |
+| 4.85% | TimeWheel::advanceToNextEvent | **Time advancement** |
+| 4.14% | LLHDProcessInterpreter::pollRegisteredMonitor | **Monitor polling** |
+| 3.83% | _int_free (glibc) | **Memory dealloc** |
+| 3.58% | __memmove_avx512 | **Memory copies** |
+| 3.24% | SimulationContext::run | **Main loop** |
+| 3.12% | TimeWheel::cascade | **Time wheel cascade** |
+| 2.71% | ProcessScheduler::executeDeltaCycle | **Delta execution** |
+| 2.60% | TimeWheel::schedule | **Scheduling** |
+| 2.39% | SimContext::initialize (lambda) | **Init** |
+| 2.31% | snapshotJITDeoptState | **JIT overhead** |
+| 2.25% | findNextEventTime | **Next event scan** |
+| 2.07% | std::_Rb_tree::_M_erase | **Red-black tree cleanup** |
+| 2.05% | ProcessScheduler::advanceTime | **Time advance** |
+| 2.01% | DeltaCycleQueue::schedule | **Queue scheduling** |
+| 1.91% | cfree | **Memory dealloc** |
+| 1.85% | triggerSensitiveProcesses | **Signal triggers** |
+| 1.71% | executePeriodicToggleClockNativeThunk | **Clock thunk** |
+
+### Analysis: Where 100% of Time Goes
+
+**Scheduling infrastructure: ~42%**
+- EventScheduler::schedule: 9.09%
+- TimeWheel::processCurrentDelta: 8.58%
+- TimeWheel::advanceToNextEvent: 4.85%
+- TimeWheel::cascade: 3.12%
+- TimeWheel::schedule: 2.60%
+- TimeWheel::findNextEventTime: 2.25%
+- DeltaCycleQueue::schedule: 2.01%
+- ProcessScheduler::executeDeltaCycle: 2.71%
+- ProcessScheduler::advanceTime: 2.05%
+- triggerSensitiveProcesses: 1.85%
+- hasReadyProcesses: 1.65%
+- executeReadyProcesses: 1.06%
+
+**Wall-clock overhead: ~9.6%**
+- clock_gettime: 9.28%
+- This is called EVERY iteration to check the wall-time guard
+
+**Memory allocation/deallocation: ~7.4%**
+- _int_free: 3.83%
+- memmove: 3.58% (SmallVector/Event copies)
+- cfree: 1.91%
+- malloc: 1.08%
+- vector realloc: 0.79%
+
+**Interpreter/process dispatch: ~10%**
+- pollRegisteredMonitor: 4.14%
+- snapshotJITDeoptState: 2.31%
+- executePeriodicToggleClock thunk: 1.71%
+- executeProcess: 0.34%
+- resumeProcess: 0.30%
+
+**Data structure overhead: ~5%**
+- DenseMap::clear: 1.52%
+- SmallVectorImpl::operator=: 1.10%
+- Rb_tree insert/rebalance: 1.63%
+- Rb_tree erase: 2.07%
+
+### Critical Insights
+
+1. **clock_gettime is 9.28% of all time** — The wall-clock guard runs EVERY iteration.
+   Should check every 1000 iterations instead of every iteration.
+
+2. **Red-black trees still used** — `std::map` for delta queues costs 3.7% (insert + erase).
+   The inline delta array optimization helps for step 0, but steps ≥4 still use std::map.
+
+3. **Memory allocation is 7.4%** — Events, SmallVectors, and DeltaCycleQueues are being
+   heap-allocated. Need object pooling or arena allocation.
+
+4. **The interpreter itself is NOT the top bottleneck** — Unlike the simple clock benchmark
+   where interpreter dispatch dominated, in UVM the scheduling infrastructure is the
+   bottleneck. This means even compiled native code won't help much until the scheduler
+   is optimized for multi-process workloads.
+
+5. **snapshotJITDeoptState is 2.31%** — This is pure JIT overhead that doesn't exist in
+   interpret mode. The JIT deopt tracking may be counterproductive for UVM workloads.
+
+### Quick Wins (low-hanging fruit)
+
+1. **Wall-clock check throttle**: Check `clock_gettime` every 1000 iterations → saves ~9%
+2. **Eliminate std::map for delta queues**: Extend inline array to cover all common delta steps
+3. **Object pool for Events**: Pre-allocate event objects, reuse instead of malloc/free
+4. **Skip pollRegisteredMonitor when no monitors**: Check `monitorCount > 0` first → saves ~4%
+5. **Remove snapshotJITDeoptState in non-debug builds**: saves ~2.3%
+
+### Estimated Impact of Quick Wins
+- Wall-clock throttle: ~9% → ~0.1% = **~9% savings**
+- Eliminate std::map: ~3.7% → ~0.5% = **~3% savings**
+- Event pool: ~5% → ~1% = **~4% savings**
+- Skip empty monitors: ~4% → ~0% = **~4% savings**
+- Remove JIT deopt: ~2.3% → ~0% = **~2% savings**
+- **Total: ~22% reduction** → 13s → ~10s for UVM benchmark
+
+This is incremental, not transformative. For 1000x on UVM, we need compiled processes.
+
+## Phase 7: Yield-Based Clock Toggle Batching
+
+### Date: 2026-02-21
+
+### Problem
+Phase 5 batching only works for the "probe-toggle-drive" clock pattern (APB style):
+```
+^loop: wait → ^toggle
+^toggle: probe sig, xor, drive sig, br ^loop
+```
+
+The UART clock uses a different IR pattern — "yield-based":
+```
+^entry: br ^loop(%false)
+^loop(%val): int_to_time, wait yield(%val) delay, ^toggle
+^toggle: %inv = xor %val, const; br ^loop(%inv)
+```
+The signal is driven by an external `llhd.drv %sig, %processResult after %eps` at module level.
+
+The existing `tryBuildPeriodicToggleClockThunkSpec` rejects this pattern because:
+1. `!waitOp.getYieldOperands().empty()` check fails (yield has operands)
+2. No `probeOp` or `toggleDriveOp` inside the process body
+
+Result: UART clock executes 113.6B instructions (30.3s) — no batching, ~7,676x worse than APB.
+
+### Fix
+Added `tryBuildYieldBasedToggleClockThunkSpec()` that:
+1. Matches the yield-based pattern (entry→loop with block arg→toggle with XOR→branch back)
+2. Traces the process result to its external `llhd.drv` user to find the signal
+3. Pre-resolves signal ID, XOR constant, and drive delay
+4. Sets `isYieldBased = true` flag
+
+Updated execution path (`executePeriodicToggleClockNativeThunk`):
+- Lazy resolution block: skipped for yield-based (signal pre-resolved from external drive)
+- Token 0 (init): sets initial block arg value, calls `interpretWait` with yield operands
+- Fallback path: deopts for yield-based (no probeOp/toggleDriveOp to interpret)
+- Fast batched path: works unchanged (drives signal directly, independent of yield mechanism)
+
+### Results
+
+**UART clock benchmark** (`uart-clock-reset.mlir`, max-time=10,000,000 fs):
+
+| Metric | Before (Phase 5) | After (Phase 7) | Improvement |
+|--------|-------------------|------------------|-------------|
+| Instructions | 113.6B | 9.66M | **11,756x** |
+| Wall time | 30.3s | 34ms | **~890x** |
+| Main loop iterations | ~100K | 28 | Batched |
+
+**APB clock benchmark** (unchanged, regression check):
+
+| Metric | Phase 5 | Phase 7 |
+|--------|---------|---------|
+| Instructions | 14.83M | 10.82M |
+| Wall time | 68ms | 12ms |
+
+Both clock patterns now use the batched fast path.
+
+### Test Results
+564/578 pass (14 pre-existing failures, 0 regressions).

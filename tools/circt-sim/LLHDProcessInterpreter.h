@@ -1064,6 +1064,7 @@ private:
 
   struct PeriodicToggleClockThunkSpec {
     bool hasInitialDrive = false;
+    bool isYieldBased = false;
     llhd::DriveOp initialDriveOp;
     mlir::Value intToTimeResult;
     llhd::WaitOp waitOp;
@@ -1199,6 +1200,12 @@ private:
       ProcessThunkExecutionState &thunkState);
 
   bool tryBuildPeriodicToggleClockThunkSpec(
+      const ProcessExecutionState &state,
+      PeriodicToggleClockThunkSpec &spec) const;
+
+  /// Try to build a yield-based periodic toggle clock thunk spec.
+  /// Handles the pattern: wait yield(%val) → xor → br loop(%inv).
+  bool tryBuildYieldBasedToggleClockThunkSpec(
       const ProcessExecutionState &state,
       PeriodicToggleClockThunkSpec &spec) const;
 
