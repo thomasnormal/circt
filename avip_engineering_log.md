@@ -4030,3 +4030,58 @@ Validate whether the latest runtime-side hypotheses changed failure signatures, 
 
 ### Outcome
 1. Arcilator AVIP fast-mode is now fully green for `all9` seed-1.
+
+---
+
+## 2026-02-21 Session: Arcilator all9x3 Stability + Compile-Path Profiling/Optimization
+
+### Scope
+1. Stress Arcilator AVIP fast mode with multi-seed stability (`all9`, seeds `1,2,3`).
+2. Profile compile bottlenecks with symbolized `perf` data.
+3. Land a targeted compile-path optimization backed by profile evidence.
+
+### Stability evidence
+1. Full all9 multi-seed run:
+   - `/tmp/arci-fastmode-all9-seeds123-20260221-064314/matrix.tsv`
+2. Result:
+   - all `27/27` rows pass (`compile_status=OK`, `sim_status=OK`, `sim_exit=0`).
+   - Includes previously sensitive lanes (`axi4Lite`, `jtag`, `spi`, `uart`) at seeds `1,2,3`.
+
+### Profiling evidence
+1. Runtime-side sample on active `axi4Lite` Arcilator lane:
+   - `perf` showed noticeable startup time in behavioral prune/liveness machinery (`SymbolDCE` path), but lane remained functionally green.
+2. Compile-side symbolized profile (isolated pinned binary):
+   - Before change:
+     - run dir: `/tmp/axi4lite-prof-20260221-071459`
+     - elapsed: `95s`
+     - hotspot stack dominated by Moore symbol verification lookups:
+       - `mlir::func::FuncOp::getInherentAttr`
+       - `mlir::SymbolTable::lookupSymbolIn`
+       - `circt::moore::VTableEntryOp::verifySymbolUses`
+   - After change:
+     - run dir: `/tmp/axi4lite-prof-after-20260221-071923`
+     - elapsed: `88s` (about `7.4%` lower in the same profiling setup)
+     - same hotspot family, with reduced wall time.
+
+### Code change
+1. `lib/Dialect/Moore/MooreOps.cpp`
+   - Optimized `VTableEntryOp::verifySymbolUses(...)`:
+     - switched target lookup to module-level `lookupSymbolIn` once.
+     - replaced per-class full method scans with direct symbol-table lookup by method name.
+     - preserved existing semantic checks (definition presence and override consistency), while removing repeated linear scans through class method bodies.
+
+### Validation after change
+1. Moore conversion checks:
+   - `build-test/bin/circt-opt test/Conversion/MooreToCore/vtable.mlir --convert-moore-to-core --verify-diagnostics | build-ot/bin/FileCheck ...` PASS
+   - `build-test/bin/circt-opt test/Conversion/MooreToCore/vtable-ops.mlir --convert-moore-to-core --verify-diagnostics | build-ot/bin/FileCheck ...` PASS
+   - `build-test/bin/circt-opt test/Conversion/MooreToCore/vtable-abstract.mlir --convert-moore-to-core --verify-diagnostics | build-ot/bin/FileCheck ...` PASS
+2. AVIP matrix recheck (post-change):
+   - `/tmp/arci-all9-seed1-after-vtable-opt-20260221-072509/matrix.tsv`
+   - all `9/9` lanes pass for seed `1`.
+3. Sensitive lane multi-seed recheck (post-change):
+   - `/tmp/arci-axi4lite-seeds123-after-vtable-opt-20260221-074345/matrix.tsv`
+   - `axi4Lite` seeds `1,2,3` all pass.
+
+### Outcome
+1. Arcilator AVIP fast mode remains functionally green after the Moore verifier optimization.
+2. Compile-path hotspot is now better characterized and partially reduced with a targeted, validated change.

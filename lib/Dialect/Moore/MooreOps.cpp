@@ -2063,12 +2063,15 @@ LogicalResult VTableOp::verifyRegions() {
 LogicalResult
 VTableEntryOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   Operation *self = getOperation();
+  auto module = self->getParentOfType<ModuleOp>();
+  if (!module)
+    return emitOpError("must be contained in a module");
 
   // 'target' must exist and resolve from the top-level symbol table of a func
   // op
   SymbolRefAttr target = getTargetAttr();
-  func::FuncOp def =
-      symbolTable.lookupNearestSymbolFrom<func::FuncOp>(self, target);
+  auto *targetOp = symbolTable.lookupSymbolIn(module, target);
+  auto def = dyn_cast_or_null<func::FuncOp>(targetOp);
   if (!def)
     return emitOpError()
            << "cannot resolve target symbol to a function operation " << target;
@@ -2091,30 +2094,32 @@ VTableEntryOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     currentVTable = cast<VTableOp>(currentOp);
 
     auto classSymName = currentVTable.getSymName();
-    ClassDeclOp parentClassDecl =
-        symbolTable.lookupNearestSymbolFrom<ClassDeclOp>(
-            parentOp, classSymName.getRootReference());
-    assert(parentClassDecl && "VTableOp must point to a classdeclop");
+    auto *classOp =
+        symbolTable.lookupSymbolIn(module, classSymName.getRootReference());
+    auto parentClassDecl = dyn_cast_or_null<ClassDeclOp>(classOp);
+    if (!parentClassDecl)
+      return emitOpError() << "cannot resolve class symbol '"
+                           << classSymName.getRootReference() << "'";
 
-    for (auto method : parentClassDecl.getBody().getOps<ClassMethodDeclOp>()) {
-      // A virtual interface declaration. Ignore.
-      if (!method.getImpl())
-        continue;
+    auto *methodOp = symbolTable.lookupSymbolIn(parentClassDecl, getNameAttr());
+    auto method = dyn_cast_or_null<ClassMethodDeclOp>(methodOp);
+    if (!method || !method.getImpl())
+      continue;
 
-      // A matching definition.
-      if (method.getSymName() == getName() && method.getImplAttr() == target)
-        defined = true;
-
-      // All definitions of the same method up the tree must be the same as the
-      // current definition, there is no shadowing.
-      // Hence, if we encounter a methoddeclop that has the same name but a
-      // different implementation that means this vtableentry should point to
-      // the op's implementation - that's an error.
-      else if (method.getSymName() == getName() &&
-               method.getImplAttr() != target && defined)
-        return emitOpError() << "Target " << target
-                             << " should be overridden by " << classSymName;
+    // A matching definition.
+    if (method.getImplAttr() == target) {
+      defined = true;
+      continue;
     }
+
+    // All definitions of the same method up the tree must be the same as the
+    // current definition, there is no shadowing.
+    // Hence, if we encounter a methoddeclop that has the same name but a
+    // different implementation that means this vtableentry should point to
+    // the op's implementation - that's an error.
+    if (defined)
+      return emitOpError() << "Target " << target
+                           << " should be overridden by " << classSymName;
   }
   if (!defined)
     return emitOpError()
