@@ -264,3 +264,27 @@
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
       - `time build-test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core` (`~0.01s`)
+
+- Iteration update (sync abort-on clock sampling semantics):
+  - realization:
+    - importer lowered `accept_on`/`reject_on` and `sync_accept_on`/
+      `sync_reject_on` identically, despite `AbortAssertionExpr::isSync`
+      exposing synchronized semantics.
+  - implemented:
+    - `AssertionExprVisitor::visit(AbortAssertionExpr)` now applies assertion
+      clock sampling to abort condition when `expr.isSync` is true, using
+      current assertion clock/timing control (or default clocking) via
+      `convertLTLTimingControl`.
+    - strengthened regression expectations in:
+      - `test/Conversion/ImportVerilog/sva-abort-on.sv`
+      - sync variants now require inner `ltl.clock` on abort condition.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-abort-on.sv`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-abort-on.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-abort-on-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_abort_on_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-abort-on-e2e.sv --check-prefix=CHECK-BMC`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-abort-on.sv build-test/test/Tools/circt-bmc/sva-abort-on-e2e.sv`
+    - formal smoke:
+      - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv` (`~0.03s`)

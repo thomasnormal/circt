@@ -1369,20 +1369,41 @@ struct AssertionExprVisitor {
     if (!condition)
       return {};
 
+    if (expr.isSync) {
+      const slang::ast::TimingControl *clockingCtrl = nullptr;
+      if (context.currentAssertionClock)
+        clockingCtrl = context.currentAssertionClock;
+      if (!clockingCtrl && context.currentAssertionTimingControl)
+        clockingCtrl = context.currentAssertionTimingControl;
+      if (!clockingCtrl && context.currentScope) {
+        if (auto *clocking =
+                context.compilation.getDefaultClocking(*context.currentScope)) {
+          if (auto *clockBlock =
+                  clocking->as_if<slang::ast::ClockingBlockSymbol>())
+            clockingCtrl = &clockBlock->getEvent();
+        }
+      }
+      if (clockingCtrl) {
+        condition = context.convertLTLTimingControl(*clockingCtrl, condition);
+        if (!condition)
+          return {};
+      }
+    }
+
     auto assertionExpr =
         context.convertAssertionExpression(expr.expr, loc, /*applyDefaults=*/false);
     if (!assertionExpr)
       return {};
 
     if (expr.action == slang::ast::AbortAssertionExpr::Accept) {
-      // Approximate accept_on / sync_accept_on as vacuous success when the
-      // abort condition is true.
+      // Approximate accept_on as vacuous success when the abort condition is
+      // true; for sync_accept_on, condition is sampled on the property clock.
       return ltl::OrOp::create(builder, loc,
                                SmallVector<Value, 2>{condition, assertionExpr});
     }
 
-    // Approximate reject_on / sync_reject_on as forcing failure when the abort
-    // condition is true.
+    // Approximate reject_on as forcing failure when the abort condition is
+    // true; for sync_reject_on, condition is sampled on the property clock.
     auto notCondition = ltl::NotOp::create(builder, loc, condition);
     return ltl::AndOp::create(builder, loc,
                               SmallVector<Value, 2>{notCondition, assertionExpr});
