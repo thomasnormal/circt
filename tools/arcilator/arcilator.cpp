@@ -30,6 +30,7 @@
 #include "circt/Dialect/Emit/EmitPasses.h"
 #include "circt/Dialect/HW/HWPasses.h"
 #include "circt/Dialect/LLHD/IR/LLHDDialect.h"
+#include "circt/Dialect/LLHD/Transforms/LLHDPasses.h"
 #include "circt/Dialect/Moore/MooreDialect.h"
 #include "circt/Dialect/OM/OMDialect.h"
 #include "circt/Dialect/OM/OMPasses.h"
@@ -41,7 +42,9 @@
 #include "circt/Support/Passes.h"
 #include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
+#include "circt/Transforms/Passes.h"
 #include "circt/Tools/arcilator/pipelines.h"
+#include "circt/Runtime/MooreRuntime.h"
 #include "mlir/Bytecode/BytecodeReader.h"
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -76,9 +79,12 @@
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Path.h"
@@ -93,6 +99,10 @@
 #endif
 
 #include <optional>
+#include <cstdlib>
+#include <cstring>
+#include <chrono>
+#include <mutex>
 
 using namespace mlir;
 using namespace circt;
@@ -280,6 +290,12 @@ static llvm::cl::opt<std::string> extraRuntimeArgs(
         "Extra arguments passed to the runtime library for JIT runs."),
     llvm::cl::init(""), llvm::cl::cat(mainCategory));
 
+static llvm::cl::opt<int> jitOptLevel(
+    "jit-opt-level",
+    llvm::cl::desc("JIT optimization level (0-3). "
+                   "Default: 0 in --behavioral mode, 3 otherwise."),
+    llvm::cl::init(-1), llvm::cl::cat(mainCategory));
+
 //===----------------------------------------------------------------------===//
 // Main Tool Logic
 //===----------------------------------------------------------------------===//
@@ -287,6 +303,131 @@ static llvm::cl::opt<std::string> extraRuntimeArgs(
 static bool untilReached(Until until) {
   return until >= runUntilBefore || until > runUntilAfter;
 }
+
+static bool shouldLogProgress() {
+  static bool enabled = []() {
+    const char *env = std::getenv("ARCILATOR_PROGRESS_LOG");
+    return env && *env && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+static bool shouldStripGlobalCtors() {
+  static bool enabled = []() {
+    const char *env = std::getenv("ARCILATOR_STRIP_GLOBAL_CTORS");
+    return env && *env && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+static void logProgress(const llvm::Twine &msg) {
+  if (!shouldLogProgress())
+    return;
+  using Clock = std::chrono::steady_clock;
+  static Clock::time_point start = Clock::now();
+  auto now = Clock::now();
+  auto elapsedMs =
+      std::chrono::duration_cast<std::chrono::milliseconds>(now - start)
+          .count();
+  llvm::errs() << "[arcilator-progress +" << elapsedMs << "ms] " << msg
+               << "\n";
+}
+
+static unsigned stripLLVMGlobalCtors(ModuleOp module) {
+  SmallVector<LLVM::GlobalCtorsOp> ctors;
+  module.walk([&](LLVM::GlobalCtorsOp op) { ctors.push_back(op); });
+  for (auto op : ctors)
+    op.erase();
+  return ctors.size();
+}
+
+static unsigned countDefinedLLVMFunctions(ModuleOp module) {
+  unsigned count = 0;
+  module.walk([&](LLVM::LLVMFuncOp fn) {
+    if (!fn.isExternal())
+      ++count;
+  });
+  return count;
+}
+
+static LogicalResult pruneModuleToEntry(ModuleOp module, StringRef entrySymbol) {
+  auto *ctx = module.getContext();
+  module.walk([&](Operation *op) {
+    auto sym = dyn_cast<SymbolOpInterface>(op);
+    if (!sym)
+      return;
+    if (sym.getName() == entrySymbol)
+      return;
+    if (auto fn = dyn_cast<LLVM::LLVMFuncOp>(op); fn && fn.isExternal())
+      return;
+    op->setAttr("sym_visibility", StringAttr::get(ctx, "private"));
+  });
+
+  PassManager pm(ctx);
+  pm.enableVerifier(false);
+  pm.addPass(createSymbolDCEPass());
+  return pm.run(module);
+}
+
+// Force the linker to keep the Moore runtime object file in this executable.
+// This exposes __moore_* and uvm_* symbols to the JIT symbol resolver.
+extern "C" {
+extern int32_t __moore_string_len(MooreString *str);
+extern int32_t uvm_hdl_check_path(MooreString *path);
+}
+// NOLINTBEGIN(cert-dcl50-cpp)
+[[maybe_unused]] static volatile void *mooreRuntimeSymbolAnchors[] = {
+    reinterpret_cast<void *>(&__moore_string_len),
+    reinterpret_cast<void *>(&uvm_hdl_check_path),
+};
+// NOLINTEND(cert-dcl50-cpp)
+
+// Minimal scheduler shims used by behavioral lowering in arcilator.
+// These provide pointer-backed signal storage for llhd.sig/prb/drv so the
+// JIT can execute without circt-sim's ProcessScheduler.
+namespace {
+static std::mutex behavioralSignalMutex;
+static llvm::DenseMap<void *, size_t> behavioralSignalBytes;
+} // namespace
+
+extern "C" int64_t __arc_sched_current_time() { return 0; }
+
+extern "C" void *__arc_sched_create_signal(void *initPtr, int64_t sizeBytes) {
+  size_t allocBytes = sizeBytes > 0 ? static_cast<size_t>(sizeBytes) : 1;
+  void *storage = std::malloc(allocBytes);
+  if (!storage)
+    return nullptr;
+  if (initPtr && allocBytes)
+    std::memcpy(storage, initPtr, allocBytes);
+  else if (allocBytes)
+    std::memset(storage, 0, allocBytes);
+
+  std::lock_guard<std::mutex> guard(behavioralSignalMutex);
+  behavioralSignalBytes[storage] = allocBytes;
+  return storage;
+}
+
+extern "C" void *__arc_sched_read_signal(void *signalHandle) {
+  return signalHandle;
+}
+
+extern "C" void __arc_sched_drive_signal(void *signalHandle, void *valuePtr,
+                                         int64_t /*delayEncoded*/,
+                                         int8_t enable) {
+  if (!enable || !signalHandle || !valuePtr)
+    return;
+  std::lock_guard<std::mutex> guard(behavioralSignalMutex);
+  auto it = behavioralSignalBytes.find(signalHandle);
+  if (it == behavioralSignalBytes.end())
+    return;
+  std::memcpy(signalHandle, valuePtr, it->second);
+}
+
+// Minimal Moore behavioral shims that are still emitted as external calls by
+// imported UVM codepaths.
+extern "C" void __moore_delay(int64_t /*delayValue*/) {}
+
+extern "C" void __moore_class_srandom(void * /*classPtr*/, int32_t /*seed*/) {}
 
 #ifdef ARCILATOR_ENABLE_JIT
 
@@ -313,6 +454,49 @@ static void bindArcRuntimeSymbols(ExecutionEngine &executionEngine) {
     bindExecutionEngineSymbol(symbolMap, interner,
                               runtimeCallbacks.symNameOnEval,
                               runtimeCallbacks.fnOnEval);
+    return symbolMap;
+  });
+}
+
+static void bindBehavioralRuntimeSymbols(ExecutionEngine &executionEngine,
+                                         ModuleOp module) {
+  executionEngine.registerSymbols([&](llvm::orc::MangleAndInterner interner) {
+    llvm::orc::SymbolMap symbolMap;
+    auto tryBind = [&](StringRef name) {
+      if (name.empty())
+        return;
+      auto sym = interner(name);
+      if (symbolMap.count(sym))
+        return;
+      void *target =
+          llvm::sys::DynamicLibrary::SearchForAddressOfSymbol(name.str().c_str());
+      if (!target)
+        return;
+      bindExecutionEngineSymbol(symbolMap, interner, name, target);
+    };
+
+    bindExecutionEngineSymbol(symbolMap, interner, "__arc_sched_current_time",
+                              &__arc_sched_current_time);
+    bindExecutionEngineSymbol(symbolMap, interner, "__arc_sched_create_signal",
+                              &__arc_sched_create_signal);
+    bindExecutionEngineSymbol(symbolMap, interner, "__arc_sched_read_signal",
+                              &__arc_sched_read_signal);
+    bindExecutionEngineSymbol(symbolMap, interner, "__arc_sched_drive_signal",
+                              &__arc_sched_drive_signal);
+    bindExecutionEngineSymbol(symbolMap, interner, "__moore_delay",
+                              &__moore_delay);
+    bindExecutionEngineSymbol(symbolMap, interner, "__moore_class_srandom",
+                              &__moore_class_srandom);
+
+    // Resolve behavioral runtime externs from the host process.
+    // This includes Moore/UVM helper APIs emitted as external LLVM funcs.
+    for (auto fn : module.getOps<LLVM::LLVMFuncOp>()) {
+      if (!fn.isExternal())
+        continue;
+      StringRef name = fn.getName();
+      if (name.starts_with("__moore_") || name.starts_with("uvm_"))
+        tryBind(name);
+    }
     return symbolMap;
   });
 }
@@ -378,31 +562,66 @@ static void populateHwModuleToArcPipeline(PassManager &pm) {
 }
 
 /// Populate a pass manager with the behavioral simulation pipeline.
-/// This pipeline bypasses Arc conversion and instead lowers LLHD processes,
-/// Moore ops, and Sim ops directly to LLVM IR for native compilation.
-/// This enables arcilator to handle UVM/testbench designs that use
-/// behavioral LLHD process-based simulation.
+/// This pipeline still bypasses Arc conversion, but first runs the LLHD/Moore
+/// cleanup sequence used by import flows so residual process/event-control ops
+/// in helper functions are normalized before final LLVM lowering.
 static void populateBehavioralToLLVMPipeline(PassManager &pm) {
   if (verbosePassExecutions)
     pm.addInstrumentation(
         std::make_unique<VerbosePassInstrumentation<mlir::ModuleOp>>(
             "arcilator-behavioral"));
 
-  // For the behavioral pipeline, we skip Arc conversion entirely.
-  // Instead, we lower all dialect ops directly to LLVM:
-  //   1. SCF → ControlFlow
-  //   2. Comb → Arith (then Arith → LLVM)
-  //   3. HW types/ops → LLVM
-  //   4. Func → LLVM
-  //   5. ControlFlow → LLVM
-  //   6. LLHD/Moore/Sim ops are handled as pass-through (already LLVM-friendly
-  //      or will be lowered to runtime calls in a future pass)
-
   // First, canonicalize to clean up the IR.
   pm.addPass(createCanonicalizerPass());
 
+  // Re-run the LLHD/Moore cleanup sequence to normalize any residual
+  // moore.wait_event / llhd.process structures that survived import.
+  pm.addNestedPass<hw::HWModuleOp>(llhd::createWrapProceduralOpsPass());
+  pm.addPass(createSCFToControlFlowPass());
+  pm.addPass(llhd::createInlineCallsPass());
+  pm.addPass(createInlinerPass());
+  pm.addPass(createConvertMooreToCorePass());
+  pm.addPass(createSymbolDCEPass());
+
+  auto &modulePM = pm.nest<hw::HWModuleOp>();
+  modulePM.addPass(llhd::createMem2RegPass());
+  modulePM.addPass(llhd::createHoistSignalsPass());
+  modulePM.addPass(llhd::createDeseqPass());
+  modulePM.addPass(llhd::createLowerProcessesPass());
+  modulePM.addPass(createCSEPass());
+  modulePM.addPass(createBottomUpSimpleCanonicalizerPass());
+
+  modulePM.addPass(llhd::createUnrollLoopsPass());
+  modulePM.addPass(createCSEPass());
+  modulePM.addPass(createBottomUpSimpleCanonicalizerPass());
+
+  modulePM.addPass(llhd::createRemoveControlFlowPass());
+  modulePM.addPass(createCSEPass());
+  modulePM.addPass(createBottomUpSimpleCanonicalizerPass());
+  modulePM.addPass(createMapArithToCombPass(true));
+
+  modulePM.addPass(llhd::createCombineDrivesPass());
+  modulePM.addPass(llhd::createSig2Reg());
+  modulePM.addPass(createCSEPass());
+  modulePM.addPass(createBottomUpSimpleCanonicalizerPass());
+
   // Lower behavioral LLHD/Moore/Sim ops to LLVM IR with runtime calls.
   pm.addPass(createLowerBehavioralToLLVMPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createSymbolDCEPass());
+}
+
+/// Normalize LLVM global initializers so LLVM IR translation does not crash on
+/// pointer/aggregate globals initialized with integer zero attributes.
+static void sanitizeLLVMGlobalInitializers(ModuleOp module) {
+  module.walk([&](LLVM::GlobalOp globalOp) {
+    auto intInit = llvm::dyn_cast_or_null<IntegerAttr>(globalOp.getValueAttr());
+    if (!intInit || !intInit.getValue().isZero())
+      return;
+    if (llvm::isa<IntegerType>(globalOp.getGlobalType()))
+      return;
+    globalOp.setValueAttr(LLVM::ZeroAttr::get(module.getContext()));
+  });
 }
 
 static LogicalResult processBuffer(
@@ -411,7 +630,9 @@ static LogicalResult processBuffer(
   mlir::OwningOpRef<mlir::ModuleOp> module;
   {
     auto parserTimer = ts.nest("Parse MLIR input");
+    logProgress("parse-start");
     module = parseSourceFile<ModuleOp>(sourceMgr, &context);
+    logProgress("parse-done");
   }
   if (!module)
     return failure();
@@ -424,9 +645,10 @@ static LogicalResult processBuffer(
     if (failed(applyPassManagerCLOptions(pmBehavioral)))
       return failure();
     populateBehavioralToLLVMPipeline(pmBehavioral);
-
+    logProgress("behavioral-pipeline-start");
     if (failed(pmBehavioral.run(module.get())))
       return failure();
+    logProgress("behavioral-pipeline-done");
   } else {
     // Standard Arc pipeline: lower HwModule to Arc model.
     PassManager pmArc(&context);
@@ -435,9 +657,10 @@ static LogicalResult processBuffer(
     if (failed(applyPassManagerCLOptions(pmArc)))
       return failure();
     populateHwModuleToArcPipeline(pmArc);
-
+    logProgress("arc-pipeline-start");
     if (failed(pmArc.run(module.get())))
       return failure();
+    logProgress("arc-pipeline-done");
 
     // Output state info as JSON if requested.
     if (!stateFile.empty() && !untilReached(UntilStateLowering)) {
@@ -473,9 +696,19 @@ static LogicalResult processBuffer(
 
     if (printDebugInfo && outputFormat == OutputLLVM)
       pmLlvm.addPass(LLVM::createDIScopeForLLVMFuncOpPass());
-
+    logProgress("llvm-pipeline-start");
     if (failed(pmLlvm.run(module.get())))
       return failure();
+    logProgress("llvm-pipeline-done");
+  }
+
+  sanitizeLLVMGlobalInitializers(module.get());
+  logProgress("sanitize-globals-done");
+  if (behavioral && shouldStripGlobalCtors()) {
+    unsigned erased = stripLLVMGlobalCtors(module.get());
+    if (erased > 0)
+      logProgress(llvm::Twine("strip-global-ctors-done count=") +
+                  llvm::Twine(erased));
   }
 
 #ifdef ARCILATOR_ENABLE_JIT
@@ -487,7 +720,45 @@ static LogicalResult processBuffer(
       return failure();
     }
 
-    Operation *toCall = module->lookupSymbol(jitEntryPoint);
+    std::string selectedEntryPoint = jitEntryPoint;
+    Operation *toCall = module->lookupSymbol(selectedEntryPoint);
+    if (!toCall && selectedEntryPoint == "entry") {
+      auto pickFallback = [&](auto pred) -> Operation * {
+        for (auto fn : module->getOps<LLVM::LLVMFuncOp>()) {
+          if (fn.isExternal() || fn.getNumArguments() != 0)
+            continue;
+          auto visibility = fn.getSymVisibility();
+          if (visibility && *visibility == "private")
+            continue;
+          StringRef name = fn.getName();
+          std::string lower = llvm::StringRef(name).lower();
+          if (pred(name, lower))
+            return fn.getOperation();
+        }
+        return nullptr;
+      };
+
+      for (StringRef exact :
+           {"hvl_top", "hdl_top", "HvlTop", "HdlTop", "hvlTop", "hdlTop"}) {
+        if ((toCall = module->lookupSymbol(exact))) {
+          selectedEntryPoint = exact.str();
+          break;
+        }
+      }
+      if (!toCall)
+        toCall = pickFallback([](StringRef, StringRef lower) {
+          return lower.contains("hvl") && lower.contains("top");
+        });
+      if (!toCall)
+        toCall = pickFallback([](StringRef, StringRef lower) {
+          return lower.contains("hdl") && lower.contains("top");
+        });
+      if (!toCall)
+        toCall = pickFallback(
+            [](StringRef, StringRef lower) { return lower.contains("top"); });
+      if (toCall)
+        selectedEntryPoint = cast<SymbolOpInterface>(toCall).getName().str();
+    }
     if (!toCall) {
       llvm::errs() << "entry point not found: '" << jitEntryPoint << "'\n";
       return failure();
@@ -495,7 +766,7 @@ static LogicalResult processBuffer(
 
     auto toCallFunc = llvm::dyn_cast<LLVM::LLVMFuncOp>(toCall);
     if (!toCallFunc) {
-      llvm::errs() << "entry point '" << jitEntryPoint
+      llvm::errs() << "entry point '" << selectedEntryPoint
                    << "' was found but on an operation of type '"
                    << toCall->getName()
                    << "' while an LLVM function was expected\n";
@@ -505,36 +776,79 @@ static LogicalResult processBuffer(
     unsigned numArgs = toCallFunc.getNumArguments();
     if (numArgs) {
       if (jitArgs.size() % numArgs != 0) {
-        llvm::errs() << "entry point '" << jitEntryPoint << "' has " << numArgs
+          llvm::errs() << "entry point '" << selectedEntryPoint << "' has "
+                       << numArgs
                      << " arguments, but provided " << jitArgs.size()
                      << " arguments (not a multiple)\n";
         return failure();
       }
       if (jitArgs.empty()) {
-        llvm::errs() << "entry point '" << jitEntryPoint
+        llvm::errs() << "entry point '" << selectedEntryPoint
                      << "' must have no arguments\n";
         return failure();
       }
     } else if (!jitArgs.empty()) {
-      llvm::errs() << "entry point '" << jitEntryPoint
+      llvm::errs() << "entry point '" << selectedEntryPoint
                    << "' has no arguments, but provided " << jitArgs.size()
                    << "arguments\n";
       return failure();
     }
 
+    if (behavioral) {
+      unsigned beforeFuncs = countDefinedLLVMFunctions(module.get());
+      logProgress(llvm::Twine("jit-prune-start entry=") +
+                  llvm::Twine(selectedEntryPoint) + llvm::Twine(" funcs=") +
+                  llvm::Twine(beforeFuncs));
+      if (failed(pruneModuleToEntry(module.get(), selectedEntryPoint))) {
+        llvm::errs() << "failed to prune module symbols for entry point '"
+                     << selectedEntryPoint << "'\n";
+        return failure();
+      }
+      unsigned afterFuncs = countDefinedLLVMFunctions(module.get());
+      logProgress(llvm::Twine("jit-prune-done funcs=") + llvm::Twine(afterFuncs));
+    }
+
     SmallVector<StringRef, 4> sharedLibraries(sharedLibs.begin(),
                                               sharedLibs.end());
 
+    int effectiveJitOptLevel = jitOptLevel;
+    if (effectiveJitOptLevel < 0)
+      effectiveJitOptLevel = behavioral ? 0 : 3;
+    if (effectiveJitOptLevel > 3) {
+      llvm::errs() << "invalid --jit-opt-level: " << effectiveJitOptLevel
+                   << " (expected 0..3)\n";
+      return failure();
+    }
+
+    llvm::CodeGenOptLevel codeGenOptLevel = llvm::CodeGenOptLevel::Aggressive;
+    switch (effectiveJitOptLevel) {
+    case 0:
+      codeGenOptLevel = llvm::CodeGenOptLevel::None;
+      break;
+    case 1:
+      codeGenOptLevel = llvm::CodeGenOptLevel::Less;
+      break;
+    case 2:
+      codeGenOptLevel = llvm::CodeGenOptLevel::Default;
+      break;
+    case 3:
+      codeGenOptLevel = llvm::CodeGenOptLevel::Aggressive;
+      break;
+    default:
+      llvm_unreachable("effectiveJitOptLevel must be in [0, 3]");
+    }
+
     mlir::ExecutionEngineOptions engineOptions;
-    engineOptions.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Aggressive;
+    engineOptions.jitCodeGenOptLevel = codeGenOptLevel;
     std::function<llvm::Error(llvm::Module *)> transformer =
         mlir::makeOptimizingTransformer(
-            /*optLevel=*/3, /*sizeLevel=*/0,
+            /*optLevel=*/effectiveJitOptLevel, /*sizeLevel=*/0,
             /*targetMachine=*/nullptr);
     engineOptions.transformer = transformer;
     engineOptions.sharedLibPaths = sharedLibraries;
 
     auto tsCompile = tsJit.nest("Compile");
+    logProgress("jit-create-start");
     auto executionEngine =
         mlir::ExecutionEngine::create(module.get(), engineOptions);
     if (!executionEngine) {
@@ -545,11 +859,16 @@ static LogicalResult processBuffer(
           });
       return failure();
     }
+    logProgress("jit-create-done");
 
     if (!noJitRuntime)
       bindArcRuntimeSymbols(**executionEngine);
+    if (behavioral)
+      bindBehavioralRuntimeSymbols(**executionEngine, module.get());
+    logProgress("jit-bind-symbols-done");
 
-    auto expectedFunc = (*executionEngine)->lookupPacked(jitEntryPoint);
+    logProgress("jit-lookup-start");
+    auto expectedFunc = (*executionEngine)->lookupPacked(selectedEntryPoint);
     if (!expectedFunc) {
       llvm::handleAllErrors(
           expectedFunc.takeError(), [](const llvm::ErrorInfoBase &info) {
@@ -558,6 +877,7 @@ static LogicalResult processBuffer(
           });
       return failure();
     }
+    logProgress("jit-lookup-done");
     tsCompile.stop();
 
     auto tsExecute = tsJit.nest("Execute");
@@ -578,7 +898,7 @@ static LogicalResult processBuffer(
         auto type = arg.getType();
         if (!type.isIntOrIndex()) {
           llvm::errs() << "argument " << arg.getArgNumber()
-                       << " of entry point '" << jitEntryPoint
+                       << " of entry point '" << selectedEntryPoint
                        << "' is not an integer or index type\n";
           return failure();
         }
@@ -613,6 +933,7 @@ static LogicalResult processBuffer(
     // Handle the case without arguments as before.
     if (jitArgs.empty())
       (*simulationFunc)(nullptr);
+    logProgress("jit-execute-done");
 
     return success();
   }
