@@ -458,6 +458,7 @@ void ProcessScheduler::scheduleProcessDirect(ProcessId id, Process *proc) {
   // so they're never already in the queue when waking from a timed wait.
   queue.push_back(id);
   proc->clearWaiting();
+  proc->inReadyQueue = true;
   proc->setState(ProcessState::Ready);
   recordTriggerTime(id);
 }
@@ -566,8 +567,15 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
 }
 
 void ProcessScheduler::recordSignalChange(SignalId signalId) {
-  if (signalsChangedThisDeltaSet.insert(signalId).second)
+  if (signalId < signalsChangedThisDeltaBits.size()) {
+    if (!signalsChangedThisDeltaBits[signalId]) {
+      signalsChangedThisDeltaBits[signalId] = true;
+      signalsChangedThisDelta.push_back(signalId);
+    }
+  } else {
+    // Signal ID beyond bitvector size — always record (safe fallback).
     signalsChangedThisDelta.push_back(signalId);
+  }
 }
 
 void ProcessScheduler::recordTriggerSignal(ProcessId id, SignalId signalId) {
@@ -758,17 +766,19 @@ void ProcessScheduler::scheduleProcess(ProcessId id, SchedulingRegion region) {
     return;
   }
 
-  // Add to ready queue if not already there
-  auto &queue = readyQueues[static_cast<size_t>(region)];
-  if (std::find(queue.begin(), queue.end(), id) == queue.end()) {
-    queue.push_back(id);
-    proc->setState(ProcessState::Ready);
-    LLVM_DEBUG(llvm::dbgs() << "Scheduled process " << id << " ('" << proc->getName()
-                 << "') in region " << getSchedulingRegionName(region)
-                 << ", queue size=" << queue.size() << "\n");
-  } else {
+  // Skip if already in a ready queue — O(1) flag check instead of O(n) scan.
+  if (proc->inReadyQueue) {
     LLVM_DEBUG(llvm::dbgs() << "Process " << id << " already in queue\n");
+    return;
   }
+
+  auto &queue = readyQueues[static_cast<size_t>(region)];
+  queue.push_back(id);
+  proc->inReadyQueue = true;
+  proc->setState(ProcessState::Ready);
+  LLVM_DEBUG(llvm::dbgs() << "Scheduled process " << id << " ('" << proc->getName()
+               << "') in region " << getSchedulingRegionName(region)
+               << ", queue size=" << queue.size() << "\n");
 }
 
 void ProcessScheduler::suspendProcess(ProcessId id, const SimTime &resumeTime) {
@@ -844,6 +854,52 @@ void ProcessScheduler::flushPendingFastUpdates() {
   pendingFastUpdates.clear();
 }
 
+size_t ProcessScheduler::registerClockDomain(ProcessId processId,
+                                              SignalId signalId,
+                                              uint64_t toggleMask,
+                                              uint64_t halfPeriodFs,
+                                              uint64_t firstWakeFs,
+                                              uint32_t signalWidth) {
+  size_t idx = clockDomains.size();
+  clockDomains.push_back(
+      {processId, signalId, toggleMask, halfPeriodFs, firstWakeFs, signalWidth});
+  processToClockDomain[processId] = idx;
+  LLVM_DEBUG(llvm::dbgs() << "Registered clock domain " << idx << " for process "
+                          << processId << " signal " << signalId
+                          << " period=" << (halfPeriodFs * 2) << "fs\n");
+  return idx;
+}
+
+bool ProcessScheduler::isClockDomainProcess(ProcessId id) const {
+  return processToClockDomain.count(id);
+}
+
+bool ProcessScheduler::advanceClockDomains(uint64_t targetTimeFs) {
+  bool didWork = false;
+  for (auto &cd : clockDomains) {
+    if (!cd.active)
+      continue;
+    if (cd.nextWakeFs > targetTimeFs)
+      continue;
+
+    // Toggle the clock signal directly — no Event construction, no TimeWheel.
+    uint64_t oldVal = readSignalValueFast(cd.signalId);
+    uint64_t newVal = oldVal ^ cd.toggleMask;
+
+    // Update signal. updateSignalFast triggers sensitive processes via
+    // the sensitivity list callback, waking any @(posedge clk) waiters.
+    updateSignalFast(cd.signalId, newVal, cd.signalWidth);
+
+    // Advance to next half-period.
+    cd.nextWakeFs += cd.halfPeriodFs;
+    didWork = true;
+
+    // Process one clock domain edge per call so processes can execute
+    // between edges (delta cycles run at each edge).
+  }
+  return didWork;
+}
+
 void ProcessScheduler::terminateProcess(ProcessId id) {
   Process *proc = getProcess(id);
   if (!proc)
@@ -906,6 +962,20 @@ void ProcessScheduler::initialize() {
 
   // All registered processes are now active (Ready state).
   activeProcessCount = processes.size();
+
+  // Pre-allocate hot-path vectors to avoid memmove during simulation.
+  size_t numProcs = processes.size();
+  size_t numSigs = signalStates.size();
+  signalsChangedThisDelta.reserve(numSigs);
+  signalsChangedThisDeltaBits.resize(numSigs, false);
+  lastDeltaSignals.reserve(numSigs);
+  processesExecutedThisDelta.reserve(numProcs);
+  lastDeltaProcesses.reserve(numProcs);
+  pendingFastUpdates.reserve(numProcs);
+  readyQueueScratch.reserve(numProcs);
+  for (auto &q : readyQueues)
+    q.reserve(numProcs);
+
   initialized = true;
 }
 
@@ -917,8 +987,12 @@ bool ProcessScheduler::executeDeltaCycle() {
 
   bool anyExecuted = false;
   currentDeltaCount = 0;
+  // Clear bitvector entries only for signals that changed (O(n_changed)
+  // instead of O(n_total_signals) from DenseSet::clear()).
+  for (SignalId s : signalsChangedThisDelta)
+    if (s < signalsChangedThisDeltaBits.size())
+      signalsChangedThisDeltaBits[s] = false;
   signalsChangedThisDelta.clear();
-  signalsChangedThisDeltaSet.clear();
   processesExecutedThisDelta.clear();
   triggerSignalsThisDelta.clear();
   triggerTimesThisDelta.clear();
@@ -941,10 +1015,11 @@ bool ProcessScheduler::executeDeltaCycle() {
   if (anyExecuted) {
     ++stats.deltaCyclesExecuted;
     ++currentDeltaCount;
-    lastDeltaSignals = signalsChangedThisDelta;
-    lastDeltaProcesses = processesExecutedThisDelta;
-    lastDeltaTriggerSignals = triggerSignalsThisDelta;
-    lastDeltaTriggerTimes = triggerTimesThisDelta;
+    // Swap instead of copy to reuse buffer capacity.
+    std::swap(lastDeltaSignals, signalsChangedThisDelta);
+    std::swap(lastDeltaProcesses, processesExecutedThisDelta);
+    std::swap(lastDeltaTriggerSignals, triggerSignalsThisDelta);
+    std::swap(lastDeltaTriggerTimes, triggerTimesThisDelta);
 
     // Check for infinite loop
     if (currentDeltaCount >= config.maxDeltaCycles) {
@@ -975,9 +1050,11 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
     }
   });
 
-  // Copy the queue since execution may modify it
-  std::vector<ProcessId> toExecute = std::move(queue);
+  // Swap the queue into a persistent scratch buffer so execution can schedule
+  // new processes into the now-empty queue. Reuses buffer capacity across calls.
+  std::swap(readyQueueScratch, queue);
   queue.clear();
+  auto &toExecute = readyQueueScratch;
 
   size_t executed = 0;
   for (ProcessId id : toExecute) {
@@ -986,6 +1063,9 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
     Process *proc = getProcess(id);
     if (!proc)
       continue;
+
+    // Clear the queue membership flag now that we've dequeued it.
+    proc->inReadyQueue = false;
 
     if (proc->getState() == ProcessState::Terminated)
       continue;
@@ -1082,8 +1162,16 @@ bool ProcessScheduler::advanceTime() {
   // First, process any ready processes
   executeCurrentTime();
 
-  // Check if there are any events or pending fast updates
-  if (eventScheduler->isComplete() && pendingFastUpdates.empty()) {
+  // Find earliest clock domain wake time (0 = none active).
+  uint64_t earliestClockWake = UINT64_MAX;
+  for (const auto &cd : clockDomains)
+    if (cd.active && cd.nextWakeFs < earliestClockWake)
+      earliestClockWake = cd.nextWakeFs;
+  bool hasClockWork = (earliestClockWake != UINT64_MAX);
+
+  // Check if there are any events, pending fast updates, or clock domains
+  if (eventScheduler->isComplete() && pendingFastUpdates.empty() &&
+      !hasClockWork) {
     // Check if any processes are ready
     for (auto &queue : readyQueues) {
       if (!queue.empty())
@@ -1099,7 +1187,8 @@ bool ProcessScheduler::advanceTime() {
   // We process all delta cycles at the current time (events may schedule more
   // events at the same time). Then advance to the next real time and return
   // to the caller so it can run VPI callbacks etc.
-  while (!eventScheduler->isComplete() || !pendingFastUpdates.empty()) {
+  while (!eventScheduler->isComplete() || !pendingFastUpdates.empty() ||
+         hasClockWork) {
     if (isAbortRequested())
       return false;
 
@@ -1125,9 +1214,51 @@ bool ProcessScheduler::advanceTime() {
     }
 
     // No events or pending updates at current delta — advance to the next
-    // event time.
-    if (!eventScheduler->advanceToNextTime()) {
-      if (eventScheduler->isComplete())
+    // event time. Compare with earliest clock domain wake and advance to
+    // whichever is sooner.
+    uint64_t currentTimeFs = eventScheduler->getCurrentTime().realTime;
+
+    // Recompute earliest clock domain wake.
+    earliestClockWake = UINT64_MAX;
+    for (const auto &cd : clockDomains)
+      if (cd.active && cd.nextWakeFs < earliestClockWake)
+        earliestClockWake = cd.nextWakeFs;
+    hasClockWork = (earliestClockWake != UINT64_MAX);
+
+    // Try to advance TimeWheel to its next event.
+    bool timeWheelAdvanced = false;
+    if (!eventScheduler->isComplete()) {
+      // If clock domain is earlier than TimeWheel, advance TimeWheel time
+      // pointer to clock wake time (without processing TW events).
+      timeWheelAdvanced = eventScheduler->advanceToNextTime();
+    }
+
+    // If clock domain wake is at or before current time, process it now.
+    if (hasClockWork && earliestClockWake <= currentTimeFs) {
+      advanceClockDomains(currentTimeFs);
+      didWork = true;
+      for (auto &queue : readyQueues)
+        if (!queue.empty())
+          return true;
+      continue;
+    }
+
+    // If clock domain wake is earlier than next TimeWheel event (or TW is
+    // complete), advance sim time directly to the clock wake time.
+    if (hasClockWork &&
+        (eventScheduler->isComplete() ||
+         earliestClockWake <= eventScheduler->getCurrentTime().realTime)) {
+      // Advance event scheduler time to clock wake point.
+      eventScheduler->advanceTimeTo(earliestClockWake);
+      advanceClockDomains(earliestClockWake);
+      didWork = true;
+      LLVM_DEBUG(llvm::dbgs() << "Clock domain advanced time to "
+                              << earliestClockWake << " fs\n");
+      return true;
+    }
+
+    if (!timeWheelAdvanced) {
+      if (eventScheduler->isComplete() && !hasClockWork)
         break;
       // Neither stepDelta nor advanceToNextTime made progress, but
       // isComplete is false. This means orphaned events exist at past
@@ -1187,6 +1318,11 @@ bool ProcessScheduler::isComplete() const {
   if (activeProcessCount > 0 && !eventScheduler->isComplete())
     return false;
 
+  // Check clock domains — if any active, simulation is not complete.
+  for (const auto &cd : clockDomains)
+    if (cd.active)
+      return false;
+
   // Check if any processes are ready
   for (const auto &queue : readyQueues) {
     if (!queue.empty())
@@ -1222,6 +1358,10 @@ void ProcessScheduler::reset() {
   // Reset event scheduler
   eventScheduler->reset();
 
+  // Clear clock domains
+  clockDomains.clear();
+  processToClockDomain.clear();
+
   // Reset statistics
   stats = Statistics();
 
@@ -1229,7 +1369,8 @@ void ProcessScheduler::reset() {
   initialized = false;
   currentDeltaCount = 0;
   signalsChangedThisDelta.clear();
-  signalsChangedThisDeltaSet.clear();
+  std::fill(signalsChangedThisDeltaBits.begin(),
+            signalsChangedThisDeltaBits.end(), false);
   lastDeltaSignals.clear();
   processesExecutedThisDelta.clear();
   lastDeltaProcesses.clear();

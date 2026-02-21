@@ -517,6 +517,10 @@ public:
   /// on the same signals every cycle).
   llvm::DenseSet<SignalId> registeredSignals;
 
+  /// True when this process is currently in a ready queue. Used for O(1)
+  /// dedup in scheduleProcess instead of O(n) std::find on the queue.
+  bool inReadyQueue = false;
+
 private:
   ProcessId id;
   std::string name;
@@ -668,9 +672,24 @@ public:
   /// Resolve all drivers to compute the signal value.
   /// Returns the resolved value based on IEEE 1800-2017 strength rules,
   /// or using wired-AND/wired-OR resolution for wand/wor nets.
-  SignalValue resolveDrivers() const {
+  SignalValue resolveDrivers(
+      SignalEncoding encoding = SignalEncoding::Unknown) const {
     if (drivers.empty())
       return current;
+
+    auto isFourStateAllZ = [](const SignalValue &value) {
+      if (value.isUnknown())
+        return false;
+      uint32_t width = value.getWidth();
+      if (width < 2 || (width % 2) != 0)
+        return false;
+      uint32_t logicalWidth = width / 2;
+      const llvm::APInt &bits = value.getAPInt();
+      llvm::APInt unknownMask = bits.extractBits(logicalWidth, 0);
+      llvm::APInt logicalBits = bits.extractBits(logicalWidth, logicalWidth);
+      return unknownMask.isAllOnes() && logicalBits.isAllOnes();
+    };
+    bool treatFourStateZAsHighZ = encoding == SignalEncoding::FourStateStruct;
 
     // Count active drivers and collect them.
     llvm::SmallVector<const SignalDriver *, 4> activeDrivers;
@@ -696,6 +715,8 @@ public:
       llvm::APInt result;
 
       for (const auto *d : activeDrivers) {
+        if (treatFourStateZAsHighZ && isFourStateAllZ(d->value))
+          continue;
         if (d->value.isUnknown())
           continue;
         llvm::APInt driverBits = d->value.getAPInt();
@@ -730,10 +751,19 @@ public:
       DriveStrength strength;
     };
     llvm::SmallVector<DriverGroup, 4> groups;
+    bool sawExplicitUnknown = false;
+    const SignalValue *allZValue = nullptr;
 
     for (const auto *d : activeDrivers) {
-      if (d->value.isUnknown())
+      if (d->value.isUnknown()) {
+        sawExplicitUnknown = true;
         continue; // Skip X drivers
+      }
+      if (treatFourStateZAsHighZ && isFourStateAllZ(d->value)) {
+        if (!allZValue)
+          allZValue = &d->value;
+        continue;
+      }
 
       // Use the stronger of the two strengths for comparison.
       DriveStrength effectiveStrength =
@@ -755,8 +785,13 @@ public:
         groups.push_back({d->value, effectiveStrength});
     }
 
-    if (groups.empty())
+    if (groups.empty()) {
+      if (sawExplicitUnknown)
+        return SignalValue::makeX(current.getWidth());
+      if (allZValue)
+        return *allZValue;
       return SignalValue::makeX(current.getWidth());
+    }
 
     if (groups.size() == 1)
       return groups[0].value;
@@ -1190,7 +1225,35 @@ public:
   /// Reset the scheduler to initial state.
   void reset();
 
+  //===--------------------------------------------------------------------===//
+  // ClockDomain bypass (avoid TimeWheel for periodic clocks)
+  //===--------------------------------------------------------------------===//
+
+  /// Register a periodic clock domain. Returns the domain index.
+  size_t registerClockDomain(ProcessId processId, SignalId signalId,
+                             uint64_t toggleMask, uint64_t halfPeriodFs,
+                             uint64_t firstWakeFs, uint32_t signalWidth);
+
+  /// Check if a process is managed by a clock domain.
+  bool isClockDomainProcess(ProcessId id) const;
+
+  /// Advance all clock domains to the target time, toggling signals.
+  bool advanceClockDomains(uint64_t targetTimeFs);
+
 private:
+  /// A clock domain represents a periodic signal toggle that bypasses
+  /// the TimeWheel entirely.
+  struct ClockDomainInfo {
+    ProcessId processId;
+    SignalId signalId;
+    uint64_t toggleMask;
+    uint64_t halfPeriodFs;
+    uint64_t nextWakeFs;
+    uint32_t signalWidth;
+    bool active = true;
+  };
+  std::vector<ClockDomainInfo> clockDomains;
+  llvm::DenseMap<ProcessId, size_t> processToClockDomain;
   /// Schedule processes triggered by a signal change.
   void triggerSensitiveProcesses(SignalId signalId, const SignalValue &oldVal,
                                  const SignalValue &newVal);
@@ -1248,6 +1311,10 @@ private:
   std::vector<ProcessId>
       readyQueues[static_cast<size_t>(SchedulingRegion::NumRegions)];
 
+  // Scratch buffer for executeReadyProcesses — persists across calls to
+  // avoid repeated heap allocation when swapping with the ready queue.
+  std::vector<ProcessId> readyQueueScratch;
+
   // Processes waiting for timed events
   std::vector<std::pair<SimTime, ProcessId>> timedWaitQueue;
 
@@ -1276,7 +1343,8 @@ private:
 
   // Signals updated during the current delta cycle.
   llvm::SmallVector<SignalId, 32> signalsChangedThisDelta;
-  llvm::DenseSet<SignalId> signalsChangedThisDeltaSet;
+  // Bitvector for O(1) dedup + O(n_changed) clear (vs DenseSet O(n_buckets)).
+  std::vector<bool> signalsChangedThisDeltaBits;
   llvm::SmallVector<SignalId, 32> lastDeltaSignals;
 
   llvm::SmallVector<ProcessId, 32> processesExecutedThisDelta;
