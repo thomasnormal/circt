@@ -2217,6 +2217,11 @@ private:
   /// Cache for getLLVMTypeSizeForGEP — avoids recursive struct walks on hot path.
   mutable llvm::DenseMap<mlir::Type, unsigned> typeSizeForGEPCache;
 
+  /// Cache for resolveSignalId — maps signal values to resolved signal IDs.
+  /// Avoids repeated lookup chains through valueToSignal/instanceOutputMap.
+  mutable llvm::DenseMap<std::pair<mlir::Value, InstanceId>, SignalId>
+      resolveSignalIdCache;
+
   /// Map from signal IDs to signal names.
   llvm::DenseMap<SignalId, std::string> signalIdToName;
 
