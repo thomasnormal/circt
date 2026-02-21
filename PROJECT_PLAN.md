@@ -126,6 +126,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    Unclocked properties using sampled `_gclk` functions now correctly lower
    with the scope's global clocking event instead of producing unclocked
    assertions.
+12. **SVA `@($global_clock)` timing-control support + assertion-drop hardening** (Feb 21, 2026):
+   ImportVerilog now lowers `$global_clock` assertion timing controls through
+   the scope's global clocking block and no longer silently drops assertions
+   when assertion-expression lowering fails (except true dead-generate
+   `InvalidAssertionExpr` branches).
 
 ### Previously Completed (Iteration 1401, Feb 14, 2026)
 1. **sv-tests 100% coverage**: 952 PASS + 76 XFAIL = 1028/1028. Zero silent skips. Key additions: SVA LTLToCore pipeline, CompRegOp support, AnalysisManager integration, tagged union checker, runner compile-only mode for preprocessing tests.
