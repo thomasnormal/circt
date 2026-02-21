@@ -198,6 +198,20 @@ def is_i3c_avip(avip_root: pathlib.Path, filelists):
             return True
     return False
 
+def is_uart_avip(avip_root: pathlib.Path, filelists):
+    if avip_root and "uart" in avip_root.name.lower():
+        return True
+    for fl in filelists:
+        if "uart" in fl.name.lower():
+            return True
+        try:
+            text = fl.read_text()
+        except OSError:
+            continue
+        if "uart" in text.lower():
+            return True
+    return False
+
 def append_after_once(text: str, anchor: str, block: str):
     if anchor not in text:
         return text, False
@@ -379,6 +393,19 @@ def rewrite_i3c_text(path: pathlib.Path, text: str):
 """
         new_text, did_change = append_after_once(text, anchor, block)
         if did_change:
+            text = new_text
+            changed = True
+    return text, changed
+
+def rewrite_uart_text(path: pathlib.Path, text: str):
+    changed = False
+    if path.name == "UartRxTransaction.sv":
+        new_text = re.sub(
+            r"\(\s*this\.parity\s*&&\s*rhs1\.parity\s*\)",
+            "(this.parity == rhs1.parity)",
+            text,
+        )
+        if new_text != text:
             text = new_text
             changed = True
     return text, changed
@@ -652,6 +679,74 @@ if needs_i3c:
                 except OSError:
                     continue
                 new_text, changed = rewrite_i3c_text(path, text)
+                if not changed:
+                    continue
+                tmp_path = tmp_dir / path.name
+                tmp_path.write_text(new_text)
+                include_only_patched = True
+                break
+        if include_only_patched:
+            includes.insert(0, str(tmp_dir.resolve()))
+
+needs_uart = is_uart_avip(avip_dir, filelists)
+if needs_uart:
+    tmp_dir = out_path.parent / ".avip_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    uart_patch_names = {
+        "UartRxTransaction.sv",
+    }
+    uart_passthrough_names = {
+        "UartRxPkg.sv",
+        "UartTxPkg.sv",
+    }
+    file_idx_by_name = {}
+    for idx, path_str in enumerate(files):
+        name = pathlib.Path(path_str).name
+        if name in uart_patch_names and name not in file_idx_by_name:
+            file_idx_by_name[name] = idx
+
+    # Copy package files into tmp so local `include` lookup can resolve against
+    # patched include-only files emitted in the same directory.
+    for idx, path_str in enumerate(list(files)):
+        path = pathlib.Path(path_str)
+        if path.name not in uart_passthrough_names:
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        tmp_path = tmp_dir / path.name
+        tmp_path.write_text(text)
+        files[idx] = str(tmp_path.resolve())
+
+    # Patch filelist entries directly when present.
+    for idx, path_str in enumerate(list(files)):
+        path = pathlib.Path(path_str)
+        if path.name not in uart_patch_names:
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        new_text, changed = rewrite_uart_text(path, text)
+        if not changed:
+            continue
+        tmp_path = tmp_dir / path.name
+        tmp_path.write_text(new_text)
+        files[idx] = str(tmp_path.resolve())
+
+    # Patch include-only UART sources and prepend tmp dir in include search path.
+    if avip_root and avip_root.exists():
+        include_only_patched = False
+        for name in uart_patch_names:
+            if name in file_idx_by_name:
+                continue
+            for path in avip_root.rglob(name):
+                try:
+                    text = path.read_text()
+                except OSError:
+                    continue
+                new_text, changed = rewrite_uart_text(path, text)
                 if not changed:
                     continue
                 tmp_path = tmp_dir / path.name
