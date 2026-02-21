@@ -35,4 +35,12 @@ module ActionBlockSeverity(input logic clk, a, b);
     if (cond)
       $display("nested_if_disp_fail");
   end
+
+  // CHECK: verif.assert {{.*}} label "nested_case_disp_fail"
+  assert property (@(posedge clk) b |-> a) else begin
+    case (shadow)
+      1'b1: $display("nested_case_disp_fail");
+      default: ;
+    endcase
+  end
 endmodule
