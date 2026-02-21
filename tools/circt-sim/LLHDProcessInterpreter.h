@@ -17,6 +17,7 @@
 #ifndef CIRCT_TOOLS_CIRCT_SIM_LLHDPROCESSINTERPRETER_H
 #define CIRCT_TOOLS_CIRCT_SIM_LLHDPROCESSINTERPRETER_H
 
+#include "LLHDProcessInterpreterBytecode.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
@@ -1099,6 +1100,7 @@ private:
     PeriodicToggleClock = 1u << 0,
     ResumableWaitSelfLoop = 1u << 1,
     JITCompiledBlock = 1u << 2,
+    BytecodeProcess = 1u << 3,
   };
 
   /// Try a cached direct fast path for common hot process loop shapes.
@@ -1222,6 +1224,14 @@ private:
   bool executeJITCompiledBlockNativeThunk(
       ProcessId procId, ProcessExecutionState &state,
       ProcessThunkExecutionState &thunkState);
+
+  /// Try to compile a process to bytecode micro-ops.
+  bool tryCompileProcessBytecode(ProcessId procId,
+                                 ProcessExecutionState &state);
+
+  /// Execute a process using its compiled bytecode program.
+  bool executeBytecodeProcess(ProcessId procId, ProcessExecutionState &state,
+                              ProcessThunkExecutionState &thunkState);
 
   /// Emit a concise unsupported-shape detail for deopt telemetry.
   std::string
@@ -2508,6 +2518,10 @@ private:
 
   /// Per-process JIT block specs for compiled hot blocks.
   llvm::DenseMap<ProcessId, std::unique_ptr<JITBlockSpec>> jitBlockSpecs;
+
+  /// Per-process compiled bytecode programs for the bytecode interpreter.
+  llvm::DenseMap<ProcessId, std::unique_ptr<BytecodeProgram>>
+      bytecodeProgramMap;
 
   /// Whether block-level JIT is enabled.
   bool blockJITEnabled = false;

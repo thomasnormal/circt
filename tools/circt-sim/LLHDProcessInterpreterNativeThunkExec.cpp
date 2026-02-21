@@ -128,6 +128,11 @@ bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
       kindMask |=
           toFastPathMask(DirectProcessFastPathKind::ResumableWaitSelfLoop);
 
+    // Bytecode interpreter: compile MLIR process IR to flat micro-op array.
+    if (tryCompileProcessBytecode(procId, state))
+      kindMask |=
+          toFastPathMask(DirectProcessFastPathKind::BytecodeProcess);
+
     // Block-level JIT: identify and compile a hot block, but DON'T add to
     // kindMask yet. The first activation must be handled by the interpreter
     // (or another thunk) to execute the entry block. The JIT kind will be
@@ -219,6 +224,15 @@ bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
                        ProcessThunkExecutionState &thunkState) {
                   return executePeriodicToggleClockNativeThunk(id, s,
                                                                thunkState);
+                }))
+      return true;
+
+  // Bytecode interpreter: tight switch loop over pre-compiled micro-ops.
+  if (kindMask & toFastPathMask(DirectProcessFastPathKind::BytecodeProcess))
+    if (tryKind(DirectProcessFastPathKind::BytecodeProcess,
+                [this](ProcessId id, ProcessExecutionState &s,
+                       ProcessThunkExecutionState &thunkState) {
+                  return executeBytecodeProcess(id, s, thunkState);
                 }))
       return true;
 

@@ -1,11 +1,24 @@
+set(LLVM_LINK_COMPONENTS Support)
+set(CIRCT_SIM_TEST_JIT_LIBS)
+if(MLIR_ENABLE_EXECUTION_ENGINE)
+  set(LLVM_LINK_COMPONENTS Support native)
+  add_compile_definitions(CIRCT_SIM_JIT_ENABLED)
+  set(CIRCT_SIM_TEST_JIT_LIBS
+    LLVMOrcJIT
+    MLIRExecutionEngine
+  )
+endif()
+
 set(CIRCT_SIM_TEST_LIBS
   CIRCTArc
   CIRCTArcToLLVM
   CIRCTArcTransforms
   CIRCTCombToArith
+  CIRCTCombToLLVM
   CIRCTConvertToArcs
   CIRCTEmit
   CIRCTHW
+  CIRCTHWToLLVM
   CIRCTHWTransforms
   CIRCTLLHD
   CIRCTMoore
@@ -19,28 +32,42 @@ set(CIRCT_SIM_TEST_LIBS
   CIRCTTransforms
   CIRCTVerif
   MLIRArithDialect
+  MLIRArithToLLVM
+  MLIRBuiltinToLLVMIRTranslation
   MLIRControlFlowDialect
+  MLIRControlFlowToLLVM
   MLIRDLTIDialect
   MLIRFuncDialect
   MLIRFuncInlinerExtension
+  MLIRFuncToLLVM
   MLIRIndexDialect
   MLIRLLVMDialect
   MLIRLLVMIRTransforms
+  MLIRLLVMToLLVMIRTranslation
   MLIRMathDialect
   MLIRParser
   MLIRSCFDialect
+  MLIRSCFToControlFlow
+  MLIRTargetLLVMIRExport
   MLIRTransforms
 )
 
 add_circt_unittest(CIRCTSimToolTests
   LLHDProcessInterpreterTest.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreter.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterBytecode.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/JITCompileManager.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/JITSchedulerRuntime.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/JITBlockCompiler.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterDrive.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterGlobals.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterMemory.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterModuleLevelInit.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterTrace.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterUvm.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/UVMFastPaths.cpp
 )
@@ -53,5 +80,6 @@ target_include_directories(CIRCTSimToolTests
 target_link_libraries(CIRCTSimToolTests
   PRIVATE
   ${CIRCT_SIM_TEST_LIBS}
+  ${CIRCT_SIM_TEST_JIT_LIBS}
   MooreRuntime
 )
