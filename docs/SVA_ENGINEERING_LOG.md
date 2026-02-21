@@ -80,3 +80,19 @@
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-first-match-unbounded.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-first-match-unbounded.sv`
     - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-first-match-unbounded.sv`
     - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core --lower-clocked-assert-like --externalize-registers --lower-to-bmc='top-module=unbounded_first_match bound=5'`
+
+- Iteration update (`restrict property` support):
+  - realization:
+    - ImportVerilog rejected legal concurrent `restrict property` statements
+      with `unsupported concurrent assertion kind: Restrict`.
+  - implemented:
+    - lowered `AssertionKind::Restrict` to assumption semantics in importer
+      paths (plain, clocked, hoisted clocked, and immediate assertion path).
+    - added import regression:
+      - `test/Conversion/ImportVerilog/sva-restrict-property.sv`
+    - added BMC pipeline regression:
+      - `test/Tools/circt-bmc/sva-restrict-e2e.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-restrict-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-restrict-property.sv`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-restrict-property.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-restrict-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_restrict bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-restrict-e2e.sv --check-prefix=CHECK-BMC`
