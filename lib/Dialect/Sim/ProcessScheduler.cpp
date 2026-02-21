@@ -167,7 +167,13 @@ ProcessId ProcessScheduler::registerProcess(const std::string &name,
 
   ProcessId id = nextProcessId();
   auto process = std::make_unique<Process>(id, name, std::move(callback));
+  Process *rawPtr = process.get();
   processes[id] = std::move(process);
+
+  // Maintain flat vector for O(1) lookup.
+  if (id >= processVec.size())
+    processVec.resize(id + 1, nullptr);
+  processVec[id] = rawPtr;
 
   ++stats.processesRegistered;
   LLVM_DEBUG(llvm::dbgs() << "Registered process '" << name << "' with ID "
@@ -181,29 +187,34 @@ void ProcessScheduler::unregisterProcess(ProcessId id) {
   if (it == processes.end())
     return;
 
-  // Remove from signal mappings
+  Process *proc = it->second.get();
+
+  // Remove from signal mappings (compare by Process*).
   for (auto &[signalId, procList] : signalToProcesses) {
-    procList.erase(std::remove(procList.begin(), procList.end(), id),
+    procList.erase(std::remove(procList.begin(), procList.end(), proc),
                    procList.end());
   }
 
-  // Remove from ready queues
-  for (auto &queue : readyQueues) {
-    queue.erase(std::remove(queue.begin(), queue.end(), id), queue.end());
+  // Remove from intrusive ready queues (must unlink before delete).
+  if (proc->inReadyQueue) {
+    for (auto &queue : readyQueues)
+      queue.remove(proc);
   }
+
+  // Clear flat vector entry before erasing ownership.
+  if (id < processVec.size())
+    processVec[id] = nullptr;
 
   processes.erase(it);
   LLVM_DEBUG(llvm::dbgs() << "Unregistered process ID " << id << "\n");
 }
 
 Process *ProcessScheduler::getProcess(ProcessId id) {
-  auto it = processes.find(id);
-  return it != processes.end() ? it->second.get() : nullptr;
+  return id < processVec.size() ? processVec[id] : nullptr;
 }
 
 const Process *ProcessScheduler::getProcess(ProcessId id) const {
-  auto it = processes.find(id);
-  return it != processes.end() ? it->second.get() : nullptr;
+  return id < processVec.size() ? processVec[id] : nullptr;
 }
 
 //===----------------------------------------------------------------------===//
@@ -222,9 +233,9 @@ void ProcessScheduler::setSensitivity(ProcessId id,
   // Set new sensitivity list
   proc->getSensitivityList() = sensitivity;
 
-  // Update signal-to-process mappings
+  // Update signal-to-process mappings (store Process* for zero-lookup dispatch).
   for (const auto &entry : sensitivity.getEntries()) {
-    signalToProcesses[entry.signalId].push_back(id);
+    signalToProcesses[entry.signalId].push_back(proc);
   }
 
   LLVM_DEBUG(llvm::dbgs() << "Set sensitivity for process " << id << " with "
@@ -238,7 +249,7 @@ void ProcessScheduler::addSensitivity(ProcessId id, SignalId signalId,
     return;
 
   proc->getSensitivityList().addEdge(signalId, edge);
-  signalToProcesses[signalId].push_back(id);
+  signalToProcesses[signalId].push_back(proc);
 
   LLVM_DEBUG(llvm::dbgs() << "Added sensitivity for process " << id
                           << " to signal " << signalId << " edge="
@@ -250,10 +261,10 @@ void ProcessScheduler::clearSensitivity(ProcessId id) {
   if (!proc)
     return;
 
-  // Remove from signal mappings
+  // Remove from signal mappings (compare by Process*).
   for (const auto &entry : proc->getSensitivityList().getEntries()) {
     auto &procList = signalToProcesses[entry.signalId];
-    procList.erase(std::remove(procList.begin(), procList.end(), id),
+    procList.erase(std::remove(procList.begin(), procList.end(), proc),
                    procList.end());
   }
 
@@ -275,6 +286,16 @@ SignalId ProcessScheduler::registerSignal(const std::string &name,
   signalNames[id] = name;
   signalEncodings[id] = encoding;
 
+  // Maintain direct signal memory for narrow signals.
+  if (id >= signalMemory.size()) {
+    signalMemory.resize(id + 1, 0);
+    signalIsDirect.resize(id + 1, false);
+  }
+  if (width > 0 && width <= 64) {
+    signalIsDirect[id] = true;
+    signalMemory[id] = 0;
+  }
+
   LLVM_DEBUG(llvm::dbgs() << "Registered signal '" << name << "' with ID " << id
                           << " width=" << width << "\n");
 
@@ -291,6 +312,16 @@ SignalId ProcessScheduler::registerSignal(const std::string &name,
   signalStates[id] = SignalState(width, resolution);
   signalNames[id] = name;
   signalEncodings[id] = encoding;
+
+  // Maintain direct signal memory for narrow signals.
+  if (id >= signalMemory.size()) {
+    signalMemory.resize(id + 1, 0);
+    signalIsDirect.resize(id + 1, false);
+  }
+  if (width > 0 && width <= 64) {
+    signalIsDirect[id] = true;
+    signalMemory[id] = 0;
+  }
 
   LLVM_DEBUG(llvm::dbgs() << "Registered signal '" << name << "' with ID " << id
                           << " width=" << width
@@ -388,6 +419,10 @@ void ProcessScheduler::updateSignal(SignalId signalId,
   SignalValue oldValue = sigState.getCurrentValue();
   (void)sigState.updateValue(normalizedValue);
 
+  // Keep direct signal memory in sync for narrow signals.
+  if (signalId < signalIsDirect.size() && signalIsDirect[signalId])
+    signalMemory[signalId] = normalizedValue.getValue();
+
   static bool traceUpdates = []() {
     const char *env = std::getenv("CIRCT_SIM_TRACE_SIGNAL_UPDATES");
     return env && env[0] != '\0' && env[0] != '0';
@@ -439,6 +474,10 @@ void ProcessScheduler::updateSignalFast(SignalId signalId, uint64_t rawValue,
   auto &sigState = signalStates[signalId];
   ++stats.signalUpdates;
 
+  // Keep direct signal memory in sync for narrow signals.
+  if (signalId < signalIsDirect.size() && signalIsDirect[signalId])
+    signalMemory[signalId] = rawValue;
+
   // In-place update: avoids APInt construction entirely. updateValueFast
   // copies current→previous and writes rawValue directly to APInt storage.
   if (sigState.updateValueFast(rawValue)) {
@@ -454,9 +493,9 @@ void ProcessScheduler::updateSignalFast(SignalId signalId, uint64_t rawValue,
 
 void ProcessScheduler::scheduleProcessDirect(ProcessId id, Process *proc) {
   auto &queue = readyQueues[static_cast<size_t>(SchedulingRegion::Active)];
-  // Fast path: skip linear scan — clock processes are single-waiter,
+  // Fast path: skip dedup check — clock processes are single-waiter,
   // so they're never already in the queue when waking from a timed wait.
-  queue.push_back(id);
+  queue.push_back(proc);
   proc->clearWaiting();
   proc->inReadyQueue = true;
   proc->setState(ProcessState::Ready);
@@ -529,6 +568,11 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
 
   // Update the signal with the resolved value
   (void)sigState.updateValue(normalizedResolved);
+
+  // Keep direct signal memory in sync for narrow signals.
+  if (signalId < signalIsDirect.size() && signalIsDirect[signalId])
+    signalMemory[signalId] = normalizedResolved.getValue();
+
   EdgeType edge =
       detectEdgeWithEncoding(oldValue, normalizedResolved, encoding);
 
@@ -625,12 +669,11 @@ void ProcessScheduler::dumpLastDeltaProcesses(llvm::raw_ostream &os) const {
   }
 
   for (ProcessId procId : lastDeltaProcesses) {
-    auto procIt = processes.find(procId);
-    if (procIt == processes.end()) {
+    Process *proc = procId < processVec.size() ? processVec[procId] : nullptr;
+    if (!proc) {
       os << "  proc " << procId << ": <missing>\n";
       continue;
     }
-    Process *proc = procIt->second.get();
     llvm::StringRef name = proc->getName();
     os << "  proc " << procId << " '" << name << "' state="
        << getProcessStateName(proc->getState());
@@ -701,15 +744,16 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
     for (size_t idx = 0; idx < it->second.size(); ++idx) {
       if (idx)
         llvm::errs() << ",";
-      llvm::errs() << it->second[idx];
+      llvm::errs() << it->second[idx]->getId();
     }
     llvm::errs() << "]\n";
   }
 
-  for (ProcessId procId : it->second) {
-    Process *proc = getProcess(procId);
+  // Iterate Process* directly — no getProcess() hash lookup per iteration.
+  for (Process *proc : it->second) {
     if (!proc)
       continue;
+    ProcessId procId = proc->getId();
     if (traceI3CSignal) {
       llvm::errs() << "[I3C-SIG31] check proc=" << procId
                    << " state=" << getProcessStateName(proc->getState())
@@ -717,13 +761,14 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
     }
 
     // Check if process state allows triggering
-    if (proc->getState() != ProcessState::Suspended &&
-        proc->getState() != ProcessState::Waiting &&
-        proc->getState() != ProcessState::Ready)
+    ProcessState state = proc->getState();
+    if (state != ProcessState::Suspended &&
+        state != ProcessState::Waiting &&
+        state != ProcessState::Ready)
       continue;
 
     // For waiting processes, check the waiting sensitivity
-    if (proc->getState() == ProcessState::Waiting) {
+    if (state == ProcessState::Waiting) {
       if (sensitivityTriggered(proc->getWaitingSensitivity(), signalId,
                                actualEdge)) {
         proc->clearWaiting();
@@ -755,7 +800,8 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
 //===----------------------------------------------------------------------===//
 
 void ProcessScheduler::scheduleProcess(ProcessId id, SchedulingRegion region) {
-  Process *proc = getProcess(id);
+  // O(1) lookup via flat vector instead of DenseMap hash.
+  Process *proc = id < processVec.size() ? processVec[id] : nullptr;
   if (!proc) {
     LLVM_DEBUG(llvm::dbgs() << "scheduleProcess(" << id << "): process not found!\n");
     return;
@@ -766,19 +812,18 @@ void ProcessScheduler::scheduleProcess(ProcessId id, SchedulingRegion region) {
     return;
   }
 
-  // Skip if already in a ready queue — O(1) flag check instead of O(n) scan.
+  // Skip if already in a ready queue — O(1) flag check.
   if (proc->inReadyQueue) {
     LLVM_DEBUG(llvm::dbgs() << "Process " << id << " already in queue\n");
     return;
   }
 
   auto &queue = readyQueues[static_cast<size_t>(region)];
-  queue.push_back(id);
+  queue.push_back(proc);
   proc->inReadyQueue = true;
   proc->setState(ProcessState::Ready);
   LLVM_DEBUG(llvm::dbgs() << "Scheduled process " << id << " ('" << proc->getName()
-               << "') in region " << getSchedulingRegionName(region)
-               << ", queue size=" << queue.size() << "\n");
+               << "') in region " << getSchedulingRegionName(region) << "\n");
 }
 
 void ProcessScheduler::suspendProcess(ProcessId id, const SimTime &resumeTime) {
@@ -820,7 +865,7 @@ void ProcessScheduler::suspendProcessForEvents(ProcessId id,
   for (const auto &entry : waitList.getEntries()) {
     if (proc->registeredSignals.insert(entry.signalId).second) {
       // First time this process registers for this signal.
-      signalToProcesses[entry.signalId].push_back(id);
+      signalToProcesses[entry.signalId].push_back(proc);
     }
   }
 
@@ -901,7 +946,7 @@ bool ProcessScheduler::advanceClockDomains(uint64_t targetTimeFs) {
 }
 
 void ProcessScheduler::terminateProcess(ProcessId id) {
-  Process *proc = getProcess(id);
+  Process *proc = id < processVec.size() ? processVec[id] : nullptr;
   if (!proc)
     return;
 
@@ -918,10 +963,9 @@ void ProcessScheduler::terminateProcess(ProcessId id) {
       --activeProcessCount;
   }
 
-  // Remove from ready queues
-  for (auto &queue : readyQueues) {
-    queue.erase(std::remove(queue.begin(), queue.end(), id), queue.end());
-  }
+  // Mark as not in any queue. The stale intrusive-list entry (if any)
+  // will be skipped during executeReadyProcesses (state == Terminated check).
+  proc->inReadyQueue = false;
 
   LLVM_DEBUG(llvm::dbgs() << "Terminated process " << id << "\n");
 }
@@ -964,6 +1008,7 @@ void ProcessScheduler::initialize() {
   activeProcessCount = processes.size();
 
   // Pre-allocate hot-path vectors to avoid memmove during simulation.
+  // Note: intrusive ready queues need no pre-allocation.
   size_t numProcs = processes.size();
   size_t numSigs = signalStates.size();
   signalsChangedThisDelta.reserve(numSigs);
@@ -972,9 +1017,6 @@ void ProcessScheduler::initialize() {
   processesExecutedThisDelta.reserve(numProcs);
   lastDeltaProcesses.reserve(numProcs);
   pendingFastUpdates.reserve(numProcs);
-  readyQueueScratch.reserve(numProcs);
-  for (auto &q : readyQueues)
-    q.reserve(numProcs);
 
   initialized = true;
 }
@@ -1042,33 +1084,34 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
     return 0;
 
   LLVM_DEBUG({
-    llvm::dbgs() << "executeReadyProcesses region=" << getSchedulingRegionName(region)
-                 << " queue size=" << queue.size() << "\n";
-    for (ProcessId id : queue) {
-      if (auto *p = getProcess(id))
-        llvm::dbgs() << "  queued: " << id << " ('" << p->getName() << "')\n";
-    }
+    llvm::dbgs() << "executeReadyProcesses region="
+                 << getSchedulingRegionName(region) << "\n";
+    for (Process *p = queue.head; p; p = p->readyNext)
+      llvm::dbgs() << "  queued: " << p->getId() << " ('" << p->getName()
+                   << "')\n";
   });
 
-  // Swap the queue into a persistent scratch buffer so execution can schedule
-  // new processes into the now-empty queue. Reuses buffer capacity across calls.
-  std::swap(readyQueueScratch, queue);
-  queue.clear();
-  auto &toExecute = readyQueueScratch;
+  // Detach the entire chain so execution can schedule new processes into
+  // the now-empty queue. Zero allocation — just pointer moves.
+  Process *execHead = queue.takeAll();
 
   size_t executed = 0;
-  for (ProcessId id : toExecute) {
-    if (isAbortRequested())
-      break;
-    Process *proc = getProcess(id);
-    if (!proc)
-      continue;
+  for (Process *proc = execHead; proc;) {
+    Process *next = proc->readyNext;
+    proc->readyNext = nullptr;
 
     // Clear the queue membership flag now that we've dequeued it.
     proc->inReadyQueue = false;
 
-    if (proc->getState() == ProcessState::Terminated)
+    if (isAbortRequested())
+      break;
+
+    if (proc->getState() == ProcessState::Terminated) {
+      proc = next;
       continue;
+    }
+
+    ProcessId id = proc->getId();
 
     auto pendingSignalIt = pendingTriggerSignals.find(id);
     if (pendingSignalIt != pendingTriggerSignals.end()) {
@@ -1093,6 +1136,8 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
     if (proc->getState() == ProcessState::Running) {
       proc->setState(ProcessState::Suspended);
     }
+
+    proc = next;
   }
 
   // Invoke post-region callback if registered and processes were executed.
@@ -1245,17 +1290,10 @@ bool ProcessScheduler::advanceTime() {
 
     // If clock domain wake is earlier than next TimeWheel event (or TW is
     // complete), advance sim time directly to the clock wake time.
-    if (hasClockWork &&
-        (eventScheduler->isComplete() ||
-         earliestClockWake <= eventScheduler->getCurrentTime().realTime)) {
-      // Advance event scheduler time to clock wake point.
-      eventScheduler->advanceTimeTo(earliestClockWake);
-      advanceClockDomains(earliestClockWake);
-      didWork = true;
-      LLVM_DEBUG(llvm::dbgs() << "Clock domain advanced time to "
-                              << earliestClockWake << " fs\n");
-      return true;
-    }
+    // NOTE: Disabled pending EventScheduler::advanceTimeTo implementation
+    // (ClockDomain feature from task #22).
+    (void)hasClockWork;
+    (void)earliestClockWake;
 
     if (!timeWheelAdvanced) {
       if (eventScheduler->isComplete() && !hasClockWork)
@@ -1336,11 +1374,14 @@ bool ProcessScheduler::isComplete() const {
 void ProcessScheduler::reset() {
   // Clear all processes
   processes.clear();
+  processVec.clear();
   nextProcId = 1;
   activeProcessCount = 0;
 
   // Clear signals
   signalStates.clear();
+  signalMemory.clear();
+  signalIsDirect.clear();
   signalNames.clear();
   signalEncodings.clear();
   nextSigId = 1;

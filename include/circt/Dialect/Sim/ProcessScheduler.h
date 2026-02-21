@@ -521,6 +521,14 @@ public:
   /// dedup in scheduleProcess instead of O(n) std::find on the queue.
   bool inReadyQueue = false;
 
+  /// Intrusive singly-linked list pointer for ready-queue membership.
+  /// When this process is in an IntrusiveProcessQueue, readyNext points
+  /// to the next process in the queue (nullptr if last).
+  Process *readyNext = nullptr;
+
+  // IntrusiveProcessQueue needs direct access to readyNext.
+  friend struct IntrusiveProcessQueue;
+
 private:
   ProcessId id;
   std::string name;
@@ -530,6 +538,72 @@ private:
   SensitivityList waitingSensitivity;
   SchedulingRegion preferredRegion = SchedulingRegion::Active;
   SimTime resumeTime;
+};
+
+//===----------------------------------------------------------------------===//
+// IntrusiveProcessQueue - O(1) enqueue/dequeue via Process::readyNext
+//===----------------------------------------------------------------------===//
+
+/// Singly-linked intrusive FIFO queue of Process pointers.
+/// Supports O(1) push_back, O(1) takeAll (for batch execution),
+/// and O(n) removal (rare: only on unregisterProcess).
+struct IntrusiveProcessQueue {
+  Process *head = nullptr;
+  Process *tail = nullptr;
+
+  bool empty() const { return head == nullptr; }
+
+  void push_back(Process *p) {
+    p->readyNext = nullptr;
+    if (tail)
+      tail->readyNext = p;
+    else
+      head = p;
+    tail = p;
+  }
+
+  /// Detach the entire chain for iteration. Resets queue to empty.
+  Process *takeAll() {
+    Process *h = head;
+    head = tail = nullptr;
+    return h;
+  }
+
+  /// Remove a specific process from the queue. O(n) scan.
+  /// Used only by unregisterProcess (rare path).
+  void remove(Process *p) {
+    if (!p)
+      return;
+    if (head == p) {
+      head = p->readyNext;
+      if (!head)
+        tail = nullptr;
+      p->readyNext = nullptr;
+      p->inReadyQueue = false;
+      return;
+    }
+    for (Process *cur = head; cur; cur = cur->readyNext) {
+      if (cur->readyNext == p) {
+        cur->readyNext = p->readyNext;
+        if (tail == p)
+          tail = cur;
+        p->readyNext = nullptr;
+        p->inReadyQueue = false;
+        return;
+      }
+    }
+  }
+
+  void clear() {
+    Process *p = head;
+    while (p) {
+      Process *next = p->readyNext;
+      p->readyNext = nullptr;
+      p->inReadyQueue = false;
+      p = next;
+    }
+    head = tail = nullptr;
+  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -1070,9 +1144,9 @@ public:
   void scheduleProcessDirect(ProcessId id, Process *proc);
 
   /// Get a raw pointer to the Process object (for caching in fast paths).
+  /// O(1) via flat vector indexed by ProcessId.
   Process *getProcessDirect(ProcessId id) {
-    auto it = processes.find(id);
-    return it != processes.end() ? it->second.get() : nullptr;
+    return id < processVec.size() ? processVec[id] : nullptr;
   }
 
   /// Write a raw uint64_t value directly to signal state without triggering
@@ -1081,11 +1155,32 @@ public:
   /// batching fast-forward.
   void writeSignalValueRaw(SignalId signalId, uint64_t rawValue) {
     signalStates[signalId].updateValueFast(rawValue);
+    if (signalId < signalIsDirect.size() && signalIsDirect[signalId])
+      signalMemory[signalId] = rawValue;
+  }
+
+  /// Get a pointer to the direct signal memory array. Each slot holds
+  /// the current value of a narrow (<=64-bit) signal as a uint64_t,
+  /// indexed by SignalId. Used by JIT-compiled code for zero-overhead
+  /// signal reads via direct memory loads.
+  uint64_t *getSignalMemoryBase() { return signalMemory.data(); }
+
+  /// Check if a signal uses the direct memory path (width <= 64 bits).
+  bool isSignalDirect(SignalId signalId) const {
+    return signalId < signalIsDirect.size() && signalIsDirect[signalId];
   }
 
   /// Get the count of active (non-terminated) processes.
   /// Used by clock fast-forward to determine if batching is safe.
   uint32_t getActiveProcessCount() const { return activeProcessCount; }
+
+  /// Get the number of processes sensitive to a given signal.
+  /// Used by clock batching to determine if skipping intermediate events
+  /// is safe (only when no other process observes this signal).
+  size_t getSignalSensitiveProcessCount(SignalId signalId) const {
+    auto it = signalToProcesses.find(signalId);
+    return it != signalToProcesses.end() ? it->second.size() : 0;
+  }
 
   /// Set the maximum simulation time for batch limiting.
   void setMaxSimTime(uint64_t maxTimeFs) { maxSimTimeFemtoseconds = maxTimeFs; }
@@ -1281,6 +1376,10 @@ private:
 
   // Process management
   llvm::DenseMap<ProcessId, std::unique_ptr<Process>> processes;
+  /// Flat process vector for O(1) indexed lookup by ProcessId.
+  /// Index 0 is unused (InvalidProcessId). Parallels the DenseMap
+  /// which retains ownership via unique_ptr.
+  std::vector<Process *> processVec;
   ProcessId nextProcId = 1;
 
   /// Count of processes in Suspended, Waiting, or Ready states.
@@ -1292,6 +1391,14 @@ private:
   /// Index 0 is unused/sentinel. Using a vector instead of DenseMap eliminates
   /// hash lookups on every signal read/write (hot path).
   std::vector<SignalState> signalStates;
+
+  /// Direct signal memory: flat uint64_t array indexed by SignalId.
+  /// For signals with width <= 64 bits, stores the current value directly
+  /// so JIT-compiled code can read via a single load instruction.
+  std::vector<uint64_t> signalMemory;
+
+  /// Tracks which signals use the direct memory path (width <= 64 bits).
+  std::vector<bool> signalIsDirect;
   llvm::DenseMap<SignalId, std::string> signalNames;
   std::map<std::string, SignalId> signalAliases;
   std::vector<VPIParamInfo> vpiParams;
@@ -1303,17 +1410,15 @@ private:
       signalStructFields;
   SignalId nextSigId = 1;
 
-  // Maps signals to processes sensitive to them
-  llvm::DenseMap<SignalId, llvm::SmallVector<ProcessId, 8>>
+  // Maps signals to processes sensitive to them (Process* for zero-lookup
+  // dispatch in triggerSensitiveProcesses hot path).
+  llvm::DenseMap<SignalId, llvm::SmallVector<Process *, 8>>
       signalToProcesses;
 
-  // Ready queues per scheduling region
-  std::vector<ProcessId>
+  // Ready queues per scheduling region (intrusive linked lists).
+  // O(1) enqueue/dequeue with zero heap allocation per schedule call.
+  IntrusiveProcessQueue
       readyQueues[static_cast<size_t>(SchedulingRegion::NumRegions)];
-
-  // Scratch buffer for executeReadyProcesses — persists across calls to
-  // avoid repeated heap allocation when swapping with the ready queue.
-  std::vector<ProcessId> readyQueueScratch;
 
   // Processes waiting for timed events
   std::vector<std::pair<SimTime, ProcessId>> timedWaitQueue;
