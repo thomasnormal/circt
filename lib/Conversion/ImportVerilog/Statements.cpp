@@ -2354,6 +2354,10 @@ struct StmtVisitor {
       case slang::ast::AssertionKind::Assume:
         moore::AssumeOp::create(builder, loc, defer, gatedCond, StringAttr{});
         return success();
+      case slang::ast::AssertionKind::Restrict:
+        // Immediate restrict assertions are lowered as assumes.
+        moore::AssumeOp::create(builder, loc, defer, gatedCond, StringAttr{});
+        return success();
       case slang::ast::AssertionKind::CoverProperty:
         moore::CoverOp::create(builder, loc, defer, gatedCond, StringAttr{});
         return success();
@@ -2595,6 +2599,11 @@ struct StmtVisitor {
         verif::ClockedAssumeOp::create(builder, loc, property, edge, clockVal,
                                        enable, actionLabel);
         return success();
+      case slang::ast::AssertionKind::Restrict:
+        // Restrict constraints are treated as assumptions in lowering.
+        verif::ClockedAssumeOp::create(builder, loc, property, edge, clockVal,
+                                       enable, actionLabel);
+        return success();
       case slang::ast::AssertionKind::CoverProperty:
         verif::ClockedCoverOp::create(builder, loc, property, edge, clockVal,
                                       enable, actionLabel);
@@ -2663,6 +2672,11 @@ struct StmtVisitor {
               verif::ClockedAssumeOp::create(builder, loc, innerProperty, edge,
                                              clockVal, enable, actionLabel);
               return success();
+            case slang::ast::AssertionKind::Restrict:
+              // Restrict constraints are treated as assumptions in lowering.
+              verif::ClockedAssumeOp::create(builder, loc, innerProperty, edge,
+                                             clockVal, enable, actionLabel);
+              return success();
             case slang::ast::AssertionKind::CoverProperty:
               verif::ClockedCoverOp::create(builder, loc, innerProperty, edge,
                                             clockVal, enable, actionLabel);
@@ -2685,6 +2699,11 @@ struct StmtVisitor {
                               actionLabel);
       return success();
     case slang::ast::AssertionKind::Assume:
+      verif::AssumeOp::create(builder, loc, property, disableIffEnable,
+                              actionLabel);
+      return success();
+    case slang::ast::AssertionKind::Restrict:
+      // Restrict constraints are treated as assumptions in lowering.
       verif::AssumeOp::create(builder, loc, property, disableIffEnable,
                               actionLabel);
       return success();
