@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1541 - February 21, 2026
+
+### [ImportVerilog][SVA] Stabilize compound match-item assignment lowering against Slang normalized RHS trees
+
+1. **Fixed compound match-item RHS evaluation semantics and crash mode**  
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - evaluate compound match-item RHS under a temporary lhs reference context
+     so synthesized `LValueReference` nodes in Slang trees lower correctly.
+   - avoids importer assertion failures in `RvalueExprVisitor` and keeps
+     compound updates single-application (no accidental double-op composition).
+
+2. **Validation**
+   - `ninja -C build-test circt-verilog circt-translate`: PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-local-var.sv build-test/test/Conversion/ImportVerilog/sva-action-block.sv build-test/test/Conversion/ImportVerilog/sva-labeled-module-assert.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic0[0-3]' utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva`: PASS (`8/8` mode cases).
+
 ## Iteration 1540 - February 21, 2026
 
 ### [ImportVerilog][SVA] Add compound sequence match-item assignment support for local assertion vars
