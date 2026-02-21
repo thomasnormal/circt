@@ -1242,3 +1242,9 @@ verilator-verification, and yosys corpora).
     - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-MOORE`
     - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-strong-weak.sv build-test/test/Tools/circt-bmc/sva-strong-weak-e2e.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+
+- Additional ImportVerilog SVA closure:
+  - `strong(expr)` lowers with explicit eventual-progress requirement.
+  - `weak(expr)` remains direct.
+  - updated regression:
+    - `test/Conversion/ImportVerilog/sva-strong-weak.sv`

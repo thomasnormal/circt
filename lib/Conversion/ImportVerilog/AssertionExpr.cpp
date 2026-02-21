@@ -1331,8 +1331,9 @@ struct AssertionExprVisitor {
         context.convertAssertionExpression(expr.expr, loc, /*applyDefaults=*/false);
     if (!value)
       return {};
-    // Distinguish strong and weak wrappers by requiring explicit finite
-    // progress for strong(...).
+    // Distinguish strong/weak wrappers by adding an explicit finite-progress
+    // obligation for strong(...) via eventually(...). Weak(...) remains
+    // safety-only in the current lowering.
     if (expr.strength == slang::ast::StrongWeakAssertionExpr::Strong) {
       auto eventually = ltl::EventuallyOp::create(builder, loc, value);
       return ltl::AndOp::create(
