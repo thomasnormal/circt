@@ -782,3 +782,9 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - ImportVerilog now differentiates `strong(...)` and `weak(...)` wrappers.
   - updated regression:
     - `test/Conversion/ImportVerilog/sva-strong-weak.sv`
+
+- Additional closure (same date):
+  - empty `first_match` sequences now lower in `LTLToCore` instead of emitting
+    a conversion error.
+  - regression:
+    - `test/Conversion/LTLToCore/first-match-empty.mlir`

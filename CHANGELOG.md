@@ -73765,3 +73765,14 @@ See CHANGELOG.md on recent progress.
       - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-MOORE`
       - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-strong-weak.sv`
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+93. LTLToCore SVA: support empty `first_match` sequences
+    (February 21, 2026):
+    - feature:
+      - `lib/Conversion/LTLToCore/LTLToCore.cpp`
+      - empty `first_match` now lowers to constant true.
+    - regression coverage:
+      - new:
+        - `test/Conversion/LTLToCore/first-match-empty.mlir`
+    - validation:
+      - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-empty.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-empty.mlir`
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/first-match-empty.mlir`
