@@ -228,13 +228,17 @@ bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
       return true;
 
   // Bytecode interpreter: tight switch loop over pre-compiled micro-ops.
-  if (kindMask & toFastPathMask(DirectProcessFastPathKind::BytecodeProcess))
-    if (tryKind(DirectProcessFastPathKind::BytecodeProcess,
-                [this](ProcessId id, ProcessExecutionState &s,
-                       ProcessThunkExecutionState &thunkState) {
-                  return executeBytecodeProcess(id, s, thunkState);
-                }))
+  // Bytecode processes never deopt, so skip the expensive deopt snapshot.
+  if (kindMask & toFastPathMask(DirectProcessFastPathKind::BytecodeProcess)) {
+    ProcessThunkExecutionState thunkState;
+    thunkState.resumeToken = state.jitThunkResumeToken;
+    if (executeBytecodeProcess(procId, state, thunkState)) {
+      state.jitThunkResumeToken = thunkState.resumeToken;
       return true;
+    }
+    // Bytecode failed — clear the kind and fall through.
+    clearKind(DirectProcessFastPathKind::BytecodeProcess);
+  }
 
   // JIT-compiled block: general native code with scheduler callbacks.
   if (kindMask & toFastPathMask(DirectProcessFastPathKind::JITCompiledBlock))

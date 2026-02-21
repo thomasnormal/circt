@@ -843,6 +843,9 @@ public:
     return clockedAssertionFailures;
   }
 
+  /// Print bytecode compilation statistics.
+  void printBytecodeStats() const;
+
   /// Get the bit width of a type. Made public for use by helper functions.
   /// Uses a cache for composite types (struct/array) to avoid repeated recursion.
   static unsigned getTypeWidth(mlir::Type type);
@@ -2522,6 +2525,11 @@ private:
   /// Per-process compiled bytecode programs for the bytecode interpreter.
   llvm::DenseMap<ProcessId, std::unique_ptr<BytecodeProgram>>
       bytecodeProgramMap;
+
+  /// Bytecode compilation diagnostic counters.
+  unsigned bytecodeAttempted = 0;
+  unsigned bytecodeCompiled = 0;
+  std::map<std::string, unsigned> bytecodeFailedOps;
 
   /// Whether block-level JIT is enabled.
   bool blockJITEnabled = false;

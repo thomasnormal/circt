@@ -818,6 +818,32 @@ void ProcessScheduler::suspendProcessForEvents(ProcessId id,
                           << waitList.size() << " events\n");
 }
 
+void ProcessScheduler::resuspendProcessFast(ProcessId id) {
+  Process *proc = getProcess(id);
+  if (!proc)
+    return;
+  // Set state back to Waiting without rebuilding the sensitivity list.
+  // The waiting sensitivity and signal-to-process mappings are unchanged
+  // from the previous suspend (bytecode processes always wait on the
+  // same signals).
+  proc->setState(ProcessState::Waiting);
+}
+
+void ProcessScheduler::queueSignalUpdateFast(SignalId signalId, uint64_t value,
+                                              uint32_t width) {
+  pendingFastUpdates.push_back({signalId, value, width});
+}
+
+void ProcessScheduler::flushPendingFastUpdates() {
+  if (pendingFastUpdates.empty())
+    return;
+  // Apply all deferred signal updates. This calls updateSignalFast which
+  // triggers sensitive processes and adds them to ready queues.
+  for (auto &upd : pendingFastUpdates)
+    updateSignalFast(upd.signalId, upd.value, upd.width);
+  pendingFastUpdates.clear();
+}
+
 void ProcessScheduler::terminateProcess(ProcessId id) {
   Process *proc = getProcess(id);
   if (!proc)
@@ -1056,8 +1082,8 @@ bool ProcessScheduler::advanceTime() {
   // First, process any ready processes
   executeCurrentTime();
 
-  // Check if there are any events pending
-  if (eventScheduler->isComplete()) {
+  // Check if there are any events or pending fast updates
+  if (eventScheduler->isComplete() && pendingFastUpdates.empty()) {
     // Check if any processes are ready
     for (auto &queue : readyQueues) {
       if (!queue.empty())
@@ -1073,13 +1099,23 @@ bool ProcessScheduler::advanceTime() {
   // We process all delta cycles at the current time (events may schedule more
   // events at the same time). Then advance to the next real time and return
   // to the caller so it can run VPI callbacks etc.
-  while (!eventScheduler->isComplete()) {
+  while (!eventScheduler->isComplete() || !pendingFastUpdates.empty()) {
     if (isAbortRequested())
       return false;
+
+    // Flush pending fast signal updates from bytecode processes alongside
+    // Event processing. Both types of deferred updates are applied at the
+    // same logical delta boundary, preserving IEEE 1800 semantics.
+    bool hadPendingUpdates = !pendingFastUpdates.empty();
+    if (hadPendingUpdates)
+      flushPendingFastUpdates();
+
     // Try to step a delta cycle at the current time
-    if (eventScheduler->stepDelta()) {
+    bool hadEvents = eventScheduler->stepDelta();
+
+    if (hadPendingUpdates || hadEvents) {
       didWork = true;
-      // Events were processed, check if any processes are now ready
+      // Events/updates were processed, check if any processes are now ready
       for (auto &queue : readyQueues) {
         if (!queue.empty())
           return true;
@@ -1088,7 +1124,8 @@ bool ProcessScheduler::advanceTime() {
       continue;
     }
 
-    // No events at current delta — advance to the next event time.
+    // No events or pending updates at current delta — advance to the next
+    // event time.
     if (!eventScheduler->advanceToNextTime()) {
       if (eventScheduler->isComplete())
         break;

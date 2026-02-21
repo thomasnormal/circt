@@ -1624,16 +1624,38 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
     }
   }
 
+  // Init sub-stage timing — enabled by CIRCT_SIM_TRACE_INIT env var or
+  // LLVM_DEBUG. Helps profile where init time is spent on large designs.
+  const bool traceInitTiming = std::getenv("CIRCT_SIM_TRACE_INIT") != nullptr;
+  auto initStart = std::chrono::steady_clock::now();
+  auto lastInitStage = initStart;
+  auto reportInitStage = [&](const char *stage) {
+    if (!traceInitTiming)
+      return;
+    auto now = std::chrono::steady_clock::now();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         now - lastInitStage)
+                         .count();
+    auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       now - initStart)
+                       .count();
+    llvm::errs() << "[circt-sim] init." << stage << " " << elapsedMs
+                 << "ms (total: " << totalMs << "ms)\n";
+    lastInitStage = now;
+  };
+
   // === STACK OVERFLOW FIX ===
   // Use a single iterative pass to discover all operations instead of
   // multiple recursive walk() calls. This prevents stack overflow on
   // large designs (165k+ lines with deep nesting).
   DiscoveredOps discoveredOps;
   discoverOpsIteratively(hwModule, discoveredOps);
+  reportInitStage("discoverOps");
 
   // Register all signals first (using pre-discovered ops)
   if (failed(registerSignals(hwModule, discoveredOps)))
     return failure();
+  reportInitStage("registerSignals");
 
   // Register seq.firreg operations before processes (using pre-discovered ops).
   registerFirRegs(discoveredOps, 0, InstanceInputMapping{});
@@ -1647,6 +1669,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Then register all processes (using pre-discovered ops)
   if (failed(registerProcesses(discoveredOps)))
     return failure();
+  reportInitStage("registerProcesses");
 
   // Recursively process child module instances EXCEPT module-level ops.
   // We must register child signals and instance mappings first so that
@@ -1654,6 +1677,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Note: initializeChildInstances does its own iterative discovery for each child
   if (failed(initializeChildInstances(discoveredOps, 0)))
     return failure();
+  reportInitStage("initChildInstances");
 
   // Register combinational processes for static module-level drives
   // (continuous assignments like port connections).
@@ -1664,6 +1688,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
 
   // Analyze NBA yield chains to fix loop accumulation for NBA bit-select.
   analyzeNBAYieldChains();
+  reportInitStage("contAssign+alloca+nba");
 
   // Discover global ops once, shared between initializeGlobals and
   // executeGlobalConstructors to avoid duplicate module walks.
@@ -1675,6 +1700,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Initialize LLVM global variables (especially vtables) using iterative discovery
   if (failed(initializeGlobals(cachedGlobalOps)))
     return failure();
+  reportInitStage("initGlobals");
 
   // Pre-populate function lookup cache by walking the module symbol table once.
   // ModuleOp::lookupSymbol is O(n) per call (linear scan of all ops); by
@@ -1696,6 +1722,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
                << "LLHDProcessInterpreter: Pre-cached "
                << funcLookupCache.size() << " function lookups\n");
   }
+  reportInitStage("funcLookupCache");
 
   inGlobalInit = true;
 
@@ -1711,12 +1738,14 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // This includes hdl_top's initial blocks that call config_db::set().
   if (failed(executeModuleLevelLLVMOps(hwModule)))
     return failure();
+  reportInitStage("moduleLevelOps");
 
   // Now execute deferred child module-level ops. These were saved during
   // initializeChildInstances() and must run AFTER executeModuleLevelLLVMOps()
   // so that parent signal values (malloc results etc.) are in the scheduler
   // when child modules probe parent signals.
   executeChildModuleLevelOps();
+  reportInitStage("childModuleLevelOps");
 
   // Re-evaluate static continuous assignments after module-level LLVM init.
   // Some module drives (notably interface tri-state wiring) depend on values
@@ -1737,6 +1766,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
       continue;
     executeContinuousAssignment(driveOp);
   }
+  reportInitStage("reEvalContAssign");
 
   // Create shadow signals for interface struct fields. This must happen after
   // both parent and child module-level ops so that all interface pointer
@@ -1746,6 +1776,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // creation can be stuck on pointer signals that never toggle. Expand those
   // process sensitivities to the newly created field signals.
   expandDeferredInterfaceSensitivityExpansions();
+  reportInitStage("shadowSignals");
 
   LLVM_DEBUG({
     if (!interfaceFieldSignals.empty()) {

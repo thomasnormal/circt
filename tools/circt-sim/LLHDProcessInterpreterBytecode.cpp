@@ -25,6 +25,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "llvm/Support/Debug.h"
+#include <map>
 
 #define DEBUG_TYPE "llhd-bytecode"
 
@@ -48,6 +49,9 @@ public:
   /// Try to compile a process to bytecode. Returns nullopt if the process
   /// contains unsupported operations.
   std::optional<BytecodeProgram> compile(llhd::ProcessOp processOp);
+
+  /// Name of the first op that caused compilation failure (diagnostic).
+  std::string failedOpName;
 
 private:
   /// Assign a virtual register to an SSA value. Returns the register index.
@@ -392,6 +396,7 @@ bool BytecodeCompiler::compileOp(Operation *op, BytecodeProgram &program) {
   // Unsupported operation.
   LLVM_DEBUG(llvm::dbgs() << "[Bytecode] Unsupported op: " << op->getName()
                           << "\n");
+  failedOpName = op->getName().getStringRef().str();
   return false;
 }
 
@@ -475,6 +480,13 @@ BytecodeCompiler::compile(llhd::ProcessOp processOp) {
 
 namespace {
 
+/// A pending drive from bytecode execution, batched for a single Event.
+struct PendingDrive {
+  uint32_t signalId;
+  uint32_t width;
+  uint64_t value;
+};
+
 /// Execute a compiled bytecode program starting from the given block.
 /// Returns true if the process suspended (hit Wait), false if it halted or
 /// encountered an error.
@@ -483,6 +495,9 @@ bool executeBytecodeProgram(const BytecodeProgram &program,
                             uint32_t startBlock) {
   uint64_t regs[128];
   std::memset(regs, 0, sizeof(regs));
+
+  // Collect drives to batch into a single Event at the end.
+  llvm::SmallVector<PendingDrive, 4> pendingDrives;
 
   uint32_t currentBlock = startBlock;
 
@@ -511,14 +526,7 @@ bool executeBytecodeProgram(const BytecodeProgram &program,
         // Mask to signal width.
         if (op.width < 64)
           val &= (1ULL << op.width) - 1;
-        // Schedule epsilon delta update. Use the fast path that
-        // directly updates the signal on the next delta cycle.
-        scheduler.getEventScheduler().scheduleNextDelta(
-            SchedulingRegion::Active,
-            Event([&scheduler, sigId = op.signalId, val,
-                   width = op.width]() {
-              scheduler.updateSignalFast(sigId, val, width);
-            }));
+        pendingDrives.push_back({op.signalId, op.width, val});
         break;
       }
 
@@ -633,11 +641,18 @@ bool executeBytecodeProgram(const BytecodeProgram &program,
         currentBlock = regs[op.srcReg1] ? op.srcReg2 : op.srcReg3;
         goto next_block;
 
-      case MicroOpKind::Wait:
+      case MicroOpKind::Wait: {
+        // Queue all pending drives via the fast path (no Event overhead).
+        for (const auto &d : pendingDrives)
+          scheduler.queueSignalUpdateFast(d.signalId, d.value, d.width);
         return true; // Suspended
+      }
 
-      case MicroOpKind::Halt:
+      case MicroOpKind::Halt: {
+        for (const auto &d : pendingDrives)
+          scheduler.queueSignalUpdateFast(d.signalId, d.value, d.width);
         return false; // Process terminated
+      }
       }
     }
 
@@ -655,6 +670,24 @@ bool executeBytecodeProgram(const BytecodeProgram &program,
 // Integration with LLHDProcessInterpreter
 //===----------------------------------------------------------------------===//
 
+/// Print bytecode compilation statistics. Called before _exit().
+void LLHDProcessInterpreter::printBytecodeStats() const {
+  if (bytecodeAttempted == 0)
+    return;
+  llvm::errs() << "\n[Bytecode Stats] " << bytecodeCompiled << "/"
+               << bytecodeAttempted << " processes compiled to bytecode\n";
+  if (!bytecodeFailedOps.empty()) {
+    llvm::errs() << "[Bytecode Stats] Ops causing fallback:\n";
+    std::vector<std::pair<std::string, unsigned>> sorted(
+        bytecodeFailedOps.begin(), bytecodeFailedOps.end());
+    llvm::sort(sorted, [](const auto &a, const auto &b) {
+      return a.second > b.second;
+    });
+    for (auto &[name, count] : sorted)
+      llvm::errs() << "  " << name << ": " << count << "\n";
+  }
+}
+
 /// Try to compile a process to bytecode and store the result.
 bool LLHDProcessInterpreter::tryCompileProcessBytecode(
     ProcessId procId, ProcessExecutionState &state) {
@@ -662,11 +695,20 @@ bool LLHDProcessInterpreter::tryCompileProcessBytecode(
   if (!processOp)
     return false;
 
+  ++bytecodeAttempted;
+
   BytecodeCompiler compiler(
       [this](Value v) { return resolveSignalId(v); }, scheduler);
   auto program = compiler.compile(processOp);
-  if (!program)
+  if (!program) {
+    if (!compiler.failedOpName.empty())
+      bytecodeFailedOps[compiler.failedOpName]++;
+    else
+      bytecodeFailedOps["(unknown/too-many-regs)"]++;
     return false;
+  }
+
+  ++bytecodeCompiled;
 
   // Store the compiled program.
   auto prog = std::make_unique<BytecodeProgram>(std::move(*program));
@@ -702,25 +744,28 @@ bool LLHDProcessInterpreter::executeBytecodeProcess(
   bool suspended = executeBytecodeProgram(program, scheduler, startBlock);
 
   if (suspended) {
-    // Re-register process for signal sensitivity.
-    SensitivityList waitList;
-    for (size_t i = 0; i < program.waitSignals.size(); ++i) {
-      waitList.addEdge(program.waitSignals[i], program.waitEdges[i]);
-    }
-    scheduler.suspendProcessForEvents(procId, waitList);
+    if (thunkState.resumeToken == 0) {
+      // First activation: do full sensitivity registration.
+      SensitivityList waitList;
+      for (size_t i = 0; i < program.waitSignals.size(); ++i) {
+        waitList.addEdge(program.waitSignals[i], program.waitEdges[i]);
+      }
+      scheduler.suspendProcessForEvents(procId, waitList);
 
-    // Update the cached wait state for the process skip optimization.
-    state.lastWaitHadDelay = false;
-    state.lastWaitHasEdge = false;
-    if (!state.lastSensitivityValid ||
-        state.lastSensitivityEntries.size() != waitList.getEntries().size()) {
+      // Initialize the cached wait state for the process skip optimization.
+      state.lastWaitHadDelay = false;
+      state.lastWaitHasEdge = false;
       state.lastSensitivityEntries = waitList.getEntries();
       state.lastSensitivityValid = true;
-    }
-    state.lastSensitivityValues.resize(state.lastSensitivityEntries.size());
-    for (size_t i = 0; i < state.lastSensitivityEntries.size(); ++i) {
-      state.lastSensitivityValues[i] =
-          scheduler.getSignalValue(state.lastSensitivityEntries[i].signalId);
+      state.lastSensitivityValues.resize(state.lastSensitivityEntries.size());
+      for (size_t i = 0; i < state.lastSensitivityEntries.size(); ++i) {
+        state.lastSensitivityValues[i] =
+            scheduler.getSignalValue(state.lastSensitivityEntries[i].signalId);
+      }
+    } else {
+      // Subsequent activations: just set state back to Waiting.
+      // Sensitivity list and signal registrations are unchanged.
+      scheduler.resuspendProcessFast(procId);
     }
 
     // Advance resume token so next activation starts from resume block.
