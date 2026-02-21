@@ -372,6 +372,12 @@ public:
   /// Clear all entries.
   void clear() { entries.clear(); }
 
+  /// Assign entries from existing range (avoids per-element emplace_back).
+  template <typename RangeT>
+  void assignFrom(const RangeT &src) {
+    entries.assign(src.begin(), src.end());
+  }
+
   /// Get the entries.
   const llvm::SmallVector<SensitivityEntry, 4> &getEntries() const {
     return entries;

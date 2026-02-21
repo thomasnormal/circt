@@ -15034,8 +15034,7 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
     SensitivityList waitList;
     auto cacheIt = state.waitSensitivityCache.find(waitOp.getOperation());
     if (cacheIt != state.waitSensitivityCache.end()) {
-      for (const auto &entry : cacheIt->second)
-        waitList.addEdge(entry.signalId, entry.edge);
+      waitList.assignFrom(cacheIt->second);
       ++state.waitSensitivityCacheHits;
     }
 
@@ -15221,8 +15220,7 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
     SensitivityList waitList;
     auto cacheIt = state.waitSensitivityCache.find(waitOp.getOperation());
     if (cacheIt != state.waitSensitivityCache.end()) {
-      for (const auto &entry : cacheIt->second)
-        waitList.addEdge(entry.signalId, entry.edge);
+      waitList.assignFrom(cacheIt->second);
       ++state.waitSensitivityCacheHits;
     } else {
       llvm::SmallVector<SignalId, 8> derivedSignals;
