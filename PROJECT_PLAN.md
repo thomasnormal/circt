@@ -122,6 +122,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    Importer now lowers `$future_gclk(expr)` through forward temporal
    `ltl.delay(expr, 1, 0)` semantics instead of approximating with
    `moore.past(expr, 1)`, and regression checks now lock this behavior.
+11. **SVA unclocked `_gclk` global-clocking semantics fix** (Feb 21, 2026):
+   Unclocked properties using sampled `_gclk` functions now correctly lower
+   with the scope's global clocking event instead of producing unclocked
+   assertions.
 
 ### Previously Completed (Iteration 1401, Feb 14, 2026)
 1. **sv-tests 100% coverage**: 952 PASS + 76 XFAIL = 1028/1028. Zero silent skips. Key additions: SVA LTLToCore pipeline, CompRegOp support, AnalysisManager integration, tagged union checker, runner compile-only mode for preprocessing tests.
@@ -162,7 +166,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 ### Next Steps (Simulation)
 1. **Fix I2S/I3C 0% coverage**: Both AVIPs complete simulation but report 0% coverage. I2S has RX channel issue; I3C likely a coverage collection wiring problem.
 2. **Fix APB/AHB scoreboard errors**: 5 APB and 4 AHB UVM_ERROR from scoreboard comparisons (master vs slave data mismatches). May be signal propagation timing issues.
-3. **Convert 321 sv-tests xfail to pass**: black-parrot (6), remaining $*_gclk sampled value functions (~9 pending after `$future_gclk` semantic fix), power operator (2), easyUVM tests. Need to fix underlying parser/lowering bugs.
+3. **Convert 321 sv-tests xfail to pass**: black-parrot (6), remaining $*_gclk sampled value functions (~8 pending after `$future_gclk` + unclocked-global-clocking fixes), power operator (2), easyUVM tests. Need to fix underlying parser/lowering bugs.
 4. **Performance optimization**: Target >500 ns/s for practical AVIP runs.
 5. **SVA assertion runtime**: Genuine SVA runtime for concurrent assertion checking during simulation (task #38).
 

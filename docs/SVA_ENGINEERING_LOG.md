@@ -354,3 +354,27 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv` (`elapsed=0.032s`)
+
+- Iteration update (unclocked `_gclk` global-clocking semantics):
+  - realization:
+    - unclocked properties using sampled `_gclk` calls lowered to unclocked
+      `verif.assert` forms even when a scope-level `global clocking` existed.
+    - root cause: `_gclk` normalization reused base sampled-value lowering but
+      did not force clock timing when no local assertion/default clock applied.
+  - implemented:
+    - `_gclk` paths now consult `compilation.getGlobalClockingAndNoteUse`
+      when no explicit/default assertion clock is present.
+    - for unclocked `_gclk` assertion contexts, helper-lowered sampled values
+      are boolean-normalized and wrapped with `convertLTLTimingControl` so
+      assertions remain clocked on the global clocking event.
+    - added regression:
+      - `test/Conversion/ImportVerilog/gclk-global-clocking.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-global-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-global-clocking.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/gclk-global-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-global-clocking.sv --check-prefix=CHECK-MOORE`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/gclk-global-clocking.sv build-test/test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-global-clocking.sv` (`elapsed=0.074s`)
