@@ -1094,6 +1094,19 @@ public:
   void suspendProcessForEvents(ProcessId id,
                                const SensitivityList &waitList);
 
+  /// Lightweight re-suspend for bytecode processes that always wait on the
+  /// same signals. Skips sensitivity list rebuild and signal registration
+  /// (already done on first suspend). Only sets state back to Waiting.
+  void resuspendProcessFast(ProcessId id);
+
+  /// Queue a deferred signal update (applied at the next delta boundary).
+  /// Much cheaper than scheduling an Event: 12 bytes vs 80+ bytes per update,
+  /// no Event construction/destruction/move overhead.
+  void queueSignalUpdateFast(SignalId signalId, uint64_t value, uint32_t width);
+
+  /// Check if there are pending fast signal updates.
+  bool hasPendingFastUpdates() const { return !pendingFastUpdates.empty(); }
+
   /// Terminate a process.
   void terminateProcess(ProcessId id);
 
@@ -1280,6 +1293,19 @@ private:
 
   // Maximum simulation time for batch limiting (0 = unlimited).
   uint64_t maxSimTimeFemtoseconds = 0;
+
+  // Pending signal updates from bytecode processes. Flushed at the next
+  // delta boundary alongside Event processing. Each entry is 16 bytes
+  // (vs 80+ bytes per Event), avoiding Event construction/move/destruction.
+  struct PendingSignalUpdate {
+    SignalId signalId;
+    uint64_t value;
+    uint32_t width;
+  };
+  llvm::SmallVector<PendingSignalUpdate, 32> pendingFastUpdates;
+
+  /// Flush all pending fast signal updates via updateSignalFast.
+  void flushPendingFastUpdates();
 };
 
 //===----------------------------------------------------------------------===//
