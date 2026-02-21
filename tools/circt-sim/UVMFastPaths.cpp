@@ -118,6 +118,30 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
     return StringSwitch<UvmFastPathAction>(calleeName)
         .Case("uvm_pkg::uvm_phase::wait_for_self_and_siblings_to_drop",
               UvmFastPathAction::WaitForSelfAndSiblingsToDrop)
+        .Case("uvm_pkg::uvm_printer::print_field_int",
+              UvmFastPathAction::PrinterNoOp)
+        .Case("uvm_pkg::uvm_printer::print_field",
+              UvmFastPathAction::PrinterNoOp)
+        .Case("uvm_pkg::uvm_printer::print_generic_element",
+              UvmFastPathAction::PrinterNoOp)
+        .Case("uvm_pkg::uvm_printer::print_generic",
+              UvmFastPathAction::PrinterNoOp)
+        .Case("uvm_pkg::uvm_printer::print_time",
+              UvmFastPathAction::PrinterNoOp)
+        .Case("uvm_pkg::uvm_printer::print_string",
+              UvmFastPathAction::PrinterNoOp)
+        .Case("uvm_pkg::uvm_printer::print_real",
+              UvmFastPathAction::PrinterNoOp)
+        .Case("uvm_pkg::uvm_printer::print_array_header",
+              UvmFastPathAction::PrinterNoOp)
+        .Case("uvm_pkg::uvm_printer::print_array_footer",
+              UvmFastPathAction::PrinterNoOp)
+        .Case("uvm_pkg::uvm_printer::print_array_range",
+              UvmFastPathAction::PrinterNoOp)
+        .Case("uvm_pkg::uvm_printer::print_object_header",
+              UvmFastPathAction::PrinterNoOp)
+        .Case("uvm_pkg::uvm_printer::print_object",
+              UvmFastPathAction::PrinterNoOp)
         .Case("uvm_pkg::uvm_report_object::uvm_report_info",
               UvmFastPathAction::ReportInfoSuppress)
         .Case("uvm_pkg::uvm_report_object::uvm_report_warning",
@@ -449,6 +473,39 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     }
   }
 
+  // m_uvm_get_root / uvm_get_report_object: return cached uvm_root::m_inst.
+  if ((matchesMethod("m_uvm_get_root") ||
+       matchesMethod("uvm_get_report_object")) &&
+      funcOp.getNumResults() >= 1) {
+    // Look up uvm_root::m_inst global for the root singleton pointer.
+    uint64_t rootAddr = 0;
+    auto *addressofOp = rootModule.lookupSymbol(
+        "uvm_pkg::uvm_pkg::uvm_root::m_inst");
+    if (addressofOp) {
+      auto globalIt = globalMemoryBlocks.find(
+          "uvm_pkg::uvm_pkg::uvm_root::m_inst");
+      if (globalIt != globalMemoryBlocks.end() &&
+          globalIt->second.initialized &&
+          globalIt->second.data.size() >= 8) {
+        for (unsigned i = 0; i < 8; ++i)
+          rootAddr |= static_cast<uint64_t>(globalIt->second.data[i]) << (i * 8);
+      }
+    }
+    if (rootAddr != 0) {
+      unsigned width = std::max(1u, getTypeWidth(funcOp.getResultTypes()[0]));
+      results.push_back(InterpretedValue(llvm::APInt(width, rootAddr)));
+      noteUvmFastPathActionHit("func.body.m_uvm_get_root");
+      return true;
+    }
+  }
+
+  // m_execute_scheduled_forks: no-op. The interpreter handles fork scheduling
+  // directly; this UVM infrastructure method can be safely bypassed.
+  if (matchesMethod("m_execute_scheduled_forks")) {
+    noteUvmFastPathActionHit("func.body.m_execute_scheduled_forks");
+    return true;
+  }
+
   if (matchesMethod("uvm_phase_hopper::try_put") && args.size() >= 2) {
     uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
     uint64_t phaseAddr = args[1].isX() ? 0 : args[1].getUInt64();
@@ -485,6 +542,12 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
       hasPhase = true;
     }
     writePointerToOutAddr(args[1], phaseAddr);
+    // Drop the objection that try_put raised when the phase was enqueued.
+    if (hasPhase && hopperAddr != 0) {
+      auto objIt = phaseObjectionHandles.find(hopperAddr);
+      if (objIt != phaseObjectionHandles.end())
+        __moore_objection_drop(objIt->second, "", 0, "", 0, 1);
+    }
     appendBoolResult(hasPhase);
     noteUvmFastPathActionHit("func.body.phase_hopper.try_get");
     return true;
@@ -521,17 +584,57 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
 
   if (matchesMethod("uvm_phase_hopper::get") && args.size() >= 2) {
     uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
+    // Decline if the output pointer is null/unwritable — the caller passed
+    // an invalid destination and we must not drain the queue.
+    uint64_t outAddr = args[1].isX() ? 0 : args[1].getUInt64();
+    if (outAddr == 0)
+      return false;
     auto it = phaseHopperQueue.find(hopperAddr);
     if (it != phaseHopperQueue.end() && !it->second.empty()) {
       uint64_t phaseAddr = it->second.front();
       it->second.pop_front();
       writePointerToOutAddr(args[1], phaseAddr);
+      // Drop the objection that try_put raised.
+      if (hopperAddr != 0) {
+        auto objIt = phaseObjectionHandles.find(hopperAddr);
+        if (objIt != phaseObjectionHandles.end())
+          __moore_objection_drop(objIt->second, "", 0, "", 0, 1);
+      }
       noteUvmFastPathActionHit("func.body.phase_hopper.get");
       return true;
     }
     if (!waitOnHopperData(hopperAddr))
       return false;
     noteUvmFastPathActionHit("func.body.phase_hopper.get_retry");
+    return true;
+  }
+
+  // Return the objection handle associated with a phase hopper.
+  if (matchesMethod("uvm_phase_hopper::get_objection") && args.size() >= 1 &&
+      funcOp.getNumResults() >= 1) {
+    uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
+    uint64_t objHandle = 0;
+    auto it = phaseObjectionHandles.find(hopperAddr);
+    if (it != phaseObjectionHandles.end())
+      objHandle = static_cast<uint64_t>(it->second);
+    unsigned width = std::max(1u, getTypeWidth(funcOp.getResultTypes()[0]));
+    results.push_back(InterpretedValue(llvm::APInt(width, objHandle)));
+    noteUvmFastPathActionHit("func.body.phase_hopper.get_objection");
+    return true;
+  }
+
+  // Return the total objection count for a handle.
+  if (matchesMethod("get_objection_total") && args.size() >= 1 &&
+      funcOp.getNumResults() >= 1) {
+    uint64_t objHandle = args[0].isX() ? 0 : args[0].getUInt64();
+    int64_t count = 0;
+    if (objHandle != 0)
+      count = __moore_objection_get_count(
+          static_cast<MooreObjectionHandle>(objHandle));
+    unsigned width = std::max(1u, getTypeWidth(funcOp.getResultTypes()[0]));
+    results.push_back(InterpretedValue(
+        llvm::APInt(width, static_cast<uint64_t>(std::max<int64_t>(0, count)))));
+    noteUvmFastPathActionHit("func.body.objection.get_objection_total");
     return true;
   }
 
@@ -1556,8 +1659,17 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
                << calleeName << "\n");
     recordFastPathHit("registry.func.call.report_handler_set_severity_file");
     return true;
-  case UvmFastPathAction::AdjustNamePassthrough:
   case UvmFastPathAction::PrinterNoOp:
+    // Suppress printer body and zero all results.
+    for (Value result : callOp.getResults()) {
+      unsigned width = std::max(1u, getTypeWidth(result.getType()));
+      setValue(procId, result, InterpretedValue(llvm::APInt::getZero(width)));
+    }
+    LLVM_DEBUG(llvm::dbgs()
+               << "  func.call: printer no-op: " << calleeName << "\n");
+    recordFastPathHit("registry.func.call.printer_noop");
+    return true;
+  case UvmFastPathAction::AdjustNamePassthrough:
   case UvmFastPathAction::None:
     break;
   }
@@ -1568,6 +1680,32 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     uint64_t phaseAddr = phaseVal.isX() ? 0 : phaseVal.getUInt64();
     return handleUvmWaitForSelfAndSiblingsToDrop(procId, phaseAddr,
                                                  callOp.getOperation());
+  }
+
+  // Pattern-based printer interception: catches subclass-qualified names
+  // like uvm_pkg::custom_printer::uvm_printer::print_field_int_foo that
+  // the exact StringSwitch above misses.
+  if (calleeName.contains("uvm_printer::print_field_int") ||
+      calleeName.contains("uvm_printer::print_field") ||
+      calleeName.contains("uvm_printer::print_generic_element") ||
+      calleeName.contains("uvm_printer::print_generic") ||
+      calleeName.contains("uvm_printer::print_time") ||
+      calleeName.contains("uvm_printer::print_string") ||
+      calleeName.contains("uvm_printer::print_real") ||
+      calleeName.contains("uvm_printer::print_array_header") ||
+      calleeName.contains("uvm_printer::print_array_footer") ||
+      calleeName.contains("uvm_printer::print_array_range") ||
+      calleeName.contains("uvm_printer::print_object_header") ||
+      calleeName.contains("uvm_printer::print_object")) {
+    for (Value result : callOp.getResults()) {
+      unsigned width = std::max(1u, getTypeWidth(result.getType()));
+      setValue(procId, result, InterpretedValue(llvm::APInt::getZero(width)));
+    }
+    LLVM_DEBUG(llvm::dbgs()
+               << "  func.call: printer no-op (pattern): " << calleeName
+               << "\n");
+    recordFastPathHit("func.call.printer_noop_pattern");
+    return true;
   }
 
   // Optional fast-path for low-severity report traffic. This bypasses

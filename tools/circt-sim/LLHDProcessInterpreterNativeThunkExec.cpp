@@ -2329,9 +2329,12 @@ bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(
           spec.driveEpsilon == 0) {
         scheduler.updateSignalFast(sigId, toggled, sigWidth);
       } else {
-        SimTime driveTime(timeFs + spec.delayFs, 0, 0);
+        // Drive time = current time + drive delay (NOT wait delay).
+        // spec.driveRealFs is the drive's real-time component (usually 0 for eps).
+        // spec.delayFs is the WAIT delay — used only for the process wake time.
+        SimTime driveTime(timeFs, 0, 0);
         if (spec.driveRealFs > 0)
-          driveTime = SimTime(timeFs, 0, 0).advanceTime(spec.driveRealFs);
+          driveTime = driveTime.advanceTime(spec.driveRealFs);
         uint32_t combinedDelta = spec.driveDelta + spec.driveEpsilon;
         if (combinedDelta > 0 && spec.driveRealFs == 0)
           driveTime.deltaStep = combinedDelta;

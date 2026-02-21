@@ -193,6 +193,12 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
   for (LLVM::GlobalOp globalOp : globalOps.globals) {
     StringRef globalName = globalOp.getSymName();
 
+    // Skip globals already allocated (dual-top: initializeGlobals is called
+    // per-module but globals are shared; re-allocating would invalidate
+    // addresses captured by the first module's addressof ops).
+    if (globalAddresses.count(globalName))
+      continue;
+
     LLVM_DEBUG(llvm::dbgs() << "  Found global: " << globalName << "\n");
 
     // Get the global's type to calculate size
