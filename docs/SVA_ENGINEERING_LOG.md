@@ -47,6 +47,10 @@
   - added regression `test/Conversion/ImportVerilog/sva-labeled-module-assert.sv`.
   - revalidated yosys SVA smoke on `basic0[0-3]` after the importer fix
     (`8/8` mode cases passing).
+  - added support for compound sequence match-item assignments on local
+    assertion variables (`+=`, `-=`, `*=`, `/=`, `%=`, bitwise ops, shifts).
+  - added regressions in `test/Conversion/ImportVerilog/sva-local-var.sv`
+    for `z += 1` and `s <<= 1` match-item forms.
 
 - Next steps:
   - implement richer action-block lowering (beyond severity-message extraction),

@@ -114,6 +114,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    assertions (`label: assert property ...`) to avoid invalid multi-block
    `moore.module` IR (`cf.br` split around terminator). This unblocked
    yosys SVA `basic00` and broader `basic0[0-3]` smoke in CIRCT BMC.
+9. **SVA compound match-item local-var assignment support** (Feb 21, 2026):
+   Importer now lowers compound sequence match-item assignments for local
+   assertion variables (e.g. `z += 1`, `s <<= 1`) instead of rejecting them
+   as unsupported assignment kinds.
 
 ### Previously Completed (Iteration 1401, Feb 14, 2026)
 1. **sv-tests 100% coverage**: 952 PASS + 76 XFAIL = 1028/1028. Zero silent skips. Key additions: SVA LTLToCore pipeline, CompRegOp support, AnalysisManager integration, tagged union checker, runner compile-only mode for preprocessing tests.

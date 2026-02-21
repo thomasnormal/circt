@@ -676,10 +676,6 @@ struct AssertionExprVisitor {
       switch (item->kind) {
       case slang::ast::ExpressionKind::Assignment: {
         auto &assign = item->as<slang::ast::AssignmentExpression>();
-        if (assign.isCompound() || assign.isNonBlocking()) {
-          mlir::emitError(loc, "unsupported match item assignment kind");
-          return failure();
-        }
         auto *sym = assign.left().getSymbolReference();
         auto *local =
             sym ? sym->as_if<slang::ast::LocalAssertionVarSymbol>() : nullptr;
@@ -688,9 +684,112 @@ struct AssertionExprVisitor {
                                "assertion variable");
           return failure();
         }
-        auto rhs = context.convertRvalueExpression(assign.right());
-        if (!rhs)
-          return failure();
+        Value rhs;
+        if (assign.isCompound()) {
+          auto *binding = context.lookupAssertionLocalVarBinding(local);
+          if (!binding) {
+            mlir::emitError(loc, "local assertion variable referenced before "
+                                 "assignment");
+            return failure();
+          }
+          auto offset = context.getAssertionSequenceOffset();
+          if (offset < binding->offset) {
+            mlir::emitError(loc, "local assertion variable referenced before "
+                                 "assignment time");
+            return failure();
+          }
+          Value lhs;
+          if (offset == binding->offset) {
+            lhs = binding->value;
+          } else {
+            if (!isa<moore::UnpackedType>(binding->value.getType())) {
+              mlir::emitError(loc, "unsupported local assertion variable type");
+              return failure();
+            }
+            lhs = moore::PastOp::create(builder, loc, binding->value,
+                                        static_cast<int64_t>(offset -
+                                                             binding->offset))
+                      .getResult();
+          }
+          if (!lhs)
+            return failure();
+          const slang::ast::Expression *rhsExpr = &assign.right();
+          if (auto *binary = rhsExpr->as_if<slang::ast::BinaryExpression>()) {
+            if (binary->op == *assign.op &&
+                binary->left().kind ==
+                    slang::ast::ExpressionKind::LValueReference) {
+              rhsExpr = &binary->right();
+            }
+          }
+          rhs = context.convertRvalueExpression(*rhsExpr);
+          if (!rhs)
+            return failure();
+          auto lhsInt = dyn_cast<moore::IntType>(lhs.getType());
+          auto rhsInt = dyn_cast<moore::IntType>(rhs.getType());
+          bool isSigned = assign.left().type && assign.left().type->isSigned();
+          if (!lhsInt || !rhsInt) {
+            mlir::emitError(loc)
+                << "compound match item assignment requires integer operands";
+            return failure();
+          }
+          if (rhs.getType() != lhs.getType())
+            rhs = context.materializeConversion(lhs.getType(), rhs,
+                                                isSigned, loc);
+          if (!rhs)
+            return failure();
+          using slang::ast::BinaryOperator;
+          switch (*assign.op) {
+          case BinaryOperator::Add:
+            rhs = moore::AddOp::create(builder, loc, lhs, rhs).getResult();
+            break;
+          case BinaryOperator::Subtract:
+            rhs = moore::SubOp::create(builder, loc, lhs, rhs).getResult();
+            break;
+          case BinaryOperator::Multiply:
+            rhs = moore::MulOp::create(builder, loc, lhs, rhs).getResult();
+            break;
+          case BinaryOperator::Divide:
+            rhs = isSigned
+                      ? moore::DivSOp::create(builder, loc, lhs, rhs).getResult()
+                      : moore::DivUOp::create(builder, loc, lhs, rhs).getResult();
+            break;
+          case BinaryOperator::Mod:
+            rhs = isSigned
+                      ? moore::ModSOp::create(builder, loc, lhs, rhs).getResult()
+                      : moore::ModUOp::create(builder, loc, lhs, rhs).getResult();
+            break;
+          case BinaryOperator::BinaryAnd:
+            rhs = moore::AndOp::create(builder, loc, lhs, rhs).getResult();
+            break;
+          case BinaryOperator::BinaryOr:
+            rhs = moore::OrOp::create(builder, loc, lhs, rhs).getResult();
+            break;
+          case BinaryOperator::BinaryXor:
+            rhs = moore::XorOp::create(builder, loc, lhs, rhs).getResult();
+            break;
+          case BinaryOperator::LogicalShiftLeft:
+          case BinaryOperator::ArithmeticShiftLeft:
+            rhs = moore::ShlOp::create(builder, loc, lhs, rhs).getResult();
+            break;
+          case BinaryOperator::LogicalShiftRight:
+            rhs = moore::ShrOp::create(builder, loc, lhs, rhs).getResult();
+            break;
+          case BinaryOperator::ArithmeticShiftRight:
+            rhs = isSigned
+                      ? moore::AShrOp::create(builder, loc, lhs, rhs).getResult()
+                      : moore::ShrOp::create(builder, loc, lhs, rhs).getResult();
+            break;
+          default:
+            mlir::emitError(loc, "unsupported compound match item assignment "
+                                 "operator");
+            return failure();
+          }
+        }
+        if (!rhs) {
+          rhs = context.convertRvalueExpression(assign.right());
+          if (!rhs)
+            return failure();
+        }
         if (!isa<moore::UnpackedType>(rhs.getType())) {
           mlir::emitError(loc, "unsupported match item assignment type")
               << rhs.getType();

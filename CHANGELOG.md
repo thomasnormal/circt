@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1540 - February 21, 2026
+
+### [ImportVerilog][SVA] Add compound sequence match-item assignment support for local assertion vars
+
+1. **Implemented compound match-item assignment lowering**  
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - sequence/property local assertion vars in match items now support
+     compound assignment operators instead of hard-failing as unsupported.
+   - added lowering support for arithmetic (`+=`, `-=`, `*=`, `/=`, `%=`),
+     bitwise (`&=`, `|=`, `^=`), and shift (`<<=`, `>>=`, `<<<=`, `>>>=`)
+     operator families on integer local assertion vars.
+   - hardened lowering to avoid `LValueReference` assertion crashes by
+     unwrapping the synthesized RHS shape used by Slang for compound forms.
+
+2. **Added regression coverage**  
+   (`test/Conversion/ImportVerilog/sva-local-var.sv`):
+   - added `prop_compound_match_item` (`z += 1`) and
+     `prop_shift_match_item` (`s <<= 1`) checks.
+   - asserts IR contains the expected arithmetic / shift operations in
+     assertion lowering.
+
+3. **Validation**
+   - `ninja -C build-test circt-verilog circt-translate`: PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-local-var.sv build-test/test/Conversion/ImportVerilog/sva-action-block.sv build-test/test/Conversion/ImportVerilog/sva-labeled-module-assert.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic0[0-3]' utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva`: PASS (`8/8` mode cases).
+
 ## Iteration 1539 - February 21, 2026
 
 ### [ImportVerilog][SVA] Fix module-level labeled concurrent-assert lowering to preserve valid `moore.module` form
