@@ -5200,6 +5200,17 @@ extern "C" int32_t __moore_coverage_get_num_covergroups(void) {
   return static_cast<int32_t>(registeredCovergroups.size());
 }
 
+extern "C" int32_t __moore_coverage_control(int32_t control, int32_t covType) {
+  (void)control;
+  (void)covType;
+  return 0;
+}
+
+extern "C" int32_t __moore_coverage_get_max(int32_t covType) {
+  (void)covType;
+  return 100;
+}
+
 extern "C" void __moore_covergroup_set_goal(void *cg, double goal) {
   auto *covergroup = static_cast<MooreCovergroup *>(cg);
   if (!covergroup)

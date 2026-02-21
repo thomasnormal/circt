@@ -1445,6 +1445,19 @@ double __moore_coverage_get_total(void);
 /// @return Number of covergroups currently registered
 int32_t __moore_coverage_get_num_covergroups(void);
 
+/// Control coverage collection (start/stop/reset).
+///
+/// @param control Control code (0=stop, 1=start, 2=reset)
+/// @param covType Coverage type bitmask
+/// @return 0 on success
+int32_t __moore_coverage_control(int32_t control, int32_t covType);
+
+/// Get the maximum number of bins across all coverpoints.
+///
+/// @param covType Coverage type selector
+/// @return Maximum bin count
+int32_t __moore_coverage_get_max(int32_t covType);
+
 /// Set a coverage goal for a covergroup.
 /// Used for reporting whether coverage targets have been met.
 ///

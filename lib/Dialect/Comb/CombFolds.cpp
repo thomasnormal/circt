@@ -2292,6 +2292,9 @@ bool comb::foldMuxChainWithComparison(
     if (!collectConstantValues(nextMux))
       break;
     nextTreeValue = getTreeValue(nextMux);
+    // Detect cycles: if we've walked back to the root, stop.
+    if (nextTreeValue == rootMux.getResult())
+      break;
   }
 
   auto indexWidth = cast<IntegerType>(indexValue.getType()).getWidth();
