@@ -1545,6 +1545,26 @@ lowerSequenceEventListControl(Context &context, Location loc,
   SmallVector<const slang::ast::SignalEventControl *, 4> equivalentSignals;
   SmallVector<const slang::ast::SignalEventControl *, 4> parsedSignalEvents;
   SmallVector<MultiClockSignalEventInfo, 4> multiClockSignals;
+  std::optional<ltl::ClockEdge> inferredSequenceEdge;
+  Value inferredSequenceClock;
+  bool canInferSequenceClock = !signalEvents.empty();
+  for (auto *signalCtrl : signalEvents) {
+    auto signalEdge = convertEdgeKindLTL(signalCtrl->edge);
+    Value signalClock = context.convertRvalueExpression(signalCtrl->expr);
+    signalClock = context.convertToI1(signalClock);
+    if (!signalClock)
+      return failure();
+    parsedSignalEvents.push_back(signalCtrl);
+    multiClockSignals.push_back(MultiClockSignalEventInfo{
+        signalClock, signalEdge, signalCtrl->iffCondition, &signalCtrl->expr});
+    if (!inferredSequenceEdge) {
+      inferredSequenceEdge = signalEdge;
+      inferredSequenceClock = signalClock;
+    } else if (*inferredSequenceEdge != signalEdge ||
+               !equivalentClockSignals(inferredSequenceClock, signalClock)) {
+      canInferSequenceClock = false;
+    }
+  }
   bool useGenericSequenceLabel =
       !signalEvents.empty() && sequenceEvents.size() == 1;
 
@@ -1601,12 +1621,18 @@ lowerSequenceEventListControl(Context &context, Location loc,
                                                 clockedValue);
         }
       }
+      if (!clockedValue.getDefiningOp<ltl::ClockOp>() && canInferSequenceClock &&
+          inferredSequenceEdge)
+        clockedValue = ltl::ClockOp::create(builder, loc, clockedValue,
+                                            *inferredSequenceEdge,
+                                            inferredSequenceClock);
     }
 
     auto clockOp = clockedValue.getDefiningOp<ltl::ClockOp>();
     if (!clockOp)
       return mlir::emitError(loc)
-             << "sequence event control requires a clocking event";
+             << "sequence event control requires a clocking event (or a "
+                "uniform signal event clock for inference)";
 
     auto sequenceEdge = signalCtrl->edge == slang::ast::EdgeKind::None
                             ? clockOp.getEdge()
@@ -1653,19 +1679,13 @@ lowerSequenceEventListControl(Context &context, Location loc,
     clockedValues.push_back(clockedValue);
   }
 
-  for (auto *signalCtrl : signalEvents) {
-    auto signalEdge = convertEdgeKindLTL(signalCtrl->edge);
-    Value signalClock = context.convertRvalueExpression(signalCtrl->expr);
-    signalClock = context.convertToI1(signalClock);
-    if (!signalClock)
-      return failure();
+  for (const auto &signalEvent : multiClockSignals) {
+    auto signalEdge = signalEvent.edge;
+    Value signalClock = signalEvent.clock;
     if (sameClockAndEdge &&
         (signalEdge != *commonEdge ||
          !equivalentClockSignals(commonClock, signalClock)))
       sameClockAndEdge = false;
-    parsedSignalEvents.push_back(signalCtrl);
-    multiClockSignals.push_back(MultiClockSignalEventInfo{
-        signalClock, signalEdge, signalCtrl->iffCondition, &signalCtrl->expr});
   }
   if (sameClockAndEdge)
     equivalentSignals = parsedSignalEvents;

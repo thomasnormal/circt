@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1552 - February 21, 2026
+
+### [ImportVerilog][SVA] Infer sequence clock in mixed sequence+signal event lists
+
+1. **Added mixed-event clock inference for unclocked sequence event controls**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - when lowering mixed event lists containing sequence/property-like events
+     plus signal events, unclocked sequence events can now inherit clocking
+     from signal events if the signal-event clock is uniform
+     (same edge + equivalent clock signal).
+   - this closes forms like:
+     - `always @(s or posedge clk) ...`
+       where `s` is an unclocked sequence.
+   - if no explicit/default sequence clock exists and signal clocks are not
+     uniform, lowering still fails with a targeted diagnostic.
+
+2. **Added regression coverage**
+   - `test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
+     - verifies mixed event-list lowering now succeeds for unclocked `s` plus
+       `posedge clk` and emits event wait/detect structure.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv` (`real=0.039s`, `user=0.002s`, `sys=0.006s`).
+
 ## Iteration 1551 - February 21, 2026
 
 ### [ImportVerilog][SVA] Deduplicate repeated assertion clock-event list entries

@@ -520,3 +520,31 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time BMC_SMOKE_ONLY=1 TEST_FILTER='^counter$' utils/run_yosys_sva_circt_bmc.sh` (`real=2.233s`)
+
+- Iteration update (mixed sequence+signal event-list clock inference):
+  - realization:
+    - mixed event-list lowering required each sequence event to already be
+      clocked (explicitly or via default clocking), so patterns like
+      `always @(s or posedge clk)` with unclocked `s` failed with
+      `sequence event control requires a clocking event`.
+    - commercial tools typically infer sequence sampling from the uniform
+      signal-event clock in this form.
+  - implemented:
+    - in `lowerSequenceEventListControl`, signal events are pre-parsed and
+      tracked as concrete `(clock, edge)` tuples.
+    - added inference path for unclocked sequence events: if signal events are
+      uniform (same edge + equivalent clock signal), synthesize
+      `ltl.clock(sequence, inferred_edge, inferred_clock)` before sequence
+      event lowering.
+    - retained failure for non-uniform signal clocks with updated targeted
+      diagnostic.
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv` (`real=0.039s`)
