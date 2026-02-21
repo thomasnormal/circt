@@ -311,3 +311,17 @@
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv` (`~0.01s`)
+
+- Iteration update (strong/weak wrapper semantic split):
+  - realization:
+    - `strong(...)` and `weak(...)` wrappers were lowered identically.
+  - implemented:
+    - `strong(expr)` now lowers as `ltl.and(expr, ltl.eventually expr)`.
+    - `weak(expr)` remains direct lowering.
+    - updated regression:
+      - `test/Conversion/ImportVerilog/sva-strong-weak.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-IMPORT`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-MOORE`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-strong-weak.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
