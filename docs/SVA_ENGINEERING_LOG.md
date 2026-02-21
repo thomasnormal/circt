@@ -37,6 +37,16 @@
   - the action-block path did not emit a warning in the common
     `assert property (...) else $error("...")` shape; diagnostics were silently
     dropped.
+  - module-level labeled concurrent assertions (`label: assert property ...`)
+    could be lowered after module terminator setup, which split `moore.module`
+    into multiple blocks and broke verification.
+
+- Additional closure in this iteration:
+  - fixed module-level concurrent assertion insertion to avoid post-terminator
+    block splitting in `moore.module`.
+  - added regression `test/Conversion/ImportVerilog/sva-labeled-module-assert.sv`.
+  - revalidated yosys SVA smoke on `basic0[0-3]` after the importer fix
+    (`8/8` mode cases passing).
 
 - Next steps:
   - implement richer action-block lowering (beyond severity-message extraction),

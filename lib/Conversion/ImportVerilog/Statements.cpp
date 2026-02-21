@@ -2427,6 +2427,15 @@ struct StmtVisitor {
   // Handle concurrent assertion statements.
   LogicalResult visit(const slang::ast::ConcurrentAssertionStatement &stmt) {
     auto loc = context.convertLocation(stmt.sourceRange);
+    if (auto *block = builder.getInsertionBlock()) {
+      if (isa<moore::SVModuleOp>(block->getParentOp())) {
+        if (block->mightHaveTerminator()) {
+          if (auto output =
+                  dyn_cast_or_null<moore::OutputOp>(block->getTerminator()))
+            builder.setInsertionPoint(output);
+        }
+      }
+    }
     auto *insertionBlock = builder.getInsertionBlock();
     auto enclosingProc = insertionBlock
                                  ? dyn_cast_or_null<moore::ProcedureOp>(

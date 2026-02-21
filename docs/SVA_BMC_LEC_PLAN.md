@@ -144,6 +144,9 @@ Items are grouped by pipeline stage.
   temporal-property form (`@property_name` when lowering yields `!ltl.property`).
 - Sequence event controls in event lists do not currently support explicit edge
   qualifiers (only sequence/property event form without edge qualifiers).
+- Module-level labeled concurrent assertions now preserve single-block module
+  structure during import (no invalid `cf.br` block-splitting around
+  `moore.output` terminators).
 - Some assertion port timing-control value paths still carry unsupported
   diagnostics in generic expression lowering; these paths should be retired or
   completed once all legal event-typed uses are covered.
