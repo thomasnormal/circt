@@ -12,8 +12,6 @@
 #include "slang/ast/expressions/OperatorExpressions.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "ImportVerilogInternals.h"
-#include "circt/Dialect/Comb/CombOps.h"
-#include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Support/LLVM.h"
@@ -1259,20 +1257,16 @@ struct AssertionExprVisitor {
     auto selector = context.convertRvalueExpression(expr.expr);
     if (!selector)
       return {};
-    selector = context.convertToBool(selector);
-    selector = context.convertToI1(selector);
+    selector = context.convertToSimpleBitVector(selector);
     if (!selector)
       return {};
 
     Value result;
-    if (expr.defaultCase) {
+    if (expr.defaultCase)
       result = context.convertAssertionExpression(*expr.defaultCase, loc,
                                                   /*applyDefaults=*/false);
-      if (!result)
-        return {};
-    } else {
-      result = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
-    }
+    if (expr.defaultCase && !result)
+      return {};
 
     for (auto itemIt = expr.items.rbegin(); itemIt != expr.items.rend();
          ++itemIt) {
@@ -1288,13 +1282,21 @@ struct AssertionExprVisitor {
         auto caseValue = context.convertRvalueExpression(*caseExpr);
         if (!caseValue)
           return {};
-        caseValue = context.convertToBool(caseValue);
-        caseValue = context.convertToI1(caseValue);
+        caseValue = context.convertToSimpleBitVector(caseValue);
         if (!caseValue)
           return {};
-        Value match = comb::ICmpOp::create(builder, loc,
-                                           comb::ICmpPredicate::eq, selector,
-                                           caseValue);
+        if (caseValue.getType() != selector.getType()) {
+          caseValue = context.materializeConversion(
+              selector.getType(), caseValue, /*isSigned=*/false,
+              context.convertLocation(caseExpr->sourceRange));
+          if (!caseValue)
+            return {};
+        }
+        Value match = moore::EqOp::create(builder, loc, selector, caseValue);
+        match = context.convertToBool(match);
+        match = context.convertToI1(match);
+        if (!match)
+          return {};
         if (!groupCond)
           groupCond = match;
         else
@@ -1304,9 +1306,14 @@ struct AssertionExprVisitor {
       if (!groupCond)
         continue;
 
-      auto notCond = ltl::NotOp::create(builder, loc, groupCond);
       auto condAndBody = ltl::AndOp::create(
           builder, loc, SmallVector<Value, 2>{groupCond, body});
+      if (!result) {
+        result = condAndBody;
+        continue;
+      }
+
+      auto notCond = ltl::NotOp::create(builder, loc, groupCond);
       auto notCondAndElse = ltl::AndOp::create(
           builder, loc, SmallVector<Value, 2>{notCond, result});
       result = ltl::OrOp::create(builder, loc,
@@ -1314,6 +1321,8 @@ struct AssertionExprVisitor {
                                                        notCondAndElse});
     }
 
+    if (!result)
+      result = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
     return result;
   }
 

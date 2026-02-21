@@ -715,6 +715,8 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - regressions:
     - `test/Conversion/ImportVerilog/sva-case-property.sv`
     - `test/Tools/circt-bmc/sva-case-property-e2e.sv`
+  - `case` property lowering now uses bitvector selector equality for
+    multi-bit selectors (not boolean-only matching).
 
 ## Ownership and References
 

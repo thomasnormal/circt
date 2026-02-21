@@ -1190,3 +1190,5 @@ verilator-verification, and yosys corpora).
     `sync_reject_on`) are now lowered instead of rejected.
   - `strong(...)` / `weak(...)` property wrappers are now accepted and lowered.
   - `case` property expressions are now accepted and lowered.
+  - `case` property selector matching now preserves multi-bit bitvector
+    equality semantics.
