@@ -17,6 +17,7 @@
 #ifndef CIRCT_TOOLS_CIRCT_SIM_LLHDPROCESSINTERPRETER_H
 #define CIRCT_TOOLS_CIRCT_SIM_LLHDPROCESSINTERPRETER_H
 
+#include "AOTProcessCompiler.h"
 #include "LLHDProcessInterpreterBytecode.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
@@ -76,7 +77,9 @@ namespace sim {
 class JITBlockCompiler;
 struct JITBlockSpec;
 class JITCompileManager;
+struct JITRuntimeContext;
 struct ProcessThunkExecutionState;
+class UcontextProcessManager;
 
 //===----------------------------------------------------------------------===//
 // InterpretedValue - Runtime value representation
@@ -726,6 +729,11 @@ public:
 
   /// Dump process execution state for diagnostics.
   void dumpProcessStates(llvm::raw_ostream &os) const;
+
+  /// Whether profile summary at exit is enabled.
+  bool isProfileSummaryAtExitEnabled() const {
+    return profileSummaryAtExitEnabled;
+  }
 
   /// Dump operation execution statistics.
   void dumpOpStats(llvm::raw_ostream &os, size_t topN) const;
@@ -2296,6 +2304,23 @@ private:
   /// references across inserts and erases.
   std::map<ProcessId, ProcessExecutionState> processStates;
 
+  /// Per-process execution model from classifyProcess(). Populated during
+  /// registerProcesses() for llhd.process ops. Processes not in this map
+  /// (seq.initial, llhd.combinational, fork children) use default interpreter
+  /// dispatch.
+  llvm::DenseMap<ProcessId, ExecModel> processExecModels;
+
+  /// Per-process callback plan for callback-classified processes.
+  /// Only populated for processes with isCallback() == true.
+  /// Stores the static sensitivity list and frame layout.
+  llvm::DenseMap<ProcessId, CallbackPlan> processCallbackPlans;
+
+  /// Counter for callback dispatch activations (diagnostics).
+  uint64_t callbackDispatchCount = 0;
+
+  /// Counter for callback fast-resuspend activations (diagnostics).
+  uint64_t callbackFastResuspendCount = 0;
+
   /// Shared function result cache across all processes for pure, high-frequency
   /// UVM/domain getters. This complements per-process funcResultCache to avoid
   /// repeating identical graph/singleton queries in sibling processes.
@@ -3034,6 +3059,9 @@ private:
   /// mode (1=enabled, 0=disabled). Default is enabled (1).
   std::map<std::string, int32_t> randModeState;
 
+  /// Coverage sampling control: when true, sample() calls are no-ops.
+  bool coverageStopped = false;
+
   /// Per-object constraint_mode state. Key is "classPtr:constraintName",
   /// value is mode (1=enabled, 0=disabled). Default is enabled (1).
   std::map<std::string, int32_t> constraintModeState;
@@ -3391,6 +3419,93 @@ private:
   /// Interpret an llvm.mlir.addressof operation.
   mlir::LogicalResult interpretLLVMAddressOf(ProcessId procId,
                                               mlir::LLVM::AddressOfOp addrOfOp);
+
+  //===--------------------------------------------------------------------===//
+  // Call-indirect cache support
+  //===--------------------------------------------------------------------===//
+
+  /// Whether the direct dispatch cache is disabled via env var.
+  bool callIndirectDirectDispatchCacheDisabled = false;
+
+  /// Resolution cache: maps funcAddr to resolved callee name.
+  llvm::DenseMap<uint64_t, std::string> callIndirectResolutionCache;
+
+  /// Dispatch cache: maps funcAddr to resolved FuncOp.
+  llvm::DenseMap<uint64_t, mlir::func::FuncOp> callIndirectDispatchCache;
+
+  /// Resolution cache stats.
+  uint64_t ciResolutionCacheInstalls = 0;
+  uint64_t ciResolutionCacheHits = 0;
+  uint64_t ciResolutionCacheMisses = 0;
+  uint64_t ciResolutionCacheDeopts = 0;
+
+  /// Dispatch cache stats.
+  uint64_t ciDispatchCacheInstalls = 0;
+  uint64_t ciDispatchCacheHits = 0;
+  uint64_t ciDispatchCacheMisses = 0;
+  uint64_t ciDispatchCacheDeopts = 0;
+
+  //===--------------------------------------------------------------------===//
+  // Function symbol lookup cache stats
+  //===--------------------------------------------------------------------===//
+
+  uint64_t funcLookupCacheHits = 0;
+  uint64_t funcLookupCacheMisses = 0;
+  uint64_t funcLookupCacheNegativeHits = 0;
+
+  //===--------------------------------------------------------------------===//
+  // Analysis port terminal cache
+  //===--------------------------------------------------------------------===//
+
+  /// Cache mapping analysis port address to its terminal count.
+  llvm::DenseMap<uint64_t, int64_t> analysisPortTerminalCache;
+
+  uint64_t analysisPortTerminalCacheHits = 0;
+  uint64_t analysisPortTerminalCacheMisses = 0;
+  uint64_t analysisPortTerminalCacheInvalidations = 0;
+
+  //===--------------------------------------------------------------------===//
+  // Dynamic string registry capping
+  //===--------------------------------------------------------------------===//
+
+  uint64_t dynamicStringMaxEntries = 0;
+  uint64_t dynamicStringRegistrations = 0;
+  uint64_t dynamicStringUpdates = 0;
+  uint64_t dynamicStringEvictions = 0;
+
+  //===--------------------------------------------------------------------===//
+  // AOT (Ahead-of-Time) Compilation Support
+  //===--------------------------------------------------------------------===//
+
+  /// Whether AOT compilation is enabled (via CIRCT_SIM_AOT=1).
+  bool aotEnabled = false;
+
+  /// The AOT process compiler (created lazily when aotEnabled).
+  std::unique_ptr<AOTProcessCompiler> aotCompiler;
+
+  /// Ucontext manager for AOT coroutine processes.
+  std::unique_ptr<UcontextProcessManager> ucontextMgr;
+
+  /// JIT runtime context for AOT-compiled code callbacks.
+  std::unique_ptr<JITRuntimeContext> aotJitCtx;
+
+  /// Set of processes compiled as coroutines (need ucontext resume).
+  llvm::DenseSet<ProcessId> aotCompiledProcesses;
+
+  /// Map of processes compiled as callbacks → their entry function pointer.
+  llvm::DenseMap<ProcessId, void *> aotCallbackFuncs;
+
+  /// Set of callback processes that haven't had their first activation yet.
+  llvm::DenseSet<ProcessId> aotCallbackFirstActivation;
+
+  /// Compile all eligible processes via AOT batch compilation.
+  void aotCompileProcesses();
+
+  /// Execute an AOT-compiled coroutine process (resume via ucontext).
+  void executeAOTProcess(ProcessId procId);
+
+  /// Execute an AOT-compiled callback process (direct function call).
+  void executeAOTCallbackProcess(ProcessId procId);
 };
 
 } // namespace sim

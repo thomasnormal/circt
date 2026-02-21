@@ -249,7 +249,10 @@ void ProcessScheduler::addSensitivity(ProcessId id, SignalId signalId,
     return;
 
   proc->getSensitivityList().addEdge(signalId, edge);
-  signalToProcesses[signalId].push_back(proc);
+  // Track in registeredSignals to prevent double-registration if
+  // suspendProcessForEvents() is later called for this signal.
+  if (proc->registeredSignals.insert(signalId).second)
+    signalToProcesses[signalId].push_back(proc);
 
   LLVM_DEBUG(llvm::dbgs() << "Added sensitivity for process " << id
                           << " to signal " << signalId << " edge="
@@ -295,6 +298,8 @@ SignalId ProcessScheduler::registerSignal(const std::string &name,
     signalIsDirect[id] = true;
     signalMemory[id] = 0;
   }
+  if (id >= (unsigned)signalTriggeredThisDelta.size())
+    signalTriggeredThisDelta.resize(id + 1, false);
 
   LLVM_DEBUG(llvm::dbgs() << "Registered signal '" << name << "' with ID " << id
                           << " width=" << width << "\n");
@@ -322,6 +327,8 @@ SignalId ProcessScheduler::registerSignal(const std::string &name,
     signalIsDirect[id] = true;
     signalMemory[id] = 0;
   }
+  if (id >= (unsigned)signalTriggeredThisDelta.size())
+    signalTriggeredThisDelta.resize(id + 1, false);
 
   LLVM_DEBUG(llvm::dbgs() << "Registered signal '" << name << "' with ID " << id
                           << " width=" << width
@@ -417,6 +424,13 @@ void ProcessScheduler::updateSignal(SignalId signalId,
   SignalValue normalizedValue =
       normalizeSignalValueWidth(newValue, signalWidth);
   SignalValue oldValue = sigState.getCurrentValue();
+
+  // E1b: skip update and fanout if value didn't change.
+  if (oldValue == normalizedValue) {
+    ++stats.signalDedupSkips;
+    return;
+  }
+
   (void)sigState.updateValue(normalizedValue);
 
   // Keep direct signal memory in sync for narrow signals.
@@ -473,6 +487,14 @@ void ProcessScheduler::updateSignalFast(SignalId signalId, uint64_t rawValue,
                                         uint32_t width) {
   auto &sigState = signalStates[signalId];
   ++stats.signalUpdates;
+
+  // E1b: skip update and fanout if value didn't change (check direct memory
+  // before writing).
+  if (signalId < signalIsDirect.size() && signalIsDirect[signalId] &&
+      signalMemory[signalId] == rawValue) {
+    ++stats.signalDedupSkips;
+    return;
+  }
 
   // Keep direct signal memory in sync for narrow signals.
   if (signalId < signalIsDirect.size() && signalIsDirect[signalId])
@@ -737,6 +759,17 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
   if (actualEdge == EdgeType::None)
     return;
 
+  // Per-delta signal-level dedup: if this signal's fanout was already walked
+  // in the current delta, all sensitive processes are already in the ready
+  // queue (scheduleProcess's inReadyQueue flag prevents double-scheduling).
+  if (signalId < (unsigned)signalTriggeredThisDelta.size()) {
+    if (signalTriggeredThisDelta[signalId]) {
+      ++stats.signalDedupSkips;
+      return;
+    }
+    signalTriggeredThisDelta.set(signalId);
+  }
+
   bool traceI3CSignal = traceI3CSignal31 && (signalId == 31 || signalId == 45);
   if (traceI3CSignal) {
     llvm::errs() << "[I3C-SIG31] edge=" << getEdgeTypeName(actualEdge)
@@ -877,11 +910,11 @@ void ProcessScheduler::resuspendProcessFast(ProcessId id) {
   Process *proc = getProcess(id);
   if (!proc)
     return;
-  // Set state back to Waiting without rebuilding the sensitivity list.
-  // The waiting sensitivity and signal-to-process mappings are unchanged
-  // from the previous suspend (bytecode processes always wait on the
-  // same signals).
-  proc->setState(ProcessState::Waiting);
+  // Fast re-arm: copy the permanent sensitivity list into the waiting
+  // sensitivity so that triggerSensitiveProcesses() (which checks
+  // getWaitingSensitivity() for Waiting-state processes) can match edges.
+  // The signal-to-process mappings are unchanged from registerProcess().
+  proc->setWaitingFor(proc->getSensitivityList());
 }
 
 void ProcessScheduler::queueSignalUpdateFast(SignalId signalId, uint64_t value,
@@ -1013,6 +1046,7 @@ void ProcessScheduler::initialize() {
   size_t numSigs = signalStates.size();
   signalsChangedThisDelta.reserve(numSigs);
   signalsChangedThisDeltaBits.resize(numSigs, false);
+  signalTriggeredThisDelta.resize((unsigned)numSigs, false);
   lastDeltaSignals.reserve(numSigs);
   processesExecutedThisDelta.reserve(numProcs);
   lastDeltaProcesses.reserve(numProcs);
@@ -1035,6 +1069,7 @@ bool ProcessScheduler::executeDeltaCycle() {
     if (s < signalsChangedThisDeltaBits.size())
       signalsChangedThisDeltaBits[s] = false;
   signalsChangedThisDelta.clear();
+  signalTriggeredThisDelta.reset();
   processesExecutedThisDelta.clear();
   triggerSignalsThisDelta.clear();
   triggerTimesThisDelta.clear();
@@ -1412,6 +1447,7 @@ void ProcessScheduler::reset() {
   signalsChangedThisDelta.clear();
   std::fill(signalsChangedThisDeltaBits.begin(),
             signalsChangedThisDeltaBits.end(), false);
+  signalTriggeredThisDelta.reset();
   lastDeltaSignals.clear();
   processesExecutedThisDelta.clear();
   lastDeltaProcesses.clear();

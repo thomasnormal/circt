@@ -11,10 +11,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "AOTProcessCompiler.h"
+#include "UcontextProcess.h"
 #include "LLHDProcessInterpreter.h"
 #include "LLHDProcessInterpreterStorePatterns.h"
 #include "JITBlockCompiler.h"
-#include "JITCompileManager.h"
 
 // Global crash diagnostic — last LLVM callee name
 char g_lastLLVMCallCalleeBuf[256] = {};
@@ -522,6 +523,10 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   uvmSeqQueueCacheEvictOnCap =
       envFlagEnabled("CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_EVICT_ON_CAP");
   maxFunctionOps = envUint64Value("CIRCT_SIM_MAX_FUNC_OPS", 0);
+  callIndirectDirectDispatchCacheDisabled =
+      envFlagEnabled("CIRCT_SIM_DISABLE_CALL_INDIRECT_DIRECT_DISPATCH_CACHE");
+  dynamicStringMaxEntries =
+      envUint64Value("CIRCT_SIM_DYNAMIC_STRING_MAX_ENTRIES", 0);
 
   // Register a post-Active callback to apply conditional process drive values
   // (from always_comb / always @(*) blocks) so that firreg processes in the
@@ -570,6 +575,58 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
 // JITBlockSpec, and BytecodeProgram are complete types when unique_ptr
 // destructors fire.
 LLHDProcessInterpreter::~LLHDProcessInterpreter() = default;
+
+bool LLHDProcessInterpreter::isAhbMonitorSampleFunctionForTrace(
+    llvm::StringRef funcName) {
+  return funcName.contains("ahb_monitor") && funcName.contains("sample");
+}
+
+bool LLHDProcessInterpreter::tryReadStringKey(ProcessId procId,
+                                               uint64_t strPtrVal,
+                                               int64_t strLen,
+                                               std::string &out) {
+  // Check dynamicStrings first.
+  auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtrVal));
+  if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+      dynIt->second.second > 0) {
+    out.assign(dynIt->second.first, dynIt->second.second);
+    return true;
+  }
+  // Fall back to interpreter memory.
+  if (strPtrVal == 0 || strLen <= 0)
+    return false;
+  uint64_t offset = 0;
+  MemoryBlock *block = findBlockByAddress(strPtrVal, offset);
+  if (!block || !block->initialized ||
+      block->data.size() < offset + static_cast<uint64_t>(strLen))
+    return false;
+  out.assign(reinterpret_cast<const char *>(block->data.data() + offset),
+             static_cast<size_t>(strLen));
+  return true;
+}
+
+std::string LLHDProcessInterpreter::readMooreStringStruct(
+    ProcessId procId, InterpretedValue packedValue) {
+  // Decode !llvm.struct<(ptr, i64)> — LLVM struct fields are low-to-high bits:
+  //   field 0 (ptr) = bits [63:0], field 1 (len/i64) = bits [127:64]
+  unsigned totalWidth = packedValue.getWidth();
+  if (totalWidth < 128 || packedValue.isX())
+    return {};
+  const APInt &bits = packedValue.getAPInt();
+  uint64_t ptr = bits.extractBits(64, 0).getZExtValue();
+  uint64_t len = bits.extractBits(64, 64).getZExtValue();
+  if (ptr == 0 || len == 0)
+    return {};
+  std::string result;
+  if (tryReadStringKey(procId, ptr, static_cast<int64_t>(len), result))
+    return result;
+  return {};
+}
+
+std::string LLHDProcessInterpreter::readMooreStringStruct(
+    ProcessId procId, mlir::Value operand) {
+  return readMooreStringStruct(procId, getValue(procId, operand));
+}
 
 void LLHDProcessInterpreter::setCompileModeEnabled(bool enable) {
   compileModeEnabled = enable;
@@ -3931,6 +3988,53 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
 
   registerProcessState(procId, std::move(state));
   opToProcessId[processOp.getOperation()] = procId;
+
+  // Classify the process into an ExecModel using the 6-step algorithm.
+  // valueToSignal is fully populated by registerSignals() which runs first.
+  CallbackPlan plan =
+      AOTProcessCompiler::classifyProcess(processOp, valueToSignal);
+  processExecModels[procId] = plan.model;
+
+  if (plan.isCallback()) {
+    processCallbackPlans[procId] = std::move(plan);
+    const auto &storedPlan = processCallbackPlans[procId];
+
+    // For CallbackStaticObserved, register permanent sensitivity once.
+    // The scheduler will wake this process on any change to these signals
+    // without rebuilding the sensitivity list on each activation.
+    if (storedPlan.model == ExecModel::CallbackStaticObserved) {
+      for (auto &[sigId, edge] : storedPlan.staticSignals) {
+        if (sigId != 0)
+          scheduler.addSensitivity(procId, sigId, edge);
+      }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "[callback] proc=" << procId
+                 << " registered permanent sensitivity ("
+                 << storedPlan.staticSignals.size() << " signals)\n");
+    }
+  }
+
+  LLVM_DEBUG({
+    const char *modelStr = "Coroutine";
+    switch (plan.model) {
+    case ExecModel::CallbackStaticObserved:
+      modelStr = "CallbackStaticObserved";
+      break;
+    case ExecModel::CallbackDynamicWait:
+      modelStr = "CallbackDynamicWait";
+      break;
+    case ExecModel::CallbackTimeOnly:
+      modelStr = "CallbackTimeOnly";
+      break;
+    case ExecModel::OneShotCallback:
+      modelStr = "OneShotCallback";
+      break;
+    case ExecModel::Coroutine:
+      break;
+    }
+    llvm::dbgs() << "[callback] proc=" << procId << " name=" << name
+                 << " model=" << modelStr << "\n";
+  });
 
   LLVM_DEBUG(maybeTraceRegisteredTopProcess(name, procId));
 
@@ -7743,6 +7847,15 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     }
   }
 
+  // Track callback-classified process activations for diagnostics.
+  {
+    auto modelIt = processExecModels.find(procId);
+    if (modelIt != processExecModels.end() &&
+        modelIt->second != ExecModel::Coroutine) {
+      ++callbackDispatchCount;
+    }
+  }
+
   // Direct fast paths for known hot process loop shapes. These execute
   // without compile-budgeted thunk installation and avoid repeated
   // compile-mode missing-thunk deopts for common AVIP clock loops.
@@ -7771,69 +7884,6 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       }
     }
   }
-  if (compileModeEnabled && jitCompileManager && compilePathEligible) {
-    JITDeoptStateSnapshot deoptSnapshot;
-    bool hasDeoptSnapshot = snapshotJITDeoptState(procId, deoptSnapshot);
-    auto noteProcessDeoptReason = [&](JITCompileManager::DeoptReason reason,
-                                      llvm::StringRef detail = llvm::StringRef()) {
-      if (jitCompileManager)
-        jitCompileManager->noteProcessDeoptOnce(procId, reason);
-      if (!jitDeoptReasonByProcess.count(procId))
-        jitDeoptReasonByProcess[procId] =
-            JITCompileManager::getDeoptReasonName(reason).str();
-      if (!detail.empty() && !jitDeoptDetailByProcess.count(procId))
-        jitDeoptDetailByProcess[procId] = detail.str();
-    };
-    auto maybeInvalidateThunkForNoCachePolicy = [&]() {
-      if (llvm::StringRef(jitCompileManager->getConfig().cachePolicy)
-              .equals_insensitive("none"))
-        jitCompileManager->invalidateProcessThunk(procId);
-    };
-
-    ProcessThunkExecutionState thunkState;
-    thunkState.resumeToken = state.jitThunkResumeToken;
-    if (jitCompileManager->executeProcessThunk(procId, thunkState)) {
-      if (!thunkState.deoptRequested) {
-        state.jitThunkResumeToken = thunkState.resumeToken;
-        maybeInvalidateThunkForNoCachePolicy();
-        return;
-      }
-      if (hasDeoptSnapshot && thunkState.restoreSnapshotOnDeopt)
-        (void)restoreJITDeoptState(procId, deoptSnapshot);
-      noteProcessDeoptReason(JITCompileManager::DeoptReason::GuardFailed,
-                             thunkState.deoptDetail);
-    } else {
-      std::string installDeoptDetail;
-      ProcessThunkInstallResult installResult =
-          tryInstallProcessThunk(procId, state, &installDeoptDetail);
-      if (installResult == ProcessThunkInstallResult::Installed) {
-        ProcessThunkExecutionState installedThunkState;
-        installedThunkState.resumeToken = state.jitThunkResumeToken;
-        if (jitCompileManager->executeProcessThunk(procId, installedThunkState)) {
-          if (!installedThunkState.deoptRequested) {
-            state.jitThunkResumeToken = installedThunkState.resumeToken;
-            maybeInvalidateThunkForNoCachePolicy();
-            return;
-          }
-          if (hasDeoptSnapshot && installedThunkState.restoreSnapshotOnDeopt)
-            (void)restoreJITDeoptState(procId, deoptSnapshot);
-          noteProcessDeoptReason(JITCompileManager::DeoptReason::GuardFailed,
-                                 installedThunkState.deoptDetail);
-        } else {
-          installResult = ProcessThunkInstallResult::MissingThunk;
-        }
-      }
-
-      if (installResult != ProcessThunkInstallResult::Installed) {
-        JITCompileManager::DeoptReason reason =
-            JITCompileManager::DeoptReason::MissingThunk;
-        if (installResult == ProcessThunkInstallResult::UnsupportedOperation)
-          reason = JITCompileManager::DeoptReason::UnsupportedOperation;
-        noteProcessDeoptReason(reason, installDeoptDetail);
-      }
-    }
-  }
-
   // Cache the active process state to avoid repeated std::map lookups
   // in executeStep/getValue/setValue on every operation.
   ProcessId savedActiveProcessId = activeProcessId;
@@ -8210,6 +8260,20 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
         targetTime, SchedulingRegion::Active,
         Event([this, procId]() { resumeProcess(procId); }));
   }
+
+  // Debug tripwire: detect misclassification of callback processes.
+  // If a process was classified as a callback but didn't end up in a waiting
+  // state (e.g., it halted, was killed, or got stuck), log a warning.
+  LLVM_DEBUG({
+    auto modelIt = processExecModels.find(procId);
+    if (modelIt != processExecModels.end() &&
+        modelIt->second != ExecModel::Coroutine) {
+      if (state.halted && !state.isInitialBlock) {
+        llvm::dbgs() << "[callback] MISCLASSIFICATION TRIPWIRE: proc="
+                     << procId << " classified as callback but halted\n";
+      }
+    }
+  });
 
   // Restore the previously active process state.
   activeProcessId = savedActiveProcessId;
@@ -15028,6 +15092,22 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
         Event([this, procId]() { resumeProcess(procId); }));
   }
 
+  // Callback fast-resuspend: for CallbackStaticObserved processes, the
+  // sensitivity list was registered permanently during registerProcess().
+  // Skip the expensive sensitivity list rebuild and just flip the process
+  // state back to Waiting.
+  if (!hadDelay) {
+    auto cbIt = processCallbackPlans.find(procId);
+    if (cbIt != processCallbackPlans.end() &&
+        cbIt->second.model == ExecModel::CallbackStaticObserved) {
+      scheduler.resuspendProcessFast(procId);
+      ++callbackFastResuspendCount;
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  [callback] fast-resuspend proc=" << procId << "\n");
+      return success();
+    }
+  }
+
   // Handle event-based wait (sensitivity list)
   // Note: The 'observed' operands are probe results (values), not signal refs.
   // We need to trace back to find the original signal by looking at the
@@ -16537,11 +16617,16 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   // Intercept direct UVM name getters to avoid recursive string construction in
   // startup paths. Apply this even when the return value is unused.
+  // Only match UVM-specific name getters (uvm_pkg:: or uvm_ prefix) to avoid
+  // intercepting user-defined functions like "base::get_name".
   bool isUvmGetNameCall =
+      (calleeName.contains("uvm_pkg::") || calleeName.contains("uvm_")) &&
       calleeName.contains("get_name") &&
       !calleeName.contains("get_name_constraint") &&
       !calleeName.contains("get_name_enabled");
-  bool isUvmGetFullNameCall = calleeName.contains("get_full_name");
+  bool isUvmGetFullNameCall =
+      (calleeName.contains("uvm_pkg::") || calleeName.contains("uvm_")) &&
+      calleeName.contains("get_full_name");
   if (isUvmGetNameCall || isUvmGetFullNameCall) {
     if (callOp.getNumResults() < 1)
       return success();
@@ -16969,6 +17054,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end()) {
         conns.push_back(providerAddr);
         invalidateUvmSequencerQueueCache(selfAddr);
+        // Invalidate analysis port terminal cache for this port.
+        if (analysisPortTerminalCache.erase(selfAddr))
+          ++analysisPortTerminalCacheInvalidations;
       }
     }
     // [SEQ-CONN] func.call connect diagnostic removed
@@ -16985,7 +17073,16 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     uint64_t rawSelfAddr = selfVal.isX() ? 0 : selfVal.getUInt64();
     uint64_t selfAddr = canonicalizeUvmObjectAddress(procId, rawSelfAddr);
     if (analysisPortConnections.count(selfAddr)) {
-      int32_t count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
+      int32_t count;
+      auto aptcIt = analysisPortTerminalCache.find(selfAddr);
+      if (aptcIt != analysisPortTerminalCache.end()) {
+        count = static_cast<int32_t>(aptcIt->second);
+        ++analysisPortTerminalCacheHits;
+      } else {
+        count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
+        analysisPortTerminalCache[selfAddr] = count;
+        ++analysisPortTerminalCacheMisses;
+      }
       Value result = callOp.getResult(0);
       unsigned width = getTypeWidth(result.getType());
       setValue(procId, result,
@@ -23273,10 +23370,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     }
     return 0;
   };
-  bool isUvmGetNameCall = calleeName.contains("get_name") &&
-                          !calleeName.contains("get_name_constraint") &&
-                          !calleeName.contains("get_name_enabled");
-  bool isUvmGetFullNameCall = calleeName.contains("get_full_name");
+  bool isUvmGetNameCall =
+      (calleeName.contains("uvm_pkg::") || calleeName.contains("uvm_")) &&
+      calleeName.contains("get_name") &&
+      !calleeName.contains("get_name_constraint") &&
+      !calleeName.contains("get_name_enabled");
+  bool isUvmGetFullNameCall =
+      (calleeName.contains("uvm_pkg::") || calleeName.contains("uvm_")) &&
+      calleeName.contains("get_full_name");
   if (isUvmGetNameCall || isUvmGetFullNameCall) {
     // The return value is frequently ignored in hot startup paths; still
     // bypass body interpretation to avoid recursive string churn.
@@ -23441,6 +23542,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   if (cacheIt != funcLookupCache.end()) {
     auto &cached = cacheIt->second;
     if (cached.kind == 1) {
+      ++funcLookupCacheHits;
       // Cached as func::FuncOp
       auto mlirFuncOp = cast<func::FuncOp>(cached.op);
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: resolved '" << calleeName
@@ -23493,6 +23595,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
     if (cached.kind == 2) {
+      ++funcLookupCacheNegativeHits;
       // Cached as not found
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
                               << "' not found (cached)\n");
@@ -23502,7 +23605,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       }
       return success();
     }
+    ++funcLookupCacheHits;
     // kind == 0: cached as LLVM::LLVMFuncOp, fall through to handle below
+  } else {
+    ++funcLookupCacheMisses;
   }
 
   // Cache miss or LLVM func - do the full lookup
@@ -23648,7 +23754,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (stIt == processStates.end())
         return false;
       llvm::StringRef fn = stIt->second.currentFuncName;
-      return fn.contains("get_name") || fn.contains("get_full_name");
+      // Only match UVM-specific name getter patterns to avoid breaking
+      // user-defined functions like "base::get_name" or "derived::get_name".
+      return (fn.contains("uvm_") || fn.contains("uvm_pkg::")) &&
+             (fn.contains("get_name") || fn.contains("get_full_name"));
     };
 
     // Handle known runtime library functions
@@ -24165,7 +24274,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           getValue(procId, callOp.getOperand(0)).getUInt64());
       int32_t covType = static_cast<int32_t>(
           getValue(procId, callOp.getOperand(1)).getUInt64());
-      int32_t result = __moore_coverage_control(control, covType);
+      (void)covType;
+      // IEEE 1800-2017 §44.3: control values:
+      // 1 = $cov_start, 2 = $cov_stop, 3 = $cov_reset, 4 = $cov_check
+      if (control == 2) // $cov_stop
+        coverageStopped = true;
+      else if (control == 1) // $cov_start
+        coverageStopped = false;
+      int32_t result = 0; // return success
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(),
                  InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
@@ -24178,7 +24294,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     if (calleeName == "__moore_coverage_get_max") {
       int32_t covType = static_cast<int32_t>(
           getValue(procId, callOp.getOperand(0)).getUInt64());
-      int32_t result = __moore_coverage_get_max(covType);
+      (void)covType;
+      int32_t result = 100; // stub: max coverage is 100%
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(),
                  InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
@@ -24208,10 +24325,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           getValue(procId, callOp.getOperand(1)).getUInt64());
       int64_t value = static_cast<int64_t>(
           getValue(procId, callOp.getOperand(2)).getUInt64());
-      __moore_coverpoint_sample(cg, cpIdx, value);
+      // Skip sampling when coverage has been stopped via $coverage_control.
+      if (!coverageStopped)
+        __moore_coverpoint_sample(cg, cpIdx, value);
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_sample("
                                << cg << ", " << cpIdx << ", "
-                               << value << ")\n");
+                               << value << ")"
+                               << (coverageStopped ? " (STOPPED)" : "") << "\n");
       return success();
     }
 
@@ -24410,8 +24530,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         int64_t ptrVal = 0;
         int64_t lenVal = 0;
         if (!stateStr.empty()) {
-          if (stateStr.size() > 4096)
-            stateStr.resize(4096);
+          // Keep the full serialized mt19937 state; do not truncate.
           interpreterStrings.push_back(std::move(stateStr));
           const std::string &stored = interpreterStrings.back();
           ptrVal = reinterpret_cast<int64_t>(stored.data());
@@ -24528,11 +24647,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         oss << rng;
         stateStr = oss.str();
 
+
+
         int64_t ptrVal = 0;
         int64_t lenVal = 0;
         if (!stateStr.empty()) {
-          if (stateStr.size() > 4096)
-            stateStr.resize(4096);
+          // Keep the full serialized mt19937 state; do not truncate.
           interpreterStrings.push_back(std::move(stateStr));
           const std::string &stored = interpreterStrings.back();
           ptrVal = reinterpret_cast<int64_t>(stored.data());
@@ -24563,7 +24683,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         InterpretedValue stateVal = getValue(procId, callOp.getOperand(1));
 
         if (!stateVal.isX()) {
-          APInt bits = stateVal.getAPInt();
+          const APInt &bits = stateVal.getAPInt();
           uint64_t ptrVal = bits.extractBits(64, 0).getZExtValue();
           uint64_t lenVal = bits.extractBits(64, 64).getZExtValue();
 
@@ -26653,7 +26773,20 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         int64_t lenVal = static_cast<int64_t>(stored.size());
 
         // Register in dynamic strings registry
-        dynamicStrings[ptrVal] = {stored.data(), lenVal};
+        ++dynamicStringRegistrations;
+        auto dynIt = dynamicStrings.find(ptrVal);
+        if (dynIt != dynamicStrings.end()) {
+          ++dynamicStringUpdates;
+          dynIt->second = {stored.data(), lenVal};
+        } else if (dynamicStringMaxEntries > 0 &&
+                   dynamicStrings.size() >= dynamicStringMaxEntries) {
+          // Evict oldest entry to make room
+          ++dynamicStringEvictions;
+          dynamicStrings.erase(dynamicStrings.begin());
+          dynamicStrings[ptrVal] = {stored.data(), lenVal};
+        } else {
+          dynamicStrings[ptrVal] = {stored.data(), lenVal};
+        }
 
         // Pack into 128-bit struct result {ptr(lower 64), len(upper 64)}
         APInt packedResult(128, 0);
@@ -29621,11 +29754,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // ---- __moore_is_rand_enabled ----
     // Signature: (classPtr: ptr, propertyName: ptr) -> i32
     if (calleeName == "__moore_is_rand_enabled") {
-      // Temporary stabilization path: always report randomization as enabled.
-      // This avoids startup OOM churn in UVM name/report paths while we
-      // converge on full rand_mode parity.
+      // Check per-field rand_mode state. Default is enabled (1).
+      int32_t mode = 1;
+      if (!randModeState.empty() && callOp.getNumOperands() >= 2) {
+        std::string key = makeStateKey(callOp.getOperand(0), callOp.getOperand(1));
+        auto it = randModeState.find(key);
+        if (it != randModeState.end())
+          mode = it->second;
+      }
       if (callOp.getNumResults() >= 1)
-        setValue(procId, callOp.getResult(), InterpretedValue(1ULL, 32));
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(mode), 32));
       return success();
     }
 
