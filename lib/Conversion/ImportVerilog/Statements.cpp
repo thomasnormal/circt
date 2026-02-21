@@ -2422,9 +2422,59 @@ struct StmtVisitor {
     auto loc = context.convertLocation(stmt.sourceRange);
     auto *insertionBlock = builder.getInsertionBlock();
     auto enclosingProc = insertionBlock
-                             ? dyn_cast_or_null<moore::ProcedureOp>(
-                                   insertionBlock->getParentOp())
-                             : nullptr;
+                                 ? dyn_cast_or_null<moore::ProcedureOp>(
+                                       insertionBlock->getParentOp())
+                                 : nullptr;
+    auto extractActionBlockLabel =
+        [&](const slang::ast::Statement *actionStmt) -> StringAttr {
+      if (!actionStmt)
+        return {};
+      if (auto *timed = actionStmt->as_if<slang::ast::TimedStatement>())
+        actionStmt = &timed->stmt;
+      if (auto *block = actionStmt->as_if<slang::ast::BlockStatement>()) {
+        if (auto *stmtList =
+                block->body.as_if<slang::ast::StatementList>()) {
+          if (stmtList->list.size() == 1)
+            actionStmt = stmtList->list.front();
+        } else {
+          actionStmt = &block->body;
+        }
+      }
+      auto *exprStmt = actionStmt->as_if<slang::ast::ExpressionStatement>();
+      if (!exprStmt)
+        return {};
+      auto *call = exprStmt->expr.as_if<slang::ast::CallExpression>();
+      if (!call)
+        return {};
+      auto *sci = std::get_if<slang::ast::CallExpression::SystemCallInfo>(
+          &call->subroutine);
+      if (!sci)
+        return {};
+      StringRef taskName = sci->subroutine->name;
+      if (taskName != "$error" && taskName != "$warning" &&
+          taskName != "$fatal" && taskName != "$info")
+        return {};
+
+      auto args = call->arguments();
+      size_t msgArgIndex = 0;
+      if (taskName == "$fatal" && !args.empty()) {
+        auto firstArgConst = context.evaluateConstant(*args[0]);
+        if (firstArgConst && firstArgConst.isInteger())
+          msgArgIndex = 1;
+      }
+      if (msgArgIndex >= args.size())
+        return builder.getStringAttr(taskName);
+
+      const slang::ast::Expression *msgArg = args[msgArgIndex];
+      while (auto *conv = msgArg->as_if<slang::ast::ConversionExpression>())
+        msgArg = &conv->operand();
+      if (auto *strLit = msgArg->as_if<slang::ast::StringLiteral>())
+        return builder.getStringAttr(strLit->getValue());
+      auto msgConst = context.evaluateConstant(*args[msgArgIndex]);
+      if (msgConst && msgConst.isString())
+        return builder.getStringAttr(msgConst.str());
+      return {};
+    };
 
     // Check for a `disable iff` expression:
     // The DisableIff construct can only occur at the top level of an assertion
@@ -2442,7 +2492,16 @@ struct StmtVisitor {
       innerPropertySpec = &disableIff->expr;
     }
 
-    if (stmt.ifTrue && !stmt.ifTrue->as_if<slang::ast::EmptyStatement>()) {
+    StringAttr actionLabel;
+    if (stmt.ifFalse && !stmt.ifFalse->as_if<slang::ast::EmptyStatement>())
+      actionLabel = extractActionBlockLabel(stmt.ifFalse);
+    if (!actionLabel && stmt.ifTrue &&
+        !stmt.ifTrue->as_if<slang::ast::EmptyStatement>())
+      actionLabel = extractActionBlockLabel(stmt.ifTrue);
+    if ((!actionLabel && stmt.ifFalse &&
+         !stmt.ifFalse->as_if<slang::ast::EmptyStatement>()) ||
+        (!actionLabel && stmt.ifTrue &&
+         !stmt.ifTrue->as_if<slang::ast::EmptyStatement>())) {
       mlir::emitWarning(loc)
           << "ignoring concurrent assertion action blocks during import";
     }
@@ -2480,19 +2539,19 @@ struct StmtVisitor {
       switch (stmt.assertionKind) {
       case slang::ast::AssertionKind::Assert:
         verif::ClockedAssertOp::create(builder, loc, property, edge, clockVal,
-                                       enable, StringAttr{});
+                                       enable, actionLabel);
         return success();
       case slang::ast::AssertionKind::Assume:
         verif::ClockedAssumeOp::create(builder, loc, property, edge, clockVal,
-                                       enable, StringAttr{});
+                                       enable, actionLabel);
         return success();
       case slang::ast::AssertionKind::CoverProperty:
         verif::ClockedCoverOp::create(builder, loc, property, edge, clockVal,
-                                      enable, StringAttr{});
+                                      enable, actionLabel);
         return success();
       case slang::ast::AssertionKind::Expect:
         verif::ClockedAssertOp::create(builder, loc, property, edge, clockVal,
-                                       enable, StringAttr{});
+                                       enable, actionLabel);
         return success();
       default:
         break;
@@ -2548,19 +2607,19 @@ struct StmtVisitor {
             switch (stmt.assertionKind) {
             case slang::ast::AssertionKind::Assert:
               verif::ClockedAssertOp::create(builder, loc, innerProperty, edge,
-                                             clockVal, enable, StringAttr{});
+                                             clockVal, enable, actionLabel);
               return success();
             case slang::ast::AssertionKind::Assume:
               verif::ClockedAssumeOp::create(builder, loc, innerProperty, edge,
-                                             clockVal, enable, StringAttr{});
+                                             clockVal, enable, actionLabel);
               return success();
             case slang::ast::AssertionKind::CoverProperty:
               verif::ClockedCoverOp::create(builder, loc, innerProperty, edge,
-                                            clockVal, enable, StringAttr{});
+                                            clockVal, enable, actionLabel);
               return success();
             case slang::ast::AssertionKind::Expect:
               verif::ClockedAssertOp::create(builder, loc, innerProperty, edge,
-                                             clockVal, enable, StringAttr{});
+                                             clockVal, enable, actionLabel);
               return success();
             default:
               break;
@@ -2573,19 +2632,19 @@ struct StmtVisitor {
     switch (stmt.assertionKind) {
     case slang::ast::AssertionKind::Assert:
       verif::AssertOp::create(builder, loc, property, disableIffEnable,
-                              StringAttr{});
+                              actionLabel);
       return success();
     case slang::ast::AssertionKind::Assume:
       verif::AssumeOp::create(builder, loc, property, disableIffEnable,
-                              StringAttr{});
+                              actionLabel);
       return success();
     case slang::ast::AssertionKind::CoverProperty:
       verif::CoverOp::create(builder, loc, property, disableIffEnable,
-                              StringAttr{});
+                              actionLabel);
       return success();
     case slang::ast::AssertionKind::Expect:
       verif::AssertOp::create(builder, loc, property, disableIffEnable,
-                              StringAttr{});
+                              actionLabel);
       return success();
     default:
       break;
