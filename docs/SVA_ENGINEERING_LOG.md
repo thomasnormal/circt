@@ -333,3 +333,24 @@
   - validation:
     - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-empty.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-empty.mlir`
     - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/first-match-empty.mlir`
+
+- Iteration update (`$future_gclk` forward temporal semantics):
+  - realization:
+    - `$future_gclk` was normalized to `$past` as an approximation, which
+      inverted temporal direction for sampled-value semantics.
+    - existing regression checks around global-clock sampled functions were too
+      broad (`CHECK: verif.assert`) and could match later assertions.
+  - implemented:
+    - in `convertAssertionCallExpression`, `_gclk` normalization now maps
+      `$future_gclk` to `$future`.
+    - added direct `$future` lowering as `ltl.delay(<bool arg>, 1, 0)`.
+    - tightened `test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+      checks to keep each function's pattern local, and to explicitly require
+      `ltl.delay ..., 1, 0` for `$future_gclk`.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv` (`elapsed=0.032s`)
