@@ -1253,6 +1253,17 @@ struct AssertionExprVisitor {
                              SmallVector<Value, 2>{notCond, ifExpr});
   }
 
+  Value visit(const slang::ast::StrongWeakAssertionExpr &expr) {
+    auto value =
+        context.convertAssertionExpression(expr.expr, loc, /*applyDefaults=*/false);
+    if (!value)
+      return {};
+    // Strong/weak sequence interpretation differences are end-of-trace
+    // semantics. Preserve the inner assertion expression in the current
+    // lowering pipeline.
+    return value;
+  }
+
   Value visit(const slang::ast::DisableIffAssertionExpr &expr) {
     auto disableCond = context.convertRvalueExpression(expr.condition);
     // IEEE 1800 allows general integral truthy expressions in `disable iff`.

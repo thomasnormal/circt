@@ -707,6 +707,10 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - regressions:
     - `test/Conversion/ImportVerilog/sva-abort-on.sv`
     - `test/Tools/circt-bmc/sva-abort-on-e2e.sv`
+  - ImportVerilog now supports `strong(...)` / `weak(...)` property wrappers.
+  - regressions:
+    - `test/Conversion/ImportVerilog/sva-strong-weak.sv`
+    - `test/Tools/circt-bmc/sva-strong-weak-e2e.sv`
 
 ## Ownership and References
 
