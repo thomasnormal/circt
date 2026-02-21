@@ -590,6 +590,16 @@ bool EventScheduler::advanceToNextTime() {
   return false;
 }
 
+void EventScheduler::advanceTimeTo(uint64_t timeFs) {
+  // Advance the internal simulation clock to the specified time without
+  // processing any events. Used by minnow/clock-domain bypasses when no
+  // TimeWheel events exist but sim time must advance for process wake-ups.
+  if (timeFs > wheel->getCurrentTime().realTime) {
+    wheel->setCurrentTime(SimTime(timeFs, 0, 0));
+    ++stats.realTimeAdvances;
+  }
+}
+
 bool EventScheduler::isComplete() const { return !wheel->hasEvents(); }
 
 void EventScheduler::reset() {
