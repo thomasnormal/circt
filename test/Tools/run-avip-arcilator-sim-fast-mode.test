@@ -1,0 +1,22 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/mbit/apb_avip/sim
+// RUN: : > %t/mbit/apb_avip/sim/apb_compile.f
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: > "${OUT:?OUT is required}"\n' > %t/fake-run-avip.sh
+// RUN: chmod +x %t/fake-run-avip.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "ARGS:$*"\necho "CIRCT_UVM_ARGS=${CIRCT_UVM_ARGS:-}"\necho "Simulation terminated at time 10 fs"\necho "UVM_FATAL : 0"\necho "UVM_ERROR : 0"\n' > %t/fake-arcilator
+// RUN: chmod +x %t/fake-arcilator
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/fake-circt-verilog
+// RUN: chmod +x %t/fake-circt-verilog
+// RUN: env MBIT_DIR=%t/mbit AVIPS=apb SEEDS=1 RUN_AVIP=%t/fake-run-avip.sh CIRCT_VERILOG=%t/fake-circt-verilog ARCILATOR=%t/fake-arcilator COMPILE_TIMEOUT=10 SIM_TIMEOUT=10 SIM_TIMEOUT_GRACE=1 MAX_WALL_MS=11000 ARCILATOR_FAST_MODE=1 %S/../../utils/run_avip_arcilator_sim.sh %t/out > %t/log.txt 2>&1
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=META < %t/out/meta.txt
+// RUN: FileCheck %s --check-prefix=MATRIX < %t/out/matrix.tsv
+// RUN: FileCheck %s --check-prefix=SIMLOG < %t/out/apb/sim_seed_1.log
+//
+// LOG: [avip-arcilator-sim] apb seed=1 sim_status=OK sim_exit=0
+// META: arcilator_fast_mode=1
+// META: arcilator_strip_global_ctors=<auto>
+// MATRIX: {{^avip[[:space:]]+seed[[:space:]]+compile_status[[:space:]]+compile_sec[[:space:]]+sim_status[[:space:]]+sim_exit[[:space:]]+sim_sec[[:space:]]+sim_time_fs[[:space:]]+uvm_fatal[[:space:]]+uvm_error[[:space:]]+compile_log[[:space:]]+sim_log$}}
+// MATRIX: {{^apb[[:space:]]+1[[:space:]]+OK[[:space:]]+[0-9]+[[:space:]]+OK[[:space:]]+0[[:space:]]+[0-9]+[[:space:]]+10[[:space:]]+0[[:space:]]+0[[:space:]]+.*compile\.log[[:space:]]+.*sim_seed_1\.log$}}
+// SIMLOG: ARGS:--behavioral --run --jit-entry=hvl_top --max-wall-ms=11000 {{.*}}/out/apb/apb.mlir
+// SIMLOG: CIRCT_UVM_ARGS=+UVM_TESTNAME=apb_8b_write_test +ntb_random_seed=1 +UVM_VERBOSITY=UVM_LOW

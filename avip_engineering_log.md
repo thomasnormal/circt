@@ -3928,6 +3928,58 @@ Validate whether the latest runtime-side hypotheses changed failure signatures, 
 
 ---
 
+## 2026-02-21 Session: UART Frontend Fix + all9 Seeds123 Functional Closure
+
+### Scope
+1. Resolve a new UART compile regression seen after toolchain churn.
+2. Re-validate full AVIP matrix in both `interpret` and `compile` modes with seeds `1,2,3`.
+3. Keep results reproducible by running serially (avoid parallel timeout contention).
+
+### Frontend fix
+1. `lib/Conversion/ImportVerilog/Expressions.cpp`
+   - Fixed short-circuit chain lowering in `buildShortCircuitLogicalOp(...)`.
+   - Root cause: flattened `&&/||/->` non-last continue blocks could be left
+     unterminated (`moore.conditional` without region terminator).
+   - Symptom artifact:
+     - `/tmp/avip-uart-compile-seed2-solo-20260221-062449/uart/uart.warnings.log`
+     - error: `UartRxTransaction.sv:63: block with no terminator`.
+   - Fix mechanics:
+     - track created conditional ops / continue blocks,
+     - explicitly yield nested child conditional results in parent continue
+       blocks during unwind.
+2. Rebuilt tool:
+   - `ninja -C build-test circt-verilog` PASS.
+
+### Targeted rechecks after fix
+1. UART compile seed2 solo:
+   - `/tmp/avip-uart-compile-seed2-solo-postfix-20260221-062821/matrix.tsv`
+   - `compile_status=OK`, `sim_status=OK`.
+2. UART interpret seed2 solo:
+   - `/tmp/avip-uart-interpret-seed2-solo-postfix-20260221-063356/matrix.tsv`
+   - `compile_status=OK`, `sim_status=OK`.
+3. AXI4Lite timeout-only failures cleared with higher compile timeout:
+   - `/tmp/avip-axi4lite-interpret-seeds123-timeoutfix-20260221-060552/matrix.tsv`
+   - `/tmp/avip-axi4lite-compile-seeds123-timeoutfix-20260221-060552/matrix.tsv`
+   - both `functional_fail_rows=0`.
+
+### Full matrix closure (serial, timeout-fixed)
+1. Interpret (`all9`, seeds `1,2,3`):
+   - command used serial mode with `COMPILE_TIMEOUT=600`, `SIM_TIMEOUT=300`.
+   - matrix: `/tmp/avip-all9-interpret-seeds123-serial-timeoutfix-20260221-063938/matrix.tsv`
+   - gate summary: `functional_fail_rows=0`.
+2. Compile (`all9`, seeds `1,2,3`):
+   - command used serial mode with `COMPILE_TIMEOUT=600`, `SIM_TIMEOUT=300`.
+   - matrix: `/tmp/avip-all9-compile-seeds123-serial-timeoutfix-20260221-071418/matrix.tsv`
+   - gate summary: `functional_fail_rows=0`.
+
+### Current status
+1. AVIP compile+run correctness is green for all `all9` lanes in both modes
+   under the serial timeout-fixed validation above.
+2. Coverage parity remains open (`coverage_fail_rows` non-zero; many rows still
+   emit `cov_1_pct/cov_2_pct = -` / `No covergroups registered.`).
+
+---
+
 ## 2026-02-21 Session: Arcilator AVIP Unblock via Fast HVL Entry Mode
 
 ### Scope
@@ -4085,3 +4137,110 @@ Validate whether the latest runtime-side hypotheses changed failure signatures, 
 ### Outcome
 1. Arcilator AVIP fast mode remains functionally green after the Moore verifier optimization.
 2. Compile-path hotspot is now better characterized and partially reduced with a targeted, validated change.
+
+---
+
+## 2026-02-21 Session: Serial all9 Seeds123 Functional Pass (Interpret + Compile)
+
+### Validation profile
+1. Ran full `all9` with seeds `1,2,3` serially (no parallel AVIP sweeps) using:
+   - `COMPILE_TIMEOUT=600`
+   - `SIM_TIMEOUT=300`
+   - `SIM_TIMEOUT_GRACE=30`
+   - `FAIL_ON_FUNCTIONAL_GATE=1`
+   - `FAIL_ON_COVERAGE_BASELINE=0`
+
+### Artifacts
+1. Interpret:
+   - `/tmp/avip-all9-interpret-seeds123-serial-timeoutfix-20260221-063938/matrix.tsv`
+   - summary: `rows=27`, `bad_compile_or_sim=0`, `bad_uvm=0`
+2. Compile:
+   - `/tmp/avip-all9-compile-seeds123-serial-timeoutfix-20260221-071418/matrix.tsv`
+   - summary: `rows=27`, `bad_compile_or_sim=0`, `bad_uvm=0`
+
+### Notes
+1. Functional compile+run closure is green for all AVIPs in both modes under the profile above.
+2. Coverage parity remains open (coverage gate disabled for this closure pass).
+3. Toolchain hashes changed between interpret and compile batches due ongoing concurrent development, but both full matrices are functionally green.
+
+---
+
+## 2026-02-21 Session: Default Timeout Profile Hardening (Runner Defaults)
+
+### Problem observed
+1. With historical defaults (`COMPILE_TIMEOUT=240`, `SIM_TIMEOUT=240`), `uart` could fail on wall-time edge races even when simulation was otherwise healthy.
+2. Repro artifact:
+   - `/tmp/avip-all9-interpret-seeds123-default-20260221-074932/matrix.tsv`
+   - only failing row: `uart seed=3` with `sim_status=FAIL`, `sim_exit=1`, `sim_sec=240`.
+3. Log signature:
+   - `/tmp/avip-all9-interpret-seeds123-default-20260221-074932/uart/sim_seed_3.log`
+   - `Wall-clock timeout reached (global guard)` followed by `Simulation completed at time ...`.
+
+### Change
+1. Updated runner defaults in `utils/run_avip_circt_sim.sh`:
+   - `COMPILE_TIMEOUT` default: `240 -> 600`
+   - `SIM_TIMEOUT` default: `240 -> 300`
+   - updated usage comments accordingly.
+
+### Post-change validation
+1. Timeout-edge targeted checks (`seed=3`):
+   - interpret:
+     - `/tmp/avip-uart-interpret-defaultpost-seed3-20260221-082205/matrix.tsv`
+     - `functional_fail_rows=0`.
+   - compile:
+     - `/tmp/avip-uart-compile-defaultpost-seed3-20260221-082210/matrix.tsv`
+     - `functional_fail_rows=0`.
+2. Full all9 sanity (default profile, `seed=1`) in both modes:
+   - interpret:
+     - `/tmp/avip-all9-interpret-seed1-defaultpost-20260221-082750/matrix.tsv`
+     - `functional_fail_rows=0`.
+   - compile:
+     - `/tmp/avip-all9-compile-seed1-defaultpost-20260221-082751/matrix.tsv`
+     - `functional_fail_rows=0`.
+3. Full all9 seeds123 closure with same effective profile (serial):
+   - interpret:
+     - `/tmp/avip-all9-interpret-seeds123-serial-timeoutfix-20260221-063938/matrix.tsv`
+   - compile:
+     - `/tmp/avip-all9-compile-seeds123-serial-timeoutfix-20260221-071418/matrix.tsv`
+   - both: `bad_compile_or_sim=0` across `27/27` rows.
+
+### Status
+1. AVIP compile+run correctness is functionally green in both interpreted and compiled modes under the hardened default profile.
+2. Coverage parity remains a separate open track.
+
+---
+
+## 2026-02-21 Session: Arcilator all9x3 Re-Verification + Runner Lit Coverage
+
+### Scope
+1. Re-verify full Arcilator AVIP matrix after recent runtime/frontend churn.
+2. Add lit coverage for `utils/run_avip_arcilator_sim.sh` fast-mode and no-fast-mode argument/metadata behavior.
+
+### Validation evidence
+1. Full matrix rerun (`all9`, seeds `1,2,3`):
+   - command:
+     - `AVIP_SET=all9 SEEDS=1,2,3 COMPILE_TIMEOUT=600 SIM_TIMEOUT=180 utils/run_avip_arcilator_sim.sh /tmp/arci-all9-seeds123-20260221-verify1`
+   - artifact:
+     - `/tmp/arci-all9-seeds123-20260221-verify1/matrix.tsv`
+   - summary:
+     - `rows=27 compile_ok=27 sim_ok=27`
+2. Focused lit coverage for runner behavior:
+   - `build-ot/bin/llvm-lit -sv test/Tools --filter='run-avip-arcilator-sim-(fast-mode|no-fast-mode)'`
+   - result: `2/2` passed.
+
+### Performance snapshot from matrix
+1. Per-AVIP compile/sim hotspots (`compile_sec`, max `sim_sec`):
+   - `spi`: `208`, `148`
+   - `uart`: `207`, `126`
+   - `axi4`: `201`, `77`
+   - `i2s`: `185`, `131`
+   - `axi4Lite`: `154`, `81`
+2. Peak rows:
+   - max compile row:
+     - `spi seed=1 compile_sec=208 sim_sec=134` (`/tmp/arci-all9-seeds123-20260221-verify1/spi/compile.log`)
+   - max sim row:
+     - `spi seed=2 compile_sec=208 sim_sec=148` (`/tmp/arci-all9-seeds123-20260221-verify1/spi/sim_seed_2.log`)
+
+### Outcome
+1. Arcilator AVIP fast-mode remains fully green across `all9` for seeds `1,2,3` on current head.
+2. Added regression coverage to prevent fast-mode/no-fast-mode runner contract regressions.
