@@ -329,6 +329,10 @@ struct ProcessExecutionState {
   /// Cached values for the last sensitivity list.
   llvm::SmallVector<SignalValue, 4> lastSensitivityValues;
 
+  /// The wait operation that produced the cached sensitivity entries.
+  /// If the next wait is the same op, we can skip the entry comparison.
+  mlir::Operation *lastWaitOp = nullptr;
+
   /// Cache of derived wait sensitivities keyed by wait operations.
   llvm::DenseMap<mlir::Operation *, llvm::SmallVector<SensitivityEntry, 4>>
       waitSensitivityCache;
