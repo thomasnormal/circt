@@ -2564,9 +2564,12 @@ struct StmtVisitor {
       OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointAfter(enclosingProc);
       auto property = context.convertAssertionExpression(*innerPropertySpec, loc);
-      if (!property)
-        // Assertion in dead generate code — skip silently.
-        return success();
+      if (!property) {
+        // Slang uses InvalidAssertionExpr for dead generate branches.
+        if (innerPropertySpec->as_if<slang::ast::InvalidAssertionExpr>())
+          return success();
+        return failure();
+      }
       auto *assertionClock = getCanonicalAssertionClockSignalEvent(
           *context.currentAssertionClock);
       if (!assertionClock)
@@ -2622,9 +2625,12 @@ struct StmtVisitor {
     }
 
     auto property = context.convertAssertionExpression(*innerPropertySpec, loc);
-    if (!property)
-      // Assertion in dead generate code — skip silently.
-      return success();
+    if (!property) {
+      // Slang uses InvalidAssertionExpr for dead generate branches.
+      if (innerPropertySpec->as_if<slang::ast::InvalidAssertionExpr>())
+        return success();
+      return failure();
+    }
 
     // If the property has its own clock and we're inside a procedure, hoist
     // the assertion to module level using clocked verif ops.

@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1546 - February 21, 2026
+
+### [ImportVerilog][SVA] Support `@($global_clock)` assertion timing controls and stop silent assertion drops on lowering failures
+
+1. **Added `$global_clock` timing-control support in assertion LTL clocking**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - `LTLClockControlVisitor` now recognizes `SignalEventControl` expressions
+     that call the `$global_clock` system function.
+   - resolves `$global_clock` through
+     `compilation.getGlobalClockingAndNoteUse(*currentScope)` and recursively
+     lowers the referenced global clocking event.
+
+2. **Hardened concurrent assertion lowering failure behavior**
+   (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   - failed `convertAssertionExpression` no longer gets silently treated as
+     dead-generate code.
+   - only `InvalidAssertionExpr` is skipped silently (dead generate branch);
+     all other conversion failures now propagate `failure()`.
+
+3. **Added regression coverage**
+   - `test/Conversion/ImportVerilog/sva-global-clock-func.sv`
+     - verifies `assert property (@($global_clock) ...)` lowers to clocked
+       assertion forms.
+   - `test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`
+     - verifies invalid assertion clocking (`@(1)`) fails import instead of
+       silently dropping the assertion from IR.
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-func.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-func.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-global-clock-func.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-func.sv --check-prefix=CHECK-MOORE`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv` fails with expected diagnostic (`error: expected a 1-bit integer`): PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build-test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv build-test/test/Conversion/ImportVerilog/gclk-global-clocking.sv build-test/test/Conversion/ImportVerilog/gclk-sampled-functions.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS (`2/2` mode cases).
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-func.sv` (`elapsed=0.077s`).
+
 ## Iteration 1545 - February 21, 2026
 
 ### [ImportVerilog][SVA] Apply global clocking semantics to unclocked `_gclk` sampled-value assertions

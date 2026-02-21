@@ -1703,6 +1703,37 @@ struct LTLClockControlVisitor {
       return clockEvent.visit(visitor);
     }
 
+    // Resolve $global_clock in assertion timing controls to the scope's
+    // declared global clocking event.
+    if (auto *callExpr = ctrl.expr.as_if<slang::ast::CallExpression>()) {
+      if (callExpr->isSystemCall() &&
+          callExpr->getKnownSystemName() ==
+              slang::parsing::KnownSystemName::GlobalClock) {
+        if (!context.currentScope) {
+          mlir::emitError(loc)
+              << "$global_clock requires an enclosing scope";
+          return Value{};
+        }
+        auto *globalClocking = context.compilation.getGlobalClockingAndNoteUse(
+            *context.currentScope);
+        if (!globalClocking) {
+          mlir::emitError(loc)
+              << "no global clocking is available in this scope";
+          return Value{};
+        }
+        if (auto *clockBlock =
+                globalClocking->as_if<slang::ast::ClockingBlockSymbol>()) {
+          auto &clockEvent = clockBlock->getEvent();
+          auto visitor = *this;
+          visitor.loc = context.convertLocation(clockEvent.sourceRange);
+          return clockEvent.visit(visitor);
+        }
+        mlir::emitError(loc)
+            << "unsupported global clocking symbol kind for $global_clock";
+        return Value{};
+      }
+    }
+
     auto edge = convertEdgeKindLTL(ctrl.edge);
     auto expr = context.convertRvalueExpression(ctrl.expr);
     if (!expr)
