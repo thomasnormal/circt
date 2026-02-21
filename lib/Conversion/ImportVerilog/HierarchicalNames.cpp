@@ -687,6 +687,57 @@ LogicalResult Context::collectHierarchicalValuesFromStatement(
   return visitor.result;
 }
 
+template <typename CompilationT>
+static const slang::ast::Scope *maybeGetBindDirectiveScope(
+    const CompilationT &compilation,
+    const slang::syntax::BindDirectiveSyntax *bindSyntax) {
+  if constexpr (requires(const CompilationT &comp,
+                         const slang::syntax::BindDirectiveSyntax *syntax) {
+                  comp.getBindDirectiveScope(syntax);
+                }) {
+    if (bindSyntax)
+      return compilation.getBindDirectiveScope(bindSyntax);
+  }
+  return nullptr;
+}
+
+template <typename InstanceT>
+static const slang::ast::Scope *maybeGetInstanceBindScope(
+    const InstanceT &instNode) {
+  if constexpr (requires(const InstanceT &inst) { inst.getBindScope(); })
+    return instNode.getBindScope();
+  return nullptr;
+}
+
+static const slang::ast::Scope *
+resolveBindDirectiveScopeCompat(Context &context,
+                                const slang::ast::BindDirectiveInfo &bindInfo,
+                                const slang::ast::InstanceBodySymbol &body) {
+  // Newer slang revisions provide direct bind-scope queries.
+  if (const auto *scope =
+          maybeGetBindDirectiveScope(context.compilation, bindInfo.bindSyntax))
+    return scope;
+
+  // Older slang revisions don't expose bind scope directly.
+  // Falling back to the target instance body matches the historical fallback
+  // used for file-level / definition-level binds where compilation-unit scope
+  // cannot resolve target-local names.
+  return &body;
+}
+
+static const slang::ast::Scope *
+resolveInstanceBindScopeCompat(const slang::ast::InstanceSymbol &instNode) {
+  if (const auto *scope = maybeGetInstanceBindScope(instNode))
+    return scope;
+
+  // Older slang revisions don't expose InstanceSymbol::getBindScope. When this
+  // instance comes from bind elaboration, use the immediate parent scope as the
+  // best available approximation for hierarchical-name collection.
+  if (instNode.body.flags.has(slang::ast::InstanceFlags::FromBind))
+    return instNode.getParentScope();
+  return nullptr;
+}
+
 static LogicalResult collectBindDirectiveHierarchicalValues(
     Context &context, const slang::ast::InstanceBodySymbol &body) {
   auto *node = body.hierarchyOverrideNode;
@@ -698,7 +749,8 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
     auto *bindSyntax = bindInfo.bindSyntax;
     if (!bindSyntax)
       continue;
-    const auto *bindScope = context.compilation.getBindDirectiveScope(bindSyntax);
+    const auto *bindScope =
+        resolveBindDirectiveScopeCompat(context, bindInfo, body);
     if (!bindScope)
       continue;
 
@@ -708,8 +760,9 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
     // when it's inside an instance body (i.e., the bind was written inside a
     // module body).
     const slang::ast::Scope *exprScope = bindScope;
-    if (!bindScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>() &&
-        !bindScope->getContainingInstance())
+    auto *bindScopeBody =
+        bindScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+    if (!bindScopeBody && !bindScope->getContainingInstance())
       exprScope = &body;
 
     slang::ast::ASTContext astContext(*exprScope,
@@ -820,7 +873,7 @@ struct InstBodyVisitor {
   // Handle instances.
   LogicalResult visit(const slang::ast::InstanceSymbol &instNode) {
     auto &outermostModule = getOutermostModule(*instNode.getParentScope());
-    auto *bindScope = instNode.getBindScope();
+    auto *bindScope = resolveInstanceBindScopeCompat(instNode);
     for (const auto *con : instNode.getPortConnections()) {
       if (const auto *expr = con->getExpression())
         if (failed(context.collectHierarchicalValues(*expr, outermostModule,
