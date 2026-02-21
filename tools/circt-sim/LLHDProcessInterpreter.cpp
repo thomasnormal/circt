@@ -5881,9 +5881,9 @@ void LLHDProcessInterpreter::registerClockedAssertions(
           executeClockedAssertion(assertOp, instanceId);
         });
     if (auto *process = scheduler.getProcess(procId)) {
-      // Evaluate assertions in the Observed region (after NBA, after all
-      // signal updates have settled for this time slot).
-      process->setPreferredRegion(SchedulingRegion::NBA);
+      // Evaluate assertions in the Observed region (IEEE 1800-2017 §4.4.2):
+      // after Active+NBA signal updates have settled for this time slot.
+      process->setPreferredRegion(SchedulingRegion::Observed);
     }
 
     // Register sensitivity to clock signal changes.

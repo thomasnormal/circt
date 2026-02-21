@@ -1074,17 +1074,26 @@ bool ProcessScheduler::executeDeltaCycle() {
   triggerSignalsThisDelta.clear();
   triggerTimesThisDelta.clear();
 
-  // Process regions with ready processes, skipping empty ones.
-  // Build a bitmask of non-empty ready queues for fast iteration.
-  uint16_t readyMask = 0;
-  for (size_t i = 0; i < static_cast<size_t>(SchedulingRegion::NumRegions); ++i)
-    if (!readyQueues[i].empty())
-      readyMask |= (1u << i);
+  // IEEE 1800-2017 §4.4 region ordering with NBA flush.
+  //
+  // Phase 1: Preponed → Active → Inactive
+  // These regions execute with pre-NBA signal values.
+  for (size_t i = static_cast<size_t>(SchedulingRegion::Preponed);
+       i <= static_cast<size_t>(SchedulingRegion::Inactive); ++i) {
+    auto region = static_cast<SchedulingRegion>(i);
+    size_t executed = executeReadyProcesses(region);
+    anyExecuted = anyExecuted || (executed > 0);
+  }
 
-  while (readyMask) {
-    unsigned regionIdx = __builtin_ctz(readyMask);
-    readyMask &= readyMask - 1; // Clear lowest set bit
-    auto region = static_cast<SchedulingRegion>(regionIdx);
+  // Phase 2: Flush pending nonblocking-assignment signal updates so that
+  // NBA-region processes (and later Observed/Reactive) see the committed
+  // values (IEEE 1800-2017 §4.4.2, §10.4.2).
+  flushPendingFastUpdates();
+
+  // Phase 3: NBA → Observed → Reactive → ReInactive → ReNBA → Postponed
+  for (size_t i = static_cast<size_t>(SchedulingRegion::NBA);
+       i < static_cast<size_t>(SchedulingRegion::NumRegions); ++i) {
+    auto region = static_cast<SchedulingRegion>(i);
     size_t executed = executeReadyProcesses(region);
     anyExecuted = anyExecuted || (executed > 0);
   }
