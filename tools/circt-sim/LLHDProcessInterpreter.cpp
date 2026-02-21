@@ -7440,7 +7440,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
 static void cacheWaitState(ProcessExecutionState &state,
                            const ProcessScheduler &scheduler,
-                           const SensitivityList *waitList, bool hadDelay) {
+                           const SensitivityList *waitList, bool hadDelay,
+                           mlir::Operation *waitOp = nullptr) {
   state.lastWaitHadDelay = hadDelay;
 
   if (!waitList || waitList->empty()) {
@@ -7448,6 +7449,17 @@ static void cacheWaitState(ProcessExecutionState &state,
     state.lastSensitivityEntries.clear();
     state.lastSensitivityValues.clear();
     state.lastSensitivityValid = false;
+    state.lastWaitOp = nullptr;
+    return;
+  }
+
+  // Fast path: if the same wait op produced the entries, they're identical —
+  // skip the element-by-element comparison and just update signal values.
+  if (state.lastSensitivityValid && waitOp && waitOp == state.lastWaitOp) {
+    for (size_t i = 0; i < state.lastSensitivityEntries.size(); ++i) {
+      state.lastSensitivityValues[i] =
+          scheduler.getSignalValue(state.lastSensitivityEntries[i].signalId);
+    }
     return;
   }
 
@@ -7459,6 +7471,7 @@ static void cacheWaitState(ProcessExecutionState &state,
       state.lastSensitivityEntries.size() == newEntries.size() &&
       state.lastSensitivityEntries == newEntries) {
     // Same sensitivity list — just update cached signal values.
+    state.lastWaitOp = waitOp;
     for (size_t i = 0; i < state.lastSensitivityEntries.size(); ++i) {
       state.lastSensitivityValues[i] =
           scheduler.getSignalValue(state.lastSensitivityEntries[i].signalId);
@@ -7478,6 +7491,7 @@ static void cacheWaitState(ProcessExecutionState &state,
       state.lastWaitHasEdge = true;
   }
   state.lastSensitivityValid = true;
+  state.lastWaitOp = waitOp;
 }
 
 static bool canSkipCachedProcess(const ProcessExecutionState &state,
@@ -15207,7 +15221,8 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
         state.waitSensitivityCache.try_emplace(waitOp.getOperation(),
                                                waitList.getEntries());
       scheduler.suspendProcessForEvents(procId, waitList);
-      cacheWaitState(state, scheduler, &waitList, hadDelay);
+      cacheWaitState(state, scheduler, &waitList, hadDelay,
+                     waitOp.getOperation());
     } else {
       cacheWaitState(state, scheduler, nullptr, hadDelay);
     }
@@ -15299,7 +15314,8 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
       LLVM_DEBUG(llvm::dbgs()
                  << "  Wait with no delay/no signals - derived "
                  << waitList.size() << " probe signal(s)\n");
-      cacheWaitState(state, scheduler, &waitList, hadDelay);
+      cacheWaitState(state, scheduler, &waitList, hadDelay,
+                     waitOp.getOperation());
     } else {
       // Guard against infinite delta cycles: if this process+wait has already
       // been through the empty-sensitivity fallback at least once, halt the
