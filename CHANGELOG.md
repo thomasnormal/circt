@@ -73361,6 +73361,8 @@ See CHANGELOG.md on recent progress.
         (`$display/$write`), preserving message text as
         `verif.assert`/`verif.clocked_assert` labels.
       - supports direct expression form and one-statement `begin...end` blocks.
+      - now also scans multi-statement `begin...end` action blocks and preserves
+        the first supported diagnostic/message task as the assertion label.
       - `$fatal(code, "msg")` keeps `"msg"` as the label payload.
     - regression coverage:
       - updated:
@@ -73370,6 +73372,7 @@ See CHANGELOG.md on recent progress.
         - `else $fatal(1, "fatal_fail")`
         - `else begin $warning("warn_fail"); end`
         - `else $display("disp_fail")`
+        - `else begin shadow = a; $display("multi_stmt_disp_fail"); end`
     - validation:
       - build: PASS
         - `ninja -C build-test circt-translate`
