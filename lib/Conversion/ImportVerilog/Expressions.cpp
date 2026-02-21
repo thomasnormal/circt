@@ -8489,6 +8489,9 @@ Value Context::convertLvalueExpression(const slang::ast::Expression &expr) {
 Value Context::convertToBool(Value value) {
   if (!value)
     return {};
+  if (auto intTy = dyn_cast<IntegerType>(value.getType()))
+    if (intTy.getWidth() == 1)
+      return value;
   if (auto type = dyn_cast_or_null<moore::IntType>(value.getType()))
     if (type.getBitSize() == 1)
       return value;

@@ -73380,3 +73380,25 @@ See CHANGELOG.md on recent progress.
         - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`
       - frontend smoke: PASS
         - `build-test/bin/circt-verilog --ir-moore --no-uvm-auto-include test/Conversion/ImportVerilog/sva-action-block.sv`
+82. ImportVerilog SVA: fix spurious bool-cast diagnostics for nested
+    event-typed assertion-port clocking
+    (February 21, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/Expressions.cpp`
+      - `Context::convertToBool` now accepts builtin `i1` values directly.
+      - removes false-positive diagnostic:
+        `expression of type 'i1' cannot be cast to a boolean`
+        in legal nested SVA clocking paths.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-event-port-past-no-spurious-bool-error.sv`
+      - validates:
+        - no spurious bool-cast error for nested
+          `$past(x, 1, @(event_port))`
+        - import emits expected `moore.wait_event` + `verif.assert`.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-verilog circt-translate`
+      - focused test: PASS
+        - `build-test/bin/circt-verilog --ir-moore --no-uvm-auto-include test/Conversion/ImportVerilog/sva-event-port-past-no-spurious-bool-error.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-event-port-past-no-spurious-bool-error.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-event-port-past-no-spurious-bool-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-event-port-past-no-spurious-bool-error.sv --check-prefix=IR`
