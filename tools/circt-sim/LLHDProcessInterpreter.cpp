@@ -566,8 +566,9 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   deferFirRegUpdates = true;
 }
 
-// Destructor defined here (not in header) so that JITBlockCompiler and
-// JITBlockSpec are complete types when unique_ptr destructors fire.
+// Destructor defined here (not in header) so that JITBlockCompiler,
+// JITBlockSpec, and BytecodeProgram are complete types when unique_ptr
+// destructors fire.
 LLHDProcessInterpreter::~LLHDProcessInterpreter() = default;
 
 void LLHDProcessInterpreter::setCompileModeEnabled(bool enable) {

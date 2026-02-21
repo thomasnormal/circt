@@ -874,5 +874,63 @@ All hotspots < 3.2%, extremely flat distribution:
 No single function dominates — further optimization requires structural changes
 (JIT block compilation, native scheduling, direct memory layout).
 
-### Test Results
+### Phase 9 Test Results
+564/578 pass (14 pre-existing failures, 0 regressions).
+
+## Phase 10: Bytecode Interpreter
+
+### Date: 2026-02-21
+
+### Summary
+Pre-compiled micro-op bytecode interpreter for LLHD processes. Walks process IR once
+at init time to build a flat array of MicroOps with pre-resolved signal IDs and integer
+virtual registers. Executes via a tight switch loop without MLIR op access, string
+lookups, DenseMap, or APInt during execution.
+
+### Architecture
+- **MicroOp struct**: 22 op kinds — Probe, Drive, Const, Add/Sub/And/Or/Xor/Shl/Shr/Mul,
+  ICmpEq/Ne, Jump, BranchIf, Wait, Halt, Not, Trunci, Zext, Sext, Mux
+- **BytecodeCompiler**: Walks MLIR `llhd.process` IR. Assigns uint8_t virtual registers
+  (max 128). Pre-resolves all signal IDs to integers. Builds flat `SmallVector<MicroOp>`
+  with block offset table. Falls back to interpreter for unsupported ops (func.call,
+  LLVM memory ops, sim.fork, etc.)
+- **Executor**: `switch(op.kind)` loop with `uint64_t regs[128]`. Block-based execution
+  with goto transitions. Returns true (suspended on Wait) or false (Halt/error)
+- **Integration**: `DirectProcessFastPathKind::BytecodeProcess` flag (bit 3). Detected
+  at init via `tryCompileProcessBytecode()`. Dispatched before JIT and
+  ResumableWaitSelfLoop in `tryExecuteDirectProcessFastPath()`
+
+### Files
+- `tools/circt-sim/LLHDProcessInterpreterBytecode.cpp` (new, ~740 lines)
+- `tools/circt-sim/LLHDProcessInterpreterBytecode.h` (new, ~95 lines)
+- `tools/circt-sim/LLHDProcessInterpreter.h` (BytecodeProcess enum + method decls)
+- `tools/circt-sim/LLHDProcessInterpreterNativeThunkExec.cpp` (detection + dispatch)
+- `tools/circt-sim/CMakeLists.txt` + `unittests/.../CMakeLists.txt`
+
+### Pipeline Benchmark Results (10-process, 10K clocks, 100ms sim)
+
+| Phase | Instructions | vs Baseline |
+|-------|-------------|-------------|
+| Baseline (interpreter) | 2,504M | — |
+| Phase 9 (micro-opts) | 627M | -75.0% |
+| **Phase 10 (bytecode)** | **459M** | **-81.7%** |
+
+**5.5x total reduction** from original baseline on the pipeline benchmark.
+
+### Per-Delta-Cycle Analysis
+- ~200K process activations (10K clocks × 2 deltas × 10 processes)
+- 459M / 200K ≈ **2,295 instructions/activation** (including scheduler overhead)
+- Remaining cost dominated by scheduler (suspendProcessForEvents, event queue,
+  sensitivity list management), not bytecode execution itself
+
+### Bytecode Eligibility
+Processes are bytecode-eligible if they only contain: hw.constant, llhd.prb, llhd.drv,
+llhd.constant_time, llhd.wait, llhd.halt, cf.br (with block args), cf.cond_br (no
+block args), comb.{add,xor,and,or,icmp,mux}, arith.{trunci,extui,extsi},
+llhd.int_to_time. Signals must be ≤64 bits wide.
+
+Non-eligible processes (function calls, LLVM memory ops, sim.fork, wide signals) fall
+back to the MLIR-walking interpreter transparently.
+
+### Phase 10 Test Results
 564/578 pass (14 pre-existing failures, 0 regressions).
