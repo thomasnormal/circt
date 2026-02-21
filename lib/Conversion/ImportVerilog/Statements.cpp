@@ -2608,6 +2608,10 @@ struct StmtVisitor {
         verif::ClockedCoverOp::create(builder, loc, property, edge, clockVal,
                                       enable, actionLabel);
         return success();
+      case slang::ast::AssertionKind::CoverSequence:
+        verif::ClockedCoverOp::create(builder, loc, property, edge, clockVal,
+                                      enable, actionLabel);
+        return success();
       case slang::ast::AssertionKind::Expect:
         verif::ClockedAssertOp::create(builder, loc, property, edge, clockVal,
                                        enable, actionLabel);
@@ -2681,6 +2685,10 @@ struct StmtVisitor {
               verif::ClockedCoverOp::create(builder, loc, innerProperty, edge,
                                             clockVal, enable, actionLabel);
               return success();
+            case slang::ast::AssertionKind::CoverSequence:
+              verif::ClockedCoverOp::create(builder, loc, innerProperty, edge,
+                                            clockVal, enable, actionLabel);
+              return success();
             case slang::ast::AssertionKind::Expect:
               verif::ClockedAssertOp::create(builder, loc, innerProperty, edge,
                                              clockVal, enable, actionLabel);
@@ -2710,6 +2718,10 @@ struct StmtVisitor {
     case slang::ast::AssertionKind::CoverProperty:
       verif::CoverOp::create(builder, loc, property, disableIffEnable,
                               actionLabel);
+      return success();
+    case slang::ast::AssertionKind::CoverSequence:
+      verif::CoverOp::create(builder, loc, property, disableIffEnable,
+                             actionLabel);
       return success();
     case slang::ast::AssertionKind::Expect:
       verif::AssertOp::create(builder, loc, property, disableIffEnable,

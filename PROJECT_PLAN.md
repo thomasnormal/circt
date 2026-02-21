@@ -1184,3 +1184,5 @@ verilator-verification, and yosys corpora).
 - Additional SVA importer closure:
   - concurrent `restrict property` is now accepted and lowered as assumption
     semantics, including clocked and procedural-hoisted forms.
+  - concurrent `cover sequence` is now accepted and lowered as cover semantics,
+    including clocked and procedural-hoisted forms.
