@@ -477,3 +477,22 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv` (`elapsed=0.028s`)
+
+- Iteration update (yosys SVA `counter` known-profile XPASS cleanup):
+  - realization:
+    - widened yosys SVA smoke (`TEST_FILTER='.'`) was clean functionally but
+      still exited non-zero due stale expectation baseline:
+      `XPASS(fail): counter [known]`.
+    - this indicated the expected-failure baseline lagged behind current SVA
+      behavior.
+  - implemented:
+    - removed stale `counter\tfail\tknown` expected-XFAIL entries from:
+      - `utils/yosys-sva-bmc-expected.txt`
+      - `utils/yosys-sva-bmc-xfail.txt`
+  - validation:
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^counter$' utils/run_yosys_sva_circt_bmc.sh`
+      now reports `PASS(pass)` and `PASS(fail)` with zero xpass.
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+      now passes with no failures/xpass in the widened smoke set.
+    - profiling sample:
+      - `time BMC_SMOKE_ONLY=1 TEST_FILTER='^counter$' utils/run_yosys_sva_circt_bmc.sh` (`elapsed=1.777s`)

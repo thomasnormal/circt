@@ -6,10 +6,6 @@
 #   known  -> BMC_ASSUME_KNOWN_INPUTS=1
 #   xprop  -> BMC_ASSUME_KNOWN_INPUTS=0
 #
-# `counter` fail-mode is assumption-profile sensitive in current lowering.
-# Under known-input assumptions it currently does not produce a counterexample.
-counter	fail	known
-
 # Under xprop profile (BMC_ASSUME_KNOWN_INPUTS=0), unconstrained 4-state
 # inputs can drive pass-mode counterexamples in the following tests.
 basic00	pass	xprop

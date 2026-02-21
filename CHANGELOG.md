@@ -1,5 +1,22 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1550 - February 21, 2026
+
+### [SVA][Regression] Retire stale `counter` known-profile fail XFAIL baseline in yosys SVA BMC expectations
+
+1. **Removed stale expected-XFAIL entries for `counter` fail mode**
+   (`utils/yosys-sva-bmc-expected.txt`,
+   `utils/yosys-sva-bmc-xfail.txt`):
+   - dropped `counter	fail	known` from expectation baselines.
+   - this case now consistently passes in known-input profile and should no
+     longer be treated as XPASS failure noise.
+
+2. **Validation**
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='^counter$' utils/run_yosys_sva_circt_bmc.sh`: PASS (both pass/fail modes pass; no xpass).
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS (no failures, no xpass across the widened smoke set).
+   - profiling sample:
+     - `time BMC_SMOKE_ONLY=1 TEST_FILTER='^counter$' utils/run_yosys_sva_circt_bmc.sh` (`elapsed=1.777s`).
+
 ## Iteration 1549 - February 21, 2026
 
 ### [ImportVerilog][SVA] Preserve `iff` guards for `$global_clock` event controls
