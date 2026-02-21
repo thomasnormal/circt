@@ -35,6 +35,7 @@ MBIT_DIR="${MBIT_DIR:-/home/thomas-ahle/mbit}"
 AVIP_SET="${AVIP_SET:-core8}"
 SEEDS_CSV="${SEEDS:-1}"
 UVM_VERBOSITY="${UVM_VERBOSITY:-UVM_LOW}"
+ARCILATOR_FAST_MODE="${ARCILATOR_FAST_MODE:-1}"
 
 MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-20}"
 COMPILE_TIMEOUT="${COMPILE_TIMEOUT:-300}"
@@ -196,6 +197,8 @@ git_sha="$(git -C "$CIRCT_ROOT" rev-parse HEAD 2>/dev/null || echo "<unknown>")"
   echo "sim_timeout_hard=$SIM_TIMEOUT_HARD"
   echo "max_wall_ms=$MAX_WALL_MS"
   echo "uvm_verbosity=$UVM_VERBOSITY"
+  echo "arcilator_fast_mode=$ARCILATOR_FAST_MODE"
+  echo "arcilator_strip_global_ctors=${ARCILATOR_STRIP_GLOBAL_CTORS:-<auto>}"
   echo "circt_verilog_args=${CIRCT_VERILOG_ARGS:-<none>}"
   echo "arcilator_args=${ARCILATOR_ARGS:-<none>}"
 } > "$meta"
@@ -210,6 +213,19 @@ fi
 
 for row in "${selected_avips[@]}"; do
   IFS='|' read -r name avip_dir filelist tops test_name <<< "$row"
+  IFS=',' read -ra top_modules <<< "$tops"
+  lane_jit_entry=""
+  if [[ "$ARCILATOR_FAST_MODE" == "1" ]]; then
+    for t in "${top_modules[@]}"; do
+      t="${t//[[:space:]]/}"
+      [[ -z "$t" ]] && continue
+      lower_t="${t,,}"
+      if [[ "$lower_t" == *hvl*top* ]]; then
+        lane_jit_entry="$t"
+        break
+      fi
+    done
+  fi
   avip_out="$OUT_DIR/$name"
   mkdir -p "$avip_out"
 
@@ -232,7 +248,6 @@ for row in "${selected_avips[@]}"; do
         lane_verilog_args="$jtag_compat_args"
       fi
     fi
-    IFS=',' read -ra top_modules <<< "$tops"
     for t in "${top_modules[@]}"; do
       t="${t//[[:space:]]/}"
       [[ -z "$t" ]] && continue
@@ -275,13 +290,26 @@ for row in "${selected_avips[@]}"; do
       fi
 
       start_sim=$(date +%s)
+      lane_arcilator_args=("${arcilator_extra_args[@]}")
+      has_jit_entry_arg=0
+      for arg in "${lane_arcilator_args[@]}"; do
+        if [[ "$arg" == "--jit-entry" || "$arg" == --jit-entry=* ]]; then
+          has_jit_entry_arg=1
+          break
+        fi
+      done
+      if [[ "$ARCILATOR_FAST_MODE" == "1" && $has_jit_entry_arg -eq 0 && -n "$lane_jit_entry" ]]; then
+        lane_arcilator_args+=("--jit-entry=$lane_jit_entry")
+      fi
+
+      strip_global_ctors="${ARCILATOR_STRIP_GLOBAL_CTORS:-$ARCILATOR_FAST_MODE}"
       set +e
       run_limited "$SIM_TIMEOUT_HARD" \
-        env CIRCT_UVM_ARGS="$uvm_args" \
+        env CIRCT_UVM_ARGS="$uvm_args" ARCILATOR_STRIP_GLOBAL_CTORS="$strip_global_ctors" \
         "$ARCILATOR" \
         --behavioral \
         --run \
-        "${arcilator_extra_args[@]}" \
+        "${lane_arcilator_args[@]}" \
         --max-wall-ms="$MAX_WALL_MS" \
         "$mlir_file" > "$sim_log" 2>&1
       sim_exit=$?
