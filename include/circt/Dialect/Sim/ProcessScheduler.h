@@ -1337,6 +1337,27 @@ public:
   /// Advance all clock domains to the target time, toggling signals.
   bool advanceClockDomains(uint64_t targetTimeFs);
 
+  //===--------------------------------------------------------------------===//
+  // Minnow time callbacks (lightweight periodic process re-arm)
+  //===--------------------------------------------------------------------===//
+
+  /// Register a minnow: a lightweight callback for time-only processes.
+  /// Instead of scheduling an Event (80+ bytes) into the TimeWheel for each
+  /// re-arm, minnows are stored as compact 24-byte structs and advanced
+  /// in-place. Returns the minnow index.
+  size_t registerMinnow(ProcessId processId, uint64_t delayFs);
+
+  /// Re-arm a minnow with a new wake time relative to current sim time.
+  /// Called after a time-only process executes to schedule its next wake.
+  void rearmMinnow(ProcessId processId);
+
+  /// Check if a process has a registered minnow.
+  bool isMinnowProcess(ProcessId id) const;
+
+  /// Advance all minnows to the target time, waking processes whose
+  /// scheduled time has arrived.
+  bool advanceMinnows(uint64_t targetTimeFs);
+
 private:
   /// A clock domain represents a periodic signal toggle that bypasses
   /// the TimeWheel entirely.
@@ -1351,6 +1372,18 @@ private:
   };
   std::vector<ClockDomainInfo> clockDomains;
   llvm::DenseMap<ProcessId, size_t> processToClockDomain;
+
+  /// A minnow is a lightweight time callback for processes that only wait
+  /// on a constant delay (CallbackTimeOnly). 24 bytes vs 80+ for an Event.
+  struct MinnowInfo {
+    ProcessId processId;
+    uint64_t nextWakeFs;  // Next scheduled wake time in femtoseconds
+    uint64_t delayFs;     // Constant re-arm delay
+    bool active = true;
+  };
+  std::vector<MinnowInfo> minnows;
+  llvm::DenseMap<ProcessId, size_t> processToMinnow;
+
   /// Schedule processes triggered by a signal change.
   void triggerSensitiveProcesses(SignalId signalId, const SignalValue &oldVal,
                                  const SignalValue &newVal);

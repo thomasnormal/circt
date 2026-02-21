@@ -759,16 +759,11 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
   if (actualEdge == EdgeType::None)
     return;
 
-  // Per-delta signal-level dedup: if this signal's fanout was already walked
-  // in the current delta, all sensitive processes are already in the ready
-  // queue (scheduleProcess's inReadyQueue flag prevents double-scheduling).
-  if (signalId < (unsigned)signalTriggeredThisDelta.size()) {
-    if (signalTriggeredThisDelta[signalId]) {
-      ++stats.signalDedupSkips;
-      return;
-    }
-    signalTriggeredThisDelta.set(signalId);
-  }
+  // Note: E1c signal-level dedup was removed because it unsoundly skips
+  // fanout walks when a signal changes multiple times per delta. A signal
+  // driven 0→1→0 within one delta needs BOTH edge transitions to trigger
+  // sensitive processes. The process-level inReadyQueue dedup (in
+  // scheduleProcess) already prevents double-enqueue of the same process.
 
   bool traceI3CSignal = traceI3CSignal31 && (signalId == 31 || signalId == 45);
   if (traceI3CSignal) {
@@ -978,6 +973,58 @@ bool ProcessScheduler::advanceClockDomains(uint64_t targetTimeFs) {
   return didWork;
 }
 
+//===----------------------------------------------------------------------===//
+// Minnow time callbacks
+//===----------------------------------------------------------------------===//
+
+size_t ProcessScheduler::registerMinnow(ProcessId processId, uint64_t delayFs) {
+  size_t idx = minnows.size();
+  uint64_t firstWake =
+      eventScheduler->getCurrentTime().realTime + delayFs;
+  minnows.push_back({processId, firstWake, delayFs, /*active=*/true});
+  processToMinnow[processId] = idx;
+  LLVM_DEBUG(llvm::dbgs() << "Registered minnow " << idx << " for process "
+                          << processId << " delay=" << delayFs
+                          << "fs firstWake=" << firstWake << "fs\n");
+  return idx;
+}
+
+void ProcessScheduler::rearmMinnow(ProcessId processId) {
+  auto it = processToMinnow.find(processId);
+  if (it == processToMinnow.end())
+    return;
+  auto &m = minnows[it->second];
+  m.nextWakeFs = eventScheduler->getCurrentTime().realTime + m.delayFs;
+  LLVM_DEBUG(llvm::dbgs() << "Re-armed minnow for process " << processId
+                          << " nextWake=" << m.nextWakeFs << "fs\n");
+}
+
+bool ProcessScheduler::isMinnowProcess(ProcessId id) const {
+  return processToMinnow.count(id);
+}
+
+bool ProcessScheduler::advanceMinnows(uint64_t targetTimeFs) {
+  bool didWork = false;
+  for (auto &m : minnows) {
+    if (!m.active)
+      continue;
+    if (m.nextWakeFs > targetTimeFs)
+      continue;
+
+    // Resume the process via the standard resumeProcess path.
+    // This clears the scheduler's waiting state and schedules the process
+    // into its preferred region. The interpreter's state.destBlock (set
+    // in interpretWait) will handle resume-to-destination-block.
+    resumeProcess(m.processId);
+    didWork = true;
+
+    // Note: the minnow is NOT re-armed here. The interpreter's
+    // interpretWait() will call rearmMinnow() after the process
+    // executes and reaches its next wait.
+  }
+  return didWork;
+}
+
 void ProcessScheduler::terminateProcess(ProcessId id) {
   Process *proc = id < processVec.size() ? processVec[id] : nullptr;
   if (!proc)
@@ -999,6 +1046,11 @@ void ProcessScheduler::terminateProcess(ProcessId id) {
   // Mark as not in any queue. The stale intrusive-list entry (if any)
   // will be skipped during executeReadyProcesses (state == Terminated check).
   proc->inReadyQueue = false;
+
+  // Deactivate any minnow associated with this process.
+  auto mIt = processToMinnow.find(id);
+  if (mIt != processToMinnow.end())
+    minnows[mIt->second].active = false;
 
   LLVM_DEBUG(llvm::dbgs() << "Terminated process " << id << "\n");
 }
@@ -1258,9 +1310,16 @@ bool ProcessScheduler::advanceTime() {
       earliestClockWake = cd.nextWakeFs;
   bool hasClockWork = (earliestClockWake != UINT64_MAX);
 
-  // Check if there are any events, pending fast updates, or clock domains
+  // Find earliest minnow wake time.
+  uint64_t earliestMinnowWake = UINT64_MAX;
+  for (const auto &m : minnows)
+    if (m.active && m.nextWakeFs < earliestMinnowWake)
+      earliestMinnowWake = m.nextWakeFs;
+  bool hasMinnowWork = (earliestMinnowWake != UINT64_MAX);
+
+  // Check if there are any events, pending fast updates, clock domains, or minnows
   if (eventScheduler->isComplete() && pendingFastUpdates.empty() &&
-      !hasClockWork) {
+      !hasClockWork && !hasMinnowWork) {
     // Check if any processes are ready
     for (auto &queue : readyQueues) {
       if (!queue.empty())
@@ -1277,7 +1336,7 @@ bool ProcessScheduler::advanceTime() {
   // events at the same time). Then advance to the next real time and return
   // to the caller so it can run VPI callbacks etc.
   while (!eventScheduler->isComplete() || !pendingFastUpdates.empty() ||
-         hasClockWork) {
+         hasClockWork || hasMinnowWork) {
     if (isAbortRequested())
       return false;
 
@@ -1314,13 +1373,12 @@ bool ProcessScheduler::advanceTime() {
         earliestClockWake = cd.nextWakeFs;
     hasClockWork = (earliestClockWake != UINT64_MAX);
 
-    // Try to advance TimeWheel to its next event.
-    bool timeWheelAdvanced = false;
-    if (!eventScheduler->isComplete()) {
-      // If clock domain is earlier than TimeWheel, advance TimeWheel time
-      // pointer to clock wake time (without processing TW events).
-      timeWheelAdvanced = eventScheduler->advanceToNextTime();
-    }
+    // Recompute earliest minnow wake.
+    earliestMinnowWake = UINT64_MAX;
+    for (const auto &m : minnows)
+      if (m.active && m.nextWakeFs < earliestMinnowWake)
+        earliestMinnowWake = m.nextWakeFs;
+    hasMinnowWork = (earliestMinnowWake != UINT64_MAX);
 
     // If clock domain wake is at or before current time, process it now.
     if (hasClockWork && earliestClockWake <= currentTimeFs) {
@@ -1332,15 +1390,44 @@ bool ProcessScheduler::advanceTime() {
       continue;
     }
 
-    // If clock domain wake is earlier than next TimeWheel event (or TW is
-    // complete), advance sim time directly to the clock wake time.
-    // NOTE: Disabled pending EventScheduler::advanceTimeTo implementation
-    // (ClockDomain feature from task #22).
+    // If minnow wake is at or before current time, process it now.
+    if (hasMinnowWork && earliestMinnowWake <= currentTimeFs) {
+      advanceMinnows(currentTimeFs);
+      didWork = true;
+      for (auto &queue : readyQueues)
+        if (!queue.empty())
+          return true;
+      continue;
+    }
+
+    // Before advancing the TimeWheel, check if a minnow or clock domain
+    // wake is earlier. If so, advance sim time to that point first.
+    uint64_t earliestBypass = std::min(earliestClockWake, earliestMinnowWake);
+    bool timeWheelAdvanced = false;
+    if (!eventScheduler->isComplete()) {
+      timeWheelAdvanced = eventScheduler->advanceToNextTime();
+      // If the TimeWheel advanced past a minnow/clock wake, we need to
+      // process those at the right time. The TimeWheel's advanceToNextTime
+      // sets the sim time, so on the next loop iteration the
+      // "at or before currentTime" checks above will catch them.
+    }
+
+    // If neither the TimeWheel nor bypasses (clock/minnow) have work,
+    // and the EventScheduler is empty, stop.
     (void)hasClockWork;
     (void)earliestClockWake;
+    (void)hasMinnowWork;
+    (void)earliestMinnowWake;
 
     if (!timeWheelAdvanced) {
-      if (eventScheduler->isComplete() && !hasClockWork)
+      // No TimeWheel events — check if minnow/clock wake can drive time.
+      if (earliestBypass < UINT64_MAX) {
+        // Advance sim time directly to the earliest bypass wake.
+        eventScheduler->advanceTimeTo(earliestBypass);
+        didWork = true;
+        continue;
+      }
+      if (eventScheduler->isComplete() && !hasClockWork && !hasMinnowWork)
         break;
       // Neither stepDelta nor advanceToNextTime made progress, but
       // isComplete is false. This means orphaned events exist at past
@@ -1403,6 +1490,11 @@ bool ProcessScheduler::isComplete() const {
   // Check clock domains — if any active, simulation is not complete.
   for (const auto &cd : clockDomains)
     if (cd.active)
+      return false;
+
+  // Check minnows — if any active, simulation is not complete.
+  for (const auto &m : minnows)
+    if (m.active)
       return false;
 
   // Check if any processes are ready

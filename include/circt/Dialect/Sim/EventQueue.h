@@ -357,6 +357,11 @@ public:
   /// Get the current simulation time.
   const SimTime &getCurrentTime() const { return currentTime; }
 
+  /// Set the current simulation time without processing events.
+  /// Used by bypass mechanisms (minnows, clock domains) that advance
+  /// sim time independently of the TimeWheel's event queue.
+  void setCurrentTime(const SimTime &time) { currentTime = time; }
+
   /// Advance to the next scheduled event time.
   /// Returns false if there are no more events.
   bool advanceToNextEvent();

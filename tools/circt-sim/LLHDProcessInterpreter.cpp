@@ -15086,10 +15086,32 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
     LLVM_DEBUG(llvm::dbgs() << "  Wait delay " << delay.realTime
                             << " fs until time " << targetTime.realTime << "\n");
 
-    // Schedule resumption
-    scheduler.getEventScheduler().schedule(
-        targetTime, SchedulingRegion::Active,
-        Event([this, procId]() { resumeProcess(procId); }));
+    // Minnow fast-path: for CallbackTimeOnly processes with a constant delay,
+    // use a lightweight minnow (24 bytes) instead of a TimeWheel Event (80+
+    // bytes). The minnow is registered on first wait and re-armed on subsequent
+    // waits.
+    auto cbIt = processCallbackPlans.find(procId);
+    if (cbIt != processCallbackPlans.end() &&
+        cbIt->second.model == ExecModel::CallbackTimeOnly &&
+        delay.realTime > 0) {
+      if (!scheduler.isMinnowProcess(procId)) {
+        // First time: register the minnow with constant delay.
+        scheduler.registerMinnow(procId, delay.realTime);
+      } else {
+        // Subsequent waits: re-arm the existing minnow.
+        scheduler.rearmMinnow(procId);
+      }
+      // Set process to Suspended so the scheduler knows it's waiting.
+      auto *proc = scheduler.getProcessDirect(procId);
+      if (proc)
+        proc->setState(ProcessState::Suspended);
+    } else {
+      // Fallback: schedule via TimeWheel Event (for non-time-only processes
+      // or dynamic delays).
+      scheduler.getEventScheduler().schedule(
+          targetTime, SchedulingRegion::Active,
+          Event([this, procId]() { resumeProcess(procId); }));
+    }
   }
 
   // Callback fast-resuspend: for CallbackStaticObserved processes, the
