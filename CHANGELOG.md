@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1539 - February 21, 2026
+
+### [ImportVerilog][SVA] Fix module-level labeled concurrent-assert lowering to preserve valid `moore.module` form
+
+1. **Fixed invalid module-region block splitting for labeled concurrent assertions**  
+   (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   - module-scope concurrent assertions are now inserted safely with respect to
+     module terminator placement, avoiding accidental `cf.br` creation and
+     multi-block `moore.module` verification failures.
+   - this specifically resolves failures triggered by
+     `label: assert property (...) else ...` module items in yosys SVA cases.
+
+2. **Added regression coverage**  
+   (`test/Conversion/ImportVerilog/sva-labeled-module-assert.sv`):
+   - verifies labeled module-level concurrent assertions import correctly.
+   - checks action-label preservation and guards against `cf.br` in module IR.
+
+3. **Validation**
+   - `ninja -C build-test circt-verilog circt-translate`: PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-action-block.sv build-test/test/Conversion/ImportVerilog/sva-event-port-past-no-spurious-bool-error.sv build-test/test/Conversion/ImportVerilog/sva-labeled-module-assert.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic0[0-3]' utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva`: PASS (`8/8` mode cases).
+
 ## Iteration 1538 - February 19, 2026
 
 ### circt-sim: fix 9 syscall/feature bugs across force/release, randomize, plusargs, coverage, and VCD dump
