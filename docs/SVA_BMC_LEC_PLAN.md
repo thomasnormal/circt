@@ -152,6 +152,8 @@ Items are grouped by pipeline stage.
   completed once all legal event-typed uses are covered.
   - Feb 21, 2026: fixed a concrete false-positive diagnostic in this area for
     nested `$past(..., @(event_port))` lowering (`i1` bool-cast path).
+- Sequence match-item compound local-var assignments are now lowered for
+  integer local assertion variables (arithmetic/bitwise/shift compound forms).
 
 ### BMC + Semantics Gaps
 
