@@ -853,14 +853,25 @@ static LogicalResult lowerClockedSequenceEventControl(
   for (Value cond : nfa.conditions)
     loopConditions.push_back(cloneValueIntoBlock(cond, builder, condMapping));
 
-  SmallVector<SmallVector<SmallVector<Value, 4>, 4>, 8> incoming;
+  SmallVector<SmallVector<Value, 4>, 8> incoming;
   incoming.resize(numStates);
   for (size_t from = 0; from < numStates; ++from) {
+    DenseMap<Value, Value> transitionTerms;
     for (auto &tr : nfa.states[from].transitions) {
       if (tr.isEpsilon)
         continue;
-      incoming[tr.to].push_back(SmallVector<Value, 4>{
-          stateArgs[from], loopConditions[tr.condIndex]});
+      Value condition = loopConditions[tr.condIndex];
+      auto it = transitionTerms.find(condition);
+      Value term;
+      if (it != transitionTerms.end()) {
+        term = it->second;
+      } else {
+        term = comb::AndOp::create(builder, loc,
+                                   ValueRange{stateArgs[from], condition},
+                                   true);
+        transitionTerms.insert({condition, term});
+      }
+      incoming[tr.to].push_back(term);
     }
   }
 
@@ -870,10 +881,8 @@ static LogicalResult lowerClockedSequenceEventControl(
     SmallVector<Value, 8> orInputs;
     if (static_cast<int>(i) == fragment.start)
       orInputs.push_back(trueVal);
-    for (auto &edgeVals : incoming[i]) {
-      auto andVal = comb::AndOp::create(builder, loc, edgeVals, true);
-      orInputs.push_back(andVal);
-    }
+    for (auto term : incoming[i])
+      orInputs.push_back(term);
     if (orInputs.empty())
       nextVals[i] = falseVal;
     else
@@ -1155,14 +1164,25 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
   for (Value cond : nfa.conditions)
     loopConditions.push_back(cloneValueIntoBlock(cond, builder, condMapping));
 
-  SmallVector<SmallVector<SmallVector<Value, 4>, 4>, 8> incoming;
+  SmallVector<SmallVector<Value, 4>, 8> incoming;
   incoming.resize(numStates);
   for (size_t from = 0; from < numStates; ++from) {
+    DenseMap<Value, Value> transitionTerms;
     for (auto &tr : nfa.states[from].transitions) {
       if (tr.isEpsilon)
         continue;
-      incoming[tr.to].push_back(SmallVector<Value, 4>{
-          stateArgs[from], loopConditions[tr.condIndex]});
+      Value condition = loopConditions[tr.condIndex];
+      auto it = transitionTerms.find(condition);
+      Value term;
+      if (it != transitionTerms.end()) {
+        term = it->second;
+      } else {
+        term = comb::AndOp::create(builder, loc,
+                                   ValueRange{stateArgs[from], condition},
+                                   true);
+        transitionTerms.insert({condition, term});
+      }
+      incoming[tr.to].push_back(term);
     }
   }
 
@@ -1172,10 +1192,8 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
     SmallVector<Value, 8> orInputs;
     if (static_cast<int>(i) == fragment.start)
       orInputs.push_back(trueVal);
-    for (auto &edgeVals : incoming[i]) {
-      auto andVal = comb::AndOp::create(builder, loc, edgeVals, true);
-      orInputs.push_back(andVal);
-    }
+    for (auto term : incoming[i])
+      orInputs.push_back(term);
     if (orInputs.empty())
       nextVals[i] = falseVal;
     else
@@ -1191,6 +1209,7 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
 
   SmallVector<Value, 8> acceptingMatches;
   for (size_t from = 0; from < numStates; ++from) {
+    DenseSet<Value> emittedConditions;
     for (auto &tr : nfa.states[from].transitions) {
       if (tr.isEpsilon || !nfa.states[tr.to].accepting)
         continue;
@@ -1199,6 +1218,8 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
       // They keep states alive across unrelated clocks, but they should never
       // trigger new procedural wakeups by themselves.
       if (isClockStutterCondition(condition, allTicks))
+        continue;
+      if (!emittedConditions.insert(condition).second)
         continue;
       acceptingMatches.push_back(comb::AndOp::create(
           builder, loc, ValueRange{stateArgs[from], condition}, true));
