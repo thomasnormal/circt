@@ -4244,3 +4244,136 @@ Validate whether the latest runtime-side hypotheses changed failure signatures, 
 ### Outcome
 1. Arcilator AVIP fast-mode remains fully green across `all9` for seeds `1,2,3` on current head.
 2. Added regression coverage to prevent fast-mode/no-fast-mode runner contract regressions.
+
+---
+
+## 2026-02-21: Xcelium Process Dispatch Architecture (Binary Analysis)
+
+### Motivation
+To inform the design of circt-sim's AOT compiled process execution, we analyzed
+the Xcelium 24.03 `xmsim` binary to understand how Cadence handles compiled
+process suspension and resumption.
+
+### Method
+- `nm -D` on `/opt/cadence/installs/XCELIUM2403/tools/bin/64bit/xmsim` to
+  enumerate dynamic symbols
+- `objdump -d` to disassemble code around context-switching call sites
+
+### Key Findings
+
+**1. ucontext API for process setup**
+```
+U getcontext@GLIBC_2.2.5
+U makecontext@GLIBC_2.2.5
+U setcontext@GLIBC_2.2.5
+```
+Each compiled process gets its own execution context initialized via the
+standard POSIX ucontext API.
+
+**2. setjmp/longjmp for the hot switching path (NOT swapcontext)**
+```
+U _setjmp@GLIBC_2.2.5
+U _longjmp@GLIBC_2.2.5
+```
+The hot dispatch loop avoids `swapcontext` entirely. `swapcontext` calls
+`sigprocmask` (a syscall) on every switch — `_setjmp`/`_longjmp` skip
+signal mask save/restore, making them ~10x faster for context switching.
+
+**3. 32 KB process stacks**
+From disassembly at `0x1d980a4`:
+```asm
+mov    $0x8000,%edi          ; 32KB allocation size
+call   <allocator>
+mov    %rax,0x10(%rcx)       ; uc_stack.ss_sp
+movq   $0x8000,0x20(%rcx)    ; uc_stack.ss_size = 32KB
+```
+
+**4. Dispatch pattern (disassembly at `0x1d97470`)**
+```asm
+; --- Scheduler saves its context ---
+add    $0x3a8,%rdi           ; offset to jmp_buf within process struct
+movl   $0x1,0xc8(%rdi)       ; set "initialized" flag
+call   _setjmp               ; save scheduler context (fast, no sigprocmask)
+test   %eax,%eax
+jne    process_yielded        ; nonzero = longjmp return = process yielded
+
+; --- First-time dispatch ---
+mov    0x8(%rsp),%rax        ; load process context pointer
+mov    %rax,%rdi
+mov    0x470(%rax),%eax      ; check resume flag at offset 0x470
+test   %eax,%eax
+jne    do_longjmp            ; if set: resume via longjmp
+call   setcontext            ; first entry: jump to process via setcontext
+```
+
+Pattern summary:
+- Scheduler: `_setjmp` → `setcontext` (first dispatch) or nothing (process resumes via `longjmp`)
+- Process yield: `_longjmp` back to scheduler's saved `_setjmp` point
+- Process resume: scheduler calls `longjmp` to process's saved `_setjmp` point
+
+**5. Other notable symbols**
+- `dpi_scope_stack_counter` — DPI scope stack tracking (global variable)
+- `fault_sched_cl`, `fault_sched_seqlogic` — separate schedulers for
+  combinational logic vs sequential logic
+- `fmiAddSignalSensitivity`, `fmiSetSignalSensitivity` — FMI-based
+  sensitivity management
+- `mcp::sim::*` namespace — multi-clock partitioning (MCP) infrastructure
+  for parallel simulation
+
+### Architecture Implications for circt-sim
+
+The Xcelium architecture validates the coroutine approach over state-machine
+transformation:
+
+| Approach | Xcelium uses? | Complexity | Performance |
+|----------|:---:|---|---|
+| ucontext + setjmp/longjmp | Yes | Low — natural control flow preserved | Fast — no sigprocmask syscall |
+| State-machine transform | No | High — SSA spilling at every wait point | Fast but complex to implement |
+| swapcontext | No | Low | Slow — sigprocmask on every switch |
+| C++20 coroutines | No | Medium — compiler support needed | Fast but ABI-dependent |
+
+### Implementation Plan for circt-sim
+
+Based on these findings, the circt-sim compiled process architecture:
+
+1. **`CompiledProcessContext` struct**: `ucontext_t` (for initial setup) +
+   `jmp_buf` (for hot path) + 32KB stack + yield metadata (wait kind, delay,
+   signal ID)
+
+2. **`__circt_sim_yield(kind, arg)`**: extern "C" function called by compiled
+   process code at `llhd.wait` points. Does `_longjmp` back to the scheduler.
+
+3. **Scheduler dispatch**: `_setjmp` to save scheduler state, then
+   `setcontext` (first entry) or `longjmp` (resume) to switch to process.
+
+4. **BehavioralLowering.cpp change**: Replace the `llhd.wait` error at line
+   472 with a call to `__circt_sim_yield`, passing the wait kind and
+   delay/signal arguments.
+
+---
+
+## 2026-02-21 Session: Slang API Compatibility Unblock for Arcilator Validation
+
+### Problem
+1. `check-circt-arcilator` was blocked early by ImportVerilog compile failures tied to slang API drift:
+   - `Compilation::getBindDirectiveScope` not found
+   - `InstanceSymbol::getBindScope` not found
+2. Failure site:
+   - `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`
+
+### Fix
+1. Added compatibility helpers in `HierarchicalNames.cpp`:
+   - detect and use newer APIs when present (template-based detection)
+   - fallback for older slang revisions:
+     - bind-directive scope => target `InstanceBodySymbol` scope
+     - instance bind scope => parent scope for `FromBind` instances, else `nullptr`
+2. Preserved existing behavior where possible and kept fallback comments inline.
+
+### Validation
+1. Targeted rebuild of failing object:
+   - `ninja -C build-test lib/Conversion/ImportVerilog/CMakeFiles/obj.CIRCTImportVerilog.dir/HierarchicalNames.cpp.o` PASS
+2. Arcilator runner regression tests still pass:
+   - `build-ot/bin/llvm-lit -sv test/Tools --filter='run-avip-arcilator-sim-(fast-mode|no-fast-mode)'` PASS (`2/2`)
+3. Note on full `check-circt-arcilator`:
+   - no longer blocked by slang API symbols, but full target currently hits host-resource `cc1plus` terminations during broad rebuild under this workspace state.
+
