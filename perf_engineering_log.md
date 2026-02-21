@@ -552,7 +552,84 @@ with clock generation, master/slave BFMs, sequencer, driver, monitor, scoreboard
 
 This is incremental, not transformative. For 1000x on UVM, we need compiled processes.
 
-## Phase 7: Yield-Based Clock Toggle Batching
+## Phase 8: Current AVIP UVM Profile (Post-Phase 7)
+
+### Date: 2026-02-21
+
+### Setup
+Re-profiled AVIP APB dual-top with current build (Phase 5+7 applied).
+
+**Workload**: `/tmp/avip-perf-test/apb/apb.mlir`, `--top hvl_top --top hdl_top`,
+max-time=500ns (500,000,000,000 fs), 100,005 iterations.
+
+### Timing Breakdown
+
+| Stage | Wall time | % |
+|-------|-----------|---|
+| parse | 0ms | 0% |
+| passes | 1,721ms | 20.6% |
+| init | 4,127ms | 49.5% |
+| run (simulation) | 812ms | 9.7% |
+| overhead (exit/cleanup) | ~1,674ms | 20.1% |
+| **Total** | **8,334ms** | **100%** |
+
+### Key Finding: Init-Dominated, Not Simulation-Dominated
+
+The simulation phase is only 812ms (9.7%) — clock batching has made the clock
+toggling essentially free. The bottleneck is:
+
+1. **Init (49.5%)**: Walking 500K-line MLIR, resolving globals, registering signals
+2. **Passes (20.6%)**: MLIR lowering/optimization (GreedyPatternRewrite, fold, etc.)
+3. **Cleanup (20.1%)**: SimulationContext destructor, deallocation
+
+### Profile: Top Functions
+
+All top functions are MLIR infrastructure, not simulation:
+
+| % | Function | Category |
+|---|----------|----------|
+| 4.31% | LLVM::GlobalOp::getInherentAttr | Init (walking globals) |
+| 3.46% | func::FuncOp::getInherentAttr | Init |
+| 3.38% | eraseUnreachableBlocks | Passes |
+| 3.35% | GreedyPatternRewriteDriver::addSingleOpToWorklist | Passes |
+| 2.86% | GreedyPatternRewriteDriver::processWorklist | Passes |
+| 2.61% | Operation::fold | Passes |
+| 2.40% | SymbolTable::lookupSymbolIn | Init |
+| 2.19% | UniqueFunctionBase destructor | Memory cleanup |
+| 2.11% | Value::getDefiningOp | Init |
+| 0.84% | findMemoryBlockByAddress | **Simulation** |
+
+Only 0.84% of total time is in actual simulation code.
+
+### Comparison with Pre-Phase-5 Profile
+
+The Phase 7 (earlier) UVM profile showed simulation functions dominating (clock_gettime 9.28%,
+EventScheduler::schedule 9.09%, etc.). After Phase 5+7 clock batching:
+- Clock process overhead: eliminated by batching
+- Wall-clock check: throttled to every 1024 iterations
+- Net effect: simulation dropped from ~50% to ~10% of total time
+- Remaining bottleneck: init + passes (70%)
+
+### Instruction Count
+
+| Metric | Value |
+|--------|-------|
+| Total instructions | 47.48B |
+| Sim iterations | 100,005 |
+| Insns per iter | ~474K |
+| Wall time per sim-ns | ~16.7ms |
+
+### Implication
+
+Further perf improvements on the simulation loop will have diminishing returns —
+the ceiling is 9.7% of total time. To improve end-to-end performance:
+1. **Skip unnecessary passes** for pre-lowered MLIR (saves ~20%)
+2. **Lazy init** — don't walk all globals upfront (saves ~50%)
+3. **Fast `_exit(0)`** — already implemented, saves destructor time
+
+---
+
+## Phase 7b: Yield-Based Clock Toggle Batching
 
 ### Date: 2026-02-21
 
