@@ -1189,3 +1189,4 @@ verilator-verification, and yosys corpora).
   - abort-style property operators (`accept_on`, `reject_on`, `sync_accept_on`,
     `sync_reject_on`) are now lowered instead of rejected.
   - `strong(...)` / `weak(...)` property wrappers are now accepted and lowered.
+  - `case` property expressions are now accepted and lowered.

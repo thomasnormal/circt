@@ -711,6 +711,10 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - regressions:
     - `test/Conversion/ImportVerilog/sva-strong-weak.sv`
     - `test/Tools/circt-bmc/sva-strong-weak-e2e.sv`
+  - ImportVerilog now supports `case` property expressions.
+  - regressions:
+    - `test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `test/Tools/circt-bmc/sva-case-property-e2e.sv`
 
 ## Ownership and References
 
