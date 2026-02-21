@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1551 - February 21, 2026
+
+### [ImportVerilog][SVA] Deduplicate repeated assertion clock-event list entries
+
+1. **Eliminated redundant `ltl.clock` / `ltl.or` generation for repeated clock events**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - added structural equivalence checking for clocked LTL values in assertion
+     event-list lowering.
+   - `LTLClockControlVisitor::visit(EventListControl)` now drops duplicate
+     clocked entries before building the final OR.
+   - dead duplicate LTL ops are cleaned up via `eraseLTLDeadOps`.
+
+2. **Added regression coverage**
+   - `test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+     - verifies `@(posedge clk or posedge clk)` lowers to one `ltl.clock`
+       without a redundant `ltl.or`.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time BMC_SMOKE_ONLY=1 TEST_FILTER='^counter$' utils/run_yosys_sva_circt_bmc.sh` (`real=2.233s`, `user=0.389s`, `sys=0.086s`).
+
 ## Iteration 1550 - February 21, 2026
 
 ### [SVA][Regression] Retire stale `counter` known-profile fail XFAIL baseline in yosys SVA BMC expectations

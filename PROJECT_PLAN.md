@@ -1281,3 +1281,13 @@ verilator-verification, and yosys corpora).
     `LTLToCore`.
   - regression:
     - `test/Conversion/LTLToCore/first-match-empty.mlir`
+
+- Additional ImportVerilog SVA closure:
+  - assertion clock event-list lowering now deduplicates repeated equivalent
+    clock events, avoiding redundant `ltl.clock` / `ltl.or` generation.
+  - new regression:
+    - `test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
