@@ -1173,12 +1173,18 @@ verilator-verification, and yosys corpora).
 - SVA/LTL closure:
   - Added unbounded `first_match` regression:
     `test/Conversion/LTLToCore/first-match-unbounded.mlir`.
-  - `LTLToCore` no longer hard-fails unbounded `first_match` during
-    `verif.clocked_assert` lowering; unbounded cases now take a non-failing
-    generic sequence-lowering fallback.
+  - `LTLToCore` now lowers unbounded `first_match` with first-hit semantics:
+    accepting next states define `match`, and next-state updates are masked by
+    `!match` after first satisfaction.
+  - reduced duplicate transition masking in first-match lowering (bounded and
+    unbounded paths) by caching per-state/per-condition masks.
 - Validation snapshots:
+  - `ninja -C build-test circt-opt`
   - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
-  - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core --lower-clocked-assert-like --externalize-registers --lower-to-bmc='top-module=unbounded_first_match bound=5'`
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/first-match-unbounded.mlir`
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+  - profiling sample:
+    - `time build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core` (`~0.01s`)
   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-restrict-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_restrict bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-restrict-e2e.sv --check-prefix=CHECK-BMC`
 
 - Additional SVA importer closure:
