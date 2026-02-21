@@ -21,6 +21,8 @@
 # --- AVIP simulation (explicit commands; $1=out_dir, env vars for config) ---
 avip_sim_smoke	smoke	AVIP_SET=core8 SEEDS=1 utils/run_avip_circt_sim.sh /tmp/unified-avip-smoke	AVIP_SET=core8 SEEDS=1 utils/run_avip_xcelium_reference.sh /tmp/unified-avip-xcelium-smoke	-	-	-	-
 avip_sim_nightly	nightly,full	AVIP_SET=all9 SEEDS=1,2,3 utils/run_avip_circt_sim.sh /tmp/unified-avip-nightly	AVIP_SET=all9 SEEDS=1,2,3 utils/run_avip_xcelium_reference.sh /tmp/unified-avip-xcelium-nightly	-	-	-	-
+avip_arcilator_smoke	smoke	AVIP_SET=core8 SEEDS=1 utils/run_avip_arcilator_sim.sh /tmp/unified-avip-arcilator-smoke	-	-	-	-	-
+avip_arcilator_nightly	nightly,full	AVIP_SET=all9 SEEDS=1 utils/run_avip_arcilator_sim.sh /tmp/unified-avip-arcilator-nightly	-	-	-	-	-
 avip_verilog_smoke	smoke	AVIP_SET=core8 utils/run_avip_circt_verilog.sh ~/mbit/apb_avip	-	-	-	-	-
 avip_verilog_nightly	nightly,full	AVIP_SET=all9 utils/run_avip_circt_verilog.sh ~/mbit/apb_avip	-	-	-	-	-
 #

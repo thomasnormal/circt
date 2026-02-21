@@ -1,0 +1,22 @@
+# adapter_id	engine	command_prefix
+# engine: circt|xcelium
+# command_prefix is executed as: <command_prefix> <suite_root> <adapter_args>
+
+# AVIP reference lanes
+avip_sim	circt	utils/run_avip_circt_sim.sh
+avip_sim	xcelium	utils/run_avip_xcelium_reference.sh
+avip_arcilator	circt	utils/run_avip_arcilator_sim.sh
+
+# Formal/suite lanes
+sv_tests_bmc	circt	utils/run_sv_tests_circt_bmc.sh
+sv_tests_lec	circt	utils/run_sv_tests_circt_lec.sh
+sv_tests_sim	circt	utils/run_sv_tests_circt_sim.sh
+verilator_bmc	circt	utils/run_verilator_verification_circt_bmc.sh
+verilator_lec	circt	utils/run_verilator_verification_circt_lec.sh
+yosys_bmc	circt	utils/run_yosys_sva_circt_bmc.sh
+yosys_lec	circt	utils/run_yosys_sva_circt_lec.sh
+opentitan_sim	circt	utils/run_opentitan_circt_sim.sh
+ibex_sim	circt	utils/run_opentitan_circt_sim.sh
+
+# Mutation lanes
+mcy_examples_native_real	circt	utils/run_mutation_mcy_examples_native_real.sh
