@@ -61,3 +61,22 @@
     including side-effectful blocks and success/failure branch semantics.
   - continue inventory-driven closure on unsupported SVA items in
     `docs/SVA_BMC_LEC_PLAN.md`.
+
+- Iteration update (unbounded `first_match` formal path):
+  - realization:
+    - ImportVerilog now accepts unbounded `first_match` forms, but the
+      `LTLToCore` lowering still rejected some unbounded sequence forms with:
+      `first_match lowering requires a bounded sequence`.
+    - reproduction was stable with:
+      `ltl.first_match(ltl.non_consecutive_repeat %a, 2)` under
+      `verif.clocked_assert`.
+  - implemented:
+    - added `test/Conversion/LTLToCore/first-match-unbounded.mlir` as a
+      dedicated regression.
+    - updated `LTLToCore` first-match lowering to avoid hard failure on
+      unbounded inputs and fall back to generic sequence lowering for now.
+  - validation:
+    - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-first-match-unbounded.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-first-match-unbounded.sv`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-first-match-unbounded.sv`
+    - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core --lower-clocked-assert-like --externalize-registers --lower-to-bmc='top-module=unbounded_first_match bound=5'`

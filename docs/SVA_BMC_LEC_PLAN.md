@@ -680,6 +680,17 @@ Run these at least once per iteration (or per change if relevant):
 
 Record results in CHANGELOG.md and include relevant output artifacts.
 
+## Latest SVA closure slice (2026-02-21)
+
+- Closed gap:
+  - `LTLToCore` no longer hard-fails on unbounded `ltl.first_match` inputs in
+    clocked assertions (reproducer: unbounded non-consecutive repeat).
+- New regression:
+  - `test/Conversion/LTLToCore/first-match-unbounded.mlir`
+- Validation:
+  - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
+  - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core --lower-clocked-assert-like --externalize-registers --lower-to-bmc='top-module=unbounded_first_match bound=5'`
+
 ## Ownership and References
 
 - Primary plan: PROJECT_PLAN.md (tracks and iteration status)

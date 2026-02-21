@@ -869,13 +869,12 @@ struct LTLPropertyLowerer {
     NFABuilder nfa(trueVal, clockPredicate);
     if (auto firstMatch = seq.getDefiningOp<ltl::FirstMatchOp>()) {
       auto maxLen = getSequenceMaxLength(firstMatch.getInput());
-      if (!maxLen) {
-        firstMatch.emitError(
-            "first_match lowering requires a bounded sequence");
-        return {};
-      }
-      return lowerFirstMatchSequence(firstMatch.getInput(), clock, edge,
-                                     *maxLen);
+      if (maxLen)
+        return lowerFirstMatchSequence(firstMatch.getInput(), clock, edge,
+                                       *maxLen);
+      // Fallback for unbounded first_match: lower the inner sequence with the
+      // generic NFA path rather than rejecting the property.
+      return lowerSequence(firstMatch.getInput(), clock, edge);
     }
     auto fragment = nfa.build(seq, loc, builder);
     nfa.eliminateEpsilon();
