@@ -1784,6 +1784,28 @@ struct LTLClockControlVisitor {
     return ltl::ClockOp::create(builder, loc, seqOrPro, edge, expr);
   }
 
+  Value visit(const slang::ast::EventListControl &ctrl) {
+    SmallVector<Value, 4> clockedValues;
+    for (const auto *event : ctrl.events) {
+      if (!event)
+        continue;
+      auto visitor = *this;
+      visitor.loc = context.convertLocation(event->sourceRange);
+      visitor.seqOrPro = seqOrPro;
+      auto clocked = event->visit(visitor);
+      if (!clocked)
+        return Value{};
+      clockedValues.push_back(clocked);
+    }
+    if (clockedValues.empty()) {
+      mlir::emitError(loc) << "empty assertion clock event list";
+      return Value{};
+    }
+    if (clockedValues.size() == 1)
+      return clockedValues.front();
+    return ltl::OrOp::create(builder, loc, clockedValues);
+  }
+
   template <typename T>
   Value visit(T &&ctrl) {
     mlir::emitError(loc, "unsupported LTL clock control: ")
