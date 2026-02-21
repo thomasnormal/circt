@@ -2442,6 +2442,14 @@ struct StmtVisitor {
       if (auto *block = actionStmt->as_if<slang::ast::BlockStatement>()) {
         return extractActionBlockLabel(&block->body);
       }
+      if (auto *conditional =
+              actionStmt->as_if<slang::ast::ConditionalStatement>()) {
+        if (auto label = extractActionBlockLabel(&conditional->ifTrue))
+          return label;
+        if (conditional->ifFalse)
+          return extractActionBlockLabel(conditional->ifFalse);
+        return {};
+      }
       auto *exprStmt = actionStmt->as_if<slang::ast::ExpressionStatement>();
       if (!exprStmt)
         return {};

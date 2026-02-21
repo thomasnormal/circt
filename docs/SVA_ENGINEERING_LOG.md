@@ -26,6 +26,7 @@
     - `begin ... $warning("...") ... end`
     - `$display("...")`
     - multi-statement `begin/end` action blocks (first supported diagnostic call)
+    - nested control-flow action blocks (`if (...) $display("...")`)
   - fixed a spurious importer diagnostic for nested event-typed assertion-port
     clocking in `$past(..., @(e))` paths by accepting builtin `i1` in
     `convertToBool`.

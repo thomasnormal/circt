@@ -11,6 +11,7 @@ endmodule
 
 module ActionBlockSeverity(input logic clk, a, b);
   logic shadow;
+  logic cond;
   // CHECK-LABEL: moore.module @ActionBlockSeverity
   // CHECK: verif.assert {{.*}} label "fatal_fail"
   assert property (@(posedge clk) a |-> b) else $fatal(1, "fatal_fail");
@@ -27,5 +28,11 @@ module ActionBlockSeverity(input logic clk, a, b);
   assert property (@(posedge clk) b |=> a) else begin
     shadow = a;
     $display("multi_stmt_disp_fail");
+  end
+
+  // CHECK: verif.assert {{.*}} label "nested_if_disp_fail"
+  assert property (@(posedge clk) a |-> b) else begin
+    if (cond)
+      $display("nested_if_disp_fail");
   end
 endmodule
