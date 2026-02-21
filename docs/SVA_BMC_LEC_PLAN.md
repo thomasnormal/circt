@@ -765,3 +765,15 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 - Formal tooling references: docs/FormalVerification.md
 - Dialect references: docs/Dialects/LTL.md, docs/Dialects/SMT.md
 - BMC/LEC passes: docs/Passes.md
+
+- Additional closure (same date):
+  - ImportVerilog now differentiates `strong(...)` and `weak(...)` wrappers.
+  - `strong(expr)` lowers with explicit eventual progress requirement via
+    `ltl.eventually`; `weak(expr)` remains direct.
+  - updated regression:
+    - `test/Conversion/ImportVerilog/sva-strong-weak.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-IMPORT`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-MOORE`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-strong-weak-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc="top-module=sva_strong_weak_e2e bound=2" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-strong-weak-e2e.sv --check-prefix=CHECK-BMC`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
