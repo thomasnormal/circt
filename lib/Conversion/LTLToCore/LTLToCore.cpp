@@ -519,15 +519,23 @@ struct LTLPropertyLowerer {
 
     SmallVector<SmallVector<Value, 8>, 8> nextInputs(numStates);
     for (size_t from = 0; from < numStates; ++from) {
+      auto shifted =
+          shiftAges(currentStates[from], zeroBit, ageWidth, zeroBits);
+      DenseMap<size_t, Value> maskedByCond;
       for (auto &tr : nfa.states[from].transitions) {
         if (tr.isEpsilon)
           continue;
-        auto shifted =
-            shiftAges(currentStates[from], zeroBit, ageWidth, zeroBits);
-        auto mask =
-            comb::ReplicateOp::create(builder, loc,
-                                      nfa.conditions[tr.condIndex], ageWidth);
-        auto masked = comb::AndOp::create(builder, loc, shifted, mask);
+        auto it = maskedByCond.find(tr.condIndex);
+        Value masked;
+        if (it != maskedByCond.end()) {
+          masked = it->second;
+        } else {
+          auto mask = comb::ReplicateOp::create(builder, loc,
+                                                nfa.conditions[tr.condIndex],
+                                                ageWidth);
+          masked = comb::AndOp::create(builder, loc, shifted, mask);
+          maskedByCond.insert({tr.condIndex, masked});
+        }
         nextInputs[tr.to].push_back(masked);
       }
     }
@@ -563,6 +571,101 @@ struct LTLPropertyLowerer {
       nextStates[i].setValue(kept);
     }
 
+    return match;
+  }
+
+  Value lowerFirstMatchSequenceUnbounded(Value seq, Value clock,
+                                         ltl::ClockEdge edge) {
+    static_cast<void>(edge);
+    if (!clock) {
+      seq.getDefiningOp()->emitError("sequence lowering requires a clock");
+      return {};
+    }
+
+    auto trueVal =
+        hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+    auto falseVal =
+        hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
+    NFABuilder nfa(trueVal);
+    auto fragment = nfa.build(seq, loc, builder);
+    nfa.eliminateEpsilon();
+
+    size_t numStates = nfa.states.size();
+    if (numStates == 0)
+      return trueVal;
+
+    SmallVector<Value, 8> stateRegs;
+    SmallVector<Backedge, 8> nextStates;
+    BackedgeBuilder bb(builder, loc);
+    for (size_t i = 0; i < numStates; ++i) {
+      auto next = bb.get(builder.getI1Type());
+      nextStates.push_back(next);
+      auto powerOn =
+          seq::createConstantInitialValue(builder, falseVal.getOperation());
+      auto [reset, resetVal] = getResetPair(falseVal);
+      auto reg = seq::CompRegOp::create(builder, loc, next, clock, reset,
+                                        resetVal,
+                                        builder.getStringAttr("ltl_state"),
+                                        powerOn);
+      stateRegs.push_back(reg);
+    }
+
+    SmallVector<Value, 8> currentStates(stateRegs.begin(), stateRegs.end());
+    currentStates[fragment.start] =
+        comb::OrOp::create(builder, loc,
+                           SmallVector<Value, 2>{currentStates[fragment.start],
+                                                 trueVal},
+                           true);
+
+    SmallVector<SmallVector<Value, 8>, 8> nextInputs(numStates);
+    for (size_t from = 0; from < numStates; ++from) {
+      DenseMap<size_t, Value> maskedByCond;
+      for (auto &tr : nfa.states[from].transitions) {
+        if (tr.isEpsilon)
+          continue;
+        auto it = maskedByCond.find(tr.condIndex);
+        Value masked;
+        if (it != maskedByCond.end()) {
+          masked = it->second;
+        } else {
+          masked = comb::AndOp::create(
+              builder, loc,
+              SmallVector<Value, 2>{currentStates[from],
+                                    nfa.conditions[tr.condIndex]},
+              true);
+          maskedByCond.insert({tr.condIndex, masked});
+        }
+        nextInputs[tr.to].push_back(masked);
+      }
+    }
+
+    SmallVector<Value, 8> nextVals(numStates, falseVal);
+    for (size_t i = 0; i < numStates; ++i) {
+      if (nextInputs[i].empty())
+        continue;
+      if (nextInputs[i].size() == 1) {
+        nextVals[i] = nextInputs[i].front();
+        continue;
+      }
+      nextVals[i] = comb::OrOp::create(builder, loc, nextInputs[i], true);
+    }
+
+    SmallVector<Value, 8> accepting;
+    for (size_t i = 0; i < numStates; ++i) {
+      if (nfa.states[i].accepting)
+        accepting.push_back(nextVals[i]);
+    }
+    if (accepting.empty())
+      return falseVal;
+    Value match = accepting.front();
+    if (accepting.size() > 1)
+      match = comb::OrOp::create(builder, loc, accepting, true);
+    auto notMatch = comb::XorOp::create(builder, loc, match, trueVal);
+    for (size_t i = 0; i < numStates; ++i) {
+      auto kept = comb::AndOp::create(
+          builder, loc, SmallVector<Value, 2>{nextVals[i], notMatch}, true);
+      nextStates[i].setValue(kept);
+    }
     return match;
   }
 
@@ -872,9 +975,8 @@ struct LTLPropertyLowerer {
       if (maxLen)
         return lowerFirstMatchSequence(firstMatch.getInput(), clock, edge,
                                        *maxLen);
-      // Fallback for unbounded first_match: lower the inner sequence with the
-      // generic NFA path rather than rejecting the property.
-      return lowerSequence(firstMatch.getInput(), clock, edge);
+      return lowerFirstMatchSequenceUnbounded(firstMatch.getInput(), clock,
+                                              edge);
     }
     auto fragment = nfa.build(seq, loc, builder);
     nfa.eliminateEpsilon();

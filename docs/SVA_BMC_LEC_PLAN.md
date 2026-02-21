@@ -162,6 +162,8 @@ Items are grouped by pipeline stage.
   incomplete.
 - Liveness-style eventualities near bound need stronger closure checks.
 - Sampled-value alignment remains imperfect in some local-variable scenarios.
+- Some unbounded-sequence forms can still generate large NFAs; more global
+  CSE/transition dedup in sequence lowering remains a performance track.
 
 ### Tooling + Flow Gaps
 
@@ -683,13 +685,22 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 ## Latest SVA closure slice (2026-02-21)
 
 - Closed gap:
-  - `LTLToCore` no longer hard-fails on unbounded `ltl.first_match` inputs in
-    clocked assertions (reproducer: unbounded non-consecutive repeat).
+  - `LTLToCore` now lowers unbounded `ltl.first_match` in clocked assertions
+    with first-hit semantics: accepting next states form `match`, and all
+    next-state updates are masked by `!match`.
 - New regression:
   - `test/Conversion/LTLToCore/first-match-unbounded.mlir`
 - Validation:
+  - `ninja -C build-test circt-opt`
   - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
-  - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core --lower-clocked-assert-like --externalize-registers --lower-to-bmc='top-module=unbounded_first_match bound=5'`
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/first-match-unbounded.mlir`
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+  - profiling sample:
+    - `time build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core` (`~0.01s`)
+
+- Performance follow-up in same slice:
+  - reduced duplicate transition masking in bounded and unbounded first-match
+    lowering via per-source-state/per-condition mask caching.
 
 - Additional closure (same date):
   - ImportVerilog now supports concurrent `restrict property` by lowering to

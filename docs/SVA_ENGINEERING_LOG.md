@@ -195,3 +195,27 @@
     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
     - formal smoke:
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+
+- Iteration update (unbounded `first_match` semantic closure + perf):
+  - realization:
+    - the initial unbounded `first_match` enablement used generic sequence
+      fallback semantics; this avoided hard errors but did not encode
+      first-hit suppression.
+    - transition masking in `first_match` lowering duplicated many equivalent
+      `and` terms (same source state and condition), creating avoidable IR
+      churn.
+  - implemented:
+    - added dedicated unbounded first-match lowering that computes `match` from
+      accepting next states and masks all next-state updates with `!match`.
+    - optimized both bounded and unbounded first-match paths with
+      per-source-state/per-condition transition-mask caching to reduce
+      duplicated combinational terms.
+    - strengthened regression to assert the first-hit kill-switch structure:
+      - `test/Conversion/LTLToCore/first-match-unbounded.mlir`
+  - validation:
+    - `ninja -C build-test circt-opt`
+    - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/first-match-unbounded.mlir`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+    - profiling sample:
+      - `time build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core` (`~0.01s`)

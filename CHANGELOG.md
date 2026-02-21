@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1542 - February 21, 2026
+
+### [LTLToCore][SVA] Add semantic unbounded `first_match` lowering and reduce transition-mask duplication
+
+1. **Implemented unbounded `first_match` first-hit semantics**
+   (`lib/Conversion/LTLToCore/LTLToCore.cpp`):
+   - replaced generic unbounded fallback with dedicated lowering that computes
+     `match` from accepting next states and masks all next-state updates by
+     `!match`, preserving first-hit behavior for unbounded inputs.
+
+2. **Reduced first-match lowering churn in bounded and unbounded paths**
+   (`lib/Conversion/LTLToCore/LTLToCore.cpp`):
+   - cached transition masks per source-state and condition index to avoid
+     recomputing duplicate `comb.and` masking terms for identical transitions.
+
+3. **Strengthened regression coverage**
+   (`test/Conversion/LTLToCore/first-match-unbounded.mlir`):
+   - tightened checks to assert the lowered `match` / `!match` kill-switch
+     structure, not just the existence of a `verif.assert`.
+
+4. **Validation**
+   - `ninja -C build-test circt-opt`: PASS.
+   - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`: PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/first-match-unbounded.mlir`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS (`2/2` mode cases).
+   - profiling sample:
+     - `time build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core` (`~0.01s`).
+
 ## Iteration 1541 - February 21, 2026
 
 ### [ImportVerilog][SVA] Stabilize compound match-item assignment lowering against Slang normalized RHS trees
