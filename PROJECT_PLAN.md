@@ -1248,3 +1248,9 @@ verilator-verification, and yosys corpora).
   - `weak(expr)` remains direct.
   - updated regression:
     - `test/Conversion/ImportVerilog/sva-strong-weak.sv`
+
+- Additional SVA/LTL closure:
+  - empty `first_match` sequences now lower as immediate success in
+    `LTLToCore`.
+  - regression:
+    - `test/Conversion/LTLToCore/first-match-empty.mlir`
