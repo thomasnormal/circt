@@ -2425,20 +2425,22 @@ struct StmtVisitor {
                                  ? dyn_cast_or_null<moore::ProcedureOp>(
                                        insertionBlock->getParentOp())
                                  : nullptr;
-    auto extractActionBlockLabel =
-        [&](const slang::ast::Statement *actionStmt) -> StringAttr {
+    std::function<StringAttr(const slang::ast::Statement *)>
+        extractActionBlockLabel =
+            [&](const slang::ast::Statement *actionStmt) -> StringAttr {
       if (!actionStmt)
         return {};
       if (auto *timed = actionStmt->as_if<slang::ast::TimedStatement>())
         actionStmt = &timed->stmt;
-      if (auto *block = actionStmt->as_if<slang::ast::BlockStatement>()) {
-        if (auto *stmtList =
-                block->body.as_if<slang::ast::StatementList>()) {
-          if (stmtList->list.size() == 1)
-            actionStmt = stmtList->list.front();
-        } else {
-          actionStmt = &block->body;
+      if (auto *stmtList = actionStmt->as_if<slang::ast::StatementList>()) {
+        for (auto *stmt : stmtList->list) {
+          if (auto label = extractActionBlockLabel(stmt))
+            return label;
         }
+        return {};
+      }
+      if (auto *block = actionStmt->as_if<slang::ast::BlockStatement>()) {
+        return extractActionBlockLabel(&block->body);
       }
       auto *exprStmt = actionStmt->as_if<slang::ast::ExpressionStatement>();
       if (!exprStmt)

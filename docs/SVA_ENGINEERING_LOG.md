@@ -25,6 +25,7 @@
     - `$fatal(<code>, "...")`
     - `begin ... $warning("...") ... end`
     - `$display("...")`
+    - multi-statement `begin/end` action blocks (first supported diagnostic call)
 
 - Surprises:
   - the action-block path did not emit a warning in the common

@@ -10,6 +10,7 @@ module ActionBlockAssert(input logic clk, rst, a, b);
 endmodule
 
 module ActionBlockSeverity(input logic clk, a, b);
+  logic shadow;
   // CHECK-LABEL: moore.module @ActionBlockSeverity
   // CHECK: verif.assert {{.*}} label "fatal_fail"
   assert property (@(posedge clk) a |-> b) else $fatal(1, "fatal_fail");
@@ -21,4 +22,10 @@ module ActionBlockSeverity(input logic clk, a, b);
 
   // CHECK: verif.assert {{.*}} label "disp_fail"
   assert property (@(posedge clk) a |=> b) else $display("disp_fail");
+
+  // CHECK: verif.assert {{.*}} label "multi_stmt_disp_fail"
+  assert property (@(posedge clk) b |=> a) else begin
+    shadow = a;
+    $display("multi_stmt_disp_fail");
+  end
 endmodule
