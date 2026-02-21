@@ -3970,3 +3970,27 @@ Validate whether the latest runtime-side hypotheses changed failure signatures, 
 ### Notes
 1. Under host contention from other concurrent `circt-verilog` jobs, compile times varied significantly; functional statuses remained green in the matrix above.
 2. Fast mode is designed as an AVIP unblock path for Arcilator throughput; it is not a claim of full UVM semantic parity.
+
+---
+
+## 2026-02-21 Session: Arcilator Fast Mode all9 Sweep (Seed 1)
+
+### Run
+1. `AVIP_SET=all9 COMPILE_TIMEOUT=600 SEEDS=1 utils/run_avip_arcilator_sim.sh /tmp/arci-fastmode-all9-20260221-060645`
+
+### Result summary
+1. `8/9` lanes pass end-to-end (`compile_status=OK`, `sim_status=OK`):
+   - `apb, ahb, axi4, axi4Lite, i2s, i3c, jtag, spi`.
+2. `uart` is the only failing lane, and it fails at compile stage (sim skipped):
+   - `compile_status=FAIL`, `compile_sec=6`.
+
+### UART failure signature
+1. Log: `/tmp/arci-fastmode-all9-20260221-060645/uart/uart.warnings.log`
+2. Key error:
+   - `../mbit/uart_avip/src/hvlTop/uartRxAgent/UartRxTransaction.sv:63:11: error: block with no terminator`
+   - followed by verifier failure:
+   - `generated MLIR module failed to verify; this is likely a bug in circt-verilog`.
+
+### Interpretation
+1. This `uart` blocker is a frontend import/verification issue in `circt-verilog` (Moore conditional lowering), not an Arcilator runtime/JIT execution issue.
+2. Arcilator fast-mode unblock is complete for the `core8` AVIPs and all non-`uart` lanes in `all9`.
