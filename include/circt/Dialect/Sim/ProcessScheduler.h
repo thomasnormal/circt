@@ -17,6 +17,7 @@
 
 #include "circt/Dialect/Sim/EventQueue.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -1307,6 +1308,7 @@ public:
     size_t signalUpdates = 0;
     size_t edgesDetected = 0;
     size_t maxDeltaCyclesReached = 0;
+    uint64_t signalDedupSkips = 0;
   };
 
   const Statistics &getStatistics() const { return stats; }
@@ -1450,6 +1452,9 @@ private:
   llvm::SmallVector<SignalId, 32> signalsChangedThisDelta;
   // Bitvector for O(1) dedup + O(n_changed) clear (vs DenseSet O(n_buckets)).
   std::vector<bool> signalsChangedThisDeltaBits;
+  // Per-delta signal-level dedup: prevents walking the same signal's fanout
+  // more than once per delta cycle. Reset at each delta boundary.
+  llvm::BitVector signalTriggeredThisDelta;
   llvm::SmallVector<SignalId, 32> lastDeltaSignals;
 
   llvm::SmallVector<ProcessId, 32> processesExecutedThisDelta;
