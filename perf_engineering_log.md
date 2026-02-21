@@ -833,3 +833,46 @@ Three functions eliminated from hot path:
 
 ### Test Results
 564/578 pass (14 pre-existing failures, 0 regressions).
+
+## Phase 9c-9d: Additional interpreter caching
+
+### Date: 2026-02-21
+
+### 9c: cacheWaitState wait-op identity fast path
+Track which `llhd.wait` operation produced the cached sensitivity entries. When the same
+wait op is hit again (RTL processes loop on the same wait), skip element-by-element vector
+comparison and directly update signal values. Uses `Operation*` identity check (free).
+
+### 9d: resolveSignalId cache
+Cache signal ID resolution results in `DenseMap<(Value, InstanceId), SignalId>`. Eliminates
+repeated recursive lookups through `valueToSignal → instanceOutputMap → blockArgs → casts`
+chains that resolve to the same signal on every cycle.
+
+### Cumulative AVIP 50us Benchmark (all Phase 9 optimizations)
+
+| Metric | Original Baseline | After Phase 9a-d | Improvement |
+|--------|-------------------|-------------------|-------------|
+| Instructions | 781.0B | 627.3B | **-153.7B (-19.7%)** |
+| Wall time | 78.7s | 62.9s | **-15.8s (-20.1%)** |
+
+### Throughput (50us sim, 10M delta cycles)
+- **158,983 delta cycles/s** (was 127,065 baseline)
+- **62,730 instructions/delta cycle** (was 78,100 baseline)
+- **~795 ns/s simulation throughput** (50us / 62.9s)
+
+### Final Profile (20us AVIP)
+All hotspots < 3.2%, extremely flat distribution:
+- findBlockByAddress: 3.20%
+- interpretOperation: 2.97%
+- cacheWaitState: 2.95%
+- suspendProcessForEvents: 2.53%
+- interpretLLVMStore: 2.50%
+- memmove: 2.06%
+- interpretProbe: 2.05%
+- DenseMapIterator: 1.98%
+
+No single function dominates — further optimization requires structural changes
+(JIT block compilation, native scheduling, direct memory layout).
+
+### Test Results
+564/578 pass (14 pre-existing failures, 0 regressions).
