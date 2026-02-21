@@ -156,3 +156,25 @@
     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-strong-weak-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_strong_weak_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-strong-weak-e2e.sv --check-prefix=CHECK-BMC`
     - formal smoke:
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+
+- Iteration update (`case` property expressions):
+  - realization:
+    - `case (...) ... endcase` in property expressions failed import with
+      `unsupported expression: Case`.
+  - implemented:
+    - added lowering for `slang::ast::CaseAssertionExpr` in
+      `AssertionExprVisitor`.
+    - current lowering model:
+      - selector/case item expressions are normalized to boolean `i1`.
+      - item groups lower to prioritized nested conditional property logic.
+      - no-default case lowers with false default branch.
+    - added import regression:
+      - `test/Conversion/ImportVerilog/sva-case-property.sv`
+    - added BMC pipeline regression:
+      - `test/Tools/circt-bmc/sva-case-property-e2e.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
+    - formal smoke:
+      - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)

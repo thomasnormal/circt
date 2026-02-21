@@ -12,6 +12,8 @@
 #include "slang/ast/expressions/OperatorExpressions.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "ImportVerilogInternals.h"
+#include "circt/Dialect/Comb/CombOps.h"
+#include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Support/LLVM.h"
@@ -1251,6 +1253,68 @@ struct AssertionExprVisitor {
 
     return ltl::OrOp::create(builder, loc,
                              SmallVector<Value, 2>{notCond, ifExpr});
+  }
+
+  Value visit(const slang::ast::CaseAssertionExpr &expr) {
+    auto selector = context.convertRvalueExpression(expr.expr);
+    if (!selector)
+      return {};
+    selector = context.convertToBool(selector);
+    selector = context.convertToI1(selector);
+    if (!selector)
+      return {};
+
+    Value result;
+    if (expr.defaultCase) {
+      result = context.convertAssertionExpression(*expr.defaultCase, loc,
+                                                  /*applyDefaults=*/false);
+      if (!result)
+        return {};
+    } else {
+      result = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
+    }
+
+    for (auto itemIt = expr.items.rbegin(); itemIt != expr.items.rend();
+         ++itemIt) {
+      auto body = context.convertAssertionExpression(*itemIt->body, loc,
+                                                     /*applyDefaults=*/false);
+      if (!body)
+        return {};
+
+      Value groupCond;
+      for (auto *caseExpr : itemIt->expressions) {
+        if (!caseExpr)
+          continue;
+        auto caseValue = context.convertRvalueExpression(*caseExpr);
+        if (!caseValue)
+          return {};
+        caseValue = context.convertToBool(caseValue);
+        caseValue = context.convertToI1(caseValue);
+        if (!caseValue)
+          return {};
+        Value match = comb::ICmpOp::create(builder, loc,
+                                           comb::ICmpPredicate::eq, selector,
+                                           caseValue);
+        if (!groupCond)
+          groupCond = match;
+        else
+          groupCond = ltl::OrOp::create(builder, loc,
+                                        SmallVector<Value, 2>{groupCond, match});
+      }
+      if (!groupCond)
+        continue;
+
+      auto notCond = ltl::NotOp::create(builder, loc, groupCond);
+      auto condAndBody = ltl::AndOp::create(
+          builder, loc, SmallVector<Value, 2>{groupCond, body});
+      auto notCondAndElse = ltl::AndOp::create(
+          builder, loc, SmallVector<Value, 2>{notCond, result});
+      result = ltl::OrOp::create(builder, loc,
+                                 SmallVector<Value, 2>{condAndBody,
+                                                       notCondAndElse});
+    }
+
+    return result;
   }
 
   Value visit(const slang::ast::StrongWeakAssertionExpr &expr) {
