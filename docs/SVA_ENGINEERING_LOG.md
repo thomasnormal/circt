@@ -26,6 +26,11 @@
     - `begin ... $warning("...") ... end`
     - `$display("...")`
     - multi-statement `begin/end` action blocks (first supported diagnostic call)
+  - fixed a spurious importer diagnostic for nested event-typed assertion-port
+    clocking in `$past(..., @(e))` paths by accepting builtin `i1` in
+    `convertToBool`.
+  - added regression:
+    - `test/Conversion/ImportVerilog/sva-event-port-past-no-spurious-bool-error.sv`
 
 - Surprises:
   - the action-block path did not emit a warning in the common

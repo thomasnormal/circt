@@ -147,6 +147,8 @@ Items are grouped by pipeline stage.
 - Some assertion port timing-control value paths still carry unsupported
   diagnostics in generic expression lowering; these paths should be retired or
   completed once all legal event-typed uses are covered.
+  - Feb 21, 2026: fixed a concrete false-positive diagnostic in this area for
+    nested `$past(..., @(event_port))` lowering (`i1` bool-cast path).
 
 ### BMC + Semantics Gaps
 

@@ -106,6 +106,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    the diagnostic message as assertion labels during import
    (e.g. `else $error("fail")` / `$display("fail")` ->
    `verif.assert ... label "fail"`).
+7. **SVA event-port clocking diagnostic cleanup** (Feb 21, 2026):
+   Fixed false-positive importer diagnostic for nested event-typed assertion
+   port clocking in `$past(..., @(event_port))` scenarios.
 
 ### Previously Completed (Iteration 1401, Feb 14, 2026)
 1. **sv-tests 100% coverage**: 952 PASS + 76 XFAIL = 1028/1028. Zero silent skips. Key additions: SVA LTLToCore pipeline, CompRegOp support, AnalysisManager integration, tagged union checker, runner compile-only mode for preprocessing tests.
