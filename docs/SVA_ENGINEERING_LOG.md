@@ -496,3 +496,27 @@
       now passes with no failures/xpass in the widened smoke set.
     - profiling sample:
       - `time BMC_SMOKE_ONLY=1 TEST_FILTER='^counter$' utils/run_yosys_sva_circt_bmc.sh` (`elapsed=1.777s`)
+
+- Iteration update (assertion event-list duplicate clock dedup):
+  - realization:
+    - repeated assertion clock events (for example
+      `@(posedge clk or posedge clk)`) lowered to duplicated `ltl.clock`
+      operations plus a redundant `ltl.or`.
+    - this is unnecessary IR churn and can hurt downstream compile/runtime on
+      large generated assertion sets with accidental duplicate event entries.
+  - implemented:
+    - added structural equivalence helper for clocked LTL values
+      (`edge + input + equivalent clock signal`).
+    - `LTLClockControlVisitor::visit(EventListControl)` now filters duplicate
+      entries before constructing the final OR.
+    - duplicate temporary LTL ops are reclaimed with `eraseLTLDeadOps`.
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+  - validation:
+    - `ninja -C build-test circt-translate`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time BMC_SMOKE_ONLY=1 TEST_FILTER='^counter$' utils/run_yosys_sva_circt_bmc.sh` (`real=2.233s`)

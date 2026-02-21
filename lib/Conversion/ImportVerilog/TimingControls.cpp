@@ -1496,6 +1496,18 @@ static bool equivalentClockSignals(Value lhs, Value rhs) {
   return false;
 }
 
+static bool equivalentClockedLTLValues(Value lhs, Value rhs) {
+  if (lhs == rhs)
+    return true;
+  auto lhsClock = lhs.getDefiningOp<ltl::ClockOp>();
+  auto rhsClock = rhs.getDefiningOp<ltl::ClockOp>();
+  if (!lhsClock || !rhsClock)
+    return false;
+  return lhsClock.getEdge() == rhsClock.getEdge() &&
+         lhsClock.getInput() == rhsClock.getInput() &&
+         equivalentClockSignals(lhsClock.getClock(), rhsClock.getClock());
+}
+
 static LogicalResult
 lowerSequenceEventListControl(Context &context, Location loc,
                               const slang::ast::EventListControl &ctrl) {
@@ -1842,6 +1854,13 @@ struct LTLClockControlVisitor {
       auto clocked = event->visit(visitor);
       if (!clocked)
         return Value{};
+      bool duplicate = llvm::any_of(clockedValues, [&](Value known) {
+        return equivalentClockedLTLValues(known, clocked);
+      });
+      if (duplicate) {
+        eraseLTLDeadOps(clocked);
+        continue;
+      }
       clockedValues.push_back(clocked);
     }
     if (clockedValues.empty()) {
