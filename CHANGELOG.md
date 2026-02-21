@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1545 - February 21, 2026
+
+### [ImportVerilog][SVA] Apply global clocking semantics to unclocked `_gclk` sampled-value assertions
+
+1. **Closed `_gclk` global-clocking hole in assertion-call lowering**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - `_gclk` sampled-value variants now consult scope global clocking via
+     `getGlobalClockingAndNoteUse` when no explicit/default assertion clock is
+     active.
+   - for unclocked assertion contexts, `_gclk` paths now force clock-aware
+     lowering and wrap helper-lowered sampled values with clock timing control,
+     preventing accidental unclocked `verif.assert` emission.
+   - applied to `$rose_gclk`/`$fell_gclk`/`$stable_gclk`/`$changed_gclk`,
+     `$past_gclk`, and `$future_gclk` paths.
+
+2. **Added regression coverage for unclocked global-clocking behavior**
+   (`test/Conversion/ImportVerilog/gclk-global-clocking.sv`):
+   - verifies unclocked properties using `_gclk` sampled-value calls still lower
+     through clocked assertion forms.
+   - checks both importer IR and `--ir-moore` output forms.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-global-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-global-clocking.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/gclk-global-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-global-clocking.sv --check-prefix=CHECK-MOORE`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`: PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/gclk-global-clocking.sv build-test/test/Conversion/ImportVerilog/gclk-sampled-functions.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS (`2/2` mode cases).
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-global-clocking.sv` (`elapsed=0.074s`).
+
 ## Iteration 1544 - February 21, 2026
 
 ### [ImportVerilog][SVA] Lower `$future_gclk` to forward temporal delay instead of `$past` approximation

@@ -1501,6 +1501,7 @@ Value Context::convertAssertionCallExpression(
           .Case("$changing_gclk", "$changed")
           .Default(std::string(subroutine.name));
   StringRef funcName(normalizedName);
+  bool isGlobalClockVariant = StringRef(subroutine.name).ends_with("_gclk");
 
   FailureOr<Value> result;
   Value value;
@@ -1514,9 +1515,20 @@ Value Context::convertAssertionCallExpression(
     value = this->convertToI1(value);
     if (!value)
       return {};
-    return ltl::DelayOp::create(builder, loc, value,
-                                builder.getI64IntegerAttr(1),
-                                builder.getI64IntegerAttr(0));
+    auto delayed = ltl::DelayOp::create(builder, loc, value,
+                                        builder.getI64IntegerAttr(1),
+                                        builder.getI64IntegerAttr(0));
+    if (isGlobalClockVariant && inAssertionExpr && !currentAssertionClock &&
+        !currentAssertionTimingControl && currentScope) {
+      if (auto *clocking =
+              compilation.getGlobalClockingAndNoteUse(*currentScope)) {
+        if (auto *clockBlock =
+                clocking->as_if<slang::ast::ClockingBlockSymbol>()) {
+          return convertLTLTimingControl(clockBlock->getEvent(), delayed);
+        }
+      }
+    }
+    return delayed;
   }
 
   if (funcName == "$rose" || funcName == "$fell" ||
@@ -1573,6 +1585,14 @@ Value Context::convertAssertionCallExpression(
             clockingCtrl = &clockBlock->getEvent();
         }
       }
+      if (!clockingCtrl && isGlobalClockVariant && currentScope) {
+        if (auto *clocking =
+                compilation.getGlobalClockingAndNoteUse(*currentScope)) {
+          if (auto *clockBlock =
+                  clocking->as_if<slang::ast::ClockingBlockSymbol>())
+            clockingCtrl = &clockBlock->getEvent();
+        }
+      }
     }
 
     if (!clockingCtrl)
@@ -1595,13 +1615,27 @@ Value Context::convertAssertionCallExpression(
                                          *currentAssertionTimingControl))
         explicitClockMatchesAssertionClock = true;
     }
-    bool needsClockedHelper = enableExpr || !disableExprs.empty() ||
-                              (hasClockingArg &&
-                               !explicitClockMatchesAssertionClock);
+    bool forceClockedHelperForUnclockedGclk =
+        isGlobalClockVariant && clockingCtrl && inAssertionExpr &&
+        !currentAssertionClock && !currentAssertionTimingControl;
+    bool needsClockedHelper =
+        enableExpr || !disableExprs.empty() ||
+        (hasClockingArg && !explicitClockMatchesAssertionClock) ||
+        forceClockedHelperForUnclockedGclk;
     if (clockingCtrl && inAssertionExpr && needsClockedHelper) {
-      return lowerSampledValueFunctionWithClocking(
+      auto sampled = lowerSampledValueFunctionWithClocking(
           *this, *args[0], *clockingCtrl, funcName, enableExpr,
           disableExprs, loc);
+      if (!sampled)
+        return {};
+      if (forceClockedHelperForUnclockedGclk) {
+        sampled = convertToBool(sampled);
+        sampled = convertToI1(sampled);
+        if (!sampled)
+          return {};
+        return convertLTLTimingControl(*clockingCtrl, sampled);
+      }
+      return sampled;
     }
 
     if (hasClockingArg && !inAssertionExpr) {
@@ -1733,6 +1767,14 @@ Value Context::convertAssertionCallExpression(
             clockingCtrl = &clockBlock->getEvent();
         }
       }
+      if (!clockingCtrl && isGlobalClockVariant && currentScope) {
+        if (auto *clocking =
+                compilation.getGlobalClockingAndNoteUse(*currentScope)) {
+          if (auto *clockBlock =
+                  clocking->as_if<slang::ast::ClockingBlockSymbol>())
+            clockingCtrl = &clockBlock->getEvent();
+        }
+      }
     };
     if (inAssertionExpr) {
       if (!clockingCtrl)
@@ -1761,12 +1803,28 @@ Value Context::convertAssertionCallExpression(
                                            *currentAssertionTimingControl))
           explicitClockMatchesAssertionClock = true;
       }
-      bool needsClockedHelper = enableExpr || !disableExprs.empty() ||
-                                (hasClockingArg &&
-                                 !explicitClockMatchesAssertionClock);
-      if (needsClockedHelper)
-        return lowerPastWithClocking(*this, *args[0], *clockingCtrl, delay,
-                                     enableExpr, disableExprs, loc);
+      bool forceClockedHelperForUnclockedGclk =
+          isGlobalClockVariant && clockingCtrl && !currentAssertionClock &&
+          !currentAssertionTimingControl;
+      bool needsClockedHelper =
+          enableExpr || !disableExprs.empty() ||
+          (hasClockingArg && !explicitClockMatchesAssertionClock) ||
+          forceClockedHelperForUnclockedGclk;
+      if (needsClockedHelper) {
+        auto sampled = lowerPastWithClocking(*this, *args[0], *clockingCtrl,
+                                             delay, enableExpr, disableExprs,
+                                             loc);
+        if (!sampled)
+          return {};
+        if (forceClockedHelperForUnclockedGclk) {
+          sampled = convertToBool(sampled);
+          sampled = convertToI1(sampled);
+          if (!sampled)
+            return {};
+          return convertLTLTimingControl(*clockingCtrl, sampled);
+        }
+        return sampled;
+      }
     }
     if (enableExpr) {
       mlir::emitError(loc)
