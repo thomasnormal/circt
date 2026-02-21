@@ -549,9 +549,7 @@ struct LTLPropertyLowerer {
       return {};
     }
     if (maxLen == 0) {
-      seq.getDefiningOp()->emitError(
-          "first_match with empty sequences is not supported");
-      return {};
+      return hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
     }
 
     auto trueVal =
