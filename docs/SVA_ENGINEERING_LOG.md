@@ -242,3 +242,25 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sequence-event-control.sv` (`~0.01s`)
+
+- Iteration update (both-edge clock support for clocked sequence/property lowering):
+  - realization:
+    - `LTLToCore::normalizeClock` still rejected `ltl::ClockEdge::Both` for
+      `i1` clocks, which blocked direct `--lower-ltl-to-core` lowering of
+      `verif.clocked_{assert,assume,cover}` on `!ltl.sequence` properties with
+      `edge` clocks.
+  - implemented:
+    - removed the `both-edge clocks are not supported in LTL lowering` bailout
+      in `normalizeClock`; both-edge now normalizes through `seq.to_clock`
+      (no inversion), and edge discrimination continues in sequence lowering
+      (`getClockTick`).
+    - added regression:
+      - `test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
+  - validation:
+    - `ninja -C build-test circt-opt`
+    - `build-test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir build-test/test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir build-test/test/Conversion/LTLToCore/clocked-assert-edge-gating.mlir`
+    - formal smoke:
+      - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+    - profiling sample:
+      - `time build-test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core` (`~0.01s`)
