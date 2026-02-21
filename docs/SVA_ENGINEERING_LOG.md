@@ -51,6 +51,10 @@
     assertion variables (`+=`, `-=`, `*=`, `/=`, `%=`, bitwise ops, shifts).
   - added regressions in `test/Conversion/ImportVerilog/sva-local-var.sv`
     for `z += 1` and `s <<= 1` match-item forms.
+  - follow-up stabilization: compound assignment RHS in Slang can include
+    synthesized lvalue references and normalized compound-expression trees.
+    lowering now evaluates that RHS under a temporary lhs reference context,
+    avoiding importer assertions and preserving single-application semantics.
 
 - Next steps:
   - implement richer action-block lowering (beyond severity-message extraction),

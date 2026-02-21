@@ -713,77 +713,19 @@ struct AssertionExprVisitor {
           }
           if (!lhs)
             return failure();
-          const slang::ast::Expression *rhsExpr = &assign.right();
-          if (auto *binary = rhsExpr->as_if<slang::ast::BinaryExpression>()) {
-            if (binary->op == *assign.op &&
-                binary->left().kind ==
-                    slang::ast::ExpressionKind::LValueReference) {
-              rhsExpr = &binary->right();
-            }
+          auto lhsUnpacked = dyn_cast<moore::UnpackedType>(lhs.getType());
+          if (!lhsUnpacked) {
+            mlir::emitError(loc, "unsupported match item assignment type")
+                << lhs.getType();
+            return failure();
           }
-          rhs = context.convertRvalueExpression(*rhsExpr);
+          auto lhsRef = moore::VariableOp::create(
+              builder, loc, moore::RefType::get(lhsUnpacked), StringAttr{}, lhs);
+          context.lvalueStack.push_back(lhsRef);
+          rhs = context.convertRvalueExpression(assign.right());
+          context.lvalueStack.pop_back();
           if (!rhs)
             return failure();
-          auto lhsInt = dyn_cast<moore::IntType>(lhs.getType());
-          auto rhsInt = dyn_cast<moore::IntType>(rhs.getType());
-          bool isSigned = assign.left().type && assign.left().type->isSigned();
-          if (!lhsInt || !rhsInt) {
-            mlir::emitError(loc)
-                << "compound match item assignment requires integer operands";
-            return failure();
-          }
-          if (rhs.getType() != lhs.getType())
-            rhs = context.materializeConversion(lhs.getType(), rhs,
-                                                isSigned, loc);
-          if (!rhs)
-            return failure();
-          using slang::ast::BinaryOperator;
-          switch (*assign.op) {
-          case BinaryOperator::Add:
-            rhs = moore::AddOp::create(builder, loc, lhs, rhs).getResult();
-            break;
-          case BinaryOperator::Subtract:
-            rhs = moore::SubOp::create(builder, loc, lhs, rhs).getResult();
-            break;
-          case BinaryOperator::Multiply:
-            rhs = moore::MulOp::create(builder, loc, lhs, rhs).getResult();
-            break;
-          case BinaryOperator::Divide:
-            rhs = isSigned
-                      ? moore::DivSOp::create(builder, loc, lhs, rhs).getResult()
-                      : moore::DivUOp::create(builder, loc, lhs, rhs).getResult();
-            break;
-          case BinaryOperator::Mod:
-            rhs = isSigned
-                      ? moore::ModSOp::create(builder, loc, lhs, rhs).getResult()
-                      : moore::ModUOp::create(builder, loc, lhs, rhs).getResult();
-            break;
-          case BinaryOperator::BinaryAnd:
-            rhs = moore::AndOp::create(builder, loc, lhs, rhs).getResult();
-            break;
-          case BinaryOperator::BinaryOr:
-            rhs = moore::OrOp::create(builder, loc, lhs, rhs).getResult();
-            break;
-          case BinaryOperator::BinaryXor:
-            rhs = moore::XorOp::create(builder, loc, lhs, rhs).getResult();
-            break;
-          case BinaryOperator::LogicalShiftLeft:
-          case BinaryOperator::ArithmeticShiftLeft:
-            rhs = moore::ShlOp::create(builder, loc, lhs, rhs).getResult();
-            break;
-          case BinaryOperator::LogicalShiftRight:
-            rhs = moore::ShrOp::create(builder, loc, lhs, rhs).getResult();
-            break;
-          case BinaryOperator::ArithmeticShiftRight:
-            rhs = isSigned
-                      ? moore::AShrOp::create(builder, loc, lhs, rhs).getResult()
-                      : moore::ShrOp::create(builder, loc, lhs, rhs).getResult();
-            break;
-          default:
-            mlir::emitError(loc, "unsupported compound match item assignment "
-                                 "operator");
-            return failure();
-          }
         }
         if (!rhs) {
           rhs = context.convertRvalueExpression(assign.right());
