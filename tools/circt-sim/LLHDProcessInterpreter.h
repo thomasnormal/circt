@@ -2210,6 +2210,9 @@ private:
   /// Map from child module input block arguments to instance IDs.
   mutable llvm::DenseMap<mlir::Value, InstanceId> inputValueInstanceMap;
 
+  /// Cache for getLLVMTypeSizeForGEP — avoids recursive struct walks on hot path.
+  mutable llvm::DenseMap<mlir::Type, unsigned> typeSizeForGEPCache;
+
   /// Map from signal IDs to signal names.
   llvm::DenseMap<SignalId, std::string> signalIdToName;
 
