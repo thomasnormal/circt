@@ -406,3 +406,29 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-func.sv` (`elapsed=0.077s`)
+
+- Iteration update (`$global_clock` explicit sampled-value clocking args):
+  - realization:
+    - after adding `@($global_clock)` support in assertion LTL timing controls,
+      sampled-value explicit clocking argument paths could still fail because
+      they lower through generic event controls (`EventControlVisitor`) instead
+      of `LTLClockControlVisitor`.
+    - reproduction: `assert property ($rose(a, @($global_clock)));` failed
+      import prior to this fix.
+  - implemented:
+    - added `$global_clock` handling in `EventControlVisitor` signal-event
+      lowering, resolving through
+      `compilation.getGlobalClockingAndNoteUse(*currentScope)` and recursively
+      lowering the resolved global clocking event.
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-func.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-func.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv` (fails with `error: expected a 1-bit integer`)
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build-test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build-test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv` (`elapsed=0.031s`)

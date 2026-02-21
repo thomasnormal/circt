@@ -87,6 +87,32 @@ struct EventControlVisitor {
       return clockEvent.visit(visitor);
     }
 
+    // Resolve $global_clock event controls to the declared global clocking
+    // event in the current scope.
+    if (auto *callExpr = ctrl.expr.as_if<slang::ast::CallExpression>()) {
+      if (callExpr->isSystemCall() &&
+          callExpr->getKnownSystemName() ==
+              slang::parsing::KnownSystemName::GlobalClock) {
+        if (!context.currentScope)
+          return mlir::emitError(loc)
+                 << "$global_clock requires an enclosing scope";
+        auto *globalClocking = context.compilation.getGlobalClockingAndNoteUse(
+            *context.currentScope);
+        if (!globalClocking)
+          return mlir::emitError(loc)
+                 << "no global clocking is available in this scope";
+        if (auto *clockBlock =
+                globalClocking->as_if<slang::ast::ClockingBlockSymbol>()) {
+          auto &clockEvent = clockBlock->getEvent();
+          auto visitor = *this;
+          visitor.loc = context.convertLocation(clockEvent.sourceRange);
+          return clockEvent.visit(visitor);
+        }
+        return mlir::emitError(loc)
+               << "unsupported global clocking symbol kind for $global_clock";
+      }
+    }
+
     // If this is an event-typed assertion port, substitute the bound timing
     // control directly (e.g., for $past/$rose explicit clocking arguments).
     if (context.inAssertionExpr && symRef) {

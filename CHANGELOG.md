@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1547 - February 21, 2026
+
+### [ImportVerilog][SVA] Support `$global_clock` in explicit sampled-value clocking arguments
+
+1. **Extended generic event-control lowering for `$global_clock`**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - `EventControlVisitor::visit(SignalEventControl)` now recognizes
+     `$global_clock` system-call events and resolves them to the scope global
+     clocking event before lowering.
+   - this closes explicit sampled-value clocking forms such as:
+     `$rose(expr, @($global_clock))`.
+
+2. **Added regression coverage**
+   - `test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv`
+     - verifies sampled-value explicit clocking argument lowering uses
+       `moore.wait_event` + `moore.detect_event posedge` from global clocking.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-func.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-func.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv` fails with expected diagnostic (`error: expected a 1-bit integer`): PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build-test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build-test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS (`2/2` mode cases).
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv` (`elapsed=0.031s`).
+
 ## Iteration 1546 - February 21, 2026
 
 ### [ImportVerilog][SVA] Support `@($global_clock)` assertion timing controls and stop silent assertion drops on lowering failures

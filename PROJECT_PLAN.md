@@ -131,6 +131,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    the scope's global clocking block and no longer silently drops assertions
    when assertion-expression lowering fails (except true dead-generate
    `InvalidAssertionExpr` branches).
+13. **SVA sampled explicit `@($global_clock)` support** (Feb 21, 2026):
+   Explicit sampled-value clocking-argument forms (for example,
+   `$rose(a, @($global_clock))`) now lower through resolved global clocking
+   events instead of failing import.
 
 ### Previously Completed (Iteration 1401, Feb 14, 2026)
 1. **sv-tests 100% coverage**: 952 PASS + 76 XFAIL = 1028/1028. Zero silent skips. Key additions: SVA LTLToCore pipeline, CompRegOp support, AnalysisManager integration, tagged union checker, runner compile-only mode for preprocessing tests.
