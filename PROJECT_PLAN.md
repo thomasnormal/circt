@@ -135,6 +135,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    Explicit sampled-value clocking-argument forms (for example,
    `$rose(a, @($global_clock))`) now lower through resolved global clocking
    events instead of failing import.
+14. **SVA assertion clock event-list support** (Feb 21, 2026):
+   Property clocking with event lists (for example,
+   `@(posedge clk or negedge clk)`) now lowers by clocking per-event and OR
+   combining the resulting clocked properties.
 
 ### Previously Completed (Iteration 1401, Feb 14, 2026)
 1. **sv-tests 100% coverage**: 952 PASS + 76 XFAIL = 1028/1028. Zero silent skips. Key additions: SVA LTLToCore pipeline, CompRegOp support, AnalysisManager integration, tagged union checker, runner compile-only mode for preprocessing tests.

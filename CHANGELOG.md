@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1548 - February 21, 2026
+
+### [ImportVerilog][SVA] Add assertion clock event-list (`@(e1 or e2)`) lowering support
+
+1. **Implemented event-list clocking in assertion LTL timing controls**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - `LTLClockControlVisitor` now handles `EventListControl`.
+   - lowers each listed event using the same base sequence/property and combines
+     results with `ltl.or`.
+   - this enables assertions such as:
+     `assert property (@(posedge clk or negedge clk) (...));`
+
+2. **Added regression coverage**
+   - `test/Conversion/ImportVerilog/sva-clock-event-list.sv`
+     - verifies import emits two `ltl.clock` ops (posedge + negedge), merges
+       with `ltl.or`, and emits `verif.assert`.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-list.sv`: PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-clock-event-list.sv build-test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build-test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build-test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS (`2/2` mode cases).
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv` (`elapsed=0.041s`).
+
 ## Iteration 1547 - February 21, 2026
 
 ### [ImportVerilog][SVA] Support `$global_clock` in explicit sampled-value clocking arguments

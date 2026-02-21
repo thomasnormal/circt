@@ -432,3 +432,23 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv` (`elapsed=0.031s`)
+
+- Iteration update (assertion clock event-list lowering):
+  - realization:
+    - property clocking event lists (e.g. `@(posedge clk or negedge clk)`) were
+      rejected with `unsupported LTL clock control: EventList`.
+  - implemented:
+    - added `EventListControl` handling in `LTLClockControlVisitor`.
+    - each listed event is lowered with the same base sequence/property, then
+      combined using `ltl.or`.
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-clock-event-list.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-list.sv`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-clock-event-list.sv build-test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build-test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build-test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv` (`elapsed=0.041s`)
