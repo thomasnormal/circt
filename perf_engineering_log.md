@@ -746,3 +746,48 @@ Both clock patterns now use the batched fast path.
 
 ### Test Results
 564/578 pass (14 pre-existing failures, 0 regressions).
+
+## Phase 9: Interpreter Hot Path Optimizations
+
+### Date: 2026-02-21
+
+### Summary
+Three targeted optimizations based on 20us AVIP UVM profiling data:
+1. **suspendProcessForEvents DenseSet** (3.27% → 2.56%): Per-process `DenseSet<SignalId>` replaces O(N) `std::find` per signal per cycle. Once a process registers for a signal, it stays registered — no need to re-add on every suspension.
+2. **cacheWaitState skip** (3.46% → ~same): Skip vector copy when sensitivity list entries unchanged between consecutive waits. Only update cached signal values. Most RTL processes wait on the same signals every cycle.
+3. **getLLVMTypeSizeForGEP cache** (1.81% → <0.5%): `DenseMap<Type, unsigned>` cache eliminates recursive struct/array type size computation. Same types are queried thousands of times during GEP interpretation.
+
+### AVIP 50us Benchmark Results (APB dual-top)
+
+| Metric | Baseline | After Phase 9 | Improvement |
+|--------|----------|---------------|-------------|
+| Instructions | 781.0B | 701.3B | **-79.7B (-10.2%)** |
+| Wall time | 78.7s | 68.7s | **-10.0s (-12.7%)** |
+| IPC | 2.93 | 2.91 | ~same |
+
+### Throughput (50us sim, 10M delta cycles)
+- **145,570 delta cycles/s**
+- **70,129 instructions/delta cycle**
+- **~1000 ns/s simulation throughput** (50us sim / 68.7s wall)
+
+### Profile Comparison (20us AVIP)
+
+| Function | Before | After |
+|----------|--------|-------|
+| cacheWaitState | 3.46% | 3.78% |
+| SensitivityEntry emplace_back | 2.97% | 3.27% |
+| suspendProcessForEvents | **3.27%** | **2.56%** |
+| findBlockByAddress | 2.59% | 2.87% |
+| interpretOperation | 2.40% | 2.57% |
+| interpretLLVMStore | 2.24% | 2.55% |
+| interpretProbe | 2.15% | 2.55% |
+| getLLVMTypeSizeForGEP | **1.81%** | **<0.5%** |
+
+Note: percentages shifted up because total instruction count dropped (denominator effect).
+
+### Pipeline Benchmark (non-UVM, 10 processes, 100ms sim)
+- Before: 2,521,957,846 → After: 2,504,244,433 instructions (0.7% improvement)
+- Minimal benefit here because pipeline processes have simple fixed sensitivity lists.
+
+### Test Results
+564/578 pass (14 pre-existing failures, 0 regressions).

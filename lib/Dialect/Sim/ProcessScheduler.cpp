@@ -802,11 +802,15 @@ void ProcessScheduler::suspendProcessForEvents(ProcessId id,
   // it would otherwise become orphaned in Suspended state with no sensitivity.
   proc->getSensitivityList() = waitList;
 
-  // Ensure the signals in the wait list are mapped to this process
+  // Ensure the signals in the wait list are mapped to this process.
+  // Optimization: use a per-process set of registered signal IDs to avoid
+  // redundant O(N) linear scans in signalToProcesses on every cycle.
+  // RTL always blocks re-suspend on the same signals every cycle, making
+  // the original std::find always return true after the first registration.
   for (const auto &entry : waitList.getEntries()) {
-    auto &procList = signalToProcesses[entry.signalId];
-    if (std::find(procList.begin(), procList.end(), id) == procList.end()) {
-      procList.push_back(id);
+    if (proc->registeredSignals.insert(entry.signalId).second) {
+      // First time this process registers for this signal.
+      signalToProcesses[entry.signalId].push_back(id);
     }
   }
 

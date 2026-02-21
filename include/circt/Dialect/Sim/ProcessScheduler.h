@@ -505,6 +505,12 @@ public:
       state = ProcessState::Ready;
   }
 
+  /// Set of signal IDs this process has been registered for in the
+  /// scheduler's signalToProcesses map. Avoids redundant O(N) linear
+  /// scans on every suspendProcessForEvents call (RTL processes re-suspend
+  /// on the same signals every cycle).
+  llvm::DenseSet<SignalId> registeredSignals;
+
 private:
   ProcessId id;
   std::string name;
