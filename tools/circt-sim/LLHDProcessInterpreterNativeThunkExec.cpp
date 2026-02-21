@@ -7,7 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLHDProcessInterpreter.h"
+#include "JITBlockCompiler.h"
 #include "JITCompileManager.h"
+#include "JITSchedulerRuntime.h"
+#include "circt/Dialect/Comb/CombOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "llvm/ADT/Twine.h"
@@ -124,9 +127,47 @@ bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
       kindMask |=
           toFastPathMask(DirectProcessFastPathKind::ResumableWaitSelfLoop);
 
+    // Block-level JIT: identify and compile a hot block, but DON'T add to
+    // kindMask yet. The first activation must be handled by the interpreter
+    // (or another thunk) to execute the entry block. The JIT kind will be
+    // activated on the second invocation once jitThunkResumeToken >= 1.
+    if (blockJITEnabled && jitBlockCompiler) {
+      auto processOp = state.getProcessOp();
+      if (processOp) {
+        JITBlockSpec blockSpec;
+        if (jitBlockCompiler->identifyHotBlock(processOp, valueToSignal,
+                                               scheduler, blockSpec)) {
+          if (jitBlockCompiler->compileBlock(blockSpec, state.getProcessOp()
+                                                 ->getParentOfType<mlir::ModuleOp>())) {
+            jitBlockSpecs[procId] = std::make_unique<JITBlockSpec>(std::move(blockSpec));
+            LLVM_DEBUG(llvm::dbgs()
+                       << "[JIT] Compiled block for proc=" << procId
+                       << " (deferred activation)\n");
+          }
+        }
+      }
+    }
+
     directProcessFastPathKinds[procId] = kindMask;
   } else {
     kindMask = kindIt->second;
+
+    // Deferred JIT activation: after the first activation (handled by
+    // interpreter or other thunks), add JIT kind if we have a compiled block
+    // and the process has been through at least one wait cycle.
+    if (!(kindMask &
+          toFastPathMask(DirectProcessFastPathKind::JITCompiledBlock)) &&
+        state.jitThunkResumeToken >= 1) {
+      auto specIt = jitBlockSpecs.find(procId);
+      if (specIt != jitBlockSpecs.end() && specIt->second &&
+          specIt->second->nativeFunc) {
+        kindMask |=
+            toFastPathMask(DirectProcessFastPathKind::JITCompiledBlock);
+        directProcessFastPathKinds[procId] = kindMask;
+        LLVM_DEBUG(llvm::dbgs()
+                   << "[JIT] Activated JIT block for proc=" << procId << "\n");
+      }
+    }
   }
 
   if (kindMask == 0)
@@ -135,6 +176,10 @@ bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
   auto clearKind = [&](DirectProcessFastPathKind kind) {
     kindMask &= ~toFastPathMask(kind);
     directProcessFastPathKinds[procId] = kindMask;
+    if ((kind == DirectProcessFastPathKind::JITCompiledBlock) &&
+        ((kindMask &
+          toFastPathMask(DirectProcessFastPathKind::JITCompiledBlock)) == 0))
+      jitBlockSpecs.erase(procId);
     if ((kind == DirectProcessFastPathKind::PeriodicToggleClock) &&
         ((kindMask &
           toFastPathMask(DirectProcessFastPathKind::PeriodicToggleClock)) == 0))
@@ -165,12 +210,23 @@ bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
     return false;
   };
 
+  // Try PeriodicToggleClock first — it's a specialized pattern that
+  // bypasses the interpreter entirely with direct signal memory access.
   if (kindMask & toFastPathMask(DirectProcessFastPathKind::PeriodicToggleClock))
     if (tryKind(DirectProcessFastPathKind::PeriodicToggleClock,
                 [this](ProcessId id, ProcessExecutionState &s,
                        ProcessThunkExecutionState &thunkState) {
                   return executePeriodicToggleClockNativeThunk(id, s,
                                                                thunkState);
+                }))
+      return true;
+
+  // JIT-compiled block: general native code with scheduler callbacks.
+  if (kindMask & toFastPathMask(DirectProcessFastPathKind::JITCompiledBlock))
+    if (tryKind(DirectProcessFastPathKind::JITCompiledBlock,
+                [this](ProcessId id, ProcessExecutionState &s,
+                       ProcessThunkExecutionState &thunkState) {
+                  return executeJITCompiledBlockNativeThunk(id, s, thunkState);
                 }))
       return true;
 
@@ -1766,6 +1822,141 @@ bool LLHDProcessInterpreter::tryBuildPeriodicToggleClockThunkSpec(
   spec.toggleOp = toggleOp;
   spec.toggleDriveOp = toggleDriveOp;
   spec.delayFs = delayFs;
+
+  // Pre-resolve signal ID, toggle constant, and drive delay for the native
+  // fast path. This enables bypassing the interpreter entirely at execution.
+  spec.signalId = getSignalId(probeOp.getSignal());
+  if (spec.signalId != 0) {
+    spec.signalWidth = scheduler.getSignalValue(spec.signalId).getWidth();
+    // Extract the XOR constant from the toggle op operands.
+    bool xorResolved = false;
+    if (isa<comb::XorOp>(toggleOp) && toggleOp->getNumOperands() == 2) {
+      Value constOperand =
+          (toggleOp->getOperand(0) == probeOp.getResult())
+              ? toggleOp->getOperand(1) : toggleOp->getOperand(0);
+      uint64_t xorConst = 0;
+      if (extractConstU64(constOperand, xorConst) && spec.signalWidth <= 64) {
+        spec.toggleXorConstant = xorConst;
+        xorResolved = true;
+      }
+    }
+    // Extract the drive delay from the drive op (NOT the wait delay).
+    // Clock toggles typically use epsilon delay for the drive.
+    bool driveDelayResolved = false;
+    if (xorResolved && toggleDriveOp.getTime()) {
+      if (auto constTime =
+              toggleDriveOp.getTime().getDefiningOp<llhd::ConstantTimeOp>()) {
+        SimTime driveDelay = convertTime(constTime.getValueAttr());
+        spec.driveRealFs = driveDelay.realTime;
+        spec.driveDelta = driveDelay.deltaStep;
+        spec.driveEpsilon = 0; // Already folded into deltaStep by convertTime
+        driveDelayResolved = true;
+      }
+    }
+    spec.nativePathAvailable = xorResolved && driveDelayResolved;
+  }
+
+  return true;
+}
+
+bool LLHDProcessInterpreter::executeJITCompiledBlockNativeThunk(
+    ProcessId procId, ProcessExecutionState &state,
+    ProcessThunkExecutionState &thunkState) {
+  auto specIt = jitBlockSpecs.find(procId);
+  if (specIt == jitBlockSpecs.end() || !specIt->second)
+    return false;
+  auto &spec = *specIt->second;
+
+  if (!spec.nativeFunc) {
+    thunkState.deoptRequested = true;
+    thunkState.deoptDetail = "jit_compiled_block:null_func";
+    return true;
+  }
+
+  if (state.halted) {
+    thunkState.halted = true;
+    thunkState.waiting = false;
+    return true;
+  }
+
+  // The first activation is always handled by the interpreter (deferred
+  // activation). The JIT thunk only handles subsequent activations where the
+  // process has resumed from a wait into the hot block.
+  if (state.destBlock != spec.hotBlock) {
+    thunkState.deoptRequested = true;
+    thunkState.deoptDetail = "jit_compiled_block:dest_block_mismatch";
+    return true;
+  }
+
+  state.waiting = false;
+
+  // Build the argument array for the packed calling convention.
+  // Arguments are: [read_handle_0, ..., read_handle_N, drive_handle_0, ..., drive_handle_M]
+  llvm::SmallVector<void *, 8> argPtrs;
+  // Pack signal handles as pointers.
+  llvm::SmallVector<void *, 8> handleStorage;
+  for (SignalId sigId : spec.signalReads)
+    handleStorage.push_back(
+        reinterpret_cast<void *>(static_cast<uintptr_t>(sigId)));
+  for (SignalId sigId : spec.signalDrives)
+    handleStorage.push_back(
+        reinterpret_cast<void *>(static_cast<uintptr_t>(sigId)));
+
+  // For the packed calling convention, each argument is passed as void**.
+  for (auto &h : handleStorage)
+    argPtrs.push_back(&h);
+
+  // Set up the JIT runtime context.
+  JITRuntimeContext ctx;
+  ctx.scheduler = &scheduler;
+  ctx.processId = procId;
+  setJITRuntimeContext(&ctx);
+
+  // Call the JIT-compiled native function.
+  // The packed convention passes an array of void* pointers to arguments.
+  LLVM_DEBUG(llvm::dbgs() << "[JIT] Executing " << spec.funcName
+                          << " proc=" << procId
+                          << " reads=" << spec.signalReads.size()
+                          << " drives=" << spec.signalDrives.size()
+                          << " nargs=" << argPtrs.size() << "\n");
+  spec.nativeFunc(argPtrs.data());
+
+  clearJITRuntimeContext();
+
+  // Re-enter wait state. Set up the delay value for the wait op.
+  if (spec.waitOp.getDelay()) {
+    Value delayVal = spec.waitOp.getDelay();
+    if (auto constTime =
+            delayVal.getDefiningOp<llhd::ConstantTimeOp>()) {
+      SimTime delay = convertTime(constTime.getValueAttr());
+      unsigned delayWidth =
+          std::max(1u, getTypeWidth(delayVal.getType()));
+      setValue(procId, delayVal,
+               InterpretedValue(llvm::APInt(delayWidth, delay.realTime)));
+    } else if (auto intToTime =
+                   delayVal.getDefiningOp<llhd::IntToTimeOp>()) {
+      // IntToTimeOp: get the integer operand value from the interpreter.
+      Value intVal = intToTime.getOperand();
+      if (auto constOp = intVal.getDefiningOp<arith::ConstantOp>()) {
+        auto intAttr = llvm::cast<mlir::IntegerAttr>(constOp.getValue());
+        unsigned delayWidth =
+            std::max(1u, getTypeWidth(delayVal.getType()));
+        setValue(procId, delayVal,
+                 InterpretedValue(llvm::APInt(delayWidth,
+                     intAttr.getValue().getZExtValue())));
+      }
+    }
+  }
+  if (failed(interpretWait(procId, spec.waitOp))) {
+    thunkState.deoptRequested = true;
+    thunkState.deoptDetail = "jit_compiled_block:wait_failed";
+    return true;
+  }
+
+  state.jitThunkResumeToken = 1;
+  thunkState.halted = state.halted;
+  thunkState.waiting = state.waiting;
+  thunkState.resumeToken = state.jitThunkResumeToken;
   return true;
 }
 
@@ -1828,6 +2019,140 @@ bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(
       return true;
     }
     state.waiting = false;
+
+    // NATIVE FAST PATH: bypass interpreter entirely for direct signal access.
+    // Reads signal value from scheduler's flat array, XORs with pre-resolved
+    // constant, schedules drive event and process wake without any DenseMap
+    // lookups, APInt allocation, or MLIR op interpretation.
+    //
+    // Lazy resolution: if signalId wasn't resolved at spec-build time
+    // (common in compile mode where thunks install before signal registration),
+    // resolve it now on first use.
+    if (!spec.nativePathAvailable && spec.signalId == 0) {
+      spec.signalId = getSignalId(spec.probeOp.getSignal());
+      if (spec.signalId != 0) {
+        spec.signalWidth =
+            scheduler.getSignalValue(spec.signalId).getWidth();
+        bool xorOk = false;
+        if (isa<comb::XorOp>(spec.toggleOp) &&
+            spec.toggleOp->getNumOperands() == 2 &&
+            spec.signalWidth <= 64) {
+          Value constOperand =
+              (spec.toggleOp->getOperand(0) == spec.probeOp.getResult())
+                  ? spec.toggleOp->getOperand(1)
+                  : spec.toggleOp->getOperand(0);
+          uint64_t xorConst = 0;
+          if (auto hwConst = constOperand.getDefiningOp<hw::ConstantOp>()) {
+            spec.toggleXorConstant = hwConst.getValue().getZExtValue();
+            xorOk = true;
+          } else if (auto arithConst =
+                         constOperand.getDefiningOp<arith::ConstantOp>()) {
+            if (auto intAttr = dyn_cast<IntegerAttr>(arithConst.getValue())) {
+              spec.toggleXorConstant = intAttr.getValue().getZExtValue();
+              xorOk = true;
+            }
+          }
+        }
+        // Also resolve drive delay.
+        bool driveOk = false;
+        if (xorOk && spec.toggleDriveOp.getTime()) {
+          if (auto constTime = spec.toggleDriveOp.getTime()
+                                   .getDefiningOp<llhd::ConstantTimeOp>()) {
+            SimTime dd = convertTime(constTime.getValueAttr());
+            spec.driveRealFs = dd.realTime;
+            spec.driveDelta = dd.deltaStep;
+            spec.driveEpsilon = 0;
+            driveOk = true;
+          }
+        }
+        spec.nativePathAvailable = xorOk && driveOk;
+      }
+    }
+    if (spec.nativePathAvailable) {
+      // Cache Process pointer on first use for O(1) scheduling.
+      if (!spec.cachedProcess)
+        spec.cachedProcess = scheduler.getProcessDirect(procId);
+
+      // FAST PATH: batched clock toggle.
+      // When no other processes are sensitive to this clock signal, we can
+      // execute N half-cycles in a tight loop without Event/TimeWheel overhead.
+      SimTime currentTime = scheduler.getCurrentTime();
+      auto *schedPtr = &scheduler;
+      SignalId sigId = spec.signalId;
+      uint32_t sigWidth = spec.signalWidth;
+      uint64_t rawVal = scheduler.readSignalValueFast(sigId);
+
+      // Determine batch size. Batch only when this clock process is the ONLY
+      // active process in the entire simulation. This ensures no other process
+      // could become sensitive to the clock during the batch period.
+      size_t batchCount = 1;
+      uint32_t apc = scheduler.getActiveProcessCount();
+      if (apc <= 1) {
+        // Only the clock process is alive. Safe to batch.
+        batchCount = 4096;
+        // Limit batch to not exceed max simulation time.
+        uint64_t maxSimTime = scheduler.getMaxSimTime();
+        if (maxSimTime > 0 && currentTime.realTime < maxSimTime) {
+          uint64_t remaining = maxSimTime - currentTime.realTime;
+          size_t maxBatch = remaining / spec.delayFs;
+          if (maxBatch < batchCount)
+            batchCount = std::max(maxBatch, (size_t)1);
+        }
+      }
+      // Execute N-1 toggles inline. Since no process is sensitive, we
+      // only need to update the raw signal value — no triggerSensitiveProcesses,
+      // no event scheduling, no signalChangeCallback. Just flip the bit.
+      uint64_t toggled = rawVal;
+      uint64_t timeFs = currentTime.realTime;
+      for (size_t i = 0; i < batchCount - 1; ++i) {
+        toggled ^= spec.toggleXorConstant;
+        timeFs += spec.delayFs;
+      }
+      // Write the accumulated pre-final value to the signal state.
+      // Since we verified no one is listening, use writeSignalValueRaw
+      // which skips triggerSensitiveProcesses and callbacks entirely.
+      if (batchCount > 1) {
+        scheduler.writeSignalValueRaw(sigId, toggled);
+      }
+      // Final toggle — this one schedules events normally.
+      toggled ^= spec.toggleXorConstant;
+
+      if (spec.driveRealFs == 0 && spec.driveDelta == 0 &&
+          spec.driveEpsilon == 0) {
+        scheduler.updateSignalFast(sigId, toggled, sigWidth);
+      } else {
+        SimTime driveTime(timeFs + spec.delayFs, 0, 0);
+        if (spec.driveRealFs > 0)
+          driveTime = SimTime(timeFs, 0, 0).advanceTime(spec.driveRealFs);
+        uint32_t combinedDelta = spec.driveDelta + spec.driveEpsilon;
+        if (combinedDelta > 0 && spec.driveRealFs == 0)
+          driveTime.deltaStep = combinedDelta;
+        driveTime.region = static_cast<uint8_t>(SchedulingRegion::NBA);
+        scheduler.getEventScheduler().schedule(
+            driveTime, SchedulingRegion::NBA,
+            Event([schedPtr, sigId, toggled, sigWidth]() {
+              schedPtr->updateSignalFast(sigId, toggled, sigWidth);
+            }));
+      }
+      // Schedule process resumption at the final wake time.
+      SimTime wakeTime(timeFs + spec.delayFs, 0, 0);
+      Process *cachedProc = spec.cachedProcess;
+      scheduler.getEventScheduler().schedule(
+          wakeTime, SchedulingRegion::Active,
+          Event([schedPtr, procId, cachedProc]() {
+            schedPtr->scheduleProcessDirect(procId, cachedProc);
+          }));
+      state.destBlock = spec.waitDestBlock;
+      state.destOperands.clear();
+      state.waiting = true;
+      state.jitThunkResumeToken = 1;
+      thunkState.halted = state.halted;
+      thunkState.waiting = state.waiting;
+      thunkState.resumeToken = state.jitThunkResumeToken;
+      return true;
+    }
+
+    // Fallback: use interpreter for non-XOR toggle ops or unresolved signals.
     if (failed(interpretProbe(procId, spec.probeOp)) ||
         failed(interpretOperation(procId, spec.toggleOp)) ||
         failed(interpretDrive(procId, spec.toggleDriveOp))) {
@@ -2017,7 +2342,10 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
   };
 
   while (!state.callStack.empty()) {
-    CallStackFrame frame = std::move(state.callStack.front());
+    // Use copy-out instead of move-out for frame extraction. Some compile-mode
+    // workloads hit unstable behavior in SmallVector move-assignment for
+    // CallStackFrame payloads during nested resume/rotate sequences.
+    CallStackFrame frame = state.callStack.front();
     state.callStack.erase(state.callStack.begin());
 
     // Remaining old outer frames before resuming this frame.

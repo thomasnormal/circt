@@ -169,6 +169,9 @@ public:
   /// Check if the value is unknown (X).
   bool isUnknown() const { return isX; }
 
+  /// Clear the X flag (mark value as known). Used by fast-path signal update.
+  void clearIsX() { isX = false; }
+
   /// Get the LSB (for single-bit edge detection).
   bool getLSB() const { return value[0]; }
 
@@ -606,6 +609,21 @@ public:
     return SignalValue::detectEdge(previous, current);
   }
 
+  /// Update the signal with a raw uint64_t value in-place (≤64-bit signals).
+  /// Returns true if the value changed. Avoids APInt construction for the
+  /// common case of small signals. The caller is responsible for triggering
+  /// sensitive processes when this returns true.
+  bool updateValueFast(uint64_t rawValue) {
+    previous = current;
+    // Directly modify the APInt's raw storage in-place.
+    uint64_t *rawData =
+        const_cast<uint64_t *>(current.getAPInt().getRawData());
+    *rawData = rawValue;
+    // Clear the X flag (we know the value is concrete).
+    current.clearIsX();
+    return previous != current;
+  }
+
   /// Check if the signal has changed.
   bool hasChanged() const { return current != previous; }
 
@@ -982,6 +1000,52 @@ public:
   /// Get the previous value of a signal (before the most recent update).
   const SignalValue &getSignalPreviousValue(SignalId signalId) const;
 
+  //===--------------------------------------------------------------------===//
+  // Fast-path signal and process access (zero-overhead hot loop support)
+  //===--------------------------------------------------------------------===//
+
+  /// Read a signal's current uint64_t value directly (≤64-bit signals only).
+  /// No bounds check, no APInt indirection. Caller must ensure signalId is
+  /// valid and the signal width is ≤64 bits.
+  uint64_t readSignalValueFast(SignalId signalId) const {
+    return signalStates[signalId].getCurrentValue().getAPInt().getZExtValue();
+  }
+
+  /// Update a signal value using a raw uint64_t. Skips VPI ownership check,
+  /// signal width normalization, and debug tracing. Triggers sensitive
+  /// processes and the signal change callback if the value actually changed.
+  /// Only valid for signals with width ≤64 bits and known (non-X) values.
+  void updateSignalFast(SignalId signalId, uint64_t rawValue, uint32_t width);
+
+  /// Schedule a process into the Active ready queue without DenseMap lookup.
+  /// The process must already be in Suspended or Waiting state.
+  /// Uses a pre-cached Process pointer for O(1) access.
+  void scheduleProcessDirect(ProcessId id, Process *proc);
+
+  /// Get a raw pointer to the Process object (for caching in fast paths).
+  Process *getProcessDirect(ProcessId id) {
+    auto it = processes.find(id);
+    return it != processes.end() ? it->second.get() : nullptr;
+  }
+
+  /// Write a raw uint64_t value directly to signal state without triggering
+  /// any sensitive processes or callbacks. Only safe when the caller has
+  /// verified that no process is observing this signal. Used by clock
+  /// batching fast-forward.
+  void writeSignalValueRaw(SignalId signalId, uint64_t rawValue) {
+    signalStates[signalId].updateValueFast(rawValue);
+  }
+
+  /// Get the count of active (non-terminated) processes.
+  /// Used by clock fast-forward to determine if batching is safe.
+  uint32_t getActiveProcessCount() const { return activeProcessCount; }
+
+  /// Set the maximum simulation time for batch limiting.
+  void setMaxSimTime(uint64_t maxTimeFs) { maxSimTimeFemtoseconds = maxTimeFs; }
+
+  /// Get the maximum simulation time (0 = unlimited).
+  uint64_t getMaxSimTime() const { return maxSimTimeFemtoseconds; }
+
   /// Get the registered signal names map.
   const llvm::DenseMap<SignalId, std::string> &getSignalNames() const {
     return signalNames;
@@ -1038,6 +1102,12 @@ public:
   /// Execute all delta cycles at the current time.
   /// Returns the number of delta cycles executed.
   size_t executeCurrentTime();
+
+  /// Execute ready processes in scheduling regions up to and including
+  /// maxRegion. Does one pass through regions [Preponed, maxRegion].
+  /// Used by VPI to process Active/Inactive before flushing value-change
+  /// callbacks, ensuring cbValueChange fires before NBA (IEEE 1800 §4.7).
+  size_t executeRegionsUpTo(SchedulingRegion maxRegion);
 
   /// Advance simulation time to the next scheduled event.
   ///
@@ -1125,8 +1195,15 @@ private:
   llvm::DenseMap<ProcessId, std::unique_ptr<Process>> processes;
   ProcessId nextProcId = 1;
 
+  /// Count of processes in Suspended, Waiting, or Ready states.
+  /// Used by isComplete() fast path to avoid iterating all processes.
+  uint32_t activeProcessCount = 0;
+
   // Signal management
-  llvm::DenseMap<SignalId, SignalState> signalStates;
+  /// Signal states indexed by SignalId (IDs are sequential starting from 1).
+  /// Index 0 is unused/sentinel. Using a vector instead of DenseMap eliminates
+  /// hash lookups on every signal read/write (hot path).
+  std::vector<SignalState> signalStates;
   llvm::DenseMap<SignalId, std::string> signalNames;
   std::map<std::string, SignalId> signalAliases;
   std::vector<VPIParamInfo> vpiParams;
@@ -1188,6 +1265,9 @@ private:
 
   // Static signal for unknown values
   static SignalValue unknownSignal;
+
+  // Maximum simulation time for batch limiting (0 = unlimited).
+  uint64_t maxSimTimeFemtoseconds = 0;
 };
 
 //===----------------------------------------------------------------------===//

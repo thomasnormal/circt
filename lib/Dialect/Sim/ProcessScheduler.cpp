@@ -269,6 +269,8 @@ SignalId ProcessScheduler::registerSignal(const std::string &name,
                                           uint32_t width,
                                           SignalEncoding encoding) {
   SignalId id = nextSignalId();
+  if (id >= signalStates.size())
+    signalStates.resize(id + 1);
   signalStates[id] = SignalState(width);
   signalNames[id] = name;
   signalEncodings[id] = encoding;
@@ -284,6 +286,8 @@ SignalId ProcessScheduler::registerSignal(const std::string &name,
                                           SignalEncoding encoding,
                                           SignalResolution resolution) {
   SignalId id = nextSignalId();
+  if (id >= signalStates.size())
+    signalStates.resize(id + 1);
   signalStates[id] = SignalState(width, resolution);
   signalNames[id] = name;
   signalEncodings[id] = encoding;
@@ -355,9 +359,8 @@ ProcessScheduler::getSignalStructFields(SignalId signalId) const {
 
 void ProcessScheduler::setSignalResolution(SignalId signalId,
                                            SignalResolution resolution) {
-  auto it = signalStates.find(signalId);
-  if (it != signalStates.end())
-    it->second.setResolution(resolution);
+  if (signalId < signalStates.size())
+    signalStates[signalId].setResolution(resolution);
 }
 
 void ProcessScheduler::setMaxDeltaCycles(size_t maxDeltaCycles) {
@@ -372,18 +375,18 @@ void ProcessScheduler::updateSignal(SignalId signalId,
   if (isVpiOwnershipSuppressionEnabled() && vpiOwnedSignals.count(signalId))
     return;
 
-  auto it = signalStates.find(signalId);
-  if (it == signalStates.end()) {
+  if (signalId >= signalStates.size()) {
     LLVM_DEBUG(llvm::dbgs() << "Warning: updating unknown signal " << signalId
                             << "\n");
     return;
   }
+  auto &sigState = signalStates[signalId];
 
-  uint32_t signalWidth = it->second.getCurrentValue().getWidth();
+  uint32_t signalWidth = sigState.getCurrentValue().getWidth();
   SignalValue normalizedValue =
       normalizeSignalValueWidth(newValue, signalWidth);
-  SignalValue oldValue = it->second.getCurrentValue();
-  (void)it->second.updateValue(normalizedValue);
+  SignalValue oldValue = sigState.getCurrentValue();
+  (void)sigState.updateValue(normalizedValue);
 
   static bool traceUpdates = []() {
     const char *env = std::getenv("CIRCT_SIM_TRACE_SIGNAL_UPDATES");
@@ -431,6 +434,34 @@ void ProcessScheduler::updateSignal(SignalId signalId,
   }
 }
 
+void ProcessScheduler::updateSignalFast(SignalId signalId, uint64_t rawValue,
+                                        uint32_t width) {
+  auto &sigState = signalStates[signalId];
+  ++stats.signalUpdates;
+
+  // In-place update: avoids APInt construction entirely. updateValueFast
+  // copies current→previous and writes rawValue directly to APInt storage.
+  if (sigState.updateValueFast(rawValue)) {
+    ++stats.edgesDetected;
+    const SignalValue &newVal = sigState.getCurrentValue();
+    const SignalValue &oldVal = sigState.getPreviousValue();
+    if (signalChangeCallback)
+      signalChangeCallback(signalId, newVal);
+    triggerSensitiveProcesses(signalId, oldVal, newVal);
+    recordSignalChange(signalId);
+  }
+}
+
+void ProcessScheduler::scheduleProcessDirect(ProcessId id, Process *proc) {
+  auto &queue = readyQueues[static_cast<size_t>(SchedulingRegion::Active)];
+  // Fast path: skip linear scan — clock processes are single-waiter,
+  // so they're never already in the queue when waking from a timed wait.
+  queue.push_back(id);
+  proc->clearWaiting();
+  proc->setState(ProcessState::Ready);
+  recordTriggerTime(id);
+}
+
 void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
                                                 uint64_t driverId,
                                                 const SignalValue &newValue,
@@ -440,24 +471,24 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
   if (isVpiOwnershipSuppressionEnabled() && vpiOwnedSignals.count(signalId))
     return;
 
-  auto it = signalStates.find(signalId);
-  if (it == signalStates.end()) {
+  if (signalId >= signalStates.size()) {
     LLVM_DEBUG(llvm::dbgs() << "Warning: updating unknown signal " << signalId
                             << "\n");
     return;
   }
+  auto &sigState = signalStates[signalId];
 
-  uint32_t signalWidth = it->second.getCurrentValue().getWidth();
+  uint32_t signalWidth = sigState.getCurrentValue().getWidth();
   SignalValue normalizedValue =
       normalizeSignalValueWidth(newValue, signalWidth);
-  SignalValue oldValue = it->second.getCurrentValue();
+  SignalValue oldValue = sigState.getCurrentValue();
   SignalEncoding encoding = getSignalEncoding(signalId);
 
   // Add/update the driver with its strength information
-  it->second.addOrUpdateDriver(driverId, normalizedValue, strength0, strength1);
+  sigState.addOrUpdateDriver(driverId, normalizedValue, strength0, strength1);
 
   // Resolve all drivers to get the final signal value
-  SignalValue resolvedValue = it->second.resolveDrivers();
+  SignalValue resolvedValue = sigState.resolveDrivers();
   SignalValue normalizedResolved =
       normalizeSignalValueWidth(resolvedValue, signalWidth);
 
@@ -496,7 +527,7 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
   }
 
   // Update the signal with the resolved value
-  (void)it->second.updateValue(normalizedResolved);
+  (void)sigState.updateValue(normalizedResolved);
   EdgeType edge =
       detectEdgeWithEncoding(oldValue, normalizedResolved, encoding);
 
@@ -512,7 +543,7 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
     }
     llvm::dbgs() << " strength=(" << getDriveStrengthName(strength0) << ", "
                  << getDriveStrengthName(strength1) << ")";
-    if (it->second.hasMultipleDrivers()) {
+    if (sigState.hasMultipleDrivers()) {
       llvm::dbgs() << " resolved=";
       if (normalizedResolved.isUnknown()) {
         llvm::dbgs() << "X";
@@ -559,13 +590,12 @@ void ProcessScheduler::dumpLastDeltaSignals(llvm::raw_ostream &os) const {
     llvm::StringRef name = nameIt == signalNames.end()
                                ? llvm::StringRef("<unknown>")
                                : llvm::StringRef(nameIt->second);
-    auto stateIt = signalStates.find(signalId);
-    if (stateIt == signalStates.end()) {
+    if (signalId >= signalStates.size()) {
       os << "  " << name << " (id=" << signalId << "): <missing>\n";
       continue;
     }
 
-    const SignalValue &value = stateIt->second.getCurrentValue();
+    const SignalValue &value = signalStates[signalId].getCurrentValue();
     if (value.isUnknown() || value.isFourStateX()) {
       os << "  " << name << " (id=" << signalId << ", w=" << value.getWidth()
          << "): X\n";
@@ -624,18 +654,16 @@ void ProcessScheduler::dumpLastDeltaProcesses(llvm::raw_ostream &os) const {
 }
 
 const SignalValue &ProcessScheduler::getSignalValue(SignalId signalId) const {
-  auto it = signalStates.find(signalId);
-  if (it == signalStates.end())
+  if (signalId >= signalStates.size())
     return unknownSignal;
-  return it->second.getCurrentValue();
+  return signalStates[signalId].getCurrentValue();
 }
 
 const SignalValue &
 ProcessScheduler::getSignalPreviousValue(SignalId signalId) const {
-  auto it = signalStates.find(signalId);
-  if (it == signalStates.end())
+  if (signalId >= signalStates.size())
     return unknownSignal;
-  return it->second.getPreviousValue();
+  return signalStates[signalId].getPreviousValue();
 }
 
 bool ProcessScheduler::isAbortRequested() const {
@@ -791,7 +819,18 @@ void ProcessScheduler::terminateProcess(ProcessId id) {
   if (!proc)
     return;
 
+  ProcessState oldState = proc->getState();
   proc->setState(ProcessState::Terminated);
+
+  // Decrement active count if leaving an active state.
+  // Running is also active (process was in Ready/Waiting, then started executing).
+  if (oldState == ProcessState::Suspended ||
+      oldState == ProcessState::Waiting ||
+      oldState == ProcessState::Ready ||
+      oldState == ProcessState::Running) {
+    if (activeProcessCount > 0)
+      --activeProcessCount;
+  }
 
   // Remove from ready queues
   for (auto &queue : readyQueues) {
@@ -835,6 +874,8 @@ void ProcessScheduler::initialize() {
     }
   }
 
+  // All registered processes are now active (Ready state).
+  activeProcessCount = processes.size();
   initialized = true;
 }
 
@@ -852,10 +893,16 @@ bool ProcessScheduler::executeDeltaCycle() {
   triggerSignalsThisDelta.clear();
   triggerTimesThisDelta.clear();
 
-  // Process all regions in order
-  for (size_t regionIdx = 0;
-       regionIdx < static_cast<size_t>(SchedulingRegion::NumRegions);
-       ++regionIdx) {
+  // Process regions with ready processes, skipping empty ones.
+  // Build a bitmask of non-empty ready queues for fast iteration.
+  uint16_t readyMask = 0;
+  for (size_t i = 0; i < static_cast<size_t>(SchedulingRegion::NumRegions); ++i)
+    if (!readyQueues[i].empty())
+      readyMask |= (1u << i);
+
+  while (readyMask) {
+    unsigned regionIdx = __builtin_ctz(readyMask);
+    readyMask &= readyMask - 1; // Clear lowest set bit
     auto region = static_cast<SchedulingRegion>(regionIdx);
     size_t executed = executeReadyProcesses(region);
     anyExecuted = anyExecuted || (executed > 0);
@@ -948,6 +995,18 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
   }
 
   return executed;
+}
+
+size_t ProcessScheduler::executeRegionsUpTo(SchedulingRegion maxRegion) {
+  if (isAbortRequested())
+    return 0;
+  size_t total = 0;
+  for (size_t regionIdx = 0;
+       regionIdx <= static_cast<size_t>(maxRegion); ++regionIdx) {
+    auto region = static_cast<SchedulingRegion>(regionIdx);
+    total += executeReadyProcesses(region);
+  }
+  return total;
 }
 
 size_t ProcessScheduler::executeCurrentTime() {
@@ -1081,21 +1140,16 @@ bool ProcessScheduler::hasReadyProcesses() const {
 }
 
 bool ProcessScheduler::isComplete() const {
+  // Fast path: if the event scheduler has pending events and there are
+  // active processes that could be woken, simulation is not complete.
+  // This avoids iterating all processes and all ready queues on every call.
+  if (activeProcessCount > 0 && !eventScheduler->isComplete())
+    return false;
+
   // Check if any processes are ready
   for (const auto &queue : readyQueues) {
     if (!queue.empty())
       return false;
-  }
-
-  // Check if any processes are suspended (waiting for events)
-  for (const auto &[id, proc] : processes) {
-    if (proc->getState() == ProcessState::Suspended ||
-        proc->getState() == ProcessState::Waiting ||
-        proc->getState() == ProcessState::Ready) {
-      // Check if there are pending events that could wake them
-      if (!eventScheduler->isComplete())
-        return false;
-    }
   }
 
   // Check if event scheduler has events
@@ -1106,6 +1160,7 @@ void ProcessScheduler::reset() {
   // Clear all processes
   processes.clear();
   nextProcId = 1;
+  activeProcessCount = 0;
 
   // Clear signals
   signalStates.clear();
