@@ -629,6 +629,64 @@ the ceiling is 9.7% of total time. To improve end-to-end performance:
 
 ---
 
+## Phase 8b: Multi-Process Pipeline Benchmark
+
+### Date: 2026-02-21
+
+### Setup
+Created a synthetic multi-process benchmark: 1 clock + 8 pipeline stages + reset = 10 processes.
+Each pipeline stage observes clk+rst and either resets or copies from the previous stage on posedge.
+This represents a typical RTL design with multiple concurrent always blocks.
+
+### Results
+
+| Benchmark | Sim time | Processes | Instructions | Wall time | Insn/clock-cycle |
+|-----------|----------|-----------|--------------|-----------|------------------|
+| Clock-only (APB) | 10ms | 3 (1 active) | 10.8M | 17ms | ~5 |
+| Pipeline (8-stage) | 10ms | 10 (9 active) | 266M | 148ms | ~133K |
+| Pipeline (8-stage) | 100ms | 10 (9 active) | 2.52B | 271ms | ~126K |
+
+Clock batching does NOT activate because `activeProcessCount > 1`.
+Per-clock-cycle cost: ~133K instructions (vs ~5 with batching). **26,600x gap**.
+
+### Profile: Pipeline Benchmark (100ms sim)
+
+| % | Function | Category |
+|---|----------|----------|
+| 9.42% | interpretProbe | **Interpreter** |
+| 7.24% | interpretOperation | **Interpreter** |
+| 3.30% | getSignalIdInInstance | Signal lookup |
+| 3.07% | memmove | Memory copies |
+| 2.99% | executeProcess | Process dispatch |
+| 2.32% | StringAttr::getValue | MLIR overhead |
+| 2.22% | ProbeOp::getSignal | MLIR overhead |
+| 1.89% | EventScheduler::schedule | Scheduling |
+| 1.80% | executeStep | Process dispatch |
+| 1.49% | getSignalId | Signal lookup |
+| 1.43% | interpretWait | **Interpreter** |
+
+### Analysis
+
+- **Interpreter: ~20%** (probe + operation + wait) — this is the target for JIT compilation
+- **Signal lookup: ~5%** (getSignalId, getSignalIdInInstance) — hash map lookups per probe/drive
+- **MLIR accessor overhead: ~5%** (StringAttr::getValue, ProbeOp::getSignal, etc.)
+- **Process dispatch: ~5%** (executeProcess, executeStep)
+- **Scheduling: ~5%** (EventScheduler, memmove for events)
+
+### Key Insight
+Each pipeline stage executes: probe(clk) + probe(rst) + cond_br + probe(src) + drive(dst) + wait = 6 ops.
+At ~133K instructions per clock cycle for 8 stages = ~16K instructions per stage per cycle.
+Compare to native code which would be ~20 instructions for the same logic.
+**Per-stage overhead: ~800x vs native** — this is the interpreter tax.
+
+### Optimization Path
+1. **Signal ID caching**: Pre-resolve signal IDs at thunk build time → eliminates getSignalId calls
+2. **Direct value access**: Read signal values from flat array → eliminates interpretProbe DenseMap lookups
+3. **Compiled process loops**: JIT-compile the observe-check-drive pattern → eliminates per-op dispatch
+4. **Sensitivity-based thunks**: For edge-triggered processes, skip re-execution on negedge
+
+---
+
 ## Phase 7b: Yield-Based Clock Toggle Batching
 
 ### Date: 2026-02-21
