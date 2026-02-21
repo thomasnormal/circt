@@ -18,4 +18,7 @@ module ActionBlockSeverity(input logic clk, a, b);
   assert property (@(posedge clk) b |-> a) else begin
     $warning("warn_fail");
   end
+
+  // CHECK: verif.assert {{.*}} label "disp_fail"
+  assert property (@(posedge clk) a |=> b) else $display("disp_fail");
 endmodule
