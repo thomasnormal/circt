@@ -103,10 +103,44 @@ struct EventControlVisitor {
                  << "no global clocking is available in this scope";
         if (auto *clockBlock =
                 globalClocking->as_if<slang::ast::ClockingBlockSymbol>()) {
-          auto &clockEvent = clockBlock->getEvent();
-          auto visitor = *this;
-          visitor.loc = context.convertLocation(clockEvent.sourceRange);
-          return clockEvent.visit(visitor);
+          auto *clockSignalEvent =
+              clockBlock->getEvent()
+                  .template as_if<slang::ast::SignalEventControl>();
+          if (!clockSignalEvent) {
+            auto &clockEvent = clockBlock->getEvent();
+            auto visitor = *this;
+            visitor.loc = context.convertLocation(clockEvent.sourceRange);
+            return clockEvent.visit(visitor);
+          }
+
+          auto edge = convertEdgeKind(clockSignalEvent->edge);
+          auto expr = context.convertRvalueExpression(clockSignalEvent->expr);
+          if (!expr)
+            return failure();
+
+          Value condition;
+          auto appendIffCondition =
+              [&](const slang::ast::Expression *iffExpr) -> LogicalResult {
+            if (!iffExpr)
+              return success();
+            Value next = context.convertRvalueExpression(*iffExpr);
+            next = context.convertToBool(next, Domain::TwoValued);
+            if (!next)
+              return failure();
+            if (condition)
+              condition =
+                  moore::AndOp::create(builder, loc, condition, next).getResult();
+            else
+              condition = next;
+            return success();
+          };
+          if (failed(appendIffCondition(clockSignalEvent->iffCondition)))
+            return failure();
+          if (failed(appendIffCondition(ctrl.iffCondition)))
+            return failure();
+
+          moore::DetectEventOp::create(builder, loc, edge, expr, condition);
+          return success();
         }
         return mlir::emitError(loc)
                << "unsupported global clocking symbol kind for $global_clock";
@@ -1750,8 +1784,21 @@ struct LTLClockControlVisitor {
         if (auto *clockBlock =
                 globalClocking->as_if<slang::ast::ClockingBlockSymbol>()) {
           auto &clockEvent = clockBlock->getEvent();
+          Value gatedSeq = seqOrPro;
+          if (ctrl.iffCondition) {
+            auto condition = context.convertRvalueExpression(*ctrl.iffCondition);
+            condition = context.convertToBool(condition, Domain::TwoValued);
+            if (!condition)
+              return Value{};
+            condition = context.convertToI1(condition);
+            if (!condition)
+              return Value{};
+            gatedSeq = ltl::AndOp::create(
+                builder, loc, SmallVector<Value, 2>{condition, seqOrPro});
+          }
           auto visitor = *this;
           visitor.loc = context.convertLocation(clockEvent.sourceRange);
+          visitor.seqOrPro = gatedSeq;
           return clockEvent.visit(visitor);
         }
         mlir::emitError(loc)

@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1549 - February 21, 2026
+
+### [ImportVerilog][SVA] Preserve `iff` guards for `$global_clock` event controls
+
+1. **Fixed lost `iff` semantics in `$global_clock` lowering paths**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - `LTLClockControlVisitor` `$global_clock` handling now applies outer
+     `iffCondition` by gating the property/sequence (`ltl.and`) before
+     clocking on the resolved global event.
+   - `EventControlVisitor` `$global_clock` handling now combines `iff` guards
+     from both the global clocking event and the outer event control and emits
+     `moore.detect_event ... if ...` accordingly.
+
+2. **Added regression coverage**
+   - `test/Conversion/ImportVerilog/sva-global-clock-iff.sv`
+     - verifies `@($global_clock iff en)` gates property clocking.
+     - verifies sampled-value explicit clocking
+       (`$rose(a, @($global_clock iff en))`) preserves the `iff` detect
+       condition in wait-event lowering.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-iff.sv`: PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-global-clock-iff.sv build-test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build-test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build-test/test/Conversion/ImportVerilog/sva-clock-event-list.sv build-test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS (`2/2` mode cases).
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv` (`elapsed=0.028s`).
+
 ## Iteration 1548 - February 21, 2026
 
 ### [ImportVerilog][SVA] Add assertion clock event-list (`@(e1 or e2)`) lowering support

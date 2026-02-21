@@ -452,3 +452,28 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv` (`elapsed=0.041s`)
+
+- Iteration update (`$global_clock iff` guard preservation):
+  - realization:
+    - `$global_clock` support landed, but outer `iff` guards were dropped in
+      both assertion LTL clocking and sampled-value explicit event-control
+      lowering.
+    - reproduction:
+      - `assert property (@($global_clock iff en) (a |-> b));`
+      - `assert property ($rose(a, @($global_clock iff en)));`
+  - implemented:
+    - in `LTLClockControlVisitor`, `$global_clock` now applies outer
+      `iffCondition` by gating `seqOrPro` with `ltl.and` before clocking.
+    - in `EventControlVisitor`, `$global_clock` now combines outer and inner
+      `iff` guards and emits `moore.detect_event ... if ...` for sampled-value
+      helper/event paths.
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-global-clock-iff.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-iff.sv`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-global-clock-iff.sv build-test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build-test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build-test/test/Conversion/ImportVerilog/sva-clock-event-list.sv build-test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv` (`elapsed=0.028s`)
