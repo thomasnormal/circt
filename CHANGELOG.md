@@ -73363,6 +73363,8 @@ See CHANGELOG.md on recent progress.
       - supports direct expression form and one-statement `begin...end` blocks.
       - now also scans multi-statement `begin...end` action blocks and preserves
         the first supported diagnostic/message task as the assertion label.
+      - now recurses through nested conditional action blocks and preserves
+        labels from supported diagnostics in those branches.
       - `$fatal(code, "msg")` keeps `"msg"` as the label payload.
     - regression coverage:
       - updated:
@@ -73373,6 +73375,7 @@ See CHANGELOG.md on recent progress.
         - `else begin $warning("warn_fail"); end`
         - `else $display("disp_fail")`
         - `else begin shadow = a; $display("multi_stmt_disp_fail"); end`
+        - `else begin if (cond) $display("nested_if_disp_fail"); end`
     - validation:
       - build: PASS
         - `ninja -C build-test circt-translate`
