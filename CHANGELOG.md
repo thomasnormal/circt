@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1543 - February 21, 2026
+
+### [LTLToCore][SVA] Apply warmup by minimum sequence length and optimize sequence-event NFA term generation
+
+1. **Extended assertion warmup to unbounded sequences with known minimum length**
+   (`lib/Conversion/LTLToCore/LTLToCore.cpp`):
+   - added `getSequenceMinLength` and switched sequence warmup gating to use
+     minimum-length information instead of requiring exact bounded lengths.
+   - this preserves startup warmup behavior for unbounded-repeat sequence forms
+     when a finite minimum delay exists.
+
+2. **Added regression coverage for unbounded sequence warmup**
+   (`test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir`):
+   - verifies warmup gating structure (`ltl_past` + `notWarmup OR match`) for
+     unbounded non-consecutive-repeat sequence assertions.
+
+3. **Reduced sequence-event-control transition-term duplication**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - cache per-source-state transition terms while building NFA next-state
+     expressions for single-clock and multi-clock sequence event controls.
+   - deduplicate accepting-transition condition terms per source-state in the
+     multi-clock path.
+
+4. **Validation**
+   - `ninja -C build-test circt-opt circt-verilog`: PASS.
+   - `build-test/bin/circt-opt test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir`: PASS.
+   - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`: PASS.
+   - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS (`2/2` mode cases).
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sequence-event-control.sv` (`~0.01s`).
+
 ## Iteration 1542 - February 21, 2026
 
 ### [LTLToCore][SVA] Add semantic unbounded `first_match` lowering and reduce transition-mask duplication

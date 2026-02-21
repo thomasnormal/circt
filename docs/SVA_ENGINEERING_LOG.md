@@ -219,3 +219,26 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
       - `time build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core` (`~0.01s`)
+
+- Iteration update (sequence warmup min-bound semantics + sequence-event perf):
+  - realization:
+    - sequence assertion warmup in `LTLToCore` was keyed to exact
+      finite-length bounds only; unbounded sequences with known minimum length
+      did not receive startup warmup gating.
+    - sequence event-control lowering duplicated transition `and` terms per
+      state in large NFAs, creating avoidable combinational churn.
+  - implemented:
+    - added `getSequenceMinLength` in `LTLToCore` and switched warmup gating
+      to use minimum-length information (including unbounded-repeat forms).
+    - optimized sequence event-control NFA lowering in
+      `TimingControls.cpp` by caching per-source-state transition terms.
+    - added regression:
+      - `test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir`
+  - validation:
+    - `ninja -C build-test circt-opt circt-verilog`
+    - `build-test/bin/circt-opt test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir`
+    - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sequence-event-control.sv` (`~0.01s`)

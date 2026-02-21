@@ -372,6 +372,87 @@ struct LTLPropertyLowerer {
     return std::nullopt;
   }
 
+  std::optional<uint64_t> getSequenceMinLength(Value seq) {
+    if (!seq)
+      return 0;
+    if (auto clockOp = seq.getDefiningOp<ltl::ClockOp>())
+      return getSequenceMinLength(clockOp.getInput());
+    if (auto pastOp = seq.getDefiningOp<ltl::PastOp>())
+      return getSequenceMinLength(pastOp.getInput());
+    if (auto delayOp = seq.getDefiningOp<ltl::DelayOp>()) {
+      auto inputMin = getSequenceMinLength(delayOp.getInput());
+      if (!inputMin)
+        return std::nullopt;
+      return *inputMin + delayOp.getDelay();
+    }
+    if (!isa<ltl::SequenceType>(seq.getType()))
+      return 1;
+    if (auto concatOp = seq.getDefiningOp<ltl::ConcatOp>()) {
+      uint64_t minLen = 0;
+      for (auto input : concatOp.getInputs()) {
+        auto inputMin = getSequenceMinLength(input);
+        if (!inputMin)
+          return std::nullopt;
+        minLen += *inputMin;
+      }
+      return minLen;
+    }
+    if (auto repeatOp = seq.getDefiningOp<ltl::RepeatOp>()) {
+      auto inputMin = getSequenceMinLength(repeatOp.getInput());
+      if (!inputMin)
+        return std::nullopt;
+      return *inputMin * repeatOp.getBase();
+    }
+    if (auto gotoOp = seq.getDefiningOp<ltl::GoToRepeatOp>()) {
+      auto inputMin = getSequenceMinLength(gotoOp.getInput());
+      if (!inputMin)
+        return std::nullopt;
+      return *inputMin * gotoOp.getBase();
+    }
+    if (auto nonConsecutiveOp = seq.getDefiningOp<ltl::NonConsecutiveRepeatOp>()) {
+      auto inputMin = getSequenceMinLength(nonConsecutiveOp.getInput());
+      if (!inputMin)
+        return std::nullopt;
+      return *inputMin * nonConsecutiveOp.getBase();
+    }
+    if (auto orOp = seq.getDefiningOp<ltl::OrOp>()) {
+      std::optional<uint64_t> minLen;
+      for (auto input : orOp.getInputs()) {
+        auto inputMin = getSequenceMinLength(input);
+        if (!inputMin)
+          return std::nullopt;
+        if (!minLen || *inputMin < *minLen)
+          minLen = *inputMin;
+      }
+      return minLen;
+    }
+    if (auto andOp = seq.getDefiningOp<ltl::AndOp>()) {
+      std::optional<uint64_t> minLen;
+      for (auto input : andOp.getInputs()) {
+        auto inputMin = getSequenceMinLength(input);
+        if (!inputMin)
+          return std::nullopt;
+        if (!minLen || *inputMin > *minLen)
+          minLen = *inputMin;
+      }
+      return minLen;
+    }
+    if (auto intersectOp = seq.getDefiningOp<ltl::IntersectOp>()) {
+      std::optional<uint64_t> minLen;
+      for (auto input : intersectOp.getInputs()) {
+        auto inputMin = getSequenceMinLength(input);
+        if (!inputMin)
+          return std::nullopt;
+        if (!minLen || *inputMin > *minLen)
+          minLen = *inputMin;
+      }
+      return minLen;
+    }
+    if (auto firstMatch = seq.getDefiningOp<ltl::FirstMatchOp>())
+      return getSequenceMinLength(firstMatch.getInput());
+    return std::nullopt;
+  }
+
   Value shiftAges(Value input, Value zeroBit, unsigned width, Value zeroBits) {
     if (width == 1)
       return zeroBits;
@@ -694,17 +775,15 @@ struct LTLPropertyLowerer {
       // Only assertions need warmup to avoid false failures during sequence
       // startup.
       if (!skipWarmup && warmupClock) {
-        if (auto bounds = getSequenceLengthBounds(prop)) {
-          if (bounds->first == bounds->second && bounds->first > 0) {
-            uint64_t shift = bounds->first - 1;
-            if (shift > 0) {
-              auto warmup = shiftValue(trueVal, shift, warmupClock);
-              auto notWarmup = comb::XorOp::create(
-                  builder, loc, warmup,
-                  hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
-              match = comb::OrOp::create(
-                  builder, loc, SmallVector<Value, 2>{notWarmup, match}, true);
-            }
+        if (auto minLen = getSequenceMinLength(prop); minLen && *minLen > 0) {
+          uint64_t shift = *minLen - 1;
+          if (shift > 0) {
+            auto warmup = shiftValue(trueVal, shift, warmupClock);
+            auto notWarmup = comb::XorOp::create(
+                builder, loc, warmup,
+                hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
+            match = comb::OrOp::create(
+                builder, loc, SmallVector<Value, 2>{notWarmup, match}, true);
           }
         }
       }
@@ -749,9 +828,10 @@ struct LTLPropertyLowerer {
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
       // Skip warmup for assumes - constraints should apply from cycle 0.
       if (!skipWarmup) {
-        if (auto bounds = getSequenceLengthBounds(notOp.getInput())) {
-          if (bounds->first == bounds->second && bounds->first > 0 && clock) {
-            uint64_t shift = bounds->first - 1;
+        if (clock) {
+          if (auto minLen = getSequenceMinLength(notOp.getInput());
+              minLen && *minLen > 0) {
+            uint64_t shift = *minLen - 1;
             if (shift > 0) {
               auto trueVal =
                   hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);

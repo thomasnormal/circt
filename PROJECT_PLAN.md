@@ -1198,3 +1198,14 @@ verilator-verification, and yosys corpora).
   - `case` property expressions are now accepted and lowered.
   - `case` property selector matching now preserves multi-bit bitvector
     equality semantics.
+
+- Additional SVA/LTL closure:
+  - sequence assertion warmup in `LTLToCore` now uses minimum sequence length
+    (including unbounded-repeat forms), not only exact bounded lengths.
+  - new regression:
+    - `test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir`
+  - sequence event-control lowering now caches per-source-state transition
+    terms to reduce duplicated combinational terms in large NFA-based waits.
+  - validation:
+    - `build-test/bin/circt-opt test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sequence-event-control.sv`

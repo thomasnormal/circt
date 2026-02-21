@@ -703,6 +703,15 @@ Record results in CHANGELOG.md and include relevant output artifacts.
     lowering via per-source-state/per-condition mask caching.
 
 - Additional closure (same date):
+  - `LTLToCore` sequence warmup now uses minimum-length bounds, not only exact
+    finite bounds, so unbounded-repeat sequences with known minimum delay get
+    startup warmup gating in assertion lowering.
+  - regression:
+    - `test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir`
+  - sequence event-control lowering now caches per-source-state transition
+    terms to reduce duplicated combinational `and` generation in large NFAs.
+
+- Additional closure (same date):
   - ImportVerilog now supports concurrent `restrict property` by lowering to
     assume semantics.
   - regressions:
