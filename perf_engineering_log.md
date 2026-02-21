@@ -791,3 +791,45 @@ Note: percentages shifted up because total instruction count dropped (denominato
 
 ### Test Results
 564/578 pass (14 pre-existing failures, 0 regressions).
+
+## Phase 9b: SensitivityList assignFrom optimization
+
+### Date: 2026-02-21
+
+### Summary
+The sensitivity list cache was rebuilding the `SensitivityList` by calling `addEdge()` per entry
+(each an `emplace_back` into a `SmallVector`). This was 3.27% of runtime. Replaced with bulk
+`assignFrom()` using `SmallVector::assign(begin, end)` which batch-copies the range.
+
+Also added `SensitivityList::assignFrom<RangeT>()` template method to `ProcessScheduler.h`.
+
+### AVIP 50us Benchmark — Cumulative Results
+
+| Metric | Original Baseline | After Phase 9+9b | Improvement |
+|--------|-------------------|-------------------|-------------|
+| Instructions | 781.0B | 641.2B | **-139.8B (-17.9%)** |
+| Wall time | 78.7s | 66.2s | **-12.5s (-15.9%)** |
+
+### Throughput (50us sim, 10M delta cycles)
+- **151,076 delta cycles/s** (was 145,570)
+- **64,119 instructions/delta cycle** (was 70,129)
+- **~755 ns/s simulation throughput** (50us sim / 66.2s wall)
+
+### Profile Summary (20us AVIP, post all optimizations)
+All hotspots now < 4%, evenly distributed across fundamental interpreter operations:
+- cacheWaitState: 3.90%
+- interpretOperation: 2.94%
+- findBlockByAddress: 2.81%
+- interpretLLVMStore: 2.56%
+- suspendProcessForEvents: 2.28%
+- memmove: 2.21%
+- interpretProbe: 2.13%
+- DenseMapIterator: 1.87%
+
+Three functions eliminated from hot path:
+- SensitivityEntry emplace_back: 2.97% → <0.5% (assignFrom)
+- getLLVMTypeSizeForGEP: 1.81% → <0.5% (DenseMap cache)
+- suspendProcessForEvents std::find: 3.27% → 2.28% (DenseSet registration)
+
+### Test Results
+564/578 pass (14 pre-existing failures, 0 regressions).
