@@ -697,6 +697,11 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - regressions:
     - `test/Conversion/ImportVerilog/sva-restrict-property.sv`
     - `test/Tools/circt-bmc/sva-restrict-e2e.sv`
+  - ImportVerilog now supports concurrent `cover sequence` lowering through
+    the cover paths.
+  - regressions:
+    - `test/Conversion/ImportVerilog/sva-cover-sequence.sv`
+    - `test/Tools/circt-bmc/sva-cover-sequence-e2e.sv`
 
 ## Ownership and References
 

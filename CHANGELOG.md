@@ -73513,3 +73513,24 @@ See CHANGELOG.md on recent progress.
         - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-restrict-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-restrict-property.sv`
         - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-restrict-property.sv`
         - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-restrict-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_restrict bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-restrict-e2e.sv --check-prefix=CHECK-BMC`
+85. ImportVerilog SVA: support concurrent `cover sequence`
+    (February 21, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/Statements.cpp`
+      - added `AssertionKind::CoverSequence` lowering in concurrent assertion
+        paths; now maps to `verif.cover` / `verif.clocked_cover`.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-cover-sequence.sv`
+        - `test/Tools/circt-bmc/sva-cover-sequence-e2e.sv`
+      - reproduces prior importer failure:
+        - `unsupported concurrent assertion kind: CoverSequence`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-cover-sequence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-cover-sequence.sv`
+        - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-cover-sequence.sv`
+        - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-cover-sequence-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_cover_sequence bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-cover-sequence-e2e.sv --check-prefix=CHECK-BMC`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
