@@ -2737,7 +2737,9 @@ LogicalResult SimulationContext::run() {
                      << ", executed: " << stats.processesExecuted
                      << ", delta cycles: " << stats.deltaCyclesExecuted << "\n";
         // Dump process states to show what's alive/dead/waiting
-        if (llhdInterpreter)
+        // (skip if profile summary at exit will dump later)
+        if (llhdInterpreter &&
+            !llhdInterpreter->isProfileSummaryAtExitEnabled())
           llhdInterpreter->dumpProcessStates(llvm::errs());
         // No more events
         break;
@@ -2808,6 +2810,13 @@ LogicalResult SimulationContext::run() {
   if (!vpiLibrary.empty())
     VPIRuntime::getInstance().fireEndOfSimulation();
 
+  // Dump profile summary at exit if requested.
+  if (llhdInterpreter && llhdInterpreter->isProfileSummaryAtExitEnabled()) {
+    llvm::outs().flush();
+    llhdInterpreter->dumpProcessStates(llvm::errs());
+    llvm::errs().flush();
+  }
+
   // Report completion
   const auto &finalTime = scheduler.getCurrentTime();
   llvm::outs() << "[circt-sim] Simulation completed at time "
@@ -2844,11 +2853,6 @@ void SimulationContext::printStatistics(llvm::raw_ostream &os) const {
 
   if (printProcessStats && llhdInterpreter) {
     llhdInterpreter->dumpProcessStats(os, processStatsTop);
-  }
-
-  if (profiler) {
-    os << "\n--- Profiling Statistics ---\n";
-    // profiler->printReport(os);
   }
 
   os << "=============================\n";

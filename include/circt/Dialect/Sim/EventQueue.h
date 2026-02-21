@@ -546,6 +546,10 @@ public:
   /// Returns true if time was advanced, false if no events or already at next event.
   bool advanceToNextTime();
 
+  /// Advance the internal simulation time to the specified value (in fs).
+  /// Does NOT process events — just moves the clock forward.
+  void advanceTimeTo(uint64_t timeFs);
+
   /// Check if the simulation is complete (no more events).
   bool isComplete() const;
 

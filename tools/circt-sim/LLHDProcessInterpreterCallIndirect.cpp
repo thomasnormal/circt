@@ -231,6 +231,16 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         noteJitRuntimeIndirectUnresolved(procId, callIndirectOp);
     });
 
+    // Install resolution cache entry on exit (after resolution completes).
+    uint64_t ciCacheFuncAddr = 0;
+    auto installResolutionCacheOnExit = llvm::make_scope_exit([&]() {
+      if (sawResolvedTarget && ciCacheFuncAddr != 0 &&
+          !callIndirectResolutionCache.count(ciCacheFuncAddr)) {
+        callIndirectResolutionCache[ciCacheFuncAddr] = resolvedTargetName;
+        ++ciResolutionCacheInstalls;
+      }
+    });
+
     // Early trace: log every call_indirect to detect analysis_port writes.
     if (traceAnalysisEnabled) {
       // Try to identify the callee from the SSA chain (GEP → vtable)
@@ -633,6 +643,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
     // Look up the function name from the vtable
     uint64_t funcAddr = funcPtrVal.getUInt64();
+
+    ciCacheFuncAddr = funcAddr;
+
+    // Check resolution cache first.
+    auto rcIt = callIndirectResolutionCache.find(funcAddr);
+    if (rcIt != callIndirectResolutionCache.end()) {
+      ++ciResolutionCacheHits;
+    } else {
+      ++ciResolutionCacheMisses;
+    }
+
     auto it = addressToFunction.find(funcAddr);
     if (it == addressToFunction.end()) {
       // Runtime vtable pointer is corrupt or unmapped. Try static resolution
@@ -2349,8 +2370,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     if (calleeName.contains("uvm_port_base") &&
         calleeName.ends_with("::size") &&
         callIndirectOp.getNumResults() >= 1) {
-      uint64_t selfAddr =
+      uint64_t rawSelfAddr =
           (!args.empty() && !args[0].isX()) ? args[0].getUInt64() : 0;
+      uint64_t selfAddr = canonicalizeUvmObjectAddress(procId, rawSelfAddr);
       if (analysisPortConnections.count(selfAddr)) {
         int32_t count = getNativeUvmPortSize(analysisPortConnections, selfAddr);
         Value result = callIndirectOp.getResult(0);
@@ -3087,7 +3109,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
       if (found && itemAddr != 0) {
         // Track the dequeued item by both pull-port and resolved queue alias.
-        recordUvmDequeuedItem(portAddr, seqrQueueAddr, itemAddr);
+        recordUvmDequeuedItem(procId, portAddr, seqrQueueAddr, itemAddr);
         // Write item address to output ref (args[1]).
         // The output ref is an llhd.ref or alloca-backed ptr.
         uint64_t refAddr = args[1].isX() ? 0 : args[1].getUInt64();

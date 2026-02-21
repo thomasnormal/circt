@@ -54,6 +54,7 @@ set(libs
 
 add_circt_tool(circt-sim
   PARTIAL_SOURCES_INTENDED
+  AOTProcessCompiler.cpp
   circt-sim.cpp
   JITCompileManager.cpp
   JITSchedulerRuntime.cpp
@@ -70,6 +71,7 @@ add_circt_tool(circt-sim
   LLHDProcessInterpreterTrace.cpp
   LLHDProcessInterpreterUvm.cpp
   LLHDProcessInterpreterWaitCondition.cpp
+  UcontextProcess.cpp
   UVMFastPaths.cpp
   DEPENDS ${libs}
 )
