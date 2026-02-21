@@ -73534,3 +73534,26 @@ See CHANGELOG.md on recent progress.
         - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-cover-sequence-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_cover_sequence bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-cover-sequence-e2e.sv --check-prefix=CHECK-BMC`
       - formal smoke: PASS
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+86. ImportVerilog SVA: support abort-style property operators
+    (`accept_on` / `reject_on` / sync variants)
+    (February 21, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - added lowering for `slang::ast::AbortAssertionExpr`.
+      - accept variants lower to `ltl.or(cond, property)`.
+      - reject variants lower to `ltl.and(ltl.not(cond), property)`.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-abort-on.sv`
+        - `test/Tools/circt-bmc/sva-abort-on-e2e.sv`
+      - reproduces prior importer failure:
+        - `unsupported expression: Abort`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-abort-on.sv`
+        - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-abort-on.sv`
+        - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-abort-on-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_abort_on_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-abort-on-e2e.sv --check-prefix=CHECK-BMC`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`

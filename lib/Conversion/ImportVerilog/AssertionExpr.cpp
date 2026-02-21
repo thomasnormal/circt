@@ -1278,6 +1278,32 @@ struct AssertionExprVisitor {
     return orOp.getResult();
   }
 
+  Value visit(const slang::ast::AbortAssertionExpr &expr) {
+    auto condition = context.convertRvalueExpression(expr.condition);
+    condition = context.convertToBool(condition);
+    condition = context.convertToI1(condition);
+    if (!condition)
+      return {};
+
+    auto assertionExpr =
+        context.convertAssertionExpression(expr.expr, loc, /*applyDefaults=*/false);
+    if (!assertionExpr)
+      return {};
+
+    if (expr.action == slang::ast::AbortAssertionExpr::Accept) {
+      // Approximate accept_on / sync_accept_on as vacuous success when the
+      // abort condition is true.
+      return ltl::OrOp::create(builder, loc,
+                               SmallVector<Value, 2>{condition, assertionExpr});
+    }
+
+    // Approximate reject_on / sync_reject_on as forcing failure when the abort
+    // condition is true.
+    auto notCondition = ltl::NotOp::create(builder, loc, condition);
+    return ltl::AndOp::create(builder, loc,
+                              SmallVector<Value, 2>{notCondition, assertionExpr});
+  }
+
   /// Emit an error for all other expressions.
   template <typename T>
   Value visit(T &&node) {
