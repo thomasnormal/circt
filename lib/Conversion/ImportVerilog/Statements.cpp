@@ -670,6 +670,13 @@ struct StmtVisitor {
       auto *blockSym = stmt.blockSymbol;
       if (!blockSym || blockSym->name.empty())
         return context.convertStatement(stmt.body);
+      // Module bodies are single-block regions. Labeled module-level
+      // concurrent assertions can arrive here wrapped in a named block
+      // (`label: assert property ...`), but must not introduce CFG blocks.
+      // Keep these linear and rely on statement lowering to emit the assertion.
+      if (builder.getInsertionBlock() &&
+          isa<moore::SVModuleOp>(builder.getInsertionBlock()->getParentOp()))
+        return context.convertStatement(stmt.body);
 
       auto &exitBlock = createBlock();
       context.disableStack.push_back({blockSym, &exitBlock});
@@ -2448,6 +2455,29 @@ struct StmtVisitor {
           return label;
         if (conditional->ifFalse)
           return extractActionBlockLabel(conditional->ifFalse);
+        return {};
+      }
+      if (auto *patternCase =
+              actionStmt->as_if<slang::ast::PatternCaseStatement>()) {
+        for (const auto &item : patternCase->items) {
+          if (item.stmt) {
+            if (auto label = extractActionBlockLabel(item.stmt))
+              return label;
+          }
+        }
+        if (patternCase->defaultCase)
+          return extractActionBlockLabel(patternCase->defaultCase);
+        return {};
+      }
+      if (auto *caseStmt = actionStmt->as_if<slang::ast::CaseStatement>()) {
+        for (const auto &item : caseStmt->items) {
+          if (item.stmt) {
+            if (auto label = extractActionBlockLabel(item.stmt))
+              return label;
+          }
+        }
+        if (caseStmt->defaultCase)
+          return extractActionBlockLabel(caseStmt->defaultCase);
         return {};
       }
       auto *exprStmt = actionStmt->as_if<slang::ast::ExpressionStatement>();
