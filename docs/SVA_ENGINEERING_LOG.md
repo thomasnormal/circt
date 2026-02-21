@@ -114,3 +114,25 @@
     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-cover-sequence-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_cover_sequence bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-cover-sequence-e2e.sv --check-prefix=CHECK-BMC`
     - formal smoke:
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
+
+- Iteration update (`accept_on` / `reject_on` support):
+  - realization:
+    - abort-style property operators (`accept_on`, `reject_on`,
+      `sync_accept_on`, `sync_reject_on`) failed import with:
+      `unsupported expression: Abort`.
+  - implemented:
+    - added lowering for `slang::ast::AbortAssertionExpr` in
+      `AssertionExprVisitor`.
+    - current lowering model:
+      - accept variants: `ltl.or(condition, property)`
+      - reject variants: `ltl.and(ltl.not(condition), property)`
+    - added import regression:
+      - `test/Conversion/ImportVerilog/sva-abort-on.sv`
+    - added BMC pipeline regression:
+      - `test/Tools/circt-bmc/sva-abort-on-e2e.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-abort-on.sv`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-abort-on.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-abort-on-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_abort_on_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-abort-on-e2e.sv --check-prefix=CHECK-BMC`
+    - formal smoke:
+      - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)

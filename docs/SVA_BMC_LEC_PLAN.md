@@ -702,6 +702,11 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - regressions:
     - `test/Conversion/ImportVerilog/sva-cover-sequence.sv`
     - `test/Tools/circt-bmc/sva-cover-sequence-e2e.sv`
+  - ImportVerilog now supports abort-style property operators:
+    `accept_on`, `reject_on`, `sync_accept_on`, `sync_reject_on`.
+  - regressions:
+    - `test/Conversion/ImportVerilog/sva-abort-on.sv`
+    - `test/Tools/circt-bmc/sva-abort-on-e2e.sv`
 
 ## Ownership and References
 
