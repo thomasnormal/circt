@@ -73681,3 +73681,26 @@ See CHANGELOG.md on recent progress.
         - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
       - formal smoke: PASS
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+90. LTLToCore SVA: support both-edge (`edge`) normalization for direct
+    clocked sequence/property lowering
+    (February 21, 2026):
+    - feature:
+      - `lib/Conversion/LTLToCore/LTLToCore.cpp`
+      - removed the `both-edge clocks are not supported in LTL lowering`
+        bailout in `normalizeClock` so `edge` on `i1` clocks lowers through
+        `seq.to_clock` and uses existing both-edge tick semantics.
+    - regression coverage:
+      - new:
+        - `test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
+      - reproduces prior lowering failure:
+        - `both-edge clocks are not supported in LTL lowering`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-opt`
+      - focused tests: PASS
+        - `build-test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
+        - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir build-test/test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir build-test/test/Conversion/LTLToCore/clocked-assert-edge-gating.mlir`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - profiling sample:
+        - `time build-test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core` (`~0.01s`)

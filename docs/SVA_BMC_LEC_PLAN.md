@@ -738,6 +738,16 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - `case` property lowering now uses bitvector selector equality for
     multi-bit selectors (not boolean-only matching).
 
+- Additional closure (same date):
+  - `LTLToCore` now supports both-edge clock normalization for direct lowering
+    of clocked sequence/property checks on `i1` clocks.
+  - regression:
+    - `test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
+  - validation:
+    - `build-test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+
 ## Ownership and References
 
 - Primary plan: PROJECT_PLAN.md (tracks and iteration status)

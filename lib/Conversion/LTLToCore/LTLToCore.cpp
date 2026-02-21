@@ -1201,11 +1201,6 @@ struct LTLPropertyLowerer {
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
       clockSignal = comb::XorOp::create(builder, loc, clockSignal, one);
     }
-    if (edge == ltl::ClockEdge::Both) {
-      mlir::emitError(loc,
-                      "both-edge clocks are not supported in LTL lowering");
-      return {};
-    }
     return seq::ToClockOp::create(builder, loc, clockSignal);
   }
 
