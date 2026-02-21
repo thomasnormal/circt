@@ -1318,7 +1318,9 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
 
 static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
                                                const slang::ast::Expression &expr,
-                                               const slang::ast::Expression *iffExpr) {
+                                               const slang::ast::Expression *iffExpr,
+                                               std::optional<ltl::ClockEdge> edgeOverride =
+                                                   std::nullopt) {
   OpBuilder &builder = context.builder;
   const slang::ast::Expression *assertionExpr = &expr;
   if (auto symRef = expr.getSymbolReference()) {
@@ -1369,7 +1371,7 @@ static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
                                   SmallVector<Value, 2>{seqValue, condition});
   }
   Value clockValue = clockOp.getClock();
-  auto edge = clockOp.getEdge();
+  auto edge = edgeOverride ? *edgeOverride : clockOp.getEdge();
   auto result =
       lowerClockedSequenceEventControl(context, loc, seqValue, clockValue, edge);
   eraseLTLDeadOps(clockedValue);
@@ -1477,11 +1479,6 @@ lowerSequenceEventListControl(Context &context, Location loc,
     }
     sequenceSourceDetailAttrs.push_back(builder.getDictionaryAttr(detailAttrs));
 
-    if (signalCtrl->edge != slang::ast::EdgeKind::None)
-      return mlir::emitError(loc)
-             << "sequence event controls in event lists do not support edge "
-                "qualifiers";
-
     const slang::ast::Expression *assertionExpr = &signalCtrl->expr;
     if (auto symRef = signalCtrl->expr.getSymbolReference()) {
       if (symRef->kind == slang::ast::SymbolKind::Sequence ||
@@ -1518,10 +1515,14 @@ lowerSequenceEventListControl(Context &context, Location loc,
       return mlir::emitError(loc)
              << "sequence event control requires a clocking event";
 
+    auto sequenceEdge = signalCtrl->edge == slang::ast::EdgeKind::None
+                            ? clockOp.getEdge()
+                            : convertEdgeKindLTL(signalCtrl->edge);
+
     if (!commonEdge) {
-      commonEdge = clockOp.getEdge();
+      commonEdge = sequenceEdge;
       commonClock = clockOp.getClock();
-    } else if (*commonEdge != clockOp.getEdge() ||
+    } else if (*commonEdge != sequenceEdge ||
                !equivalentClockSignals(commonClock, clockOp.getClock())) {
       sameClockAndEdge = false;
     }
@@ -1538,7 +1539,20 @@ lowerSequenceEventListControl(Context &context, Location loc,
       sequenceInput = ltl::AndOp::create(
           builder, loc, SmallVector<Value, 2>{sequenceInput, condition});
       clockedValue = ltl::ClockOp::create(builder, loc, sequenceInput,
-                                          clockOp.getEdge(), clockOp.getClock());
+                                          sequenceEdge, clockOp.getClock());
+    } else if (sequenceEdge != clockOp.getEdge()) {
+      clockedValue = ltl::ClockOp::create(builder, loc, sequenceInput,
+                                          sequenceEdge, clockOp.getClock());
+    }
+
+    if (signalCtrl->edge != slang::ast::EdgeKind::None) {
+      std::string sourceLabel = source + ":" + formatClockEdge(sequenceEdge).str();
+      sequenceSourceAttrs.back() = builder.getStringAttr(sourceLabel);
+      auto detail = sequenceSourceDetailAttrs.back().getValue();
+      SmallVector<NamedAttribute, 8> detailAttrs(detail.begin(), detail.end());
+      detailAttrs.push_back(builder.getNamedAttr(
+          "edge", builder.getStringAttr(formatClockEdge(sequenceEdge))));
+      sequenceSourceDetailAttrs.back() = builder.getDictionaryAttr(detailAttrs);
     }
     sequenceInputs.push_back(sequenceInput);
     clockedInputs.push_back(clockedValue);
@@ -1822,11 +1836,11 @@ static LogicalResult handleRoot(Context &context,
     }
 
     if (isAssertionEventControl(signalCtrl.expr)) {
+      std::optional<ltl::ClockEdge> edgeOverride;
       if (signalCtrl.edge != slang::ast::EdgeKind::None)
-        return mlir::emitError(loc)
-               << "sequence event controls do not support edge qualifiers";
+        edgeOverride = convertEdgeKindLTL(signalCtrl.edge);
       return lowerSequenceEventControl(context, loc, signalCtrl.expr,
-                                       signalCtrl.iffCondition);
+                                       signalCtrl.iffCondition, edgeOverride);
     }
 
     auto waitOp = moore::WaitEventOp::create(builder, loc);

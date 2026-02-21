@@ -24,6 +24,7 @@ module SequenceEventControl;
   end
 endmodule
 
+
 // Test event-list sequence controls: @(seq1 or seq2)
 module SequenceEventListControl;
   logic clk, a, b;
@@ -53,6 +54,7 @@ module SequenceEventListControl;
     a <= ~a;
   end
 endmodule
+
 
 // Test mixed sequence/signal event list on equivalent clock edge.
 module SequenceSignalEventListControl;
