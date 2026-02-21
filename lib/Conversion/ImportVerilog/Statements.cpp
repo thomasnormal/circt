@@ -2452,7 +2452,8 @@ struct StmtVisitor {
         return {};
       StringRef taskName = sci->subroutine->name;
       if (taskName != "$error" && taskName != "$warning" &&
-          taskName != "$fatal" && taskName != "$info")
+          taskName != "$fatal" && taskName != "$info" &&
+          taskName != "$display" && taskName != "$write")
         return {};
 
       auto args = call->arguments();

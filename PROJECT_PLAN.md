@@ -101,6 +101,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 4. **Regression tests**: sig-extract-x-drive-as-zero.mlir, iface-field-reverse-propagation.mlir.
 
 5. **OpenTitan**: 30/39 tests pass. Fixed stuck-at-time-0 for spi_device, alert_handler.
+6. **SVA importer diagnostics preservation** (Feb 21, 2026):
+   Concurrent assertion action blocks with simple severity calls now preserve
+   the diagnostic message as assertion labels during import
+   (e.g. `else $error("fail")` / `$display("fail")` ->
+   `verif.assert ... label "fail"`).
 
 ### Previously Completed (Iteration 1401, Feb 14, 2026)
 1. **sv-tests 100% coverage**: 952 PASS + 76 XFAIL = 1028/1028. Zero silent skips. Key additions: SVA LTLToCore pipeline, CompRegOp support, AnalysisManager integration, tagged union checker, runner compile-only mode for preprocessing tests.

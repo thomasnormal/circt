@@ -127,6 +127,42 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
     to UVM `do_compare` default argument mismatch and reversed range bins.
     Track as AVIP fixes, not CIRCT.
 
+## Unsupported Feature Inventory (As Of February 21, 2026)
+
+This inventory tracks known SVA-related gaps that are still not fully supported.
+Items are grouped by pipeline stage.
+
+### Import + Frontend Gaps
+
+- General concurrent assertion action-block semantics are not modeled end-to-end.
+  - Import now preserves simple severity-message action blocks
+    (`$error/$warning/$fatal/$info`, plus `$display/$write`) as assertion
+    labels for diagnostics.
+  - Rich action blocks (arbitrary statements, side effects) are still not
+    represented as assertion failure actions in IR/formal flows.
+- Property event controls in procedural timing controls remain unsupported in
+  temporal-property form (`@property_name` when lowering yields `!ltl.property`).
+- Sequence event controls in event lists do not currently support explicit edge
+  qualifiers (only sequence/property event form without edge qualifiers).
+- Some assertion port timing-control value paths still carry unsupported
+  diagnostics in generic expression lowering; these paths should be retired or
+  completed once all legal event-typed uses are covered.
+
+### BMC + Semantics Gaps
+
+- Per-check edge scheduling in BMC remains incomplete for mixed edge cases.
+- Nested / multi-clock sequence semantics inside a single property remain
+  incomplete.
+- Liveness-style eventualities near bound need stronger closure checks.
+- Sampled-value alignment remains imperfect in some local-variable scenarios.
+
+### Tooling + Flow Gaps
+
+- LEC workflow exists but is not yet fully integrated as a stable end-to-end
+  default flow with complete CEX reporting.
+- UVM runtime behavior in BMC remains incomplete (currently prunes unreachable
+  runtime symbols instead of full class runtime modeling).
+
 ## Core Workstreams
 
 ### Track A: SVA Language Semantics

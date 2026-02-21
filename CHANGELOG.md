@@ -73351,3 +73351,29 @@ See CHANGELOG.md on recent progress.
         - `utils/run_mutation_mcy_examples.sh --examples-root ~/mcy/examples --example bitcnt --example picorv32_primes --mutations-backend native --require-native-backend --native-tests-mode real --generate-count 16 --mutation-limit 16 --jobs 2 --example-retries 1 --out-dir /tmp/mcy_examples_native_real_<timestamp>`
         - `bitcnt`: `13/16` (`81.25%`)
         - `picorv32_primes`: `16/16` (`100.00%`)
+81. ImportVerilog SVA: preserve simple concurrent assertion action-block
+    diagnostics as assertion labels
+    (February 21, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/Statements.cpp`
+      - concurrent assertion statements now extract simple severity action
+        blocks (`$error/$warning/$fatal/$info`) and simple display actions
+        (`$display/$write`), preserving message text as
+        `verif.assert`/`verif.clocked_assert` labels.
+      - supports direct expression form and one-statement `begin...end` blocks.
+      - `$fatal(code, "msg")` keeps `"msg"` as the label payload.
+    - regression coverage:
+      - updated:
+        - `test/Conversion/ImportVerilog/sva-action-block.sv`
+      - validates label preservation for:
+        - `else $error("fail")`
+        - `else $fatal(1, "fatal_fail")`
+        - `else begin $warning("warn_fail"); end`
+        - `else $display("disp_fail")`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+      - focused test: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`
+      - frontend smoke: PASS
+        - `build-test/bin/circt-verilog --ir-moore --no-uvm-auto-include test/Conversion/ImportVerilog/sva-action-block.sv`
