@@ -691,6 +691,13 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
   - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core --lower-clocked-assert-like --externalize-registers --lower-to-bmc='top-module=unbounded_first_match bound=5'`
 
+- Additional closure (same date):
+  - ImportVerilog now supports concurrent `restrict property` by lowering to
+    assume semantics.
+  - regressions:
+    - `test/Conversion/ImportVerilog/sva-restrict-property.sv`
+    - `test/Tools/circt-bmc/sva-restrict-e2e.sv`
+
 ## Ownership and References
 
 - Primary plan: PROJECT_PLAN.md (tracks and iteration status)

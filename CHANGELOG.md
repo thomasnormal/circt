@@ -73492,3 +73492,24 @@ See CHANGELOG.md on recent progress.
         - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-first-match-unbounded.sv`
       - formal smoke: PASS
         - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core --lower-clocked-assert-like --externalize-registers --lower-to-bmc='top-module=unbounded_first_match bound=5'`
+84. ImportVerilog SVA: support concurrent `restrict property`
+    (February 21, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/Statements.cpp`
+      - added `AssertionKind::Restrict` lowering in concurrent assertion paths.
+      - `restrict property` now maps to assumption semantics:
+        - `verif.assume` / `verif.clocked_assume`
+        - immediate path maps to `moore.assume`.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-restrict-property.sv`
+        - `test/Tools/circt-bmc/sva-restrict-e2e.sv`
+      - reproduces prior importer failure:
+        - `unsupported concurrent assertion kind: Restrict`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-restrict-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-restrict-property.sv`
+        - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-restrict-property.sv`
+        - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-restrict-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_restrict bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-restrict-e2e.sv --check-prefix=CHECK-BMC`
