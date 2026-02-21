@@ -1494,7 +1494,7 @@ Value Context::convertAssertionCallExpression(
           .Case("$stable_gclk", "$stable")
           .Case("$changed_gclk", "$changed")
           .Case("$past_gclk", "$past")
-          .Case("$future_gclk", "$past")
+          .Case("$future_gclk", "$future")
           .Case("$rising_gclk", "$rose")
           .Case("$falling_gclk", "$fell")
           .Case("$steady_gclk", "$stable")
@@ -1505,6 +1505,19 @@ Value Context::convertAssertionCallExpression(
   FailureOr<Value> result;
   Value value;
   Value boolVal;
+
+  if (funcName == "$future") {
+    value = this->convertRvalueExpression(*args[0]);
+    if (!value)
+      return {};
+    value = this->convertToBool(value);
+    value = this->convertToI1(value);
+    if (!value)
+      return {};
+    return ltl::DelayOp::create(builder, loc, value,
+                                builder.getI64IntegerAttr(1),
+                                builder.getI64IntegerAttr(0));
+  }
 
   if (funcName == "$rose" || funcName == "$fell" ||
       funcName == "$stable" || funcName == "$changed") {

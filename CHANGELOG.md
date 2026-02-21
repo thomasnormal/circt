@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1544 - February 21, 2026
+
+### [ImportVerilog][SVA] Lower `$future_gclk` to forward temporal delay instead of `$past` approximation
+
+1. **Implemented direct future lowering for global-clock sampled calls**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - `_gclk` normalization now maps `$future_gclk` to `$future`.
+   - `$future` now lowers to `ltl.delay(<bool arg>, 1, 0)` in assertion call
+     conversion, replacing the previous `$past` approximation.
+
+2. **Added/updated regression coverage**
+   (`test/Conversion/ImportVerilog/gclk-sampled-functions.sv`):
+   - tightened per-call FileCheck sequencing to avoid cross-assert accidental
+     matches.
+   - explicitly checks `$future_gclk` lowers through `ltl.delay ..., 1, 0` and
+     clocked sequence assertion form.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/gclk-sampled-functions.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS (`2/2` mode cases).
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv` (`elapsed=0.032s`).
+
 ## Iteration 1543 - February 21, 2026
 
 ### [LTLToCore][SVA] Apply warmup by minimum sequence length and optimize sequence-event NFA term generation
