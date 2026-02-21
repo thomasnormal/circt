@@ -1167,3 +1167,15 @@ verilator-verification, and yosys corpora).
    statuses to per-assertion proof/counterexample extraction, then add
    cover-reachability-native objective classes with strict-gate parity
    governance.
+
+### Iteration Update (2026-02-21)
+
+- SVA/LTL closure:
+  - Added unbounded `first_match` regression:
+    `test/Conversion/LTLToCore/first-match-unbounded.mlir`.
+  - `LTLToCore` no longer hard-fails unbounded `first_match` during
+    `verif.clocked_assert` lowering; unbounded cases now take a non-failing
+    generic sequence-lowering fallback.
+- Validation snapshots:
+  - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
+  - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core --lower-clocked-assert-like --externalize-registers --lower-to-bmc='top-module=unbounded_first_match bound=5'`

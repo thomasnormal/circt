@@ -942,11 +942,6 @@ struct AssertionExprVisitor {
         context.convertAssertionExpression(expr.seq, loc, /*applyDefaults=*/false);
     if (!sequenceValue)
       return {};
-    auto bounds = getSequenceLengthBounds(sequenceValue);
-    if (!bounds || !bounds->max) {
-      mlir::emitError(loc) << "first_match requires a bounded sequence";
-      return {};
-    }
     if (failed(handleMatchItems(expr.matchItems)))
       return {};
     return ltl::FirstMatchOp::create(builder, loc, sequenceValue);

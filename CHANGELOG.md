@@ -73469,3 +73469,26 @@ See CHANGELOG.md on recent progress.
       - focused test: PASS
         - `build-test/bin/circt-verilog --ir-moore --no-uvm-auto-include test/Conversion/ImportVerilog/sva-event-port-past-no-spurious-bool-error.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-event-port-past-no-spurious-bool-error.sv`
         - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-event-port-past-no-spurious-bool-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-event-port-past-no-spurious-bool-error.sv --check-prefix=IR`
+83. LTLToCore SVA: accept unbounded `first_match` in formal lowering
+    (February 21, 2026):
+    - feature:
+      - `lib/Conversion/LTLToCore/LTLToCore.cpp`
+      - removed hard failure path for unbounded `ltl.first_match` in
+        `lowerSequence`; bounded cases keep dedicated first-match lowering,
+        unbounded cases now use generic sequence lowering fallback.
+    - regression coverage:
+      - new:
+        - `test/Conversion/LTLToCore/first-match-unbounded.mlir`
+      - reproduces previous failure:
+        - `first_match lowering requires a bounded sequence`
+        - `failed to lower clocked assertion`
+      - now verifies successful `verif.assert ... : i1` emission.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-opt`
+      - focused tests: PASS
+        - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-first-match-unbounded.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-first-match-unbounded.sv`
+        - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-first-match-unbounded.sv`
+      - formal smoke: PASS
+        - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core --lower-clocked-assert-like --externalize-registers --lower-to-bmc='top-module=unbounded_first_match bound=5'`
