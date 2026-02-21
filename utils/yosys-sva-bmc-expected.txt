@@ -8,9 +8,6 @@
 #   known  -> BMC_ASSUME_KNOWN_INPUTS=1
 #   xprop  -> BMC_ASSUME_KNOWN_INPUTS=0
 
-# counter fail-mode is assumption-profile sensitive under known assumptions.
-counter	fail	known	xfail
-
 # Under xprop profile (BMC_ASSUME_KNOWN_INPUTS=0), unconstrained 4-state
 # inputs currently drive pass-mode counterexamples in the following tests.
 basic00	pass	xprop	xfail

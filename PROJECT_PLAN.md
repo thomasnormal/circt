@@ -142,6 +142,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 15. **SVA `$global_clock iff ...` guard preservation** (Feb 21, 2026):
    ImportVerilog now preserves outer `iff` guards for `$global_clock` in both
    property clocking and explicit sampled-value clocking arguments.
+16. **SVA yosys `counter` known-profile baseline cleanup** (Feb 21, 2026):
+   Removed stale expected-XFAIL baseline entries for `counter` fail-mode in
+   the known-input profile now that this case passes consistently.
 
 ### Previously Completed (Iteration 1401, Feb 14, 2026)
 1. **sv-tests 100% coverage**: 952 PASS + 76 XFAIL = 1028/1028. Zero silent skips. Key additions: SVA LTLToCore pipeline, CompRegOp support, AnalysisManager integration, tagged union checker, runner compile-only mode for preprocessing tests.
