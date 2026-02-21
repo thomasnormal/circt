@@ -644,6 +644,11 @@ public:
     scheduler.setMaxDeltaCycles(maxDeltaCycles);
   }
 
+  /// Set the maximum simulation time (for batch limiting).
+  void setMaxSimTime(uint64_t maxTimeFs) {
+    scheduler.setMaxSimTime(maxTimeFs);
+  }
+
   /// Configure the maximum operations per process activation.
   void setMaxProcessSteps(size_t maxSteps) {
     maxProcessSteps = maxSteps;
@@ -761,6 +766,7 @@ private:
   uint64_t lastVCDTime = 0;
   bool vcdTimeInitialized = false;
   bool vcdReady = false;
+  bool vcdDumpEnabled = true;  // $dumpoff/$dumpon gate
 
   // Module information
   llvm::SmallVector<std::string, 4> topModuleNames;
@@ -1279,6 +1285,35 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
             vcdWriter->endDumpVars();
             vcdReady = true;
           });
+
+      // Set up $dumpoff callback to pause VCD recording.
+      llhdInterpreter->setDumpoffCallback(
+          [this]() {
+            vcdDumpEnabled = false;
+          });
+
+      // Set up $dumpon callback to resume VCD recording with re-sync snapshot.
+      llhdInterpreter->setDumponCallback(
+          [this]() {
+            vcdDumpEnabled = true;
+            if (!vcdWriter || !vcdReady)
+              return;
+            // Write current time and re-sync all traced signals
+            // (IEEE 1800-2017 §21.7.3: resume by emitting current values).
+            uint64_t currentTime = scheduler.getCurrentTime().realTime;
+            if (currentTime != lastVCDTime) {
+              vcdWriter->writeTime(currentTime);
+              lastVCDTime = currentTime;
+            }
+            for (auto &traced : tracedSignals) {
+              const auto &value = scheduler.getSignalValue(traced.first);
+              if (value.isUnknown())
+                vcdWriter->writeUnknown(traced.second, value.getWidth());
+              else
+                vcdWriter->writeValue(traced.second, value.getValue(),
+                                      value.getWidth());
+            }
+          });
     }
 
     llhdInterpreter->setCompileModeEnabled(runMode == RunMode::Compile);
@@ -1671,7 +1706,7 @@ LogicalResult SimulationContext::setupParallelSimulation() {
 
 void SimulationContext::recordValueChange(SignalId signal,
                                            const SignalValue &value) {
-  if (!vcdWriter || !vcdReady)
+  if (!vcdWriter || !vcdReady || !vcdDumpEnabled)
     return;
 
   uint64_t currentTime = scheduler.getCurrentTime().realTime;
@@ -2480,8 +2515,9 @@ LogicalResult SimulationContext::run() {
     }
     ++loopIterations;
 
-    // Check wall-clock timeout
-    if (timeout > 0) {
+    // Check wall-clock timeout (amortized: every 1024 iterations to avoid
+    // clock_gettime syscall overhead which is ~9% of runtime).
+    if (timeout > 0 && (loopIterations & 1023) == 0) {
       auto now = std::chrono::steady_clock::now();
       auto elapsed =
           std::chrono::duration_cast<std::chrono::seconds>(now - startWallTime);
@@ -2508,7 +2544,9 @@ LogicalResult SimulationContext::run() {
     size_t deltasExecuted;
     static bool traceExec =
         std::getenv("CIRCT_SIM_TRACE_VPI_TIMING") != nullptr;
-    auto execStart = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point execStart;
+    if (traceExec)
+      execStart = std::chrono::steady_clock::now();
     if (parallelScheduler) {
       deltasExecuted = parallelScheduler->executeCurrentTimeParallel();
     } else {
@@ -2548,7 +2586,9 @@ LogicalResult SimulationContext::run() {
       auto &vpi = VPIRuntime::getInstance();
       static bool traceMainVpi =
           std::getenv("CIRCT_SIM_TRACE_VPI_TIMING") != nullptr;
-      auto mRwStart = std::chrono::steady_clock::now();
+      std::chrono::steady_clock::time_point mRwStart, mRwEnd, mRoEnd;
+      if (traceMainVpi)
+        mRwStart = std::chrono::steady_clock::now();
       int mRwCount = 0;
       for (int rwIter = 0; rwIter < 100; ++rwIter) {
         vpi.fireCallbacks(cbReadWriteSynch);
@@ -2556,9 +2596,11 @@ LogicalResult SimulationContext::run() {
         if (!vpi.hasActiveCallbacks(cbReadWriteSynch))
           break;
       }
-      auto mRwEnd = std::chrono::steady_clock::now();
+      if (traceMainVpi)
+        mRwEnd = std::chrono::steady_clock::now();
       vpi.fireCallbacks(cbReadOnlySynch);
-      auto mRoEnd = std::chrono::steady_clock::now();
+      if (traceMainVpi)
+        mRoEnd = std::chrono::steady_clock::now();
       if (traceMainVpi) {
         static uint64_t mainVpiCount = 0;
         ++mainVpiCount;
@@ -3379,6 +3421,8 @@ static LogicalResult processInput(MLIRContext &context,
       runMode == RunMode::Compile && !resolveJitReportPath().empty());
   simContext.setMaxDeltaCycles(maxDeltas);
   simContext.setMaxProcessSteps(maxProcessSteps);
+  if (maxTime > 0)
+    simContext.setMaxSimTime(maxTime);
   if (failed(simContext.initialize(*module, tops))) {
     return failure();
   }

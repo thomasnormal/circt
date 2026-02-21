@@ -24,8 +24,10 @@
 #include "circt/Dialect/Sim/EventQueue.h"
 #include "circt/Dialect/Sim/ProcessScheduler.h"
 #include "circt/Dialect/Sim/SimOps.h"
+#include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -70,6 +72,8 @@ class GlobalOp;
 namespace circt {
 namespace sim {
 
+class JITBlockCompiler;
+struct JITBlockSpec;
 class JITCompileManager;
 struct ProcessThunkExecutionState;
 
@@ -329,6 +333,11 @@ struct ProcessExecutionState {
   llvm::DenseMap<mlir::Operation *, llvm::SmallVector<SensitivityEntry, 4>>
       waitSensitivityCache;
 
+  /// Process-level fallback sensitivity derived from all ProbeOps in the
+  /// process/initial body. Reused across wait ops that need probe fallback.
+  llvm::SmallVector<SensitivityEntry, 8> probeSensitivityFallbackCache;
+  bool probeSensitivityFallbackValid = false;
+
   /// Indicates whether the cached sensitivity data is valid.
   bool lastSensitivityValid = false;
 
@@ -573,6 +582,7 @@ struct DiscoveredGlobalOps {
 class LLHDProcessInterpreter {
 public:
   LLHDProcessInterpreter(ProcessScheduler &scheduler);
+  ~LLHDProcessInterpreter();
 
   /// Initialize the interpreter for a hardware module.
   /// This walks the module to find all signals and processes,
@@ -733,7 +743,12 @@ public:
   void setCollectOpStats(bool enable) { collectOpStats = enable; }
 
   /// Enable or disable compile-mode execution behavior.
-  void setCompileModeEnabled(bool enable) { compileModeEnabled = enable; }
+  /// When enabled, also initializes the block-level JIT compiler.
+  void setCompileModeEnabled(bool enable);
+
+  /// Enable or disable block-level JIT (true native codegen).
+  /// Called by setCompileModeEnabled, or directly for testing.
+  void setBlockJITEnabled(bool enable);
 
   /// Enable or disable runtime call_indirect target-set profiling.
   void setJitRuntimeIndirectProfileEnabled(bool enable) {
@@ -791,6 +806,27 @@ public:
   void setDumpvarsCallback(std::function<void()> callback) {
     dumpvarsCallback = std::move(callback);
   }
+
+  /// Set a callback for $dumpoff to pause VCD value-change recording.
+  void setDumpoffCallback(std::function<void()> callback) {
+    dumpoffCallback = std::move(callback);
+  }
+
+  /// Set a callback for $dumpon to resume VCD value-change recording.
+  void setDumponCallback(std::function<void()> callback) {
+    dumponCallback = std::move(callback);
+  }
+
+  /// Apply a DPI/VPI force to a signal and synchronize interpreter force state.
+  void applyDpiForce(SignalId sigId, const SignalValue &forcedValue);
+
+  /// Release a DPI/VPI force and restore pre-force value when available.
+  void applyDpiRelease(SignalId sigId);
+
+  /// Resolve a hierarchical HDL path (e.g., "top.sig") to a SignalId.
+  /// Tries exact match, then leaf-name match, then suffix matches.
+  /// Returns 0 if not found.
+  SignalId resolveHdlPathToSignalId(llvm::StringRef path) const;
 
   /// Check if abort has been requested (calls the shouldAbortCallback).
   bool isAbortRequested() const {
@@ -874,6 +910,11 @@ private:
   /// Build the allocaBackingSignal mapping by scanning process yields and
   /// their corresponding module-level drives.
   void buildAllocaToSignalMapping(hw::HWModuleOp hwModule);
+
+  /// Analyze NBA yield chains to detect loop accumulation patterns where
+  /// a stale probe is read instead of the accumulated block argument.
+  /// Populates nbaYieldBlockArgMap and nbaProbeValues.
+  void analyzeNBAYieldChains();
 
   /// After a memory-backed struct field write, propagate the updated alloca
   /// contents to the backing signal so probes see the new value.
@@ -1031,12 +1072,28 @@ private:
     mlir::Operation *toggleOp = nullptr;
     llhd::DriveOp toggleDriveOp;
     uint64_t delayFs = 0;
+
+    /// Pre-resolved signal ID for direct memory access (bypasses interpreter).
+    SignalId signalId = 0;
+    /// Bit width of the signal.
+    uint32_t signalWidth = 0;
+    /// XOR constant for the toggle operation.
+    uint64_t toggleXorConstant = 0;
+    /// Drive delay components (from the drive op, NOT the wait op).
+    uint64_t driveRealFs = 0;
+    uint32_t driveDelta = 0;
+    uint32_t driveEpsilon = 0;
+    /// Whether the native fast path is available (all fields resolved).
+    bool nativePathAvailable = false;
+    /// Cached Process pointer for O(1) scheduleProcessDirect calls.
+    Process *cachedProcess = nullptr;
   };
 
   enum class DirectProcessFastPathKind : uint8_t {
     None = 0,
     PeriodicToggleClock = 1u << 0,
     ResumableWaitSelfLoop = 1u << 1,
+    JITCompiledBlock = 1u << 2,
   };
 
   /// Try a cached direct fast path for common hot process loop shapes.
@@ -1146,6 +1203,12 @@ private:
       PeriodicToggleClockThunkSpec &spec) const;
 
   bool executePeriodicToggleClockNativeThunk(
+      ProcessId procId, ProcessExecutionState &state,
+      ProcessThunkExecutionState &thunkState);
+
+  /// Execute a JIT-compiled hot block for a process.
+  /// Returns true if the JIT block handled execution (even on deopt).
+  bool executeJITCompiledBlockNativeThunk(
       ProcessId procId, ProcessExecutionState &state,
       ProcessThunkExecutionState &thunkState);
 
@@ -1340,9 +1403,468 @@ private:
                                            int64_t objectionCount);
   void pollJoinNoneDisableForkResume(ProcessId procId, ForkId forkId,
                                      uint64_t token);
+  void maybeTraceFilteredCall(ProcessId procId, llvm::StringRef callKind,
+                              llvm::StringRef calleeName, int64_t nowFs,
+                              uint64_t deltaStep);
+  void maybeTraceCallIndirectSiteCacheHit(int64_t methodIndex) const;
+  void maybeTraceCallIndirectSiteCacheStore(bool hasStaticMethodIndex,
+                                            int64_t methodIndex) const;
+  void maybeTraceInterfaceSensitivityBegin(ProcessId procId,
+                                           llvm::StringRef processName,
+                                           size_t sourceCount) const;
+  void maybeTraceInterfaceSensitivitySource(SignalId sourceSignalId,
+                                            size_t fieldCount) const;
+  void maybeTraceInterfaceSensitivityAddedField(SignalId fieldSignalId) const;
+  void maybeTraceInterfaceFieldShadowScanSummary(
+      size_t topLevelSignalCount, size_t instanceSignalMapCount,
+      size_t childCopyPairCount) const;
+  void maybeTraceInterfaceParentGepStructName(
+      llvm::StringRef structName) const;
+  void maybeTraceInterfaceParentScanResult(
+      SignalId signalId, unsigned userCount, unsigned probeCount,
+      unsigned gepCount, bool foundInterfaceStruct,
+      uint64_t mallocAddress) const;
+  void maybeTraceChildInstanceFound(llvm::StringRef instanceName,
+                                    llvm::StringRef moduleName) const;
+  void maybeTraceChildInstanceMissingRootModule() const;
+  void maybeTraceChildInstanceMissingModule(llvm::StringRef moduleName) const;
+  void maybeTraceRegisteredChildSignal(llvm::StringRef hierarchicalName,
+                                       SignalId signalId) const;
+  void maybeTraceRegisteredChildProcess(llvm::StringRef processName,
+                                        ProcessId processId) const;
+  void maybeTraceRegisteredChildCombinational(
+      llvm::StringRef combinationalName, ProcessId processId,
+      size_t sensitivityCount) const;
+  void maybeTraceRegisteredChildInitialBlock(llvm::StringRef initialName,
+                                             ProcessId processId) const;
+  void maybeTraceChildInputMapped(llvm::StringRef portName,
+                                  SignalId signalId) const;
+  void maybeTraceChildInstanceOutputCountMismatch(
+      llvm::StringRef instanceName, unsigned resultCount,
+      unsigned outputCount) const;
+  void maybeTraceInitializationRegistrationSummary(
+      size_t signalCount, size_t processCount) const;
+  void maybeTraceIterativeDiscoverySummary(
+      size_t instanceCount, size_t signalCount, size_t outputCount,
+      size_t processCount, size_t combinationalCount, size_t initialCount,
+      size_t moduleDriveCount, size_t firRegCount,
+      size_t clockedAssertCount) const;
+  void maybeTraceRegisteredPortSignal(llvm::StringRef portName,
+                                      SignalId signalId,
+                                      unsigned width) const;
+  void maybeTraceMappedExternalPortSignal(llvm::StringRef portName,
+                                          SignalId signalId) const;
+  void maybeTraceRegisteredOutputSignal(llvm::StringRef outputName,
+                                        SignalId signalId,
+                                        unsigned width) const;
+  void maybeTraceRegisteredSignalInitialValue(
+      const llvm::APInt &initialValue) const;
+  void maybeTraceRegisteredSignal(llvm::StringRef signalName,
+                                  SignalId signalId,
+                                  unsigned width) const;
+  void maybeTraceExportSignalsBegin(size_t signalCount) const;
+  void maybeTraceExportedSignal(llvm::StringRef hierarchicalPath,
+                                SignalId signalId,
+                                uint32_t width) const;
+  void maybeTraceSignalRegistryEntryCount(size_t entryCount) const;
+  void maybeTraceRegistryAccessorsConfigured(bool connected) const;
+  void maybeTraceFoundProcessOp(unsigned resultCount) const;
+  void maybeTraceRegisteredTopProcess(llvm::StringRef processName,
+                                      ProcessId processId) const;
+  void maybeTraceRegisteredTopCombinationalProcess(
+      llvm::StringRef processName, ProcessId processId,
+      size_t sensitivityCount) const;
+  void maybeTraceRegisteredTopInitialBlock(llvm::StringRef processName,
+                                           ProcessId processId) const;
+  void traceInterfaceSignalOverwrite(uint64_t fieldAddress,
+                                     SignalId oldSignalId,
+                                     SignalId newSignalId,
+                                     llvm::StringRef newSignalName) const;
+  void maybeTraceMultiDriverPostNbaConditionalSignals(
+      size_t pendingFirRegCount) const;
+  void maybeTraceMultiDriverPostNbaApply(
+      SignalId signalId, const SignalValue &driveValue) const;
+  void maybeTraceMultiDriverPostNbaSkipFirReg(SignalId signalId) const;
+  void maybeTraceMultiDriverSuppressedUnconditional(SignalId signalId) const;
+  void maybeTraceMultiDriverConditionalEnable(
+      SignalId signalId, const InterpretedValue &enableValue) const;
+  void maybeTraceMultiDriverStoredConditional(SignalId signalId,
+                                              const SignalValue &driveValue) const;
+  void maybeTraceExecuteModuleDrives(ProcessId procId) const;
+  void maybeTraceModuleDriveTrigger(SignalId triggerSignalId,
+                                    SignalId destinationSignalId,
+                                    ProcessId processId) const;
+  void maybeTraceInterfacePropagationSource(
+      SignalId sourceSignalId, const InterpretedValue &sourceValue,
+      size_t fanoutCount) const;
+  void maybeTraceInterfacePropagationChild(
+      SignalId childSignalId, const InterpretedValue &childValue) const;
+  void maybeTraceInterfaceCopyPairLink(SignalId parentSignalId,
+                                       uint64_t parentAddress,
+                                       SignalId childSignalId,
+                                       uint64_t childAddress) const;
+  void maybeTraceInterfaceDeferredSameInterfaceLink(
+      SignalId sourceSignalId, SignalId destinationSignalId) const;
+  void maybeTraceInterfaceCopyPairSummary(size_t totalPairs,
+                                          unsigned resolvedPairs,
+                                          unsigned unresolvedSourceCount,
+                                          unsigned unresolvedDestCount,
+                                          unsigned resolvedDeferredCount,
+                                          size_t childToParentCount,
+                                          size_t propagationCount) const;
+  void maybeTraceInterfaceSignalCopyLink(SignalId sourceSignalId,
+                                         SignalId destinationSignalId,
+                                         uint64_t destinationAddress) const;
+  void maybeTraceInterfaceSignalCopySummary(size_t totalPairs,
+                                            unsigned resolvedPairs,
+                                            unsigned unresolvedDestCount) const;
+  void maybeTraceInterfaceFieldSignalDumpHeader(size_t totalEntries) const;
+  void maybeTraceInterfaceFieldSignalDumpEntry(uint64_t address,
+                                               SignalId signalId) const;
+  void maybeTraceInterfaceAutoLinkSignalDumpHeader(
+      size_t totalInterfaces) const;
+  void maybeTraceInterfaceAutoLinkSignalDumpEntry(
+      SignalId interfaceSignalId,
+      llvm::ArrayRef<SignalId> fieldSignalIds) const;
+  void maybeTraceInterfaceParentSignals(
+      llvm::ArrayRef<SignalId> parentSignalIds) const;
+  void maybeTraceInterfaceInstanceAwareLink(
+      SignalId childSignalId, SignalId parentSignalId) const;
+  void maybeTraceInterfaceFieldPropagationMap() const;
+  void maybeTraceInterfaceAutoLinkMatch(unsigned bestMatchCount,
+                                        SignalId childInterfaceSignalId,
+                                        SignalId parentInterfaceSignalId) const;
+  void maybeTraceInterfaceAutoLinkTotal(unsigned autoLinkedCount) const;
+  void maybeTraceInterfaceIntraLinkDetection(size_t reverseTargetCount,
+                                             size_t interfaceGroupCount) const;
+  void maybeTraceInterfaceIntraLinkReverseTarget(SignalId signalId,
+                                                 size_t childCount) const;
+  void maybeTraceInterfaceIntraLinkBlock(size_t fieldCount,
+                                         size_t publicCount,
+                                         size_t danglingCount) const;
+  void maybeTraceInterfaceIntraLinkChildBlocks(size_t childBlockCount) const;
+  void maybeTraceInterfaceIntraLinkMatch(SignalId danglingSignalId,
+                                         SignalId publicSignalId,
+                                         size_t publicChildCount) const;
+  void maybeTraceInterfaceIntraLinkTotal(unsigned intraLinkCount) const;
+  void maybeTraceInterfaceTriStateCandidateInstall(
+      SignalId conditionSignalId, SignalId sourceSignalId,
+      SignalId destinationSignalId, unsigned conditionBitIndex,
+      const InterpretedValue &elseValue) const;
+  void maybeTraceInterfaceTriStateCandidateSummary(
+      size_t candidateCount, unsigned installedCount, unsigned unresolvedCount,
+      size_t totalRuleCount) const;
+  void maybeTraceInterfaceTriStateTrigger(SignalId sourceSignalId,
+                                          size_t ruleCount) const;
+  void maybeTraceInterfaceTriStateRule(
+      unsigned ruleIndex, SignalId conditionSignalId, unsigned conditionBitIndex,
+      const InterpretedValue &conditionValue, bool conditionTrue,
+      SignalId sourceSignalId, const InterpretedValue &sourceValue,
+      SignalId destinationSignalId, const InterpretedValue &destinationBefore,
+      const InterpretedValue &selectedValue, bool selectedIsExplicitHighZ) const;
+  void maybeTraceCondBranch(ProcessId procId,
+                            const InterpretedValue &conditionValue,
+                            bool tookTrueBranch, mlir::Value conditionSsaValue);
+  void maybeTraceInstanceOutput(SignalId signalId,
+                                llvm::ArrayRef<SignalId> sourceSignals,
+                                size_t processCount) const;
+  void maybeTraceInstanceOutputDependencySignals(
+      SignalId signalId, llvm::ArrayRef<SignalId> sourceSignals) const;
+  void maybeTraceInstanceOutputUpdate(SignalId signalId,
+                                      const InterpretedValue &value) const;
+  void maybeTraceCombTraceThroughHit(SignalId signalId,
+                                     const InterpretedValue &driveValue) const;
+  void maybeTraceCombTraceThroughMiss(SignalId signalId, bool inCombMap,
+                                      bool visited) const;
+  void maybeTraceContinuousFallback(mlir::Value value,
+                                    unsigned invalidatedCount) const;
+  void maybeTraceDriveSchedule(SignalId signalId,
+                               const InterpretedValue &driveValue,
+                               const SimTime &currentTime,
+                               const SimTime &targetTime,
+                               const SimTime &delay) const;
+  void maybeTraceDriveFailure(ProcessId procId, llhd::DriveOp driveOp,
+                              llvm::StringRef reason,
+                              mlir::Value signalValue) const;
+  void maybeTraceRefArgResolveFailure(ProcessId procId,
+                                      mlir::Value unresolvedValue,
+                                      bool hasBlockArgSource,
+                                      mlir::Value blockArgSourceValue,
+                                      SignalId blockArgSourceSignal) const;
+  void maybeTraceI3CFieldDriveSignalStruct(
+      ProcessId procId, llhd::DriveOp driveOp, llvm::StringRef fieldName,
+      unsigned bitOffset, unsigned fieldWidth, SignalId parentSignalId,
+      const InterpretedValue &driveValue) const;
+  void maybeTraceI3CFieldDriveMemStruct(
+      ProcessId procId, llhd::DriveOp driveOp, llvm::StringRef fieldName,
+      int64_t index, unsigned bitOffset, int64_t fieldWidth,
+      const InterpretedValue &driveValue) const;
+  void maybeTraceI3CFieldDriveMem(ProcessId procId, llhd::DriveOp driveOp,
+                                  uint64_t index, uint64_t elementOffset,
+                                  const InterpretedValue &driveValue) const;
+  void maybeTraceI3CFieldDrive(ProcessId procId, llhd::DriveOp driveOp,
+                               llvm::StringRef fieldName, uint64_t index,
+                               unsigned bitOffset,
+                               const InterpretedValue &driveValue) const;
+  void maybeTraceArrayDriveRemap(ProcessId procId, mlir::Value originalSignal,
+                                 mlir::Value remappedSignal);
+  void maybeTraceArrayDriveSchedule(SignalId parentSignalId, uint64_t index,
+                                    unsigned bitOffset, unsigned elementWidth,
+                                    const llvm::APInt &elementValue,
+                                    bool driveValueIsX, unsigned parentWidth,
+                                    unsigned resultWidth,
+                                    const SimTime &delay) const;
+  void maybeTraceI3CAddressBitDrive(llhd::DriveOp driveOp,
+                                    unsigned bitOffset,
+                                    const InterpretedValue &driveValue) const;
+  void maybeTraceI3CRefCast(ProcessId procId, bool resolved, uint64_t address,
+                            unsigned bitOffset, mlir::Value inputValue,
+                            mlir::Value outputValue) const;
+  void maybeTraceI3CCastLayout(ProcessId procId, mlir::Type outputType,
+                               const llvm::APInt &inputBits,
+                               const llvm::APInt &convertedBits) const;
+  void maybeTraceI3CConfigHandleGet(llvm::StringRef callee, llvm::StringRef key,
+                                    uint64_t ptrPayload, uint64_t outRefAddr,
+                                    llvm::StringRef fieldName) const;
+  void maybeTraceI3CConfigHandleSet(llvm::StringRef callee, llvm::StringRef key,
+                                    uint64_t ptrPayload,
+                                    llvm::StringRef fieldName) const;
+  void maybeTraceI3CHandleCall(ProcessId procId, llvm::StringRef calleeName,
+                               llvm::ArrayRef<InterpretedValue> args) const;
+  void maybeTraceI3CCallStackSave(ProcessId procId, llvm::StringRef funcName,
+                                  size_t blockOpCount,
+                                  size_t savedFrameCount) const;
+  void maybeTraceI3CToClassArgs(ProcessId procId, llvm::StringRef calleeName,
+                                llvm::ArrayRef<InterpretedValue> args) const;
+  void maybeTraceConfigDbFuncCallGetBegin(llvm::StringRef callee,
+                                          llvm::StringRef key,
+                                          llvm::StringRef instName,
+                                          llvm::StringRef fieldName,
+                                          size_t entryCount) const;
+  void maybeTraceConfigDbFuncCallGetHit(llvm::StringRef key,
+                                        size_t byteCount) const;
+  void maybeTraceConfigDbFuncCallGetMiss(llvm::StringRef key) const;
+  void maybeTraceConfigDbFuncCallSet(llvm::StringRef callee,
+                                     llvm::StringRef key, unsigned valueBytes,
+                                     size_t entryCount) const;
+  void maybeTraceSequencerFuncCallSize(llvm::StringRef calleeName,
+                                       uint64_t selfAddr, int32_t count,
+                                       size_t totalConnections) const;
+  void maybeTraceSequencerFuncCallGet(llvm::StringRef calleeName,
+                                      uint64_t portAddr,
+                                      size_t fifoMapCount) const;
+  void maybeTraceSequencerFuncCallPop(uint64_t itemAddr, uint64_t portAddr,
+                                      uint64_t queueAddr,
+                                      bool fromFallbackSearch) const;
+  void maybeTraceSequencerFuncCallTryMiss(uint64_t portAddr,
+                                          uint64_t refAddr) const;
+  void maybeTraceSequencerFuncCallWait(uint64_t portAddr,
+                                       uint64_t queueAddr) const;
+  void maybeTraceSequencerFuncCallItemDoneMiss(uint64_t callerAddr) const;
+  void maybeTraceAnalysisWriteFuncCallBegin(llvm::StringRef calleeName,
+                                            uint64_t portAddr,
+                                            bool inConnectionMap) const;
+  void maybeTraceAnalysisWriteFuncCallTerminals(size_t terminalCount) const;
+  void maybeTraceAnalysisWriteFuncCallMissingVtableHeader(
+      uint64_t impAddr) const;
+  void maybeTraceAnalysisWriteFuncCallMissingAddressToGlobal(
+      uint64_t vtableAddr) const;
+  void maybeTraceAnalysisWriteFuncCallMissingAddressToFunction(
+      uint64_t writeFuncAddr) const;
+  void maybeTraceAnalysisWriteFuncCallMissingModuleFunction(
+      llvm::StringRef functionName) const;
+  void maybeTraceAnalysisWriteFuncCallDispatch(llvm::StringRef functionName) const;
+  void maybeTraceFuncCacheSharedHit(llvm::StringRef functionName,
+                                    uint64_t argHash) const;
+  void maybeTraceFuncCacheSharedStore(llvm::StringRef functionName,
+                                      uint64_t argHash) const;
+  void maybeTracePhaseOrderProcessPhase(uint64_t phaseAddr, uint64_t impAddr,
+                                        std::optional<int> order) const;
+  void maybeTracePhaseOrderProcessPhaseWaitPred(uint64_t phaseAddr, int order,
+                                                uint64_t predImpAddr) const;
+  void maybeTracePhaseOrderProcessPhaseWaitUnknownImp(uint64_t phaseAddr,
+                                                      uint64_t impAddr) const;
+  void maybeTracePhaseOrderFinishPhase(uint64_t phaseAddr, uint64_t impAddr,
+                                       int order, size_t waiterCount) const;
+  void maybeTracePhaseOrderWakeWaiter(ProcessId waiterProcId,
+                                      uint64_t impAddr) const;
+  void maybeTracePhaseOrderExecutePhase(uint64_t phaseAddr,
+                                        llvm::StringRef phaseName) const;
+  void maybeTraceMailboxTryPut(ProcessId procId, uint64_t mboxId,
+                               uint64_t message, bool success) const;
+  void maybeTraceMailboxWakeGetByTryPut(ProcessId procId, ProcessId waiterProcId,
+                                        uint64_t mboxId, uint64_t outAddr,
+                                        uint64_t message) const;
+  void maybeTraceMailboxGet(ProcessId procId, uint64_t mboxId,
+                            llvm::StringRef mode, uint64_t outAddr,
+                            std::optional<uint64_t> message) const;
+  void maybeTraceRandClassSrandom(uint64_t objAddr, uint32_t seed) const;
+  void maybeTraceRandBasic(uint64_t objAddr, uint64_t size, int32_t rc) const;
+  void maybeTraceRandBytes(uint64_t dataAddr, int64_t size, int32_t rc,
+                           int firstByte) const;
+  void maybeTraceRandRange(uint64_t objAddr, int64_t minVal, int64_t maxVal,
+                           int64_t result) const;
+  void maybeTraceTailWrapperSuspendElide(ProcessId procId,
+                                         llvm::StringRef wrapperName,
+                                         llvm::StringRef calleeName,
+                                         bool monitorDeserializer,
+                                         bool driveSample) const;
+  void maybeTraceOnDemandLoadSignal(uint64_t addr, SignalId signalId,
+                                    llvm::StringRef signalName) const;
+  void maybeTraceOnDemandLoadNoSignal(uint64_t addr) const;
+  void maybeTraceStructInjectX(llvm::StringRef fieldName, bool structIsX,
+                               bool newValueIsX, unsigned totalWidth) const;
+  void maybeTraceAhbTxnFieldWrite(ProcessId procId, llvm::StringRef funcName,
+                                  uint64_t txnAddr, llvm::StringRef fieldName,
+                                  std::optional<uint64_t> index,
+                                  unsigned bitOffset, unsigned width,
+                                  const InterpretedValue &value,
+                                  const SimTime &now) const;
+  void maybeTraceFreadSignalPath(SignalId signalId, int32_t elemWidth,
+                                 int32_t elemStorageBytes, int32_t numElements,
+                                 uint64_t totalBytes) const;
+  void maybeTraceFreadSignalWidth(uint64_t bitWidth, size_t rawBytes,
+                                  int32_t result) const;
+  void maybeTraceFreadPointerPath(int32_t elemWidth, int32_t elemStorageBytes,
+                                  int32_t numElements, uint64_t totalBytes) const;
+  void maybeTraceFuncProgress(ProcessId procId, size_t funcBodySteps,
+                              size_t totalSteps, llvm::StringRef funcName,
+                              size_t callDepth,
+                              llvm::StringRef opName) const;
+  void maybeTraceProcessStepOverflowInFunc(ProcessId procId,
+                                           size_t effectiveMaxProcessSteps,
+                                           size_t totalSteps,
+                                           llvm::StringRef funcName,
+                                           bool isLLVMFunction) const;
+  void maybeTraceProcessActivationStepLimitExceeded(
+      ProcessId procId, size_t maxStepsPerActivation) const;
+  void maybeTraceProcessStepOverflow(ProcessId procId,
+                                     size_t effectiveMaxProcessSteps,
+                                     size_t totalSteps, size_t funcBodySteps,
+                                     llvm::StringRef currentFuncName,
+                                     llvm::StringRef lastOpName) const;
+  void maybeTraceSvaAssertionFailed(llvm::StringRef label, int64_t timeFs,
+                                    mlir::Location loc) const;
+  void maybeTraceImmediateAssertionFailed(llvm::StringRef label,
+                                          mlir::Location loc) const;
+  void maybeTraceUvmRunTestEntry(ProcessId procId, llvm::StringRef calleeName,
+                                 uint64_t entryCount) const;
+  void maybeTraceUvmRunTestReentryError(ProcessId procId,
+                                        llvm::StringRef calleeName,
+                                        uint64_t entryCount) const;
+  void maybeTraceFuncCallInternalFailureWarning(
+      llvm::StringRef calleeName) const;
+  void maybeTraceSimTerminateTriggered(ProcessId procId,
+                                       mlir::Location loc) const;
+  void maybeTraceUvmJitPromotionCandidate(llvm::StringRef stableKey,
+                                          uint64_t hitCount,
+                                          uint64_t hotThreshold,
+                                          size_t budgetRemaining) const;
+  void maybeTraceGetNameLoop(ProcessId procId, uint64_t seq,
+                             const SimTime &now, size_t callDepth,
+                             size_t callStackSize, bool waiting,
+                             uint64_t sameSiteStreak, uint64_t getNameCount,
+                             uint64_t getFullNameCount,
+                             uint64_t inGetNameBodyCount,
+                             uint64_t randEnabledCount,
+                             llvm::StringRef calleeName,
+                             llvm::StringRef currentFuncName) const;
+  void maybeTraceGetNameLoopLLVM(ProcessId procId, uint64_t seq,
+                                 const SimTime &now, size_t callDepth,
+                                 size_t callStackSize, bool waiting,
+                                 size_t dynamicStringCount,
+                                 size_t internStringCount,
+                                 uint64_t sameSiteStreak,
+                                 uint64_t randEnabledCount,
+                                 uint64_t getNameCount,
+                                 uint64_t inGetNameBodyCount,
+                                 llvm::StringRef calleeName,
+                                 llvm::StringRef currentFuncName) const;
+  void maybeTraceBaudFastPathReject(ProcessId procId,
+                                    llvm::StringRef calleeName,
+                                    llvm::StringRef reason) const;
+  void maybeTraceBaudFastPathNullSelfStall(ProcessId procId,
+                                           llvm::StringRef calleeName) const;
+  void maybeTraceBaudFastPathGep(llvm::StringRef calleeName, bool baseMatches,
+                                 size_t dynamicIndexCount,
+                                 llvm::ArrayRef<int32_t> rawIndices) const;
+  void maybeTraceBaudFastPathMissingFields(llvm::StringRef calleeName,
+                                           unsigned gepSeen, bool sawClockField,
+                                           bool sawOutputField) const;
+  void maybeTraceBaudFastPathBatchParityAdjust(ProcessId procId,
+                                               llvm::StringRef calleeName,
+                                               uint64_t adjustedEdges) const;
+  void maybeTraceBaudFastPathBatchMismatch(ProcessId procId,
+                                           llvm::StringRef calleeName,
+                                           uint64_t pendingEdges,
+                                           bool haveClockSample,
+                                           bool clockSample,
+                                           bool clockSampleValid,
+                                           bool lastClockSample,
+                                           uint64_t nowFs) const;
+  void maybeTraceBaudFastPathBatchSchedule(ProcessId procId,
+                                           llvm::StringRef calleeName,
+                                           uint64_t batchEdges,
+                                           uint64_t edgeInterval,
+                                           uint64_t stableIntervals,
+                                           int32_t count,
+                                           int32_t divider) const;
+  void maybeTraceBaudFastPathHit(ProcessId procId,
+                                 llvm::StringRef calleeName, int32_t divider,
+                                 bool primed, bool countLocalOnly,
+                                 SignalId clockSignalId,
+                                 SignalId outputSignalId) const;
+  void maybeTraceFirRegUpdate(SignalId signalId,
+                              const InterpretedValue &newValue,
+                              bool posedge) const;
   void traceI3CForkRuntimeEvent(llvm::StringRef tag, ProcessId parentProcId,
                                 ProcessId childProcId, ForkId forkId,
                                 llvm::StringRef mode = "");
+  void maybeTraceJoinNoneCheck(ProcessId procId, ForkId forkId,
+                               ProcessId childProcId,
+                               unsigned pollCount) const;
+  void maybeTraceJoinNoneWait(ProcessId procId, ForkId forkId,
+                              ProcessId childProcId,
+                              unsigned pollCount) const;
+  void maybeTraceJoinNoneResume(ProcessId procId, ForkId forkId,
+                                unsigned pollCount,
+                                bool waitingForChildReady) const;
+  void maybeTraceForkIntercept(ProcessId procId, llvm::StringRef joinKind,
+                               size_t branchCount, uint64_t phaseAddr,
+                               bool hadExplicitBlockingMap,
+                               bool shapeMatch) const;
+  void maybeTraceForkInterceptObjectionWait(ProcessId procId,
+                                            int64_t objectionHandle,
+                                            int64_t objectionCount,
+                                            uint64_t phaseAddr) const;
+  void maybeTraceForkCreate(ProcessId procId, ForkId forkId,
+                            llvm::StringRef joinKind, size_t branchCount,
+                            uint64_t phaseAddr, bool shapeExec,
+                            llvm::StringRef parentFunc,
+                            llvm::StringRef forkName) const;
+  void maybeTraceJoinNoneYield(ProcessId procId, ForkId forkId) const;
+  void maybeTraceProcessFinalize(ProcessId procId, bool killed) const;
+  void maybeTraceWaitSensitivityList(ProcessId procId, llvm::StringRef tag,
+                                     const SensitivityList &waitList) const;
+  void maybeTraceWaitEventCache(ProcessId procId, llvm::StringRef action,
+                                mlir::Operation *waitEventOp,
+                                const SensitivityList &waitList) const;
+  void maybeTraceWaitEventNoop(ProcessId procId, llvm::StringRef funcName,
+                               mlir::Operation *waitEventOp) const;
+  void maybeTraceForkTerminator(ProcessId procId) const;
+  void maybeTraceJoinAnyImmediate(ProcessId procId, ForkId forkId) const;
+  void maybeTraceDisableForkBegin(ProcessId procId, size_t forkCount,
+                                  bool deferredFire) const;
+  void maybeTraceDisableForkDeferredPoll(ProcessId procId, ForkId forkId,
+                                         ProcessId childProcId,
+                                         unsigned pollCount) const;
+  void maybeTraceDisableForkDeferredArm(ProcessId procId, ForkId forkId,
+                                        ProcessId childProcId,
+                                        ProcessState childSchedState,
+                                        uint64_t token) const;
+  void maybeTraceDisableForkChild(ProcessId procId, ForkId forkId,
+                                  ProcessId childProcId,
+                                  llvm::StringRef mode) const;
   bool shouldDeferDisableFork(ProcessId procId, ProcessId &deferChildId,
                               ForkId &deferForkId,
                               ProcessState &deferChildSchedState);
@@ -1507,6 +2029,10 @@ private:
       llvm::StringRef calleeName,
       llvm::ArrayRef<InterpretedValue> args);
 
+  /// Intercept native UVM port helper calls in LLVM::CallOp path.
+  bool tryInterceptUvmPortCall(ProcessId procId, llvm::StringRef calleeName,
+                               mlir::LLVM::CallOp callOp);
+
   //===--------------------------------------------------------------------===//
   // Value Management
   //===--------------------------------------------------------------------===//
@@ -1640,13 +2166,20 @@ private:
     InstanceInputMapping inputMap;
   };
 
-  /// State for a clocked assertion checker (edge detection).
+  /// State for a clocked assertion checker (edge detection + LTL evaluation).
   struct ClockedAssertionState {
     InterpretedValue prevClock;
     bool hasPrevClock = false;
     InstanceId instanceId = 0;
     InstanceInputMapping inputMap;
+    /// Per-operation history buffer for LTL temporal evaluation.
+    /// Key: the implication op; Value: deque of antecedent match booleans.
+    llvm::DenseMap<mlir::Operation *, std::deque<bool>> anteHistory;
   };
+
+  /// Evaluate an LTL property tree recursively, handling temporal operators.
+  /// Returns true if the property holds at the current evaluation point.
+  bool evaluateLTLProperty(mlir::Value val, ClockedAssertionState &state);
 
   /// Map from instance IDs to per-instance firreg state maps.
   llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Operation *, FirRegState>>
@@ -1681,6 +2214,29 @@ private:
   /// this map holds the value so subsequent probes can see it immediately.
   /// Key is SignalId, value is the pending value.
   llvm::DenseMap<SignalId, InterpretedValue> pendingEpsilonDrives;
+
+  /// NBA yield block argument chain tracking. When NBA (non-blocking) bit-select
+  /// assignments occur inside for-loops, the MLIR structure reads a stale probe
+  /// from before the loop rather than the accumulated block argument. This map
+  /// records (Block*, argIndex) pairs that carry accumulated values destined for
+  /// NBA yield operands. The cf.br handler uses this to update stale probes.
+  llvm::DenseMap<std::pair<mlir::Block *, unsigned>, SignalId>
+      nbaYieldBlockArgMap;
+
+  /// Maps (ProcessId, SignalId) to ProbeOp result Values inside the process.
+  /// When a cf.br updates a block arg in nbaYieldBlockArgMap, we also update
+  /// the valueMap for these probe results so loop iterations see accumulated
+  /// values rather than the stale pre-loop probe.
+  llvm::DenseMap<std::pair<ProcessId, SignalId>,
+                 llvm::SmallVector<mlir::Value, 2>>
+      nbaProbeValues;
+
+  /// Maps SignalId to ALL block argument Values in the NBA yield chain.
+  /// When any block arg in the chain is updated, ALL other block args for the
+  /// same signal must also be updated so that inner-loop struct_extract ops
+  /// that read outer-loop block args see accumulated values.
+  llvm::DenseMap<SignalId, llvm::SmallVector<mlir::Value, 4>>
+      nbaChainBlockArgs;
 
   /// Map from signal IDs to pre-force saved values. When a signal is forced,
   /// we save the current value here so we can restore it on release.
@@ -1791,6 +2347,26 @@ private:
   /// (e.g. pullups/open-drain) need true multi-driver resolution.
   llvm::DenseSet<SignalId> distinctContinuousDriverSignals;
 
+  /// Cache for detecting array-element drive patterns.
+  /// Maps a DriveOp (by Operation pointer) to the constant element index and
+  /// element bit width when the drive value is a process result produced by
+  /// hw.array_inject. A negative elementIndex means "not an array element
+  /// drive" (negative cache entry). This is used to implement read-modify-write
+  /// semantics for multiple processes writing to different elements of the same
+  /// unpacked array signal.
+  struct ArrayElementDriveInfo {
+    int64_t elementIndex; ///< -1 if not an array element drive
+    unsigned elementBitWidth;
+  };
+  llvm::DenseMap<mlir::Operation *, ArrayElementDriveInfo>
+      arrayElementDriveCache;
+
+  /// Detect if a module-level drive is an array-element drive (i.e., the drive
+  /// value comes from a process that does hw.array_inject on the driven signal).
+  /// Returns the element index and bit width if detected, or std::nullopt.
+  std::optional<std::pair<int64_t, unsigned>>
+  detectArrayElementDrive(llhd::DriveOp driveOp);
+
   /// Memory event waiter for polling-based event detection.
   /// Used for UVM events stored as boolean fields in class instances where
   /// no signal is available to wait on.
@@ -1872,6 +2448,12 @@ private:
   /// Callback for $dumpvars (start VCD tracing).
   std::function<void()> dumpvarsCallback;
 
+  /// Callback for $dumpoff (pause VCD recording).
+  std::function<void()> dumpoffCallback;
+
+  /// Callback for $dumpon (resume VCD recording).
+  std::function<void()> dumponCallback;
+
   /// Flag indicating if termination has been requested.
   bool terminationRequested = false;
   /// Number of top modules initialized. In multi-top (dual-top) mode,
@@ -1901,6 +2483,15 @@ private:
   /// Per-process metadata for periodic clock toggle native thunks.
   llvm::DenseMap<ProcessId, PeriodicToggleClockThunkSpec>
       periodicToggleClockThunkSpecs;
+
+  /// Block-level JIT compiler (lazily created when block JIT is enabled).
+  std::unique_ptr<JITBlockCompiler> jitBlockCompiler;
+
+  /// Per-process JIT block specs for compiled hot blocks.
+  llvm::DenseMap<ProcessId, std::unique_ptr<JITBlockSpec>> jitBlockSpecs;
+
+  /// Whether block-level JIT is enabled.
+  bool blockJITEnabled = false;
 
   /// Cached direct process fast-path classification mask by process.
   llvm::DenseMap<ProcessId, uint8_t> directProcessFastPathKinds;
@@ -2128,6 +2719,12 @@ private:
   /// This is a structural normalization (no dynamic function calls).
   uint64_t canonicalizeUvmObjectAddress(ProcessId procId, uint64_t addr);
 
+  /// Seed analysis-port connection traversal from both direct and alias-equivalent
+  /// port addresses (canonicalized owner base addresses).
+  void seedAnalysisPortConnectionWorklist(
+      ProcessId procId, uint64_t portAddr,
+      llvm::SmallVectorImpl<uint64_t> &worklist);
+
   /// Canonicalize a queue hint to the owning sequencer address.
   /// Returns true when the resolved address is strong enough to cache.
   bool canonicalizeUvmSequencerQueueAddress(ProcessId procId,
@@ -2189,6 +2786,13 @@ private:
   /// __moore_int_to_string and __moore_string_concat). The deque ensures
   /// stable pointers so that dynamicStrings entries remain valid.
   std::deque<std::string> interpreterStrings;
+
+  /// Intern table for interpreter-created dynamic strings to avoid
+  /// unbounded duplicate allocations from repeated concat/name hot paths.
+  llvm::StringMap<std::pair<int64_t, int64_t>> internedDynamicStrings;
+
+  /// Cache packed-string literal values -> interned string pointer/length.
+  llvm::DenseMap<int64_t, std::pair<int64_t, int64_t>> packedStringValueCache;
 
   //===--------------------------------------------------------------------===//
   // Global Variable and VTable Support
@@ -2628,6 +3232,10 @@ private:
   /// Rebuild the address range index from globalAddresses and mallocBlocks.
   void rebuildAddrRangeIndex();
 
+  /// Register a new malloc-backed address range when the index is already
+  /// materialized. This avoids full index rebuilds on every runtime allocation.
+  void noteMallocBlockAllocated(uint64_t baseAddr, uint64_t size);
+
   /// Create shadow LLHD signals for interface struct fields.
   /// Called after module-level ops are executed, when interface malloc addresses
   /// are known. Scans for llhd.sig ops whose init is a malloc'd pointer and
@@ -2648,6 +3256,25 @@ private:
   /// Find a global or malloc memory block by address using the range index.
   /// Returns the MemoryBlock pointer and sets offset, or nullptr if not found.
   MemoryBlock *findBlockByAddress(uint64_t addr, uint64_t &offset);
+
+  /// Read an object vtable pointer from the standard runtime object header
+  /// layout ([i32 class_id][ptr vtable_ptr]...) across both interpreter-managed
+  /// and native memory-backed allocations.
+  bool readObjectVTableAddress(uint64_t objectAddr, uint64_t &vtableAddr);
+
+  // Return true when a function name corresponds to AHB monitor sampling
+  // logic where field provenance tracing should be enabled.
+  static bool isAhbMonitorSampleFunctionForTrace(llvm::StringRef funcName);
+
+  // Read raw bytes from interpreter/native tracked memory for trace diagnostics.
+  bool readRawMemoryBytesForTrace(uint64_t addr, size_t size,
+                                  llvm::SmallVectorImpl<uint8_t> &out);
+
+  // Optional AHB transaction payload trace at analysis write/dispatch sites.
+  void traceAhbTxnPayload(ProcessId procId, llvm::StringRef stage,
+                          llvm::StringRef calleeName,
+                          llvm::StringRef impName, uint64_t portAddr,
+                          uint64_t txnAddr);
 
   /// Resolve the base address for a module-level alloca value.
   uint64_t getModuleLevelAllocaBaseAddress(mlir::Value value) const;
@@ -2705,6 +3332,10 @@ private:
   /// Cached global ops discovered during first initialize() call, reused by
   /// finalizeInit() to execute global constructors.
   DiscoveredGlobalOps cachedGlobalOps;
+  /// True once LLVM globals have been allocated and their addresses assigned.
+  /// This keeps addressof results stable across multiple initializeModule()
+  /// calls in a single simulation.
+  bool globalsInitialized = false;
 
   /// Execute module-level LLVM operations (alloca, call, store) that are
   /// defined in the hw.module body but outside of llhd.process blocks.

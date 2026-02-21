@@ -29,40 +29,64 @@ void DeltaCycleQueue::schedule(SchedulingRegion region, Event event) {
   assert(static_cast<size_t>(region) <
              static_cast<size_t>(SchedulingRegion::NumRegions) &&
          "Invalid scheduling region");
-  regionQueues[static_cast<size_t>(region)].push_back(std::move(event));
+  size_t idx = static_cast<size_t>(region);
+  regionQueues[idx].push_back(std::move(event));
+  activeRegionMask |= (1u << idx);
 }
 
 SchedulingRegion
 DeltaCycleQueue::getNextNonEmptyRegion(SchedulingRegion start) const {
-  for (size_t i = static_cast<size_t>(start);
-       i < static_cast<size_t>(SchedulingRegion::NumRegions); ++i) {
-    if (!regionQueues[i].empty())
-      return static_cast<SchedulingRegion>(i);
-  }
-  return SchedulingRegion::NumRegions;
+  // Shift mask to skip regions before 'start', then find lowest set bit.
+  unsigned startIdx = static_cast<unsigned>(start);
+  uint16_t mask = activeRegionMask >> startIdx;
+  if (mask == 0)
+    return SchedulingRegion::NumRegions;
+  unsigned offset = __builtin_ctz(mask);
+  unsigned idx = startIdx + offset;
+  if (idx >= static_cast<unsigned>(SchedulingRegion::NumRegions))
+    return SchedulingRegion::NumRegions;
+  return static_cast<SchedulingRegion>(idx);
 }
 
 bool DeltaCycleQueue::hasEvents(SchedulingRegion region) const {
   assert(static_cast<size_t>(region) <
              static_cast<size_t>(SchedulingRegion::NumRegions) &&
          "Invalid scheduling region");
-  return !regionQueues[static_cast<size_t>(region)].empty();
-}
-
-bool DeltaCycleQueue::hasAnyEvents() const {
-  for (size_t i = 0; i < static_cast<size_t>(SchedulingRegion::NumRegions); ++i)
-    if (!regionQueues[i].empty())
-      return true;
-  return false;
+  return (activeRegionMask & (1u << static_cast<size_t>(region))) != 0;
 }
 
 std::vector<Event> DeltaCycleQueue::popRegionEvents(SchedulingRegion region) {
   assert(static_cast<size_t>(region) <
              static_cast<size_t>(SchedulingRegion::NumRegions) &&
          "Invalid scheduling region");
+  size_t idx = static_cast<size_t>(region);
   std::vector<Event> result;
-  std::swap(result, regionQueues[static_cast<size_t>(region)]);
+  std::swap(result, regionQueues[idx]);
+  activeRegionMask &= ~(1u << idx);
   return result;
+}
+
+size_t DeltaCycleQueue::executeAndClearRegion(SchedulingRegion region) {
+  assert(static_cast<size_t>(region) <
+             static_cast<size_t>(SchedulingRegion::NumRegions) &&
+         "Invalid scheduling region");
+  size_t idx = static_cast<size_t>(region);
+  // Swap the queue out before executing — event callbacks may schedule
+  // new events into the same region, so we must not iterate in-place.
+  std::vector<Event> batch;
+  std::swap(batch, regionQueues[idx]);
+  activeRegionMask &= ~(1u << idx);
+  size_t count = batch.size();
+  for (auto &event : batch)
+    event.execute();
+  // Reclaim the buffer capacity: clear the executed events first (critical —
+  // without this, stale events would be re-executed when new events are
+  // pushed into the reused vector), then move the empty-but-allocated vector
+  // back so its capacity is reused on the next schedule() call.
+  batch.clear();
+  if (regionQueues[idx].empty())
+    regionQueues[idx] = std::move(batch);
+  return count;
 }
 
 size_t DeltaCycleQueue::getEventCount(SchedulingRegion region) const {
@@ -73,8 +97,14 @@ size_t DeltaCycleQueue::getEventCount(SchedulingRegion region) const {
 }
 
 void DeltaCycleQueue::clear() {
-  for (size_t i = 0; i < static_cast<size_t>(SchedulingRegion::NumRegions); ++i)
-    regionQueues[i].clear();
+  // Only clear regions that have events (avoids touching cold cache lines).
+  uint16_t mask = activeRegionMask;
+  while (mask) {
+    unsigned idx = __builtin_ctz(mask);
+    regionQueues[idx].clear();
+    mask &= mask - 1; // Clear lowest set bit
+  }
+  activeRegionMask = 0;
 }
 
 //===----------------------------------------------------------------------===//
@@ -82,6 +112,8 @@ void DeltaCycleQueue::clear() {
 //===----------------------------------------------------------------------===//
 
 TimeWheel::TimeWheel(Config config) : config(config) {
+  assert(config.slotsPerLevel <= 256 &&
+         "Slot bitmask only supports up to 256 slots per level");
   levels.resize(config.numLevels);
   for (size_t i = 0; i < config.numLevels; ++i) {
     levels[i].slots.resize(config.slotsPerLevel);
@@ -90,18 +122,19 @@ TimeWheel::TimeWheel(Config config) : config(config) {
       slot.hasEvents = false;
     }
   }
+  // Precompute resolution per level to avoid loop in getSlotIndex.
+  levelResolution.resize(config.numLevels);
+  uint64_t res = config.baseResolution;
+  for (size_t i = 0; i < config.numLevels; ++i) {
+    levelResolution[i] = res;
+    res *= config.slotsPerLevel;
+  }
 }
 
 TimeWheel::~TimeWheel() = default;
 
 size_t TimeWheel::getSlotIndex(uint64_t time, size_t level) const {
-  // Calculate the resolution at this level
-  uint64_t resolution = config.baseResolution;
-  for (size_t i = 0; i < level; ++i)
-    resolution *= config.slotsPerLevel;
-
-  // Get the slot index within this level
-  return (time / resolution) % config.slotsPerLevel;
+  return (time / levelResolution[level]) % config.slotsPerLevel;
 }
 
 void TimeWheel::schedule(const SimTime &time, SchedulingRegion region,
@@ -117,15 +150,16 @@ void TimeWheel::schedule(const SimTime &time, SchedulingRegion region,
   uint64_t targetTime = time.realTime;
   uint64_t timeDelta = targetTime - currentTime.realTime;
 
-  // Calculate which level this event belongs to
-  uint64_t levelCapacity = config.baseResolution * config.slotsPerLevel;
+  // Calculate which level this event belongs to.
+  // Each level covers levelResolution[level] * slotsPerLevel femtoseconds.
   size_t level = 0;
-  while (level < config.numLevels - 1 && timeDelta >= levelCapacity) {
-    levelCapacity *= config.slotsPerLevel;
+  while (level < config.numLevels - 1 &&
+         timeDelta >= levelResolution[level] * config.slotsPerLevel) {
     ++level;
   }
 
   // If beyond all levels, use overflow
+  uint64_t levelCapacity = levelResolution[level] * config.slotsPerLevel;
   if (level >= config.numLevels || timeDelta >= levelCapacity) {
     overflow[targetTime].schedule(region, std::move(event));
     ++totalEvents;
@@ -160,6 +194,7 @@ void TimeWheel::schedule(const SimTime &time, SchedulingRegion region,
   slot.getDeltaQueue(deltaStep).schedule(region, std::move(event));
   slot.hasEvents = true;
   slot.baseTime = targetTime;
+  setSlotBit(level, slotIndex);
   ++totalEvents;
 }
 
@@ -181,32 +216,53 @@ void TimeWheel::cascade(size_t fromLevel) {
 
   // Move events from this slot to lower levels
   if (slot.hasAnyEvents()) {
-    // Re-schedule all events at the correct lower level, preserving delta steps
-    for (auto &[deltaStep, deltaQueue] : slot.deltaQueues) {
-      for (size_t regionIdx = 0;
-           regionIdx < static_cast<size_t>(SchedulingRegion::NumRegions);
-           ++regionIdx) {
-        auto region = static_cast<SchedulingRegion>(regionIdx);
+    // Helper to cascade events from a single delta queue.
+    // Uses the bitmask to skip empty regions.
+    auto cascadeQueue = [&](uint32_t deltaStep, DeltaCycleQueue &deltaQueue) {
+      auto region = deltaQueue.getNextNonEmptyRegion(SchedulingRegion::Preponed);
+      while (region != SchedulingRegion::NumRegions) {
         auto events = deltaQueue.popRegionEvents(region);
         for (auto &event : events) {
           SimTime eventTime(slot.baseTime, deltaStep,
-                            static_cast<uint8_t>(regionIdx));
+                            static_cast<uint8_t>(region));
           // Decrement total since schedule will increment it again
           --totalEvents;
           schedule(eventTime, region, std::move(event));
         }
+        unsigned nextIdx = static_cast<unsigned>(region) + 1;
+        if (nextIdx >= static_cast<unsigned>(SchedulingRegion::NumRegions))
+          break;
+        region = deltaQueue.getNextNonEmptyRegion(
+            static_cast<SchedulingRegion>(nextIdx));
       }
-    }
+    };
+
+    // Cascade inline delta queues
+    for (uint32_t d = 0; d < Slot::kInlineDeltaSlots; ++d)
+      if (slot.deltaQueues[d].hasAnyEvents())
+        cascadeQueue(d, slot.deltaQueues[d]);
+
+    // Cascade extra delta queues
+    for (auto &[deltaStep, deltaQueue] : slot.extraDeltaQueues)
+      cascadeQueue(deltaStep, deltaQueue);
   }
   slot.clear();
+  clearSlotBit(fromLevel, slotIdx);
 }
 
 bool TimeWheel::findNextEventTime(SimTime &nextTime) {
-  // First check current time's slot for any events at or after current delta
+  // First check current time's slot for any events at or after current delta.
   auto &currentSlot = levels[0].slots[levels[0].currentSlot];
   if (currentSlot.hasEvents) {
-    // Check if there are events at or after the current delta step
-    for (auto &[deltaStep, queue] : currentSlot.deltaQueues) {
+    // Check inline delta queues first
+    for (uint32_t d = currentTime.deltaStep; d < Slot::kInlineDeltaSlots; ++d) {
+      if (currentSlot.deltaQueues[d].hasAnyEvents()) {
+        nextTime = SimTime(currentTime.realTime, d, 0);
+        return true;
+      }
+    }
+    // Check extra delta queues for steps >= kInlineDeltaSlots
+    for (auto &[deltaStep, queue] : currentSlot.extraDeltaQueues) {
       if (deltaStep >= currentTime.deltaStep && queue.hasAnyEvents()) {
         nextTime = SimTime(currentTime.realTime, deltaStep, 0);
         return true;
@@ -214,23 +270,24 @@ bool TimeWheel::findNextEventTime(SimTime &nextTime) {
     }
   }
 
-  // Search through all levels and find the minimum time with events
-  // We need to find the earliest event time, not just the first slot encountered
+  // Bitmask scan: iterate only slots with events using per-level bitmasks.
+  // This is O(popcount) instead of O(slotsPerLevel * numLevels).
   uint64_t minTime = UINT64_MAX;
   bool found = false;
 
   for (size_t level = 0; level < config.numLevels; ++level) {
     auto &lvl = levels[level];
-    for (size_t i = 0; i < config.slotsPerLevel; ++i) {
-      auto &slot = lvl.slots[i];
-      if (slot.hasEvents && slot.baseTime >= currentTime.realTime) {
-        // For slots at the current real time, we already checked above
-        if (slot.baseTime == currentTime.realTime)
-          continue;
-        if (slot.baseTime < minTime) {
+    for (size_t w = 0; w < Level::kBitmaskWords; ++w) {
+      uint64_t word = lvl.slotBitmask[w];
+      while (word) {
+        unsigned bit = __builtin_ctzll(word);
+        size_t slotIdx = w * 64 + bit;
+        auto &slot = lvl.slots[slotIdx];
+        if (slot.baseTime > currentTime.realTime && slot.baseTime < minTime) {
           minTime = slot.baseTime;
           found = true;
         }
+        word &= word - 1; // Clear lowest set bit
       }
     }
   }
@@ -238,7 +295,9 @@ bool TimeWheel::findNextEventTime(SimTime &nextTime) {
   // Check overflow - it's a sorted map so begin() is the minimum
   if (!overflow.empty()) {
     auto it = overflow.begin();
-    if (it->first >= currentTime.realTime && it->first < minTime) {
+    while (it != overflow.end() && it->first <= currentTime.realTime)
+      ++it;
+    if (it != overflow.end() && it->first < minTime) {
       minTime = it->first;
       found = true;
     }
@@ -258,7 +317,6 @@ bool TimeWheel::advanceToNextEvent() {
     return false;
 
   if (nextTime.realTime > currentTime.realTime) {
-    // Advance real time
     currentTime = SimTime(nextTime.realTime, 0, 0);
 
     // Update slot positions
@@ -271,20 +329,25 @@ bool TimeWheel::advanceToNextEvent() {
       cascade(level);
     }
 
-    // Move overflow events if they're now in range
+    // Move overflow events if they're now in range.
+    // Use bitmask to skip empty regions.
     while (!overflow.empty() && overflow.begin()->first == currentTime.realTime) {
       auto node = overflow.extract(overflow.begin());
       auto &deltaQueue = node.mapped();
-      for (size_t regionIdx = 0;
-           regionIdx < static_cast<size_t>(SchedulingRegion::NumRegions);
-           ++regionIdx) {
-        auto region = static_cast<SchedulingRegion>(regionIdx);
+      auto region = deltaQueue.getNextNonEmptyRegion(SchedulingRegion::Preponed);
+      while (region != SchedulingRegion::NumRegions) {
         auto events = deltaQueue.popRegionEvents(region);
         for (auto &event : events) {
           --totalEvents;
-          schedule(SimTime(currentTime.realTime, 0, regionIdx), region,
-                   std::move(event));
+          schedule(SimTime(currentTime.realTime, 0,
+                           static_cast<uint8_t>(region)),
+                   region, std::move(event));
         }
+        unsigned nextIdx = static_cast<unsigned>(region) + 1;
+        if (nextIdx >= static_cast<unsigned>(SchedulingRegion::NumRegions))
+          break;
+        region = deltaQueue.getNextNonEmptyRegion(
+            static_cast<SchedulingRegion>(nextIdx));
       }
     }
   }
@@ -297,14 +360,23 @@ size_t TimeWheel::processCurrentRegion() {
   auto &slot = levels[0].slots[slotIdx];
 
   // Get the delta queue for the current delta step
-  auto it = slot.deltaQueues.find(currentTime.deltaStep);
-  if (it == slot.deltaQueues.end()) {
+  DeltaCycleQueue *deltaQueuePtr = nullptr;
+  if (currentTime.deltaStep < Slot::kInlineDeltaSlots) {
+    if (slot.deltaQueues[currentTime.deltaStep].hasAnyEvents())
+      deltaQueuePtr = &slot.deltaQueues[currentTime.deltaStep];
+  } else {
+    auto it = slot.extraDeltaQueues.find(currentTime.deltaStep);
+    if (it != slot.extraDeltaQueues.end())
+      deltaQueuePtr = &it->second;
+  }
+  if (!deltaQueuePtr) {
     // No events at current delta step
     slot.hasEvents = slot.hasAnyEvents();
+    updateSlotBit(0, slotIdx, slot.hasEvents);
     return 0;
   }
 
-  auto &deltaQueue = it->second;
+  auto &deltaQueue = *deltaQueuePtr;
 
   // Find the next non-empty region starting from current region
   auto region = deltaQueue.getNextNonEmptyRegion(
@@ -312,18 +384,15 @@ size_t TimeWheel::processCurrentRegion() {
   if (region == SchedulingRegion::NumRegions) {
     // No events to process in current or later regions
     slot.hasEvents = slot.hasAnyEvents();
+    updateSlotBit(0, slotIdx, slot.hasEvents);
     return 0;
   }
 
   // Update current region to match
   currentTime.region = static_cast<uint8_t>(region);
 
-  auto events = deltaQueue.popRegionEvents(region);
-  size_t count = events.size();
+  size_t count = deltaQueue.executeAndClearRegion(region);
   totalEvents -= count;
-
-  for (auto &event : events)
-    event.execute();
 
   // Advance to next region
   auto nextRegion = deltaQueue.getNextNonEmptyRegion(
@@ -334,6 +403,7 @@ size_t TimeWheel::processCurrentRegion() {
     // No more events in this delta, check if we need to start a new delta
     // This will be handled by the scheduler
     slot.hasEvents = slot.hasAnyEvents();
+    updateSlotBit(0, slotIdx, slot.hasEvents);
   }
 
   return count;
@@ -344,33 +414,57 @@ size_t TimeWheel::processCurrentDelta() {
   size_t slotIdx = getSlotIndex(currentTime.realTime, 0);
   auto &slot = levels[0].slots[slotIdx];
 
-  // Get the delta queue for the current delta step
-  auto it = slot.deltaQueues.find(currentTime.deltaStep);
-  if (it != slot.deltaQueues.end()) {
-    auto &deltaQueue = it->second;
+  // Get the delta queue for the current delta step.
+  // Use inline array for steps < kInlineDeltaSlots (avoids RB-tree overhead).
+  DeltaCycleQueue *deltaQueue = nullptr;
+  bool isInline = (currentTime.deltaStep < Slot::kInlineDeltaSlots);
+  if (isInline) {
+    if (slot.deltaQueues[currentTime.deltaStep].hasAnyEvents())
+      deltaQueue = &slot.deltaQueues[currentTime.deltaStep];
+  } else {
+    auto it = slot.extraDeltaQueues.find(currentTime.deltaStep);
+    if (it != slot.extraDeltaQueues.end())
+      deltaQueue = &it->second;
+  }
 
-    for (size_t regionIdx = static_cast<size_t>(currentTime.region);
-         regionIdx < static_cast<size_t>(SchedulingRegion::NumRegions);
-         ++regionIdx) {
-      auto region = static_cast<SchedulingRegion>(regionIdx);
-      auto events = deltaQueue.popRegionEvents(region);
-      size_t count = events.size();
-      totalEvents -= count;
-      total += count;
+  if (deltaQueue) {
+    // Process all regions, repeating if event callbacks schedule new events
+    // at the same delta step in already-processed regions. Without the outer
+    // loop, such events become orphaned: they inflate totalEvents permanently
+    // but are never processed (processCurrentDelta advances past this delta),
+    // causing advanceTime() to spin forever.
+    bool madeProgress = true;
+    while (madeProgress) {
+      madeProgress = false;
+      // Use bitmask to skip empty regions.
+      auto region = deltaQueue->getNextNonEmptyRegion(
+          static_cast<SchedulingRegion>(currentTime.region));
+      while (region != SchedulingRegion::NumRegions) {
+        // Execute in-place to avoid vector move overhead.
+        size_t count = deltaQueue->executeAndClearRegion(region);
+        totalEvents -= count;
+        total += count;
+        madeProgress = true;
 
-      for (auto &event : events)
-        event.execute();
+        // Get next non-empty region after the one we just processed.
+        unsigned nextIdx = static_cast<unsigned>(region) + 1;
+        if (nextIdx >= static_cast<unsigned>(SchedulingRegion::NumRegions))
+          break;
+        region = deltaQueue->getNextNonEmptyRegion(
+            static_cast<SchedulingRegion>(nextIdx));
+      }
     }
 
-    // Clean up empty delta queue
-    if (!deltaQueue.hasAnyEvents())
-      slot.deltaQueues.erase(it);
+    // Clean up empty delta queue (only needed for overflow map entries)
+    if (!deltaQueue->hasAnyEvents() && !isInline)
+      slot.extraDeltaQueues.erase(currentTime.deltaStep);
   }
 
   // Reset region to start of next delta
   currentTime.region = 0;
   currentTime.deltaStep++;
   slot.hasEvents = slot.hasAnyEvents();
+  updateSlotBit(0, slotIdx, slot.hasEvents);
 
   return total;
 }
@@ -399,6 +493,7 @@ void TimeWheel::clear() {
       slot.clear();
     }
     level.currentSlot = 0;
+    std::memset(level.slotBitmask, 0, sizeof(level.slotBitmask));
   }
   overflow.clear();
   currentTime = SimTime();
