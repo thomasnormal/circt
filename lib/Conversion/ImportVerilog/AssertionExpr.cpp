@@ -1331,9 +1331,13 @@ struct AssertionExprVisitor {
         context.convertAssertionExpression(expr.expr, loc, /*applyDefaults=*/false);
     if (!value)
       return {};
-    // Strong/weak sequence interpretation differences are end-of-trace
-    // semantics. Preserve the inner assertion expression in the current
-    // lowering pipeline.
+    // Distinguish strong and weak wrappers by requiring explicit finite
+    // progress for strong(...).
+    if (expr.strength == slang::ast::StrongWeakAssertionExpr::Strong) {
+      auto eventually = ltl::EventuallyOp::create(builder, loc, value);
+      return ltl::AndOp::create(
+          builder, loc, SmallVector<Value, 2>{value, eventually});
+    }
     return value;
   }
 
