@@ -5204,20 +5204,34 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
 }
 
 SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
-  if (SignalId sigId = getSignalId(value))
+  // Check cache first — most probes resolve to the same signal every time.
+  auto cacheKey = std::make_pair(value, activeInstanceId);
+  auto cacheIt = resolveSignalIdCache.find(cacheKey);
+  if (cacheIt != resolveSignalIdCache.end())
+    return cacheIt->second;
+
+  if (SignalId sigId = getSignalId(value)) {
+    resolveSignalIdCache[cacheKey] = sigId;
     return sigId;
+  }
+  auto cacheAndReturn = [&](SignalId result) -> SignalId {
+    if (result != 0)
+      resolveSignalIdCache[cacheKey] = result;
+    return result;
+  };
+
   auto instMapIt = instanceOutputMap.find(activeInstanceId);
   if (instMapIt != instanceOutputMap.end()) {
     auto instIt = instMapIt->second.find(value);
     if (instIt != instMapIt->second.end()) {
       const auto &info = instIt->second;
       if (info.inputMap.empty())
-        return resolveSignalId(info.outputValue);
+        return cacheAndReturn(resolveSignalId(info.outputValue));
       ScopedInputValueMap scope(
         *const_cast<LLHDProcessInterpreter *>(this), info.inputMap);
       ScopedInstanceContext instScope(
           *const_cast<LLHDProcessInterpreter *>(this), info.instanceId);
-      return resolveSignalId(info.outputValue);
+      return cacheAndReturn(resolveSignalId(info.outputValue));
     }
   }
   if (auto arg = dyn_cast<mlir::BlockArgument>(value)) {
@@ -5227,7 +5241,7 @@ SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
         mappedValue != value) {
       ScopedInstanceContext scope(
           *const_cast<LLHDProcessInterpreter *>(this), mappedInstance);
-      return resolveSignalId(mappedValue);
+      return cacheAndReturn(resolveSignalId(mappedValue));
     }
     // Trace through function block argument sources. When a function is
     // called with an !llhd.ref argument, refBlockArgSources maps the
@@ -5241,7 +5255,7 @@ SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
         auto srcIt = stateIt->second.refBlockArgSources.find(arg);
         if (srcIt != stateIt->second.refBlockArgSources.end() &&
             srcIt->second != value) {
-          return resolveSignalId(srcIt->second);
+          return cacheAndReturn(resolveSignalId(srcIt->second));
         }
       }
     }
@@ -5266,10 +5280,10 @@ SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
       //   %ref = unrealized_conversion_cast %val : !llvm.ptr to !llhd.ref<!llvm.ptr>
       if (auto probeOp = castInput.getDefiningOp<llhd::ProbeOp>()) {
         if (SignalId sigId = getSignalId(probeOp.getSignal()))
-          return sigId;
-        return resolveSignalId(probeOp.getSignal());
+          return cacheAndReturn(sigId);
+        return cacheAndReturn(resolveSignalId(probeOp.getSignal()));
       }
-      return resolveSignalId(castInput);
+      return cacheAndReturn(resolveSignalId(castInput));
     }
   }
   // Note: arith.select on ref types is handled dynamically in interpretProbe
