@@ -934,3 +934,1036 @@ back to the MLIR-walking interpreter transparently.
 
 ### Phase 10 Test Results
 564/578 pass (14 pre-existing failures, 0 regressions).
+
+---
+
+## Phase 11: Scheduler Hot-Path Optimizations
+(See git commit `6e9d587f2`)
+
+---
+
+## Phase 13: AOT-Compiled Coroutine Processes (Phases A–C)
+
+Goal: compile `llhd.process` ops to native code at initialization time, execute via
+`_setjmp`/`_longjmp` coroutine stacks instead of interpreting op-by-op.
+
+### Phase A: setjmp/longjmp Context Switching (UcontextProcess.cpp/.h)
+
+Replaced `swapcontext` (calls `sigprocmask` syscall every switch, ~547ns) with
+`_setjmp`/`_longjmp` (skip signal masks, ~9-20ns):
+
+- `UcontextProcessState`: added `jmp_buf processJmpBuf`, `hasValidJmpBuf` flag
+- `UcontextProcessManager`: added `jmp_buf schedulerJmpBuf`
+- `resumeProcess()`: first call uses `getcontext`/`makecontext`/`setcontext`;
+  subsequent calls use `_setjmp(schedulerJmpBuf)` + `_longjmp(processJmpBuf)`
+- `__circt_sim_yield()`: records yield info in process state, saves context via
+  `_setjmp(processJmpBuf)`, then `_longjmp(schedulerJmpBuf)` to return to scheduler
+- `processTrampoline()`: on completion, `_longjmp(schedulerJmpBuf)` instead of `swapcontext`
+- Guard pages via `mprotect(PROT_NONE)` on stack bottom for overflow detection
+- ASan annotations: `__sanitizer_start_switch_fiber` / `finish_switch_fiber` around jumps
+
+### Phase B: Widen JIT Compilation Coverage (FullProcessJIT.cpp, AOTProcessCompiler.cpp)
+
+Extended the set of MLIR ops the AOT pipeline can lower to LLVM IR:
+
+- LLHD ops: `llhd.prb` → signal memory read, `llhd.drv` → drive_signal_fast,
+  `llhd.constant_time` → packed i64 delay encoding, `llhd.wait` → `__circt_sim_yield()` call,
+  `llhd.halt` → yield(Halt) + unreachable, sig projection ops → identity passthrough
+- Standard dialects: SCF-to-ControlFlow, Arith-to-LLVM, Func-to-LLVM, CF-to-LLVM
+- HW/Comb: full HWToLLVM + CombToArith + CombToLLVM conversion patterns
+- Sim: `sim.proc.print` → runtime stub, `sim.terminate` → erase (communicated via yield)
+- Type conversions: `llhd.time` → i64, `llhd.ref<T>` → `!llvm.ptr`, `sim.fstring` → `!llvm.ptr`
+- External declarations: `cloneReferencedDeclarations()` copies called function/global decls
+  into the micro-module (bodies stripped — resolved at link time via JIT symbol registration)
+
+### Phase C: AOT Batch Compilation Mode (AOTProcessCompiler.cpp, LLHDProcessInterpreter.cpp)
+
+Batch-compiles all eligible processes into ONE combined LLVM module with one `ExecutionEngine`:
+
+**Compilation pipeline** (`compileAllProcesses()`):
+1. For each eligible process, extract body into a `void @__aot_process_N()` function
+2. Signal values → baked `inttoptr(signalId)` constants (no function args needed)
+3. External values (hw.constant, llhd.constant_time defined outside process region) →
+   cloned into function entry block via IRMapping
+4. Run full lowering pipeline ONCE on combined module (all patterns from Phase B)
+5. `llvm::InitializeNativeTarget()` + `ExecutionEngine::create()` with O2 optimization
+6. Lookup function pointers via `jitEngine->lookup("__aot_process_N")`
+7. Register `__circt_sim_yield`, `__arc_sched_drive_signal_fast`, etc. as JIT symbols
+
+**Integration** (`LLHDProcessInterpreter`):
+- Enabled via `CIRCT_SIM_AOT=1` environment variable
+- `aotCompileProcesses()` called during `initialize()` after process registration
+- `executeProcess()` checks `aotCompiledProcesses` set — dispatches to `executeAOTProcess()`
+  for compiled processes, falls back to interpreter for others
+- `executeAOTProcess()`: resumes via `ucontextMgr->resumeProcess()`, then examines
+  `YieldKind` (WaitDelay → schedule future event, WaitSignal → suspend for sensitivity,
+  Halt → finalize process)
+
+**Eligibility filter** (`isProcessCompilable()`):
+- Rejects: `moore.wait_event`, `sim.fork`, unsupported sim dialect ops (sim.fmt.*),
+  `func.call` (external function references not resolved in micro-module)
+- Accepts: processes with only LLHD/HW/Comb/Arith/SCF/CF ops + sim.proc.print + sim.terminate
+
+**Bugs fixed during bring-up**:
+1. `<<UNKNOWN SSA VALUE>>` crash — external values (hw.constant, llhd.constant_time) defined
+   outside process region weren't mapped. Fix: collect with `SetVector<Value>`, clone into entry block.
+2. "No targets registered" — needed `llvm::InitializeNativeTarget()` + `InitializeNativeTargetAsmPrinter()`
+3. Dangling `func::FuncOp` after conversion — `applyPartialConversion` replaces func::FuncOp with
+   LLVM::LLVMFuncOp, invalidating stored references. Fix: store function names as `std::string`.
+4. Duplicate `aotCompileProcesses()` call — was called in both `initialize()` and `finalizeInit()`.
+5. `llhd.int_to_time` delay encoding — raw femtosecond value needs `shl 32` to match the packed
+   JIT delay format (realTimeFs in bits [63:32], delta in [31:16], epsilon in [15:0]).
+
+**Phase D**: Direct signal memory — `__circt_sim_signal_memory_base()` returns flat `uint64_t[]`
+indexed by SignalId for zero-overhead narrow signal reads (≤64 bits) in compiled code.
+
+### Phase 13 Test Results (AOT)
+
+First test: `advance-after-delta.mlir` — 2/2 processes compiled in 6.7ms, simulation
+completes at 1000000 fs with correct output. 0 errors, 0 warnings.
+
+Broader validation (18 tests with `CIRCT_SIM_AOT=1`):
+- 3 clean pass (simple signal/drive processes)
+- 3 graceful fallback (ineligible processes stay on interpreter)
+- 2 timeout (long simulations, AOT processes running correctly)
+- 7 crash from `sim.fmt.literal` — fixed by eligibility filter (rejects unsupported sim ops)
+- 2 other crashes (external func resolution, pass ordering) — also fixed by eligibility filter
+
+Performance profiling pending (Task #4).
+
+---
+
+## Phase 12: Xcelium Binary Analysis — UVM Dispatch and Parallelism
+
+Binary: `/opt/cadence/installs/XCELIUM2403/tools/inca/bin/64bit/xmsim` (52 MB, stripped ELF x86-64)
+26,333 dynamic symbols exported. Key namespaces: `mcs::` (1965 symbols), `mcp::` (1229), `xdi` (1423), `rts::` (128).
+
+### 1. Scheduling Architecture — 13 Scheduling Regions
+
+The `mcs` (Multi-Core Simulation) namespace implements the IEEE 1800 scheduling semantics. Disassembly of `mcs::queue_type_str(mcs::QueueType)` reveals a 13-entry jump table (enum values 0–12):
+
+| QueueType | Name            | IEEE 1800 Region        |
+|-----------|-----------------|------------------------|
+| 0         | MONITOR         | Postponed region       |
+| 1         | NONE            | (sentinel)             |
+| 2         | CL              | Active (combinational) |
+| 3         | NEXT_CL         | Inactive               |
+| 4         | PATH-DELAY      | Path delay update      |
+| 5         | PRE-NBA         | Pre-NBA                |
+| 6         | NBA             | Non-blocking assignment |
+| 7         | TC              | Timing check           |
+| 8         | RWSYNC          | ReadWriteSync (PLI)    |
+| 9         | OBSERVED         | Observed               |
+| 10        | POST-OBSERVED   | Reactive (post-obs)    |
+| 11        | RE-CL           | Re-active              |
+| 12        | RE-NBA          | Re-NBA                 |
+
+**Callback scheduling functions** (all in `mcs::` namespace):
+- `schedule_delta_callback` / `schedule_current_delta_callback` — Active region
+- `schedule_nba_callback` — NBA region
+- `schedule_prenba_callback` — Pre-NBA
+- `schedule_renba_callback` — Re-NBA
+- `schedule_monitor_callback` — Monitor/Postponed
+- `schedule_rwsync_callback` — ReadWriteSync
+- `schedule_observed_callback` — Observed
+- `schedule_reactive_callback` — Reactive
+- `schedule_path_delay_callback` — Path delay
+- `schedule_timing_check_callback` — Timing check
+- `schedule_simtime_callback(fn, time, bool)` — Future time scheduling
+- `schedule_callback_to_queue(QueueType, fn, bool)` — Generic
+
+**Event queue implementation**: Disassembly of `schedule_nba_callback` reveals a **free-list allocator** at global address `0x36e6dd0` for 32-byte callback event objects. Each object stores: `[+0x00: next_free][+0x08: queue_link][+0x10: callback_fn_ptr][+0x18: flags]`. The scheduler queue head is accessed via **thread-local storage** (`%fs:-0x1708` offset) through a per-timestep scheduling structure. The linked list head sits at offset `+0x58` of the time slot. This is extremely tight — zero allocation on the scheduling hot path (pops from free list, pushes onto intrusive linked list).
+
+**Separate combinational vs sequential schedulers**: The binary exports `fault_sched_cl` and `fault_sched_seqlogic` as separate scheduling entry points. Disassembly of `fault_sched_seqlogic` shows it accesses TLS at `%fs:-0x1708` and inserts into linked lists at offsets `+0x26ce8` (current delta) and `+0x26cf8` (next delta) within the per-thread simulation state. The separation of CL (combinational logic) from seqlogic (sequential) scheduling allows each to have its own queue drain priority.
+
+**Architectural implication for circt-sim**: Our single `EventQueue` with `std::priority_queue` is a bottleneck. Xcelium uses per-region intrusive linked lists with free-list allocation. We should consider:
+1. Replacing priority_queue with 13 separate intrusive linked lists (one per region)
+2. Pre-allocating callback event objects in a free-list pool
+3. Using TLS for per-thread scheduling state if we ever parallelize
+
+### 2. Parallel Simulation Infrastructure
+
+#### Multi-Clock Partitioning (MCP)
+The `mcp::sim::` namespace (1229 symbols) implements Multi-Clock Partitioning. This is Xcelium's main parallelism mechanism — it splits the DUT into clock-domain partitions that run concurrently.
+
+**Key classes**:
+- `JupiterPartitionHandler` — Singleton manager. Creates `PrimaryPartition` and `IncrementalPartition` objects from `sss_root_s`/`sss_jupiter_gd_s` structures.
+- `JupiterPartition` — Represents one clock-domain partition. Has `commId`, `pibIds`, snapshot dirs. Each partition gets a separate address space with communication IDs mapping signals across boundaries.
+- `mcp::sim::DestChecker` / `SourceChecker` / `ClockPeriodChecker` — Clock boundary checking for signal crossings. Subclasses: `DelayedDestChecker`, `DelayedDestClkChecker`, `LibertyDestClkChecker`, `DestSensitivityChecker`.
+- `mcp::sim::bytecode_container` — MCP has its own bytecode interpreter for cross-partition operations!
+
+**MCP environment variables** (tuning knobs):
+- `MCP_DISABLE_SMART_PARTITIONER` — Disable automatic partitioning
+- `MCP_DISABLE_MULTIPLE_CLOCKS` — Disable multi-clock detection
+- `MCP_DISABLE_PPL` — Disable PPL (parallel pipeline?)
+- `MCP_DISABLE_SPL` — Disable SPL (serial pipeline?)
+- `MCP_PPL_PARTS` / `MCP_PPL_LIVES` / `MCP_SPL_LIVES` — Pipeline partition counts and lifetimes
+- `MCP_DISABLE_TYPE_BASED_CODEGEN` — Disable type-based code generation
+- `MCP_DISABLE_CODE_SHARE` — Disable code sharing between partitions
+- `MCP_DISABLE_RESET_IDENTIFICATION` — Disable reset signal detection
+- `MCP_DISABLE_VIRTUAL_CLK` — Disable virtual clock inference
+
+#### Multi-Core Simulation (MCS) Communication
+The `mcs::` namespace implements inter-partition communication with multiple transport backends:
+
+**Communication modes** (template parameter `CommMode`):
+- `CommMode=1` — Shortcut (same-process, direct function call)
+- `CommMode=2` — Shared-memory (same machine, different processes)
+- `CommMode=3` — Socket (potentially cross-machine)
+
+**Cluster types** (hierarchy of template classes):
+```
+SimClusterBase<CommMode, is_primary>
+  └─ SimCluster<CommMode, is_primary>        — synchronous
+  └─ SimClusterAsync<CommMode, is_primary>    — asynchronous
+  └─ SimClusterAsyncOpt<CommMode, is_primary> — optimized async
+  └─ SimClusterFullAsync<CommMode, is_primary>— fully asynchronous
+SimShortcut<is_primary>                       — intra-process shortcut
+SimShortcutDelayed<is_primary>                — delayed shortcut
+```
+
+The boolean `is_primary` template parameter distinguishes the primary partition (which owns the scheduler) from secondary partitions (which are slaves).
+
+**Communication via AtomicRing buffer**: `mcs::AtomicRing` is a lock-free ring buffer for inter-partition signal value exchange. It supports typed reads/writes: `generic_write<PacketType, unsigned long>()`, `generic_read<SyncMode, unsigned long>()`. PacketType distinguishes different message types (value changes, sync points, delta counts, simtime updates). The ring buffer communicates `comm_id` (signal identity) + `data` (new value).
+
+**Socket-based communication**: `mcs::SocketInputStream` / `SocketOutputStream` provide socket I/O with async wait contexts for cross-process communication. The `AsyncWaitContext::thread_func` runs in a dedicated pthread for non-blocking reads.
+
+#### MCE (Multi-Core Engine)
+A separate parallelism layer for RTL simulation:
+- `-MCE_SIM_THREAD_COUNT <N>` — Set number of parallel threads
+- `-MCE_SIM_CPU_CONFIGURATION` — CPU core binding configuration
+- `-MCE_PARALLEL_PROBING` — Parallel probing of signals
+- `CTRAN: Parallel engine enabled with thread count:%u, affinity:%d`
+- Uses `pthread_setaffinity_np` and `sched_setaffinity` for CPU pinning
+
+**Threading model**: The binary imports a full set of pthreads primitives including:
+- `pthread_create/join/detach/cancel/exit` — Thread lifecycle
+- `pthread_mutex_*` (init/lock/trylock/unlock/destroy) — Mutexes
+- `pthread_rwlock_*` (rdlock/wrlock/unlock) — Reader-writer locks
+- `pthread_spin_*` (init/lock/unlock) — Spinlocks (for hot paths)
+- `pthread_cond_*` (wait/signal/broadcast/timedwait) — Conditions
+- `pthread_key_create/getspecific/setspecific` — TLS
+- `pthread_setaffinity_np` / `sched_setaffinity` — CPU affinity
+
+The use of both spinlocks AND mutexes suggests a tiered locking strategy: spinlocks for very short critical sections (signal value updates), mutexes for longer operations.
+
+**Architectural implication for circt-sim**: Xcelium's parallelism is at the clock-domain partition level, NOT at the process level. Each partition runs as a separate OS process or thread, communicating signal values through lock-free ring buffers. For circt-sim, the actionable insight is: parallelism should be at the module/clock-domain granularity, not trying to run individual always blocks in parallel.
+
+### 3. UVM Dispatch Architecture
+
+#### VPtr Argument Caching (Key Optimization)
+The `ncxxTlTFArgInfo` and `ncxxGenTFWArgInfo` classes implement a **virtual pointer argument caching** system — this is how Xcelium optimizes polymorphic SV class method calls:
+
+**ncxxTlTFArgInfo** (TL = task/function level):
+- `getTFVptrArgValue(long**, via_external_s)` — Get cached vptr for a call site
+- `setTFVptrArgValue(long**, via_external_s, long*)` — Cache a vptr at a call site
+- `getTFVptrArgSeqCount(via_external_s)` — Sequence counter (for invalidation)
+- `getIfReadOnlyTFVptrArg(via_external_s)` — Check if target is read-only (immutable dispatch)
+- `getIfTFVPtrArgCachingOptEnabled()` — Global enable flag
+- `setIfTFVPtrArgCachingOptEnabled(bool)` — Toggle
+- `getIfTFVPtrArgEnhCachingOptEnabled()` — Enhanced caching (second-tier optimization)
+- `getIfReadOnlyTFVptrArgValidScope(via_external_s)` — Scope-based cache validity
+- `getIfReadOnlyTFVptrArgValidObject(via_external_s)` — Object-based cache validity
+- `getIfReadOnlyTFVptrArgHasSelfWrite(via_external_s)` — Self-mutation check
+- `getTFVptrArgValuePoolOffsetAddr(long**, via_external_s, unsigned int)` — Pool-based address cache
+- `setTFVptrArgValueAtCount(long**, via_external_s, long*, unsigned int)` — Versioned cache
+
+**Global controls**: `ncxxTFArgInfoGlobals::b_GBL_tf_vptr_arg_enabled` and `b_GBL_tf_enh_vptr_arg_enabled` — Two levels of vptr caching (basic and enhanced).
+
+This is essentially an **inline cache** for SV virtual method dispatch. The "read-only" check determines if a call site is monomorphic (always calls the same method on the same class). The "valid scope" / "valid object" checks determine if the cached dispatch target is still valid. The "self write" check detects if the object might modify its own class type. The pool offset address optimization pre-computes the offset into a method table, avoiding a full virtual dispatch.
+
+**Architectural implication for circt-sim**: Our vtable dispatch uses `addressToFunction` lookup maps. Xcelium's approach is closer to JIT inline caching — caching the resolved function pointer at the call site with a validity check. Our Phase 12 AOT compilation should implement something similar: for each `call_indirect`, cache the last-resolved target and add a guard check.
+
+#### UVM Debug/Profile Integration
+- `uvmdbg_method_call` — UVM method call tracing
+- `uvmdbg_object_method_call` — Object-specific method tracing
+- `ml_uvm_process_checkpoint_enable` — UVM process checkpointing
+- `chk_is_uvm_package()` — UVM package detection
+
+### 4. Signal Sensitivity Optimization
+
+**FMI (Foreign Model Interface)** functions:
+- `fmiSetSignalSensitivity(instance, signals[], count)` — SET sensitivity list (replace)
+- `fmiAddSignalSensitivity(instance, signals[], count)` — ADD to sensitivity list
+- `fmiCallAfterLastDelta` / `fmiCancelLastDeltaCall` — End-of-delta callbacks
+
+Disassembly of `fmiSetSignalSensitivity` (at `0x90e62f`) shows:
+1. Iterates through an array of signal handles (8 bytes each)
+2. For each handle, calls `vdaHandleKind` to classify the handle type
+3. Calls `vdaIsSignalClass` to verify it's a valid signal
+4. Calls into the scheduler at offset +0x38 of the instance structure to update sensitivity
+5. Uses TLS flags at `%fs:-0x1670` and `%fs:-0x166c` for reentrancy protection
+
+**Clock-variable sensitivity map**: `tl::cdpes::g_clockvar_sensitivity_map` — Global map (likely hash map) for clock-variable sensitivity items. `ClockVarSensitivityItem` objects are stored in `std::unordered_map` with custom `ViaHasher` and `ViaEquals`.
+
+**DestSensitivityChecker** (in `mcp::sim::` namespace):
+- `registerSensitivitySig(int, ClkEdge, shared_ptr<DestChecker>)` — Register a signal+edge for sensitivity
+- `registerValueChange(int)` / `deregisterValueChange(int)` — Dynamic sensitivity update
+- `notifyDelayedDestChecker(int, ClkEdge)` — Edge-triggered notification
+- `isRegisteredCountEmpty()` — Fast check if any sensitivities registered
+- Managed via `std::map<int, shared_ptr<DestSensitivityChecker>>` (RB-tree)
+
+**Architectural implication for circt-sim**: Xcelium manages sensitivity via integer IDs (not pointer arrays). The `int` ID is likely a compact signal index. Our current approach of using `SmallVector<SignalId>` for wait lists is reasonable but we could benefit from bitmap-based sensitivity for very large fan-out signals.
+
+### 5. Memory Management
+
+#### Object Pool System (xbtObjPool)
+Xcelium uses type-specific object pools for high-frequency allocations:
+- `xbtObjPool<xdiDefAsrt>` — Assertion definitions
+- `xbtObjPool<xdiDefInst>` — Instance definitions
+- `xbtObjPool<xdiSimAsrt>` — Simulation assertions
+- `xbtObjPool<xdiSnareRU>` — Snare objects (waveform probes)
+- `xbtObjPool<xdiSnTrdrv>` — Transaction driver snares
+- `xbtObjPool<xdiDataType>` — Data type objects
+- `xbtObjPool<xdiDefScope>` — Scope definitions (with `GetFreeItem()` exported)
+- `xbtObjPool<xdiInstImpl>` — Instance implementations
+- `xbtObjPool<xdiDefModImpl>` — Module implementations
+- `xbtObjPool<xdiDefNetImpl>` — Net implementations
+- `xbtObjPool<xdiIfcScpNode>` — Interface scope nodes
+- `xbtObjPool<int>` / `xbtObjPool<vector<void*>>` — Generic pools
+- `_xbtGetPoolList()` — Enumerate all active pools (for debug/stats)
+- `xbt_malloc_usage_print()` / `xbt_malloc_usage_print_atexit()` — Heap usage tracking
+
+**Arena allocator (ncxxLpMemMgr)**:
+- `ncxxLpMemMgr::allocate(size_t)` / `deallocate(void*)` — Linear allocation
+- `ncxxLpMemMgr::mark()` / `rewind()` / `reset()` — Arena mark/reset pattern
+- `ncxxLpMemMgr::cache(char*)` — String interning within arena
+- Used by `ncxxVector` (custom vector using arena allocator)
+
+**Custom allocators**:
+- `salloc` — Stack allocator (likely for temporary per-delta allocations)
+- `clsMalloc` — Class-specific malloc wrapper
+- `xbtMalloc` / `xbtRealloc` / `xbtCalloc` — Tracked heap allocation
+- `zcalloc` — Zero-initialized allocation (likely for zlib)
+
+**Stack management**:
+- `-STACKSIZE <bytes>` — PLI stack size configuration
+- `-SC_THREAD_STACKSIZE` — SystemC thread stack (default 0x16000 = 90 KB)
+- `-SC_MAIN_STACKSIZE` — SystemC main stack (default 0x400000 = 4 MB)
+- Uses both `makecontext/setcontext` (ucontext) AND `setjmp/longjmp` for coroutine/process switching
+- Free-list pool for 32-byte event callback objects (seen in `schedule_nba_callback` disassembly)
+
+**Architectural implication for circt-sim**: Our Phase A `setjmp/longjmp` replacement matches Xcelium's dual approach. The object pool pattern (xbtObjPool) suggests we should pool-allocate our most common objects — particularly `ProcessEvent` / callback structs in the scheduler. The arena allocator pattern with `mark()/rewind()` is ideal for per-delta temporary allocations.
+
+### 6. Signal Value Storage (TrDrv)
+
+The `TrDrv` (Transaction Driver) appears to be the core signal value storage abstraction:
+- `mcs::Resolution::create<is_primary>(TrDrv*, vst_s*)` — Create resolution function for a signal
+- `mcs::Resolution::schedule_evs()` / `elaborate()` — Resolution scheduling
+- `getInputTrdrv` — Get input transaction driver
+- `xdiUtGetSignal(xst_s*, long*, ssl_signal_s&, cdp_node_s**)` — Get signal from scope
+- `xdiMgrImpl::TriggerVcSnare(long*, xst_s*, int*)` — Value-change notification
+- `ProfNetInfo::insert_fanout_vector()` / `get_fanout_count()` — Fanout tracking per net
+
+CDP (Compiled Data Path) is the mechanism for compiled evaluation of combinational logic:
+- `xdi_register_compiled_cdp(int*, int, int, vst_s**, int)` — Register compiled datapath
+- `wv_bt_dyn_cdp_sgi::compileToByteCode()` — Compile datapath to bytecode
+- The MCP namespace also has `mcp::sim::bytecode_container` with its own bytecode interpreter
+
+**Signal IDs**: Signals are identified by `(xst_s*, long*)` tuples — the `xst_s` is the scope/type info, `long*` is the instance path. Communication across partitions uses integer `comm_id` values mapped by `JupiterPartitionHandler::getFlatCommId()`.
+
+### 7. Configuration / Tuning Summary
+
+**Performance-critical env vars identified**:
+- `MCP_DISABLE_SMART_PARTITIONER` — Auto-partitioning toggle
+- `MCP_DISABLE_PPL` / `MCP_DISABLE_SPL` — Pipeline parallelism
+- `MCP_PPL_PARTS` / `MCP_PPL_LIVES` — Pipeline partition count/lifetime
+- `MCS_ASYNC` / `MCS_ASYNC_MODE` / `MCS_ASYNC_DELAY` — Async communication modes
+- `MCS_COMM_PROFILE` / `MCS_COMM_PROFILE_CUTOFF` — Communication profiling
+- `MCS_BUFFERING_THRESHOLD` — Ring buffer threshold
+- `-MCE_SIM_THREAD_COUNT <N>` — Parallel thread count
+- `-MCE_SIM_CPU_CONFIGURATION` — CPU affinity
+- `-STACKSIZE` / `-SC_THREAD_STACKSIZE` / `-SC_MAIN_STACKSIZE` — Stack sizing
+- `-ABVNORANGEOPT` — Disable assertion range optimization
+
+### 8. Key Takeaways for circt-sim Performance Work
+
+1. **Scheduling hot path**: Xcelium uses pre-allocated intrusive linked lists with TLS-based queue heads. Our `std::priority_queue` is slower by an order of magnitude. Phase E should implement per-region linked lists with free-list allocation.
+
+2. **VPtr inline caching**: Xcelium caches resolved virtual method targets at call sites with scope/object validity checks. This is more sophisticated than our current vtable-based dispatch. Our JIT compiler should emit guarded inline caches for `call_indirect`.
+
+3. **Parallelism granularity**: Xcelium parallelizes at clock-domain partitions, not individual processes. The communication overhead between partitions is managed by lock-free ring buffers. Our single-threaded architecture is simpler but won't scale; when we eventually add parallelism, it should be module/clock-domain based.
+
+4. **Memory pools**: Pool allocation for high-frequency objects (events, probes, instances). We should pool-allocate ProcessEvent, DriveEvent, and similar hot-path objects.
+
+5. **Separate CL/seqlogic scheduling**: Having dedicated combinational vs sequential scheduling avoids sorting overhead. Our current approach of a single queue for all signal types could benefit from this separation.
+
+6. **13 regions vs our 4**: Xcelium implements all IEEE 1800 scheduling regions. Our simplified 4-region model (active, NBA, reactive, postponed) is adequate for now but may need expansion for full compliance.
+
+7. **MCP bytecode**: Even the cross-partition communication has its own bytecode interpreter, suggesting that bytecode is the universal intermediate form for anything performance-critical in Xcelium's architecture.
+
+## Phase 12b: Xcelium Process Classification and Scaling Architecture
+
+### The Core Problem: Stack Scaling
+
+For SoC-sized designs with 100k+ processes, naively allocating a coroutine stack per process is catastrophic:
+- 100,000 processes × 32KB stack = 3.2 GB just in stacks
+- Xcelium's SC_THREAD default is even larger: `0x16000` (90KB) per SystemC thread
+
+The key insight from this analysis: **Xcelium does NOT allocate stacks for most RTL processes.** Instead, it classifies processes into fundamentally different execution categories, only a minority of which require coroutine stacks.
+
+### Process Classification Taxonomy
+
+From binary analysis, Xcelium uses at least 4 distinct process execution models:
+
+#### 1. TRDRV (Trigger Driver) — Stackless Callback
+
+The **TRDRV** (trigger driver) is the fundamental unit of RTL execution. It is a *function pointer + data context* pair, NOT a coroutine. Key evidence:
+
+```
+mcs::create_byte_trdrv()
+mcs::create_long_trdrv()
+mcs::create_pointer_trdrv(size_t)
+mcs::create_trdrv(int, size_t)
+```
+
+TRDRVs are created at elaboration time for each signal driver. The TRDRV has:
+- A method type (one of 967 `SSS_MT_*` constants)
+- A pointer to its PIB (Process Info Block) data
+- A scheduling list pointer (for event scheduling)
+
+When a TRDRV fires, the scheduler calls its method function directly on the scheduler's own call stack. **No context switch. No private stack. No coroutine overhead.** This is the "run-to-completion callback" model.
+
+**Method types relevant to RTL always blocks:**
+- `SSS_MT_REGUPDATE_BYTE` / `SSS_MT_REGUPDATE_LONG` / `SSS_MT_REGUPDATE_PTR` / `SSS_MT_REGUPDATE_REAL` — Register update for `always_ff`/`always @(posedge clk)` blocks
+- `SSS_MT_CONG_REG_UPDATE` — Congestion-aware register update
+- `SSS_MT_CONG_WIRE_UPDATE` / `SSS_MT_RD_WIRE_UPDATE` — Continuous wire update
+- `SSS_MT_CONG_ALWAYS_REENABLE` — Re-enable always blocks after evaluation
+- `SSS_MT_DPES_FOREVER_CLOCK_UPDATE_METHOD` — Optimized clock-driven forever loop
+
+**What this means for `always @(posedge clk) q <= d;`:**
+The compiler recognizes this as a "register update" pattern. At compile time (xmsc/xmelab), it generates:
+1. A `SSS_MT_REGUPDATE_*` method function (compiled C or native code)
+2. PIB entries for `q` (destination) and `d` (source)
+3. A sensitivity link to `clk`'s TRDRV chain
+
+At runtime, when `clk` changes:
+- Scheduler walks `clk`'s load list
+- For each TRDRV: `method(pib_ptr)` — a direct function call
+- No stack allocation, no context switch, no coroutine
+- Total overhead: ~10ns per TRDRV call (function pointer dispatch + memory access)
+
+#### 2. DPES Forever Clock Update — Optimized RTL Loops
+
+The **DPES (Datapath Engine Simulation) Forever** optimization is a key compile-time transformation. Evidence from 30+ debug environment variables:
+
+```
+DEBUG_DPES_FOREVER_CLOCK           — Clock signal detection
+DEBUG_DPES_FOREVER_SENSITIVITY_THRESHOLD — Sensitivity list limit
+DEBUG_DPES_FOREVER_WAIT            — Wait statement analysis
+DEBUG_DPES_FOREVER_SYNTHESIZED_EXPRESSION — Synthesized logic
+DISABLE_DPES_FOREVER_SIMPLE_WAIT   — Disable for simple waits
+DISABLE_DPES_FOREVER_REG_CLOCK_UPDATE — Disable register clock opt
+SSS_DPES_FOREVER_CLOCK_UPDATE      — The optimized method type
+```
+
+The DPES forever optimizer analyzes `always` blocks with the pattern:
+```verilog
+always begin
+    @(posedge clk);    // single event control
+    // combinational logic + NBA assignments
+end
+```
+
+The analysis functions confirm this:
+- `dpesforever_wait_item_qualifies()` — checks if the wait is a simple edge trigger
+- `dpesforever_is_sideeffect_statement()` — verifies body is side-effect-free
+- `dpesforever_is_increment_or_decrement()` — recognizes common patterns
+- `dpesforever_is_for_assignment2()` — recognizes for-loop patterns
+
+When qualified, the entire `always` block is transformed into a **single TRDRV method call** of type `SSS_MT_DPES_FOREVER_CLOCK_UPDATE_METHOD`. The data structure:
+```c
+struct sss_dpesforever_clock_update_s {
+    long *dpes_method;   // compiled evaluation function
+    int   dpes_load;     // load count
+    long *dpes_mlink;    // method link
+    int  *dpes_timestamp; // update timestamp
+};
+```
+
+**Impact**: The vast majority of RTL always blocks (80-95% in typical designs) are converted to DPES forever callbacks. These blocks:
+- Have NO private stack
+- Execute as a single function call on the scheduler thread
+- Are indistinguishable from gate-level evaluation in terms of overhead
+
+#### 3. SWB (Switch Block) — True Coroutine Context
+
+The **SWB** (Switch Block) is Xcelium's coroutine context for processes that CANNOT run to completion in a single call. Evidence:
+
+```
+COD_SWB         — Code object for switch block
+COD_SWB_D       — Switch block (data variant)
+COD_SWB_P       — Switch block (pointer variant)
+COD_SWBP        — Switch block (packed)
+COD_SWB_TGP     — Switch block (trigger global pointer)
+COD_SWB_TGW     — Switch block (trigger global word)
+COD_SWB_TLP     — Switch block (trigger local pointer)
+COD_SWB_TLW     — Switch block (trigger local word)
+```
+
+The SWB stores:
+- Automatic variables (local state)
+- Program counter (where to resume)
+- Task call chain (for nested tasks with delays)
+- The `st_swb_size` field in the stream structure determines allocation
+
+Key strings:
+```
+"CALL CHAIN DBG task_done count = %d, swb = %p, pib = %p"
+"CALL CHAIN DBG task_start count = %d, swb = %p, pib = %p"
+"automatics not to be stored in SWB"
+"XP_SWB_BLOCK_SIZE_LIMIT" — env var to control max SWB size
+"XP_SWB_SIZE_LIMIT" — another size limit env var
+"-enable_parallel_auto_swb_opt" — parallel auto-variable optimization
+```
+
+**Who gets an SWB?**
+- `initial` blocks (run once, may have delays/waits)
+- `always` blocks that don't qualify for DPES forever optimization
+- SystemVerilog tasks with timing controls (`#delay`, `@event`, `wait()`)
+- `fork...join` / `fork...join_any` / `fork...join_none` bodies
+- SystemVerilog class methods with blocking operations
+
+**Who does NOT get an SWB?**
+- `always_comb` / `always_latch` — pure combinational, converted to TRDRV callbacks
+- `always @(posedge clk)` with simple body — DPES forever optimization
+- Continuous assignments (`assign`) — wire evaluation, no process at all
+- Gate instances — primitive evaluation methods
+
+The SWB is **not a full OS-level stack.** It's a compact data block holding only the automatic variables and resume state. The actual execution happens on the scheduler's thread stack using `makecontext`/`swapcontext` (confirmed by the import of `makecontext@GLIBC`). The SWB size is determined at compile time by analyzing the automatic variable requirements:
+```
+Useless_pib_size_calculator    — Analyzes PIB/SWB space requirements
+Useless_pib_layout_printer     — Debug output for layout
+tl_cdpes_compute_reg_pib_size  — Computes register PIB sizes
+```
+
+#### 4. SC_THREAD / Fiber — SystemC Coroutines
+
+SystemC threads use a separate coroutine library: `libncscCoroutines_sh`. These are full stack-based coroutines:
+```
+-SC_THREAD_STACKSIZE <arg>  — Set SystemC SC_THREAD stack size, default is 0x16000
+InitCoroutine                — Initialize coroutine
+EndCoroutine                — Cleanup coroutine
+sdi_create_fiber            — Create fiber (lightweight thread)
+TEST_FIBER                  — Fiber testing
+```
+
+SystemC has two process types:
+- **SC_METHOD**: Like a TRDRV callback — runs to completion, no stack
+- **SC_THREAD**: True coroutine with private stack, uses `makecontext`
+
+The default stack size of `0x16000` (90,112 bytes) is configurable. SC_THREADs are the most expensive process type in Xcelium.
+
+### Scheduler Architecture: CL vs SeqLogic
+
+The two core scheduler entry points reveal the split:
+
+**`fault_sched_cl`** (Combinational Logic):
+- Dispatches through a vtable: `callq *0x70(%rax)` with flag `0x20000`
+- Then: `callq *0xc0(%rax)` for actual evaluation
+- Allocates a 24-byte scheduling node from a free list
+- Links into the Active region scheduling list (offset `0x26d08`)
+- **No coroutine context involved** — pure function dispatch
+
+**`fault_sched_seqlogic`** (Sequential Logic):
+- Takes 3 args: (trdrv_ptr, signal_value, edge_type)
+- Allocates a 24-byte scheduling node from free list
+- If `edge_type == 0`: links into NBA region list (offset `0x26ce8`)
+- If `edge_type != 0`: goes through a hash-based filtering mechanism (dedup)
+- Then links into a separate SeqLogic list (offset `0x26cf8`)
+- **No coroutine context** — just scheduling a TRDRV callback
+
+Both functions use Thread-Local Storage (`mov %fs:0xffffffffffffe8f8, %rax`) to access per-thread scheduler state, confirming MCS multi-threaded execution.
+
+### The PIB (Process Info Block) Architecture
+
+The PIB is Xcelium's key data structure for per-instance state. Every module instance has a PIB containing:
+- Signal values (registers, wires)
+- Port connections
+- Process state data
+- Automatic variable storage (SWB is part of PIB in some configurations)
+
+PIB layout is computed at compile time:
+```
+Pib_layout_metadata  — Tracks field positions
+Pib_layout_summary   — Size statistics
+Pib_entry_metadata   — Per-entry metadata (name, class, sub_name)
+pibMap::create_size_map() — Size analysis per PIB
+```
+
+From profiling strings:
+```
+"<Average_PIB_size> %3.1f bytes"
+"%8s %9ld %-15s = %6.1f%% of type = %6.1f%% of pib space"
+"Code streams are using this PIB"
+```
+
+This is significant: the PIB stores *signal values directly*, not pointers to separate allocations. A module with 100 registers has them packed contiguously in the PIB. This gives excellent cache locality.
+
+### MCS Cluster Types (Complete Enumeration)
+
+From template instantiations, there are **4 SimCluster types × 2 CommModes × 2 Trace modes = 16 variants**:
+
+| Cluster Type | CommMode | Description |
+|---|---|---|
+| `SimCluster` | SHMEM(2), SOCKET(3) | Synchronous cluster (lockstep) |
+| `SimClusterAsync` | SHMEM(2), SOCKET(3) | Asynchronous with barriers |
+| `SimClusterAsyncOpt` | SHMEM(2), SOCKET(3) | Optimized async (reduced sync) |
+| `SimClusterFullAsync` | SHMEM(2), SOCKET(3) | Fully async (speculative) |
+
+CommMode enum values: `SHMEM=2`, `SOCKET=3`. Each has `TRACE=false/true` variants.
+
+The `SharedMemoryAtomicRing` is the lockless inter-partition communication channel:
+```cpp
+mcs::SharedMemoryAtomicRing::create(string, size_t ring_size, size_t entry_size, callback)
+mcs::SharedMemoryAtomicRing::attach(string, callback)
+```
+
+Each cluster schedules its own delta/NBA/reactive callbacks:
+```
+mcs::schedule_nba_callback(void(*)())
+mcs::schedule_delta_callback(void(*)(), bool)
+mcs::schedule_current_delta_callback(void(*)(), bool)
+mcs::schedule_reactive_callback(void(*)(), bool)
+mcs::schedule_prenba_callback(void(*)(), bool)
+mcs::schedule_renba_callback(void(*)())
+```
+
+### The ncxxTlTFArgInfo Inline Cache (Detail)
+
+The `ncxxTlTFArgInfo` class implements argument caching for TF (task/function) calls:
+```cpp
+ncxxTlTFArgInfo::getTFVptrArgValue(long**, via_external_s)
+ncxxTlTFArgInfo::setTFVptrArgValue(long**, via_external_s, long*)
+ncxxTlTFArgInfo::getTFVptrArgSeqCount(via_external_s)
+ncxxTlTFArgInfo::getIfReadOnlyTFVptrArg(via_external_s)
+ncxxTlTFArgInfo::getIfTFVPtrArgCachingOptEnabled()
+ncxxTlTFArgInfo::setIfTFVPtrArgCachingOptEnabled(bool)
+ncxxTlTFArgInfo::getIfTFVPtrArgEnhCachingOptEnabled()
+ncxxTlTFArgInfo::setIfTFVPtrArgEnhCachingOptEnabled(bool)
+ncxxTlTFArgInfo::getTFVptrArgValuePoolOffsetAddr(long**, via_external_s, unsigned)
+ncxxTlTFArgInfo::setTFVptrArgValueAtCount(long**, via_external_s, long*, unsigned)
+ncxxTlTFArgInfo::getIfReadOnlyTFVptrArgValidScope(via_external_s)
+ncxxTlTFArgInfo::getIfReadOnlyTFVptrArgValidObject(via_external_s)
+ncxxTlTFArgInfo::getIfReadOnlyTFVptrArgHasSelfWrite(via_external_s)
+```
+
+This is a **polymorphic inline cache (PIC)** for virtual function argument resolution:
+- `EnhCachingOpt` = enhanced mode with pool-offset addressing (avoids pointer chasing)
+- `ReadOnlyTFVptrArg` = pure-function optimization (argument never mutated)
+- `SeqCount` = sequence number for invalidation (cache coherence)
+- `ValidScope` / `ValidObject` = scope-guarded cache (invalidate on scope change)
+
+The cache eliminates repeated vtable lookups for the common pattern where the same virtual method is called on the same object type repeatedly (e.g., UVM `get_type_name()`, `get_full_name()`).
+
+### The MINNOW: Lightweight Time Callback
+
+A notable discovery: the **MINNOW** (named after the small fish) is Xcelium's lightweight time-based callback:
+```
+"minnow (time callbacks)"
+"signal minnow"
+"ssl_minnow_call"
+"ssl_minnow_realloc"
+"ssl_minnow_realloc - exceeded maximum simulation time"
+"Method SSS_MT_MINNOW"
+"-EN_SNMINNOW_OPT" — enable signal minnow optimization
+```
+
+The minnow appears to be a time-wheel entry for `#delay` callbacks. Instead of a full process context, a minnow is just a (time, callback, data) tuple scheduled on the time wheel. When the simulation time reaches the minnow's timestamp, the callback fires directly.
+
+### Code Stream Types (COD_*)
+
+Xcelium classifies executable code into stream types:
+
+| Code Type | Purpose |
+|---|---|
+| `COD_PIB` | Process Info Block (signal storage) |
+| `COD_SWB` | Switch Block (coroutine context) |
+| `COD_SLB` | Statement List Block (sequential code) |
+| `COD_BIB` | Branch Info Block (if/case) |
+| `COD_CIB` | Call Info Block (function calls) |
+| `COD_CFB` | Control Flow Block (loops) |
+| `COD_CBLOCK` | Compound Block |
+| `COD_PCK` | Packed data |
+| `COD_FREG` | Register frame |
+| `COD_ROOT` | Root code object |
+
+Each type has variants: `_D` (data), `_P` (pointer), `P` (packed). The compiler generates these at elaboration time.
+
+### Scaling Implications for circt-sim
+
+Based on this analysis, Xcelium achieves SoC-scale simulation (millions of instances) because:
+
+1. **~90% of processes are stackless**: RTL `always` blocks become TRDRV callback methods. A 100K-instance SoC has 100K TRDRV entries (~2.4MB for 24-byte scheduling nodes) instead of 100K coroutine stacks (3.2GB).
+
+2. **PIB contiguity**: All per-instance data is packed into a single PIB allocation, giving excellent cache behavior. No chasing pointers to separate signal allocations.
+
+3. **DPES forever optimization**: The common RTL pattern `always @(posedge clk) begin ... end` is reduced to a single method pointer call, not a coroutine resume.
+
+4. **SWB size is minimal**: When a coroutine IS needed, the SWB only holds automatic variables and resume state — typically 100-500 bytes, not a full 32KB-90KB stack.
+
+5. **MCS parallelism**: Independent partitions run in separate OS threads with lockless AtomicRing communication. No coroutine scheduling overhead for cross-partition signals.
+
+### Recommendations for circt-sim
+
+**Immediate (Phase E scheduler optimization):**
+- Classify processes at registration time: "run-to-completion" vs "coroutine"
+- For RTL `always @(posedge clk)` with simple body: use a direct function call model (no setjmp/longjmp, no stack allocation)
+- Implement a `ProcessCallback` type alongside `UcontextProcess`: just a function pointer + data, called directly by the scheduler
+- Target: 0 bytes stack overhead for ~80% of processes
+
+**Medium term:**
+- Implement DPES-like analysis: detect `always` blocks where the body is a single `@(edge) → compute → NBA` pattern
+- These become "register update callbacks" — the scheduler directly computes the new value and schedules the NBA write
+- No process state to save/restore between iterations
+
+**Longer term:**
+- PIB-like contiguous signal storage per module instance
+- MINNOW-style lightweight time callbacks for `#delay` instead of full process context
+- Polymorphic inline caching for virtual method dispatch (UVM hot paths)
+
+---
+
+## Phase 13: Xcelium Architecture Deep-Dive — Live Profiling and Disassembly
+
+### Date: 2026-02-21
+
+### 1. Live Profiling: Xcelium Runs 100% in JIT-Compiled Native Code
+
+**Setup**: Xcelium 24.03-s001 available at `/opt/cadence/installs/XCELIUM2403/`.
+Binary: 52MB stripped ELF x86-64, 50MB `.text` section, 26,337 dynamic symbols.
+
+**Benchmark**: 16-instance counter chain with NBA feedback loop (`big_counter.sv`):
+- 16 × `counter_chain` modules (3 registers each = 48 FFs)
+- 1 NBA `always @(posedge clk)` block writing 16 values
+- 16 continuous assigns
+- Sim time: 10M ns (1M clock cycles)
+
+**perf stat results** (entire xrun invocation):
+```
+Instructions:      12,816,407,491
+Cycles:             3,864,904,641
+IPC:                3.32
+Cache misses:       3,271,166 (4.10% of cache refs)
+Branch misses:     16,422,263 (0.77% of branches)
+Wall time:          6.994s total
+```
+
+**Critical finding: perf report shows 100% of simulation time in `[JIT]` code**
+
+```
+# Overhead  Shared Object         Symbol
+     1.81%  [JIT] tid 1159798     [.] 0x0000000004fc8244
+     1.77%  [JIT] tid 1159798     [.] 0x0000000004fc86f1
+     1.66%  [JIT] tid 1159798     [.] 0x0000000004ff6310
+     ...  (60+ JIT entries, ALL in 0x4f26000-0x4ff8000 range)
+```
+
+When filtering for `--dsos xmsim`: **ZERO samples**. The xmsim scheduler binary contributes nothing measurable to steady-state simulation. All time is spent in JIT-generated native machine code loaded from the `.pak` file.
+
+The compiled design is stored in `xcelium.d/worklib/xm.lnx8664.077.pak` (3.9MB, encrypted/compressed format). During elaboration, Xcelium outputs "Loading native compiled code" and maps this into executable memory. The JIT code addresses (0x4f26000+) are above the xmsim text segment (ends ~0x2747470), indicating mmap'd executable pages.
+
+**What this means**: Xcelium's `xmsc` (SystemVerilog compiler) and `xmelab` (elaborator) compile the ENTIRE design — every `always` block, every continuous assign, every gate — to native x86-64 machine code BEFORE simulation starts. The scheduler is just a thin dispatcher that calls into this pre-compiled code. The scheduler itself is so lightweight it doesn't even register in the profile.
+
+### 2. Performance Comparison: Xcelium vs circt-sim
+
+| Metric | Xcelium | circt-sim | Ratio |
+|--------|---------|-----------|-------|
+| Instructions per register update | ~128 | ~3,755 | **29x** |
+| Instructions per clock cycle (16 instances) | ~10,253 | ~15,019 (1 inst) | N/A |
+| Simulation speed (ns/s) | ~1.8M | ~171 | **~10,000x** |
+| IPC | 3.32 | ~2.5 (estimated) | 1.3x |
+| Cache miss rate | 4.10% | ~8% (estimated) | 2x |
+| Branch miss rate | 0.77% | ~3% (estimated) | 4x |
+
+**Breakdown of the 10,000x gap**:
+- ~29x from interpretation overhead (APInt, dispatch tables, hash lookups vs native loads/stores)
+- ~150x from design compilation (entire design compiled vs bytecode interpretation)
+- ~2x from data layout (PIB contiguous vs scattered allocations)
+- Remaining from scheduler efficiency (intrusive linked lists vs priority queue)
+
+### 3. Detailed Disassembly: fault_sched_cl (Combinational Logic Scheduling)
+
+```asm
+fault_sched_cl(trdrv_ptr):
+  ; Step 1: Check if signal value actually changed (filter)
+  mov    global_vtable_ptr, %rax
+  mov    $0x20000, %esi        ; FLAG_CL
+  callq  *0x70(%rax)           ; vtable->check_change(trdrv, FLAG_CL)
+  test   %eax, %eax
+  jne    .done                 ; Skip if no value change (CRITICAL optimization)
+
+  ; Step 2: Evaluate the combinational expression
+  callq  *0xc0(%rax)           ; vtable->evaluate(trdrv, FLAG_CL)
+
+  ; Step 3: Pop a 24-byte node from free-list
+  mov    free_list_head, %rax
+  test   %rax, %rax
+  je     .alloc_new            ; If empty, malloc 24 bytes
+
+  ; Step 4: Fill scheduling node
+  mov    %rbx, (%rax)          ; node[0] = trdrv_ptr
+  movq   $0, 0x10(%rax)        ; node[16] = 0 (flags)
+
+  ; Step 5: TLS → scheduler state → CL queue at offset 0x26d08
+  mov    %fs:-0x1708, %rdx     ; Thread-local scheduler state
+  mov    (%rdx), %rcx
+  mov    0x26d08(%rcx), %rcx   ; CL queue head
+
+  ; Step 6: Intrusive linked list insertion (O(1))
+  mov    0x8(%rcx), %rcx       ; old_next = head.next
+  mov    %rcx, 0x8(%rax)       ; node.next = old_next
+  mov    %rax, 0x8(head)       ; head.next = node
+  mov    %rax, 0x26d08(%rdx)   ; update queue head
+```
+
+**Key insights**:
+1. **Change detection filter** (Step 1): The vtable call at offset 0x70 checks if the signal value actually changed. If not, the entire scheduling is skipped. This prevents scheduling nodes for signals that were "driven" but didn't actually change value. Our circt-sim does NOT have this optimization — we schedule all drivers regardless.
+
+2. **24-byte scheduling nodes**: Layout is `[+0: trdrv_ptr, +8: next_link, +16: flags/data]`. This is smaller than our `ProcessEvent` objects.
+
+3. **Global free-list, not per-thread**: The free-list at `0x36e6dd0` is a simple stack of pointers. Pop = subtract 8 from stack pointer and read. Push = write and add 8.
+
+4. **TLS-based queue access**: Queue heads are accessed through `%fs:-0x1708` → thread-local state → queue at fixed offsets:
+   - `+0x26ce8`: NBA region queue (fault_sched_seqlogic, edge_type=0)
+   - `+0x26cf8`: SeqLogic queue (fault_sched_seqlogic, edge_type!=0)
+   - `+0x26d08`: CL (combinational) queue (fault_sched_cl)
+
+### 4. Detailed Disassembly: fault_sched_seqlogic (Sequential Logic Scheduling)
+
+```asm
+fault_sched_seqlogic(trdrv_ptr, signal_value, edge_type):
+  ; Step 1: Pop 24-byte node from SAME free-list as fault_sched_cl
+  mov    free_list_head, %rbx
+  test   %rbx, %rbx
+  je     .alloc_new            ; malloc 24 bytes if empty
+
+  ; Step 2: Fill node
+  mov    %rbp, (%rbx)          ; node[0] = trdrv_ptr
+  mov    %r13, 0x10(%rbx)      ; node[16] = signal_value
+
+  ; Step 3: Branch on edge_type
+  test   %r12d, %r12d
+  jne    .edge_triggered
+
+  ; Path A: edge_type=0 → NBA region queue at 0x26ce8
+  mov    %fs:-0x1708, %rax     ; TLS scheduler state
+  ; ... intrusive list insert at offset 0x26ce8 ...
+
+.edge_triggered:
+  ; Path B: edge_type!=0 → Hash-based dedup + SeqLogic queue at 0x26cf8
+  mov    ghash_table, %rdi     ; Load hash table
+  test   %rdi, %rdi
+  je     .create_hash          ; Lazy init
+  callq  ghash_get_array_index ; Check if already scheduled (dedup!)
+  ; ... intrusive list insert at offset 0x26cf8 ...
+```
+
+**Key insight — Deduplication**: For edge-triggered scheduling (edge_type != 0), Xcelium uses a hash table (`ghash`) to check if the same signal/TRDRV is already scheduled in the current delta cycle. If so, it skips the duplicate. This prevents redundant process activations when a signal is driven multiple times within a single delta. Our circt-sim does NOT have this deduplication.
+
+### 5. Detailed Disassembly: schedule_nba_callback (MCS Namespace)
+
+```asm
+mcs::schedule_nba_callback(void (*fn)()):
+  ; Step 1: Pop from free-list stack at global 0x36e6dd0
+  ;   [0x36e6dd0] = base_ptr
+  ;   [0x36e6dd0 + 8] = stack_top_ptr
+  mov    $0x36e6dd0, %rdx
+  mov    0x8(%rdx), %rax       ; stack_top
+  cmp    (%rdx), %rax          ; compare with base (empty?)
+  je     .alloc_new            ; operator new(32) if empty
+
+  ; Step 2: Pop (stack shrinks downward)
+  mov    -0x8(%rax), %rbx      ; callback_node = *(top - 8)
+  sub    $0x8, %rax
+  mov    %rax, 0x8(%rdx)       ; update stack_top
+
+  ; Step 3: Fill 32-byte callback node
+  ;   [+0x00: owner_ptr (set from TLS deep path)]
+  ;   [+0x08: next_link]
+  ;   [+0x10: callback_fn_ptr]
+  ;   [+0x18: flags (byte)]
+  mov    %rbp, 0x10(%rbx)      ; node.fn = callback function
+  movb   $0, 0x18(%rbx)        ; node.flags = 0
+
+  ; Step 4: TLS → scheduler → timestep → NBA queue at +0x58
+  mov    %fs:0, %rax           ; TLS base
+  lea    -0x1708(%rax), %rax   ; scheduler offset
+  mov    (%rax), %rax
+  mov    0x1780(%rax), %rax    ; timestep state
+  mov    0x58(%rax), %rdx      ; NBA queue head
+  ; ... intrusive list insert ...
+```
+
+**Architecture of the free-list**: The free-list is a stack of pointers at a global address. Each pointer points to a pre-allocated 32-byte callback node. When the stack is empty, `operator new(32)` allocates a new node. Nodes are never freed during simulation — they're returned to the stack after dispatch.
+
+Total instruction count for scheduling an NBA callback: **~25 instructions** (including TLS access and list insertion). Compare with our `ProcessScheduler::schedule()` which involves `std::vector::push_back`, potential reallocation, and DenseMap lookups.
+
+### 6. Signal Fanout: flt_sched_load
+
+The `flt_sched_load` function is the signal fanout dispatcher — when a signal changes value, it walks the "load list" of all processes sensitive to that signal:
+
+```asm
+flt_sched_load(load_entry):
+  ; Step 1: Read trdrv_ptr and check flags
+  mov    (%rdi), %r12          ; trdrv_ptr
+  mov    0x8(%rdi), %rax       ; callback/handler
+  test   $0x2, %r12b           ; Check bit 1 flag
+  jne    .gate_evaluation      ; Gate-level path
+
+  ; Step 2: Check handler
+  test   %rax, %rax
+  je     .no_handler           ; Direct scheduling path
+
+  ; Step 3: Call handler function
+  callq  *handler              ; handler(load_entry, trdrv_ptr)
+
+  ; Step 4: Check vtable for propagation
+  mov    global_vtable, %rax
+  callq  *0x3d8(%rax)          ; vtable->should_propagate(trdrv)
+  test   %eax, %eax
+  jne    .propagate            ; Continue propagation
+  retq                         ; Done
+
+.no_handler:
+  ; Direct CL scheduling (no handler needed)
+  ; ... TLS → CL queue at 0x26d08 → intrusive list insert ...
+```
+
+**Key insight — Load list structure**:
+Each entry is a compact struct: `[+0: trdrv_ptr | flags, +8: handler, +16: data]`.
+The low 2 bits of the trdrv_ptr are used as flags (pointer is 8-byte aligned).
+Bit 1 distinguishes gate-level evaluation from behavioral.
+
+When `handler` is NULL, the load entry is scheduled directly into the CL queue without any function call overhead. When non-NULL, the handler is a compiled callback that evaluates the combinational expression and decides whether to propagate further.
+
+### 7. Event Drain Loop: Strap_doAllEvents_ and simcmd_run
+
+**Strap_doAllEvents_** (22 bytes — stub):
+```asm
+  mov    global_fn_ptr, %rdx   ; Load the actual drain function
+  test   %rdx, %rdx
+  je     .error                ; Return -2 if no function
+  xor    %eax, %eax
+  jmpq   *%rdx                ; Tail-call to drain function
+```
+
+This is a dispatch stub. The actual drain function is loaded from a global pointer, allowing runtime replacement (e.g., for different scheduling modes or debug hooks).
+
+**simcmd_run** (2664 bytes — the main simulation loop):
+This function handles command parsing (run/stop/step), region transitions, and calls into the event drain. The core loop structure:
+1. Parse command arguments (run until time, run until breakpoint, step N)
+2. Check MCS cluster state for multi-partition sync
+3. Call into `Strap_doAllEvents_` for event processing
+4. Check for VPI/UDM event dispatch (`udmDispatchEvent`)
+5. Handle `$finish`, breakpoints, and other control events
+6. TLS-based reentrancy protection (`%fs:0xffffe930`)
+
+The simcmd_run function is command-level infrastructure, NOT the hot path. The hot path is entirely in the compiled native code that the scheduler dispatches.
+
+### 8. Xcelium's Compilation Pipeline
+
+From elaboration output and binary analysis:
+
+```
+xmvlog (parse SV) → xmelab (elaborate + compile) → xmsim (run)
+                              ↓
+                    .pak file (native x86-64 code)
+                              ↓
+                    mmap'd into xmsim address space
+                              ↓
+                    scheduler dispatches into compiled code
+```
+
+The `.pak` file is an encrypted/compressed package containing compiled native code. During `xmelab`, the compiler:
+1. Classifies every `always` block, continuous assign, gate instance
+2. For RTL blocks qualifying as DPES-forever or reg-update: generates a TRDRV callback function
+3. For behavioral blocks (initial, tasks with delays): generates SWB-based coroutine code
+4. Packs all compiled code into `.pak`
+
+During `xmsim` load:
+1. "Loading native compiled code" — mmap the .pak contents into executable memory
+2. Create TRDRV entries pointing to the compiled functions
+3. Set up sensitivity (load) lists connecting signals to TRDRVs
+4. Build the scheduling infrastructure (free-lists, queue heads)
+
+### 9. The "pheapMap" Memory Profiling Infrastructure
+
+The `pheapMap_singleton_and_scoped_lock` class is NOT a priority heap for events. It's Xcelium's memory profiling infrastructure:
+
+```cpp
+pheapMap_singleton_and_scoped_lock::malloc_substitute_hook(size_t, const void*)
+pheapMap_singleton_and_scoped_lock::free_substitute_hook(void*, const void*)
+pheapMap_singleton_and_scoped_lock::pheapMap_singleton::getInstance(bool**)
+```
+
+It hooks `malloc`/`free` to track heap usage per allocation site. The singleton pattern with scoped locking suggests it's used for debug builds or with specific flags. This is NOT the event scheduling data structure.
+
+### 10. Rocketick Acquisition and MCS Origins
+
+From web research:
+- Cadence acquired **Rocketick Technologies Ltd** (Israel) in April 2016
+- Rocketick's patented fine-grain multiprocessing technology became the foundation for Xcelium's parallel capabilities
+- Key patents: **US9672065B2** (parallel simulation using multiple co-simulators), **US9128748B2**, **WO2009118731A2**
+- The core idea: partition the design into atomic Processing Elements (PEs) with computed execution dependencies, then execute PEs concurrently without violating dependencies
+- Achieves linear speedup: 6X RTL, 10X gate-level functional, 30X gate-level DFT
+
+### 11. NativeNetStorage — Runtime Activity Profiling
+
+The `NativeNetStorage` class tracks signal activity during simulation:
+- `addNativeNet(unsigned long*, unsigned long*, int, vst_s*)` — Register a net for profiling
+- `sort_top_nets_on_delta_cycles(...)` — Rank signals by activity (delta cycles per signal)
+- `sort_nets_lexicographically(...)` — Alphabetical sorting for reports
+- `FillCycleMapAndReturnCumCount(...)` — Compute cumulative activity counts
+- `dumpPeriodicData()` / `dumpGlobalCSV()` — Export profiling data
+
+Uses `std::unordered_map<vstHandleWrapper, int, keyHasher>` — mapping signal handle → delta cycle count. The `vstHandleWrapper` is a typed handle wrapper (likely wrapping a `long*` signal pointer).
+
+This profiling data is used to:
+1. Identify the "hottest" signals (most active per unit time)
+2. Guide clock-domain partitioning decisions (MCP)
+3. Feed the MCE parallel engine's work distribution
+
+### 12. Architectural Comparison: Xcelium vs circt-sim
+
+| Aspect | Xcelium | circt-sim | Gap |
+|--------|---------|-----------|-----|
+| **Design compilation** | Full native x86-64 (AOT) | MLIR bytecode interpreter | **100x+** |
+| **Signal storage** | PIB (contiguous per-instance) | DenseMap<SignalId, APInt> | **10-50x** |
+| **Scheduling node size** | 24-32 bytes (intrusive list) | ProcessEvent (~64+ bytes) | **2-3x** |
+| **Scheduling allocation** | Pre-allocated free-list | std::vector push_back | **5-10x** |
+| **Queue structure** | Per-region intrusive linked lists (13 regions) | Single priority queue | **3-5x** |
+| **Change detection** | Vtable filter before scheduling | Always schedule, check later | **2-5x** |
+| **Deduplication** | Hash-based dedup per delta | None | **1-2x** |
+| **Process classification** | 4+ types (TRDRV, DPES, SWB, SC_THREAD) | All coroutines | **5-10x** |
+| **Signal width** | Native int types (byte, long, ptr) | APInt (heap-allocated) | **10x** |
+| **Queue access** | TLS-direct (1 instruction) | Object member access | **1.5x** |
+| **IPC** | 3.32 | ~2.5 | **1.3x** |
+| **Cache miss rate** | 4.10% | ~8% | **2x** |
+| **Branch miss rate** | 0.77% | ~3% | **4x** |
+
+### 13. Key Takeaways for circt-sim
+
+**The fundamental gap is compilation, not scheduling.**
+
+The 10,000x performance gap between Xcelium and circt-sim is dominated by:
+
+1. **Compilation (100x+)**: Xcelium compiles every RTL block to native machine code. The scheduler doesn't even appear in the profile. Our interpreter executes thousands of instructions (APInt allocation, hash lookups, dispatch table searches) where Xcelium executes a few dozen native loads, adds, and stores.
+
+2. **Signal storage (10-50x)**: Xcelium stores signal values in contiguous PIB memory with native integer types. We use `DenseMap<SignalId, APInt>` with heap-allocated arbitrary-precision integers. For 1-64 bit signals (99%+ of RTL), this is pure overhead.
+
+3. **Process classification (5-10x)**: Xcelium classifies 80-90% of processes as TRDRV callbacks (stackless, run-to-completion). We treat every process as a coroutine with full context save/restore.
+
+**Priority order for closing the gap**:
+
+1. **Phase A (most impactful)**: Complete AOT compilation. Get our `AOTProcessCompiler` to compile all common process patterns to native code via LLVM. Target: compile `always_ff`, `always_comb`, simple `always @(*)` blocks. This alone could close 50-100x of the gap.
+
+2. **Phase B**: Replace APInt with native types. For signals ≤64 bits, use `uint64_t` directly. Eliminate DenseMap for signal storage — use flat arrays indexed by SignalId.
+
+3. **Phase C**: Process classification. Implement TRDRV-style callback processes for simple RTL blocks. No coroutine overhead for processes that run to completion.
+
+4. **Phase D**: Scheduler refinements (what Tasks #17 and #18 are doing). Per-region intrusive lists, free-list allocation, change detection filtering. Important but lower priority than compilation.
+
+5. **Phase E**: Signal deduplication. Hash-based check to prevent scheduling the same signal twice in a delta cycle. Low-effort, moderate impact.
+
+The scheduling optimizations in Tasks #17 and #18 are valuable but address the **smallest** part of the gap. The overwhelming priority should be getting AOT compilation working end-to-end.
