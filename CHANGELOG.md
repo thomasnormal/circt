@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1557 - February 21, 2026
+
+### [ImportVerilog][SVA] Fallback to global clocking for unclocked sequence event controls
+
+1. **Added global-clocking fallback for sequence event control lowering**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - unclocked sequence event controls now fall back to the scope global
+     clocking event when no default clocking is available.
+   - applied consistently in:
+     - standalone sequence event control lowering (`always @(s)` path),
+     - mixed sequence event-list lowering,
+     - sequence-valued assertion clocking-event lowering (`@s` in assertions).
+   - this closes failures like:
+     - `always @(s)` with `global clocking ...` but no default clocking.
+
+2. **Added regression coverage**
+   - `test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`
+     - checks procedural `@(s)` lowering through global clocking.
+     - checks assertion `@s` clocking also lowers with global clocking.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv` (`real=0.048s`, `user=0.003s`, `sys=0.005s`).
+
 ## Iteration 1556 - February 21, 2026
 
 ### [ImportVerilog][SVA] Emit edge-specific mixed-event wakeup detection for multiclock sequence waits

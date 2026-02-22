@@ -1416,6 +1416,8 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
   return success();
 }
 
+static Value applyDefaultOrGlobalClocking(Context &context, Value value);
+
 static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
                                                const slang::ast::Expression &expr,
                                                const slang::ast::Expression *iffExpr,
@@ -1440,18 +1442,7 @@ static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
            << "property event controls are not yet supported";
 
   Value clockedValue = rootValue;
-  if (!clockedValue.getDefiningOp<ltl::ClockOp>()) {
-    if (context.currentScope) {
-      if (auto *clocking = context.compilation.getDefaultClocking(
-              *context.currentScope)) {
-        if (auto *clockBlock =
-                clocking->as_if<slang::ast::ClockingBlockSymbol>())
-          clockedValue =
-              context.convertLTLTimingControl(clockBlock->getEvent(),
-                                              clockedValue);
-      }
-    }
-  }
+  clockedValue = applyDefaultOrGlobalClocking(context, clockedValue);
 
   auto clockOp = clockedValue.getDefiningOp<ltl::ClockOp>();
   if (!clockOp)
@@ -1525,6 +1516,26 @@ static bool equivalentClockedLTLValues(Value lhs, Value rhs) {
   return lhsClock.getEdge() == rhsClock.getEdge() &&
          lhsClock.getInput() == rhsClock.getInput() &&
          equivalentClockSignals(lhsClock.getClock(), rhsClock.getClock());
+}
+
+static Value applyDefaultOrGlobalClocking(Context &context, Value value) {
+  if (!value || value.getDefiningOp<ltl::ClockOp>() || !context.currentScope)
+    return value;
+
+  if (auto *clocking = context.compilation.getDefaultClocking(*context.currentScope)) {
+    if (auto *clockBlock = clocking->as_if<slang::ast::ClockingBlockSymbol>())
+      value = context.convertLTLTimingControl(clockBlock->getEvent(), value);
+  }
+  if (!value || value.getDefiningOp<ltl::ClockOp>())
+    return value;
+
+  if (auto *globalClocking =
+          context.compilation.getGlobalClockingAndNoteUse(*context.currentScope)) {
+    if (auto *clockBlock =
+            globalClocking->as_if<slang::ast::ClockingBlockSymbol>())
+      value = context.convertLTLTimingControl(clockBlock->getEvent(), value);
+  }
+  return value;
 }
 
 static LogicalResult
@@ -1631,16 +1642,7 @@ lowerSequenceEventListControl(Context &context, Location loc,
 
     Value clockedValue = rootValue;
     if (!clockedValue.getDefiningOp<ltl::ClockOp>()) {
-      if (context.currentScope) {
-        if (auto *clocking = context.compilation.getDefaultClocking(
-                *context.currentScope)) {
-          if (auto *clockBlock =
-                  clocking->as_if<slang::ast::ClockingBlockSymbol>())
-            clockedValue =
-                context.convertLTLTimingControl(clockBlock->getEvent(),
-                                                clockedValue);
-        }
-      }
+      clockedValue = applyDefaultOrGlobalClocking(context, clockedValue);
       if (!clockedValue.getDefiningOp<ltl::ClockOp>() && canInferSequenceClock &&
           inferredSequenceEdge)
         clockedValue = ltl::ClockOp::create(builder, loc, clockedValue,
@@ -1928,17 +1930,8 @@ struct LTLClockControlVisitor {
         return Value{};
       }
 
-      if (!eventValue.getDefiningOp<ltl::ClockOp>()) {
-        if (context.currentScope) {
-          if (auto *clocking = context.compilation.getDefaultClocking(
-                  *context.currentScope)) {
-            if (auto *clockBlock =
-                    clocking->as_if<slang::ast::ClockingBlockSymbol>())
-              eventValue = context.convertLTLTimingControl(clockBlock->getEvent(),
-                                                           eventValue);
-          }
-        }
-      }
+      if (!eventValue.getDefiningOp<ltl::ClockOp>())
+        eventValue = applyDefaultOrGlobalClocking(context, eventValue);
 
       if (!eventValue.getDefiningOp<ltl::ClockOp>()) {
         mlir::emitError(loc)
