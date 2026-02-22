@@ -2,6 +2,55 @@
 
 ## 2026-02-22
 
+- Iteration update (immediate-action assertion formalization + full OVL semantic closure):
+  - realization:
+    - immediate assertions with action blocks were lowered only as procedural
+      control flow; this preserved simulation side effects but dropped formal
+      obligations (`verif.assert`), causing vacuous BMC outcomes.
+    - OVL `frame` wrapper was using `min_cks=0`, which triggered a frontend
+      empty-match rejection in pre-expanded properties.
+  - TDD proof:
+    - added new regression:
+      - `test/Conversion/ImportVerilog/immediate-assert-action-block.sv`
+      - checks both Moore IR and final core IR:
+        - action-block immediate assert emits `moore.assert immediate`
+        - deferred action-block assert emits `moore.assert observed`
+        - both survive to core as `verif.assert` (count=2).
+    - semantic red/green loop:
+      - pre-fix:
+        - `ovl_sem_proposition` fail-mode `UNSAT`
+        - `ovl_sem_never_unknown_async` fail-mode `UNSAT`
+      - post-fix:
+        - both fail-modes become `SAT`.
+  - implementation:
+    - `lib/Conversion/ImportVerilog/Statements.cpp`:
+      - immediate assertions now always emit assert-like Moore ops
+        (`assert/assume/cover`, including observed/final defers) even when
+        action blocks are present.
+      - existing action-block control-flow lowering is preserved for runtime
+        side effects, but no longer replaces formal semantics.
+    - `utils/ovl_semantic/wrappers/ovl_sem_frame.sv`:
+      - switched to semantically meaningful, non-empty-match profile:
+        - `.min_cks(1)`
+        - explicit `start_event` 0->1 transition via `always_ff @(posedge clk)`
+      - adjusted pass/fail polarities to keep deterministic semantic split.
+    - `utils/ovl_semantic/manifest.tsv`:
+      - cleared known gaps:
+        - `ovl_sem_proposition`: `1 -> 0`
+        - `ovl_sem_never_unknown_async`: `1 -> 0`
+        - `ovl_sem_frame`: `tool -> 0`
+  - validation:
+    - new regression:
+      - `circt-translate --import-verilog test/Conversion/ImportVerilog/immediate-assert-action-block.sv | FileCheck ... --check-prefix=MOORE`
+      - `circt-verilog --no-uvm-auto-include test/Conversion/ImportVerilog/immediate-assert-action-block.sv | FileCheck ... --check-prefix=CORE`
+      - result: `PASS`.
+    - focused semantic closure:
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(proposition|never_unknown_async|frame)' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `6 tests, failures=0, xfail=0, xpass=0`.
+    - full semantic lane:
+      - `FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `90 tests, failures=0, xfail=0, xpass=0`.
+
 - Iteration update (const-clock closure in BMC + semantic OVL expansion with arbiter/stack):
   - realization:
     - OVL checker lowering (e.g. `ovl_arbiter`) can produce `seq.const_clock`
@@ -2610,3 +2659,39 @@
     - fixing malformed clock-region lowering did not by itself flip
       `ovl_sem_arbiter`/`ovl_sem_stack` fail-mode polarity; those remain
       semantic harness gaps, not structural pass validity bugs.
+
+- Iteration update (const-only clock-source override + arbiter/stack semantic closure):
+  - realization:
+    - in flattened OVL lowering, register clock metadata could collapse to
+      constant keys (`const0`) despite a real top-level `clk` input.
+    - this forced a constant derived BMC clock and kept targeted fail-mode
+      profiles vacuous (`UNSAT`).
+  - surprise:
+    - adding an explicit top-level `assert property (@(posedge clk) 1'b0)` to
+      the arbiter wrapper still returned `UNSAT` before the fix, confirming the
+      clock-source mapping issue rather than checker-profile intent.
+  - implemented:
+    - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+      - when discovered clock inputs are const-only, override with a uniquely
+        named clock-like interface input (`clk`/`clock`) if available.
+    - new regression:
+      - `test/Tools/circt-bmc/lower-to-bmc-const-clock-source-prefers-named-input.mlir`
+    - semantic harness tightening:
+      - updated `utils/ovl_semantic/wrappers/ovl_sem_arbiter.sv` parameters to
+        make pass/fail profiles semantically separable under real clocking.
+      - removed known-gap markers for `ovl_sem_arbiter` and
+        `ovl_sem_stack` in `utils/ovl_semantic/manifest.tsv`.
+  - validation:
+    - `ninja -C build-test circt-opt circt-bmc`
+    - `build-test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-const-clock-source-prefers-named-input.mlir`
+    - `build-test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
+    - focused semantic harness:
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(arbiter|stack)' FAIL_ON_XPASS=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `4 tests, failures=0, xfail=0, xpass=0`
+    - full OVL semantic run:
+      - `FAIL_ON_XPASS=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `90 tests, failures=0, xfail=4, xpass=0`
+  - current known semantic gaps:
+    - `ovl_sem_proposition` fail-mode
+    - `ovl_sem_never_unknown_async` fail-mode
+    - `ovl_sem_frame` tool gap (pass/fail)

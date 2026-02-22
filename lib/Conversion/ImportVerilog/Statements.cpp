@@ -2460,43 +2460,47 @@ struct StmtVisitor {
     if (!assertionsEnabled)
       return failure();
 
-    // Handle assertion statements that don't have an action block.
-    if (stmt.ifTrue && stmt.ifTrue->as_if<slang::ast::EmptyStatement>()) {
-      // Disabled assertions are treated as vacuous pass for immediate
-      // assertion checks without action blocks.
-      auto assertionsDisabled =
-          moore::NotOp::create(builder, loc, assertionsEnabled);
-      auto gatedCond =
-          createUnifiedOrOp(builder, loc, cond, assertionsDisabled);
-      auto defer = moore::DeferAssert::Immediate;
-      if (stmt.isFinal)
-        defer = moore::DeferAssert::Final;
-      else if (stmt.isDeferred)
-        defer = moore::DeferAssert::Observed;
+    auto defer = moore::DeferAssert::Immediate;
+    if (stmt.isFinal)
+      defer = moore::DeferAssert::Final;
+    else if (stmt.isDeferred)
+      defer = moore::DeferAssert::Observed;
 
+    // Immediate assertions still carry formal semantics even when action
+    // blocks are present; action blocks add side effects, but do not replace
+    // the assertion itself.
+    auto assertionsDisabled = moore::NotOp::create(builder, loc, assertionsEnabled);
+    auto gatedCond = createUnifiedOrOp(builder, loc, cond, assertionsDisabled);
+    auto emitImmediateAssertLike = [&](Value emittedCond) -> LogicalResult {
       switch (stmt.assertionKind) {
       case slang::ast::AssertionKind::Assert:
-        moore::AssertOp::create(builder, loc, defer, gatedCond, StringAttr{});
+        moore::AssertOp::create(builder, loc, defer, emittedCond, StringAttr{});
         return success();
       case slang::ast::AssertionKind::Assume:
-        moore::AssumeOp::create(builder, loc, defer, gatedCond, StringAttr{});
+        moore::AssumeOp::create(builder, loc, defer, emittedCond, StringAttr{});
         return success();
       case slang::ast::AssertionKind::Restrict:
         // Immediate restrict assertions are lowered as assumes.
-        moore::AssumeOp::create(builder, loc, defer, gatedCond, StringAttr{});
+        moore::AssumeOp::create(builder, loc, defer, emittedCond, StringAttr{});
         return success();
       case slang::ast::AssertionKind::CoverProperty:
-        moore::CoverOp::create(builder, loc, defer, gatedCond, StringAttr{});
+        moore::CoverOp::create(builder, loc, defer, emittedCond, StringAttr{});
         return success();
       case slang::ast::AssertionKind::Expect:
-        moore::AssertOp::create(builder, loc, defer, gatedCond, StringAttr{});
+        moore::AssertOp::create(builder, loc, defer, emittedCond, StringAttr{});
         return success();
       default:
-        break;
+        mlir::emitError(loc) << "unsupported immediate assertion kind: "
+                             << slang::ast::toString(stmt.assertionKind);
+        return failure();
       }
-      mlir::emitError(loc) << "unsupported immediate assertion kind: "
-                           << slang::ast::toString(stmt.assertionKind);
+    };
+    if (failed(emitImmediateAssertLike(gatedCond)))
       return failure();
+
+    // Handle assertion statements that don't have an action block.
+    if (stmt.ifTrue && stmt.ifTrue->as_if<slang::ast::EmptyStatement>()) {
+      return success();
     }
 
     // Regard assertion statements with an action block as the "if-else".
