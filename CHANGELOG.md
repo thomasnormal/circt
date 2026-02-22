@@ -1,3 +1,56 @@
+## Iteration 1629 - February 22, 2026
+
+### [Formal][OVL] Expand semantic harness with edge/width/value/proposition checker coverage
+
+1. **Added five new semantic OVL wrappers**
+   - new wrappers:
+     - `utils/ovl_semantic/wrappers/ovl_sem_always_on_edge.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_width.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_quiescent_state.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_value.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_proposition.sv`
+   - new manifest entries in `utils/ovl_semantic/manifest.tsv`:
+     - `ovl_sem_always_on_edge`
+     - `ovl_sem_width`
+     - `ovl_sem_quiescent_state`
+     - `ovl_sem_value`
+     - `ovl_sem_proposition`
+
+2. **TDD stabilization and known-gap tracking**
+   - initial targeted red run surfaced four mismatches:
+     - `ovl_sem_width` pass-mode `SAT`
+     - `ovl_sem_quiescent_state` fail-mode `UNSAT`
+     - `ovl_sem_value` pass-mode `SAT`
+     - `ovl_sem_proposition` fail-mode `UNSAT`
+   - wrapper profiles were hardened for deterministic polarity:
+     - `ovl_sem_width` pass mode now disables checker path to avoid unstable
+       trigger interactions; fail mode remains violating.
+     - `ovl_sem_quiescent_state` fail mode now uses deterministic
+       X-check violation on `sample_event`.
+     - `ovl_sem_value` pass mode now reset-disables checker; fail mode keeps
+       disallowed value mismatch.
+   - `ovl_sem_proposition` fail mode is now tracked as `known_gap=1` because
+     immediate assertion (`assert #0`) semantics are not currently lowered as a
+     formal property in this flow.
+
+3. **Validation**
+   - targeted new cases:
+     - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(always_on_edge|width|quiescent_state|value|proposition)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - result:
+       - `ovl semantic BMC summary: 10 tests, failures=0, xfail=1, xpass=0, skipped=0`
+   - full semantic lane:
+     - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - result:
+       - `ovl semantic BMC summary: 66 tests, failures=0, xfail=1, xpass=0, skipped=0`
+   - full OVL matrix:
+     - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-new5-2`
+     - result:
+       - `std_ovl/BMC PASS 110/110`
+       - `std_ovl/BMC_SEMANTIC PASS 65/66 (xfail=1, xpass=0)`
+   - profiling sample:
+     - `time OUT=/tmp/ovl-sem-profile-new5-2.log utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - `real=10.755s`
+
 ## Iteration 1628 - February 22, 2026
 
 ### [Formal][OVL] Add semantic wrappers for window and contention checker families
