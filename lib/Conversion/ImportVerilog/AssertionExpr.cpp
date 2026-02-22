@@ -1951,6 +1951,9 @@ struct AssertionExprVisitor {
               name == "$assertnonvacuouson" || name == "$assertvacuousoff") {
             break;
           }
+          if (name == "$set_coverage_db_name" || name == "$load_coverage_db") {
+            break;
+          }
           if (name == "$showscopes" || name == "$input" || name == "$key" ||
               name == "$nokey" || name == "$log" || name == "$nolog" ||
               name == "$scope" || name == "$list") {
@@ -1962,6 +1965,16 @@ struct AssertionExprVisitor {
             mlir::emitWarning(callLoc)
                 << name << " is not supported in circt-sim"
                 << " (checkpoint/restart not implemented)";
+            break;
+          }
+          if (name == "$sdf_annotate") {
+            auto callLoc = context.convertLocation(call.sourceRange);
+            mlir::emitWarning(callLoc)
+                << "$sdf_annotate is not supported in circt-sim"
+                << " (SDF timing annotation not implemented)";
+            break;
+          }
+          if (name == "$static_assert") {
             break;
           }
           if (name == "$stop") {

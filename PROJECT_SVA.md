@@ -270,6 +270,12 @@ Additional compile-only or XFAIL expectations live in
       `$scope/$list`
     - checkpoint/restart tasks now emit warnings instead of ignore remarks:
       `$save/$restart/$incsave/$reset`
+  - sequence match-item coverage/SDF/static tasks now have statement-parity
+    handling:
+    - coverage persistence controls recognized as no-op:
+      `$set_coverage_db_name/$load_coverage_db`
+    - `$sdf_annotate` now emits a warning instead of an ignore remark
+    - `$static_assert` recognized as compile-time no-op
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
