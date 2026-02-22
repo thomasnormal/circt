@@ -4451,3 +4451,41 @@ Based on these findings, the circt-sim compiled process architecture:
    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`: PASS
 4. Formal smoke:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS
+
+## 2026-02-22 Session: Assoc-array `$stable/$changed` sampled closure
+
+### Problem
+1. Sampled stability functions still rejected associative arrays:
+   - `error: unsupported sampled value type for $stable`
+2. This affected explicit-clock sampled helper paths and prevented parity with
+   aggregate sampled-value behavior already supported for arrays/queues.
+
+### Realizations / Surprises
+1. Assoc-array support had already landed for sampled edges (`$rose/$fell`) and
+   `$past` sampled controls, but `$stable/$changed` still used a narrower
+   aggregate classification.
+2. The stable-comparison helper itself needed dedicated assoc-array recursive
+   element comparison, not just type-classification updates.
+
+### Fix
+1. Extended `buildSampledStableComparison` in
+   `lib/Conversion/ImportVerilog/AssertionExpr.cpp` with:
+   - `moore::AssocArrayType`
+   - `moore::WildcardAssocArrayType`
+   using `moore.array.locator` mismatch detection + recursive per-element
+   comparison.
+2. Added assoc-array types to sampled stability classification in both:
+   - direct sampled call lowering (`convertAssertionCallExpression`)
+   - explicit-clock helper lowering (`lowerSampledValueFunctionWithSamplingControl`)
+3. Added regression:
+   - `test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`: PASS
+3. Compatibility checks:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS
