@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1560 - February 22, 2026
+
+### [ImportVerilog][SVA] Preserve composed explicit assertion clocks
+
+1. **Prevented default-clock rewrap of composed explicit clocked assertions**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`,
+   `lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - explicit assertion clock controls that produce composed roots (e.g.
+     `ltl.or` of multiple `ltl.clock` values) are now marked and preserved.
+   - default clocking is no longer reapplied to those explicitly clocked
+     results, fixing cases like:
+     - `assert property (@(s or e) d);`
+       previously wrapped again by default `@(posedge clk)`.
+   - explicit timing-control conversion now tags root ops with
+     `sva.explicit_clocking` to keep this behavior robust across composed forms.
+
+2. **Regression strengthened**
+   - updated `test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+     to require direct `verif.assert` on the mixed explicit clock expression and
+     reject re-wrapping through an additional `ltl.clock`.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv` (`real=0.008s`, `user=0.004s`, `sys=0.004s`).
+
 ## Iteration 1559 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support named-event assertion clock controls

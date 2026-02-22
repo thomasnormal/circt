@@ -19,7 +19,8 @@ module SvaAssertClockNamedEvent(input logic clk, req, ack, c, d);
   // Mixed sequence + named-event clocking should also lower.
   // CHECK: ltl.matched
   // CHECK: moore.event_triggered
-  // CHECK: ltl.or
-  // CHECK: verif.assert
+  // CHECK: [[MIXED:%.*]] = ltl.or
+  // CHECK: verif.assert [[MIXED]]
+  // CHECK-NOT: ltl.clock [[MIXED]]
   assert property (@(s or e) d);
 endmodule

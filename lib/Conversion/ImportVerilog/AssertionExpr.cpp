@@ -16,6 +16,7 @@
 #include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Support/LLVM.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/DenseSet.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Support/LLVM.h"
 #include "slang/ast/SystemSubroutine.h"
@@ -33,6 +34,7 @@ using namespace ImportVerilog;
 namespace {
 constexpr const char kDisableIffAttr[] = "sva.disable_iff";
 constexpr const char kWeakEventuallyAttr[] = "ltl.weak";
+constexpr const char kExplicitClockingAttr[] = "sva.explicit_clocking";
 
 static Value createUnknownOrZeroConstant(Context &context, Location loc,
                                          moore::IntType type) {
@@ -94,6 +96,27 @@ static bool isEquivalentTimingControl(const slang::ast::TimingControl &lhs,
       return false;
   }
   return true;
+}
+
+static bool containsExplicitClocking(Value value) {
+  if (!value)
+    return false;
+  SmallVector<Operation *, 16> worklist;
+  llvm::DenseSet<Operation *> visited;
+  if (auto *root = value.getDefiningOp())
+    worklist.push_back(root);
+  while (!worklist.empty()) {
+    Operation *op = worklist.pop_back_val();
+    if (!op || !visited.insert(op).second)
+      continue;
+    if (isa<ltl::ClockOp>(op))
+      return true;
+    for (Value operand : op->getOperands()) {
+      if (auto *def = operand.getDefiningOp())
+        worklist.push_back(def);
+    }
+  }
+  return false;
 }
 
 struct SequenceLengthBounds {
@@ -1906,7 +1929,10 @@ Value Context::convertAssertionExpression(const slang::ast::AssertionExpr &expr,
       }
     }
 
-    if (!value.getDefiningOp<ltl::ClockOp>()) {
+    bool hasExplicitClockAttr =
+        value && value.getDefiningOp() &&
+        value.getDefiningOp()->hasAttr(kExplicitClockingAttr);
+    if (!hasExplicitClockAttr && !containsExplicitClocking(value)) {
       if (auto *clocking = compilation.getDefaultClocking(*currentScope)) {
         if (auto *clockBlock =
                 clocking->as_if<slang::ast::ClockingBlockSymbol>()) {
