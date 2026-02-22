@@ -149,6 +149,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 17. **SVA packed sampled regression hardening** (Feb 22, 2026):
    Added dedicated importer regression coverage for packed sampled-value
    operators in regular assertion-clocked usage (`$changed/$stable`).
+18. **SVA string sampled explicit-clocking support** (Feb 22, 2026):
+   ImportVerilog now lowers explicit-clocked sampled-value operators on string
+   operands by sampling the existing 32-bit string-to-int bit-vector form.
 10. **SVA `$future_gclk` temporal semantics fix** (Feb 21, 2026):
    Importer now lowers `$future_gclk(expr)` through forward temporal
    `ltl.delay(expr, 1, 0)` semantics instead of approximating with

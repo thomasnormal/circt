@@ -183,6 +183,27 @@
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
+- Iteration update (string sampled-values with explicit clocking):
+  - realization:
+    - explicit-clocked sampled-value helpers still rejected `string` operands
+      even though bit-vector sampled context conversion (`string_to_int`) is
+      already available in generic expression lowering.
+  - implemented:
+    - sampled helper type derivation now recognizes `string` operands and
+      lowers them through 32-bit integer sampled-value state.
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
+    - revalidated:
+      - `test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+      - `test/Conversion/ImportVerilog/sva-sampled-packed.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 - Iteration update (bounded property `eventually` / `s_eventually`):
   - realization:
     - bounded unary temporal operators on property operands were being treated
