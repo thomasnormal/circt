@@ -138,6 +138,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers parser-accepted open-range property forms
    `s_eventually [m:$]` and `always [m:$]` using shifted-property unbounded
    eventual/always encodings.
+15. **SVA explicit-clock unpacked-array sampled support** (Feb 22, 2026):
+   ImportVerilog now lowers explicit-clocked `$stable/$changed` for fixed-size
+   unpacked arrays via helper-procedure sampled state and `moore.uarray_cmp`.
+   Added dedicated positive/negative regressions for explicit clocking and
+   canonical diagnostics on unsupported `$rose/$fell` unpacked-array operands.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
