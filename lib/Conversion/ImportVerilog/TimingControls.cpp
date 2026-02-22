@@ -1594,6 +1594,34 @@ lowerSequenceEventListControl(Context &context, Location loc,
   for (auto *signalCtrl : signalEvents) {
     const slang::ast::SignalEventControl *effectiveCtrl = signalCtrl;
     bool expandedFromClockingBlock = false;
+    if (auto *callExpr = signalCtrl->expr.as_if<slang::ast::CallExpression>()) {
+      if (callExpr->isSystemCall() &&
+          callExpr->getKnownSystemName() ==
+              slang::parsing::KnownSystemName::GlobalClock) {
+        if (!context.currentScope)
+          return mlir::emitError(loc)
+                 << "$global_clock requires an enclosing scope";
+        auto *globalClocking = context.compilation.getGlobalClockingAndNoteUse(
+            *context.currentScope);
+        if (!globalClocking)
+          return mlir::emitError(loc)
+                 << "no global clocking is available in this scope";
+        if (auto *clockBlock =
+                globalClocking->as_if<slang::ast::ClockingBlockSymbol>()) {
+          effectiveCtrl = getCanonicalSignalEventControlForAssertions(
+              clockBlock->getEvent());
+          if (!effectiveCtrl)
+            return mlir::emitError(loc)
+                   << "unsupported global clocking event kind in sequence "
+                      "event list";
+          expandedFromClockingBlock = true;
+        } else {
+          return mlir::emitError(loc)
+                 << "unsupported global clocking symbol kind for $global_clock";
+        }
+      }
+    }
+
     const slang::ast::Symbol *signalSymRef = signalCtrl->expr.getSymbolReference();
     if (!signalSymRef) {
       if (auto *named = signalCtrl->expr.as_if<slang::ast::NamedValueExpression>())

@@ -775,3 +775,26 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv` (`real=0.007s`)
+
+- Iteration update ($global_clock entries in mixed sequence event lists):
+  - realization:
+    - mixed sequence event-list lowering still failed (silently) for:
+      - `always @(s or $global_clock);`
+    - root cause was missing `$global_clock` resolution in the mixed-list
+      parsing path; this path bypassed the dedicated event-control visitor logic.
+  - implemented:
+    - added explicit `$global_clock` handling while parsing mixed sequence event
+      list signal entries.
+    - `$global_clock` now resolves through scope global clocking and is lowered
+      as the corresponding canonical signal event.
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv` (`real=0.007s`)
