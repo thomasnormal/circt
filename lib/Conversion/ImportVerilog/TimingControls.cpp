@@ -1840,6 +1840,67 @@ struct LTLClockControlVisitor {
     }
 
     auto edge = convertEdgeKindLTL(ctrl.edge);
+
+    // Support sequence-valued assertion clocking events (e.g. `@seq`) by
+    // deriving a boolean clock event from sequence match detection.
+    if (isAssertionEventControl(ctrl.expr)) {
+      const slang::ast::Expression *assertionExpr = &ctrl.expr;
+      if (auto symRef = ctrl.expr.getSymbolReference()) {
+        if (symRef->kind == slang::ast::SymbolKind::Sequence ||
+            symRef->kind == slang::ast::SymbolKind::Property ||
+            symRef->kind == slang::ast::SymbolKind::LetDecl) {
+          assertionExpr = &slang::ast::AssertionInstanceExpression::makeDefault(
+              *symRef);
+        }
+      }
+
+      Value eventValue = context.convertRvalueExpression(*assertionExpr);
+      if (!eventValue)
+        return Value{};
+      if (isa<ltl::PropertyType>(eventValue.getType())) {
+        mlir::emitError(loc)
+            << "property event controls are not yet supported";
+        return Value{};
+      }
+
+      if (!eventValue.getDefiningOp<ltl::ClockOp>()) {
+        if (context.currentScope) {
+          if (auto *clocking = context.compilation.getDefaultClocking(
+                  *context.currentScope)) {
+            if (auto *clockBlock =
+                    clocking->as_if<slang::ast::ClockingBlockSymbol>())
+              eventValue = context.convertLTLTimingControl(clockBlock->getEvent(),
+                                                           eventValue);
+          }
+        }
+      }
+
+      if (!eventValue.getDefiningOp<ltl::ClockOp>()) {
+        mlir::emitError(loc)
+            << "sequence event control requires a clocking event";
+        return Value{};
+      }
+
+      Value eventMatch = ltl::MatchedOp::create(builder, loc, eventValue);
+      Value condition;
+      if (ctrl.iffCondition) {
+        condition = context.convertRvalueExpression(*ctrl.iffCondition);
+        condition = context.convertToBool(condition, Domain::TwoValued);
+        if (!condition)
+          return Value{};
+        condition = context.convertToI1(condition);
+        if (!condition)
+          return Value{};
+      }
+      if (condition) {
+        seqOrPro = ltl::AndOp::create(
+            builder, loc, SmallVector<Value, 2>{condition, seqOrPro});
+      }
+      auto clockEdge =
+          ctrl.edge == slang::ast::EdgeKind::None ? ltl::ClockEdge::Pos : edge;
+      return ltl::ClockOp::create(builder, loc, seqOrPro, clockEdge, eventMatch);
+    }
+
     auto expr = context.convertRvalueExpression(ctrl.expr);
     if (!expr)
       return Value{};

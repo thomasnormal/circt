@@ -548,3 +548,31 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv` (`real=0.039s`)
+
+- Iteration update (sequence-valued assertion clocking events):
+  - realization:
+    - assertion timing controls accepted sequence clocking forms like `@s`, but
+      lowering treated all clocking-event expressions as scalar signals and
+      failed with `error: expected a 1-bit integer`.
+    - reproduction:
+      - `assert property (@s c);` with `s` a sequence and default clocking.
+  - implemented:
+    - added sequence-event path in `LTLClockControlVisitor` signal-event
+      lowering.
+    - sequence clocking event lowering now:
+      - converts sequence expression,
+      - applies default clocking when unclocked,
+      - derives event predicate using `ltl.matched`,
+      - clocks assertion input with `ltl.clock` on the match predicate.
+    - retained explicit error for property-valued event expressions in this
+      path.
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-iff.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` (`real=0.050s`)

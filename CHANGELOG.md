@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1553 - February 21, 2026
+
+### [ImportVerilog][SVA] Support sequence-valued assertion clocking events (`@seq`)
+
+1. **Added sequence-event clocking support in assertion timing controls**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - `LTLClockControlVisitor::visit(SignalEventControl)` now recognizes
+     sequence-valued assertion clocking events (for example `@s` where `s` is
+     a sequence).
+   - lowering path:
+     - convert the sequence event expression,
+     - apply default clocking if needed,
+     - derive an event predicate via `ltl.matched`,
+     - clock the assertion/property expression with `ltl.clock` on that event.
+   - this removes the prior hard failure
+     `error: expected a 1-bit integer` for `@seq` clocking forms.
+
+2. **Added regression coverage**
+   - `test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+     - verifies `assert property (@s c);` lowers through `ltl.matched` +
+       `ltl.clock` and emits `verif.assert`.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-iff.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` (`real=0.050s`, `user=0.002s`, `sys=0.006s`).
+
 ## Iteration 1552 - February 21, 2026
 
 ### [ImportVerilog][SVA] Infer sequence clock in mixed sequence+signal event lists
