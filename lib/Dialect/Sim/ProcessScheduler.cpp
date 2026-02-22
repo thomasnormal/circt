@@ -236,6 +236,14 @@ void ProcessScheduler::setSensitivity(ProcessId id,
   // Update signal-to-process mappings (store Process* for zero-lookup dispatch).
   for (const auto &entry : sensitivity.getEntries()) {
     signalToProcesses[entry.signalId].push_back(proc);
+    // E4: edge-specific fanout.
+    auto &fanout = signalEdgeFanout[entry.signalId];
+    switch (entry.edge) {
+    case EdgeType::Posedge: fanout.posedge.push_back(proc); break;
+    case EdgeType::Negedge: fanout.negedge.push_back(proc); break;
+    case EdgeType::AnyEdge:
+    case EdgeType::None: fanout.anyedge.push_back(proc); break;
+    }
   }
 
   LLVM_DEBUG(llvm::dbgs() << "Set sensitivity for process " << id << " with "
@@ -251,8 +259,17 @@ void ProcessScheduler::addSensitivity(ProcessId id, SignalId signalId,
   proc->getSensitivityList().addEdge(signalId, edge);
   // Track in registeredSignals to prevent double-registration if
   // suspendProcessForEvents() is later called for this signal.
-  if (proc->registeredSignals.insert(signalId).second)
+  if (proc->registeredSignals.insert(signalId).second) {
     signalToProcesses[signalId].push_back(proc);
+    // E4: edge-specific fanout.
+    auto &fanout = signalEdgeFanout[signalId];
+    switch (edge) {
+    case EdgeType::Posedge: fanout.posedge.push_back(proc); break;
+    case EdgeType::Negedge: fanout.negedge.push_back(proc); break;
+    case EdgeType::AnyEdge:
+    case EdgeType::None: fanout.anyedge.push_back(proc); break;
+    }
+  }
 
   LLVM_DEBUG(llvm::dbgs() << "Added sensitivity for process " << id
                           << " to signal " << signalId << " edge="
@@ -269,6 +286,17 @@ void ProcessScheduler::clearSensitivity(ProcessId id) {
     auto &procList = signalToProcesses[entry.signalId];
     procList.erase(std::remove(procList.begin(), procList.end(), proc),
                    procList.end());
+    // E4: remove from edge-specific fanout.
+    auto efIt = signalEdgeFanout.find(entry.signalId);
+    if (efIt != signalEdgeFanout.end()) {
+      auto &f = efIt->second;
+      auto rm = [proc](llvm::SmallVector<Process *, 4> &v) {
+        v.erase(std::remove(v.begin(), v.end(), proc), v.end());
+      };
+      rm(f.posedge);
+      rm(f.negedge);
+      rm(f.anyedge);
+    }
   }
 
   proc->getSensitivityList().clear();
@@ -759,12 +787,6 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
   if (actualEdge == EdgeType::None)
     return;
 
-  // Note: E1c signal-level dedup was removed because it unsoundly skips
-  // fanout walks when a signal changes multiple times per delta. A signal
-  // driven 0→1→0 within one delta needs BOTH edge transitions to trigger
-  // sensitive processes. The process-level inReadyQueue dedup (in
-  // scheduleProcess) already prevents double-enqueue of the same process.
-
   bool traceI3CSignal = traceI3CSignal31 && (signalId == 31 || signalId == 45);
   if (traceI3CSignal) {
     llvm::errs() << "[I3C-SIG31] edge=" << getEdgeTypeName(actualEdge)
@@ -777,48 +799,65 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
     llvm::errs() << "]\n";
   }
 
-  // Iterate Process* directly — no getProcess() hash lookup per iteration.
-  for (Process *proc : it->second) {
+  // E4: Batch clock-edge wake-up using edge-specific fanout tables.
+  auto enqueueIfReady = [&](Process *proc) {
     if (!proc)
-      continue;
-    ProcessId procId = proc->getId();
-    if (traceI3CSignal) {
-      llvm::errs() << "[I3C-SIG31] check proc=" << procId
-                   << " state=" << getProcessStateName(proc->getState())
-                   << "\n";
-    }
-
-    // Check if process state allows triggering
+      return;
     ProcessState state = proc->getState();
     if (state != ProcessState::Suspended &&
         state != ProcessState::Waiting &&
         state != ProcessState::Ready)
-      continue;
-
-    // For waiting processes, check the waiting sensitivity
+      return;
     if (state == ProcessState::Waiting) {
       if (sensitivityTriggered(proc->getWaitingSensitivity(), signalId,
                                actualEdge)) {
         proc->clearWaiting();
-        recordTriggerSignal(procId, signalId);
-        scheduleProcess(procId, proc->getPreferredRegion());
-        if (traceI3CSignal)
-          llvm::errs() << "[I3C-SIG31] trigger waiting proc=" << procId
-                       << "\n";
-        LLVM_DEBUG(llvm::dbgs()
-                   << "Process " << procId << " triggered from waiting state\n");
+        recordTriggerSignal(proc->getId(), signalId);
+        scheduleProcess(proc->getId(), proc->getPreferredRegion());
       }
-      continue;
+      return;
     }
+    // Suspended/Ready: edge match guaranteed by bucket.
+    recordTriggerSignal(proc->getId(), signalId);
+    scheduleProcess(proc->getId(), proc->getPreferredRegion());
+  };
 
-    // For suspended/ready processes, check the main sensitivity list
-    if (sensitivityTriggered(proc->getSensitivityList(), signalId,
-                             actualEdge)) {
-      recordTriggerSignal(procId, signalId);
-      scheduleProcess(procId, proc->getPreferredRegion());
-      if (traceI3CSignal)
-        llvm::errs() << "[I3C-SIG31] trigger sens proc=" << procId << "\n";
-      LLVM_DEBUG(llvm::dbgs() << "Process " << procId << " triggered\n");
+  auto efIt = signalEdgeFanout.find(signalId);
+  if (efIt != signalEdgeFanout.end()) {
+    auto &fanout = efIt->second;
+    for (Process *proc : fanout.anyedge)
+      enqueueIfReady(proc);
+    if (actualEdge == EdgeType::Posedge) {
+      for (Process *proc : fanout.posedge)
+        enqueueIfReady(proc);
+    } else if (actualEdge == EdgeType::Negedge) {
+      for (Process *proc : fanout.negedge)
+        enqueueIfReady(proc);
+    }
+  } else {
+    // Fallback: no edge fanout, use per-process sensitivityTriggered().
+    for (Process *proc : it->second) {
+      if (!proc)
+        continue;
+      ProcessState state = proc->getState();
+      if (state != ProcessState::Suspended &&
+          state != ProcessState::Waiting &&
+          state != ProcessState::Ready)
+        continue;
+      if (state == ProcessState::Waiting) {
+        if (sensitivityTriggered(proc->getWaitingSensitivity(), signalId,
+                                 actualEdge)) {
+          proc->clearWaiting();
+          recordTriggerSignal(proc->getId(), signalId);
+          scheduleProcess(proc->getId(), proc->getPreferredRegion());
+        }
+        continue;
+      }
+      if (sensitivityTriggered(proc->getSensitivityList(), signalId,
+                                actualEdge)) {
+        recordTriggerSignal(proc->getId(), signalId);
+        scheduleProcess(proc->getId(), proc->getPreferredRegion());
+      }
     }
   }
 }
@@ -894,6 +933,14 @@ void ProcessScheduler::suspendProcessForEvents(ProcessId id,
     if (proc->registeredSignals.insert(entry.signalId).second) {
       // First time this process registers for this signal.
       signalToProcesses[entry.signalId].push_back(proc);
+      // E4: edge-specific fanout.
+      auto &fanout = signalEdgeFanout[entry.signalId];
+      switch (entry.edge) {
+      case EdgeType::Posedge: fanout.posedge.push_back(proc); break;
+      case EdgeType::Negedge: fanout.negedge.push_back(proc); break;
+      case EdgeType::AnyEdge:
+      case EdgeType::None: fanout.anyedge.push_back(proc); break;
+      }
     }
   }
 
