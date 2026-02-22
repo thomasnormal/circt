@@ -1431,7 +1431,6 @@ struct AssertionExprVisitor {
         auto &unary = item->as<slang::ast::UnaryExpression>();
         using slang::ast::UnaryOperator;
         bool isInc = false;
-        bool isDec = false;
         switch (unary.op) {
         case UnaryOperator::Preincrement:
         case UnaryOperator::Postincrement:
@@ -1439,7 +1438,6 @@ struct AssertionExprVisitor {
           break;
         case UnaryOperator::Predecrement:
         case UnaryOperator::Postdecrement:
-          isDec = true;
           break;
         default:
           mlir::emitError(loc, "unsupported match item unary operator");
@@ -1457,14 +1455,30 @@ struct AssertionExprVisitor {
         if (!base)
           return failure();
         auto intType = dyn_cast<moore::IntType>(base.getType());
-        if (!intType) {
-          mlir::emitError(loc, "match item unary operator requires int type");
+        Value updated;
+        if (intType) {
+          auto one = moore::ConstantOp::create(builder, loc, intType, 1);
+          updated =
+              isInc ? moore::AddOp::create(builder, loc, base, one).getResult()
+                    : moore::SubOp::create(builder, loc, base, one).getResult();
+        } else if (auto realType = dyn_cast<moore::RealType>(base.getType())) {
+          FloatAttr oneAttr;
+          if (realType.getWidth() == moore::RealWidth::f32)
+            oneAttr = builder.getFloatAttr(builder.getF32Type(), 1.0);
+          else
+            oneAttr = builder.getFloatAttr(builder.getF64Type(), 1.0);
+          auto one = moore::ConstantRealOp::create(builder, loc, oneAttr);
+          updated = isInc
+                        ? moore::AddRealOp::create(builder, loc, base, one)
+                              .getResult()
+                        : moore::SubRealOp::create(builder, loc, base, one)
+                              .getResult();
+        } else {
+          mlir::emitError(loc,
+                          "match item unary operator requires int or real "
+                          "local assertion variable");
           return failure();
         }
-        auto one = moore::ConstantOp::create(builder, loc, intType, 1);
-        Value updated =
-            isInc ? moore::AddOp::create(builder, loc, base, one).getResult()
-                  : moore::SubOp::create(builder, loc, base, one).getResult();
         context.setAssertionLocalVarBinding(
             local, updated, context.getAssertionSequenceOffset());
         break;

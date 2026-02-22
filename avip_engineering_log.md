@@ -4814,3 +4814,33 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 5. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv`: `real=0.008s`
+
+## 2026-02-22 Session: Sequence match-item real increment/decrement parity
+
+### Problem
+1. Sequence match-item unary operations (`++` / `--`) only accepted integer
+   local assertion variables.
+2. Real local assertion variables in match items failed with:
+   - `match item unary operator requires int type`
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp`:
+   - `handleMatchItems` unary handling now supports `moore::RealType` locals.
+   - `++` lowers to `moore.fadd base, 1.0`.
+   - `--` lowers to `moore.fsub base, 1.0`.
+   - integer behavior remains unchanged (`moore.add` / `moore.sub`).
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-sequence-match-item-real-incdec.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-real-incdec.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-real-incdec.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv`: PASS
+3. Lit subset:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-real-incdec.sv build-test/test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv build-test/test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-real-incdec.sv`: `real=0.038s`
