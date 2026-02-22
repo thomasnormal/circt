@@ -127,7 +127,7 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
     to UVM `do_compare` default argument mismatch and reversed range bins.
     Track as AVIP fixes, not CIRCT.
 
-## Unsupported Feature Inventory (As Of February 21, 2026)
+## Unsupported Feature Inventory (As Of February 22, 2026)
 
 This inventory tracks known SVA-related gaps that are still not fully supported.
 Items are grouped by pipeline stage.
@@ -154,6 +154,12 @@ Items are grouped by pipeline stage.
     nested `$past(..., @(event_port))` lowering (`i1` bool-cast path).
 - Sequence match-item compound local-var assignments are now lowered for
   integer local assertion variables (arithmetic/bitwise/shift compound forms).
+- Immediate assertion (`assert #0`) semantics are not yet lowered into formal
+  obligations in the OVL semantic harness path.
+  - tracked known gap:
+    - `ovl_proposition` fail-mode in
+      `utils/ovl_semantic/wrappers/ovl_sem_proposition.sv`
+      (`known_gap=1` in `utils/ovl_semantic/manifest.tsv`).
 
 ### BMC + Semantics Gaps
 
@@ -181,8 +187,8 @@ Items are grouped by pipeline stage.
   `utils/run_ovl_sva_semantic_circt_bmc.sh`.
   - Harness style: one SV wrapper per checker case in
     `utils/ovl_semantic/wrappers/` with manifest-driven expectations.
-  - Current semantic status (Feb 22, 2026): `56/56` pass/fail obligations
-    passing (`28` checker wrappers x `pass/fail` modes).
+  - Current semantic status (Feb 22, 2026): `66` pass/fail obligations with
+    `65 PASS + 1 XFAIL` (`33` checker wrappers x `pass/fail` modes).
   - Coverage now includes:
     - `ovl_change`
     - `ovl_one_cold`
@@ -203,6 +209,11 @@ Items are grouped by pipeline stage.
     - `ovl_win_unchange`
     - `ovl_hold_value`
     - `ovl_no_contention`
+    - `ovl_always_on_edge`
+    - `ovl_width`
+    - `ovl_quiescent_state`
+    - `ovl_value`
+    - `ovl_proposition` (known gap on fail-mode; immediate assertion semantics)
 
 ## Core Workstreams
 
@@ -713,6 +724,33 @@ Run these at least once per iteration (or per change if relevant):
 - ~/mbit/*avip* (appropriate BMC/sim flow)
 
 Record results in CHANGELOG.md and include relevant output artifacts.
+
+## Latest SVA closure slice (2026-02-22, OVL semantic expansion IV)
+
+- Closed gap:
+  - OVL semantic lane now includes five more assertion-focused checkers:
+    - `ovl_always_on_edge`
+    - `ovl_width`
+    - `ovl_quiescent_state`
+    - `ovl_value`
+    - `ovl_proposition`
+  - semantic lane breadth increased from `28` to `33` checker wrappers.
+  - semantic obligation coverage increased from `56` to `66`.
+- New regressions:
+  - `utils/ovl_semantic/wrappers/ovl_sem_always_on_edge.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_width.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_quiescent_state.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_value.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_proposition.sv`
+  - manifest entries in `utils/ovl_semantic/manifest.tsv`
+- Known-gap tracking:
+  - `ovl_sem_proposition` fail-mode is marked `known_gap=1` because the
+    immediate assertion checker (`assert #0`) is not currently lowered as a
+    formal property in this flow.
+- Validation:
+  - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(always_on_edge|width|quiescent_state|value|proposition)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-new5-2`
 
 ## Latest SVA closure slice (2026-02-22, OVL semantic expansion II)
 

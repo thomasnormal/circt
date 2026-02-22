@@ -27,3 +27,8 @@ ovl_sem_win_change	utils/ovl_semantic/wrappers/ovl_sem_win_change.sv	ovl_win_cha
 ovl_sem_win_unchange	utils/ovl_semantic/wrappers/ovl_sem_win_unchange.sv	ovl_win_unchange.v	ovl_sem_win_unchange	8	0
 ovl_sem_hold_value	utils/ovl_semantic/wrappers/ovl_sem_hold_value.sv	ovl_hold_value.v	ovl_sem_hold_value	8	0
 ovl_sem_no_contention	utils/ovl_semantic/wrappers/ovl_sem_no_contention.sv	ovl_no_contention.v	ovl_sem_no_contention	8	0
+ovl_sem_always_on_edge	utils/ovl_semantic/wrappers/ovl_sem_always_on_edge.sv	ovl_always_on_edge.v	ovl_sem_always_on_edge	8	0
+ovl_sem_width	utils/ovl_semantic/wrappers/ovl_sem_width.sv	ovl_width.v	ovl_sem_width	8	0
+ovl_sem_quiescent_state	utils/ovl_semantic/wrappers/ovl_sem_quiescent_state.sv	ovl_quiescent_state.v	ovl_sem_quiescent_state	8	0
+ovl_sem_value	utils/ovl_semantic/wrappers/ovl_sem_value.sv	ovl_value.v	ovl_sem_value	8	0
+ovl_sem_proposition	utils/ovl_semantic/wrappers/ovl_sem_proposition.sv	ovl_proposition.v	ovl_sem_proposition	8	1
