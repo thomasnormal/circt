@@ -18,6 +18,12 @@
      - `ovl_sem_next` moved from `known_gap=1` to `known_gap=0`.
    - semantic runner now reports `PASS(pass)` and `PASS(fail)` for
      `ovl_sem_next` (previously `XFAIL(fail)`).
+   - expanded semantic wrapper coverage with:
+     - `utils/ovl_semantic/wrappers/ovl_sem_zero_one_hot.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_even_parity.sv`
+     - manifest entries:
+       - `ovl_sem_zero_one_hot`
+       - `ovl_sem_even_parity`
 
 3. **Added regression for state-knownness scoping**
    - new test:
@@ -33,6 +39,17 @@
      - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
    - added:
      - `test/Tools/circt-bmc/lower-to-bmc-reg-clock-source-no-arg-index.mlir`
+
+5. **Validation**
+   - semantic OVL runner:
+     - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - result:
+       - `ovl semantic BMC summary: 18 tests, failures=0, xfail=0, xpass=0, skipped=0`
+   - combined OVL matrix:
+     - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-extend`
+     - result:
+       - `std_ovl/BMC PASS 110/110`
+       - `std_ovl/BMC_SEMANTIC PASS 18/18`
 
 ## Iteration 1623 - February 22, 2026
 
