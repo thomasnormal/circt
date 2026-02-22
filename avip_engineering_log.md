@@ -5809,3 +5809,44 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 5. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-writemem-subroutine.sv`: `real=0.007s`
+
+## 2026-02-22 Session: Value-returning `$stacktrace` in match-item RHS
+
+### Problem
+1. `$stacktrace` was parser-reachable as a value-returning system function in
+   sequence match-item assignment RHS (for `string` locals), but ImportVerilog
+   rejected it with:
+   - `unsupported system call '$stacktrace'`
+2. This blocked match-item forms like:
+   - `string st; (1, st = $stacktrace) ##1 a;`
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/Expressions.cpp`:
+   - added `$stacktrace` handling in system-call expression lowering.
+   - computes scope ancestry from `currentScope` up to root / compilation unit.
+   - materializes a Moore `string` value via:
+     - `moore.constant_string` (packed int bytes)
+     - `moore.int_to_string` (dynamic string)
+   - wired both explicit call-path handling and arity-0 conversion path.
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv`
+3. Updated docs/changelog:
+   - `PROJECT_SVA.md`
+   - `CHANGELOG.md`
+
+### Validation
+1. Failing-first proof:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv`: FAIL pre-fix (`unsupported system call '$stacktrace'`)
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv --check-prefix=DIAG`: FAIL pre-fix (`DIAG-NOT` violated)
+2. Build:
+   - `ninja -C build-test circt-translate circt-verilog`: PASS
+3. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv --check-prefix=DIAG`: PASS
+   - compatibility:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-writemem-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-writemem-subroutine.sv`: PASS
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv`: `real=0.007s`

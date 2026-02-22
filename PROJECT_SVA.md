@@ -290,6 +290,8 @@ Additional compile-only or XFAIL expectations live in
     - `$writememb`
     - `$writememh`
     - `$sreadmemb/$sreadmemh` recognized as no-op extensions
+  - value-returning `$stacktrace` now lowers in assertion-expression contexts
+    (including match-item assignment RHS to local `string` variables)
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:

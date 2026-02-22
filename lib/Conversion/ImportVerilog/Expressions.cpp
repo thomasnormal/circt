@@ -7459,6 +7459,39 @@ struct RvalueExprVisitor : public ExprVisitor {
                                            loc);
     }
 
+    // $stacktrace as an expression returns a scope-trace string.
+    if (subroutine.name == "$stacktrace") {
+      SmallVector<StringRef> scopeNames;
+      for (auto *scope = context.currentScope; scope;) {
+        const auto &sym = scope->asSymbol();
+        if (sym.kind == slang::ast::SymbolKind::Root ||
+            sym.kind == slang::ast::SymbolKind::CompilationUnit)
+          break;
+        if (!sym.name.empty())
+          scopeNames.push_back(sym.name);
+        scope = sym.getParentScope();
+      }
+      std::string traceStr;
+      for (const auto &name : scopeNames)
+        traceStr += std::string(name) + "\n";
+      auto intTy = moore::IntType::getInt(
+          context.getContext(), std::max<size_t>(1, traceStr.size()) * 8);
+      auto strIntOp =
+          moore::ConstantStringOp::create(builder, loc, intTy, traceStr);
+      auto strInt = strIntOp->getResult(0);
+      if (!isa<moore::IntType>(strInt.getType())) {
+        mlir::emitError(loc)
+            << "$stacktrace internal error: expected packed integer from "
+               "constant string";
+        return {};
+      }
+      auto stacktrace = moore::IntToStringOp::create(builder, loc, strInt)
+                            .getResult();
+      auto ty = context.convertType(*expr.type);
+      return context.materializeConversion(ty, stacktrace,
+                                           expr.type->isSigned(), loc);
+    }
+
     // Helper to check if an argument is an EmptyArgumentExpression.
     auto isEmptyArg = [](const slang::ast::Expression *arg) {
       return arg->kind == slang::ast::ExpressionKind::EmptyArgument;
@@ -10053,6 +10086,36 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
                       builder, loc, intTy,
                       APInt(32, static_cast<uint64_t>(exponent),
                             /*isSigned=*/true));
+                })
+          .Case("$stacktrace",
+                [&]() -> Value {
+                  // $stacktrace as an expression returns a scope trace string.
+                  SmallVector<StringRef> scopeNames;
+                  for (auto *scope = currentScope; scope;) {
+                    const auto &sym = scope->asSymbol();
+                    if (sym.kind == slang::ast::SymbolKind::Root ||
+                        sym.kind == slang::ast::SymbolKind::CompilationUnit)
+                      break;
+                    if (!sym.name.empty())
+                      scopeNames.push_back(sym.name);
+                    scope = sym.getParentScope();
+                  }
+                  std::string traceStr;
+                  for (const auto &name : scopeNames)
+                    traceStr += std::string(name) + "\n";
+                  auto intTy = moore::IntType::getInt(
+                      getContext(), std::max<size_t>(1, traceStr.size()) * 8);
+                  auto strIntOp = moore::ConstantStringOp::create(
+                      builder, loc, intTy, traceStr);
+                  auto strInt = strIntOp->getResult(0);
+                  if (!isa<moore::IntType>(strInt.getType())) {
+                    mlir::emitError(loc)
+                        << "$stacktrace internal error: expected packed "
+                           "integer from constant string";
+                    return Value{};
+                  }
+                  return moore::IntToStringOp::create(builder, loc, strInt)
+                      .getResult();
                 })
           .Case("$reset_count",
                 [&]() -> Value {
