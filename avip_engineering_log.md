@@ -4631,3 +4631,46 @@ Based on these findings, the circt-sim compiled process architecture:
    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS
 4. Formal smoke:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS
+
+## 2026-02-22 Session: Strong unary finite-progress parity (property operands)
+
+### Problem
+1. Strong unary operators over property operands were still partially vacuity-
+   preserving in bounded-delay forms.
+2. In practice, `s_nexttime` and bounded `s_always [n:m]` lowered like weak
+   forms for delayed-cycle existence.
+
+### Realizations / Surprises
+1. The existing helper for property delay shifting encoded weak semantics:
+   - `delay_true -> property`
+2. Strong finite-progress needs an extra obligation:
+   - `delay_true && (delay_true -> property)`
+3. During refactoring, it was easy to accidentally strengthen weak `nexttime`;
+   focused import regressions caught that quickly.
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp`:
+   - extended property shift helper with `requireFiniteProgress`.
+   - enabled this mode for:
+     - property-typed `s_nexttime`
+     - property-typed bounded `s_always [n:m]`
+   - kept weak variants (`nexttime`, `always [n:m]`) on weak shifting.
+2. Updated regressions:
+   - `test/Conversion/ImportVerilog/sva-nexttime-property.sv`
+   - `test/Conversion/ImportVerilog/sva-bounded-always-property.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. Failing-first (before final fix wiring): reproduced
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-nexttime-property.sv`
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-always-property.sv`
+3. Focused post-fix:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-nexttime-property.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-always-property.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unbounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`: PASS
+4. Compatibility:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-IMPORT`: PASS
+5. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS
+6. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv`: `real=0.007s`
