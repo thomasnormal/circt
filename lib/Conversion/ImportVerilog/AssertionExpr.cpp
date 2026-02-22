@@ -981,6 +981,12 @@ struct AssertionExprVisitor {
       return ltl::NotOp::create(builder, loc, value);
     case UnaryAssertionOperator::SEventually:
       if (expr.range.has_value()) {
+        if (isa<ltl::PropertyType>(value.getType())) {
+          mlir::emitError(loc)
+              << "bounded s_eventually on property expressions is not yet "
+                 "supported";
+          return {};
+        }
         auto minDelay = builder.getI64IntegerAttr(expr.range.value().min);
         auto lengthAttr = mlir::IntegerAttr{};
         if (expr.range.value().max.has_value()) {
@@ -993,6 +999,12 @@ struct AssertionExprVisitor {
       return ltl::EventuallyOp::create(builder, loc, value);
     case UnaryAssertionOperator::Eventually: {
       if (expr.range.has_value()) {
+        if (isa<ltl::PropertyType>(value.getType())) {
+          mlir::emitError(loc)
+              << "bounded eventually on property expressions is not yet "
+                 "supported";
+          return {};
+        }
         auto minDelay = builder.getI64IntegerAttr(expr.range.value().min);
         auto lengthAttr = mlir::IntegerAttr{};
         if (expr.range.value().max.has_value()) {
@@ -1007,6 +1019,11 @@ struct AssertionExprVisitor {
       return eventually;
     }
     case UnaryAssertionOperator::Always: {
+      if (isa<ltl::PropertyType>(value.getType())) {
+        mlir::emitError(loc)
+            << "always on property expressions is not yet supported";
+        return {};
+      }
       std::pair<mlir::IntegerAttr, mlir::IntegerAttr> attr = {
           builder.getI64IntegerAttr(0), mlir::IntegerAttr{}};
       if (expr.range.has_value()) {
@@ -1017,6 +1034,11 @@ struct AssertionExprVisitor {
                                    attr.second);
     }
     case UnaryAssertionOperator::NextTime: {
+      if (isa<ltl::PropertyType>(value.getType())) {
+        mlir::emitError(loc)
+            << "nexttime on property expressions is not yet supported";
+        return {};
+      }
       auto minRepetitions = builder.getI64IntegerAttr(1);
       mlir::IntegerAttr lengthAttr = builder.getI64IntegerAttr(0);
       if (expr.range.has_value()) {
@@ -1031,6 +1053,11 @@ struct AssertionExprVisitor {
                                   lengthAttr);
     }
     case UnaryAssertionOperator::SNextTime: {
+      if (isa<ltl::PropertyType>(value.getType())) {
+        mlir::emitError(loc)
+            << "s_nexttime on property expressions is not yet supported";
+        return {};
+      }
       auto minRepetitions = builder.getI64IntegerAttr(1);
       mlir::IntegerAttr lengthAttr = builder.getI64IntegerAttr(0);
       if (expr.range.has_value()) {
@@ -1045,6 +1072,11 @@ struct AssertionExprVisitor {
                                   lengthAttr);
     }
     case UnaryAssertionOperator::SAlways: {
+      if (isa<ltl::PropertyType>(value.getType())) {
+        mlir::emitError(loc)
+            << "s_always on property expressions is not yet supported";
+        return {};
+      }
       std::pair<mlir::IntegerAttr, mlir::IntegerAttr> attr = {
           builder.getI64IntegerAttr(0), mlir::IntegerAttr{}};
       if (expr.range.has_value()) {

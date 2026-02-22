@@ -874,3 +874,29 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv` (`real=0.008s`)
+
+- Iteration update (bounded unary temporal operators on property operands):
+  - realization:
+    - legal SVA forms like `eventually [1:2] p` (with `p` a property)
+      could generate invalid IR (`ltl.delay` on `!ltl.property`) and fail at
+      MLIR verification time.
+    - this produced an internal importer failure instead of a frontend
+      diagnostic.
+  - implemented:
+    - added explicit frontend diagnostics in unary assertion lowering for
+      property-typed operands where current LTL sequence ops are invalid:
+      - bounded `eventually`
+      - bounded `s_eventually`
+      - `nexttime`
+      - `s_nexttime`
+      - `always`
+      - `s_always`
+    - new regression:
+      - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv` (`real=0.007s`)

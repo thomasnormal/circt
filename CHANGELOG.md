@@ -1,3 +1,34 @@
+## Iteration 1565 - February 22, 2026
+
+### [ImportVerilog][SVA] Guard bounded unary property forms from invalid IR
+
+1. **Prevented invalid MLIR generation for bounded unary property forms**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - importer previously could emit illegal `ltl.delay` / `ltl.repeat`
+     on `!ltl.property` for forms such as:
+     - `assert property (eventually [1:2] p);`
+   - this produced verifier failures after import instead of a frontend error.
+   - added explicit diagnostics for currently unsupported property-typed unary
+     temporal forms that rely on sequence-only ops:
+     - bounded `eventually`
+     - bounded `s_eventually`
+     - `nexttime`
+     - `s_nexttime`
+     - `always`
+     - `s_always`
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv` (`real=0.007s`, `user=0.004s`, `sys=0.002s`).
+
 ## Iteration 1564 - February 22, 2026
 
 ### [ImportVerilog][SVA] Map `$assertcontrol(8/9)` to fail-message state
