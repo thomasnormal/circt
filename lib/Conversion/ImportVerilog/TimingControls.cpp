@@ -1575,14 +1575,23 @@ lowerSequenceEventListControl(Context &context, Location loc,
   SmallVector<const slang::ast::SignalEventControl *, 4> equivalentSignals;
   SmallVector<const slang::ast::SignalEventControl *, 4> parsedSignalEvents;
   SmallVector<MultiClockSignalEventInfo, 4> multiClockSignals;
+  bool hasDirectSignalEvents = false;
   bool requiresMultiClockLowering = false;
   std::optional<ltl::ClockEdge> inferredSequenceEdge;
   Value inferredSequenceClock;
   bool canInferSequenceClock = !signalEvents.empty();
   for (auto *signalCtrl : signalEvents) {
     auto signalEdge = convertEdgeKindLTL(signalCtrl->edge);
-    Value signalClock = context.convertRvalueExpression(signalCtrl->expr);
-    signalClock = context.convertToI1(signalClock);
+    Value signalExpr = context.convertRvalueExpression(signalCtrl->expr);
+    if (!signalExpr)
+      return failure();
+    if (isa<moore::EventType>(signalExpr.getType())) {
+      hasDirectSignalEvents = true;
+      parsedSignalEvents.push_back(signalCtrl);
+      canInferSequenceClock = false;
+      continue;
+    }
+    Value signalClock = context.convertToI1(signalExpr);
     if (!signalClock)
       return failure();
     parsedSignalEvents.push_back(signalCtrl);
@@ -1744,6 +1753,47 @@ lowerSequenceEventListControl(Context &context, Location loc,
     clockedInputs.push_back(clockedValue);
     sequenceClocks.push_back(clockOp.getClock());
     clockedValues.push_back(clockedValue);
+  }
+
+  if (hasDirectSignalEvents) {
+    auto waitOp = moore::WaitEventOp::create(builder, loc);
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(&waitOp.getBody().emplaceBlock());
+    auto mooreI1Ty = moore::IntType::get(builder.getContext(), 1,
+                                         moore::Domain::TwoValued);
+
+    for (Value clockedValue : clockedValues) {
+      Value eventMatch;
+      if (isa<ltl::SequenceType>(clockedValue.getType()))
+        eventMatch = ltl::MatchedOp::create(builder, loc, clockedValue);
+      else
+        eventMatch = context.convertToI1(clockedValue);
+      if (!eventMatch)
+        return failure();
+      if (!isa<moore::IntType>(eventMatch.getType()))
+        eventMatch = UnrealizedConversionCastOp::create(builder, loc, mooreI1Ty,
+                                                        eventMatch)
+                         ->getResult(0);
+      moore::DetectEventOp::create(builder, loc, moore::Edge::PosEdge,
+                                   eventMatch, Value{});
+    }
+
+    for (auto *signalCtrl : signalEvents) {
+      Value exprValue = context.convertRvalueExpression(signalCtrl->expr);
+      if (!exprValue)
+        return failure();
+      Value condition;
+      if (signalCtrl->iffCondition) {
+        condition = context.convertRvalueExpression(*signalCtrl->iffCondition);
+        condition = context.convertToBool(condition, Domain::TwoValued);
+        if (!condition)
+          return failure();
+      }
+      moore::DetectEventOp::create(builder, loc, convertEdgeKind(signalCtrl->edge),
+                                   exprValue, condition);
+    }
+
+    return success();
   }
 
   for (const auto &signalEvent : multiClockSignals) {

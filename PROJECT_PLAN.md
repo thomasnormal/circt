@@ -1358,3 +1358,16 @@ verilator-verification, and yosys corpora).
     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
+- Additional ImportVerilog SVA closure:
+  - mixed sequence event lists now support named event entries (event-typed
+    expressions), e.g. `always @(s or e)`.
+  - when such entries are present, lowering emits sequence-match wakeups via
+    `ltl.matched` alongside direct signal/named-event wakeup detects.
+  - new regression:
+    - `test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
