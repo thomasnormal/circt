@@ -1141,6 +1141,25 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
       moore::DetectEventOp::create(waitBuilder, loc, moore::Edge::AnyChange,
                                    clockInWait, Value{});
     }
+    SmallVector<std::pair<Value, ltl::ClockEdge>, 4> emittedSpecificEdges;
+    for (const auto &signalEvent : signalEvents) {
+      bool seen = llvm::any_of(emittedSpecificEdges, [&](const auto &entry) {
+        return entry.second == signalEvent.edge &&
+               equivalentClockSignals(entry.first, signalEvent.clock);
+      });
+      if (seen)
+        continue;
+      emittedSpecificEdges.push_back({signalEvent.clock, signalEvent.edge});
+      Value clockInWait =
+          cloneValueIntoBlock(signalEvent.clock, waitBuilder, mapping);
+      if (!isa<moore::IntType>(clockInWait.getType()))
+        clockInWait = UnrealizedConversionCastOp::create(
+                          waitBuilder, loc, mooreClockTy, clockInWait)
+                          ->getResult(0);
+      moore::DetectEventOp::create(waitBuilder, loc,
+                                   convertClockEdge(signalEvent.edge),
+                                   clockInWait, Value{});
+    }
   }
 
   auto i1Type = builder.getI1Type();
