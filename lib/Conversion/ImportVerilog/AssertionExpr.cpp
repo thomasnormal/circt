@@ -1058,9 +1058,20 @@ struct AssertionExprVisitor {
     }
     case UnaryAssertionOperator::NextTime: {
       if (isa<ltl::PropertyType>(value.getType())) {
-        mlir::emitError(loc)
-            << "nexttime on property expressions is not yet supported";
-        return {};
+        uint64_t minDelay = 1;
+        uint64_t maxDelay = 1;
+        if (expr.range.has_value()) {
+          minDelay = expr.range.value().min;
+          maxDelay = expr.range.value().max.value_or(minDelay);
+        }
+        SmallVector<Value, 4> shifted;
+        shifted.reserve(maxDelay - minDelay + 1);
+        for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
+             ++delayCycles)
+          shifted.push_back(shiftPropertyBy(value, delayCycles));
+        if (shifted.size() == 1)
+          return shifted.front();
+        return ltl::OrOp::create(builder, loc, shifted);
       }
       auto minRepetitions = builder.getI64IntegerAttr(1);
       mlir::IntegerAttr lengthAttr = builder.getI64IntegerAttr(0);
@@ -1077,9 +1088,20 @@ struct AssertionExprVisitor {
     }
     case UnaryAssertionOperator::SNextTime: {
       if (isa<ltl::PropertyType>(value.getType())) {
-        mlir::emitError(loc)
-            << "s_nexttime on property expressions is not yet supported";
-        return {};
+        uint64_t minDelay = 1;
+        uint64_t maxDelay = 1;
+        if (expr.range.has_value()) {
+          minDelay = expr.range.value().min;
+          maxDelay = expr.range.value().max.value_or(minDelay);
+        }
+        SmallVector<Value, 4> shifted;
+        shifted.reserve(maxDelay - minDelay + 1);
+        for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
+             ++delayCycles)
+          shifted.push_back(shiftPropertyBy(value, delayCycles));
+        if (shifted.size() == 1)
+          return shifted.front();
+        return ltl::OrOp::create(builder, loc, shifted);
       }
       auto minRepetitions = builder.getI64IntegerAttr(1);
       mlir::IntegerAttr lengthAttr = builder.getI64IntegerAttr(0);

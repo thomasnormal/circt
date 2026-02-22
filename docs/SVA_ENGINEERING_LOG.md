@@ -2,6 +2,35 @@
 
 ## 2026-02-22
 
+- Iteration update (property `nexttime` / `s_nexttime`):
+  - realization:
+    - legal `nexttime`/`s_nexttime` forms on property operands were still
+      importer errors even though the required lowering shape is the same
+      delay-shifted property used by bounded `eventually`.
+    - Slang enforces a single count for these operators (`[N]`), not a range.
+  - implemented:
+    - added property-operand lowering for:
+      - `nexttime p`
+      - `nexttime [N] p`
+      - `s_nexttime p`
+      - `s_nexttime [N] p`
+    - lowering strategy:
+      - `ltl.delay true, N`
+      - `ltl.implication delayed_true, property`.
+    - diagnostics retained for the still-open unary property wrappers:
+      - `always`, `s_always`.
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-nexttime-property.sv`
+    - updated:
+      - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+        (now checks `always p` diagnostic).
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-nexttime-property.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-nexttime-property.sv`
+    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 - Iteration update (bounded property `eventually` / `s_eventually`):
   - realization:
     - bounded unary temporal operators on property operands were being treated

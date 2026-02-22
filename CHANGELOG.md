@@ -1,3 +1,38 @@
+## Iteration 1567 - February 22, 2026
+
+### [ImportVerilog][SVA] Lower property `nexttime` / `s_nexttime`
+
+1. **Implemented property-operand lowering for `nexttime` wrappers**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - added support for:
+     - `nexttime p`
+     - `nexttime [N] p`
+     - `s_nexttime p`
+     - `s_nexttime [N] p`
+   - property-typed lowering now shifts the property by the selected cycle
+     count and wraps with implication:
+     - `ltl.implication(ltl.delay(true, N), p)`
+   - this removes importer hard errors for legal property `nexttime` forms.
+   - diagnostics remain for still-unsupported property unary wrappers:
+     - `always`
+     - `s_always`
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-nexttime-property.sv`
+   - updated:
+     - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+       (now checks `always on property expressions is not yet supported`).
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-nexttime-property.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-nexttime-property.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1566 - February 22, 2026
 
 ### [ImportVerilog][SVA] Lower bounded `eventually` on property operands
