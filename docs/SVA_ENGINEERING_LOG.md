@@ -2,6 +2,116 @@
 
 ## 2026-02-22
 
+- Iteration update (const-clock closure in BMC + semantic OVL expansion with arbiter/stack):
+  - realization:
+    - OVL checker lowering (e.g. `ovl_arbiter`) can produce `seq.const_clock`
+      rooted state; `ExternalizeRegisters` rejected these clocks, blocking
+      end-to-end BMC.
+    - once const-clock rejection was removed, `LowerToBMC` needed explicit
+      handling for const keyed clock sources and null-root clock tracing.
+  - TDD proof:
+    - red repro (minimal):
+      - `/tmp/ext_const_clock_min.mlir`:
+        - `seq.const_clock low` + `seq.compreg` failed with:
+          - `only clocks derived from block arguments, constants, process results, or keyable i1 expressions are supported`
+    - added regression:
+      - `test/Tools/circt-bmc/externalize-registers-const-clock.mlir`
+      - verifies:
+        - low const clock -> `clock_key = "const0"`
+        - inverted low const clock -> `clock_key = "const1"`
+    - implementation:
+      - `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`:
+        - accept `seq.const_clock` as traceable clock root.
+        - add const-clock literal keying (`const0`/`const1`).
+      - `lib/Tools/circt-bmc/LowerToBMC.cpp`:
+        - synthesize derived BMC clocks from `bmc_reg_clock_sources` const keys
+          when no other clocks are discovered.
+        - guard rootless (constant) clock traces to avoid null-root crashes.
+    - green repro:
+      - `build-test/bin/circt-bmc -b 8 --allow-multi-clock --assume-known-inputs --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so --module ovl_sem_arbiter_tmp /tmp/ovl_sem_arbiter_tmp.mlir`
+      - result: `BMC_RESULT=UNSAT`.
+  - semantic harness expansion:
+    - added wrappers:
+      - `utils/ovl_semantic/wrappers/ovl_sem_arbiter.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_stack.sv`
+    - manifest additions:
+      - `ovl_sem_arbiter` (`known_gap=1`)
+      - `ovl_sem_stack` (`known_gap=1`)
+    - semantic lane breadth increased `43 -> 45` wrappers.
+    - obligations increased `86 -> 90`.
+  - validation:
+    - const-clock regression:
+      - `build-test/bin/circt-opt test/Tools/circt-bmc/externalize-registers-const-clock.mlir --externalize-registers='allow-multi-clock=true' | llvm/build/bin/FileCheck test/Tools/circt-bmc/externalize-registers-const-clock.mlir`
+    - targeted semantic batch:
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(arbiter|stack)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `4 tests, failures=0, xfail=2, xpass=0`
+    - full semantic lane:
+      - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `90 tests, failures=0, xfail=6, xpass=0`
+    - full OVL matrix:
+      - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-constclock-arbiter-stack`
+      - result:
+        - `std_ovl/BMC PASS 110/110`
+        - `std_ovl/BMC_SEMANTIC PASS 84/90 (xfail=6)`
+    - profiling sample:
+      - `time OUT=/tmp/ovl-sem-profile-constclock.log utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - `real=20.379s`
+
+- Iteration update (OVL semantic harness expansion: bits/code_distance/fifo_index + explicit frame tool gap):
+  - realization:
+    - additional combinational/data-integrity checkers (`bits`,
+      `code_distance`, `fifo_index`) were still uncovered by semantic wrappers.
+    - `frame` and several larger protocol/data-structure checkers expose
+      frontend/BMC tool limitations, so known-gap tracking needed to include
+      them without masking regressions in already-supported cases.
+  - TDD proof:
+    - added wrappers + manifest entries first:
+      - `utils/ovl_semantic/wrappers/ovl_sem_bits.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_code_distance.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_fifo_index.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_frame.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_never_unknown_async.sv`
+      - `utils/ovl_semantic/manifest.tsv` entries:
+        - `ovl_sem_bits`
+        - `ovl_sem_code_distance`
+        - `ovl_sem_fifo_index`
+        - `ovl_sem_frame`
+        - `ovl_sem_never_unknown_async`
+    - first targeted run failures:
+      - `ovl_sem_code_distance` fail-mode `UNSAT`.
+      - `ovl_sem_arbiter` / `ovl_sem_stack` failed in BMC with derived-clock
+        externalization limitation.
+      - `ovl_sem_frame` failed in frontend parse (`[*min_cks]` empty-match).
+    - stabilization + harness enhancement:
+      - `ovl_sem_code_distance` fail profile switched to deterministic xcheck
+        failure (`test_expr2` includes `X`).
+      - semantic runner (`utils/run_ovl_sva_semantic_circt_bmc.sh`) now
+        supports `known_gap=tool` (and `known_gap=any`) for expected
+        frontend/BMC tool errors, with `XFAIL`/`XPASS` accounting.
+      - `ovl_sem_frame` is tracked as `known_gap=tool` (pass/fail both XFAIL).
+      - retained immediate-assert known gaps:
+        - `ovl_sem_proposition` fail-mode (`known_gap=1`)
+        - `ovl_sem_never_unknown_async` fail-mode (`known_gap=1`)
+  - implemented:
+    - expanded semantic harness by +5 more checkers (38 -> 43 wrappers).
+    - total pass/fail obligations increased from 76 to 86.
+    - semantic status now: `82 PASS + 4 XFAIL`.
+  - validation:
+    - targeted:
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(bits|code_distance|fifo_index|frame|never_unknown_async)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `10 tests, failures=0, xfail=3, xpass=0`
+    - full semantic lane:
+      - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `86 tests, failures=0, xfail=4, xpass=0`
+    - full OVL matrix:
+      - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-next5b`
+      - result:
+        - `std_ovl/BMC PASS 110/110`
+        - `std_ovl/BMC_SEMANTIC PASS 82/86 (xfail=4)`
+    - profiling sample:
+      - `time OUT=/tmp/ovl-sem-profile-next5b.log utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - `real=15.252s`
+
 - Iteration update (OVL semantic harness expansion: cycle_sequence/handshake/req_ack_unique/reg_loaded/time):
   - realization:
     - key protocol/timing assertion checkers were still uncovered in semantic

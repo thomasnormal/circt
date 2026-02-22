@@ -366,6 +366,40 @@ static Value getI1ClockValueForKey(Value clock, bool &invert) {
   }
   return Value();
 }
+
+static std::optional<bool> getConstClockLiteral(Value clock) {
+  bool invert = false;
+  Value cur = clock;
+  while (cur) {
+    if (auto inv = cur.getDefiningOp<seq::ClockInverterOp>()) {
+      invert = !invert;
+      cur = inv.getInput();
+      continue;
+    }
+    if (auto constClock = cur.getDefiningOp<seq::ConstClockOp>()) {
+      bool bit = constClock.getValue() == seq::ClockConst::High;
+      return bit ^ invert;
+    }
+    if (auto toClock = cur.getDefiningOp<seq::ToClockOp>()) {
+      auto simplified = simplifyI1Value(toClock.getInput());
+      invert ^= simplified.invert;
+      Value base = simplified.value ? simplified.value : toClock.getInput();
+      if (auto literal = getConstI1Value(base))
+        return *literal ^ invert;
+      return std::nullopt;
+    }
+    if (cur.getType().isInteger(1)) {
+      auto simplified = simplifyI1Value(cur);
+      invert ^= simplified.invert;
+      Value base = simplified.value ? simplified.value : cur;
+      if (auto literal = getConstI1Value(base))
+        return *literal ^ invert;
+      return std::nullopt;
+    }
+    break;
+  }
+  return std::nullopt;
+}
 static StringAttr getClockPortName(HWModuleOp module, Value clock) {
   auto arg = dyn_cast<BlockArgument>(clock);
   if (!arg || arg.getOwner() != module.getBodyBlock())
@@ -432,6 +466,8 @@ static bool traceClockRoot(Value value, Value &root) {
     return traceClockRoot(toClock.getInput(), root);
   if (auto inv = value.getDefiningOp<seq::ClockInverterOp>())
     return traceClockRoot(inv.getInput(), root);
+  if (auto constClock = value.getDefiningOp<seq::ConstClockOp>())
+    return true;
   if (auto gate = value.getDefiningOp<seq::ClockGateOp>()) {
     bool anyTrue = false;
     bool anyNonConst = false;
@@ -805,9 +841,11 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
   Value root;
   bool tracedRoot = traceClockRoot(clock, root);
   bool keyInvert = false;
-  Value keyValue = getI1ClockValueForKey(clock, keyInvert);
   std::optional<std::string> clockKey;
-  if (keyValue) {
+  if (auto constClock = getConstClockLiteral(clock)) {
+    keyInvert = false;
+    clockKey = *constClock ? std::string("const1") : std::string("const0");
+  } else if (Value keyValue = getI1ClockValueForKey(clock, keyInvert)) {
     auto getBlockArgName = [&](BlockArgument arg) -> StringRef {
       if (!arg || arg.getOwner() != module.getBodyBlock())
         return {};

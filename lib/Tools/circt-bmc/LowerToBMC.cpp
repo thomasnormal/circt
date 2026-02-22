@@ -1206,6 +1206,55 @@ void LowerToBMCPass::runOnOperation() {
     for (auto clockOp : ltlClockOps)
       maybeAddClockInput(clockOp.getClock());
     if (clockInputs.empty()) {
+      if (auto regClockSources =
+              hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
+        DenseSet<StringRef> seenConstKeys;
+        Value constTrue;
+        Value constFalse;
+        auto ensureConst = [&](bool value) -> Value {
+          if (value) {
+            if (constTrue)
+              return constTrue;
+          } else {
+            if (constFalse)
+              return constFalse;
+          }
+          OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(&hwModule.getBody().front());
+          auto cst = hw::ConstantOp::create(builder, loc, builder.getI1Type(),
+                                            value ? 1 : 0);
+          if (value)
+            constTrue = cst;
+          else
+            constFalse = cst;
+          return cst;
+        };
+        for (auto attr : regClockSources) {
+          auto dict = dyn_cast<DictionaryAttr>(attr);
+          if (!dict)
+            continue;
+          auto keyAttr = dict.getAs<StringAttr>("clock_key");
+          if (!keyAttr || keyAttr.getValue().empty())
+            continue;
+          bool clockValue;
+          if (keyAttr.getValue() == "const0")
+            clockValue = false;
+          else if (keyAttr.getValue() == "const1")
+            clockValue = true;
+          else
+            continue;
+          if (auto invertAttr = dict.getAs<BoolAttr>("invert");
+              invertAttr && invertAttr.getValue())
+            clockValue = !clockValue;
+          StringRef canonicalKey = clockValue ? StringRef("const1")
+                                              : StringRef("const0");
+          if (!seenConstKeys.insert(canonicalKey).second)
+            continue;
+          maybeAddClockInput(ensureConst(clockValue));
+        }
+      }
+    }
+    if (clockInputs.empty()) {
       if (auto regClocks =
               hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks")) {
         DenseSet<StringRef> seenNames;
@@ -1276,6 +1325,8 @@ void LowerToBMCPass::runOnOperation() {
         BlockArgument root;
         if (!traceRoot(input.canonical, root) &&
             !traceRoot(input.value, root))
+          return {};
+        if (!root)
           return {};
         if (root.getOwner() != hwModule.getBodyBlock())
           return {};
@@ -1582,6 +1633,8 @@ void LowerToBMCPass::runOnOperation() {
           BlockArgument root;
           if (!traceRoot(clockInput.canonical, root) &&
               !traceRoot(clockInput.value, root))
+            continue;
+          if (!root)
             continue;
           if (root.getOwner() != hwModule.getBodyBlock())
             continue;

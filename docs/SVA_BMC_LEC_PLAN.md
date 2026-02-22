@@ -187,8 +187,12 @@ Items are grouped by pipeline stage.
   `utils/run_ovl_sva_semantic_circt_bmc.sh`.
   - Harness style: one SV wrapper per checker case in
     `utils/ovl_semantic/wrappers/` with manifest-driven expectations.
-  - Current semantic status (Feb 22, 2026): `76` pass/fail obligations with
-    `75 PASS + 1 XFAIL` (`38` checker wrappers x `pass/fail` modes).
+  - Current semantic status (Feb 22, 2026): `90` pass/fail obligations with
+    `84 PASS + 6 XFAIL` (`45` checker wrappers x `pass/fail` modes).
+  - Known-gap modes now include:
+    - `known_gap=1` (expected fail-mode result mismatch)
+    - `known_gap=tool` (expected frontend/BMC tool failure in either mode)
+    - `known_gap=any` (combined fail-result + tool-gap tracking)
   - Coverage now includes:
     - `ovl_change`
     - `ovl_one_cold`
@@ -219,6 +223,13 @@ Items are grouped by pipeline stage.
     - `ovl_req_ack_unique`
     - `ovl_reg_loaded`
     - `ovl_time`
+    - `ovl_bits`
+    - `ovl_code_distance`
+    - `ovl_fifo_index`
+    - `ovl_frame` (known gap on both modes; frontend empty-match parse)
+    - `ovl_never_unknown_async` (known gap on fail-mode; immediate assertion semantics)
+    - `ovl_arbiter` (known gap on fail-mode; semantic fail profile still vacuous)
+    - `ovl_stack` (known gap on fail-mode; semantic fail profile still vacuous)
 
 ## Core Workstreams
 
@@ -729,6 +740,66 @@ Run these at least once per iteration (or per change if relevant):
 - ~/mbit/*avip* (appropriate BMC/sim flow)
 
 Record results in CHANGELOG.md and include relevant output artifacts.
+
+## Latest SVA closure slice (2026-02-22, OVL const-clock closure + semantic expansion VII)
+
+- Closed gap:
+  - fixed BMC externalization/lowering path for constant clocks used in lowered
+    SVA/LTL state:
+    - `ExternalizeRegisters` now accepts `seq.const_clock` and emits stable
+      source keys (`const0` / `const1`).
+    - `LowerToBMC` now synthesizes derived BMC clock inputs from
+      `bmc_reg_clock_sources` const keys when no explicit/derived clocks are
+      otherwise discovered.
+    - hardened LowerToBMC against null-root clock tracing for constant clocks.
+  - this unblocks previously failing OVL checkers in the BMC pipeline
+    (notably `ovl_arbiter` import/lowering path).
+- New regression:
+  - `test/Tools/circt-bmc/externalize-registers-const-clock.mlir`
+- OVL semantic harness expansion:
+  - added wrappers:
+    - `utils/ovl_semantic/wrappers/ovl_sem_arbiter.sv`
+    - `utils/ovl_semantic/wrappers/ovl_sem_stack.sv`
+  - manifest additions:
+    - `ovl_sem_arbiter` (`known_gap=1`)
+    - `ovl_sem_stack` (`known_gap=1`)
+  - semantic lane breadth increased from `43` to `45` wrappers.
+  - semantic obligation coverage increased from `86` to `90`.
+- Validation:
+  - `build-test/bin/circt-opt test/Tools/circt-bmc/externalize-registers-const-clock.mlir --externalize-registers='allow-multi-clock=true' | llvm/build/bin/FileCheck test/Tools/circt-bmc/externalize-registers-const-clock.mlir`
+  - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(arbiter|stack)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-constclock-arbiter-stack`
+
+## Latest SVA closure slice (2026-02-22, OVL semantic expansion VI)
+
+- Closed gap:
+  - OVL semantic lane now includes additional combinational/data-integrity
+    checkers:
+    - `ovl_bits`
+    - `ovl_code_distance`
+    - `ovl_fifo_index`
+  - plus explicit known-gap tracking for:
+    - `ovl_frame` (`known_gap=tool`, frontend empty-match parse limitation)
+    - `ovl_never_unknown_async` (`known_gap=1`, immediate-assert fail-mode)
+  - semantic lane breadth increased from `38` to `43` checker wrappers.
+  - semantic obligation coverage increased from `76` to `86`.
+- Harness enhancement:
+  - `utils/run_ovl_sva_semantic_circt_bmc.sh` now supports
+    `known_gap=tool|any` in addition to existing `known_gap=1`.
+  - expected tool failures are reported as `XFAIL` and successful closures as
+    `XPASS`.
+- New regressions:
+  - `utils/ovl_semantic/wrappers/ovl_sem_bits.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_code_distance.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_fifo_index.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_frame.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_never_unknown_async.sv`
+  - manifest entries in `utils/ovl_semantic/manifest.tsv`
+- Validation:
+  - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(bits|code_distance|fifo_index|frame|never_unknown_async)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-next5b`
 
 ## Latest SVA closure slice (2026-02-22, OVL semantic expansion V)
 
