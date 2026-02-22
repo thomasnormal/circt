@@ -1670,6 +1670,7 @@ lowerSequenceEventListControl(Context &context, Location loc,
         forceMultiClockLowering = true;
       continue;
     }
+    signalExpr = context.convertToBool(signalExpr);
     Value signalClock = context.convertToI1(signalExpr);
     if (!signalClock)
       return failure();
@@ -2126,6 +2127,7 @@ struct LTLClockControlVisitor {
       if (!condition)
         return Value{};
     }
+    expr = context.convertToBool(expr);
     expr = context.convertToI1(expr);
     if (!expr)
       return Value{};
@@ -2190,6 +2192,7 @@ struct LTLClockControlVisitor {
       Value signalClock = context.convertRvalueExpression(effectiveCtrl->expr);
       if (isa<moore::EventType>(signalClock.getType()))
         signalClock = moore::EventTriggeredOp::create(builder, loc, signalClock);
+      signalClock = context.convertToBool(signalClock);
       signalClock = context.convertToI1(signalClock);
       if (!signalClock)
         return Value{};

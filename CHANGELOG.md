@@ -1,3 +1,38 @@
+## Iteration 1600 - February 22, 2026
+
+### [ImportVerilog][SVA] Support multi-bit event expressions in SVA clock controls
+
+1. **Implemented truthy normalization for event-control expressions**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - event expressions used for SVA clock/event controls now pass through
+     `convertToBool` before `convertToI1` in event-list lowering paths.
+   - this covers direct event controls (`@(e)`) and mixed sequence event lists
+     (`@(s or e)`), including sequence-clock inference helpers.
+
+2. **Behavioral fix**
+   - removes prior erroneous `expected a 1-bit integer` diagnostics for legal
+     multi-bit event expressions in SVA timing controls.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-clock-event-multibit.sv`
+     - `test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-multibit.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-multibit.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv >/dev/null`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv >/dev/null` (`real=0.005s`, `user=0.003s`, `sys=0.002s`).
+
 ## Iteration 1599 - February 22, 2026
 
 ### [ImportVerilog][SVA] Accept integral conditions in property `if` expressions
