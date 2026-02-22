@@ -240,6 +240,10 @@ Additional compile-only or XFAIL expectations live in
     - `$fdisplay*` / `$fwrite*` lower to `moore.builtin.fwrite`
     - `$fstrobe*` lowers to `moore.builtin.fstrobe`
     - `$fmonitor*` lowers to `moore.builtin.fmonitor`
+  - sequence match-item file-control subroutine calls now preserve side
+    effects:
+    - `$fflush` lowers to `moore.builtin.fflush`
+    - `$fclose` lowers to `moore.builtin.fclose`
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
