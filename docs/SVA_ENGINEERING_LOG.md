@@ -166,6 +166,23 @@
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
+- Iteration update (packed sampled-values in regular assertion clocking):
+  - realization:
+    - the packed sampled-value enablement introduced for explicit clocking also
+      broadens regular assertion-clocked forms (`$changed/$stable`), but this
+      path lacked dedicated regression coverage.
+  - implemented:
+    - added focused importer regression for packed sampled-value usage under
+      standard assertion clocking (no explicit sampled-value clock arg).
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-sampled-packed.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-packed.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 - Iteration update (bounded property `eventually` / `s_eventually`):
   - realization:
     - bounded unary temporal operators on property operands were being treated
