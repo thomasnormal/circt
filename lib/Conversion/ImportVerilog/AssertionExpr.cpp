@@ -65,6 +65,47 @@ static moore::IntType getSampledSimpleBitVectorType(Context &context,
   return {};
 }
 
+static Value buildSampledStableComparison(Context &context, Location loc,
+                                          Value lhs, Value rhs,
+                                          StringRef funcName) {
+  auto &builder = context.builder;
+  if (!lhs || !rhs || lhs.getType() != rhs.getType()) {
+    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+    return {};
+  }
+
+  if (isa<moore::IntType>(lhs.getType()))
+    return moore::EqOp::create(builder, loc, lhs, rhs).getResult();
+
+  if (isa<moore::UnpackedArrayType>(lhs.getType()))
+    return moore::UArrayCmpOp::create(builder, loc, moore::UArrayCmpPredicate::eq,
+                                      lhs, rhs);
+
+  if (auto structTy = dyn_cast<moore::UnpackedStructType>(lhs.getType())) {
+    auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+    Value allEqual = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+    for (auto member : structTy.getMembers()) {
+      auto lhsField = moore::StructExtractOp::create(builder, loc, member.type,
+                                                     member.name, lhs);
+      auto rhsField = moore::StructExtractOp::create(builder, loc, member.type,
+                                                     member.name, rhs);
+      auto fieldEq =
+          buildSampledStableComparison(context, loc, lhsField, rhsField, funcName);
+      if (!fieldEq)
+        return {};
+      if (fieldEq.getType() != i1Ty)
+        fieldEq = context.materializeConversion(i1Ty, fieldEq, false, loc);
+      if (!fieldEq)
+        return {};
+      allEqual = moore::AndOp::create(builder, loc, allEqual, fieldEq).getResult();
+    }
+    return allEqual;
+  }
+
+  mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+  return {};
+}
+
 static const slang::ast::SignalEventControl *
 getCanonicalSignalEventControl(const slang::ast::TimingControl &ctrl) {
   if (auto *signal = ctrl.as_if<slang::ast::SignalEventControl>()) {
@@ -325,10 +366,12 @@ static Value lowerSampledValueFunctionWithClocking(
   Type loweredType = context.convertType(*valueExpr.type);
   if (auto refType = dyn_cast<moore::RefType>(loweredType))
     loweredType = refType.getNestedType();
-  bool isUnpackedArraySample =
-      (isStable || isChanged) && isa<moore::UnpackedArrayType>(loweredType);
+  bool isUnpackedAggregateSample =
+      (isStable || isChanged) &&
+      (isa<moore::UnpackedArrayType>(loweredType) ||
+       isa<moore::UnpackedStructType>(loweredType));
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
-  if (!isUnpackedArraySample && !intType) {
+  if (!isUnpackedAggregateSample && !intType) {
     mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
     return {};
   }
@@ -337,7 +380,7 @@ static Value lowerSampledValueFunctionWithClocking(
   moore::IntType sampleType;
   moore::UnpackedType sampledStorageType;
   moore::IntType resultType;
-  if (isUnpackedArraySample) {
+  if (isUnpackedAggregateSample) {
     sampledStorageType = cast<moore::UnpackedType>(loweredType);
     resultType = moore::IntType::getInt(builder.getContext(), 1);
   } else {
@@ -365,7 +408,7 @@ static Value lowerSampledValueFunctionWithClocking(
     }
 
     Value prevInit;
-    if (!isUnpackedArraySample) {
+    if (!isUnpackedAggregateSample) {
       prevInit = createUnknownOrZeroConstant(context, loc, sampleType);
       if (!prevInit)
         return {};
@@ -388,12 +431,12 @@ static Value lowerSampledValueFunctionWithClocking(
     Value current = context.convertRvalueExpression(valueExpr);
     if (!current)
       return {};
-    if (!isUnpackedArraySample && !isa<moore::IntType>(current.getType()))
+    if (!isUnpackedAggregateSample && !isa<moore::IntType>(current.getType()))
       current = context.convertToSimpleBitVector(current);
     if (!current)
       return {};
-    if (isUnpackedArraySample) {
-      if (!isa<moore::UnpackedArrayType>(current.getType())) {
+    if (isUnpackedAggregateSample) {
+      if (!isa<moore::UnpackedType>(current.getType())) {
         mlir::emitError(loc)
             << "unsupported sampled value type for " << funcName;
         return {};
@@ -497,12 +540,10 @@ static Value lowerSampledValueFunctionWithClocking(
     Value prev = moore::ReadOp::create(builder, loc, prevVar);
     Value result;
     if (isStable || isChanged) {
-      Value stable;
-      if (isUnpackedArraySample)
-        stable = moore::UArrayCmpOp::create(
-            builder, loc, moore::UArrayCmpPredicate::eq, current, prev);
-      else
-        stable = moore::EqOp::create(builder, loc, current, prev).getResult();
+      Value stable = buildSampledStableComparison(context, loc, current, prev,
+                                                  funcName);
+      if (!stable)
+        return {};
       result = stable;
       if (isChanged)
         result = moore::NotOp::create(builder, loc, stable).getResult();
@@ -571,16 +612,18 @@ static Value lowerPastWithClocking(Context &context,
   if (auto refType = dyn_cast<moore::RefType>(originalType))
     originalType = refType.getNestedType();
   auto originalUnpacked = dyn_cast<moore::UnpackedType>(originalType);
-  bool isUnpackedArraySample = isa<moore::UnpackedArrayType>(originalType);
+  bool isUnpackedAggregateSample =
+      isa<moore::UnpackedArrayType>(originalType) ||
+      isa<moore::UnpackedStructType>(originalType);
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
-  if (!isUnpackedArraySample && !intType) {
+  if (!isUnpackedAggregateSample && !intType) {
     mlir::emitError(loc)
         << "unsupported $past value type with explicit clocking";
     return {};
   }
   moore::UnpackedType storageType =
-      isUnpackedArraySample ? cast<moore::UnpackedType>(originalType)
-                            : cast<moore::UnpackedType>(intType);
+      isUnpackedAggregateSample ? cast<moore::UnpackedType>(originalType)
+                                : cast<moore::UnpackedType>(intType);
 
   int64_t historyDepth = std::max<int64_t>(delay, 1);
 
@@ -599,7 +642,7 @@ static Value lowerPastWithClocking(Context &context,
     }
 
     Value init;
-    if (!isUnpackedArraySample) {
+    if (!isUnpackedAggregateSample) {
       init = createUnknownOrZeroConstant(context, loc, intType);
       if (!init)
         return {};
@@ -621,12 +664,12 @@ static Value lowerPastWithClocking(Context &context,
     Value current = context.convertRvalueExpression(valueExpr);
     if (!current)
       return {};
-    if (!isUnpackedArraySample && !isa<moore::IntType>(current.getType()))
+    if (!isUnpackedAggregateSample && !isa<moore::IntType>(current.getType()))
       current = context.convertToSimpleBitVector(current);
     if (!current)
       return {};
-    if (isUnpackedArraySample) {
-      if (!isa<moore::UnpackedArrayType>(current.getType()) ||
+    if (isUnpackedAggregateSample) {
+      if (!isa<moore::UnpackedType>(current.getType()) ||
           current.getType() != storageType) {
         mlir::emitError(loc)
             << "unsupported $past value type with explicit clocking";
@@ -725,7 +768,7 @@ static Value lowerPastWithClocking(Context &context,
     if (delay > 0)
       pastValue = moore::ReadOp::create(builder, loc, historyVars.back());
     Value disabledValue = pastValue;
-    if (!isUnpackedArraySample) {
+    if (!isUnpackedAggregateSample) {
       disabledValue = createUnknownOrZeroConstant(context, loc, intType);
       if (!disabledValue)
         return {};
@@ -1774,19 +1817,22 @@ Value Context::convertAssertionCallExpression(
     value = this->convertRvalueExpression(*args[0]);
     if (!value)
       return {};
-    bool isUArraySample =
+    bool isAggregateSample =
         (funcName == "$stable" || funcName == "$changed") &&
-        isa<moore::UnpackedArrayType>(value.getType());
-    if (!isUArraySample && isa<moore::UnpackedArrayType>(value.getType())) {
+        (isa<moore::UnpackedArrayType>(value.getType()) ||
+         isa<moore::UnpackedStructType>(value.getType()));
+    if (!isAggregateSample &&
+        (isa<moore::UnpackedArrayType>(value.getType()) ||
+         isa<moore::UnpackedStructType>(value.getType()))) {
       mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
       return {};
     }
 
-    if (!isUArraySample && !isa<moore::IntType>(value.getType()))
+    if (!isAggregateSample && !isa<moore::IntType>(value.getType()))
       value = convertToSimpleBitVector(value);
     if (!value)
       return {};
-    if (!isUArraySample && !isa<moore::IntType>(value.getType())) {
+    if (!isAggregateSample && !isa<moore::IntType>(value.getType())) {
       mlir::emitError(loc) << "unsupported sampled value type for "
                            << funcName;
       return {};
@@ -1933,12 +1979,10 @@ Value Context::convertAssertionCallExpression(
         past =
             moore::PastOp::create(builder, loc, value, /*delay=*/1).getResult();
       }
-      Value stable;
-      if (isUArraySample)
-        stable = moore::UArrayCmpOp::create(
-            builder, loc, moore::UArrayCmpPredicate::eq, sampled, past);
-      else
-        stable = moore::EqOp::create(builder, loc, sampled, past).getResult();
+      Value stable =
+          buildSampledStableComparison(*this, loc, sampled, past, funcName);
+      if (!stable)
+        return {};
       Value resultVal = stable;
       if (funcName == "$changed")
         resultVal = moore::NotOp::create(builder, loc, stable).getResult();
