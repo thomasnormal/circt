@@ -76554,3 +76554,34 @@ See CHANGELOG.md on recent progress.
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-event.sv` (`real=0.007s`, `user=0.005s`, `sys=0.002s`)
+107. ImportVerilog SVA: preserve sequence match-item display/write side effects
+     (February 22, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - sequence match-item call lowering now handles display/write-style
+        system subroutines (`$display*` / `$write*`) as explicit side effects
+        instead of dropping them.
+      - lowered calls emit `moore.builtin.display` marker messages in the
+        assertion lowering path.
+      - non-display/write system subroutines keep previous behavior:
+        ignored with a remark.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv`
+      - failing-first behavior reproduced prior to fix:
+        - system subroutines in match items were dropped or failed in
+          expression conversion (`unsupported system call `$display``).
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+        - `ninja -C build-test circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-event.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv`
+      - lit subset: PASS
+        - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sampled-event.sv build-test/test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - profiling sample:
+        - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv` (`real=0.007s`, `user=0.006s`, `sys=0.001s`)

@@ -115,7 +115,9 @@ Additional compile-only or XFAIL expectations live in
    - Still missing: UVM property interface coverage on the full sv-tests suite.
 
 5. **Sequence subroutines (16.11)**
-   - Match-item subroutine calls now parse and lower (side effects ignored)
+   - Match-item subroutine calls now parse and lower
+   - display/write-style system match-item calls now preserve side effects
+     in ImportVerilog lowering (instead of being dropped)
    - UVM sequence subroutine case compiles in `--ir-hw`
    - BMC/LEC: Added end-to-end UVM coverage in
      `test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv` and
@@ -223,6 +225,8 @@ Additional compile-only or XFAIL expectations live in
     variables in addition to integer locals
   - sequence match-item unary `++/--` now also supports `time` local assertion
     variables with timescale-aware increment/decrement semantics
+  - sequence match-item display/write system subroutine calls now lower to
+    side-effecting Moore display builtins (no longer dropped with a remark)
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
