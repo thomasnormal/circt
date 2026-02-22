@@ -1311,3 +1311,14 @@ verilator-verification, and yosys corpora).
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
+- Additional ImportVerilog SVA closure:
+  - explicit assertion clocking now correctly suppresses outer default-clocking
+    reapplication (prevents nested `ltl.clock` wrappers after explicit `@...`).
+  - updated regression:
+    - `test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-defaults-property.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-defaults-property.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-defaults.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-defaults.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`

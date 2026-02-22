@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1554 - February 21, 2026
+
+### [ImportVerilog][SVA] Do not reapply default clocking over explicit assertion clock controls
+
+1. **Fixed default-clock double-wrapping for explicitly clocked assertions**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - `convertAssertionExpression` now skips default clocking if the converted
+     assertion expression is already explicitly clocked (`ltl.clock` root).
+   - this prevents spurious re-clocking after explicit timing controls such as
+     `@s` and aligns with explicit-clock-overrides-default semantics.
+
+2. **Strengthened regression coverage**
+   - `test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+     now verifies that `assert property (@s c);` does not get re-clocked by
+     default clocking (no `ltl.clock [[CLOCKED]]` chain before `verif.assert`).
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-defaults-property.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-defaults-property.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-defaults.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-defaults.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` (`real=0.053s`, `user=0.002s`, `sys=0.006s`).
+
 ## Iteration 1553 - February 21, 2026
 
 ### [ImportVerilog][SVA] Support sequence-valued assertion clocking events (`@seq`)
