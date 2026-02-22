@@ -1952,7 +1952,8 @@ struct AssertionExprVisitor {
             break;
           }
           if (name == "$showscopes" || name == "$input" || name == "$key" ||
-              name == "$nokey" || name == "$log" || name == "$nolog") {
+              name == "$nokey" || name == "$log" || name == "$nolog" ||
+              name == "$scope" || name == "$list") {
             break;
           }
           if (name == "$save" || name == "$restart" || name == "$incsave" ||
