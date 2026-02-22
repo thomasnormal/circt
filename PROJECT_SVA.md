@@ -276,6 +276,9 @@ Additional compile-only or XFAIL expectations live in
       `$set_coverage_db_name/$load_coverage_db`
     - `$sdf_annotate` now emits a warning instead of an ignore remark
     - `$static_assert` recognized as compile-time no-op
+  - value-returning `$rewind(fd)` now lowers in assertion-expression contexts
+    (including match-item assignment RHS), preserving side effects and returning
+    an `int` success code in value position
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:

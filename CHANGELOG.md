@@ -76980,3 +76980,34 @@ See CHANGELOG.md on recent progress.
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-coverage-sdf-static-subroutine.sv` (`real=0.008s`, `user=0.003s`, `sys=0.004s`)
+121. ImportVerilog SVA: support `$rewind` in value-returning assertion calls
+     (February 22, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/Expressions.cpp`
+      - added value-context lowering for `$rewind(fd)` in one-argument system
+        call conversion:
+        - emits `moore.builtin.rewind` side effect
+        - returns `i32` success value for use in expression context
+      - this unblocks sequence match-item assignment RHS forms such as
+        `rc = $rewind(fd)` in assertion expressions.
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp` also recognizes
+        `$rewind` in assertion-call conversion path.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-sequence-match-item-rewind-function.sv`
+      - failing-first behavior reproduced prior to fix:
+        - `unsupported system call '$rewind'` in sequence match-item assignment
+          RHS call.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+        - `ninja -C build-test circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-rewind-function.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-rewind-function.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-rewind-function.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-rewind-function.sv --check-prefix=DIAG`
+      - lit subset: PASS
+        - `cd build-test && ../llvm/build/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-sequence-match-item-rewind-function.sv test/Conversion/ImportVerilog/sva-sequence-match-item-coverage-sdf-static-subroutine.sv test/Conversion/ImportVerilog/sva-sequence-match-item-scope-list-subroutine.sv`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - profiling sample:
+        - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-rewind-function.sv` (`real=0.007s`, `user=0.005s`, `sys=0.002s`)
