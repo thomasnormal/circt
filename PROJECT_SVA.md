@@ -267,6 +267,7 @@ Additional compile-only or XFAIL expectations live in
     handling:
     - debug/interactive tasks recognized as no-op controls:
       `$showscopes/$input/$key/$nokey/$log/$nolog`
+      `$scope/$list`
     - checkpoint/restart tasks now emit warnings instead of ignore remarks:
       `$save/$restart/$incsave/$reset`
 - **Deferred assertions**:

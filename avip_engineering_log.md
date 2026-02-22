@@ -5561,3 +5561,36 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 6. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-debug-checkpoint-subroutine.sv`: `real=0.007s`
+
+## 2026-02-22 Session: Sequence match-item `$scope/$list` debug tasks
+
+### Problem
+1. `$scope` and `$list` were parser-reachable in sequence match-items but still
+   emitted ignored-subroutine remarks.
+2. This left a debug-task parity gap relative to statement-level handling.
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp` in
+   `handleMatchItems` system-call handling:
+   - added `$scope` and `$list` to the recognized debug no-op family in
+     match-items.
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-sequence-match-item-scope-list-subroutine.sv`
+3. Updated docs/changelog:
+   - `PROJECT_SVA.md`
+   - `CHANGELOG.md`
+
+### Validation
+1. Failing-first proof:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-scope-list-subroutine.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-scope-list-subroutine.sv --check-prefix=DIAG`: FAIL (pre-fix; ignored-subroutine remarks for `$scope/$list`)
+2. Build:
+   - `ninja -C build-test circt-translate circt-verilog`: PASS
+3. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-scope-list-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-scope-list-subroutine.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-scope-list-subroutine.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-scope-list-subroutine.sv --check-prefix=DIAG`: PASS
+4. Lit subset:
+   - `cd build-test && ../llvm/build/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-sequence-match-item-scope-list-subroutine.sv test/Conversion/ImportVerilog/sva-sequence-match-item-debug-checkpoint-subroutine.sv test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-subroutine.sv`: PASS
+5. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+6. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-scope-list-subroutine.sv`: `real=0.007s`
