@@ -1703,3 +1703,25 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv` (`real=0.007s`)
+
+- Iteration update (SVA `case` property match semantics):
+  - realization:
+    - `CaseAssertionExpr` lowering matched item expressions with `moore.eq`,
+      which does not preserve standard 4-state case matching behavior.
+  - TDD proof:
+    - updated `test/Conversion/ImportVerilog/sva-case-property.sv` checks from
+      `moore.eq` to `moore.case_eq`.
+    - before fix:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
+      - failed because IR still emitted `moore.eq`.
+  - implemented:
+    - switched `CaseAssertionExpr` item compare lowering in
+      `AssertionExpr.cpp` from `moore::EqOp` to `moore::CaseEqOp`.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv` (`real=0.007s`)

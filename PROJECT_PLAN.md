@@ -217,6 +217,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now supports explicit sampled-clock `$past(..., @(event))` for
    open unpacked arrays and queues in assertions, using typed helper history
    state instead of rejecting those operand types.
+34. **SVA `case` property uses case-equality matching** (Feb 22, 2026):
+   ImportVerilog now lowers `case (...)` property item selection with
+   `moore.case_eq` instead of plain logical equality, matching SystemVerilog
+   `case` semantics for 4-state selectors and item expressions.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
