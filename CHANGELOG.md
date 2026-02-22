@@ -1,3 +1,46 @@
+## Iteration 1607 - February 22, 2026
+
+### [ImportVerilog][SVA] Preserve `disable iff` semantics in no-clock `$past` helper lowering
+
+1. **Implemented no-clock `$past` disable-control closure**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`,
+   `lib/Conversion/ImportVerilog/Statements.cpp`):
+   - `$past` lowering now preserves collected assertion disable expressions even
+     when no explicit/implicit assertion clock can be inferred.
+   - no-clock helper lowering now triggers for either enable controls or
+     disable controls (`enableExpr || !disableExprs.empty()`), so sampled
+     history state properly resets under disable conditions.
+   - top-level `disable iff (...)` peeled in statement lowering is now threaded
+     into assertion-expression conversion via assertion-disable scope push/pop,
+     ensuring sampled-value calls inside that property can observe disable
+     context during conversion.
+
+2. **Behavioral fix**
+   - for constructs like:
+     - `assert property (disable iff (rst) ($past(a, 1, en) |-> a));`
+     helper state updates now include reset/disable gating, preventing stale
+     pre-disable sampled history from leaking across disable windows.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv`
+   - regression checks verify:
+     - synthesized no-clock helper procedure reads `rst`,
+     - helper state-update path includes a disable-guard `moore.conditional`
+       on `rst`,
+     - assertion remains emitted with enable gating.
+
+4. **Validation**
+   - `ninja -C build-test circt-translate`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`: PASS.
+     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv >/dev/null` (`real=0.007s`, `user=0.005s`, `sys=0.002s`).
+
 ## Iteration 1606 - February 22, 2026
 
 ### [ImportVerilog][SVA] Lower enabled `$past` without explicit clocking
