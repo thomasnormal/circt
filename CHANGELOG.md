@@ -1,3 +1,42 @@
+## Iteration 1592 - February 22, 2026
+
+### [ImportVerilog][SVA] Support dynamic/open-array sampled value functions
+
+1. **Implemented open unpacked array sampled support**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - added exact sampled stability comparison for `open_uarray`:
+     - compare sizes (`moore.array.size`)
+     - detect per-index mismatches (`moore.array.locator` + `dyn_extract`)
+     - stable iff mismatch count is zero.
+   - added sampled boolean conversion for `open_uarray`:
+     - locate truthy elements with `moore.array.locator`
+     - boolean value is non-empty match queue.
+   - integrated `OpenUnpackedArrayType` into sampled aggregate lowering for:
+     - `$stable/$changed`
+     - `$rose/$fell`
+   - applies in both direct assertion-clocked sampled lowering and explicit
+     sampled clock helper lowering.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv`
+     - `test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`
+   - updated negative:
+     - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+       now checks unsupported associative-array sampled edge call.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv >/dev/null`: PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1591 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support unpacked aggregate `$rose/$fell`

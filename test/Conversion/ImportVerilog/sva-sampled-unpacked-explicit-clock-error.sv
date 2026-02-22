@@ -2,10 +2,10 @@
 // REQUIRES: slang
 
 module SvaSampledUnpackedExplicitClockError(input logic clk);
-  int s[];
+  int aa[int];
 
-  // Dynamic arrays still cannot be converted to a sampled scalar for
+  // Associative arrays still cannot be converted to a sampled scalar for
   // $rose/$fell helper lowering.
-  // CHECK: error: expression of type '!moore.open_uarray<i32>' cannot be cast to a simple bit vector
-  assert property ($rose(s, @(posedge clk)));
+  // CHECK: error: expression of type '!moore.assoc_array<i32, i32>' cannot be cast to a simple bit vector
+  assert property ($rose(aa, @(posedge clk)));
 endmodule
