@@ -1723,6 +1723,39 @@ struct AssertionExprVisitor {
             moore::PrintTimescaleBIOp::create(builder, loc);
             break;
           }
+          if (name == "$showvars") {
+            auto args = call.arguments();
+            SmallVector<Value> fragments;
+            for (const auto *arg : args) {
+              std::string varName = "?";
+              if (auto *named = arg->as_if<slang::ast::NamedValueExpression>())
+                varName = std::string(named->symbol.name);
+              auto rvalue = context.convertRvalueExpression(*arg);
+              if (!rvalue)
+                return failure();
+              auto value = context.convertToSimpleBitVector(rvalue);
+              if (!value)
+                return failure();
+              fragments.push_back(moore::FormatLiteralOp::create(
+                  builder, loc, ("  " + varName + " = ")));
+              fragments.push_back(moore::FormatIntOp::create(
+                  builder, loc, value, moore::IntFormat::Decimal,
+                  moore::IntAlign::Left, moore::IntPadding::Space,
+                  IntegerAttr(), /*isSigned=*/true));
+              fragments.push_back(
+                  moore::FormatLiteralOp::create(builder, loc, "\n"));
+            }
+            if (!fragments.empty()) {
+              Value msg;
+              if (fragments.size() == 1)
+                msg = fragments[0];
+              else
+                msg = moore::FormatConcatOp::create(builder, loc, fragments)
+                          .getResult();
+              moore::DisplayBIOp::create(builder, loc, msg);
+            }
+            break;
+          }
           if (name == "$stop") {
             moore::StopBIOp::create(builder, loc);
             break;
