@@ -1,3 +1,39 @@
+## Iteration 1593 - February 22, 2026
+
+### [ImportVerilog][SVA] Fix queue sampled-value semantics (`$stable/$changed/$rose/$fell`)
+
+1. **Implemented queue sampled-function lowering**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - queue sampled stability now uses element-aware semantics:
+     - size equality check (`moore.array.size`)
+     - mismatch detection (`moore.array.locator` + indexed extraction)
+     - stable when mismatch set is empty.
+   - queue sampled boolean conversion for `$rose/$fell` now checks if any queue
+     element is truthy (via `moore.array.locator` + non-empty result).
+   - queue type is now included in sampled aggregate classification for both
+     direct assertion-clocked and explicit-clock helper sampled lowering.
+
+2. **Behavioral fix**
+   - removes prior queue-to-zero fallback path in sampled functions, which
+     previously produced incorrect constant-like behavior.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sampled-queue.sv`
+     - `test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-queue.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-queue.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-translate --import-verilog /tmp/sva_sampled_queue_probe.sv` (no `treating queue value as zero` remarks): PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue.sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1592 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support dynamic/open-array sampled value functions

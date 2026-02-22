@@ -200,6 +200,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    `$stable/$changed/$rose/$fell` in assertions (direct and explicit-clock
    helper lowering), using size-aware elementwise comparison and boolean
    reduction through array locator primitives.
+30. **Queue sampled-value semantic parity** (Feb 22, 2026):
+   ImportVerilog now lowers queue operands for `$stable/$changed/$rose/$fell`
+   with size-aware/element-aware queue semantics, replacing prior queue-to-zero
+   fallback behavior.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to

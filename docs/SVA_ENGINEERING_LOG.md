@@ -1586,3 +1586,35 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv` (`real=0.007s`)
+
+- Iteration update (queue sampled-value semantic fix):
+  - realization:
+    - queue sampled-value functions were previously lowered through
+      simple-bit-vector fallback, producing `treating queue value as zero`
+      remarks and effectively constant-zero semantics for
+      `$stable/$changed/$rose/$fell`.
+  - implemented:
+    - added queue support in sampled stable-comparison helper:
+      - size equality via `moore.array.size`
+      - element mismatch detection via `moore.array.locator` and indexed
+        extraction
+      - stable iff no mismatches.
+    - added queue support in sampled boolean helper:
+      - truthy element detection via `moore.array.locator`
+      - queue sampled boolean is non-empty match result.
+    - wired sampled aggregate classification to include `moore::QueueType` for
+      direct and explicit-clock helper lowering paths.
+    - new regressions:
+      - `test/Conversion/ImportVerilog/sva-sampled-queue.sv`
+      - `test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-queue.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-queue.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog /tmp/sva_sampled_queue_probe.sv` (no queue-to-zero fallback remarks)
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue.sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv` (`real=0.007s`)
