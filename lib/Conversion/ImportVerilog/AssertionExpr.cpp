@@ -1625,25 +1625,29 @@ struct AssertionExprVisitor {
                                                  loc);
             return fd;
           };
-          auto emitSeverity = [&](moore::Severity severity) {
-            auto msg = moore::FormatLiteralOp::create(builder, loc, name.str());
-            moore::SeverityBIOp::create(builder, loc, severity, msg);
-          };
-          if (name == "$info") {
-            emitSeverity(moore::Severity::Info);
-            break;
-          }
-          if (name == "$warning") {
-            emitSeverity(moore::Severity::Warning);
-            break;
-          }
-          if (name == "$error") {
-            emitSeverity(moore::Severity::Error);
-            break;
-          }
-          if (name == "$fatal") {
-            emitSeverity(moore::Severity::Fatal);
-            moore::FinishBIOp::create(builder, loc, 1);
+          using moore::Severity;
+          std::optional<Severity> severity;
+          if (name == "$info")
+            severity = Severity::Info;
+          else if (name == "$warning")
+            severity = Severity::Warning;
+          else if (name == "$error")
+            severity = Severity::Error;
+          else if (name == "$fatal")
+            severity = Severity::Fatal;
+          if (severity) {
+            auto args = call.arguments();
+            if (severity == Severity::Fatal && !args.empty())
+              args = args.subspan(1);
+            FailureOr<Value> maybeMessage = context.convertFormatString(args, loc);
+            if (failed(maybeMessage))
+              return failure();
+            Value message = *maybeMessage;
+            if (message == Value{})
+              message = moore::FormatLiteralOp::create(builder, loc, "");
+            moore::SeverityBIOp::create(builder, loc, *severity, message);
+            if (severity == Severity::Fatal)
+              moore::FinishBIOp::create(builder, loc, 1);
             break;
           }
           if (name == "$monitoron") {
