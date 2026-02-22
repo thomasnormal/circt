@@ -6,7 +6,7 @@ module SvaBoundedUnaryPropertyError(input logic clk, a, b);
     @(posedge clk) a |-> b;
   endproperty
 
-  // Property-valued always forms still require dedicated lowering.
-  // expected-error @below {{always on property expressions is not yet supported}}
-  assert property (always p);
+  // `$past` enable expressions without explicit clocking are unsupported.
+  // expected-error @below {{unsupported $past enable expression without explicit clocking}}
+  assert property ($past(a, 1, b));
 endmodule

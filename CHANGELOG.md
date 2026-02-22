@@ -1,3 +1,45 @@
+## Iteration 1569 - February 22, 2026
+
+### [ImportVerilog][SVA] Lower unbounded property `always` and harden unary range handling
+
+1. **Implemented unbounded property `always` lowering**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - added support for:
+     - `always p` where `p` is property-typed
+   - lowering uses duality:
+     - `always p` -> `ltl.not(ltl.eventually(ltl.not(p)))`
+   - this removes a direct importer error for plain unbounded property
+     `always`.
+
+2. **Added explicit safety diagnostics for open property ranges**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - added frontend errors for open upper-bound range forms on property unary
+     wrappers to avoid unsound finite-loop lowering:
+     - unbounded `eventually` range on property expressions
+     - unbounded `s_eventually` range on property expressions
+     - unbounded `always` range on property expressions
+     - unbounded `s_always` range on property expressions
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+   - updated:
+     - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+       (now verifies unsupported `$past(..., enable)` without explicit
+       clocking).
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unbounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-always-property.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-nexttime-property.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unbounded-always-property.sv >/dev/null` (`real=0.007s`, `user=0.000s`, `sys=0.007s`).
+
 ## Iteration 1568 - February 22, 2026
 
 ### [ImportVerilog][SVA] Lower bounded property `always` wrappers
