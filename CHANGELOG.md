@@ -1,3 +1,41 @@
+## Iteration 1618 - February 22, 2026
+
+### [MooreToCore][SVA] Materialize constant global init without constructor
+
+1. **Implemented static constant global initialization**
+   (`lib/Conversion/MooreToCore/MooreToCore.cpp`):
+   - added `tryCreateStaticLLVMGlobalInitAttr` to detect simple Moore global
+     init regions that yield a known `moore.constant`.
+   - when detected, emit the LLVM global with the constant initializer directly
+     and skip constructor-based initialization for that global.
+   - this removes dependence on `llvm.mlir.global_ctors` side effects for
+     simple assertion-control globals in formal flows.
+
+2. **Behavioral impact**
+   - immediate-assert control global `__circt_proc_assertions_enabled` now
+     lowers as:
+     - `llvm.mlir.global internal @__circt_proc_assertions_enabled(true)`
+     without requiring `__moore_global_init___circt_proc_assertions_enabled`.
+   - avoids vacuous disabling of procedural assertions in `circt-bmc` due to
+     unexecuted global constructors.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/immediate-assert-proc-global-static-init.sv`
+   - validates the emitted LLHD/LLVM form includes static `true` init and no
+     dedicated ctor for the procedural assertion-enable global.
+
+4. **Validation**
+   - `ninja -C build-test circt-verilog circt-bmc`: PASS.
+   - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/ImportVerilog/immediate-assert-proc-global-static-init.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-llhd test/Conversion/ImportVerilog/immediate-assert-proc-global-static-init.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/immediate-assert-proc-global-static-init.sv`: PASS.
+   - formal smoke:
+     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS.
+   - targeted parity probe (still in progress):
+     - `RISING_CLOCKS_ONLY=1 TEST_FILTER='counter|extnets' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+       `counter` fail-mode still unresolved; `extnets` pass/fail polarity now
+       flips as immediate assertions are no longer vacuously disabled.
+
 ## Iteration 1617 - February 22, 2026
 
 ### [ImportVerilog][SVA] Make typed assoc-array sampled stability key-aware
