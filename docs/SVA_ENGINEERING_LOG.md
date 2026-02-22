@@ -2,6 +2,53 @@
 
 ## 2026-02-22
 
+- Iteration update (OVL semantic harness expansion: transition/overflow + req_requires):
+  - realization:
+    - transition and range-bound arithmetic checkers were still uncovered in
+      semantic OVL regression, and request/response ordering semantics from
+      `ovl_req_requires` were missing entirely.
+    - surprise:
+      - first `ovl_req_requires` fail wrapper used pulse sequencing and ended
+        up UNSAT in fail-mode due initialization/timing artifacts.
+      - replacing that with deterministic non-vacuous constant-drive profiles
+        produced stable expected polarity (pass=UNSAT, fail=SAT).
+  - TDD proof:
+    - added wrappers and manifest entries first:
+      - `utils/ovl_semantic/wrappers/ovl_sem_no_overflow.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_no_underflow.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_transition.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_no_transition.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_req_requires.sv`
+      - `utils/ovl_semantic/manifest.tsv` entries:
+        - `ovl_sem_no_overflow`
+        - `ovl_sem_no_underflow`
+        - `ovl_sem_transition`
+        - `ovl_sem_no_transition`
+        - `ovl_sem_req_requires`
+    - first targeted run:
+      - `ovl_sem_req_requires` fail-mode returned `UNSAT` unexpectedly.
+    - wrapper fix:
+      - switched to deterministic constant-drive pass/fail profiles for
+        `req_trigger/req_follower/resp_leader/resp_trigger`.
+  - implemented:
+    - expanded semantic harness by +5 more checkers (18 -> 23 wrappers).
+    - total pass/fail obligations increased from 36 to 46.
+  - validation:
+    - targeted:
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(no_overflow|no_underflow|transition|no_transition|req_requires)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `10 tests, failures=0, xfail=0, xpass=0`
+    - full semantic lane:
+      - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `46 tests, failures=0, xfail=0, xpass=0`
+    - full OVL matrix:
+      - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-new11`
+      - result:
+        - `std_ovl/BMC PASS 110/110`
+        - `std_ovl/BMC_SEMANTIC PASS 46/46`
+    - profiling sample:
+      - `time OUT=/tmp/ovl-sem-profile-new11.log utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - `real=7.376s`
+
 - Iteration update (OVL semantic harness expansion: odd_parity/increment/decrement/delta/unchange):
   - realization:
     - arithmetic and window-stability checkers were still missing from
