@@ -2,6 +2,45 @@
 
 ## 2026-02-22
 
+- Iteration update (explicit property clock precedence in procedural contexts):
+  - realization:
+    - procedural concurrent assertion lowering had a mixed-clock semantic bug:
+      explicit property clocks inside assertions were ignored whenever an
+      enclosing procedural clock existed.
+    - concrete bad shape before fix:
+      - source:
+        `always @(posedge clk_proc) assert property (@(posedge clk_prop) a);`
+      - emitted:
+        `verif.clocked_assert ... posedge clk_proc`
+      - expected:
+        `verif.clocked_assert ... posedge clk_prop`.
+  - TDD proof:
+    - added
+      `test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`.
+    - before fix:
+      - FileCheck failed: emitted clocked assert used procedural clock instead
+        of explicit property clock.
+  - implemented:
+    - in procedural clocked hoist path (`Statements.cpp`):
+      - detect `ltl.clock` on converted property expressions.
+      - when present, use explicit clock edge/signal and emit clocked op on the
+        clock input property (avoid double clocking).
+      - retain existing procedural-clock path when no explicit property clock is
+        present.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
+    - compatibility checks:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
+      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv` (`real=0.007s`)
+
 - Iteration update (explicit-clock procedural hoist ordering):
   - realization:
     - explicit-property-clock procedural hoisting still inserted new

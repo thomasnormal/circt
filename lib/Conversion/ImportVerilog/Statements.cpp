@@ -2584,10 +2584,27 @@ struct StmtVisitor {
           return success();
         return failure();
       }
-      auto *assertionClock = getCanonicalAssertionClockSignalEvent(
-          *context.currentAssertionClock);
-      if (!assertionClock)
-        assertionClock = context.currentAssertionClock;
+      Value clockVal;
+      verif::ClockEdge edge = verif::ClockEdge::Both;
+      Value emittedProperty = property;
+      if (auto clockOp = property.getDefiningOp<ltl::ClockOp>()) {
+        // Explicit property clocking takes precedence over enclosing procedural
+        // event controls.
+        edge =
+            static_cast<verif::ClockEdge>(static_cast<int>(clockOp.getEdge()));
+        clockVal = clockOp.getClock();
+        emittedProperty = clockOp.getInput();
+      } else {
+        auto *assertionClock = getCanonicalAssertionClockSignalEvent(
+            *context.currentAssertionClock);
+        if (!assertionClock)
+          assertionClock = context.currentAssertionClock;
+        clockVal = context.convertRvalueExpression(assertionClock->expr);
+        clockVal = context.convertToI1(clockVal);
+        if (!clockVal)
+          return failure();
+        edge = convertEdgeKindVerif(assertionClock->edge);
+      }
       Value enable;
       IRMapping mapping;
       llvm::DenseSet<Operation *> active;
@@ -2622,36 +2639,31 @@ struct StmtVisitor {
         if (!enable)
           return failure();
       }
-      auto clockVal = context.convertRvalueExpression(assertionClock->expr);
-      clockVal = context.convertToI1(clockVal);
-      if (!clockVal)
-        return failure();
-      auto edge = convertEdgeKindVerif(assertionClock->edge);
       switch (stmt.assertionKind) {
       case slang::ast::AssertionKind::Assert:
-        verif::ClockedAssertOp::create(builder, loc, property, edge, clockVal,
-                                       enable, actionLabel);
+        verif::ClockedAssertOp::create(builder, loc, emittedProperty, edge,
+                                       clockVal, enable, actionLabel);
         return success();
       case slang::ast::AssertionKind::Assume:
-        verif::ClockedAssumeOp::create(builder, loc, property, edge, clockVal,
-                                       enable, actionLabel);
+        verif::ClockedAssumeOp::create(builder, loc, emittedProperty, edge,
+                                       clockVal, enable, actionLabel);
         return success();
       case slang::ast::AssertionKind::Restrict:
         // Restrict constraints are treated as assumptions in lowering.
-        verif::ClockedAssumeOp::create(builder, loc, property, edge, clockVal,
-                                       enable, actionLabel);
+        verif::ClockedAssumeOp::create(builder, loc, emittedProperty, edge,
+                                       clockVal, enable, actionLabel);
         return success();
       case slang::ast::AssertionKind::CoverProperty:
-        verif::ClockedCoverOp::create(builder, loc, property, edge, clockVal,
-                                      enable, actionLabel);
+        verif::ClockedCoverOp::create(builder, loc, emittedProperty, edge,
+                                      clockVal, enable, actionLabel);
         return success();
       case slang::ast::AssertionKind::CoverSequence:
-        verif::ClockedCoverOp::create(builder, loc, property, edge, clockVal,
-                                      enable, actionLabel);
+        verif::ClockedCoverOp::create(builder, loc, emittedProperty, edge,
+                                      clockVal, enable, actionLabel);
         return success();
       case slang::ast::AssertionKind::Expect:
-        verif::ClockedAssertOp::create(builder, loc, property, edge, clockVal,
-                                       enable, actionLabel);
+        verif::ClockedAssertOp::create(builder, loc, emittedProperty, edge,
+                                       clockVal, enable, actionLabel);
         return success();
       default:
         break;
