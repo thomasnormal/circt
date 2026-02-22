@@ -142,6 +142,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
    simple bit vectors in sampled-value helper paths.
+16. **SVA packed `$past` explicit-clocking support** (Feb 22, 2026):
+   ImportVerilog now lowers explicit-clocked `$past` on packed operands by
+   sampling in simple-bit-vector form and converting results back to packed
+   type, instead of rejecting non-int operands.
 10. **SVA `$future_gclk` temporal semantics fix** (Feb 21, 2026):
    Importer now lowers `$future_gclk(expr)` through forward temporal
    `ltl.delay(expr, 1, 0)` semantics instead of approximating with

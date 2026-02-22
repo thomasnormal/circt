@@ -1,3 +1,35 @@
+## Iteration 1572 - February 22, 2026
+
+### [ImportVerilog][SVA] Support packed `$past` values with explicit clocking
+
+1. **Extended explicit-clocked `$past` lowering for packed operands**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - explicit-clocked `$past` no longer requires direct `moore::IntType`
+     operands.
+   - packed operands are now lowered by:
+     - sampling and storing their simple-bit-vector form in helper history
+     - converting the sampled result back to the original packed type at the
+       call site.
+   - this fixes importer errors on legal forms like:
+     - `$past(packed_value, 1, @(posedge clk))`.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
+   - revalidated:
+     - `test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv`
+     - `test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv >/dev/null` (`real=0.007s`, `user=0.002s`, `sys=0.005s`).
+
 ## Iteration 1571 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support packed sampled values with explicit clocking

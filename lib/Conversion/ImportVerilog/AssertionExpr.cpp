@@ -524,8 +524,11 @@ static Value lowerPastWithClocking(Context &context,
     return {};
   }
 
-  auto valueType = context.convertType(*valueExpr.type);
-  auto intType = dyn_cast_or_null<moore::IntType>(valueType);
+  Type originalType = context.convertType(*valueExpr.type);
+  if (auto refType = dyn_cast<moore::RefType>(originalType))
+    originalType = refType.getNestedType();
+  auto originalUnpacked = dyn_cast<moore::UnpackedType>(originalType);
+  auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
   if (!intType) {
     mlir::emitError(loc)
         << "unsupported $past value type with explicit clocking";
@@ -567,7 +570,9 @@ static Value lowerPastWithClocking(Context &context,
     Value current = context.convertRvalueExpression(valueExpr);
     if (!current)
       return {};
-    auto currentType = dyn_cast<moore::IntType>(current.getType());
+    if (!isa<moore::IntType>(current.getType()))
+      current = context.convertToSimpleBitVector(current);
+    auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
     if (!currentType) {
       mlir::emitError(loc)
           << "unsupported $past value type with explicit clocking";
@@ -681,7 +686,11 @@ static Value lowerPastWithClocking(Context &context,
     moore::ReturnOp::create(builder, loc);
   }
 
-  return moore::ReadOp::create(builder, loc, resultVar);
+  Value result = moore::ReadOp::create(builder, loc, resultVar);
+  if (originalUnpacked && result.getType() != originalUnpacked)
+    result = context.materializeConversion(originalUnpacked, result,
+                                           /*isSigned=*/false, loc);
+  return result;
 }
 
 struct AssertionExprVisitor {
