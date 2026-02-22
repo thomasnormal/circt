@@ -6167,3 +6167,39 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`: PASS
 6. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv`: `real=0.007s`
+
+## 2026-02-22 Session: Richer action-block labels for strobe/monitor/file I/O tasks
+
+### Problem
+1. Concurrent assertion action blocks only preserved message labels for a narrow
+   task set (`$error/$warning/$fatal/$info/$display/$write`).
+2. Action blocks using `$strobe/$monitor` and file I/O variants
+   (`$fdisplay/$fwrite/$fstrobe/$fmonitor`) degraded to generic
+   `"action_block"` labels, losing useful diagnostic context.
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/Statements.cpp` action-label
+   extraction in concurrent assertion lowering:
+   - recognized additional task families:
+     - `$strobe/$monitor` (+ `b/o/h` variants)
+     - `$fdisplay/$fwrite/$fstrobe/$fmonitor` (+ `b/o/h` variants)
+   - used `call->getSubroutineName()` (and `$`-prefixed filtering) for robust
+     task identification in action blocks.
+   - for file-task families, treated the first argument as file descriptor and
+     extracted message labels from the next argument.
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`
+
+### Validation
+1. Failing-first proof:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-io-labels.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`: FAIL pre-fix (labels were `"action_block"`).
+2. Build:
+   - `ninja -C build-test circt-translate`: PASS
+3. Focused checks:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-io-labels.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`: PASS
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`: `real=0.007s`
