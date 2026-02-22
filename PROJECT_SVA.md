@@ -185,6 +185,8 @@ Additional compile-only or XFAIL expectations live in
     value streams (including string-key associative arrays)
   - wildcard associative-array equality/stability lowering no longer emits
     illegal direct size ops on `wildcard_assoc_array` values
+  - typed associative-array sampled stability now compares both key streams and
+    value streams (including string-key associative arrays)
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:

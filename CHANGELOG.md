@@ -1,3 +1,45 @@
+## Iteration 1617 - February 22, 2026
+
+### [ImportVerilog][SVA] Make typed assoc-array sampled stability key-aware
+
+1. **Implemented key-aware typed-assoc sampled stability**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - updated sampled stable-comparison for `moore::AssocArrayType` to compare:
+     - key projection queues (`moore.array.locator all, indices`)
+     - value projection queues (`moore.array.locator all, elements`)
+   - added scalar sampled-stability support for:
+     - `moore::StringType` / `moore::FormatStringType` (via `moore.string_cmp eq`)
+     - `moore::ChandleType` (via 64-bit cast + equality)
+   - this enables recursive sampled comparison when assoc-array key types are
+     non-integer (for example `string`).
+
+2. **Behavioral fix**
+   - typed associative-array `$stable/$changed` no longer rely on positional
+     element-only comparison in sampled helper lowering.
+   - string-key associative-array sampled stability now imports and lowers
+     correctly.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-string-key-explicit-clock.sv`
+   - checks key-aware sampled lowering shape:
+     - `moore.array.locator all, indices`
+     - `moore.array.locator all, elements`
+     - assertion emission.
+
+4. **Validation**
+   - `ninja -C build-test circt-translate`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-string-key-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-string-key-explicit-clock.sv`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-wildcard-assoc-array-equality-stable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-wildcard-assoc-array-equality-stable.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS.
+   - formal regression smoke:
+     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-string-key-explicit-clock.sv >/dev/null` (`real=0.006s`, `user=0.001s`, `sys=0.005s`).
+
 ## Iteration 1616 - February 22, 2026
 
 ### [ImportVerilog][SVA] Fix wildcard assoc-array equality/stability verifier failure
