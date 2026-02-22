@@ -1,3 +1,35 @@
+## Iteration 1568 - February 22, 2026
+
+### [ImportVerilog][SVA] Lower bounded property `always` wrappers
+
+1. **Implemented bounded property lowering for `always` and `s_always`**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - added support for:
+     - `always [m:n] p` where `p` is property-typed
+     - `s_always [m:n] p` where `p` is property-typed
+   - lowering constructs conjunction over delay-shifted property instances:
+     - shift by `k`: `ltl.implication(ltl.delay(true, k), p)`
+     - combine with `ltl.and`.
+   - unbounded property forms (`always p`, `s_always p`) remain explicit
+     frontend diagnostics for now.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-bounded-always-property.sv`
+   - retained:
+     - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+       (checks unbounded `always p` diagnostic).
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-always-property.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-bounded-always-property.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-nexttime-property.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-always-property.sv >/dev/null` (`real=0.007s`, `user=0.003s`, `sys=0.004s`).
+
 ## Iteration 1567 - February 22, 2026
 
 ### [ImportVerilog][SVA] Lower property `nexttime` / `s_nexttime`
