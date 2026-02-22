@@ -231,6 +231,10 @@ Additional compile-only or XFAIL expectations live in
     now lower to side-effecting Moore severity builtins
   - sequence match-item `$fatal` system subroutine now lowers to fatal
     severity + finish side effects
+  - sequence match-item monitor/strobe family calls now preserve side effects:
+    - `$strobe*` lowers to display-side effect marker
+    - `$monitor*` lowers to monitor-side effect marker
+    - `$monitoron/$monitoroff` lower to monitor control builtins
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:

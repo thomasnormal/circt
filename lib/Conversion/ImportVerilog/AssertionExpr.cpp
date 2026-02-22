@@ -1630,6 +1630,44 @@ struct AssertionExprVisitor {
             moore::FinishBIOp::create(builder, loc, 1);
             break;
           }
+          if (name == "$monitoron") {
+            moore::MonitorOnBIOp::create(builder, loc);
+            break;
+          }
+          if (name == "$monitoroff") {
+            moore::MonitorOffBIOp::create(builder, loc);
+            break;
+          }
+          if (name == "$printtimescale") {
+            moore::PrintTimescaleBIOp::create(builder, loc);
+            break;
+          }
+          bool isMonitorLike = false;
+          StringRef monitorSuffix = name;
+          if (monitorSuffix.consume_front("$monitor"))
+            isMonitorLike = true;
+          if (isMonitorLike) {
+            if (monitorSuffix.empty() || monitorSuffix == "b" ||
+                monitorSuffix == "o" || monitorSuffix == "h") {
+              auto msg = moore::FormatLiteralOp::create(builder, loc, name.str());
+              moore::MonitorBIOp::create(builder, loc, msg);
+              break;
+            }
+          }
+          bool isStrobeLike = false;
+          StringRef strobeSuffix = name;
+          if (strobeSuffix.consume_front("$strobe"))
+            isStrobeLike = true;
+          if (isStrobeLike) {
+            if (strobeSuffix.empty() || strobeSuffix == "b" ||
+                strobeSuffix == "o" || strobeSuffix == "h") {
+              std::string marker = name.str();
+              marker.push_back('\n');
+              auto msg = moore::FormatLiteralOp::create(builder, loc, marker);
+              moore::DisplayBIOp::create(builder, loc, msg);
+              break;
+            }
+          }
           bool isDisplayLike = false;
           bool appendNewline = false;
           StringRef suffix = name;
