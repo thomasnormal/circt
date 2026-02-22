@@ -248,6 +248,8 @@ Additional compile-only or XFAIL expectations live in
     - `$finish` lowers to `moore.builtin.finish`
     - `$stop` lowers to `moore.builtin.stop`
     - `$dumpvars` lowers to display marker with `circt.dumpvars` attribute
+    - `$dumpfile` lowers to display marker with `circt.dumpfile` attribute
+    - `$exit` lowers to `moore.builtin.finish`
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:

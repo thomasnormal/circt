@@ -1665,11 +1665,30 @@ struct AssertionExprVisitor {
             moore::FinishBIOp::create(builder, loc, 0);
             break;
           }
+          if (name == "$exit") {
+            moore::FinishBIOp::create(builder, loc, 0);
+            break;
+          }
           if (name == "$dumpvars") {
             auto msg =
                 moore::FormatLiteralOp::create(builder, loc, "VCD: $dumpvars\n");
             auto displayOp = moore::DisplayBIOp::create(builder, loc, msg);
             displayOp->setAttr("circt.dumpvars", builder.getUnitAttr());
+            break;
+          }
+          if (name == "$dumpfile") {
+            std::string filename = "dump.vcd";
+            auto args = call.arguments();
+            if (!args.empty()) {
+              auto cv = context.evaluateConstant(*args[0]);
+              if (cv && cv.isString())
+                filename = cv.str();
+            }
+            std::string msgStr = "VCD: $dumpfile(\"" + filename + "\")\n";
+            auto msg = moore::FormatLiteralOp::create(builder, loc, msgStr);
+            auto displayOp = moore::DisplayBIOp::create(builder, loc, msg);
+            displayOp->setAttr("circt.dumpfile",
+                               builder.getStringAttr(filename));
             break;
           }
           if (name == "$fflush") {
