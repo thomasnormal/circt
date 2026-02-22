@@ -140,6 +140,81 @@ static Type getLvalueNestedType(Type lvalueType) {
   return {};
 }
 
+/// Build logical equality for unpacked aggregate values, with recursive support
+/// for unpacked structs.
+static Value buildUnpackedAggregateLogicalEq(Context &context, Location loc,
+                                             Value lhs, Value rhs) {
+  auto &builder = context.builder;
+  if (!lhs || !rhs || lhs.getType() != rhs.getType())
+    return {};
+
+  auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+
+  if (isa<moore::UnpackedArrayType>(lhs.getType()))
+    return moore::UArrayCmpOp::create(builder, loc, moore::UArrayCmpPredicate::eq,
+                                      lhs, rhs);
+
+  if (auto structTy = dyn_cast<moore::UnpackedStructType>(lhs.getType())) {
+    Value allEqual = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+    for (auto member : structTy.getMembers()) {
+      Value lhsField = moore::StructExtractOp::create(builder, loc, member.type,
+                                                      member.name, lhs);
+      Value rhsField = moore::StructExtractOp::create(builder, loc, member.type,
+                                                      member.name, rhs);
+      Value fieldEq;
+      if (isa<moore::UnpackedStructType, moore::UnpackedArrayType>(member.type)) {
+        fieldEq = buildUnpackedAggregateLogicalEq(context, loc, lhsField, rhsField);
+      } else if (isa<moore::StringType>(member.type) ||
+                 isa<moore::FormatStringType>(member.type)) {
+        auto strTy = moore::StringType::get(context.getContext());
+        lhsField =
+            context.materializeConversion(strTy, lhsField, false, lhsField.getLoc());
+        rhsField =
+            context.materializeConversion(strTy, rhsField, false, rhsField.getLoc());
+        if (!lhsField || !rhsField)
+          return {};
+        fieldEq = moore::StringCmpOp::create(builder, loc,
+                                             moore::StringCmpPredicate::eq,
+                                             lhsField, rhsField);
+      } else if (isa<moore::ChandleType>(member.type)) {
+        auto intTy =
+            moore::IntType::get(context.getContext(), 64, Domain::TwoValued);
+        lhsField = context.materializeConversion(intTy, lhsField, false,
+                                                 lhsField.getLoc());
+        rhsField = context.materializeConversion(intTy, rhsField, false,
+                                                 rhsField.getLoc());
+        if (!lhsField || !rhsField)
+          return {};
+        fieldEq = moore::EqOp::create(builder, loc, lhsField, rhsField);
+      } else {
+        if (!isa<moore::IntType>(lhsField.getType()))
+          lhsField = context.convertToSimpleBitVector(lhsField);
+        if (!isa<moore::IntType>(rhsField.getType()))
+          rhsField = context.convertToSimpleBitVector(rhsField);
+        if (!lhsField || !rhsField)
+          return {};
+        if (lhsField.getType() != rhsField.getType()) {
+          rhsField = context.materializeConversion(lhsField.getType(), rhsField,
+                                                   /*isSigned=*/false, loc);
+          if (!rhsField)
+            return {};
+        }
+        fieldEq = moore::EqOp::create(builder, loc, lhsField, rhsField);
+      }
+      if (!fieldEq)
+        return {};
+      if (fieldEq.getType() != i1Ty)
+        fieldEq = context.materializeConversion(i1Ty, fieldEq, false, loc);
+      if (!fieldEq)
+        return {};
+      allEqual = moore::AndOp::create(builder, loc, allEqual, fieldEq);
+    }
+    return allEqual;
+  }
+
+  return {};
+}
+
 static Value visitClassProperty(Context &context,
                                 const slang::ast::ClassPropertySymbol &expr) {
   auto loc = context.convertLocation(expr.location);
@@ -2633,6 +2708,15 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
         return moore::UArrayCmpOp::create(
             builder, loc, moore::UArrayCmpPredicate::eq, lhs, rhs);
+      else if (isa<moore::UnpackedStructType>(lhs.getType())) {
+        auto eq = buildUnpackedAggregateLogicalEq(context, loc, lhs, rhs);
+        if (!eq) {
+          mlir::emitError(loc)
+              << "unsupported unpacked struct equality operands";
+          return {};
+        }
+        return eq;
+      }
       else if (isa<moore::OpenUnpackedArrayType>(lhs.getType()) ||
                isa<moore::OpenUnpackedArrayType>(rhs.getType())) {
         // Open array equality is not supported; return false to allow
@@ -2782,6 +2866,15 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
         return moore::UArrayCmpOp::create(
             builder, loc, moore::UArrayCmpPredicate::ne, lhs, rhs);
+      else if (isa<moore::UnpackedStructType>(lhs.getType())) {
+        auto eq = buildUnpackedAggregateLogicalEq(context, loc, lhs, rhs);
+        if (!eq) {
+          mlir::emitError(loc)
+              << "unsupported unpacked struct inequality operands";
+          return {};
+        }
+        return moore::NotOp::create(builder, loc, eq);
+      }
       else if (isa<moore::OpenUnpackedArrayType>(lhs.getType()) ||
                isa<moore::OpenUnpackedArrayType>(rhs.getType())) {
         // Open array inequality is not supported; return true to allow

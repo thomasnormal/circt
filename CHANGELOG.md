@@ -1,3 +1,39 @@
+## Iteration 1585 - February 22, 2026
+
+### [ImportVerilog][SVA] Add unpacked-struct `==` / `!=` lowering (enables full-struct `$past` compares)
+
+1. **Implemented unpacked-struct logical equality / inequality lowering**
+   (`lib/Conversion/ImportVerilog/Expressions.cpp`):
+   - added recursive unpacked-aggregate equality helper for expression lowering.
+   - unpacked struct `==` now lowers as fieldwise compare + reduction.
+   - unpacked struct `!=` now lowers as logical negation of the computed
+     unpacked-struct equality.
+   - handles nested unpacked structs/arrays in the recursive path.
+
+2. **SVA impact**
+   - enables direct full-struct comparison patterns in assertions, including
+     explicit-clocked sampled functions:
+     - e.g. `($past(s, 1, @(posedge clk_b)) == s)` where `s` is unpacked
+       struct.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/unpacked-struct-equality.sv`
+   - strengthened:
+     - `test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
+       now checks full-struct equality path (`$past(s,...) == s`).
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-equality.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-struct-equality.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv >/dev/null`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv >/dev/null` (`real=0.007s`, `user=0.005s`, `sys=0.002s`).
+
 ## Iteration 1584 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support unpacked-struct sampled and explicit-clock `$past`
