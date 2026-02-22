@@ -177,6 +177,8 @@ Additional compile-only or XFAIL expectations live in
     finite delayed-cycle progress (non-vacuous strong lowering)
   - property-typed `s_eventually [n:$]` now enforces delayed-cycle existence
     before eventual satisfaction
+  - sequence-typed `s_nexttime` and bounded `s_always [n:m]` now add explicit
+    strong finite-progress obligations (`expr && eventually(expr)`)
 
 - **Assertion types**:
   - `assert property` - Immediate and concurrent
@@ -224,10 +226,10 @@ Key files:
    - Symptom: Incorrect timing for $past in clocked context
 
 2. **Strong unary operators treated as weak**
-   - Affects: sequence-typed `s_nexttime` / `s_always` finite-trace strictness
-   - Status: property-typed `s_nexttime` and bounded `s_always [n:m]` fixed;
-     sequence-typed forms still lower to delay/repeat without strong
-     end-of-trace checks
+   - Affects: remaining strong unary edge forms
+   - Status: property-typed and sequence-typed `s_nexttime` plus bounded
+     `s_always [n:m]` fixed for finite-progress obligations; remaining edge
+     forms tracked in regular parity backlog
 
 ### Fixed Bugs
 

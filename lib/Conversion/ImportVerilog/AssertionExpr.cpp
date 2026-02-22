@@ -1640,6 +1640,11 @@ struct AssertionExprVisitor {
       auto eventually = makeEventually(neg, /*isWeak=*/!isStrongAlways);
       return ltl::NotOp::create(builder, loc, eventually);
     };
+    auto requireStrongFiniteProgress = [&](Value temporalExpr) -> Value {
+      auto eventually = makeEventually(temporalExpr, /*isWeak=*/false);
+      return ltl::AndOp::create(
+          builder, loc, SmallVector<Value, 2>{temporalExpr, eventually});
+    };
     switch (expr.op) {
     case UnaryAssertionOperator::Not:
       return ltl::NotOp::create(builder, loc, value);
@@ -1792,8 +1797,9 @@ struct AssertionExprVisitor {
                                                  expr.range.value().min);
         }
       }
-      return ltl::DelayOp::create(builder, loc, value, minRepetitions,
-                                  lengthAttr);
+      auto shifted = ltl::DelayOp::create(builder, loc, value, minRepetitions,
+                                          lengthAttr);
+      return requireStrongFiniteProgress(shifted);
     }
     case UnaryAssertionOperator::SAlways: {
       if (isa<ltl::PropertyType>(value.getType())) {
@@ -1824,8 +1830,9 @@ struct AssertionExprVisitor {
         attr =
             convertRangeToAttrs(expr.range.value().min, expr.range.value().max);
       }
-      return ltl::RepeatOp::create(builder, loc, value, attr.first,
-                                   attr.second);
+      auto repeated =
+          ltl::RepeatOp::create(builder, loc, value, attr.first, attr.second);
+      return requireStrongFiniteProgress(repeated);
     }
     }
     llvm_unreachable("All enum values handled in switch");
