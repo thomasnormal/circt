@@ -233,6 +233,28 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
         std::memcpy(block.data.data(), strContent.data(), copyLen);
         LLVM_DEBUG(llvm::dbgs() << "    Initialized with string: \""
                                 << strContent << "\" (" << copyLen << " bytes)\n");
+      } else if (auto intAttr = dyn_cast<IntegerAttr>(initAttr)) {
+        // Handle integer initializers (including i1 true/false)
+        APInt intValue = intAttr.getValue();
+        unsigned bitWidth = intValue.getBitWidth();
+        unsigned byteWidth = (bitWidth + 7) / 8;
+        for (unsigned j = 0; j < byteWidth && j < block.data.size(); ++j) {
+          block.data[j] = static_cast<uint8_t>(
+              intValue.extractBits(8, j * 8).getZExtValue());
+        }
+        LLVM_DEBUG(llvm::dbgs() << "    Initialized with integer: 0x"
+                                << llvm::format_hex(intValue.getZExtValue(), 18)
+                                << " (" << byteWidth << " bytes)\n");
+      } else if (auto floatAttr = dyn_cast<FloatAttr>(initAttr)) {
+        // Handle float initializers
+        llvm::APFloat floatValue = floatAttr.getValue();
+        const llvm::APInt &floatBits = floatValue.bitcastToAPInt();
+        unsigned byteWidth = (floatBits.getBitWidth() + 7) / 8;
+        for (unsigned j = 0; j < byteWidth && j < block.data.size(); ++j) {
+          block.data[j] = static_cast<uint8_t>(
+              floatBits.extractBits(8, j * 8).getZExtValue());
+        }
+        LLVM_DEBUG(llvm::dbgs() << "    Initialized with float\n");
       } else {
         // For #llvm.zero or other initializers, data is already zeroed
         LLVM_DEBUG(llvm::dbgs() << "    Initialized to zero\n");
