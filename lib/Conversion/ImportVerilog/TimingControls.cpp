@@ -1545,6 +1545,7 @@ lowerSequenceEventListControl(Context &context, Location loc,
   SmallVector<const slang::ast::SignalEventControl *, 4> equivalentSignals;
   SmallVector<const slang::ast::SignalEventControl *, 4> parsedSignalEvents;
   SmallVector<MultiClockSignalEventInfo, 4> multiClockSignals;
+  bool requiresMultiClockLowering = false;
   std::optional<ltl::ClockEdge> inferredSequenceEdge;
   Value inferredSequenceClock;
   bool canInferSequenceClock = !signalEvents.empty();
@@ -1626,13 +1627,58 @@ lowerSequenceEventListControl(Context &context, Location loc,
         clockedValue = ltl::ClockOp::create(builder, loc, clockedValue,
                                             *inferredSequenceEdge,
                                             inferredSequenceClock);
+      if (!clockedValue.getDefiningOp<ltl::ClockOp>() &&
+          !multiClockSignals.empty()) {
+        SmallVector<Value, 4> inferredClockedVariants;
+        for (const auto &signalEvent : multiClockSignals) {
+          Value variantInput = rootValue;
+          if (signalEvent.iffCondition) {
+            Value condition =
+                context.convertRvalueExpression(*signalEvent.iffCondition);
+            condition = context.convertToBool(condition, Domain::TwoValued);
+            if (!condition)
+              return failure();
+            condition = context.convertToI1(condition);
+            if (!condition)
+              return failure();
+            variantInput = ltl::AndOp::create(
+                builder, loc, SmallVector<Value, 2>{variantInput, condition});
+          }
+          Value candidate = ltl::ClockOp::create(builder, loc, variantInput,
+                                                 signalEvent.edge,
+                                                 signalEvent.clock);
+          bool duplicate = llvm::any_of(inferredClockedVariants, [&](Value known) {
+            return equivalentClockedLTLValues(known, candidate);
+          });
+          if (duplicate) {
+            eraseLTLDeadOps(candidate);
+            continue;
+          }
+          inferredClockedVariants.push_back(candidate);
+        }
+        if (inferredClockedVariants.empty())
+          return mlir::emitError(loc)
+                 << "sequence event control clock inference produced no "
+                    "clocked variants";
+        clockedValue = inferredClockedVariants.size() == 1
+                           ? inferredClockedVariants.front()
+                           : ltl::OrOp::create(builder, loc,
+                                               inferredClockedVariants);
+        requiresMultiClockLowering = true;
+      }
     }
 
     auto clockOp = clockedValue.getDefiningOp<ltl::ClockOp>();
-    if (!clockOp)
+    if (!clockOp && !requiresMultiClockLowering)
       return mlir::emitError(loc)
              << "sequence event control requires a clocking event (or a "
                 "uniform signal event clock for inference)";
+    if (!clockOp && requiresMultiClockLowering) {
+      sameClockAndEdge = false;
+      clockedInputs.push_back(clockedValue);
+      clockedValues.push_back(clockedValue);
+      continue;
+    }
 
     auto sequenceEdge = signalCtrl->edge == slang::ast::EdgeKind::None
                             ? clockOp.getEdge()
@@ -1693,7 +1739,7 @@ lowerSequenceEventListControl(Context &context, Location loc,
   ArrayRef<DictionaryAttr> sequenceSourceDetails = sequenceSourceDetailAttrs;
 
   LogicalResult result = failure();
-  if (sameClockAndEdge) {
+  if (sameClockAndEdge && !requiresMultiClockLowering) {
     Value combinedSequence = sequenceInputs.front();
     if (sequenceInputs.size() > 1)
       combinedSequence = ltl::OrOp::create(builder, loc, sequenceInputs);

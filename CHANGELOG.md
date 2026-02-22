@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1555 - February 21, 2026
+
+### [ImportVerilog][SVA] Infer unclocked sequence sampling for non-uniform mixed event lists
+
+1. **Extended mixed sequence+signal event-list inference to non-uniform clocks**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - previously, unclocked sequence events in mixed lists were only inferred
+     when signal events shared a uniform `(edge, clock)` pair.
+   - now, when signal events are non-uniform, unclocked sequences are expanded
+     into per-signal clocked variants and merged, enabling forms like:
+     - `always @(s or posedge clk or negedge rst) ...`
+   - duplicate inferred variants are deduplicated using existing clocked-value
+     equivalence logic.
+
+2. **Added regression coverage**
+   - `test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+     - verifies non-uniform mixed-list inference lowers successfully and emits
+       mixed-event metadata/wait-event detection.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv` (`real=0.045s`, `user=0.004s`, `sys=0.005s`).
+
 ## Iteration 1554 - February 21, 2026
 
 ### [ImportVerilog][SVA] Do not reapply default clocking over explicit assertion clock controls
