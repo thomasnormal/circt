@@ -1,3 +1,43 @@
+## Iteration 1615 - February 22, 2026
+
+### [ImportVerilog][SVA] Make typed associative-array equality key-aware
+
+1. **Implemented key-aware typed-assoc equality lowering**
+   (`lib/Conversion/ImportVerilog/Expressions.cpp`):
+   - refined dynamic aggregate equality/case-equality for
+     `moore::AssocArrayType` to compare:
+     - key queues (`moore.array.locator all, indices`)
+     - value queues (`moore.array.locator all, elements`)
+   - both key/value projections now emit explicit locator predicate regions
+     yielding constant true, satisfying verifier constraints.
+   - wildcard-index associative arrays keep conservative value-stream
+     comparison fallback.
+
+2. **Behavioral fix**
+   - typed associative-array equality is no longer positional-index based.
+   - string-key associative arrays now lower through key+value comparison
+     structure rather than scalar cast fallbacks.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv`
+   - validates key-aware lowering shape:
+     - `moore.array.locator all, indices`
+     - `moore.array.locator all, elements`
+     - retained assertion emission.
+
+4. **Validation**
+   - `ninja -C build-test circt-translate`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS.
+   - formal regression smoke:
+     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv >/dev/null` (`real=0.023s`, `user=0.004s`, `sys=0.002s`).
+
 ## Iteration 1614 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support associative-array equality operators in assertions

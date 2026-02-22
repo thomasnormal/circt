@@ -181,6 +181,8 @@ Additional compile-only or XFAIL expectations live in
 - **SVA expression parity hardening**:
   - associative-array equality/case-equality (`==`, `!=`, `===`, `!==`) in
     assertion expressions now lower via aggregate element comparison
+  - typed associative-array equality now compares key streams (`indices`) and
+    value streams (including string-key associative arrays)
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:

@@ -4524,3 +4524,37 @@ Based on these findings, the circt-sim compiled process architecture:
    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS
 4. Formal smoke:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS
+
+## 2026-02-22 Session: Key-aware typed assoc-array equality
+
+### Problem
+1. Typed associative-array equality lowering was still structurally tied to
+   positional locator index usage.
+2. For non-int key types (for example `string`), parity requires explicit key
+   comparison, not just element stream comparison.
+
+### Realizations / Surprises
+1. `moore.array.locator` projection paths require a predicate region; omitting
+   the body causes IR verification failures.
+2. A robust typed-assoc comparison can be expressed in pure expression lowering
+   by comparing two projected queues:
+   - key queue (`indices`)
+   - value queue (`elements`)
+
+### Fix
+1. Updated `buildDynamicArrayLogicalEq` / `buildDynamicArrayCaseEq` in
+   `lib/Conversion/ImportVerilog/Expressions.cpp` for `moore::AssocArrayType`:
+   - build key/value projection locators with constant-true predicate region.
+   - compare projected queues recursively.
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv`: PASS
+3. Compatibility checks:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS

@@ -322,6 +322,83 @@ static Value buildDynamicArrayLogicalEq(Context &context, Location loc, Value lh
   if (!sizeEq)
     return {};
 
+  if (auto assocTy = dyn_cast<moore::AssocArrayType>(lhs.getType())) {
+    // Compare key sets and value streams separately for associative arrays.
+    auto buildProjection = [&](moore::QueueType resultTy, bool indexed,
+                               Value array) -> Value {
+      auto locator = moore::ArrayLocatorOp::create(
+          builder, loc, resultTy, moore::LocatorMode::All, indexed, array);
+      Block *body = &locator.getBody().emplaceBlock();
+      body->addArgument(assocTy.getElementType(), loc);
+      body->addArgument(i32Ty, loc);
+      {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(body);
+        Value one = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+        moore::ArrayLocatorYieldOp::create(builder, loc, one);
+      }
+      return locator.getResult();
+    };
+
+    auto valueQueueTy = moore::QueueType::get(assocTy.getElementType(), 0);
+    Value lhsValues = buildProjection(valueQueueTy, /*indexed=*/false, lhs);
+    Value rhsValues = buildProjection(valueQueueTy, /*indexed=*/false, rhs);
+    Value valuesEq = buildDynamicArrayLogicalEq(context, loc, lhsValues, rhsValues);
+    if (!valuesEq)
+      return {};
+    if (valuesEq.getType() != i1Ty)
+      valuesEq = context.materializeConversion(i1Ty, valuesEq, false, loc);
+    if (!valuesEq)
+      return {};
+
+    auto keyQueueTy = moore::QueueType::get(assocTy.getIndexType(), 0);
+    Value lhsKeys = buildProjection(keyQueueTy, /*indexed=*/true, lhs);
+    Value rhsKeys = buildProjection(keyQueueTy, /*indexed=*/true, rhs);
+    Value keysEq = buildDynamicArrayLogicalEq(context, loc, lhsKeys, rhsKeys);
+    if (!keysEq)
+      return {};
+    if (keysEq.getType() != i1Ty)
+      keysEq = context.materializeConversion(i1Ty, keysEq, false, loc);
+    if (!keysEq)
+      return {};
+
+    Value assocEq = moore::AndOp::create(builder, loc, keysEq, valuesEq);
+    return moore::AndOp::create(builder, loc, sizeEq, assocEq);
+  }
+
+  if (isa<moore::WildcardAssocArrayType>(lhs.getType())) {
+    // Wildcard index associative arrays have no statically known key type.
+    // Compare value streams as a conservative approximation.
+    auto assocTy = cast<moore::WildcardAssocArrayType>(lhs.getType());
+    auto buildProjection = [&](moore::QueueType resultTy, bool indexed,
+                               Value array) -> Value {
+      auto locator = moore::ArrayLocatorOp::create(
+          builder, loc, resultTy, moore::LocatorMode::All, indexed, array);
+      Block *body = &locator.getBody().emplaceBlock();
+      body->addArgument(assocTy.getElementType(), loc);
+      body->addArgument(i32Ty, loc);
+      {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(body);
+        Value one = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+        moore::ArrayLocatorYieldOp::create(builder, loc, one);
+      }
+      return locator.getResult();
+    };
+
+    auto valueQueueTy = moore::QueueType::get(elemTy, 0);
+    Value lhsValues = buildProjection(valueQueueTy, /*indexed=*/false, lhs);
+    Value rhsValues = buildProjection(valueQueueTy, /*indexed=*/false, rhs);
+    Value valuesEq = buildDynamicArrayLogicalEq(context, loc, lhsValues, rhsValues);
+    if (!valuesEq)
+      return {};
+    if (valuesEq.getType() != i1Ty)
+      valuesEq = context.materializeConversion(i1Ty, valuesEq, false, loc);
+    if (!valuesEq)
+      return {};
+    return moore::AndOp::create(builder, loc, sizeEq, valuesEq);
+  }
+
   auto mismatchQueueTy = moore::QueueType::get(elemTy, 0);
   auto locator = moore::ArrayLocatorOp::create(
       builder, loc, mismatchQueueTy, moore::LocatorMode::All,
@@ -577,6 +654,80 @@ static Value buildDynamicArrayCaseEq(Context &context, Location loc, Value lhs,
     sizeEq = context.materializeConversion(i1Ty, sizeEq, false, loc);
   if (!sizeEq)
     return {};
+
+  if (auto assocTy = dyn_cast<moore::AssocArrayType>(lhs.getType())) {
+    auto buildProjection = [&](moore::QueueType resultTy, bool indexed,
+                               Value array) -> Value {
+      auto locator = moore::ArrayLocatorOp::create(
+          builder, loc, resultTy, moore::LocatorMode::All, indexed, array);
+      Block *body = &locator.getBody().emplaceBlock();
+      body->addArgument(assocTy.getElementType(), loc);
+      body->addArgument(i32Ty, loc);
+      {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(body);
+        Value one = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+        moore::ArrayLocatorYieldOp::create(builder, loc, one);
+      }
+      return locator.getResult();
+    };
+
+    auto valueQueueTy = moore::QueueType::get(assocTy.getElementType(), 0);
+    Value lhsValues = buildProjection(valueQueueTy, /*indexed=*/false, lhs);
+    Value rhsValues = buildProjection(valueQueueTy, /*indexed=*/false, rhs);
+    Value valuesEq = buildDynamicArrayCaseEq(context, loc, lhsValues, rhsValues);
+    if (!valuesEq)
+      return {};
+    if (valuesEq.getType() != i1Ty)
+      valuesEq = context.materializeConversion(i1Ty, valuesEq, false, loc);
+    if (!valuesEq)
+      return {};
+
+    auto keyQueueTy = moore::QueueType::get(assocTy.getIndexType(), 0);
+    Value lhsKeys = buildProjection(keyQueueTy, /*indexed=*/true, lhs);
+    Value rhsKeys = buildProjection(keyQueueTy, /*indexed=*/true, rhs);
+    Value keysEq = buildDynamicArrayCaseEq(context, loc, lhsKeys, rhsKeys);
+    if (!keysEq)
+      return {};
+    if (keysEq.getType() != i1Ty)
+      keysEq = context.materializeConversion(i1Ty, keysEq, false, loc);
+    if (!keysEq)
+      return {};
+
+    Value assocEq = moore::AndOp::create(builder, loc, keysEq, valuesEq);
+    return moore::AndOp::create(builder, loc, sizeEq, assocEq);
+  }
+
+  if (isa<moore::WildcardAssocArrayType>(lhs.getType())) {
+    auto assocTy = cast<moore::WildcardAssocArrayType>(lhs.getType());
+    auto buildProjection = [&](moore::QueueType resultTy, bool indexed,
+                               Value array) -> Value {
+      auto locator = moore::ArrayLocatorOp::create(
+          builder, loc, resultTy, moore::LocatorMode::All, indexed, array);
+      Block *body = &locator.getBody().emplaceBlock();
+      body->addArgument(assocTy.getElementType(), loc);
+      body->addArgument(i32Ty, loc);
+      {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(body);
+        Value one = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+        moore::ArrayLocatorYieldOp::create(builder, loc, one);
+      }
+      return locator.getResult();
+    };
+
+    auto valueQueueTy = moore::QueueType::get(elemTy, 0);
+    Value lhsValues = buildProjection(valueQueueTy, /*indexed=*/false, lhs);
+    Value rhsValues = buildProjection(valueQueueTy, /*indexed=*/false, rhs);
+    Value valuesEq = buildDynamicArrayCaseEq(context, loc, lhsValues, rhsValues);
+    if (!valuesEq)
+      return {};
+    if (valuesEq.getType() != i1Ty)
+      valuesEq = context.materializeConversion(i1Ty, valuesEq, false, loc);
+    if (!valuesEq)
+      return {};
+    return moore::AndOp::create(builder, loc, sizeEq, valuesEq);
+  }
 
   auto mismatchQueueTy = moore::QueueType::get(elemTy, 0);
   auto locator = moore::ArrayLocatorOp::create(
