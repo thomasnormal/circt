@@ -987,6 +987,17 @@ struct AssertionExprVisitor {
                                builder.getI64IntegerAttr(0));
       return ltl::ImplicationOp::create(builder, loc, delayedTrue, property);
     };
+    auto makeEventually = [&](Value property, bool isWeak) -> Value {
+      auto eventually = ltl::EventuallyOp::create(builder, loc, property);
+      if (isWeak)
+        eventually->setAttr(kWeakEventuallyAttr, builder.getUnitAttr());
+      return eventually;
+    };
+    auto lowerAlwaysProperty = [&](Value property, bool isStrongAlways) -> Value {
+      auto neg = ltl::NotOp::create(builder, loc, property);
+      auto eventually = makeEventually(neg, /*isWeak=*/isStrongAlways);
+      return ltl::NotOp::create(builder, loc, eventually);
+    };
     switch (expr.op) {
     case UnaryAssertionOperator::Not:
       return ltl::NotOp::create(builder, loc, value);
@@ -994,7 +1005,13 @@ struct AssertionExprVisitor {
       if (expr.range.has_value()) {
         if (isa<ltl::PropertyType>(value.getType())) {
           auto minDelay = expr.range.value().min;
-          auto maxDelay = expr.range.value().max.value_or(minDelay);
+          if (!expr.range.value().max.has_value()) {
+            mlir::emitError(loc)
+                << "unbounded s_eventually range on property expressions is "
+                   "not yet supported";
+            return {};
+          }
+          auto maxDelay = expr.range.value().max.value();
           SmallVector<Value, 4> shifted;
           shifted.reserve(maxDelay - minDelay + 1);
           for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
@@ -1018,7 +1035,13 @@ struct AssertionExprVisitor {
       if (expr.range.has_value()) {
         if (isa<ltl::PropertyType>(value.getType())) {
           auto minDelay = expr.range.value().min;
-          auto maxDelay = expr.range.value().max.value_or(minDelay);
+          if (!expr.range.value().max.has_value()) {
+            mlir::emitError(loc)
+                << "unbounded eventually range on property expressions is not "
+                   "yet supported";
+            return {};
+          }
+          auto maxDelay = expr.range.value().max.value();
           SmallVector<Value, 4> shifted;
           shifted.reserve(maxDelay - minDelay + 1);
           for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
@@ -1044,8 +1067,14 @@ struct AssertionExprVisitor {
     case UnaryAssertionOperator::Always: {
       if (isa<ltl::PropertyType>(value.getType())) {
         if (expr.range.has_value()) {
+          if (!expr.range.value().max.has_value()) {
+            mlir::emitError(loc)
+                << "unbounded always range on property expressions is not yet "
+                   "supported";
+            return {};
+          }
           auto minDelay = expr.range.value().min;
-          auto maxDelay = expr.range.value().max.value_or(minDelay);
+          auto maxDelay = expr.range.value().max.value();
           SmallVector<Value, 4> shifted;
           shifted.reserve(maxDelay - minDelay + 1);
           for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
@@ -1055,9 +1084,7 @@ struct AssertionExprVisitor {
             return shifted.front();
           return ltl::AndOp::create(builder, loc, shifted);
         }
-        mlir::emitError(loc)
-            << "always on property expressions is not yet supported";
-        return {};
+        return lowerAlwaysProperty(value, /*isStrongAlways=*/false);
       }
       std::pair<mlir::IntegerAttr, mlir::IntegerAttr> attr = {
           builder.getI64IntegerAttr(0), mlir::IntegerAttr{}};
@@ -1131,8 +1158,14 @@ struct AssertionExprVisitor {
     case UnaryAssertionOperator::SAlways: {
       if (isa<ltl::PropertyType>(value.getType())) {
         if (expr.range.has_value()) {
+          if (!expr.range.value().max.has_value()) {
+            mlir::emitError(loc)
+                << "unbounded s_always range on property expressions is not "
+                   "yet supported";
+            return {};
+          }
           auto minDelay = expr.range.value().min;
-          auto maxDelay = expr.range.value().max.value_or(minDelay);
+          auto maxDelay = expr.range.value().max.value();
           SmallVector<Value, 4> shifted;
           shifted.reserve(maxDelay - minDelay + 1);
           for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
@@ -1142,9 +1175,7 @@ struct AssertionExprVisitor {
             return shifted.front();
           return ltl::AndOp::create(builder, loc, shifted);
         }
-        mlir::emitError(loc)
-            << "s_always on property expressions is not yet supported";
-        return {};
+        return lowerAlwaysProperty(value, /*isStrongAlways=*/true);
       }
       std::pair<mlir::IntegerAttr, mlir::IntegerAttr> attr = {
           builder.getI64IntegerAttr(0), mlir::IntegerAttr{}};

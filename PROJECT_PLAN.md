@@ -130,6 +130,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers bounded property wrappers `always [m:n]` and
    `s_always [m:n]` by constructing conjunctions over delay-shifted property
    instances.
+13. **SVA unbounded property always support** (Feb 22, 2026):
+   ImportVerilog now lowers unbounded `always p` on property operands via
+   duality (`not(eventually(not p))`) and adds explicit diagnostics to block
+   unsound open upper-bound property-range lowering in unary wrappers.
 10. **SVA `$future_gclk` temporal semantics fix** (Feb 21, 2026):
    Importer now lowers `$future_gclk(expr)` through forward temporal
    `ltl.delay(expr, 1, 0)` semantics instead of approximating with

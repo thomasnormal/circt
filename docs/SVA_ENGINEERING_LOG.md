@@ -58,6 +58,37 @@
     - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
+- Iteration update (unbounded property `always` + range guardrail):
+  - realization:
+    - plain `always p` on property operands remained unsupported.
+    - while adding unbounded support, we identified a semantic hazard: open
+      upper-bound property ranges (`[m:$]`) in unary wrappers would otherwise
+      be accidentally collapsed to a single delay if treated as finite loops.
+  - implemented:
+    - added unbounded property lowering for:
+      - `always p`
+    - lowering strategy:
+      - `always p` -> `not(eventually(not p))` using strong `eventually`.
+    - added explicit diagnostics for open upper-bound property ranges in
+      unary wrappers to prevent unsound lowering:
+      - unbounded `eventually` range on property expressions
+      - unbounded `s_eventually` range on property expressions
+      - unbounded `always` range on property expressions
+      - unbounded `s_always` range on property expressions
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+    - updated negative diagnostic regression:
+      - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+        now checks unsupported `$past(..., enable)` without explicit clocking.
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unbounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-nexttime-property.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 - Iteration update (bounded property `eventually` / `s_eventually`):
   - realization:
     - bounded unary temporal operators on property operands were being treated
