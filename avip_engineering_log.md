@@ -4778,3 +4778,39 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 5. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv`: `real=0.007s`
+
+## 2026-02-22 Session: `$past` sampled-control real parity
+
+### Problem
+1. `$past` with sampled-value controls still rejected real operands, e.g.:
+   - `$past(r, 1, en, @(posedge clk))`
+   with:
+   - `unsupported $past value type with sampled-value controls`
+2. This left a semantic hole compared to recently-added real support for
+   `$stable/$changed/$rose/$fell`.
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp` in
+   `lowerPastWithSamplingControl`:
+   - classify `isRealSample` on original lowered type.
+   - accept real in sampled-control type gate.
+   - use real-typed storage/history variables for helper procedure state.
+   - avoid integer-only bitvector conversion path for real samples.
+   - preserve disabled/reset handling for real as non-integer storage.
+2. Improved unsupported `$past` sampled-control diagnostics with concrete
+   offending type info.
+3. Added regression:
+   - `test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/past-clocking.sv`: PASS
+3. Lit subset:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv build-test/test/Conversion/ImportVerilog/past-clocking.sv build-test/test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv`: `real=0.008s`

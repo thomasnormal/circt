@@ -164,6 +164,8 @@ Additional compile-only or XFAIL expectations live in
     - `$rose` / `$fell` booleanize real samples via `value != 0.0`
     - supported in both explicit-clock helper and direct clocked-assertion
       lowering paths
+  - `$past` sampled-value controls now support real operands in explicit
+    clocking / enable-control lowering paths
 
 - **LTL operators**:
   - `|->` - Overlapping implication
