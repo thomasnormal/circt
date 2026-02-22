@@ -1465,3 +1465,17 @@ verilator-verification, and yosys corpora).
     - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/system-calls-complete.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/system-calls-complete.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
+- Additional ImportVerilog SVA closure:
+  - bounded unary temporal forms on property-valued operands now fail with
+    explicit frontend diagnostics instead of generating invalid MLIR.
+  - covered operators:
+    - bounded `eventually` / bounded `s_eventually`
+    - `nexttime` / `s_nexttime`
+    - `always` / `s_always`
+  - new regression:
+    - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
