@@ -2626,14 +2626,31 @@ struct StmtVisitor {
       auto *call = exprStmt->expr.as_if<slang::ast::CallExpression>();
       if (!call)
         return {};
-      auto *sci = std::get_if<slang::ast::CallExpression::SystemCallInfo>(
-          &call->subroutine);
-      if (!sci)
+      StringRef taskName = call->getSubroutineName();
+      if (taskName.empty() || !taskName.starts_with("$"))
         return {};
-      StringRef taskName = sci->subroutine->name;
+      auto isDisplayFamily = [&](StringRef name) {
+        auto isWithOptionalBaseSuffix = [&](StringRef prefix) {
+          StringRef tail = name;
+          if (!tail.consume_front(prefix))
+            return false;
+          return tail.empty() ||
+                 (tail.size() == 1 &&
+                  (tail.front() == 'b' || tail.front() == 'o' ||
+                   tail.front() == 'h'));
+        };
+        return isWithOptionalBaseSuffix("$display") ||
+               isWithOptionalBaseSuffix("$write") ||
+               isWithOptionalBaseSuffix("$strobe") ||
+               isWithOptionalBaseSuffix("$monitor") ||
+               isWithOptionalBaseSuffix("$fdisplay") ||
+               isWithOptionalBaseSuffix("$fwrite") ||
+               isWithOptionalBaseSuffix("$fstrobe") ||
+               isWithOptionalBaseSuffix("$fmonitor");
+      };
       if (taskName != "$error" && taskName != "$warning" &&
           taskName != "$fatal" && taskName != "$info" &&
-          taskName != "$display" && taskName != "$write")
+          !isDisplayFamily(taskName))
         return {};
 
       auto args = call->arguments();
@@ -2642,6 +2659,13 @@ struct StmtVisitor {
         auto firstArgConst = context.evaluateConstant(*args[0]);
         if (firstArgConst && firstArgConst.isInteger())
           msgArgIndex = 1;
+      } else if (taskName.starts_with("$fdisplay") ||
+                 taskName.starts_with("$fwrite") ||
+                 taskName.starts_with("$fstrobe") ||
+                 taskName.starts_with("$fmonitor")) {
+        // File variants take the file descriptor first; message payload starts
+        // at the second argument when present.
+        msgArgIndex = 1;
       }
       if (msgArgIndex >= args.size())
         return builder.getStringAttr(taskName);

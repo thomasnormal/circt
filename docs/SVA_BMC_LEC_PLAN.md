@@ -696,15 +696,22 @@ Record results in CHANGELOG.md and include relevant output artifacts.
     - `$assertcontrol(2)` unlock
     - lock state gates subsequent assertion-control updates in both
       procedural and match-item lowering paths.
+  - Concurrent assertion action blocks now preserve labels for additional I/O
+    task families:
+    - `$strobe/$monitor` (+ `b/o/h`)
+    - `$fdisplay/$fwrite/$fstrobe/$fmonitor` (+ `b/o/h`)
+    - dynamic payloads retain deterministic task-name fallback labels.
 - New regression:
   - `test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`
   - `test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv`
   - `test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv`
+  - `test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`
 - Validation:
   - `ninja -C build-test circt-translate`
   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`
   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv`
   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv`
+  - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-io-labels.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`
   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv`
   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`

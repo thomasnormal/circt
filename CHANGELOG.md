@@ -92,6 +92,25 @@
      - compatibility checks: PASS.
      - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`: PASS.
 
+7. **Expanded concurrent action-block diagnostic labels for I/O task families**
+   (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   - assertion action-label extraction now recognizes additional message tasks:
+     - `$strobe/$monitor` (+ `b/o/h` variants)
+     - `$fdisplay/$fwrite/$fstrobe/$fmonitor` (+ `b/o/h` variants)
+   - file-task message extraction now skips the file descriptor argument when
+     computing message labels.
+   - extraction now uses `call->getSubroutineName()` for action blocks to avoid
+     dropping known system-task labels due subroutine variant representation.
+   - new regression:
+     - `test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`
+   - validation:
+     - failing-first (pre-fix): new test failed; labels degraded to
+       `"action_block"`.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-io-labels.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv`: PASS.
+     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`: PASS.
+
 ## Iteration 1620 - February 22, 2026
 
 ### [SVA][Parity] Add explicit Yosys `counter/extnets` parity-lock regressions
