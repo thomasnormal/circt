@@ -227,6 +227,8 @@ Additional compile-only or XFAIL expectations live in
     variables with timescale-aware increment/decrement semantics
   - sequence match-item display/write system subroutine calls now lower to
     side-effecting Moore display builtins (no longer dropped with a remark)
+  - sequence match-item severity system subroutines (`$info/$warning/$error`)
+    now lower to side-effecting Moore severity builtins
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
