@@ -751,3 +751,27 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv` (`real=0.008s`)
+
+- Iteration update (clocking-block entries in mixed sequence event lists):
+  - realization:
+    - mixed sequence event-list lowering handled sequence/signal expressions but
+      did not resolve clocking-block symbols in that path.
+    - reproducer:
+      - `clocking cb @(posedge clk); ... always @(s or cb);`
+      - failed as `unsupported arbitrary symbol reference 'cb'`.
+  - implemented:
+    - added clocking-block symbol expansion to canonical signal-event controls
+      while parsing mixed sequence event lists.
+    - for expanded entries, lowering is forced through multiclock machinery so
+      mixed sequence/signal wakeup semantics are preserved.
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv` (`real=0.007s`)
