@@ -1,3 +1,36 @@
+## Iteration 1571 - February 22, 2026
+
+### [ImportVerilog][SVA] Support packed sampled values with explicit clocking
+
+1. **Extended sampled-value lowering for packed operands**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - explicit-clocking sampled-value helper paths for
+     `$rose/$fell/$stable/$changed` now accept packed operands, not just
+     direct `moore::IntType`.
+   - non-int packed values are normalized through
+     `convertToSimpleBitVector` before sampled comparisons/history updates.
+   - helper type derivation now handles packed/ref-wrapped types via
+     simple-bit-vector extraction.
+   - this fixes importer errors on legal SVA forms such as:
+     - `$changed(packed_struct_value, @(posedge clk))`
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+   - revalidated:
+     - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+     - `test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv`
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv >/dev/null` (`real=0.007s`, `user=0.002s`, `sys=0.005s`).
+
 ## Iteration 1570 - February 22, 2026
 
 ### [ImportVerilog][SVA] Lower open-range property `s_eventually` / `always`

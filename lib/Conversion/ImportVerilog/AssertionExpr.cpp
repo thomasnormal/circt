@@ -49,6 +49,18 @@ static Value createUnknownOrZeroConstant(Context &context, Location loc,
       FVInt(APInt(width, 0), APInt::getAllOnes(width)));
 }
 
+static moore::IntType getSampledSimpleBitVectorType(Context &context,
+                                                    const slang::ast::Type &type) {
+  Type loweredType = context.convertType(type);
+  if (auto refType = dyn_cast<moore::RefType>(loweredType))
+    loweredType = refType.getNestedType();
+  if (auto intType = dyn_cast<moore::IntType>(loweredType))
+    return intType;
+  if (auto packedType = dyn_cast<moore::PackedType>(loweredType))
+    return packedType.getSimpleBitVector();
+  return {};
+}
+
 static const slang::ast::SignalEventControl *
 getCanonicalSignalEventControl(const slang::ast::TimingControl &ctrl) {
   if (auto *signal = ctrl.as_if<slang::ast::SignalEventControl>()) {
@@ -302,8 +314,7 @@ static Value lowerSampledValueFunctionWithClocking(
     return moore::ConstantOp::create(builder, loc, resultType, 0);
   }
 
-  auto valueType = context.convertType(*valueExpr.type);
-  auto intType = dyn_cast_or_null<moore::IntType>(valueType);
+  auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
   if (!intType) {
     mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
     return {};
@@ -355,7 +366,9 @@ static Value lowerSampledValueFunctionWithClocking(
     Value current = context.convertRvalueExpression(valueExpr);
     if (!current)
       return {};
-    auto currentType = dyn_cast<moore::IntType>(current.getType());
+    if (!isa<moore::IntType>(current.getType()))
+      current = context.convertToSimpleBitVector(current);
+    auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
     if (!currentType) {
       mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
       return {};
@@ -1688,8 +1701,9 @@ Value Context::convertAssertionCallExpression(
     if (!value)
       return {};
 
-    auto valueType = dyn_cast<moore::IntType>(value.getType());
-    if (!valueType) {
+    if (!isa<moore::IntType>(value.getType()))
+      value = convertToSimpleBitVector(value);
+    if (!isa<moore::IntType>(value.getType())) {
       mlir::emitError(loc) << "unsupported sampled value type for "
                            << funcName;
       return {};

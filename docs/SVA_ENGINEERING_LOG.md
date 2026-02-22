@@ -118,6 +118,31 @@
     - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
+- Iteration update (packed sampled-values with explicit clocking):
+  - realization:
+    - sampled-value helpers used by explicit-clocking forms of
+      `$rose/$fell/$stable/$changed` rejected packed operands with:
+      `unsupported sampled value type ...`.
+    - this blocked legal SVA such as:
+      - `$changed(packed_struct, @(posedge clk))`
+  - implemented:
+    - sampled-value paths now normalize non-`IntType` packed operands through
+      `convertToSimpleBitVector` before helper lowering and comparisons.
+    - explicit-clocking helper type derivation now accepts packed types via
+      simple-bit-vector extraction.
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - revalidated:
+      - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+      - `test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 - Iteration update (bounded property `eventually` / `s_eventually`):
   - realization:
     - bounded unary temporal operators on property operands were being treated
