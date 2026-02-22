@@ -181,8 +181,8 @@ Items are grouped by pipeline stage.
   `utils/run_ovl_sva_semantic_circt_bmc.sh`.
   - Harness style: one SV wrapper per checker case in
     `utils/ovl_semantic/wrappers/` with manifest-driven expectations.
-  - Current semantic status (Feb 22, 2026): `46/46` pass/fail obligations
-    passing (`23` checker wrappers x `pass/fail` modes).
+  - Current semantic status (Feb 22, 2026): `56/56` pass/fail obligations
+    passing (`28` checker wrappers x `pass/fail` modes).
   - Coverage now includes:
     - `ovl_change`
     - `ovl_one_cold`
@@ -198,6 +198,11 @@ Items are grouped by pipeline stage.
     - `ovl_transition`
     - `ovl_no_transition`
     - `ovl_req_requires`
+    - `ovl_window`
+    - `ovl_win_change`
+    - `ovl_win_unchange`
+    - `ovl_hold_value`
+    - `ovl_no_contention`
 
 ## Core Workstreams
 
@@ -731,6 +736,31 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(no_overflow|no_underflow|transition|no_transition|req_requires)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
   - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
   - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-new11`
+
+## Latest SVA closure slice (2026-02-22, OVL semantic expansion III)
+
+- Closed gap:
+  - OVL semantic lane now includes windowed stability and contention checkers:
+    - `ovl_window`
+    - `ovl_win_change`
+    - `ovl_win_unchange`
+    - `ovl_hold_value`
+    - `ovl_no_contention`
+  - semantic lane breadth increased from `23` to `28` checker wrappers.
+  - note: semantic wrapper for `ovl_no_contention` uses
+    `min_quiet=1,max_quiet=1` to avoid empty-match sequence parsing limits in
+    current frontend lowering for `[*0]`.
+- New regressions:
+  - `utils/ovl_semantic/wrappers/ovl_sem_window.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_win_change.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_win_unchange.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_hold_value.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_no_contention.sv`
+  - manifest entries in `utils/ovl_semantic/manifest.tsv`
+- Validation:
+  - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(window|win_change|win_unchange|hold_value|no_contention)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-window-batch`
 
 ## Latest SVA closure slice (2026-02-22, OVL semantic expansion)
 

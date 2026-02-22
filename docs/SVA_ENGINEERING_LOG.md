@@ -2,6 +2,57 @@
 
 ## 2026-02-22
 
+- Iteration update (OVL semantic harness expansion: window/hold/no_contention family):
+  - realization:
+    - windowed stability checkers were still a large uncovered slice in OVL
+      semantic regression (`window`, `win_change`, `win_unchange`,
+      `hold_value`), plus bus-driver constraints in `no_contention`.
+    - surprise:
+      - `ovl_no_contention` with `min_quiet=0,max_quiet=0` trips a frontend
+        parse limitation ("sequence must not admit an empty match") in
+        `[*min_quiet]` lowering.
+      - for semantic harness, switching to `min_quiet=1,max_quiet=1` avoided
+        this parse blocker while still exercising checker semantics.
+  - TDD proof:
+    - added wrappers + manifest entries first:
+      - `utils/ovl_semantic/wrappers/ovl_sem_window.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_win_change.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_win_unchange.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_hold_value.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_no_contention.sv`
+      - `utils/ovl_semantic/manifest.tsv` entries:
+        - `ovl_sem_window`
+        - `ovl_sem_win_change`
+        - `ovl_sem_win_unchange`
+        - `ovl_sem_hold_value`
+        - `ovl_sem_no_contention`
+    - first targeted run failures:
+      - `ovl_sem_win_change` pass-mode `SAT`.
+      - `ovl_sem_win_unchange` pass-mode `SAT`.
+      - `ovl_sem_no_contention` compile error due empty-match sequence.
+    - wrapper stabilization:
+      - simplified deterministic pass/fail profiles for `win_change` and
+        `win_unchange`.
+      - changed `ovl_no_contention` parameters to `min_quiet=1,max_quiet=1`.
+  - implemented:
+    - expanded semantic harness by +5 more checkers (23 -> 28 wrappers).
+    - total pass/fail obligations increased from 46 to 56.
+  - validation:
+    - targeted:
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(window|win_change|win_unchange|hold_value|no_contention)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `10 tests, failures=0, xfail=0, xpass=0`
+    - full semantic lane:
+      - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `56 tests, failures=0, xfail=0, xpass=0`
+    - full OVL matrix:
+      - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-window-batch`
+      - result:
+        - `std_ovl/BMC PASS 110/110`
+        - `std_ovl/BMC_SEMANTIC PASS 56/56`
+    - profiling sample:
+      - `time OUT=/tmp/ovl-sem-profile-window-batch.log utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - `real=8.471s`
+
 - Iteration update (OVL semantic harness expansion: transition/overflow + req_requires):
   - realization:
     - transition and range-bound arithmetic checkers were still uncovered in
