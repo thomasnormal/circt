@@ -1,3 +1,32 @@
+## Iteration 1574 - February 22, 2026
+
+### [ImportVerilog][SVA] Support string sampled values with explicit clocking
+
+1. **Extended explicit-clocked sampled-value lowering to string operands**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - sampled helper type derivation now supports `string` in bit-vector
+     sampled context.
+   - explicit-clocked sampled-value operators (`$changed/$stable/$rose/$fell`)
+     can now sample string values via existing string-to-32-bit-int conversion
+     path, instead of hard-failing on non-int/non-packed type.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
+   - revalidated:
+     - `test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+     - `test/Conversion/ImportVerilog/sva-sampled-packed.sv`
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv >/dev/null` (`real=0.007s`, `user=0.003s`, `sys=0.004s`).
+
 ## Iteration 1573 - February 22, 2026
 
 ### [ImportVerilog][SVA] Add packed sampled-value regression coverage

@@ -58,6 +58,10 @@ static moore::IntType getSampledSimpleBitVectorType(Context &context,
     return intType;
   if (auto packedType = dyn_cast<moore::PackedType>(loweredType))
     return packedType.getSimpleBitVector();
+  // In bit-vector sampled-value context, strings are converted through
+  // moore.string_to_int (32-bit int) by convertToSimpleBitVector.
+  if (isa<moore::StringType>(loweredType))
+    return moore::IntType::getInt(context.getContext(), 32);
   return {};
 }
 
