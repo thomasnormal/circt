@@ -191,6 +191,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 27. **Nested aggregate case-equality regression hardening** (Feb 22, 2026):
    Added dedicated importer regression for unpacked-struct case equality with
    nested unpacked-array members to lock helper-recursion behavior.
+28. **Unpacked aggregate `$rose/$fell` sampled support** (Feb 22, 2026):
+   ImportVerilog now lowers `$rose/$fell` for fixed unpacked aggregates
+   (arrays/structs/unions) in both direct assertion-clock and explicit sampled
+   clock helper paths, using recursive aggregate-to-bool sampling.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to

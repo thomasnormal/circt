@@ -1,10 +1,11 @@
-// RUN: circt-translate --import-verilog --verify-diagnostics %s
+// RUN: not circt-translate --import-verilog %s 2>&1 | FileCheck %s
 // REQUIRES: slang
 
 module SvaSampledUnpackedExplicitClockError(input logic clk);
-  logic [1:0] s [2];
+  int s[];
 
-  // $rose/$fell still require scalar sampled operands.
-  // expected-error @below {{unsupported sampled value type for $rose}}
+  // Dynamic arrays still cannot be converted to a sampled scalar for
+  // $rose/$fell helper lowering.
+  // CHECK: error: expression of type '!moore.open_uarray<i32>' cannot be cast to a simple bit vector
   assert property ($rose(s, @(posedge clk)));
 endmodule

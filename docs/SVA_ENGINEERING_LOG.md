@@ -1517,3 +1517,35 @@
     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv`
     - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv build-test/test/Conversion/ImportVerilog/unpacked-union-equality.sv build-test/test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
+- Iteration update (unpacked aggregate `$rose/$fell` sampled support):
+  - realization:
+    - `$rose/$fell` were still restricted to scalar/bitvector sampled operands.
+    - fixed unpacked aggregates (arrays/structs/unions) were accepted by Slang
+      but rejected by importer lowering, blocking parity for aggregate edge
+      checks in assertions.
+  - implemented:
+    - added recursive sampled-bool builder for unpacked aggregates:
+      - arrays via `moore.dyn_extract` + OR reduction
+      - structs via `moore.struct_extract` + OR reduction
+      - unions via `moore.union_extract` + OR reduction
+    - wired sampled-value lowering to use aggregate bool sampling for
+      `$rose/$fell`:
+      - direct assertion-clocked path (`moore.past`)
+      - explicit-clock helper path (`moore.procedure always` helper state)
+    - new regressions:
+      - `test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`
+      - `test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv`
+    - updated negative coverage:
+      - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+        now checks dynamic-array `$rose` importer failure via `not ... | FileCheck`.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv` (`real=0.007s`)

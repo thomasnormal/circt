@@ -127,6 +127,91 @@ static Value buildSampledStableComparison(Context &context, Location loc,
   return {};
 }
 
+/// Build a 1-bit sampled boolean from a sampled operand. For unpacked
+/// aggregates, recursively OR-reduce member/element boolean values.
+static Value buildSampledBoolean(Context &context, Location loc, Value value,
+                                 StringRef funcName) {
+  auto &builder = context.builder;
+  if (!value) {
+    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+    return {};
+  }
+
+  auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+
+  if (isa<moore::IntType>(value.getType())) {
+    Value boolVal = moore::BoolCastOp::create(builder, loc, value).getResult();
+    if (boolVal.getType() != i1Ty)
+      boolVal = context.materializeConversion(i1Ty, boolVal, false, loc);
+    return boolVal;
+  }
+
+  if (auto arrayTy = dyn_cast<moore::UnpackedArrayType>(value.getType())) {
+    Value anySet = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+    auto idxTy = moore::IntType::get(builder.getContext(), 32,
+                                     moore::Domain::TwoValued);
+    for (unsigned i = 0; i < arrayTy.getSize(); ++i) {
+      auto idx = moore::ConstantOp::create(builder, loc, idxTy,
+                                           static_cast<int64_t>(i));
+      auto elem = moore::DynExtractOp::create(builder, loc, arrayTy.getElementType(),
+                                              value, idx);
+      auto elemBool = buildSampledBoolean(context, loc, elem, funcName);
+      if (!elemBool)
+        return {};
+      if (elemBool.getType() != i1Ty)
+        elemBool = context.materializeConversion(i1Ty, elemBool, false, loc);
+      if (!elemBool)
+        return {};
+      anySet = moore::OrOp::create(builder, loc, anySet, elemBool).getResult();
+    }
+    return anySet;
+  }
+
+  if (auto structTy = dyn_cast<moore::UnpackedStructType>(value.getType())) {
+    Value anySet = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+    for (auto member : structTy.getMembers()) {
+      auto field = moore::StructExtractOp::create(builder, loc, member.type,
+                                                  member.name, value);
+      auto fieldBool = buildSampledBoolean(context, loc, field, funcName);
+      if (!fieldBool)
+        return {};
+      if (fieldBool.getType() != i1Ty)
+        fieldBool = context.materializeConversion(i1Ty, fieldBool, false, loc);
+      if (!fieldBool)
+        return {};
+      anySet = moore::OrOp::create(builder, loc, anySet, fieldBool).getResult();
+    }
+    return anySet;
+  }
+
+  if (auto unionTy = dyn_cast<moore::UnpackedUnionType>(value.getType())) {
+    Value anySet = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+    for (auto member : unionTy.getMembers()) {
+      auto field = moore::UnionExtractOp::create(builder, loc, member.type,
+                                                 member.name, value);
+      auto fieldBool = buildSampledBoolean(context, loc, field, funcName);
+      if (!fieldBool)
+        return {};
+      if (fieldBool.getType() != i1Ty)
+        fieldBool = context.materializeConversion(i1Ty, fieldBool, false, loc);
+      if (!fieldBool)
+        return {};
+      anySet = moore::OrOp::create(builder, loc, anySet, fieldBool).getResult();
+    }
+    return anySet;
+  }
+
+  auto bitvec = context.convertToSimpleBitVector(value);
+  if (!bitvec || !isa<moore::IntType>(bitvec.getType())) {
+    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+    return {};
+  }
+  Value boolVal = moore::BoolCastOp::create(builder, loc, bitvec).getResult();
+  if (boolVal.getType() != i1Ty)
+    boolVal = context.materializeConversion(i1Ty, boolVal, false, loc);
+  return boolVal;
+}
+
 static const slang::ast::SignalEventControl *
 getCanonicalSignalEventControl(const slang::ast::TimingControl &ctrl) {
   if (auto *signal = ctrl.as_if<slang::ast::SignalEventControl>()) {
@@ -387,13 +472,16 @@ static Value lowerSampledValueFunctionWithClocking(
   Type loweredType = context.convertType(*valueExpr.type);
   if (auto refType = dyn_cast<moore::RefType>(loweredType))
     loweredType = refType.getNestedType();
-  bool isUnpackedAggregateSample =
-      (isStable || isChanged) &&
-      (isa<moore::UnpackedArrayType>(loweredType) ||
-       isa<moore::UnpackedStructType>(loweredType) ||
-       isa<moore::UnpackedUnionType>(loweredType));
+  bool isUnpackedAggregateType =
+      isa<moore::UnpackedArrayType, moore::UnpackedStructType,
+          moore::UnpackedUnionType>(loweredType);
+  bool isUnpackedAggregateStableSample =
+      (isStable || isChanged) && isUnpackedAggregateType;
+  bool isUnpackedAggregateEdgeSample =
+      (isRose || isFell) && isUnpackedAggregateType;
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
-  if (!isUnpackedAggregateSample && !intType) {
+  if (!isUnpackedAggregateStableSample && !isUnpackedAggregateEdgeSample &&
+      !intType) {
     mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
     return {};
   }
@@ -402,9 +490,13 @@ static Value lowerSampledValueFunctionWithClocking(
   moore::IntType sampleType;
   moore::UnpackedType sampledStorageType;
   moore::IntType resultType;
-  if (isUnpackedAggregateSample) {
+  if (isUnpackedAggregateStableSample) {
     sampledStorageType = cast<moore::UnpackedType>(loweredType);
     resultType = moore::IntType::getInt(builder.getContext(), 1);
+  } else if (isUnpackedAggregateEdgeSample) {
+    sampleType = moore::IntType::getInt(builder.getContext(), 1);
+    sampledStorageType = sampleType;
+    resultType = sampleType;
   } else {
     sampleType = boolCast
                      ? moore::IntType::get(builder.getContext(), 1,
@@ -430,7 +522,7 @@ static Value lowerSampledValueFunctionWithClocking(
     }
 
     Value prevInit;
-    if (!isUnpackedAggregateSample) {
+    if (!isUnpackedAggregateStableSample) {
       prevInit = createUnknownOrZeroConstant(context, loc, sampleType);
       if (!prevInit)
         return {};
@@ -453,11 +545,12 @@ static Value lowerSampledValueFunctionWithClocking(
     Value current = context.convertRvalueExpression(valueExpr);
     if (!current)
       return {};
-    if (!isUnpackedAggregateSample && !isa<moore::IntType>(current.getType()))
+    if (!isUnpackedAggregateStableSample && !isUnpackedAggregateEdgeSample &&
+        !isa<moore::IntType>(current.getType()))
       current = context.convertToSimpleBitVector(current);
     if (!current)
       return {};
-    if (isUnpackedAggregateSample) {
+    if (isUnpackedAggregateStableSample) {
       if (!isa<moore::UnpackedType>(current.getType())) {
         mlir::emitError(loc)
             << "unsupported sampled value type for " << funcName;
@@ -468,6 +561,21 @@ static Value lowerSampledValueFunctionWithClocking(
             << "unsupported sampled value type for " << funcName;
         return {};
       }
+    } else if (isUnpackedAggregateEdgeSample) {
+      if (!isa<moore::UnpackedType>(current.getType()) ||
+          current.getType() != loweredType) {
+        mlir::emitError(loc)
+            << "unsupported sampled value type for " << funcName;
+        return {};
+      }
+      current = buildSampledBoolean(context, loc, current, funcName);
+      if (!current)
+        return {};
+      if (current.getType() != sampleType)
+        current = context.materializeConversion(sampleType, current,
+                                                /*isSigned=*/false, loc);
+      if (!current)
+        return {};
     } else {
       auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
       if (!currentType) {
@@ -582,9 +690,16 @@ static Value lowerSampledValueFunctionWithClocking(
       }
     }
 
-    Value disabledValue = createUnknownOrZeroConstant(context, loc, resultType);
-    if (!disabledValue)
-      return {};
+    Value disabledValue;
+    if (isUnpackedAggregateStableSample) {
+      disabledValue = createUnknownOrZeroConstant(context, loc, resultType);
+      if (!disabledValue)
+        return {};
+    } else {
+      disabledValue = createUnknownOrZeroConstant(context, loc, resultType);
+      if (!disabledValue)
+        return {};
+    }
     Value resultValue =
         selectWithControl(result, disabledValue, disabledValue);
     moore::BlockingAssignOp::create(builder, loc, resultVar, resultValue);
@@ -1845,7 +1960,12 @@ Value Context::convertAssertionCallExpression(
         (isa<moore::UnpackedArrayType>(value.getType()) ||
          isa<moore::UnpackedStructType>(value.getType()) ||
          isa<moore::UnpackedUnionType>(value.getType()));
-    if (!isAggregateSample &&
+    bool isAggregateEdgeSample =
+        (funcName == "$rose" || funcName == "$fell") &&
+        (isa<moore::UnpackedArrayType>(value.getType()) ||
+         isa<moore::UnpackedStructType>(value.getType()) ||
+         isa<moore::UnpackedUnionType>(value.getType()));
+    if (!isAggregateSample && !isAggregateEdgeSample &&
         (isa<moore::UnpackedArrayType>(value.getType()) ||
          isa<moore::UnpackedStructType>(value.getType()) ||
          isa<moore::UnpackedUnionType>(value.getType()))) {
@@ -1853,11 +1973,13 @@ Value Context::convertAssertionCallExpression(
       return {};
     }
 
-    if (!isAggregateSample && !isa<moore::IntType>(value.getType()))
+    if (!isAggregateSample && !isAggregateEdgeSample &&
+        !isa<moore::IntType>(value.getType()))
       value = convertToSimpleBitVector(value);
     if (!value)
       return {};
-    if (!isAggregateSample && !isa<moore::IntType>(value.getType())) {
+    if (!isAggregateSample && !isAggregateEdgeSample &&
+        !isa<moore::IntType>(value.getType())) {
       mlir::emitError(loc) << "unsupported sampled value type for "
                            << funcName;
       return {};
@@ -2014,8 +2136,15 @@ Value Context::convertAssertionCallExpression(
       return resultVal;
     }
 
-    Value current = value;
-    current = moore::BoolCastOp::create(builder, loc, current).getResult();
+    Value current;
+    if (isAggregateEdgeSample) {
+      current = buildSampledBoolean(*this, loc, value, funcName);
+      if (!current)
+        return {};
+    } else {
+      current = value;
+      current = moore::BoolCastOp::create(builder, loc, current).getResult();
+    }
     Value sampled = current;
     Value past;
     if (inAssertionExpr) {
