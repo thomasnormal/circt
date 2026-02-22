@@ -1150,8 +1150,12 @@ static Value lowerPastWithSamplingControl(
       isa<moore::UnpackedStructType>(originalType) ||
       isa<moore::UnpackedUnionType>(originalType);
   bool isRealSample = isa<moore::RealType>(originalType);
+  bool isStringSample =
+      isa<moore::StringType>(originalType) ||
+      isa<moore::FormatStringType>(originalType);
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
-  if (!isUnpackedAggregateSample && !isRealSample && !intType) {
+  if (!isUnpackedAggregateSample && !isRealSample && !isStringSample &&
+      !intType) {
     mlir::emitError(loc)
         << "unsupported $past value type with sampled-value controls (input "
            "type: "
@@ -1159,7 +1163,7 @@ static Value lowerPastWithSamplingControl(
     return {};
   }
   moore::UnpackedType storageType =
-      (isUnpackedAggregateSample || isRealSample)
+      (isUnpackedAggregateSample || isRealSample || isStringSample)
           ? cast<moore::UnpackedType>(originalType)
           : cast<moore::UnpackedType>(intType);
 
@@ -1180,7 +1184,7 @@ static Value lowerPastWithSamplingControl(
     }
 
     Value init;
-    if (!isUnpackedAggregateSample && !isRealSample) {
+    if (!isUnpackedAggregateSample && !isRealSample && !isStringSample) {
       init = createUnknownOrZeroConstant(context, loc, intType);
       if (!init)
         return {};
@@ -1202,12 +1206,12 @@ static Value lowerPastWithSamplingControl(
     Value current = context.convertRvalueExpression(valueExpr);
     if (!current)
       return {};
-    if (!isUnpackedAggregateSample && !isRealSample &&
+    if (!isUnpackedAggregateSample && !isRealSample && !isStringSample &&
         !isa<moore::IntType>(current.getType()))
       current = context.convertToSimpleBitVector(current);
     if (!current)
       return {};
-    if (isUnpackedAggregateSample || isRealSample) {
+    if (isUnpackedAggregateSample || isRealSample || isStringSample) {
       if (!isa<moore::UnpackedType>(current.getType()) ||
           current.getType() != storageType) {
         mlir::emitError(loc)
@@ -1311,7 +1315,7 @@ static Value lowerPastWithSamplingControl(
     if (delay > 0)
       pastValue = moore::ReadOp::create(builder, loc, historyVars.back());
     Value disabledValue = pastValue;
-    if (!isUnpackedAggregateSample && !isRealSample) {
+    if (!isUnpackedAggregateSample && !isRealSample && !isStringSample) {
       disabledValue = createUnknownOrZeroConstant(context, loc, intType);
       if (!disabledValue)
         return {};
