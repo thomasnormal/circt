@@ -1625,6 +1625,11 @@ struct AssertionExprVisitor {
             emitSeverity(moore::Severity::Error);
             break;
           }
+          if (name == "$fatal") {
+            emitSeverity(moore::Severity::Fatal);
+            moore::FinishBIOp::create(builder, loc, 1);
+            break;
+          }
           bool isDisplayLike = false;
           bool appendNewline = false;
           StringRef suffix = name;

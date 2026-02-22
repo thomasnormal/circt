@@ -76615,3 +76615,31 @@ See CHANGELOG.md on recent progress.
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-severity-subroutine.sv` (`real=0.031s`, `user=0.002s`, `sys=0.005s`)
+109. ImportVerilog SVA: preserve sequence match-item `$fatal` side effects
+     (February 22, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - sequence match-item system subroutine lowering now supports `$fatal`.
+      - `$fatal` match-item calls now materialize as:
+        - `moore.builtin.severity fatal ...`
+        - `moore.builtin.finish 1`
+      instead of being ignored with a remark.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-sequence-match-item-fatal-subroutine.sv`
+      - failing-first behavior reproduced prior to fix:
+        - `remark: ignoring system subroutine '$fatal' in assertion match items`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+        - `ninja -C build-test circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-fatal-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-fatal-subroutine.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-severity-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-severity-subroutine.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv`
+      - lit subset: PASS
+        - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-fatal-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-severity-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - profiling sample:
+        - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-fatal-subroutine.sv` (`real=0.030s`, `user=0.003s`, `sys=0.005s`)
