@@ -76229,3 +76229,37 @@ See CHANGELOG.md on recent progress.
         - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-open-range-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-open-range-property.sv`
       - formal smoke: PASS
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+96. ImportVerilog SVA: enforce strong finite-progress semantics for sequence-
+    typed `s_nexttime` / bounded `s_always`
+    (February 22, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - non-property `s_nexttime` lowering now wraps delayed sequence with
+        strong finite-progress obligation:
+        - `delay(seq) && eventually(delay(seq))`
+      - non-property bounded `s_always [n:m]` lowering now wraps repeated
+        sequence with strong finite-progress obligation:
+        - `repeat(seq) && eventually(repeat(seq))`
+      - weak counterparts remain unchanged:
+        - `nexttime` (sequence) remains plain `ltl.delay`
+        - `always [n:m]` (sequence) remains plain `ltl.repeat`
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv`
+      - existing compatibility:
+        - `test/Conversion/ImportVerilog/sva-nexttime-property.sv`
+        - `test/Conversion/ImportVerilog/sva-bounded-always-property.sv`
+        - `test/Conversion/ImportVerilog/sva-open-range-property.sv`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+      - failing-first check (pre-fix): reproduced
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv`
+      - focused tests (post-fix): PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv`
+      - lit subset: PASS
+        - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv build-test/test/Conversion/ImportVerilog/sva-nexttime-property.sv build-test/test/Conversion/ImportVerilog/sva-bounded-always-property.sv build-test/test/Conversion/ImportVerilog/sva-open-range-property.sv`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - profiling sample:
+        - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv` (`real=0.007s`, `user=0.003s`, `sys=0.004s`)
