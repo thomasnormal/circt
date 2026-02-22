@@ -15,8 +15,11 @@ module SVABoundedEventuallyProperty(input logic clk, a, b, c, d);
   // CHECK: verif.assert
   assert property (eventually [1:2] p);
 
-  // Strong bounded eventually should follow the same bounded lowering shape.
+  // Strong bounded eventually should require finite delayed progress.
   // CHECK: ltl.implication
+  // CHECK: ltl.and
+  // CHECK: ltl.implication
+  // CHECK: ltl.and
   // CHECK: ltl.or
   // CHECK: verif.assert
   assert property (s_eventually [2:3] p);

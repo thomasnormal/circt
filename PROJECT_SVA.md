@@ -182,6 +182,8 @@ Additional compile-only or XFAIL expectations live in
   - `eventually` (weak) - Lowered with weak tag (no final liveness check)
   - `s_eventually [n:m]` - Lowered to `ltl.delay` with bounded range
   - `eventually [n:m]` - Lowered to `ltl.delay` with bounded range
+  - bounded strong `s_eventually [n:m]` now enforces finite delayed-progress
+    obligations for both property and sequence operands
   - `s_until` / `s_until_with` - Lowered to `ltl.until` AND `ltl.eventually`
   - `s_nexttime` / `s_always` - Lowered to delay/repeat (strong forms)
   - property-typed `s_nexttime` and bounded `s_always [n:m]` now enforce

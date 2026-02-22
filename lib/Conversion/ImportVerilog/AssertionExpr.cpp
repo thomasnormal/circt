@@ -1760,7 +1760,8 @@ struct AssertionExprVisitor {
           shifted.reserve(maxDelay - minDelay + 1);
           for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
                ++delayCycles)
-            shifted.push_back(shiftPropertyBy(value, delayCycles));
+            shifted.push_back(shiftPropertyBy(value, delayCycles,
+                                              /*requireFiniteProgress=*/true));
           if (shifted.size() == 1)
             return shifted.front();
           return ltl::OrOp::create(builder, loc, shifted);
@@ -1771,8 +1772,9 @@ struct AssertionExprVisitor {
           lengthAttr = builder.getI64IntegerAttr(
               expr.range.value().max.value() - expr.range.value().min);
         }
-        return ltl::DelayOp::create(builder, loc, value, minDelay,
-                                    lengthAttr);
+        auto delayed = ltl::DelayOp::create(builder, loc, value, minDelay,
+                                            lengthAttr);
+        return requireStrongFiniteProgress(delayed);
       }
       return ltl::EventuallyOp::create(builder, loc, value);
     case UnaryAssertionOperator::Eventually: {
