@@ -2528,7 +2528,8 @@ struct StmtVisitor {
       auto msgConst = context.evaluateConstant(*args[msgArgIndex]);
       if (msgConst && msgConst.isString())
         return builder.getStringAttr(msgConst.str());
-      return {};
+      // Keep task identity as fallback when the message is dynamic.
+      return builder.getStringAttr(taskName);
     };
 
     // Check for a `disable iff` expression:
