@@ -1,3 +1,42 @@
+## Iteration 1604 - February 22, 2026
+
+### [ImportVerilog][SVA] Stabilize explicit-clock procedural hoist order
+
+1. **Implemented insertion-point hardening**
+   (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   - in explicit-property-clock hoisting from procedural contexts, switched
+     emission from `setInsertionPointAfter(enclosingProc)` to deterministic
+     append-at-module-end / pre-terminator insertion.
+   - this aligns the explicit-clock hoist path with the previously hardened
+     procedural-current-clock path.
+
+2. **Behavioral fix**
+   - preserves source-order emission for multiple hoisted procedural concurrent
+     assertions with explicit property clocks.
+   - removes reverse-order hoist behavior that could interleave later hoists
+     ahead of earlier assertions in module body emission.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`
+   - regression checks:
+     - guarded procedural explicit-clock `assert property (...)`
+     - guarded procedural explicit-clock `assume property (...)`
+     - ordering and composed enable (`arith.andi`) emission.
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv >/dev/null`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`: PASS.
+     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv >/dev/null` (`real=0.007s`, `user=0.003s`, `sys=0.004s`).
+
 ## Iteration 1603 - February 22, 2026
 
 ### [ImportVerilog][SVA] Compose procedural guard with `disable iff` enable

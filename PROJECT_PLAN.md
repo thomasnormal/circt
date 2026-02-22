@@ -250,6 +250,12 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    top-level `disable iff` enables when hoisting procedural concurrent
    assertions, composing them as a single clocked-op enable condition instead
    of dropping `disable iff` in guarded blocks.
+41. **Explicit-clock procedural hoist source-order stabilization**
+   (Feb 22, 2026):
+   ImportVerilog now emits hoisted procedural concurrent assertions with
+   explicit property clocks at module-body end / pre-terminator insertion
+   points, preserving source-order behavior across multiple hoisted assertions
+   in the same process.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
