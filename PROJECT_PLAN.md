@@ -147,6 +147,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers explicit-clocked `$past` on fixed-size unpacked
    arrays using typed helper history storage, closing the previous
    `unsupported $past value type with explicit clocking` gap.
+17. **SVA implicit-clock `$past` enable support with default clocking**
+   (Feb 22, 2026):
+   ImportVerilog now lowers `$past(expr, ticks, enable)` in procedural/default
+   clocking contexts by resolving implicit clocking and routing through
+   helper-based clocked lowering when needed.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
