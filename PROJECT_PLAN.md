@@ -1334,3 +1334,14 @@ verilator-verification, and yosys corpora).
     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
+- Additional ImportVerilog SVA closure:
+  - multiclock mixed event waits now emit explicit edge-specific wakeup detects
+    for signal-event entries (`posedge` / `negedge`) alongside conservative
+    generic wakeups.
+  - updated regression:
+    - `test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`

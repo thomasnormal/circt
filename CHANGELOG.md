@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1556 - February 21, 2026
+
+### [ImportVerilog][SVA] Emit edge-specific mixed-event wakeup detection for multiclock sequence waits
+
+1. **Improved mixed-event wait lowering with explicit edge detect metadata**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - multi-clock sequence event-control wait lowering now emits additional
+     edge-specific `moore.detect_event` ops for known signal-event entries
+     (e.g., `posedge clk`, `negedge rst`) in mixed sequence+signal lists.
+   - retains existing generic clock-change wakeups for conservative correctness
+     while exposing explicit signal-event edges in IR for better traceability
+     and downstream optimization opportunities.
+
+2. **Updated regression coverage**
+   - `test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+     now checks for `moore.detect_event posedge` and `moore.detect_event negedge`
+     in the mixed multiclock wait lowering.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv` (`real=0.057s`, `user=0.001s`, `sys=0.008s`).
+
 ## Iteration 1555 - February 21, 2026
 
 ### [ImportVerilog][SVA] Infer unclocked sequence sampling for non-uniform mixed event lists
