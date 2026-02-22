@@ -159,6 +159,11 @@ Additional compile-only or XFAIL expectations live in
   - sampled stability/change support over unpacked aggregates now includes
     associative arrays (`assoc_array` / wildcard associative arrays) in both
     assertion-clocked and explicit-clock helper lowering paths
+  - sampled-value real operand support:
+    - `$stable` / `$changed` use real equality (`moore.feq`) for comparisons
+    - `$rose` / `$fell` booleanize real samples via `value != 0.0`
+    - supported in both explicit-clock helper and direct clocked-assertion
+      lowering paths
 
 - **LTL operators**:
   - `|->` - Overlapping implication

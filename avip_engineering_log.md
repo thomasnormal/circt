@@ -4733,3 +4733,48 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 6. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv`: `real=0.007s`
+
+## 2026-02-22 Session: Real-typed sampled-value parity
+
+### Problem
+1. Sampled-value functions on real operands failed in import, e.g.:
+   - `assert property ($stable(r, @(posedge clk)));`
+   with:
+   - `expression of type '!moore.f64' cannot be cast to a simple bit vector`
+2. Gap affected both helper-clocked sampled lowering and direct clocked
+   assertion lowering for `$stable/$changed/$rose/$fell`.
+
+### Realizations / Surprises
+1. Real equality is already represented in Moore via `moore.feq` / `moore.fne`.
+2. Edge functions over real can reuse sampled-boolean semantics via
+   non-zero real test (`value != 0.0`) before past/transition checks.
+3. A first implementation exposed a crash due real-stable taking an integer
+   init path with unset `sampleType`; this was corrected by routing real-stable
+   through the unpacked-storage init path.
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp`:
+   - `buildSampledStableComparison` now supports `moore::RealType` via
+     `moore::EqRealOp`.
+   - `buildSampledBoolean` now supports `moore::RealType` via:
+     - `moore.constant_real 0.0`
+     - `moore.fne(value, zero)`
+   - helper sampled lowering now classifies and supports:
+     - `isRealStableSample`
+     - `isRealEdgeSample`
+   - direct assertion lowering now uses shared sampled-boolean conversion for
+     edge functions, enabling real operands there too.
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv`: PASS
+3. Lit subset:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-nexttime-property.sv build-test/test/Conversion/ImportVerilog/sva-bounded-always-property.sv build-test/test/Conversion/ImportVerilog/sva-open-range-property.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv`: `real=0.007s`
