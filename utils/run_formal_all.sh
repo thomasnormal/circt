@@ -39,6 +39,7 @@ Options:
   --sv-tests DIR         sv-tests root (default: ~/sv-tests)
   --verilator DIR        verilator-verification root (default: ~/verilator-verification)
   --yosys DIR            yosys SVA root or yosys repo root (default: ~/yosys/tests/sva)
+  --ovl DIR              OVL root (default: ~/std_ovl)
   --z3-bin PATH          Path to z3 binary (optional)
   --baseline-file FILE   Baseline TSV file (default: utils/formal-baselines.tsv)
   --plan-file FILE       Project plan file to update (default: PROJECT_PLAN.md)
@@ -952,6 +953,17 @@ Options:
   --yosys-lec-test-filter REGEX
                          Base-name regex filter passed to yosys SVA LEC runner
                          (required when yosys/tests/sva/LEC lane runs)
+  --with-ovl             Run OVL BMC matrix lane (`std_ovl/BMC`)
+  --with-ovl-semantic    Run OVL semantic checker lane (`std_ovl/BMC_SEMANTIC`)
+  --ovl-bmc-test-filter REGEX
+                         Base-name regex filter passed to OVL BMC runner
+                         (required when std_ovl/BMC lane runs)
+  --ovl-bmc-profiles LIST
+                         Comma-separated OVL BMC profiles:
+                         known,xprop,auto (default: known,xprop)
+  --ovl-semantic-test-filter REGEX
+                         Case-id regex filter passed to OVL semantic runner
+                         (required when std_ovl/BMC_SEMANTIC lane runs)
   --require-explicit-sv-tests-filters
                          Deprecated no-op (explicit lane filters are now
                          always required for selected BMC/LEC/OpenTitan lanes)
@@ -2671,6 +2683,7 @@ OUT_DIR=""
 SV_TESTS_DIR="${HOME}/sv-tests"
 VERILATOR_DIR="${HOME}/verilator-verification"
 YOSYS_DIR="${HOME}/yosys/tests/sva"
+OVL_DIR="${HOME}/std_ovl"
 YOSYS_DIR_EXPLICIT=0
 YOSYS_DIR_RAW="$YOSYS_DIR"
 YOSYS_SVA_LAYOUT_STATUS="unknown"
@@ -3020,6 +3033,8 @@ WITH_OPENTITAN_E2E_STRICT=0
 WITH_SV_TESTS_UVM_BMC_SEMANTICS=0
 SV_TESTS_BMC_BACKEND_PARITY=0
 WITH_AVIP=0
+WITH_OVL=0
+WITH_OVL_SEMANTIC=0
 OPENTITAN_BMC_IMPL_FILTER=""
 OPENTITAN_BMC_BOUND="1"
 OPENTITAN_BMC_INCLUDE_MASKED=0
@@ -3162,6 +3177,9 @@ VERILATOR_LEC_TEST_FILTER=""
 YOSYS_BMC_TEST_FILTER=""
 YOSYS_BMC_PROFILE="auto"
 YOSYS_LEC_TEST_FILTER=""
+OVL_BMC_TEST_FILTER=""
+OVL_BMC_PROFILES="known,xprop"
+OVL_SEMANTIC_TEST_FILTER=""
 REQUIRE_NONEMPTY_FILTERED_LANES=0
 
 # Default known-verilator BMC expected failures when colocated with this
@@ -3181,6 +3199,8 @@ while [[ $# -gt 0 ]]; do
       VERILATOR_DIR="$2"; shift 2 ;;
     --yosys)
       YOSYS_DIR="$2"; YOSYS_DIR_EXPLICIT=1; shift 2 ;;
+    --ovl)
+      OVL_DIR="$2"; shift 2 ;;
     --z3-bin)
       Z3_BIN="$2"; shift 2 ;;
     --baseline-file)
@@ -4033,6 +4053,16 @@ while [[ $# -gt 0 ]]; do
       YOSYS_BMC_PROFILE="$2"; shift 2 ;;
     --yosys-lec-test-filter)
       YOSYS_LEC_TEST_FILTER="$2"; shift 2 ;;
+    --with-ovl)
+      WITH_OVL=1; shift ;;
+    --with-ovl-semantic)
+      WITH_OVL_SEMANTIC=1; shift ;;
+    --ovl-bmc-test-filter)
+      OVL_BMC_TEST_FILTER="$2"; shift 2 ;;
+    --ovl-bmc-profiles)
+      OVL_BMC_PROFILES="$2"; shift 2 ;;
+    --ovl-semantic-test-filter)
+      OVL_SEMANTIC_TEST_FILTER="$2"; shift 2 ;;
     --require-explicit-sv-tests-filters)
       shift ;;
     --require-nonempty-filtered-lanes)
@@ -4312,6 +4342,38 @@ if [[ -n "$YOSYS_LEC_TEST_FILTER" ]]; then
     exit 1
   fi
 fi
+if [[ -n "$OVL_BMC_TEST_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$OVL_BMC_TEST_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --ovl-bmc-test-filter: $OVL_BMC_TEST_FILTER" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$OVL_SEMANTIC_TEST_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$OVL_SEMANTIC_TEST_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --ovl-semantic-test-filter: $OVL_SEMANTIC_TEST_FILTER" >&2
+    exit 1
+  fi
+fi
+IFS=',' read -r -a _ovl_bmc_profiles <<< "$OVL_BMC_PROFILES"
+for _raw_profile in "${_ovl_bmc_profiles[@]}"; do
+  _profile="${_raw_profile// /}"
+  [[ -z "$_profile" ]] && continue
+  case "$_profile" in
+    known|xprop|auto) ;;
+    *)
+      echo "invalid --ovl-bmc-profiles entry: $_profile (expected known|xprop|auto)" >&2
+      exit 1
+      ;;
+  esac
+done
 if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
   set +e
   printf '' | grep -Eq "$OPENTITAN_LEC_IMPL_FILTER" 2>/dev/null
@@ -9361,6 +9423,8 @@ compute_lane_state_config_hash() {
     printf "with_opentitan_e2e_strict=%s\n" "$WITH_OPENTITAN_E2E_STRICT"
     printf "with_sv_tests_uvm_bmc_semantics=%s\n" "$WITH_SV_TESTS_UVM_BMC_SEMANTICS"
     printf "with_avip=%s\n" "$WITH_AVIP"
+    printf "with_ovl=%s\n" "$WITH_OVL"
+    printf "with_ovl_semantic=%s\n" "$WITH_OVL_SEMANTIC"
     printf "opentitan_e2e_sim_targets=%s\n" "$OPENTITAN_E2E_SIM_TARGETS"
     printf "opentitan_e2e_verilog_targets=%s\n" "$OPENTITAN_E2E_VERILOG_TARGETS"
     printf "opentitan_e2e_sim_timeout=%s\n" "$OPENTITAN_E2E_SIM_TIMEOUT"
@@ -9596,6 +9660,9 @@ compute_lane_state_config_hash() {
     printf "yosys_bmc_test_filter=%s\n" "$YOSYS_BMC_TEST_FILTER"
     printf "yosys_bmc_profile=%s\n" "$YOSYS_BMC_PROFILE"
     printf "yosys_lec_test_filter=%s\n" "$YOSYS_LEC_TEST_FILTER"
+    printf "ovl_bmc_test_filter=%s\n" "$OVL_BMC_TEST_FILTER"
+    printf "ovl_bmc_profiles=%s\n" "$OVL_BMC_PROFILES"
+    printf "ovl_semantic_test_filter=%s\n" "$OVL_SEMANTIC_TEST_FILTER"
     printf "opentitan_lec_impl_filter=%s\n" "$OPENTITAN_LEC_IMPL_FILTER"
     printf "opentitan_e2e_impl_filter=%s\n" "$OPENTITAN_E2E_IMPL_FILTER"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
@@ -10397,6 +10464,22 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
     exit 1
   fi
 fi
+if [[ "$WITH_OVL" == "1" ]] && [[ -d "$OVL_DIR" ]] && lane_enabled "std_ovl/BMC"; then
+  if [[ -z "$OVL_BMC_TEST_FILTER" ]]; then
+    echo "std_ovl/BMC requires explicit filter: set --ovl-bmc-test-filter" >&2
+    exit 1
+  fi
+fi
+if [[ "$WITH_OVL_SEMANTIC" == "1" ]] && [[ -d "$OVL_DIR" ]] && lane_enabled "std_ovl/BMC_SEMANTIC"; then
+  if [[ -z "$OVL_SEMANTIC_TEST_FILTER" ]]; then
+    echo "std_ovl/BMC_SEMANTIC requires explicit filter: set --ovl-semantic-test-filter" >&2
+    exit 1
+  fi
+fi
+if [[ "$WITH_OVL" == "1" || "$WITH_OVL_SEMANTIC" == "1" ]] && [[ ! -d "$OVL_DIR" ]]; then
+  echo "--with-ovl/--with-ovl-semantic requested but OVL directory not found: $OVL_DIR" >&2
+  exit 1
+fi
 if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
   if [[ -z "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
     echo "opentitan/LEC requires explicit filter: set --opentitan-lec-impl-filter" >&2
@@ -10555,6 +10638,8 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   need_opentitan_lec_runner=0
   need_opentitan_e2e_runner=0
   need_avip_runner=0
+  need_ovl_bmc_runner=0
+  need_ovl_semantic_runner=0
 
   yosys_bmc_lane_selected=0
   yosys_lec_lane_selected=0
@@ -10593,6 +10678,14 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     need_default_core_bmc_lanes=1
     need_yosys_bmc_runner=1
+  fi
+  if [[ "$WITH_OVL" == "1" ]] && [[ -d "$OVL_DIR" ]] && lane_enabled "std_ovl/BMC"; then
+    need_default_core_bmc_lanes=1
+    need_ovl_bmc_runner=1
+  fi
+  if [[ "$WITH_OVL_SEMANTIC" == "1" ]] && [[ -d "$OVL_DIR" ]] && lane_enabled "std_ovl/BMC_SEMANTIC"; then
+    need_default_core_bmc_lanes=1
+    need_ovl_semantic_runner=1
   fi
   if [[ "$WITH_OPENTITAN_BMC" == "1" ]] && lane_enabled "opentitan/BMC"; then
     need_opentitan_bmc_lanes=1
@@ -10753,6 +10846,12 @@ if [[ "$STRICT_TOOL_PREFLIGHT" == "1" ]]; then
   fi
   if [[ "$need_yosys_lec_runner" == "1" ]]; then
     require_executable_tool "yosys SVA LEC runner" "utils/run_yosys_sva_circt_lec.sh"
+  fi
+  if [[ "$need_ovl_bmc_runner" == "1" ]]; then
+    require_executable_tool "OVL BMC runner" "utils/run_ovl_sva_circt_bmc.sh"
+  fi
+  if [[ "$need_ovl_semantic_runner" == "1" ]]; then
+    require_executable_tool "OVL semantic BMC runner" "utils/run_ovl_sva_semantic_circt_bmc.sh"
   fi
   if [[ "$need_opentitan_bmc_runner" == "1" ]]; then
     require_executable_tool "OpenTitan BMC runner" "utils/run_opentitan_circt_bmc.py"
@@ -13495,6 +13594,87 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "yosys/tests/sva/BMC" total error summary
       record_result_with_summary "yosys/tests/sva" "BMC" "$total" "$pass" "$failures" "$xfail" "$xpass" "$error" "$skipped" "$summary"
+    fi
+  fi
+fi
+
+# OVL BMC
+if [[ "$WITH_OVL" == "1" ]] && [[ -d "$OVL_DIR" ]] && lane_enabled "std_ovl/BMC"; then
+  if lane_resume_from_state "std_ovl/BMC"; then
+    :
+  else
+    ovl_bmc_env=(OUT="$OUT_DIR/ovl-bmc-results.txt"
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN"
+      CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN"
+      CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN"
+      CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN"
+      OVL_BMC_TEST_FILTER="$OVL_BMC_TEST_FILTER"
+      OVL_BMC_PROFILES="$OVL_BMC_PROFILES"
+      Z3_BIN="$Z3_BIN")
+    if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+      ovl_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
+    fi
+    if [[ ${#FORMAL_BMC_TIMEOUT_ENV[@]} -gt 0 ]]; then
+      ovl_bmc_env+=("${FORMAL_BMC_TIMEOUT_ENV[@]}")
+    fi
+    run_suite ovl-bmc \
+      env "${ovl_bmc_env[@]}" \
+      utils/run_ovl_sva_circt_bmc.sh "$OVL_DIR" || true
+    line=$(grep -E "ovl BMC summary:" "$OUT_DIR/ovl-bmc.log" | tail -1 || true)
+    if [[ -n "$line" ]]; then
+      total=$(echo "$line" | sed -n 's/.*summary: \([0-9]\+\) tests.*/\1/p')
+      failures=$(echo "$line" | sed -n 's/.*failures=\([0-9]\+\).*/\1/p')
+      skipped=$(echo "$line" | sed -n 's/.*skipped=\([0-9]\+\).*/\1/p')
+      failures="${failures:-0}"
+      skipped="${skipped:-0}"
+      pass=$((total - failures - skipped))
+      error=0
+      summary="total=${total} pass=${pass} fail=${failures} xfail=0 xpass=0 error=${error} skip=${skipped}"
+      append_filtered_min_total_violation total summary
+      maybe_enforce_nonempty_filtered_lane "std_ovl/BMC" total error summary
+      record_result_with_summary "std_ovl" "BMC" "$total" "$pass" "$failures" 0 0 "$error" "$skipped" "$summary"
+    fi
+  fi
+fi
+
+# OVL semantic BMC
+if [[ "$WITH_OVL_SEMANTIC" == "1" ]] && [[ -d "$OVL_DIR" ]] && lane_enabled "std_ovl/BMC_SEMANTIC"; then
+  if lane_resume_from_state "std_ovl/BMC_SEMANTIC"; then
+    :
+  else
+    ovl_semantic_env=(OUT="$OUT_DIR/ovl-semantic-bmc-results.txt"
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN"
+      CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN"
+      CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN"
+      CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN"
+      OVL_SEMANTIC_TEST_FILTER="$OVL_SEMANTIC_TEST_FILTER"
+      Z3_BIN="$Z3_BIN")
+    if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+      ovl_semantic_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
+    fi
+    if [[ ${#FORMAL_BMC_TIMEOUT_ENV[@]} -gt 0 ]]; then
+      ovl_semantic_env+=("${FORMAL_BMC_TIMEOUT_ENV[@]}")
+    fi
+    run_suite ovl-bmc-semantic \
+      env "${ovl_semantic_env[@]}" \
+      utils/run_ovl_sva_semantic_circt_bmc.sh "$OVL_DIR" || true
+    line=$(grep -E "ovl semantic BMC summary:" "$OUT_DIR/ovl-bmc-semantic.log" | tail -1 || true)
+    if [[ -n "$line" ]]; then
+      total=$(echo "$line" | sed -n 's/.*summary: \([0-9]\+\) tests.*/\1/p')
+      failures=$(echo "$line" | sed -n 's/.*failures=\([0-9]\+\).*/\1/p')
+      xfail=$(echo "$line" | sed -n 's/.*xfail=\([0-9]\+\).*/\1/p')
+      xpass=$(echo "$line" | sed -n 's/.*xpass=\([0-9]\+\).*/\1/p')
+      skipped=$(echo "$line" | sed -n 's/.*skipped=\([0-9]\+\).*/\1/p')
+      failures="${failures:-0}"
+      xfail="${xfail:-0}"
+      xpass="${xpass:-0}"
+      skipped="${skipped:-0}"
+      pass=$((total - failures - xfail - xpass - skipped))
+      error=0
+      summary="total=${total} pass=${pass} fail=${failures} xfail=${xfail} xpass=${xpass} error=${error} skip=${skipped}"
+      append_filtered_min_total_violation total summary
+      maybe_enforce_nonempty_filtered_lane "std_ovl/BMC_SEMANTIC" total error summary
+      record_result_with_summary "std_ovl" "BMC_SEMANTIC" "$total" "$pass" "$failures" "$xfail" "$xpass" "$error" "$skipped" "$summary"
     fi
   fi
 fi

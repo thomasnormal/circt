@@ -33,6 +33,86 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-22 Session: OVL BMC Matrix Harness Integration
+
+### Why this pass
+We need standard-library-grade assertion coverage in regular formal cadence.
+`~/std_ovl` is the Accellera OVL corpus and gives a broad checker matrix for
+SVA import + BMC pipeline health.
+
+### Changes
+1. Added dedicated OVL runner:
+   - `utils/run_ovl_sva_circt_bmc.sh`
+   - compiles all `ovl_*.v` with `-DOVL_SVA`
+   - runs BMC matrix across profiles:
+     - `known`
+     - `xprop`
+2. Integrated lane into `run_formal_all.sh`:
+   - lane: `std_ovl/BMC`
+   - new options:
+     - `--with-ovl`
+     - `--ovl DIR`
+     - `--ovl-bmc-test-filter REGEX`
+     - `--ovl-bmc-profiles LIST`
+
+### Validation
+1. Standalone matrix:
+   - `utils/run_ovl_sva_circt_bmc.sh /home/thomas-ahle/std_ovl`
+   - result: `ovl BMC summary: 110 tests, failures=0, skipped=0`
+2. Integrated lane:
+   - `utils/run_formal_all.sh --with-ovl --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --include-lane-regex '^std_ovl/BMC$' --out-dir /tmp/formal-ovl-matrix`
+   - result: `std_ovl/BMC PASS (total=110, pass=110, fail=0)`
+
+### Notes
+- Initial all-fail run was traced to using `--ir-moore` in the OVL runner.
+  Switched to default `circt-verilog` lowering before BMC.
+
+## 2026-02-22 Session: OVL Semantic Harness + Matrix Lane
+
+### Why this pass
+The raw OVL matrix validates compile/runtime stability, but not checker
+semantics. We need a semantic harness that drives pass/fail behavior for OVL
+checkers under BMC.
+
+### Changes
+1. Added semantic manifest + wrapper harness:
+   - `utils/ovl_semantic/manifest.tsv`
+   - `utils/ovl_semantic/wrappers/*.sv`
+   - one wrapper module per semantic checker case.
+2. Updated semantic runner:
+   - `utils/run_ovl_sva_semantic_circt_bmc.sh`
+   - default compile now forces `-DOVL_GATING_OFF` to avoid unreachable gated
+     clock semantics in OVL under BMC.
+   - added known-gap tracking (`known_gap` manifest column) with
+     `XFAIL`/`XPASS` accounting.
+3. Integrated semantic lane into matrix driver:
+   - `utils/run_formal_all.sh`
+   - new lane: `std_ovl/BMC_SEMANTIC`
+   - new options:
+     - `--with-ovl-semantic`
+     - `--ovl-semantic-test-filter REGEX`
+
+### Validation
+1. Standalone semantic run:
+   - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+   - result:
+     - `ovl semantic BMC summary: 14 tests, failures=0, xfail=1, xpass=0, skipped=0`
+2. Integrated semantic lane:
+   - `utils/run_formal_all.sh --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/BMC_SEMANTIC$' --out-dir /tmp/formal-ovl-semantic-lane`
+   - result:
+     - `std_ovl/BMC_SEMANTIC PASS (total=14, pass=13, fail=0, xfail=1)`
+3. Combined OVL matrix:
+   - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix`
+   - result:
+     - `std_ovl/BMC PASS 110/110`
+     - `std_ovl/BMC_SEMANTIC PASS 13 pass / 1 xfail`
+
+### Known semantic gap
+- `ovl_sem_next` fail mode remains `UNSAT` (`XFAIL`).
+- Generated MLIR uses `verif.clocked_assert ... : !ltl.property` for
+  `ovl_next` checks, and this path is not yet yielding a violation witness in
+  BMC like the i1-based checker assertions do.
+
 ## 2026-02-22 Session: SVA Match-Item Severity Format Parity
 
 ### Why this pass
