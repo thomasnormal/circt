@@ -2563,15 +2563,17 @@ struct StmtVisitor {
     };
 
     StringAttr actionLabel;
-    if (stmt.ifFalse && !stmt.ifFalse->as_if<slang::ast::EmptyStatement>())
+    bool hasIfFalseAction =
+        stmt.ifFalse && !stmt.ifFalse->as_if<slang::ast::EmptyStatement>();
+    bool hasIfTrueAction =
+        stmt.ifTrue && !stmt.ifTrue->as_if<slang::ast::EmptyStatement>();
+    if (hasIfFalseAction)
       actionLabel = extractActionBlockLabel(stmt.ifFalse);
-    if (!actionLabel && stmt.ifTrue &&
-        !stmt.ifTrue->as_if<slang::ast::EmptyStatement>())
+    if (!actionLabel && hasIfTrueAction)
       actionLabel = extractActionBlockLabel(stmt.ifTrue);
-    if ((!actionLabel && stmt.ifFalse &&
-         !stmt.ifFalse->as_if<slang::ast::EmptyStatement>()) ||
-        (!actionLabel && stmt.ifTrue &&
-         !stmt.ifTrue->as_if<slang::ast::EmptyStatement>())) {
+    if (!actionLabel && (hasIfFalseAction || hasIfTrueAction))
+      actionLabel = builder.getStringAttr("action_block");
+    if ((!actionLabel && hasIfFalseAction) || (!actionLabel && hasIfTrueAction)) {
       mlir::emitWarning(loc)
           << "ignoring concurrent assertion action blocks during import";
     }

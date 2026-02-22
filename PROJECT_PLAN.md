@@ -277,6 +277,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    `$rose/$fell/$stable/$changed` in assertion expressions, so no-clock
    sampled-value calls honor `disable iff` by reset-gating helper state
    updates instead of relying on ungated raw history.
+46. **Concurrent action-block fallback labeling** (Feb 22, 2026):
+   ImportVerilog now emits deterministic fallback label `"action_block"` for
+   concurrent assertion action blocks where no message/system-task label can be
+   extracted, preserving action-block presence in verification IR.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
