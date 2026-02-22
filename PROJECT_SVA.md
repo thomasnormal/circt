@@ -253,6 +253,10 @@ Additional compile-only or XFAIL expectations live in
     stateful side effects via synthetic globals:
     - `$assertpasson` / `$assertpassoff`
     - `$assertnonvacuouson` / `$assertvacuousoff` / `$assertvacuouson`
+  - sequence match-item `$assertcontrol(...)` now also maps pass/vacuous
+    control codes:
+    - `6/7` for pass-message on/off
+    - `10/11` for nonvacuous-on / vacuous-off
   - sequence match-item monitor/strobe family calls now preserve side effects:
     - `$strobe*` lowers to display-side effect marker
     - `$monitor*` lowers to monitor-side effect marker

@@ -180,6 +180,38 @@ no-op in lowering.
 
 ---
 
+## 2026-02-22 Session: SVA `$assertcontrol` Pass/Vacuous Code Mapping
+
+### Why this pass
+After adding direct `$assertpass*` / `$assertvacuous*` match-item state, the
+numeric `$assertcontrol(...)` path still only handled procedural enable and
+fail-message controls.
+
+### Changes
+1. `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+   - extended `$assertcontrol(control_type)` match-item mapping to include:
+     - `6` => pass messages ON
+     - `7` => pass messages OFF
+     - `10` => nonvacuous ON (vacuous-pass disable)
+     - `11` => vacuous OFF (vacuous-pass disable)
+   - reused synthetic globals:
+     - `@__circt_assert_pass_msgs_enabled`
+     - `@__circt_assert_vacuous_pass_enabled`
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv`
+   - isolates `$assertcontrol(6/7/10/11)` and checks stateful global writes.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-translate` PASS.
+2. Focused checks PASS:
+   - `sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv`
+   - `sva-sequence-match-item-assertcontrol-subroutine.sv`
+3. Focused lit PASS:
+   - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-severity-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv`
+
+---
+
 ## 2026-02-20 Session: Whole-Project Refactor Progress (Phase 2 Mutation Stack)
 
 ### Why this pass

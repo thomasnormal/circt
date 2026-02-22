@@ -1895,6 +1895,12 @@ struct AssertionExprVisitor {
             moore::BlockingAssignOp::create(builder, loc, globalRef, enabled);
             return success();
           };
+          auto readAssertionPassMessagesEnabled = [&]() -> Value {
+            auto globalOp = getOrCreateAssertionPassMessagesEnabledGlobal();
+            auto globalRef =
+                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+            return moore::ReadOp::create(builder, loc, globalRef);
+          };
           auto getOrCreateAssertionVacuousPassEnabledGlobal =
               [&]() -> moore::GlobalVariableOp {
             if (context.assertionVacuousPassEnabledGlobal)
@@ -1939,6 +1945,12 @@ struct AssertionExprVisitor {
                 moore::GetGlobalVariableOp::create(builder, loc, globalOp);
             moore::BlockingAssignOp::create(builder, loc, globalRef, enabled);
             return success();
+          };
+          auto readAssertionVacuousPassEnabled = [&]() -> Value {
+            auto globalOp = getOrCreateAssertionVacuousPassEnabledGlobal();
+            auto globalRef =
+                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+            return moore::ReadOp::create(builder, loc, globalRef);
           };
           auto selectBool = [&](Value cond, Value ifTrue, Value ifFalse) -> Value {
             if (ifTrue.getType() != ifFalse.getType())
@@ -1990,9 +2002,15 @@ struct AssertionExprVisitor {
               auto c3 = moore::ConstantOp::create(builder, loc, i32Ty, 3);
               auto c4 = moore::ConstantOp::create(builder, loc, i32Ty, 4);
               auto c5 = moore::ConstantOp::create(builder, loc, i32Ty, 5);
+              auto c6 = moore::ConstantOp::create(builder, loc, i32Ty, 6);
+              auto c7 = moore::ConstantOp::create(builder, loc, i32Ty, 7);
               auto isOff = moore::EqOp::create(builder, loc, controlType, c3);
               auto isOn = moore::EqOp::create(builder, loc, controlType, c4);
               auto isKill = moore::EqOp::create(builder, loc, controlType, c5);
+              auto isPassOn =
+                  moore::EqOp::create(builder, loc, controlType, c6);
+              auto isPassOff =
+                  moore::EqOp::create(builder, loc, controlType, c7);
               auto offOrKill = moore::OrOp::create(builder, loc, isOff, isKill);
 
               auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
@@ -2024,6 +2042,39 @@ struct AssertionExprVisitor {
               if (!nextFailState)
                 return failure();
               if (failed(writeAssertionFailMessagesEnabled(nextFailState)))
+                return failure();
+
+              auto currentPassMsgsEnabled = readAssertionPassMessagesEnabled();
+              if (!currentPassMsgsEnabled)
+                return failure();
+              auto nextPassAfterOff =
+                  selectBool(isPassOff, disabled, currentPassMsgsEnabled);
+              if (!nextPassAfterOff)
+                return failure();
+              auto nextPassState = selectBool(isPassOn, enabled, nextPassAfterOff);
+              if (!nextPassState)
+                return failure();
+              if (failed(writeAssertionPassMessagesEnabled(nextPassState)))
+                return failure();
+
+              auto currentVacuousEnabled = readAssertionVacuousPassEnabled();
+              if (!currentVacuousEnabled)
+                return failure();
+              auto c10 = moore::ConstantOp::create(builder, loc, i32Ty, 10);
+              auto c11 = moore::ConstantOp::create(builder, loc, i32Ty, 11);
+              auto isNonVacuousOn =
+                  moore::EqOp::create(builder, loc, controlType, c10);
+              auto isVacuousOff =
+                  moore::EqOp::create(builder, loc, controlType, c11);
+              auto nextVacuousAfterOff =
+                  selectBool(isVacuousOff, disabled, currentVacuousEnabled);
+              if (!nextVacuousAfterOff)
+                return failure();
+              auto nextVacuousState =
+                  selectBool(isNonVacuousOn, disabled, nextVacuousAfterOff);
+              if (!nextVacuousState)
+                return failure();
+              if (failed(writeAssertionVacuousPassEnabled(nextVacuousState)))
                 return failure();
             }
             break;
