@@ -195,6 +195,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers `$rose/$fell` for fixed unpacked aggregates
    (arrays/structs/unions) in both direct assertion-clock and explicit sampled
    clock helper paths, using recursive aggregate-to-bool sampling.
+29. **Dynamic/open-array sampled-value support** (Feb 22, 2026):
+   ImportVerilog now supports dynamic-array/open-unpacked-array operands for
+   `$stable/$changed/$rose/$fell` in assertions (direct and explicit-clock
+   helper lowering), using size-aware elementwise comparison and boolean
+   reduction through array locator primitives.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to

@@ -1549,3 +1549,40 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv` (`real=0.007s`)
+
+- Iteration update (dynamic/open-array sampled-value support):
+  - realization:
+    - sampled-value functions on dynamic arrays (`open_uarray`) still failed
+      with simple-bit-vector cast diagnostics, despite being parser-accepted.
+    - this blocked `$stable/$changed/$rose/$fell` for dynamic arrays in
+      assertion-clocked and explicit-clock helper paths.
+  - implemented:
+    - extended sampled stable-comparison helper to support open unpacked arrays
+      by exact element-wise mismatch detection:
+      - size equality check via `moore.array.size`
+      - mismatch queue via `moore.array.locator` with per-index comparison
+      - equality if mismatch queue size is zero.
+    - extended sampled boolean helper to support open unpacked arrays by
+      locating truthy elements and checking non-empty match result.
+    - wired aggregate sampled classification to include
+      `moore::OpenUnpackedArrayType` for:
+      - `$stable/$changed`
+      - `$rose/$fell`
+      - regular assertion-clocked and explicit-clock helper paths.
+    - new regressions:
+      - `test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv`
+      - `test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`
+    - updated negative coverage:
+      - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+        now verifies unsupported associative-array `$rose`.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv` (`real=0.007s`)
