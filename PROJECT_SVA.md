@@ -172,6 +172,11 @@ Additional compile-only or XFAIL expectations live in
     - direct and explicit-clock helper lowering for `$rose` / `$fell`
       now uses native string booleanization (`moore.bool_cast` on `string`)
     - removes sampled edge reliance on `string_to_int` conversion
+  - sampled-value event operand support:
+    - direct and explicit-clock helper lowering now supports `event` operands
+      for `$stable`, `$changed`, `$rose`, and `$fell`
+    - event sampled semantics use native event booleanization
+      (`moore.bool_cast` on `event`) in both paths
   - `$past` sampled-value controls now support real operands in explicit
     clocking / enable-control lowering paths
   - `$past` sampled-value controls now preserve string operands natively

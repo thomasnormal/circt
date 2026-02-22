@@ -5063,3 +5063,53 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 5. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv`: `real=0.007s`
+
+## 2026-02-22 Session: Sampled `event` operand support
+
+### Problem
+1. Sampled-value functions on `event` operands failed during assertion lowering
+   with:
+   - `expression of type '!moore.event' cannot be cast to a simple bit vector`
+2. This blocked parser-accepted forms such as:
+   - `$stable(e)`, `$changed(e)`, `$rose(e)`, `$fell(e)`
+   - and explicit sampled-clock variants.
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp`:
+   - `buildSampledBoolean`:
+     - added native event handling via `moore.bool_cast event -> i1`.
+   - `buildSampledStableComparison`:
+     - added event handling by bool-casting both sides to i1 and comparing.
+   - helper sampled-value lowering (`lowerSampledValueFunctionWithSamplingControl`):
+     - added event type classification for stable/change and edge forms.
+     - event stable/change now uses sampled i1 state (not unpacked event
+       storage), avoiding invalid unpacked-type assumptions.
+     - bypassed bitvector conversion path for event sampled forms.
+   - direct sampled call lowering (`convertAssertionCallExpression`):
+     - added event type classification for stable/change and edge forms.
+     - bypassed `convertToSimpleBitVector` for event sampled forms.
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-sampled-event.sv`
+
+### Realizations / Surprises
+1. Initial event-support patch crashed (`circt-translate`) because helper
+   stable/change path incorrectly treated event as unpacked sampled storage.
+2. Correct model is sampled i1 state for event stable/change, consistent with
+   boolean event semantics and edge lowering.
+3. `llvm-lit` initially failed due stale `circt-verilog`; rebuilding that
+   binary was required in addition to `circt-translate`.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-translate`: PASS
+   - `ninja -C build-test circt-verilog`: PASS
+2. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-event.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv`: PASS
+3. Lit subset:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-event.sv build-test/test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-event.sv`: `real=0.007s`
