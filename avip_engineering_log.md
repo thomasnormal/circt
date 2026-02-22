@@ -33,6 +33,39 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-22 Session: SVA Match-Item Severity Format Parity
+
+### Why this pass
+Sequence match-item severity tasks (`$info/$warning/$error/$fatal`) were still
+dropping format payload arguments and only emitting literal markers, leaving a
+gap against simulator semantics.
+
+### Changes
+1. `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+   - switched match-item severity lowering to `convertFormatString(args, loc)`.
+   - preserved severity side effects and kept `$fatal` finish behavior.
+2. Regression:
+   - `test/Conversion/ImportVerilog/sva-sequence-match-item-severity-format-subroutine.sv`
+   - validates formatted severity payload lowering (`moore.fmt.int`) and fatal
+     finish side effect.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-translate circt-verilog` PASS.
+2. Focused checks PASS:
+   - `sva-sequence-match-item-severity-format-subroutine.sv`
+   - `sva-sequence-match-item-severity-subroutine.sv`
+   - `sva-sequence-match-item-system-subroutine.sv`
+   - `sva-sequence-match-item-format-args-subroutine.sv`
+3. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva` PASS.
+
+### Remaining limitation
+Yosys `counter` and `extnets` pass/fail parity remains open and appears tied to
+deeper LLHD/BMC semantic handling rather than this match-item front-end fix.
+
+---
+
 ## 2026-02-22 Session: SVA Immediate-Assert Global Init Parity
 
 ### Why this pass

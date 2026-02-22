@@ -21,6 +21,11 @@ This document serves as a central tracking point for SVA-related issues.
   - `extnets`: immediate assertions are now active (no longer vacuously off),
     but pass/fail polarity still needs alignment work.
   - `counter`: fail-mode remains unresolved under `--assume-known-inputs`.
+- Landed additional match-item severity parity:
+  - formatted severity arguments in sequence match-items (`$info/$warning/$error/$fatal`)
+    are now preserved through `convertFormatString` lowering.
+  - regression added:
+    `test/Conversion/ImportVerilog/sva-sequence-match-item-severity-format-subroutine.sv`.
 
 ## Test Suites
 

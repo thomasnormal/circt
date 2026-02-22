@@ -1,3 +1,47 @@
+## Iteration 1619 - February 22, 2026
+
+### [ImportVerilog][SVA] Preserve formatted severity arguments in match-items
+
+1. **Implemented severity-format argument lowering in match-items**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - updated sequence match-item handling for:
+     - `$info`
+     - `$warning`
+     - `$error`
+     - `$fatal`
+   - severity calls now use `context.convertFormatString(args, loc)` so format
+     payloads and argument reads are preserved (instead of emitting only a
+     name-literal marker).
+   - `$fatal` keeps finish side effect (`moore.builtin.finish 1`) after
+     formatted severity emission.
+
+2. **Behavioral fix**
+   - formatted severity invocations in sequence match-items no longer lose
+     argument payloads (e.g. `%0d` substitutions).
+   - match-item severity side effects remain intact and now carry real
+     formatted message values.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sequence-match-item-severity-format-subroutine.sv`
+   - validates:
+     - formatted integer fragment lowering (`moore.fmt.int`)
+     - all severity kinds (`info`, `warning`, `error`, `fatal`)
+     - fatal finish side effect.
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - focused tests:
+     - `sva-sequence-match-item-severity-format-subroutine.sv`: PASS.
+     - `sva-sequence-match-item-severity-subroutine.sv`: PASS.
+     - `sva-sequence-match-item-system-subroutine.sv`: PASS.
+     - `sva-sequence-match-item-format-args-subroutine.sv`: PASS.
+   - formal smoke:
+     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-severity-format-subroutine.sv >/dev/null`
+       (`real=0.008s`, `user=0.002s`, `sys=0.005s`).
+
 ## Iteration 1618 - February 22, 2026
 
 ### [MooreToCore][SVA] Materialize constant global init without constructor
