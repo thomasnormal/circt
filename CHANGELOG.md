@@ -1,3 +1,36 @@
+## Iteration 1602 - February 22, 2026
+
+### [ImportVerilog][SVA] Harden procedural clocked `disable iff` guard hoisting
+
+1. **Implemented procedural guard hoist hardening**
+   (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   - in top-level `disable iff` extraction for concurrent assertions:
+     - normalize disable condition through `convertToBool` before negation.
+   - in procedural clocked concurrent assertion emission:
+     - hoist/clone computed disable-iff enable values into destination module
+       insertion blocks when needed, mirroring assertion-guard hoist behavior.
+
+2. **Behavioral fix**
+   - fixes procedural clocked concurrent `disable iff` handling on multi-bit
+     guards and eliminates potential IR dominance errors from non-dominating
+     enable operands.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv >/dev/null`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`: PASS.
+     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv >/dev/null` (`real=0.052s`, `user=0.003s`, `sys=0.004s`).
+
 ## Iteration 1601 - February 22, 2026
 
 ### [ImportVerilog][SVA] Fix procedural `disable iff` multi-bit guards

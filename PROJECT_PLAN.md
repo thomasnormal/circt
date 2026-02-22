@@ -239,6 +239,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    concurrent assertions inside procedural clocked contexts (for example
    `always @(posedge clk) assert property (disable iff (rst) ...)` with
    multi-bit `rst`) and safely hoists the computed enable guard.
+39. **Procedural clocked concurrent disable-guard dominance hardening**
+   (Feb 22, 2026):
+   ImportVerilog now hoists computed `disable iff` enable guards consistently
+   when emitting `verif.clocked_*` ops from procedural assertion contexts,
+   avoiding IR dominance violations in lowered clocked assertions/assumptions.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
