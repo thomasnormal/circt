@@ -138,6 +138,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers parser-accepted open-range property forms
    `s_eventually [m:$]` and `always [m:$]` using shifted-property unbounded
    eventual/always encodings.
+15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
+   ImportVerilog now lowers explicit-clocking sampled-value calls on packed
+   operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
+   simple bit vectors in sampled-value helper paths.
 10. **SVA `$future_gclk` temporal semantics fix** (Feb 21, 2026):
    Importer now lowers `$future_gclk(expr)` through forward temporal
    `ltl.delay(expr, 1, 0)` semantics instead of approximating with
