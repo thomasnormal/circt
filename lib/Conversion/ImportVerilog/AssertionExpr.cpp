@@ -1608,12 +1608,33 @@ struct AssertionExprVisitor {
         if (auto *sysInfo =
                 std::get_if<slang::ast::CallExpression::SystemCallInfo>(
                     &call.subroutine)) {
+          StringRef name = sysInfo->subroutine->name;
+          bool isDisplayLike = false;
+          bool appendNewline = false;
+          StringRef suffix = name;
+          if (suffix.consume_front("$display")) {
+            isDisplayLike = true;
+            appendNewline = true;
+          } else if (suffix.consume_front("$write")) {
+            isDisplayLike = true;
+          }
+          if (isDisplayLike) {
+            if (!suffix.empty() && suffix != "b" && suffix != "o" &&
+                suffix != "h")
+              isDisplayLike = false;
+          }
+          if (isDisplayLike) {
+            std::string marker = name.str();
+            if (appendNewline)
+              marker.push_back('\n');
+            auto msg = moore::FormatLiteralOp::create(builder, loc, marker);
+            moore::DisplayBIOp::create(builder, loc, msg);
+            break;
+          }
           auto callLoc = context.convertLocation(call.sourceRange);
           mlir::emitRemark(callLoc)
-              << "ignoring system subroutine `" << sysInfo->subroutine->name
+              << "ignoring system subroutine `" << name
               << "` in assertion match items";
-          // Sequence match-item subroutine calls are side-effect only; formal
-          // lowering ignores them.
           break;
         }
         if (!context.convertRvalueExpression(call))
