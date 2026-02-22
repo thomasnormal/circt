@@ -4981,3 +4981,43 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 5. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-sequence.sv`: `real=0.006s`
+
+## 2026-02-22 Session: Sampled string `$stable/$changed` parity
+
+### Problem
+1. Sampled stability/change lowering still converted string operands through
+   `moore.string_to_int` in both paths:
+   - direct assertion-clock lowering (`$stable(s)`, `$changed(s)`)
+   - explicit sampled-clock helper lowering (`$stable(s, @clk2)`,
+     `$changed(s, @clk2)`)
+2. This lost native string semantics and emitted avoidable conversion remarks.
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp`:
+   - helper path (`lowerSampledValueFunctionWithSamplingControl`):
+     - added `isStringStableSample` classification for
+       `string` / `format_string` when lowering `$stable/$changed`.
+     - keep sampled storage in native string type and compare via
+       `buildSampledStableComparison` (`moore.string_cmp`).
+     - skip bitvector conversion path for string stability/change samples.
+   - direct path (`convertAssertionCallExpression`):
+     - added string-stability classification and bypassed
+       `convertToSimpleBitVector` for `$stable/$changed` string operands.
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv`
+   - fail-first before fix: no `moore.string_cmp`, emitted
+     `moore.string_to_int` in all four assertions.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-translate`: PASS
+2. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv`: PASS
+3. Lit subset:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv build-test/test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv build-test/test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv`: `real=0.007s`

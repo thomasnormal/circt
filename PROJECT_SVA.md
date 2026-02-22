@@ -164,6 +164,10 @@ Additional compile-only or XFAIL expectations live in
     - `$rose` / `$fell` booleanize real samples via `value != 0.0`
     - supported in both explicit-clock helper and direct clocked-assertion
       lowering paths
+  - sampled-value string stability/change parity:
+    - direct and explicit-clock helper lowering for `$stable` / `$changed`
+      now preserve native string comparison (`moore.string_cmp`)
+    - removes lossy string-to-int conversion in sampled stability/change paths
   - `$past` sampled-value controls now support real operands in explicit
     clocking / enable-control lowering paths
   - `$past` sampled-value controls now preserve string operands natively
