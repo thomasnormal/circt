@@ -1,3 +1,36 @@
+## Iteration 1580 - February 22, 2026
+
+### [ImportVerilog][SVA] Support `$past` enable with implicit default clocking
+
+1. **Enabled implicit-clock `$past(expr, ticks, enable)` lowering outside assertions**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - `$past` now resolves implicit clocking (current assertion clock/default
+     clocking/global clocking) before deciding whether helper-based lowering is
+     needed.
+   - this allows procedural/default-clocking forms such as:
+     - `always_comb q = $past(d, 1, en);`
+       when `default clocking` is in scope.
+
+2. **Fixed helper-state initialization dominance in `lowerPastWithClocking`**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - moved helper init-value creation to module insertion point to avoid
+     cross-region dominance violations when creating module-level variables from
+     procedural contexts.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv >/dev/null`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv >/dev/null` (`real=0.007s`, `user=0.002s`, `sys=0.005s`).
+
 ## Iteration 1579 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support explicit-clocked `$past` on unpacked arrays

@@ -1249,3 +1249,28 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv` (`real=0.007s`)
+
+- Iteration update (`$past` enable with implicit default clocking):
+  - realization:
+    - `$past(expr, ticks, enable)` without explicit clocking still failed with
+      `unsupported $past enable expression without explicit clocking` in
+      procedural context even when `default clocking` was available.
+  - implemented:
+    - resolved implicit clocking for `$past` regardless of assertion context,
+      reusing existing current/default/global clock inference.
+    - when implicit clock exists, routed to helper-based clocked `$past`
+      lowering instead of erroring.
+    - fixed a verifier bug discovered by the new test: helper init constants
+      for module-level `$past` state are now built at module insertion point to
+      avoid dominance violations.
+    - new regression:
+      - `test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv > /dev/null`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv > /dev/null`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv` (`real=0.007s`)

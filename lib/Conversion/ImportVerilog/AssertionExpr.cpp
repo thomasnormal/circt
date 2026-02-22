@@ -583,12 +583,6 @@ static Value lowerPastWithClocking(Context &context,
                             : cast<moore::UnpackedType>(intType);
 
   int64_t historyDepth = std::max<int64_t>(delay, 1);
-  Value init;
-  if (!isUnpackedArraySample) {
-    init = createUnknownOrZeroConstant(context, loc, intType);
-    if (!init)
-      return {};
-  }
 
   SmallVector<Value, 4> historyVars;
   Value resultVar;
@@ -602,6 +596,13 @@ static Value lowerPastWithClocking(Context &context,
         builder.setInsertionPointToEnd(moduleBlock);
     } else {
       builder.setInsertionPointToEnd(moduleBlock);
+    }
+
+    Value init;
+    if (!isUnpackedArraySample) {
+      init = createUnknownOrZeroConstant(context, loc, intType);
+      if (!init)
+        return {};
     }
 
     for (int64_t i = 0; i < historyDepth; ++i) {
@@ -2027,9 +2028,9 @@ Value Context::convertAssertionCallExpression(
         }
       }
     };
+    if (!clockingCtrl)
+      maybeSetImplicitClocking();
     if (inAssertionExpr) {
-      if (!clockingCtrl)
-        maybeSetImplicitClocking();
       if (currentScope) {
         if (auto *defaultDisable =
                 compilation.getDefaultDisable(*currentScope))
