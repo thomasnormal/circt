@@ -7,7 +7,7 @@ module SVASequenceMatchItemFerrorLocalOutput(input logic clk, a);
   sequence s;
     int rc;
     string ferr;
-    (1, ferr = "", rc = $ferror(0, ferr)) ##1 a;
+    (1, rc = $ferror(0, ferr)) ##1 a;
   endsequence
 
   // Local assertion vars should be usable as output-arg lvalues in
@@ -19,3 +19,4 @@ module SVASequenceMatchItemFerrorLocalOutput(input logic clk, a);
 endmodule
 
 // DIAG-NOT: no lvalue generated for LocalAssertionVar
+// DIAG-NOT: local assertion variable referenced before assignment

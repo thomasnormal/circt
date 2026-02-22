@@ -280,8 +280,12 @@ Additional compile-only or XFAIL expectations live in
     (including match-item assignment RHS), preserving side effects and returning
     an `int` success code in value position
   - local assertion variables now support lvalue materialization/writeback for
-    match-item expressions that pass locals to output-arg function parameters
-    (e.g. `$ferror(fd, local_string)` in assignment RHS calls)
+  match-item expressions that pass locals to output-arg function parameters
+  (e.g. `$ferror(fd, local_string)` in assignment RHS calls)
+  - uninitialized local assertion vars used as output-arg lvalues in
+    match-item assignment RHS calls now default-initialize based on type
+    (integer `0`, string `""`) instead of emitting a referenced-before-
+    assignment diagnostic
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:

@@ -5716,3 +5716,46 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 6. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv`: `real=0.007s`
+
+## 2026-02-22 Session: Default init for uninitialized local output-arg lvalues
+
+### Problem
+1. Local assertion vars used as output-arg lvalues in match-item value-call
+   forms still failed when the local had not been assigned earlier in the
+   sequence, with:
+   - `local assertion variable referenced before assignment`
+2. This blocked natural output-first patterns like:
+   - `rc = $ferror(fd, ferr)` where `ferr` is populated by the call.
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/Expressions.cpp`:
+   - in `LvalueExprVisitor::visit(NamedValueExpression)` local-assertion-var
+     path, added default binding materialization when sampled binding is
+     missing or accessed before prior binding offset.
+   - default value creation is type-directed:
+     - `moore::IntType` -> `moore.constant 0`
+     - `moore::StringType` -> empty string via
+       `moore.constant_string` + `moore.int_to_string`
+2. Updated regression:
+   - `test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv`
+   - sequence now validates output-first usage:
+     - `(1, rc = $ferror(0, ferr)) ##1 a;`
+   - diagnostic guard added:
+     - `DIAG-NOT: local assertion variable referenced before assignment`
+3. Updated docs/changelog:
+   - `PROJECT_SVA.md`
+   - `CHANGELOG.md`
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-translate circt-verilog`: PASS
+2. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv --check-prefix=DIAG`: PASS
+3. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+4. ImportVerilog regression cadence:
+   - `ninja -C build-test check-circt-conversion-importverilog`: FAIL with 45
+     baseline workspace failures (broad unrelated mismatches in this tree).
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv`: `real=0.007s`
