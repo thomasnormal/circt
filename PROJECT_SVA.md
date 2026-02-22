@@ -250,6 +250,11 @@ Additional compile-only or XFAIL expectations live in
     - `$dumpvars` lowers to display marker with `circt.dumpvars` attribute
     - `$dumpfile` lowers to display marker with `circt.dumpfile` attribute
     - `$exit` lowers to `moore.builtin.finish`
+  - sequence match-item formatting/dump-control tasks now lower without
+    ignore remarks:
+    - `$timeformat` lowers to `moore.builtin.timeformat`
+    - dump-control no-op family (`$dumpoff/$dumpon/$dumpflush/$dumpall/...`)
+      is recognized in match-item lowering
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:

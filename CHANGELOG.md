@@ -76795,3 +76795,36 @@ See CHANGELOG.md on recent progress.
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-dumpfile-exit-subroutine.sv` (`real=0.007s`, `user=0.002s`, `sys=0.005s`)
+115. ImportVerilog SVA: support sequence match-item `$timeformat` and
+     dump-control tasks
+     (February 22, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - sequence match-item system subroutine lowering now supports:
+        - `$timeformat`
+      - and recognizes dump-control no-op family in match items:
+        - `$dumplimit`, `$dumpoff`, `$dumpon`, `$dumpflush`, `$dumpall`,
+          `$dumpports`, `$dumpportslimit`, `$dumpportsoff`, `$dumpportson`,
+          `$dumpportsflush`, `$dumpportsall`
+      - `$timeformat` now lowers to `moore.builtin.timeformat`; dump-control
+        tasks are consumed as no-op side-effect tasks instead of ignored.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-sequence-match-item-timeformat-dumpcontrol-subroutine.sv`
+      - failing-first behavior reproduced prior to fix:
+        - ignored-system-subroutine remarks for `$timeformat` and
+          dump-control tasks in match items.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+        - `ninja -C build-test circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-timeformat-dumpcontrol-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-timeformat-dumpcontrol-subroutine.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-dumpfile-exit-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-dumpfile-exit-subroutine.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-control-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-control-subroutine.sv`
+      - lit subset: PASS
+        - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-timeformat-dumpcontrol-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-dumpfile-exit-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-control-subroutine.sv`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - profiling sample:
+        - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-timeformat-dumpcontrol-subroutine.sv` (`real=0.007s`, `user=0.002s`, `sys=0.005s`)
