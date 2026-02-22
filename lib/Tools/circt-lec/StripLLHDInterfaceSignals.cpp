@@ -8,6 +8,7 @@
 
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Dialect/HW/HWInstanceGraph.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Support/BoolCondition.h"
@@ -64,6 +65,8 @@ struct ModuleState {
   Namespace ns;
   unsigned insertIndex = 0;
   unsigned abstractedInterfaceInputCount = 0;
+  SmallVector<Type> addedInputTypes;
+  SmallVector<StringAttr> addedInputNames;
   SmallVector<Attribute> abstractedInterfaceInputDetails;
 
   explicit ModuleState(hw::HWModuleOp module) {
@@ -88,12 +91,17 @@ struct ModuleState {
   Value addInput(hw::HWModuleOp module, StringRef baseName, Type type,
                  StringRef reason = {}, StringRef signalName = {},
                  std::optional<unsigned> fieldIndex = std::nullopt,
-                 std::optional<Location> loc = std::nullopt) {
+                 std::optional<Location> loc = std::nullopt,
+                 bool recordAbstraction = true) {
     Builder builder(module.getContext());
     auto name = ns.newName(baseName);
     auto newInput =
         module.insertInput(insertIndex++,
                            StringAttr::get(module.getContext(), name), type);
+    addedInputTypes.push_back(type);
+    addedInputNames.push_back(newInput.first);
+    if (!recordAbstraction)
+      return newInput.second;
     ++abstractedInterfaceInputCount;
     SmallVector<NamedAttribute> attrs{
         builder.getNamedAttr("name", newInput.first),
@@ -3819,11 +3827,14 @@ stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
 
 void StripLLHDInterfaceSignalsPass::runOnOperation() {
   auto module = getOperation();
+  auto &instanceGraph = getAnalysis<hw::InstanceGraph>();
   DominanceInfo dom(module);
 
   DenseMap<Operation *, ModuleState> moduleStates;
+  DenseMap<StringAttr, Operation *> moduleOpsByName;
   module.walk([&](hw::HWModuleOp hwModule) {
     moduleStates.try_emplace(hwModule.getOperation(), hwModule);
+    moduleOpsByName[hwModule.getSymNameAttr()] = hwModule.getOperation();
   });
 
   SmallVector<llhd::CombinationalOp> combinationalOps;
@@ -3871,6 +3882,69 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
   for (auto timeOp : times)
     if (timeOp->use_empty())
       timeOp.erase();
+
+  SmallPtrSet<Operation *, 16> handled;
+  for (auto *startNode : instanceGraph) {
+    if (handled.count(startNode->getModule().getOperation()))
+      continue;
+
+    for (auto *node : llvm::post_order(startNode)) {
+      Operation *nodeOp = node->getModule().getOperation();
+      if (!handled.insert(nodeOp).second)
+        continue;
+
+      auto hwModule = dyn_cast<hw::HWModuleOp>(nodeOp);
+      if (!hwModule)
+        continue;
+
+      auto stateIt = moduleStates.find(nodeOp);
+      if (stateIt == moduleStates.end())
+        continue;
+      auto &state = stateIt->second;
+
+      SmallVector<hw::InstanceOp> instances;
+      hwModule.walk([&](hw::InstanceOp instance) { instances.push_back(instance); });
+
+      for (auto instance : instances) {
+        auto moduleNameAttr = instance.getModuleNameAttr().getAttr();
+        auto childModuleOpIt = moduleOpsByName.find(moduleNameAttr);
+        if (childModuleOpIt == moduleOpsByName.end())
+          continue;
+        auto childStateIt = moduleStates.find(childModuleOpIt->second);
+        if (childStateIt == moduleStates.end())
+          continue;
+        auto &childState = childStateIt->second;
+        if (childState.addedInputTypes.empty())
+          continue;
+
+        OpBuilder builder(instance);
+        SmallVector<Value> operands(instance.getInputs().begin(),
+                                    instance.getInputs().end());
+        SmallVector<Attribute> argNames(instance.getInputNames().getValue());
+        for (auto [type, name] :
+             llvm::zip(childState.addedInputTypes, childState.addedInputNames)) {
+          Value propagatedInput =
+              state.addInput(hwModule, name.getValue(), type, {}, {},
+                             std::nullopt, std::nullopt,
+                             /*recordAbstraction=*/false);
+          operands.push_back(propagatedInput);
+          argNames.push_back(name);
+        }
+
+        SmallVector<Attribute> resultNames(instance.getOutputNames().getValue());
+        SmallVector<Type> resultTypes(instance->getResultTypes());
+        auto newInst = hw::InstanceOp::create(
+            builder, instance.getLoc(), resultTypes,
+            instance.getInstanceNameAttr(), instance.getModuleNameAttr(),
+            operands, builder.getArrayAttr(argNames),
+            builder.getArrayAttr(resultNames), instance.getParametersAttr(),
+            instance.getInnerSymAttr(), instance.getDoNotPrintAttr());
+        instance.replaceAllUsesWith(newInst.getResults());
+        instanceGraph.replaceInstance(instance, newInst);
+        instance.erase();
+      }
+    }
+  }
 
   for (auto &[op, state] : moduleStates) {
     auto hwModule = dyn_cast<hw::HWModuleOp>(op);

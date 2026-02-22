@@ -2695,3 +2695,64 @@
     - `ovl_sem_proposition` fail-mode
     - `ovl_sem_never_unknown_async` fail-mode
     - `ovl_sem_frame` tool gap (pass/fail)
+
+- Iteration update (`StripLLHDInterfaceSignals` instance-signature propagation + OVL expansion):
+  - realization:
+    - `ovl_sem_crc` failed in `circt-bmc` with:
+      - `'hw.instance' op has a wrong number of operands; expected 10 but got 9`
+    - this was not a frontend parse issue; with `--mlir-print-ir-after-failure`,
+      the failure localized to `strip-llhd-interface-signals`.
+    - root cause:
+      - the pass inserted abstraction inputs (e.g. `llhd_comb`) on a callee
+        `hw.module` but did not append matching operands on its `hw.instance`
+        users.
+  - implemented:
+    - `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`
+      - track per-module newly added input names/types.
+      - walk the HW instance graph bottom-up and propagate each child-added
+        input through parent instances by:
+        - adding a corresponding parent input
+        - rebuilding `hw.instance` with appended operands/arg names
+      - keep propagated inputs out of
+        `circt.bmc_abstracted_llhd_interface_inputs` accounting (only direct
+        abstraction points are counted).
+    - new regression:
+      - `test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir`
+  - OVL semantic harness expansion:
+    - added wrappers:
+      - `utils/ovl_semantic/wrappers/ovl_sem_crc.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_fifo.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_memory_async.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_memory_sync.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_multiport_fifo.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_valid_id.sv`
+    - manifest updated:
+      - `utils/ovl_semantic/manifest.tsv`
+  - runner gap-model update:
+    - `utils/run_ovl_sva_semantic_circt_bmc.sh` now accepts
+      `known_gap=pass` for pass-mode-only expected mismatches.
+    - current tracked pass-only gap:
+      - `ovl_sem_multiport_fifo` pass-mode (`known_gap=pass`)
+  - validation:
+    - build:
+      - `ninja -C build-test circt-opt circt-bmc`
+    - new regression:
+      - `build-test/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir | llvm/build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir`
+    - focused semantic harness:
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(crc|multiport_fifo)' ...`
+      - result after pass fix: `crc` pass/fail both `PASS`; `multiport_fifo`
+        pass-mode remains `SAT`.
+    - expanded-six slice:
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(crc|fifo|memory_async|memory_sync|multiport_fifo|valid_id)' FAIL_ON_XPASS=0 ...`
+      - result: `14 tests, failures=0, xfail=1, xpass=0`
+    - full OVL semantic matrix:
+      - `FAIL_ON_XPASS=0 ...`
+      - result: `102 tests, failures=0, xfail=1, xpass=0`
+    - formal smoke:
+      - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - result: `2/2 PASS`
+  - surprise:
+    - `ovl_multiport_fifo` currently requires LLHD process abstraction that
+      leaves a pass-mode semantic false positive under the generic profile.
+      This is now explicitly tracked as a pass-only known gap while keeping the
+      broader matrix green.

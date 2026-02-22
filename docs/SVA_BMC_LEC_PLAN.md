@@ -1123,5 +1123,38 @@ Record results in CHANGELOG.md and include relevant output artifacts.
     - result: `6 tests, failures=0, xfail=0, xpass=0`
 
 - Known semantic gaps in OVL harness:
-  - none (all 45 wrappers now pass both pass/fail modes under
-    `utils/run_ovl_sva_semantic_circt_bmc.sh`).
+  - `ovl_sem_multiport_fifo` pass-mode (`known_gap=pass`), currently tracked
+    as an LLHD process-abstraction semantic gap.
+
+## Latest OVL expansion slice (2026-02-22, interface-propagation fix + 6 new wrappers)
+
+- Implemented:
+  - `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`
+    - fixed module signature propagation for abstraction-added inputs by
+      updating all affected `hw.instance` ops bottom-up over the instance graph.
+  - new regression:
+    - `test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir`
+  - OVL semantic wrappers added:
+    - `ovl_sem_crc`
+    - `ovl_sem_fifo`
+    - `ovl_sem_memory_async`
+    - `ovl_sem_memory_sync`
+    - `ovl_sem_multiport_fifo`
+    - `ovl_sem_valid_id`
+  - manifest updated:
+    - `utils/ovl_semantic/manifest.tsv`
+  - semantic runner updated:
+    - `utils/run_ovl_sva_semantic_circt_bmc.sh` now supports
+      `known_gap=pass` in addition to `known_gap=1|fail`, `tool`, `any`.
+
+- Validation:
+  - build:
+    - `ninja -C build-test circt-opt circt-bmc`
+  - focused pass regression:
+    - `build-test/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir | llvm/build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir`
+  - focused OVL subset:
+    - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(crc|fifo|memory_async|memory_sync|multiport_fifo|valid_id)' FAIL_ON_XPASS=0 ...`
+    - result: `14 tests, failures=0, xfail=1, xpass=0`
+  - full OVL semantic matrix:
+    - `FAIL_ON_XPASS=0 ...`
+    - result: `102 tests, failures=0, xfail=1, xpass=0`
