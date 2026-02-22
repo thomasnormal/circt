@@ -1754,3 +1754,26 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv` (`real=0.007s`)
+
+- Iteration update (property conditional with multibit conditions):
+  - realization:
+    - property-form conditionals (`if (cond) p1 else p2`) still required
+      pre-normalized 1-bit conditions in lowering, unlike other assertion
+      condition sites that already use integral truthy conversion.
+  - TDD proof:
+    - added `test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`.
+    - before fix:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`
+      - failed with:
+        `error: expected a 1-bit integer`.
+  - implemented:
+    - updated `ConditionalAssertionExpr` lowering in `AssertionExpr.cpp` to
+      call `convertToBool` before `convertToI1` for condition normalization.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property-string.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv` (`real=0.007s`)

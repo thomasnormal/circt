@@ -1815,6 +1815,7 @@ struct AssertionExprVisitor {
 
   Value visit(const slang::ast::ConditionalAssertionExpr &expr) {
     auto condition = context.convertRvalueExpression(expr.condition);
+    condition = context.convertToBool(condition);
     condition = context.convertToI1(condition);
     if (!condition)
       return {};
