@@ -1339,3 +1339,35 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv` (`real=0.006s`)
+
+- Iteration update (unpacked-struct sampled values and explicit-clock `$past`):
+  - realization:
+    - sampled-value support had been extended to unpacked arrays but still
+      rejected unpacked structs (`$changed/$stable` failed with
+      `cannot be cast to a simple bit vector`).
+    - explicit-clock `$past` helper storage similarly supported unpacked arrays
+      but not unpacked structs.
+  - implemented:
+    - added recursive sampled stable-comparison helper for unpacked structs:
+      - compare fields via `moore.struct_extract`
+      - reuse sampled comparators recursively and reduce with logical and.
+    - wired sampled call lowering (`$stable/$changed`) and explicit sampled
+      helper lowering to treat unpacked structs as supported aggregate sampled
+      values.
+    - extended explicit-clock `$past` aggregate helper path to include unpacked
+      structs (typed helper history/result storage).
+    - new regressions:
+      - `test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv`
+      - `test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv > /dev/null`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv > /dev/null`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling samples:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv` (`real=0.007s`)
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv` (`real=0.007s`)

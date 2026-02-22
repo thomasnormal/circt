@@ -164,6 +164,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    Interface instance elaboration now lowers assertion-generated procedural
    members from interface bodies at instance sites, closing a silent-drop gap
    where interface assertions were previously omitted from imported IR.
+21. **SVA unpacked-struct sampled-value support** (Feb 22, 2026):
+   ImportVerilog now lowers `$stable/$changed` on unpacked struct operands
+   (regular and explicit sampled clock helper paths), and extends explicit
+   clock `$past` helper storage support to unpacked struct values.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
