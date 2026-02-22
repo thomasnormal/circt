@@ -256,6 +256,12 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    explicit property clocks at module-body end / pre-terminator insertion
    points, preserving source-order behavior across multiple hoisted assertions
    in the same process.
+42. **Explicit property clock precedence in procedural assertions**
+   (Feb 22, 2026):
+   ImportVerilog now preserves explicit property clocking
+   (`assert property (@(edge clk_prop) ...)`) when lowering inside procedural
+   clocked contexts, instead of incorrectly forcing the enclosing procedural
+   clock (`always @(edge clk_proc)`).
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
