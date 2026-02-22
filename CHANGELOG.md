@@ -1,3 +1,41 @@
+## Iteration 1606 - February 22, 2026
+
+### [ImportVerilog][SVA] Lower enabled `$past` without explicit clocking
+
+1. **Implemented implicit sampled-state lowering for enabled `$past`**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - generalized `$past` helper lowering to support sampled-value controls
+     with and without an explicit timing control.
+   - when `$past(expr, delay, enable)` appears without explicit clocking and no
+     implicit assertion clock can be inferred, ImportVerilog now lowers it via
+     module-local sampled history state instead of rejecting the construct.
+
+2. **Behavioral fix**
+   - assertions such as `assert property ($past(a, 1, b) |-> c);` now import
+     successfully and produce assertion IR, rather than failing with:
+     `unsupported $past enable expression without explicit clocking`.
+
+3. **Regression coverage**
+   - updated:
+     - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+   - changed from an expected-error diagnostic test to a positive FileCheck
+     regression that verifies:
+     - helper sampled-state lowering (`moore.variable`, `moore.procedure`),
+     - control gating (`moore.conditional`),
+     - retained assertion emission (`verif.assert`).
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`: PASS.
+     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv >/dev/null` (`real=0.008s`, `user=0.003s`, `sys=0.004s`).
+
 ## Iteration 1605 - February 22, 2026
 
 ### [ImportVerilog][SVA] Honor explicit property clocks in procedural assertions

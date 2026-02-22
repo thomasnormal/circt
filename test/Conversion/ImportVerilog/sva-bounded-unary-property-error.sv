@@ -1,12 +1,16 @@
-// RUN: circt-translate --import-verilog --verify-diagnostics %s
+// RUN: circt-translate --import-verilog %s | FileCheck %s
 // REQUIRES: slang
 
 module SvaBoundedUnaryPropertyError(input logic clk, a, b);
-  property p;
-    @(posedge clk) a |-> b;
-  endproperty
+  logic c;
 
-  // `$past` enable expressions without explicit clocking are unsupported.
-  // expected-error @below {{unsupported $past enable expression without explicit clocking}}
-  assert property ($past(a, 1, b));
+  // Enabled $past without explicit clocking should lower via implicit sampled
+  // state instead of producing a frontend error.
+  assert property ($past(a, 1, b) |-> c);
 endmodule
+
+// CHECK-LABEL: moore.module @SvaBoundedUnaryPropertyError
+// CHECK: moore.variable
+// CHECK: moore.procedure always
+// CHECK: moore.conditional
+// CHECK: verif.assert
