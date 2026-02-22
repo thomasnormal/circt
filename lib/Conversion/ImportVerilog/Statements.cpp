@@ -2926,9 +2926,6 @@ struct StmtVisitor {
       return true;
     }
     if (subroutine.name == "$assertcontrol") {
-      auto currentEnabled = readProceduralAssertionsEnabled();
-      if (!currentEnabled)
-        return failure();
       if (!args.empty()) {
         auto controlType = context.convertRvalueExpression(*args[0]);
         if (!controlType)
@@ -2937,6 +2934,9 @@ struct StmtVisitor {
         if (controlType.getType() != i32Ty)
           controlType = moore::ConversionOp::create(builder, loc, i32Ty, controlType);
 
+        auto currentEnabled = readProceduralAssertionsEnabled();
+        if (!currentEnabled)
+          return failure();
         auto c3 = moore::ConstantOp::create(builder, loc, i32Ty, 3);
         auto c4 = moore::ConstantOp::create(builder, loc, i32Ty, 4);
         auto c5 = moore::ConstantOp::create(builder, loc, i32Ty, 5);
@@ -2951,6 +2951,20 @@ struct StmtVisitor {
         auto afterOff = selectBool(offOrKill, disabled, currentEnabled);
         auto nextState = selectBool(isOn, enabled, afterOff);
         if (failed(writeProceduralAssertionsEnabled(nextState)))
+          return failure();
+
+        // Also honor fail-message controls that map to $assertfailon/off.
+        auto currentFailMsgsEnabled = readAssertionFailMessagesEnabled();
+        if (!currentFailMsgsEnabled)
+          return failure();
+        auto c8 = moore::ConstantOp::create(builder, loc, i32Ty, 8);
+        auto c9 = moore::ConstantOp::create(builder, loc, i32Ty, 9);
+        auto isFailOn = moore::EqOp::create(builder, loc, controlType, c8);
+        auto isFailOff = moore::EqOp::create(builder, loc, controlType, c9);
+        auto nextFailAfterOff =
+            selectBool(isFailOff, disabled, currentFailMsgsEnabled);
+        auto nextFailState = selectBool(isFailOn, enabled, nextFailAfterOff);
+        if (failed(writeAssertionFailMessagesEnabled(nextFailState)))
           return failure();
       }
       return true;
