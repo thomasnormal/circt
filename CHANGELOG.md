@@ -1,3 +1,19 @@
+## Iteration 1590 - February 22, 2026
+
+### [ImportVerilog][SVA] Harden nested aggregate case-equality regression coverage
+
+1. **Added nested aggregate case-equality regression**
+   - new:
+     - `test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv`
+   - locks recursive aggregate case-equality lowering for unpacked structs that
+     contain unpacked-array fields (`===` / `!==`).
+
+2. **Validation**
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv >/dev/null`: PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv build-test/test/Conversion/ImportVerilog/unpacked-union-equality.sv build-test/test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+
 ## Iteration 1589 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support unpacked-union equality operators (`==/!=/===/!==`)

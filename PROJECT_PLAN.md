@@ -188,6 +188,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers unpacked-union `==/!=/===/!==` expressions via
    aggregate recursive comparison helpers (union member extraction + reduction),
    enabling direct union-compare SVA assertions without field workarounds.
+27. **Nested aggregate case-equality regression hardening** (Feb 22, 2026):
+   Added dedicated importer regression for unpacked-struct case equality with
+   nested unpacked-array members to lock helper-recursion behavior.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
