@@ -1657,6 +1657,21 @@ struct AssertionExprVisitor {
             moore::PrintTimescaleBIOp::create(builder, loc);
             break;
           }
+          if (name == "$stop") {
+            moore::StopBIOp::create(builder, loc);
+            break;
+          }
+          if (name == "$finish") {
+            moore::FinishBIOp::create(builder, loc, 0);
+            break;
+          }
+          if (name == "$dumpvars") {
+            auto msg =
+                moore::FormatLiteralOp::create(builder, loc, "VCD: $dumpvars\n");
+            auto displayOp = moore::DisplayBIOp::create(builder, loc, msg);
+            displayOp->setAttr("circt.dumpvars", builder.getUnitAttr());
+            break;
+          }
           if (name == "$fflush") {
             Value fd = getFd();
             if (!fd)
