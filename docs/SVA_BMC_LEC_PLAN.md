@@ -171,6 +171,22 @@ Items are grouped by pipeline stage.
   default flow with complete CEX reporting.
 - UVM runtime behavior in BMC remains incomplete (currently prunes unreachable
   runtime symbols instead of full class runtime modeling).
+- ✅ OVL BMC matrix harness is now integrated into `run_formal_all.sh` as
+  lane `std_ovl/BMC` via `utils/run_ovl_sva_circt_bmc.sh`.
+  - Current matrix status (Feb 22, 2026): `110/110` passing across
+    `known,xprop` profiles.
+  - Follow-up: add OVL LEC companion lane to track cross-mode parity.
+- ✅ OVL semantic harness is now integrated into `run_formal_all.sh` as
+  lane `std_ovl/BMC_SEMANTIC` via
+  `utils/run_ovl_sva_semantic_circt_bmc.sh`.
+  - Harness style: one SV wrapper per checker case in
+    `utils/ovl_semantic/wrappers/` with manifest-driven expectations.
+  - Current semantic status (Feb 22, 2026): `14` checks
+    (`13` pass, `1` known xfail).
+  - Known gap:
+    - `ovl_next` fail-mode remains `UNSAT` due `!ltl.property`-typed
+      `verif.clocked_assert` lowering path not yet producing a violatable
+      SAT witness in BMC.
 
 ## Core Workstreams
 

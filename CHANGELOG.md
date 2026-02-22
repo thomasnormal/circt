@@ -1,3 +1,89 @@
+## Iteration 1623 - February 22, 2026
+
+### [Formal][OVL] Add semantic OVL harness lane with per-wrapper checker modules
+
+1. **Added OVL semantic harness with per-checker wrappers**
+   - harness inputs:
+     - `utils/ovl_semantic/manifest.tsv`
+     - `utils/ovl_semantic/wrappers/*.sv`
+   - runner:
+     - `utils/run_ovl_sva_semantic_circt_bmc.sh`
+   - each case runs `pass` and `fail` modes and expects:
+     - pass: `BMC_RESULT=UNSAT`
+     - fail: `BMC_RESULT=SAT` (unless marked known gap)
+
+2. **Hardened runner semantics and reporting**
+   - compile defaults now include `-DOVL_GATING_OFF` for BMC reachability of
+     OVL checker assertions.
+   - added known-gap handling from manifest (`known_gap` column) with:
+     - `XFAIL` on expected fail-mode mismatch
+     - `XPASS` when a known gap unexpectedly closes
+   - summary now reports:
+     - `failures=... xfail=... xpass=... skipped=...`
+
+3. **Integrated new lane into `run_formal_all.sh`**
+   - new lane:
+     - `std_ovl/BMC_SEMANTIC`
+   - new CLI options:
+     - `--with-ovl-semantic`
+     - `--ovl-semantic-test-filter REGEX`
+   - strict preflight now verifies:
+     - `utils/run_ovl_sva_semantic_circt_bmc.sh`
+   - lane records `xfail/xpass` in suite summary.
+
+4. **Validation**
+   - standalone semantic runner:
+     - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - result:
+       - `ovl semantic BMC summary: 14 tests, failures=0, xfail=1, xpass=0, skipped=0`
+   - isolated semantic lane:
+     - `utils/run_formal_all.sh --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/BMC_SEMANTIC$' --out-dir /tmp/formal-ovl-semantic-lane`
+     - result:
+       - `std_ovl BMC_SEMANTIC PASS total=14 pass=13 fail=0 xfail=1 xpass=0`
+   - combined OVL matrix:
+     - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix`
+     - result:
+       - `std_ovl/BMC PASS 110/110`
+       - `std_ovl/BMC_SEMANTIC PASS 13 pass, 1 xfail`
+
+## Iteration 1622 - February 22, 2026
+
+### [Formal][OVL] Add standard OVL BMC matrix harness + run_formal_all lane
+
+1. **Added dedicated OVL BMC matrix runner**
+   - new script:
+     - `utils/run_ovl_sva_circt_bmc.sh`
+   - compiles each `ovl_*.v` checker with `-DOVL_SVA` and runs `circt-bmc`.
+   - supports profile matrix via `OVL_BMC_PROFILES`:
+     - `known`
+     - `xprop`
+     - `auto`
+   - supports checker filtering via `OVL_BMC_TEST_FILTER`.
+   - emits per-case `PASS(profile)` / `FAIL(profile)` rows and summary:
+     - `ovl BMC summary: <N> tests, failures=<F>, skipped=<S>`.
+
+2. **Integrated OVL into `run_formal_all.sh` as a first-class lane**
+   - new lane:
+     - `std_ovl/BMC`
+   - new CLI options:
+     - `--with-ovl`
+     - `--ovl DIR`
+     - `--ovl-bmc-test-filter REGEX`
+     - `--ovl-bmc-profiles LIST`
+   - lane participates in standard summary output and filtered-lane non-empty
+     enforcement (`maybe_enforce_nonempty_filtered_lane`).
+   - added strict-tool preflight runner check for:
+     - `utils/run_ovl_sva_circt_bmc.sh`
+
+3. **Validation (full matrix)**
+   - standalone OVL matrix:
+     - `utils/run_ovl_sva_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - result: `ovl BMC summary: 110 tests, failures=0, skipped=0`
+   - integrated lane run:
+     - `utils/run_formal_all.sh --with-ovl --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --include-lane-regex '^std_ovl/BMC$' --out-dir /tmp/formal-ovl-matrix`
+     - result:
+       - `std_ovl BMC PASS total=110 pass=110 fail=0 error=0 skip=0`
+
 ## Iteration 1621 - February 22, 2026
 
 ### [ImportVerilog][SVA] Add stateful pass/vacuous assertion-control match-items
