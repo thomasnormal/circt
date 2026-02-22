@@ -4912,3 +4912,35 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 5. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv`: `real=0.007s`
+
+## 2026-02-22 Session: `$past` sampled-control time storage preservation
+
+### Problem
+1. `$past(time, ..., controls)` helper lowering still used bitvector history
+   state internally.
+2. This introduced avoidable helper-path conversions instead of preserving
+   native `time` storage through sampled control state.
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp` in
+   `lowerPastWithSamplingControl`:
+   - added `isTimeSample` classification.
+   - route `time` operands through native helper storage path (similar to
+     real/string preservation).
+   - skip helper-side bitvector conversion and integer unknown init path for
+     `time` sampled-control values.
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-past-time-sampled-controls.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-time-sampled-controls.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-time-sampled-controls.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv`: PASS
+3. Lit subset:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-past-time-sampled-controls.sv build-test/test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv build-test/test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-time-sampled-controls.sv`: `real=0.007s`
