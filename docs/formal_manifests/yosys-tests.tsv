@@ -1,0 +1,2 @@
+suite_id	default_root	bmc_runner	bmc_args	lec_runner	lec_args	profiles	notes
+yosys-tests	~/yosys/tests	utils/run_yosys_sva_circt_bmc.sh	-	utils/run_yosys_sva_circt_lec.sh	-	nightly,full	Primary yosys/tests SVA formal regression lane

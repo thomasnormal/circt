@@ -1,0 +1,2 @@
+suite_id	default_root	bmc_runner	bmc_args	lec_runner	lec_args	profiles	notes
+verilator-verification	~/verilator-verification	utils/run_verilator_verification_circt_bmc.sh	-	utils/run_verilator_verification_circt_lec.sh	-	nightly,full	Primary verilator-verification formal regression lane
