@@ -2310,6 +2310,15 @@ private:
   /// dispatch.
   llvm::DenseMap<ProcessId, ExecModel> processExecModels;
 
+  /// E2: CallbackFrame stores loop-carried values across callback activations.
+  /// For processes classified as callbacks with loop-carried state, the frame
+  /// persists destOperands between activations to enable warm-start resumption.
+  struct CallbackFrame {
+    llvm::SmallVector<InterpretedValue> slots;
+    bool initialized = false;
+  };
+  llvm::DenseMap<ProcessId, CallbackFrame> callbackFrames;
+
   /// Per-process callback plan for callback-classified processes.
   /// Only populated for processes with isCallback() == true.
   /// Stores the static sensitivity list and frame layout.

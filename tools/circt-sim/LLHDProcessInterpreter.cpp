@@ -3999,6 +3999,12 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
     processCallbackPlans[procId] = std::move(plan);
     const auto &storedPlan = processCallbackPlans[procId];
 
+    // E2: Allocate callback frame for processes with loop-carried state.
+    if (storedPlan.hasFrame()) {
+      CallbackFrame &frame = callbackFrames[procId];
+      frame.slots.resize(storedPlan.frameSlotTypes.size());
+    }
+
     // For CallbackStaticObserved, register permanent sensitivity once.
     // The scheduler will wake this process on any change to these signals
     // without rebuilding the sensitivity list on each activation.
@@ -7997,6 +8003,20 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       state.waiting = true;
       scheduler.suspendProcessForEvents(procId, waitList);
       return;
+    }
+  }
+
+  // E2: For callback processes with an initialized frame, pre-populate
+  // destBlock/destOperands from the frame for warm-start resumption.
+  // This skips re-executing the preamble (entry block → first wait).
+  if (!state.destBlock) {
+    auto cbIt = processCallbackPlans.find(procId);
+    if (cbIt != processCallbackPlans.end() && cbIt->second.isCallback()) {
+      auto frameIt = callbackFrames.find(procId);
+      if (frameIt != callbackFrames.end() && frameIt->second.initialized) {
+        state.destBlock = cbIt->second.resumeBlock;
+        state.destOperands.assign(frameIt->second.slots.begin(), frameIt->second.slots.end());
+      }
     }
   }
 
@@ -15124,9 +15144,29 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
         cbIt->second.model == ExecModel::CallbackStaticObserved) {
       scheduler.resuspendProcessFast(procId);
       ++callbackFastResuspendCount;
+
+      // E2: Save loop-carried values to CallbackFrame for next activation.
+      {
+        auto frameIt = callbackFrames.find(procId);
+        if (frameIt != callbackFrames.end()) {
+          frameIt->second.slots.assign(state.destOperands.begin(), state.destOperands.end());
+          frameIt->second.initialized = true;
+        }
+      }
+
       LLVM_DEBUG(llvm::dbgs()
                  << "  [callback] fast-resuspend proc=" << procId << "\n");
       return success();
+    }
+  }
+
+  // E2: Save loop-carried values to CallbackFrame for non-static-observed
+  // callback processes (CallbackDynamicWait, CallbackTimeOnly).
+  {
+    auto frameIt = callbackFrames.find(procId);
+    if (frameIt != callbackFrames.end()) {
+      frameIt->second.slots.assign(state.destOperands.begin(), state.destOperands.end());
+      frameIt->second.initialized = true;
     }
   }
 

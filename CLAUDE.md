@@ -6,6 +6,8 @@
 any large-output command directly.** Doing so causes context overflow that
 crashes your session and kills your entire team.
 
+**Don't write or run any code yourself. Always delegate to your agent team.**
+
 ### What You Must NEVER Do
 ```
 # ALL OF THESE WILL CRASH YOU:
@@ -16,6 +18,13 @@ bash utils/run_sv_tests_circt_sim.sh     # sv-tests
 circt-sim some.mlir --top foo            # simulation run
 git stash pop                            # can produce huge merge conflict output
 ```
+
+### WARNING: Do NOT blindly revert files
+**Other agents (e.g., the Codex agent working on circt-bmc) may have committed
+or modified files in the same repo.** Before reverting any file with
+`git checkout HEAD --`, check that you are not undoing another agent's work.
+Only revert files YOU modified in your current session. When in doubt, use
+`git diff HEAD -- <file>` to inspect what would be lost.
 
 ### What You Must ALWAYS Do Instead
 ```python
@@ -343,9 +352,9 @@ Must match by NAME, not pointer identity. This caused 0% coverage in all 9 AVIPs
 - **`CHANGELOG.md`** — All changes, organized by date/feature
 - **`perf_engineering_log.md`** — Performance measurements after each E-phase, AVIP timings
 - **`avip_engineering_log.md`** — AVIP bring-up progress, dual-top debugging history
+- **`~/.claude/plans/cached-zooming-fern.md`** — Full AOT/performance engineering project plan (phases E0–E6)
 
 ### Auto-Memory (persist across sessions)
-- **`~/.claude/plans/cached-zooming-fern.md`** — Full AOT/performance engineering project plan (phases E0–E6)
 - **`~/.claude/projects/-home-thomas-ahle-circt/memory/MEMORY.md`** — Master reference: architecture, workflow rules, all major fixes. First 200 lines auto-loaded.
 - **`~/.claude/projects/-home-thomas-ahle-circt/memory/implementation-notes.md`** — config_db, UVM phase sequencing, event/wait, deferred sim.terminate.
 - **`~/.claude/projects/-home-thomas-ahle-circt/memory/aot-status.md`** — AOT phase status, rejection ops, test pass rates.
