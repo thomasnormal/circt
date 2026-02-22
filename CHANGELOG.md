@@ -1,3 +1,35 @@
+## Iteration 1577 - February 22, 2026
+
+### [ImportVerilog][SVA] Support unpacked-array sampled values in assertion clocking
+
+1. **Implemented sampled-value lowering for fixed-size unpacked arrays**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - regular assertion-clocked `$changed/$stable` now accept fixed-size
+     unpacked array operands.
+   - importer no longer forces simple-bit-vector conversion for this case.
+   - lowering now uses:
+     - `moore.past` on the unpacked array value
+     - `moore.uarray_cmp eq` for sampled/current comparison
+     - `moore.not` for `$changed`.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv`
+   - updated:
+     - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+       (expected diagnostic text under current explicit-clocking path).
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv >/dev/null` (`real=0.007s`, `user=0.003s`, `sys=0.004s`).
+
 ## Iteration 1576 - February 22, 2026
 
 ### [ImportVerilog][SVA] Harden sampled explicit-clocking failure paths

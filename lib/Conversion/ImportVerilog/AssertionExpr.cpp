@@ -1715,12 +1715,15 @@ Value Context::convertAssertionCallExpression(
     value = this->convertRvalueExpression(*args[0]);
     if (!value)
       return {};
+    bool isUArraySample =
+        (funcName == "$stable" || funcName == "$changed") &&
+        isa<moore::UnpackedArrayType>(value.getType());
 
-    if (!isa<moore::IntType>(value.getType()))
+    if (!isUArraySample && !isa<moore::IntType>(value.getType()))
       value = convertToSimpleBitVector(value);
     if (!value)
       return {};
-    if (!isa<moore::IntType>(value.getType())) {
+    if (!isUArraySample && !isa<moore::IntType>(value.getType())) {
       mlir::emitError(loc) << "unsupported sampled value type for "
                            << funcName;
       return {};
@@ -1847,8 +1850,12 @@ Value Context::convertAssertionCallExpression(
         past =
             moore::PastOp::create(builder, loc, value, /*delay=*/1).getResult();
       }
-      auto stable =
-          moore::EqOp::create(builder, loc, sampled, past).getResult();
+      Value stable;
+      if (isUArraySample)
+        stable = moore::UArrayCmpOp::create(
+            builder, loc, moore::UArrayCmpPredicate::eq, sampled, past);
+      else
+        stable = moore::EqOp::create(builder, loc, sampled, past).getResult();
       Value resultVal = stable;
       if (funcName == "$changed")
         resultVal = moore::NotOp::create(builder, loc, stable).getResult();
