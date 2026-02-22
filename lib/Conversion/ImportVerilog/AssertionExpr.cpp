@@ -1611,7 +1611,9 @@ struct AssertionExprVisitor {
     if (!value)
       return {};
     using slang::ast::UnaryAssertionOperator;
-    auto shiftPropertyBy = [&](Value property, uint64_t delayCycles) -> Value {
+    auto shiftPropertyBy =
+        [&](Value property, uint64_t delayCycles,
+            bool requireFiniteProgress = false) -> Value {
       if (delayCycles == 0)
         return property;
       auto trueVal =
@@ -1620,7 +1622,12 @@ struct AssertionExprVisitor {
           ltl::DelayOp::create(builder, loc, trueVal,
                                builder.getI64IntegerAttr(delayCycles),
                                builder.getI64IntegerAttr(0));
-      return ltl::ImplicationOp::create(builder, loc, delayedTrue, property);
+      auto shifted =
+          ltl::ImplicationOp::create(builder, loc, delayedTrue, property);
+      if (!requireFiniteProgress)
+        return shifted;
+      return ltl::AndOp::create(
+          builder, loc, SmallVector<Value, 2>{delayedTrue, shifted});
     };
     auto makeEventually = [&](Value property, bool isWeak) -> Value {
       auto eventually = ltl::EventuallyOp::create(builder, loc, property);
@@ -1630,7 +1637,7 @@ struct AssertionExprVisitor {
     };
     auto lowerAlwaysProperty = [&](Value property, bool isStrongAlways) -> Value {
       auto neg = ltl::NotOp::create(builder, loc, property);
-      auto eventually = makeEventually(neg, /*isWeak=*/isStrongAlways);
+      auto eventually = makeEventually(neg, /*isWeak=*/!isStrongAlways);
       return ltl::NotOp::create(builder, loc, eventually);
     };
     switch (expr.op) {
@@ -1641,7 +1648,8 @@ struct AssertionExprVisitor {
         if (isa<ltl::PropertyType>(value.getType())) {
           auto minDelay = expr.range.value().min;
           if (!expr.range.value().max.has_value()) {
-            return makeEventually(shiftPropertyBy(value, minDelay),
+            return makeEventually(
+                shiftPropertyBy(value, minDelay, /*requireFiniteProgress=*/true),
                                   /*isWeak=*/false);
           }
           auto maxDelay = expr.range.value().max.value();
@@ -1768,7 +1776,8 @@ struct AssertionExprVisitor {
         shifted.reserve(maxDelay - minDelay + 1);
         for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
              ++delayCycles)
-          shifted.push_back(shiftPropertyBy(value, delayCycles));
+          shifted.push_back(shiftPropertyBy(value, delayCycles,
+                                            /*requireFiniteProgress=*/true));
         if (shifted.size() == 1)
           return shifted.front();
         return ltl::OrOp::create(builder, loc, shifted);
@@ -1801,7 +1810,8 @@ struct AssertionExprVisitor {
           shifted.reserve(maxDelay - minDelay + 1);
           for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
                ++delayCycles)
-            shifted.push_back(shiftPropertyBy(value, delayCycles));
+            shifted.push_back(shiftPropertyBy(value, delayCycles,
+                                              /*requireFiniteProgress=*/true));
           if (shifted.size() == 1)
             return shifted.front();
           return ltl::AndOp::create(builder, loc, shifted);

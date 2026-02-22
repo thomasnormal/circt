@@ -7,7 +7,7 @@ module SVAUnboundedAlwaysProperty(input logic clk, a, b, c, d);
   endproperty
 
   // CHECK: %[[N1:.*]] = ltl.not %{{.*}} : !ltl.property
-  // CHECK: %[[E1:.*]] = ltl.eventually %[[N1]] : !ltl.property
+  // CHECK: %[[E1:.*]] = ltl.eventually %[[N1]] {ltl.weak} : !ltl.property
   // CHECK: %[[A1:.*]] = ltl.not %[[E1]] : !ltl.property
   // CHECK: verif.assert %[[A1]] : !ltl.property
   assert property (always p);

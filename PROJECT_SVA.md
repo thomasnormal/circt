@@ -173,6 +173,8 @@ Additional compile-only or XFAIL expectations live in
   - `eventually [n:m]` - Lowered to `ltl.delay` with bounded range
   - `s_until` / `s_until_with` - Lowered to `ltl.until` AND `ltl.eventually`
   - `s_nexttime` / `s_always` - Lowered to delay/repeat (strong forms)
+  - property-typed `s_nexttime` and bounded `s_always [n:m]` now enforce
+    finite delayed-cycle progress (non-vacuous strong lowering)
 
 - **Assertion types**:
   - `assert property` - Immediate and concurrent
@@ -220,8 +222,10 @@ Key files:
    - Symptom: Incorrect timing for $past in clocked context
 
 2. **Strong unary operators treated as weak**
-   - Affects: `s_nexttime`, `s_always` finite-trace strictness
-   - Status: Lowered to delay/repeat without strong end-of-trace checks
+   - Affects: sequence-typed `s_nexttime` / `s_always` finite-trace strictness
+   - Status: property-typed `s_nexttime` and bounded `s_always [n:m]` fixed;
+     sequence-typed forms still lower to delay/repeat without strong
+     end-of-trace checks
 
 ### Fixed Bugs
 

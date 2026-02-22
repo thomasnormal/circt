@@ -19,10 +19,12 @@ module SVABoundedAlwaysProperty(input logic clk, a, b, c, d);
   // CHECK: %[[TRUE3:.*]] = hw.constant true
   // CHECK: %[[D3:.*]] = ltl.delay %[[TRUE3]], 1, 0 : i1
   // CHECK: %[[PA:.*]] = ltl.implication %[[D3]], %{{.*}} : !ltl.sequence, !ltl.property
+  // CHECK: %[[SPA:.*]] = ltl.and %[[D3]], %[[PA]] : !ltl.sequence, !ltl.property
   // CHECK: %[[TRUE4:.*]] = hw.constant true
   // CHECK: %[[D4:.*]] = ltl.delay %[[TRUE4]], 2, 0 : i1
   // CHECK: %[[PB:.*]] = ltl.implication %[[D4]], %{{.*}} : !ltl.sequence, !ltl.property
-  // CHECK: %[[AND2:.*]] = ltl.and %[[PA]], %[[PB]] : !ltl.property, !ltl.property
+  // CHECK: %[[SPB:.*]] = ltl.and %[[D4]], %[[PB]] : !ltl.sequence, !ltl.property
+  // CHECK: %[[AND2:.*]] = ltl.and %[[SPA]], %[[SPB]] : !ltl.property, !ltl.property
   // CHECK: verif.assert %[[AND2]] : !ltl.property
   assert property (s_always [1:2] p);
 

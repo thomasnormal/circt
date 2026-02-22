@@ -20,7 +20,8 @@ module SVANexttimeProperty(input logic clk, a, b, c, d);
   // CHECK: %[[TRUE3:.*]] = hw.constant true
   // CHECK: %[[D4:.*]] = ltl.delay %[[TRUE3]], 4, 0 : i1
   // CHECK: %[[P4:.*]] = ltl.implication %[[D4]], %{{.*}} : !ltl.sequence, !ltl.property
-  // CHECK: verif.assert %[[P4]] : !ltl.property
+  // CHECK: %[[SP4:.*]] = ltl.and %[[D4]], %[[P4]] : !ltl.sequence, !ltl.property
+  // CHECK: verif.assert %[[SP4]] : !ltl.property
   assert property (s_nexttime [4] p);
 
   assert property (@(posedge clk) c |-> d);
