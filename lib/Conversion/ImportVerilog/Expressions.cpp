@@ -142,6 +142,9 @@ static Type getLvalueNestedType(Type lvalueType) {
 
 /// Build logical equality for unpacked aggregate values, with recursive support
 /// for unpacked structs and unions.
+static Value buildDynamicArrayLogicalEq(Context &context, Location loc,
+                                        Value lhs, Value rhs);
+
 static Value buildUnpackedAggregateLogicalEq(Context &context, Location loc,
                                              Value lhs, Value rhs) {
   auto &builder = context.builder;
@@ -164,7 +167,11 @@ static Value buildUnpackedAggregateLogicalEq(Context &context, Location loc,
       Value fieldEq;
       if (isa<moore::UnpackedStructType, moore::UnpackedArrayType,
               moore::UnpackedUnionType>(member.type)) {
-        fieldEq = buildUnpackedAggregateLogicalEq(context, loc, lhsField, rhsField);
+        fieldEq =
+            buildUnpackedAggregateLogicalEq(context, loc, lhsField, rhsField);
+      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+                     member.type)) {
+        fieldEq = buildDynamicArrayLogicalEq(context, loc, lhsField, rhsField);
       } else if (isa<moore::StringType>(member.type) ||
                  isa<moore::FormatStringType>(member.type)) {
         auto strTy = moore::StringType::get(context.getContext());
@@ -223,7 +230,11 @@ static Value buildUnpackedAggregateLogicalEq(Context &context, Location loc,
       Value fieldEq;
       if (isa<moore::UnpackedStructType, moore::UnpackedArrayType,
               moore::UnpackedUnionType>(member.type)) {
-        fieldEq = buildUnpackedAggregateLogicalEq(context, loc, lhsField, rhsField);
+        fieldEq =
+            buildUnpackedAggregateLogicalEq(context, loc, lhsField, rhsField);
+      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+                     member.type)) {
+        fieldEq = buildDynamicArrayLogicalEq(context, loc, lhsField, rhsField);
       } else if (isa<moore::StringType>(member.type) ||
                  isa<moore::FormatStringType>(member.type)) {
         auto strTy = moore::StringType::get(context.getContext());
@@ -273,6 +284,111 @@ static Value buildUnpackedAggregateLogicalEq(Context &context, Location loc,
   }
 
   return {};
+}
+
+/// Build logical equality for dynamic unpacked aggregates (open arrays/queues).
+static Value buildDynamicArrayLogicalEq(Context &context, Location loc, Value lhs,
+                                        Value rhs) {
+  auto &builder = context.builder;
+  if (!lhs || !rhs || lhs.getType() != rhs.getType())
+    return {};
+
+  auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+  auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+
+  moore::UnpackedType elemTy;
+  if (auto openTy = dyn_cast<moore::OpenUnpackedArrayType>(lhs.getType()))
+    elemTy = openTy.getElementType();
+  else if (auto queueTy = dyn_cast<moore::QueueType>(lhs.getType()))
+    elemTy = queueTy.getElementType();
+  else
+    return {};
+
+  Value lhsSize = moore::ArraySizeOp::create(builder, loc, lhs);
+  Value rhsSize = moore::ArraySizeOp::create(builder, loc, rhs);
+  Value sizeEq = moore::EqOp::create(builder, loc, lhsSize, rhsSize);
+  if (sizeEq.getType() != i1Ty)
+    sizeEq = context.materializeConversion(i1Ty, sizeEq, false, loc);
+  if (!sizeEq)
+    return {};
+
+  auto mismatchQueueTy = moore::QueueType::get(elemTy, 0);
+  auto locator = moore::ArrayLocatorOp::create(
+      builder, loc, mismatchQueueTy, moore::LocatorMode::All,
+      /*indexed=*/false, lhs);
+
+  Block *bodyBlock = &locator.getBody().emplaceBlock();
+  bodyBlock->addArgument(elemTy, loc);
+  bodyBlock->addArgument(i32Ty, loc);
+
+  {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(bodyBlock);
+    Value lhsElem = bodyBlock->getArgument(0);
+    Value idx = bodyBlock->getArgument(1);
+    Value rhsElem = moore::DynExtractOp::create(builder, loc, elemTy, rhs, idx);
+
+    Value elemEq;
+    if (isa<moore::UnpackedStructType, moore::UnpackedArrayType,
+            moore::UnpackedUnionType>(elemTy)) {
+      elemEq = buildUnpackedAggregateLogicalEq(context, loc, lhsElem, rhsElem);
+    } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(elemTy)) {
+      elemEq = buildDynamicArrayLogicalEq(context, loc, lhsElem, rhsElem);
+    } else if (isa<moore::StringType>(elemTy) || isa<moore::FormatStringType>(elemTy)) {
+      auto strTy = moore::StringType::get(context.getContext());
+      lhsElem =
+          context.materializeConversion(strTy, lhsElem, false, lhsElem.getLoc());
+      rhsElem =
+          context.materializeConversion(strTy, rhsElem, false, rhsElem.getLoc());
+      if (!lhsElem || !rhsElem)
+        return {};
+      elemEq = moore::StringCmpOp::create(builder, loc,
+                                          moore::StringCmpPredicate::eq,
+                                          lhsElem, rhsElem);
+    } else if (isa<moore::ChandleType>(elemTy)) {
+      auto intTy =
+          moore::IntType::get(context.getContext(), 64, Domain::TwoValued);
+      lhsElem = context.materializeConversion(intTy, lhsElem, false,
+                                              lhsElem.getLoc());
+      rhsElem = context.materializeConversion(intTy, rhsElem, false,
+                                              rhsElem.getLoc());
+      if (!lhsElem || !rhsElem)
+        return {};
+      elemEq = moore::EqOp::create(builder, loc, lhsElem, rhsElem);
+    } else {
+      if (!isa<moore::IntType>(lhsElem.getType()))
+        lhsElem = context.convertToSimpleBitVector(lhsElem);
+      if (!isa<moore::IntType>(rhsElem.getType()))
+        rhsElem = context.convertToSimpleBitVector(rhsElem);
+      if (!lhsElem || !rhsElem)
+        return {};
+      if (lhsElem.getType() != rhsElem.getType()) {
+        rhsElem = context.materializeConversion(lhsElem.getType(), rhsElem,
+                                                /*isSigned=*/false, loc);
+        if (!rhsElem)
+          return {};
+      }
+      elemEq = moore::EqOp::create(builder, loc, lhsElem, rhsElem);
+    }
+    if (!elemEq)
+      return {};
+    if (elemEq.getType() != i1Ty)
+      elemEq = context.materializeConversion(i1Ty, elemEq, false, loc);
+    if (!elemEq)
+      return {};
+    Value mismatch = moore::NotOp::create(builder, loc, elemEq);
+    moore::ArrayLocatorYieldOp::create(builder, loc, mismatch);
+  }
+
+  Value mismatchCount = moore::ArraySizeOp::create(builder, loc, locator);
+  Value zero = moore::ConstantOp::create(builder, loc, i32Ty, 0);
+  Value noMismatch = moore::EqOp::create(builder, loc, mismatchCount, zero);
+  if (noMismatch.getType() != i1Ty)
+    noMismatch = context.materializeConversion(i1Ty, noMismatch, false, loc);
+  if (!noMismatch)
+    return {};
+
+  return moore::AndOp::create(builder, loc, sizeEq, noMismatch);
 }
 
 /// Build case equality for unpacked aggregate values, with recursive support
@@ -2913,12 +3029,17 @@ struct RvalueExprVisitor : public ExprVisitor {
         }
         return eq;
       }
-      else if (isa<moore::OpenUnpackedArrayType>(lhs.getType()) ||
-               isa<moore::OpenUnpackedArrayType>(rhs.getType())) {
-        // Open array equality is not supported; return false to allow
-        // compilation of UVM compare helpers.
-        auto boolTy = moore::IntType::getInt(context.getContext(), 1);
-        return moore::ConstantOp::create(builder, loc, boolTy, 0);
+      else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+                   lhs.getType()) ||
+               isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+                   rhs.getType())) {
+        auto eq = buildDynamicArrayLogicalEq(context, loc, lhs, rhs);
+        if (!eq) {
+          mlir::emitError(loc)
+              << "unsupported dynamic unpacked equality operands";
+          return {};
+        }
+        return eq;
       }
       else if (isa<moore::StringType>(lhs.getType()) ||
                isa<moore::StringType>(rhs.getType()) ||
@@ -2942,11 +3063,6 @@ struct RvalueExprVisitor : public ExprVisitor {
         if (!lhs || !rhs)
           return {};
         return moore::EqOp::create(builder, loc, lhs, rhs);
-      } else if (isa<moore::QueueType>(lhs.getType()) ||
-                 isa<moore::QueueType>(rhs.getType())) {
-        // Queue equality unsupported - return false to allow compilation.
-        auto boolTy = moore::IntType::getInt(context.getContext(), 1);
-        return moore::ConstantOp::create(builder, loc, boolTy, 0);
       } else if (isa<moore::VirtualInterfaceType>(lhs.getType()) ||
                  isa<moore::VirtualInterfaceType>(rhs.getType())) {
         // Virtual interface comparison (e.g., vif == null, vif1 == vif2).
@@ -3072,12 +3188,17 @@ struct RvalueExprVisitor : public ExprVisitor {
         }
         return moore::NotOp::create(builder, loc, eq);
       }
-      else if (isa<moore::OpenUnpackedArrayType>(lhs.getType()) ||
-               isa<moore::OpenUnpackedArrayType>(rhs.getType())) {
-        // Open array inequality is not supported; return true to allow
-        // compilation of UVM compare helpers.
-        auto boolTy = moore::IntType::getInt(context.getContext(), 1);
-        return moore::ConstantOp::create(builder, loc, boolTy, 1);
+      else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+                   lhs.getType()) ||
+               isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+                   rhs.getType())) {
+        auto eq = buildDynamicArrayLogicalEq(context, loc, lhs, rhs);
+        if (!eq) {
+          mlir::emitError(loc)
+              << "unsupported dynamic unpacked inequality operands";
+          return {};
+        }
+        return moore::NotOp::create(builder, loc, eq);
       }
       else if (isa<moore::StringType>(lhs.getType()) ||
                isa<moore::StringType>(rhs.getType()) ||
@@ -3100,10 +3221,6 @@ struct RvalueExprVisitor : public ExprVisitor {
         if (!lhs || !rhs)
           return {};
         return moore::NeOp::create(builder, loc, lhs, rhs);
-      } else if (isa<moore::QueueType>(lhs.getType()) ||
-                 isa<moore::QueueType>(rhs.getType())) {
-        auto boolTy = moore::IntType::getInt(context.getContext(), 1);
-        return moore::ConstantOp::create(builder, loc, boolTy, 1);
       } else if (isa<moore::VirtualInterfaceType>(lhs.getType()) ||
                  isa<moore::VirtualInterfaceType>(rhs.getType())) {
         // Virtual interface comparison (e.g., vif != null, vif1 != vif2).

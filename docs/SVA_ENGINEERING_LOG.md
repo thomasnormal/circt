@@ -1618,3 +1618,33 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv` (`real=0.007s`)
+
+- Iteration update (dynamic-array/queue logical equality semantics):
+  - realization:
+    - dynamic array (`open_uarray`) and queue logical equality/inequality
+      (`==` / `!=`) were lowered to hardcoded constants in expressions and SVA,
+      causing incorrect semantics.
+  - implemented:
+    - added dynamic aggregate logical equality helper in `Expressions.cpp`:
+      - size equality via `moore.array.size`
+      - element-wise mismatch detection via `moore.array.locator` +
+        indexed extraction
+      - equality iff sizes match and mismatch set is empty.
+    - supports both `open_uarray` and `queue`.
+    - integrated helper into binary operator lowering for `==` / `!=`.
+    - extended aggregate recursive equality handling so nested struct/union
+      fields that are dynamic arrays/queues lower through the same helper.
+    - new regressions:
+      - `test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv`
+      - `test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv`
+    - `build-test/bin/circt-translate --import-verilog /tmp/queue_eq_probe.sv` (no hardcoded equality constants for queue compares)
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv build-test/test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue.sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv` (`real=0.007s`)

@@ -1,3 +1,38 @@
+## Iteration 1594 - February 22, 2026
+
+### [ImportVerilog][SVA] Fix dynamic-array/queue logical equality (`==` / `!=`)
+
+1. **Implemented dynamic aggregate logical equality lowering**
+   (`lib/Conversion/ImportVerilog/Expressions.cpp`):
+   - added helper for open unpacked arrays and queues:
+     - compare sizes (`moore.array.size`)
+     - find element mismatches (`moore.array.locator` + indexed extraction)
+     - equality is true iff sizes match and mismatch set is empty.
+   - integrated this helper into binary `==` / `!=` lowering paths.
+   - nested unpacked aggregate recursion now routes dynamic array/queue fields
+     through the same equality helper.
+
+2. **Behavioral fix**
+   - removes prior constant fallback behavior for dynamic array and queue
+     equality (`==` always false, `!=` always true).
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv`
+     - `test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-translate --import-verilog /tmp/queue_eq_probe.sv` (no hardcoded equality constants in queue compare lowering): PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv build-test/test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue.sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv >/dev/null` (`real=0.007s`, `user=0.003s`, `sys=0.004s`).
+
 ## Iteration 1593 - February 22, 2026
 
 ### [ImportVerilog][SVA] Fix queue sampled-value semantics (`$stable/$changed/$rose/$fell`)

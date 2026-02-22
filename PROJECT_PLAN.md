@@ -204,6 +204,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers queue operands for `$stable/$changed/$rose/$fell`
    with size-aware/element-aware queue semantics, replacing prior queue-to-zero
    fallback behavior.
+31. **Dynamic-array/queue logical equality parity** (Feb 22, 2026):
+   ImportVerilog now lowers `==`/`!=` on open unpacked arrays and queues with
+   size-aware elementwise semantics (including SVA expression contexts), rather
+   than constant fallback results.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
