@@ -1192,3 +1192,38 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv` (`real=0.007s`)
+
+- Iteration update (explicit-clocked unpacked-array sampled support):
+  - realization:
+    - helper-based explicit clocking for sampled-value functions still assumed
+      scalar/bit-vector operands, so `$changed/$stable` on fixed-size unpacked
+      arrays worked in regular assertion-clocking paths but failed when an
+      explicit sampled clock forced helper lowering.
+  - implemented:
+    - extended `lowerSampledValueFunctionWithClocking` to support unpacked
+      array operands for `$stable/$changed`:
+      - store previous sampled value in typed unpacked-array state
+      - compare with `moore.uarray_cmp eq`
+      - derive `$changed` using `moore.not`
+    - hardened frontend diagnostics for unpacked-array sampled operands used
+      with `$rose/$fell` to emit consistent
+      `unsupported sampled value type for $rose/$fell`.
+    - regressions:
+      - added `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv`
+      - updated `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+  - surprise:
+    - first test run used stale binaries (`build/bin` absent), so the new test
+      still showed old behavior until rebuilding `build-test` tools.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv > /dev/null`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv > /dev/null`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv > /dev/null`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv > /dev/null`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv > /dev/null`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv` (`real=0.007s`)

@@ -318,23 +318,37 @@ static Value lowerSampledValueFunctionWithClocking(
     return moore::ConstantOp::create(builder, loc, resultType, 0);
   }
 
-  auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
-  if (!intType) {
-    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
-    return {};
-  }
-
   bool isRose = funcName == "$rose";
   bool isFell = funcName == "$fell";
   bool isStable = funcName == "$stable";
   bool isChanged = funcName == "$changed";
+  Type loweredType = context.convertType(*valueExpr.type);
+  if (auto refType = dyn_cast<moore::RefType>(loweredType))
+    loweredType = refType.getNestedType();
+  bool isUnpackedArraySample =
+      (isStable || isChanged) && isa<moore::UnpackedArrayType>(loweredType);
+  auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
+  if (!isUnpackedArraySample && !intType) {
+    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+    return {};
+  }
+
   bool boolCast = isRose || isFell;
-  auto sampleType = boolCast
-                        ? moore::IntType::get(builder.getContext(), 1,
-                                              intType.getDomain())
-                        : intType;
-  auto resultType =
-      moore::IntType::get(builder.getContext(), 1, sampleType.getDomain());
+  moore::IntType sampleType;
+  moore::UnpackedType sampledStorageType;
+  moore::IntType resultType;
+  if (isUnpackedArraySample) {
+    sampledStorageType = cast<moore::UnpackedType>(loweredType);
+    resultType = moore::IntType::getInt(builder.getContext(), 1);
+  } else {
+    sampleType = boolCast
+                     ? moore::IntType::get(builder.getContext(), 1,
+                                           intType.getDomain())
+                     : intType;
+    sampledStorageType = sampleType;
+    resultType =
+        moore::IntType::get(builder.getContext(), 1, sampleType.getDomain());
+  }
 
   Value prevVar;
   Value resultVar;
@@ -350,13 +364,17 @@ static Value lowerSampledValueFunctionWithClocking(
       builder.setInsertionPointToEnd(moduleBlock);
     }
 
-    Value prevInit = createUnknownOrZeroConstant(context, loc, sampleType);
-    if (!prevInit)
-      return {};
+    Value prevInit;
+    if (!isUnpackedArraySample) {
+      prevInit = createUnknownOrZeroConstant(context, loc, sampleType);
+      if (!prevInit)
+        return {};
+    }
     Value resultInit = moore::ConstantOp::create(builder, loc, resultType, 0);
 
-    prevVar = moore::VariableOp::create(
-        builder, loc, moore::RefType::get(sampleType), StringAttr{}, prevInit);
+    prevVar = moore::VariableOp::create(builder, loc,
+                                        moore::RefType::get(sampledStorageType),
+                                        StringAttr{}, prevInit);
     resultVar = moore::VariableOp::create(
         builder, loc, moore::RefType::get(resultType), StringAttr{},
         resultInit);
@@ -370,20 +388,34 @@ static Value lowerSampledValueFunctionWithClocking(
     Value current = context.convertRvalueExpression(valueExpr);
     if (!current)
       return {};
-    if (!isa<moore::IntType>(current.getType()))
+    if (!isUnpackedArraySample && !isa<moore::IntType>(current.getType()))
       current = context.convertToSimpleBitVector(current);
     if (!current)
       return {};
-    auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
-    if (!currentType) {
-      mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
-      return {};
+    if (isUnpackedArraySample) {
+      if (!isa<moore::UnpackedArrayType>(current.getType())) {
+        mlir::emitError(loc)
+            << "unsupported sampled value type for " << funcName;
+        return {};
+      }
+      if (current.getType() != sampledStorageType) {
+        mlir::emitError(loc)
+            << "unsupported sampled value type for " << funcName;
+        return {};
+      }
+    } else {
+      auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
+      if (!currentType) {
+        mlir::emitError(loc)
+            << "unsupported sampled value type for " << funcName;
+        return {};
+      }
+      if (boolCast)
+        current = moore::BoolCastOp::create(builder, loc, current);
+      if (current.getType() != sampleType)
+        current = context.materializeConversion(sampleType, current,
+                                                /*isSigned=*/false, loc);
     }
-    if (boolCast)
-      current = moore::BoolCastOp::create(builder, loc, current);
-    if (current.getType() != sampleType)
-      current = context.materializeConversion(sampleType, current,
-                                              /*isSigned=*/false, loc);
 
     Value enable;
     bool hasEnable = false;
@@ -465,8 +497,12 @@ static Value lowerSampledValueFunctionWithClocking(
     Value prev = moore::ReadOp::create(builder, loc, prevVar);
     Value result;
     if (isStable || isChanged) {
-      auto stable =
-          moore::EqOp::create(builder, loc, current, prev).getResult();
+      Value stable;
+      if (isUnpackedArraySample)
+        stable = moore::UArrayCmpOp::create(
+            builder, loc, moore::UArrayCmpPredicate::eq, current, prev);
+      else
+        stable = moore::EqOp::create(builder, loc, current, prev).getResult();
       result = stable;
       if (isChanged)
         result = moore::NotOp::create(builder, loc, stable).getResult();
@@ -489,7 +525,8 @@ static Value lowerSampledValueFunctionWithClocking(
     Value resultValue =
         selectWithControl(result, disabledValue, disabledValue);
     moore::BlockingAssignOp::create(builder, loc, resultVar, resultValue);
-    Value nextPrev = selectWithControl(current, prev, prevInit);
+    Value resetPrev = prevInit ? prevInit : prev;
+    Value nextPrev = selectWithControl(current, prev, resetPrev);
     moore::BlockingAssignOp::create(builder, loc, prevVar, nextPrev);
     moore::ReturnOp::create(builder, loc);
   }
@@ -1718,6 +1755,10 @@ Value Context::convertAssertionCallExpression(
     bool isUArraySample =
         (funcName == "$stable" || funcName == "$changed") &&
         isa<moore::UnpackedArrayType>(value.getType());
+    if (!isUArraySample && isa<moore::UnpackedArrayType>(value.getType())) {
+      mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+      return {};
+    }
 
     if (!isUArraySample && !isa<moore::IntType>(value.getType()))
       value = convertToSimpleBitVector(value);
