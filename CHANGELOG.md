@@ -1,3 +1,29 @@
+## Iteration 1579 - February 22, 2026
+
+### [ImportVerilog][SVA] Support explicit-clocked `$past` on unpacked arrays
+
+1. **Extended explicit-clocked `$past` helper state to unpacked arrays**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - explicit-clocked `$past` now accepts fixed-size unpacked array operands.
+   - helper history and result state are now typed for unpacked arrays (not
+     forced through simple-bit-vector conversion).
+   - this closes the importer failure on forms such as:
+     - `$past(s, 1, @(posedge clk_b))` where `s` is unpacked array.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv >/dev/null`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv >/dev/null` (`real=0.007s`, `user=0.002s`, `sys=0.005s`).
+
 ## Iteration 1578 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support explicit-clocked unpacked-array sampled values

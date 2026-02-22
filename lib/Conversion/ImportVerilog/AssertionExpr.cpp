@@ -571,17 +571,24 @@ static Value lowerPastWithClocking(Context &context,
   if (auto refType = dyn_cast<moore::RefType>(originalType))
     originalType = refType.getNestedType();
   auto originalUnpacked = dyn_cast<moore::UnpackedType>(originalType);
+  bool isUnpackedArraySample = isa<moore::UnpackedArrayType>(originalType);
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
-  if (!intType) {
+  if (!isUnpackedArraySample && !intType) {
     mlir::emitError(loc)
         << "unsupported $past value type with explicit clocking";
     return {};
   }
+  moore::UnpackedType storageType =
+      isUnpackedArraySample ? cast<moore::UnpackedType>(originalType)
+                            : cast<moore::UnpackedType>(intType);
 
   int64_t historyDepth = std::max<int64_t>(delay, 1);
-  Value init = createUnknownOrZeroConstant(context, loc, intType);
-  if (!init)
-    return {};
+  Value init;
+  if (!isUnpackedArraySample) {
+    init = createUnknownOrZeroConstant(context, loc, intType);
+    if (!init)
+      return {};
+  }
 
   SmallVector<Value, 4> historyVars;
   Value resultVar;
@@ -599,10 +606,10 @@ static Value lowerPastWithClocking(Context &context,
 
     for (int64_t i = 0; i < historyDepth; ++i) {
       historyVars.push_back(moore::VariableOp::create(
-          builder, loc, moore::RefType::get(intType), StringAttr{}, init));
+          builder, loc, moore::RefType::get(storageType), StringAttr{}, init));
     }
     resultVar = moore::VariableOp::create(
-        builder, loc, moore::RefType::get(intType), StringAttr{}, init);
+        builder, loc, moore::RefType::get(storageType), StringAttr{}, init);
 
     auto proc =
         moore::ProcedureOp::create(builder, loc, moore::ProcedureKind::Always);
@@ -613,18 +620,28 @@ static Value lowerPastWithClocking(Context &context,
     Value current = context.convertRvalueExpression(valueExpr);
     if (!current)
       return {};
-    if (!isa<moore::IntType>(current.getType()))
+    if (!isUnpackedArraySample && !isa<moore::IntType>(current.getType()))
       current = context.convertToSimpleBitVector(current);
-    auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
-    if (!currentType) {
-      mlir::emitError(loc)
-          << "unsupported $past value type with explicit clocking";
+    if (!current)
       return {};
+    if (isUnpackedArraySample) {
+      if (!isa<moore::UnpackedArrayType>(current.getType()) ||
+          current.getType() != storageType) {
+        mlir::emitError(loc)
+            << "unsupported $past value type with explicit clocking";
+        return {};
+      }
+    } else {
+      auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
+      if (!currentType) {
+        mlir::emitError(loc)
+            << "unsupported $past value type with explicit clocking";
+        return {};
+      }
+      if (current.getType() != intType)
+        current = context.materializeConversion(intType, current,
+                                                /*isSigned=*/false, loc);
     }
-    if (current.getType() != intType)
-      current =
-          context.materializeConversion(intType, current, /*isSigned=*/false,
-                                         loc);
 
     Value enable;
     bool hasEnable = false;
@@ -706,15 +723,19 @@ static Value lowerPastWithClocking(Context &context,
     Value pastValue = current;
     if (delay > 0)
       pastValue = moore::ReadOp::create(builder, loc, historyVars.back());
-    Value disabledValue = createUnknownOrZeroConstant(context, loc, intType);
-    if (!disabledValue)
-      return {};
+    Value disabledValue = pastValue;
+    if (!isUnpackedArraySample) {
+      disabledValue = createUnknownOrZeroConstant(context, loc, intType);
+      if (!disabledValue)
+        return {};
+    }
     Value resultValue =
         selectWithControl(pastValue, disabledValue, disabledValue);
     moore::BlockingAssignOp::create(builder, loc, resultVar, resultValue);
 
     auto selectHistoryUpdate = [&](Value onTrue, Value onHold) -> Value {
-      return selectWithControl(onTrue, onHold, init);
+      Value reset = init ? init : onHold;
+      return selectWithControl(onTrue, onHold, reset);
     };
 
     for (int64_t i = historyDepth - 1; i > 0; --i) {
