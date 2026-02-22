@@ -6,7 +6,7 @@ module sva_case_property(input logic clk, input logic [1:0] sel,
                          input logic a, b, c);
   // CHECK-LABEL: moore.module @sva_case_property
 
-  // CHECK: moore.eq
+  // CHECK: moore.case_eq
   // CHECK: verif.assert
   assert property (@(posedge clk)
     case (sel)
@@ -16,7 +16,7 @@ module sva_case_property(input logic clk, input logic [1:0] sel,
     endcase
   );
 
-  // CHECK: moore.eq
+  // CHECK: moore.case_eq
   // CHECK: verif.assert
   assert property (@(posedge clk)
     case (sel)

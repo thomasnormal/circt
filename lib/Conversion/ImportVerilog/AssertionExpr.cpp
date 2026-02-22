@@ -1882,7 +1882,8 @@ struct AssertionExprVisitor {
           if (!caseValue)
             return {};
         }
-        Value match = moore::EqOp::create(builder, loc, selector, caseValue);
+        Value match =
+            moore::CaseEqOp::create(builder, loc, selector, caseValue);
         match = context.convertToBool(match);
         match = context.convertToI1(match);
         if (!match)
