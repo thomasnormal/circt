@@ -181,8 +181,8 @@ Items are grouped by pipeline stage.
   `utils/run_ovl_sva_semantic_circt_bmc.sh`.
   - Harness style: one SV wrapper per checker case in
     `utils/ovl_semantic/wrappers/` with manifest-driven expectations.
-  - Current semantic status (Feb 22, 2026): `36/36` pass/fail obligations
-    passing (`18` checker wrappers x `pass/fail` modes).
+  - Current semantic status (Feb 22, 2026): `46/46` pass/fail obligations
+    passing (`23` checker wrappers x `pass/fail` modes).
   - Coverage now includes:
     - `ovl_change`
     - `ovl_one_cold`
@@ -193,6 +193,11 @@ Items are grouped by pipeline stage.
     - `ovl_decrement`
     - `ovl_delta`
     - `ovl_unchange`
+    - `ovl_no_overflow`
+    - `ovl_no_underflow`
+    - `ovl_transition`
+    - `ovl_no_transition`
+    - `ovl_req_requires`
 
 ## Core Workstreams
 
@@ -703,6 +708,29 @@ Run these at least once per iteration (or per change if relevant):
 - ~/mbit/*avip* (appropriate BMC/sim flow)
 
 Record results in CHANGELOG.md and include relevant output artifacts.
+
+## Latest SVA closure slice (2026-02-22, OVL semantic expansion II)
+
+- Closed gap:
+  - OVL semantic lane now includes transition and overflow/underflow checkers
+    plus request-sequence ordering:
+    - `ovl_no_overflow`
+    - `ovl_no_underflow`
+    - `ovl_transition`
+    - `ovl_no_transition`
+    - `ovl_req_requires`
+  - semantic lane breadth increased from `18` to `23` checker wrappers.
+- New regressions:
+  - `utils/ovl_semantic/wrappers/ovl_sem_no_overflow.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_no_underflow.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_transition.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_no_transition.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_req_requires.sv`
+  - manifest entries in `utils/ovl_semantic/manifest.tsv`
+- Validation:
+  - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(no_overflow|no_underflow|transition|no_transition|req_requires)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-new11`
 
 ## Latest SVA closure slice (2026-02-22, OVL semantic expansion)
 

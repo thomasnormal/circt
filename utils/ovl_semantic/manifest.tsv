@@ -17,3 +17,8 @@ ovl_sem_increment	utils/ovl_semantic/wrappers/ovl_sem_increment.sv	ovl_increment
 ovl_sem_decrement	utils/ovl_semantic/wrappers/ovl_sem_decrement.sv	ovl_decrement.v	ovl_sem_decrement	8	0
 ovl_sem_delta	utils/ovl_semantic/wrappers/ovl_sem_delta.sv	ovl_delta.v	ovl_sem_delta	8	0
 ovl_sem_unchange	utils/ovl_semantic/wrappers/ovl_sem_unchange.sv	ovl_unchange.v	ovl_sem_unchange	8	0
+ovl_sem_no_overflow	utils/ovl_semantic/wrappers/ovl_sem_no_overflow.sv	ovl_no_overflow.v	ovl_sem_no_overflow	8	0
+ovl_sem_no_underflow	utils/ovl_semantic/wrappers/ovl_sem_no_underflow.sv	ovl_no_underflow.v	ovl_sem_no_underflow	8	0
+ovl_sem_transition	utils/ovl_semantic/wrappers/ovl_sem_transition.sv	ovl_transition.v	ovl_sem_transition	8	0
+ovl_sem_no_transition	utils/ovl_semantic/wrappers/ovl_sem_no_transition.sv	ovl_no_transition.v	ovl_sem_no_transition	8	0
+ovl_sem_req_requires	utils/ovl_semantic/wrappers/ovl_sem_req_requires.sv	ovl_req_requires.v	ovl_sem_req_requires	10	0
