@@ -4944,3 +4944,40 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 5. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-time-sampled-controls.sv`: `real=0.007s`
+
+## 2026-02-22 Session: Bounded strong eventually parity (`s_eventually [n:m]`)
+
+### Problem
+1. Bounded `s_eventually [n:m]` lowering was still weak-equivalent in multiple
+   paths:
+   - property operands used weak delayed implications per branch.
+   - sequence operands lowered to plain bounded delay, matching weak
+     `eventually [n:m]`.
+2. This missed finite-trace strictness expected from strong bounded eventually.
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp`:
+   - for property-typed bounded `s_eventually`, each shifted branch now uses
+     strong delayed-progress form:
+     - `delay_true && (delay_true -> property)`
+   - for sequence-typed bounded `s_eventually`, bounded delay result now wraps
+     with strong finite-progress obligation:
+     - `expr && eventually(expr)`
+   - weak bounded `eventually [n:m]` remains unchanged.
+2. Regression updates:
+   - updated: `test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+   - added: `test/Conversion/ImportVerilog/sva-bounded-eventually-sequence.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-sequence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-sequence.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-always-property.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-open-range-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-open-range-property.sv`: PASS
+3. Lit subset:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv build-test/test/Conversion/ImportVerilog/sva-bounded-eventually-sequence.sv build-test/test/Conversion/ImportVerilog/sva-bounded-always-property.sv build-test/test/Conversion/ImportVerilog/sva-open-range-property.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-sequence.sv`: `real=0.006s`
