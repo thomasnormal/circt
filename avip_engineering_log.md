@@ -33,6 +33,42 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-22 Session: SVA Immediate-Assert Global Init Parity
+
+### Why this pass
+Yosys SVA `extnets` analysis showed procedural immediate assertions could be
+vacuously disabled in formal due to constructor-dependent initialization of
+`__circt_proc_assertions_enabled`.
+
+### Changes
+1. `lib/Conversion/MooreToCore/MooreToCore.cpp`
+   - added static constant-global init extraction for simple Moore global init
+     regions.
+   - when init is a known constant, emit it directly in `llvm.mlir.global`
+     and skip ctor-based initialization for that global.
+2. Regression:
+   - `test/Conversion/ImportVerilog/immediate-assert-proc-global-static-init.sv`
+   - checks `@__circt_proc_assertions_enabled(true)` and absence of its
+     dedicated global ctor dependency.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-verilog circt-bmc` PASS.
+2. Focused regression:
+   - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/ImportVerilog/immediate-assert-proc-global-static-init.sv` PASS.
+3. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva` PASS.
+4. Targeted probe:
+   - `RISING_CLOCKS_ONLY=1 TEST_FILTER='counter|extnets' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+   - `counter` fail-mode still unresolved; `extnets` polarity flipped after
+     immediate assertions became active.
+
+### Remaining limitation
+`counter` (`--assume-known-inputs`) and `extnets` pass/fail polarity still
+need dedicated semantic alignment work in formal lowering/checking.
+
+---
+
 ## 2026-02-20 Session: Whole-Project Refactor Progress (Phase 2 Mutation Stack)
 
 ### Why this pass

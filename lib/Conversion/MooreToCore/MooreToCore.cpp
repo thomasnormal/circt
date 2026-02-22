@@ -6725,6 +6725,34 @@ static Attribute createLLVMZeroAttr(Type type, MLIRContext *ctx) {
   return {};
 }
 
+/// Try to extract a static LLVM initializer from a Moore global init region.
+/// This handles simple constant initializers to avoid relying on global ctors.
+static std::optional<Attribute>
+tryCreateStaticLLVMGlobalInitAttr(GlobalVariableOp op, Type llvmGlobalType) {
+  auto *initBlock = op.getInitBlock();
+  if (!initBlock || initBlock->empty())
+    return std::nullopt;
+
+  auto yieldOp = dyn_cast<YieldOp>(initBlock->getTerminator());
+  if (!yieldOp || initBlock->getOperations().size() != 2)
+    return std::nullopt;
+
+  auto constOp = yieldOp.getResult().getDefiningOp<moore::ConstantOp>();
+  if (!constOp || constOp->getBlock() != initBlock)
+    return std::nullopt;
+
+  auto intTy = dyn_cast<IntegerType>(llvmGlobalType);
+  if (!intTy)
+    return std::nullopt;
+
+  FVInt constant = constOp.getValue();
+  if (constant.hasUnknown())
+    return std::nullopt;
+
+  APInt raw = constant.getRawValue().zextOrTrunc(intTy.getWidth());
+  return IntegerAttr::get(intTy, raw);
+}
+
 struct GlobalVariableOpConversion
     : public OpConversionPattern<GlobalVariableOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -6742,8 +6770,13 @@ struct GlobalVariableOpConversion
     // for LLVM::GlobalOp, e.g. 4-state types produce hw.struct<value,unknown>).
     Type llvmGlobalType = convertToLLVMType(convertedType);
 
-    // Create an LLVM global with zero initialization.
+    auto staticInitAttr = tryCreateStaticLLVMGlobalInitAttr(op, llvmGlobalType);
+
+    // Create an LLVM global. Prefer static constant init when possible,
+    // otherwise fall back to zero + constructor-based initialization.
     Attribute initAttr = createLLVMZeroAttr(llvmGlobalType, op.getContext());
+    if (staticInitAttr)
+      initAttr = *staticInitAttr;
 
     auto globalOp = LLVM::GlobalOp::create(rewriter, loc, llvmGlobalType,
                                            /*isConstant=*/false,
@@ -6907,7 +6940,7 @@ struct GlobalVariableOpConversion
     // If there's an init region with a YieldOp, create a global constructor
     // function to initialize the variable at program startup.
     Block *initBlock = op.getInitBlock();
-    if (initBlock && !initBlock->empty()) {
+    if (!staticInitAttr && initBlock && !initBlock->empty()) {
       // Find the YieldOp that provides the initial value.
       auto yieldOp = dyn_cast<YieldOp>(initBlock->getTerminator());
       if (yieldOp) {
@@ -18813,7 +18846,7 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       if (Operation *definingOp = mooreVal.getDefiningOp()) {
         // Check if this is a Moore operation that we can convert inline
         if (isa<ClassPropertyRefOp, ReadOp, ConstantOp, DynExtractOp,
-                ArraySizeOp, EqOp, NeOp, SubOp, AddOp, AndOp, OrOp,
+                ArraySizeOp, EqOp, NeOp, SubOp, AddOp, AndOp, OrOp, NotOp,
                 ConversionOp, StructExtractOp, StringCmpOp,
                 ClassHandleCmpOp, WildcardEqOp, WildcardNeOp,
                 IntToLogicOp, ClassNullOp, StringToLowerOp, StringToUpperOp,
@@ -19258,6 +19291,30 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       }
 
       return comb::OrOp::create(rewriter, loc, lhs, rhs, false);
+    }
+
+    // Handle moore.not (logical NOT) — needed for array.locator predicates
+    if (auto notOp = dyn_cast<NotOp>(mooreOp)) {
+      Value input = getConvertedOperand(notOp.getInput());
+      if (!input)
+        return nullptr;
+
+      // 4-state NOT with X-propagation (Z bits become X)
+      if (isFourStateStructType(input.getType())) {
+        Value inputVal = extractFourStateValue(rewriter, loc, input);
+        Value inputUnk = extractFourStateUnknown(rewriter, loc, input);
+        Value max = hw::ConstantOp::create(rewriter, loc, inputVal.getType(), -1);
+        Value resultVal = comb::XorOp::create(rewriter, loc, inputVal, max, false);
+        Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, inputUnk);
+        return createFourStateStruct(rewriter, loc, maskedVal, inputUnk);
+      }
+
+      // Two-valued NOT: XOR with all-ones
+      Type resultType = typeConverter->convertType(notOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+      Value max = hw::ConstantOp::create(rewriter, loc, resultType, -1);
+      return comb::XorOp::create(rewriter, loc, input, max, false);
     }
 
     // Handle moore.conversion (type conversion)

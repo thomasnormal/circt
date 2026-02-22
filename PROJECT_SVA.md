@@ -9,6 +9,19 @@ This document tracks the status of SVA support in CIRCT, including bugs, missing
 SVA (SystemVerilog Assertions) is handled by the **Codex agent** for dedicated development.
 This document serves as a central tracking point for SVA-related issues.
 
+## Current Investigation (Feb 22, 2026)
+
+- Landed a MooreToCore fix to materialize simple constant global initializers
+  directly in `llvm.mlir.global` (instead of requiring ctor execution).
+- This specifically unblocks immediate-assert enable globals in formal flows,
+  where `llvm.mlir.global_ctors` are not executed by `circt-bmc`.
+- Added regression:
+  - `test/Conversion/ImportVerilog/immediate-assert-proc-global-static-init.sv`
+- Latest targeted Yosys probe (`counter|extnets`) after the fix:
+  - `extnets`: immediate assertions are now active (no longer vacuously off),
+    but pass/fail polarity still needs alignment work.
+  - `counter`: fail-mode remains unresolved under `--assume-known-inputs`.
+
 ## Test Suites
 
 ### sv-tests Chapter-16 (Assertions)
