@@ -175,6 +175,8 @@ Additional compile-only or XFAIL expectations live in
   - `s_nexttime` / `s_always` - Lowered to delay/repeat (strong forms)
   - property-typed `s_nexttime` and bounded `s_always [n:m]` now enforce
     finite delayed-cycle progress (non-vacuous strong lowering)
+  - property-typed `s_eventually [n:$]` now enforces delayed-cycle existence
+    before eventual satisfaction
 
 - **Assertion types**:
   - `assert property` - Immediate and concurrent
