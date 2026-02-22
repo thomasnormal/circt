@@ -1006,10 +1006,8 @@ struct AssertionExprVisitor {
         if (isa<ltl::PropertyType>(value.getType())) {
           auto minDelay = expr.range.value().min;
           if (!expr.range.value().max.has_value()) {
-            mlir::emitError(loc)
-                << "unbounded s_eventually range on property expressions is "
-                   "not yet supported";
-            return {};
+            return makeEventually(shiftPropertyBy(value, minDelay),
+                                  /*isWeak=*/false);
           }
           auto maxDelay = expr.range.value().max.value();
           SmallVector<Value, 4> shifted;
@@ -1067,13 +1065,11 @@ struct AssertionExprVisitor {
     case UnaryAssertionOperator::Always: {
       if (isa<ltl::PropertyType>(value.getType())) {
         if (expr.range.has_value()) {
-          if (!expr.range.value().max.has_value()) {
-            mlir::emitError(loc)
-                << "unbounded always range on property expressions is not yet "
-                   "supported";
-            return {};
-          }
           auto minDelay = expr.range.value().min;
+          if (!expr.range.value().max.has_value()) {
+            auto shifted = shiftPropertyBy(value, minDelay);
+            return lowerAlwaysProperty(shifted, /*isStrongAlways=*/false);
+          }
           auto maxDelay = expr.range.value().max.value();
           SmallVector<Value, 4> shifted;
           shifted.reserve(maxDelay - minDelay + 1);
