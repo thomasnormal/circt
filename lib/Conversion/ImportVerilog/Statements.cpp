@@ -2671,12 +2671,19 @@ struct StmtVisitor {
     if (auto clockOp = property.getDefiningOp<ltl::ClockOp>()) {
       if (enclosingProc) {
         OpBuilder::InsertionGuard guard(builder);
-        builder.setInsertionPointAfter(enclosingProc);
+        auto *moduleBlock = enclosingProc->getBlock();
+        if (moduleBlock->mightHaveTerminator()) {
+          if (auto *terminator = moduleBlock->getTerminator())
+            builder.setInsertionPoint(terminator);
+          else
+            builder.setInsertionPointToEnd(moduleBlock);
+        } else {
+          builder.setInsertionPointToEnd(moduleBlock);
+        }
 
         // Clone the clock op and its dependencies to the module level.
         IRMapping mapping;
         llvm::DenseSet<Operation *> active;
-        auto *moduleBlock = builder.getInsertionBlock();
         auto hoistedProperty = cloneAssertionValueIntoBlock(
             property, builder, moduleBlock, mapping, active);
         if (!hoistedProperty) {
