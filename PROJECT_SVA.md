@@ -263,6 +263,12 @@ Additional compile-only or XFAIL expectations live in
     - `$asserton/$assertoff/$assertkill/$assertcontrol`
     - `$assertfailon/$assertfailoff`
     - `$assertpasson/$assertpassoff/$assertnonvacuouson/$assertvacuousoff`
+  - sequence match-item debug/checkpoint task family now has statement-parity
+    handling:
+    - debug/interactive tasks recognized as no-op controls:
+      `$showscopes/$input/$key/$nokey/$log/$nolog`
+    - checkpoint/restart tasks now emit warnings instead of ignore remarks:
+      `$save/$restart/$incsave/$reset`
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
