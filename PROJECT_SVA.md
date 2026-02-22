@@ -255,6 +255,9 @@ Additional compile-only or XFAIL expectations live in
     - `$timeformat` lowers to `moore.builtin.timeformat`
     - dump-control no-op family (`$dumpoff/$dumpon/$dumpflush/$dumpall/...`)
       is recognized in match-item lowering
+  - sequence match-item debug subroutine `$showvars` now preserves side
+    effects and lowers to `moore.builtin.display` with formatted per-variable
+    output
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
