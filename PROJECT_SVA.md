@@ -249,6 +249,10 @@ Additional compile-only or XFAIL expectations live in
     now lower to side-effecting Moore severity builtins
   - sequence match-item `$fatal` system subroutine now lowers to fatal
     severity + finish side effects
+  - sequence match-item assertion-control pass/vacuous tasks now preserve
+    stateful side effects via synthetic globals:
+    - `$assertpasson` / `$assertpassoff`
+    - `$assertnonvacuouson` / `$assertvacuousoff` / `$assertvacuouson`
   - sequence match-item monitor/strobe family calls now preserve side effects:
     - `$strobe*` lowers to display-side effect marker
     - `$monitor*` lowers to monitor-side effect marker

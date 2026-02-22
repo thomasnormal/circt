@@ -143,6 +143,43 @@ Use these parity locks to drive semantic fixes in:
 
 ---
 
+## 2026-02-22 Session: SVA Assertion-Control Match-Item Pass/Vacuous State
+
+### Why this pass
+Sequence match-item assertion-control handling already tracked procedural
+assert enable and fail-message toggles, but pass/vacuous controls were still
+no-op in lowering.
+
+### Changes
+1. `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`
+   - added new synthetic global handles:
+     - `assertionPassMessagesEnabledGlobal`
+     - `assertionVacuousPassEnabledGlobal`
+2. `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+   - added global creation/write helpers for:
+     - `@__circt_assert_pass_msgs_enabled`
+     - `@__circt_assert_vacuous_pass_enabled`
+   - match-item system subroutines now emit stateful writes for:
+     - `$assertpasson`, `$assertpassoff`
+     - `$assertnonvacuouson`, `$assertvacuousoff`, `$assertvacuouson`
+   - fixed global insertion point to top-level `builtin.module` scope to
+     satisfy symbol-table verification.
+3. Regression update:
+   - `test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-subroutine.sv`
+   - now checks for both new globals.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-translate` PASS.
+2. Focused checks PASS:
+   - `sva-sequence-match-item-assertcontrol-subroutine.sv`
+   - `sva-sequence-match-item-severity-subroutine.sv`
+   - `sva-sequence-match-item-system-subroutine.sv`
+3. Focused lit PASS:
+   - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-severity-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv`
+
+---
+
 ## 2026-02-20 Session: Whole-Project Refactor Progress (Phase 2 Mutation Stack)
 
 ### Why this pass
