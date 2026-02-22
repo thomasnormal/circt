@@ -1503,3 +1503,17 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv` (`real=0.007s`)
+
+- Iteration update (nested aggregate case-equality regression hardening):
+  - realization:
+    - while extending aggregate case-equality recursion for unions, nested
+      unpacked-array fields inside unpacked structs became supported through
+      shared helper recursion and needed explicit regression lock-in.
+  - implemented:
+    - new regression:
+      - `test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv build-test/test/Conversion/ImportVerilog/unpacked-union-equality.sv build-test/test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
