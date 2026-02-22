@@ -1,3 +1,31 @@
+## Iteration 1599 - February 22, 2026
+
+### [ImportVerilog][SVA] Accept integral conditions in property `if` expressions
+
+1. **Implemented truthy condition normalization**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - in `ConditionalAssertionExpr` lowering, conditions now flow through
+     `convertToBool` before `convertToI1`.
+
+2. **Behavioral fix**
+   - property-level conditional forms such as
+     `assert property (@(posedge clk) if (sel) a else b);`
+     now accept multi-bit integral conditions.
+   - removes prior erroneous `expected a 1-bit integer` diagnostic.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property-string.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1598 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support string selectors in `case` properties

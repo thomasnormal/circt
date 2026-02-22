@@ -225,6 +225,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers string-selector `case` property item matching via
    `moore.string_cmp eq` instead of string-to-int bit-vector fallback, aligning
    assertion `case` string behavior with statement lowering.
+36. **SVA property-conditional integral condition support** (Feb 22, 2026):
+   ImportVerilog now lowers property-level `if (cond) ... else ...` conditions
+   using integral truthy semantics (`convertToBool`), instead of requiring a
+   pre-normalized 1-bit condition.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
