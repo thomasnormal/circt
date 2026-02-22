@@ -2152,6 +2152,20 @@
     - `build-test/bin/circt-opt test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir --convert-verif-to-smt="assume-known-inputs=true" --reconcile-unrealized-casts -allow-unregistered-dialect | llvm/build/bin/FileCheck test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir`
     - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_next$' FAIL_ON_XPASS=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result flipped from `XFAIL(fail)` to `XPASS(fail)`; known-gap marker then removed.
+    - expanded semantic coverage:
+      - added wrappers:
+        - `utils/ovl_semantic/wrappers/ovl_sem_zero_one_hot.sv`
+        - `utils/ovl_semantic/wrappers/ovl_sem_even_parity.sv`
+      - manifest entries:
+        - `ovl_sem_zero_one_hot`
+        - `ovl_sem_even_parity`
+      - full semantic run:
+        - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+        - `ovl semantic BMC summary: 18 tests, failures=0, xfail=0, xpass=0, skipped=0`
+      - full OVL matrix:
+        - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-extend`
+        - `std_ovl/BMC PASS 110/110`
+        - `std_ovl/BMC_SEMANTIC PASS 18/18`
   - follow-up hardening in same slice:
     - fixed null-attr crash paths (`dict.get(...)` + `dyn_cast`) by switching to
       `dict.getAs<...>` in:
