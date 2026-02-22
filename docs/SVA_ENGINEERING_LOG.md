@@ -2,6 +2,41 @@
 
 ## 2026-02-22
 
+- Iteration update (no-clock sampled-value disable-iff closure):
+  - realization:
+    - after no-clock `$past` disable-iff fixes, sampled-value functions
+      (`$rose/$fell/$stable/$changed`) still had a matching hole in top-level
+      disable contexts:
+      - with no explicit/inferred assertion clock, lowering could fall back to
+        direct `moore.past` state without disable-driven helper reset behavior.
+    - concrete repro:
+      - `assert property (disable iff (rst) ($rose(a) |-> b));`
+      - before fix, helper state reset on `rst` was not guaranteed for this
+        no-clock sampled-value path.
+  - TDD proof:
+    - added
+      `test/Conversion/ImportVerilog/sva-sampled-disable-iff-no-clock.sv`.
+    - before fix:
+      - regression failed, showing missing helper/state-reset shape.
+  - implemented:
+    - generalized sampled-value helper lowering to accept optional timing
+      control (`clocked` or no-clock sampled-control mode).
+    - routed assertion sampled-value helper lowering through the generalized
+      helper when sampled controls are present, including no-clock disable
+      contexts.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-disable-iff-no-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-disable-iff-no-clock.sv`
+    - compatibility checks:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-value-change.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-value-change.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-disable-iff-no-clock.sv >/dev/null` (`real=0.006s`)
+
 - Iteration update (no-clock `$past` + top-level `disable iff`):
   - realization:
     - after enabling no-clock `$past(..., enable)`, sampled helper updates still
