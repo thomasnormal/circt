@@ -1042,6 +1042,7 @@ void ProcessScheduler::rearmMinnow(ProcessId processId) {
     return;
   auto &m = minnows[it->second];
   m.nextWakeFs = eventScheduler->getCurrentTime().realTime + m.delayFs;
+  m.active = true;
   LLVM_DEBUG(llvm::dbgs() << "Re-armed minnow for process " << processId
                           << " nextWake=" << m.nextWakeFs << "fs\n");
 }
@@ -1058,16 +1059,19 @@ bool ProcessScheduler::advanceMinnows(uint64_t targetTimeFs) {
     if (m.nextWakeFs > targetTimeFs)
       continue;
 
+    // Deactivate BEFORE resuming so the minnow cannot fire again at the
+    // same time.  interpretWait() → rearmMinnow() will reactivate it when
+    // the process reaches its next wait.  If a native thunk bypasses
+    // interpretWait, the minnow stays inactive (the thunk schedules its
+    // own time events).
+    m.active = false;
+
     // Resume the process via the standard resumeProcess path.
     // This clears the scheduler's waiting state and schedules the process
     // into its preferred region. The interpreter's state.destBlock (set
     // in interpretWait) will handle resume-to-destination-block.
     resumeProcess(m.processId);
     didWork = true;
-
-    // Note: the minnow is NOT re-armed here. The interpreter's
-    // interpretWait() will call rearmMinnow() after the process
-    // executes and reaches its next wait.
   }
   return didWork;
 }
