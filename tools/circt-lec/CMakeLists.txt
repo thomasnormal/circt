@@ -50,6 +50,8 @@ target_link_libraries(circt-lec
   CIRCTSVAToLTL
   CIRCTLTLToCore
   CIRCTTransforms
+  CIRCTSynth
+  CIRCTSynthToComb
   CIRCTSupport
   CIRCTVerif
   CIRCTVerifToSMT

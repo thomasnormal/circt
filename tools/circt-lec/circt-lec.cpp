@@ -20,6 +20,7 @@
 #include "circt/Conversion/MooreToCore.h"
 #include "circt/Conversion/SMTToZ3LLVM.h"
 #include "circt/Conversion/SVAToLTL.h"
+#include "circt/Conversion/SynthToComb.h"
 #include "circt/Conversion/VerifToSMT.h"
 #include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/Datapath/DatapathDialect.h"
@@ -41,6 +42,7 @@
 #include "circt/Dialect/SV/SVPasses.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqPasses.h"
+#include "circt/Dialect/Synth/SynthDialect.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Support/Passes.h"
 #include "circt/Support/ResourceGuard.h"
@@ -802,6 +804,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
       opts.insertMode = lec::InsertAdditionalModeEnum::None;
     pm.addPass(createConstructLEC(opts));
   }
+  pm.addPass(createConvertSynthToComb());
   pm.addPass(createConvertHWToSMT());
   pm.addPass(createConvertDatapathToSMT());
   pm.addPass(createConvertCombToSMT());
@@ -1376,6 +1379,7 @@ int main(int argc, char **argv) {
     circt::sv::SVDialect,
     circt::sva::SVADialect,
     circt::seq::SeqDialect,
+    circt::synth::SynthDialect,
     mlir::smt::SMTDialect,
     circt::verif::VerifDialect,
     mlir::arith::ArithDialect,
