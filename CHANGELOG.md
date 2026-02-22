@@ -1,3 +1,24 @@
+## Iteration 1573 - February 22, 2026
+
+### [ImportVerilog][SVA] Add packed sampled-value regression coverage
+
+1. **Added regression coverage for packed sampled values in regular assertion clocking**
+   (`test/Conversion/ImportVerilog/sva-sampled-packed.sv`):
+   - covers packed operand lowering for:
+     - `$changed(s)`
+     - `$stable(s)`
+     under `assert property (@(posedge clk) ...)` clocking.
+   - verifies packed-to-simple-bit-vector sampled lowering and assertion
+     emission in importer and Moore output.
+
+2. **Validation**
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-packed.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1572 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support packed `$past` values with explicit clocking
