@@ -200,6 +200,8 @@ Additional compile-only or XFAIL expectations live in
     illegal direct size ops on `wildcard_assoc_array` values
   - typed associative-array sampled stability now compares both key streams and
     value streams (including string-key associative arrays)
+  - sequence match-item unary `++/--` now supports real local assertion
+    variables in addition to integer locals
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
