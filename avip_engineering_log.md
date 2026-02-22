@@ -4414,3 +4414,40 @@ Based on these findings, the circt-sim compiled process architecture:
 3. Compatibility checks:
    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`: PASS
    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+
+## 2026-02-22 Session: Assoc-array `$past` sampled-control closure
+
+### Problem
+1. `$past` helper lowering with sampled controls still rejected associative
+   arrays:
+   - `error: unsupported $past value type with sampled-value controls`
+2. This affected explicit-clock + enable forms used in real SVA code:
+   - `$past(aa, 1, en, @(posedge clk))`
+
+### Realizations / Surprises
+1. `$past` sampled-control lowering used a narrower unpacked-type set than the
+   sampled edge-function helper path.
+2. Helper storage/state mechanics already work for unpacked aggregates in
+   general; the blocker was just aggregate type classification.
+3. A focused regression must avoid unrelated diagnostics (e.g., nonblocking
+   assignments to dynamic/associative elements), otherwise it masks the real
+   SVA gap.
+
+### Fix
+1. Extended unpacked aggregate classification in
+   `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+   (`lowerPastWithSamplingControl`) to include:
+   - `moore::AssocArrayType`
+   - `moore::WildcardAssocArrayType`
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS
+3. Compatibility checks:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS

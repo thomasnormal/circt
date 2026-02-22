@@ -148,7 +148,7 @@ Additional compile-only or XFAIL expectations live in
 
 - **SVA assertion functions** (Iteration 28-29):
   - `$sampled` - Current value sampling
-  - `$past` - Previous value access (basic + explicit clocking, enable for explicit/timed/property)
+  - `$past` - Previous value access (basic + explicit clocking, enable for explicit/timed/property, sampled-control support for associative arrays)
   - `$changed` - Value change detection
   - `$stable` - Value stability check
   - `$rose` - Rising edge detection
