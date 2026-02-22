@@ -1,3 +1,32 @@
+## Iteration 1598 - February 22, 2026
+
+### [ImportVerilog][SVA] Support string selectors in `case` properties
+
+1. **Implemented string-aware `CaseAssertionExpr` matching**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - for string / format-string selectors, case-item matching now uses
+     `moore.string_cmp eq` after normalizing to `!moore.string`.
+   - non-string selectors continue to use bit-vector matching via
+     `moore.case_eq`.
+
+2. **Behavioral fix**
+   - removes string-to-int fallback for assertion `case` selectors and aligns
+     behavior with statement-level string case matching.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-case-property-string.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property-string.sv`: PASS.
+   - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property-string.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1597 - February 22, 2026
 
 ### [ImportVerilog][SVA] Fix `case` property match semantics

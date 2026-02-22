@@ -1847,9 +1847,19 @@ struct AssertionExprVisitor {
     auto selector = context.convertRvalueExpression(expr.expr);
     if (!selector)
       return {};
-    selector = context.convertToSimpleBitVector(selector);
-    if (!selector)
-      return {};
+    bool selectorIsString = isa<moore::StringType, moore::FormatStringType>(
+        selector.getType());
+    if (selectorIsString) {
+      auto strTy = moore::StringType::get(context.getContext());
+      selector =
+          context.materializeConversion(strTy, selector, /*isSigned=*/false, loc);
+      if (!selector)
+        return {};
+    } else {
+      selector = context.convertToSimpleBitVector(selector);
+      if (!selector)
+        return {};
+    }
 
     Value result;
     if (expr.defaultCase)
@@ -1872,18 +1882,30 @@ struct AssertionExprVisitor {
         auto caseValue = context.convertRvalueExpression(*caseExpr);
         if (!caseValue)
           return {};
-        caseValue = context.convertToSimpleBitVector(caseValue);
-        if (!caseValue)
-          return {};
-        if (caseValue.getType() != selector.getType()) {
+        Value match;
+        if (selectorIsString) {
+          auto strTy = moore::StringType::get(context.getContext());
           caseValue = context.materializeConversion(
-              selector.getType(), caseValue, /*isSigned=*/false,
+              strTy, caseValue, /*isSigned=*/false,
               context.convertLocation(caseExpr->sourceRange));
           if (!caseValue)
             return {};
+          match = moore::StringCmpOp::create(builder, loc,
+                                             moore::StringCmpPredicate::eq,
+                                             selector, caseValue);
+        } else {
+          caseValue = context.convertToSimpleBitVector(caseValue);
+          if (!caseValue)
+            return {};
+          if (caseValue.getType() != selector.getType()) {
+            caseValue = context.materializeConversion(
+                selector.getType(), caseValue, /*isSigned=*/false,
+                context.convertLocation(caseExpr->sourceRange));
+            if (!caseValue)
+              return {};
+          }
+          match = moore::CaseEqOp::create(builder, loc, selector, caseValue);
         }
-        Value match =
-            moore::CaseEqOp::create(builder, loc, selector, caseValue);
         match = context.convertToBool(match);
         match = context.convertToI1(match);
         if (!match)
