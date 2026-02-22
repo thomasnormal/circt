@@ -799,6 +799,30 @@ void LowerToBMCPass::runOnOperation() {
         return Value();
       if (input.getType() == builder.getI1Type())
         return input;
+      if (isFourStateStructType(input.getType())) {
+        if (auto it = materializedClockInputs.find(input);
+            it != materializedClockInputs.end())
+          return it->second;
+        OpBuilder::InsertionGuard guard(builder);
+        if (auto blockArg = dyn_cast<BlockArgument>(input)) {
+          builder.setInsertionPointToStart(blockArg.getOwner());
+        } else if (auto *def = input.getDefiningOp()) {
+          builder.setInsertionPointAfter(def);
+        } else {
+          return Value();
+        }
+        Value value = hw::StructExtractOp::create(builder, loc, input, "value");
+        Value unknown =
+            hw::StructExtractOp::create(builder, loc, input, "unknown");
+        Value one =
+            hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+        Value notUnknown =
+            comb::XorOp::create(builder, loc, unknown, one).getResult();
+        Value lowered =
+            comb::AndOp::create(builder, loc, value, notUnknown).getResult();
+        materializedClockInputs.try_emplace(input, lowered);
+        return lowered;
+      }
       if (!isa<seq::ClockType>(input.getType()))
         return Value();
       if (auto toClock = input.getDefiningOp<seq::ToClockOp>())
@@ -1312,6 +1336,64 @@ void LowerToBMCPass::runOnOperation() {
           }
           maybeAddClockInput(clockVal);
         }
+      }
+    }
+    if (clockInputs.empty()) {
+      // Some imported LLHD/SystemVerilog modules carry unresolved register clock
+      // metadata (e.g. unit sources after hierarchy remapping) and therefore do
+      // not expose a traceable top-level ltl/seq clock value. If there is
+      // exactly one clock-like original interface input, use it as the fallback
+      // BMC clock source.
+      bool hasRegClockMetadata = false;
+      if (auto regClockSources =
+              hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources"))
+        hasRegClockMetadata = !regClockSources.empty();
+      if (!hasRegClockMetadata)
+        if (auto regClocks = hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks"))
+          hasRegClockMetadata = !regClocks.empty();
+
+      auto isClockLikeInput = [&](Type type) -> bool {
+        if (isa<seq::ClockType>(type))
+          return true;
+        if (auto intTy = dyn_cast<IntegerType>(type))
+          return intTy.getWidth() == 1;
+        auto structTy = dyn_cast<hw::StructType>(type);
+        if (!structTy)
+          return false;
+        auto valueField = structTy.getFieldType("value");
+        auto unknownField = structTy.getFieldType("unknown");
+        if (!valueField || !unknownField)
+          return false;
+        auto valueIntTy = dyn_cast<IntegerType>(valueField);
+        auto unknownIntTy = dyn_cast<IntegerType>(unknownField);
+        return valueIntTy && unknownIntTy && valueIntTy.getWidth() == 1 &&
+               unknownIntTy.getWidth() == 1;
+      };
+
+      if (hasRegClockMetadata) {
+        Block &entryBlock = hwModule.getBody().front();
+        auto inputTypes = hwModule.getInputTypes();
+        unsigned interfaceInputs = inputTypes.size();
+        if (numRegs) {
+          auto regCount = cast<IntegerAttr>(numRegs).getValue().getZExtValue();
+          if (regCount <= interfaceInputs)
+            interfaceInputs -= regCount;
+        }
+
+        std::optional<unsigned> candidate;
+        bool ambiguous = false;
+        for (unsigned idx = 0; idx < interfaceInputs; ++idx) {
+          if (!isClockLikeInput(inputTypes[idx]))
+            continue;
+          if (candidate) {
+            ambiguous = true;
+            break;
+          }
+          candidate = idx;
+        }
+
+        if (!ambiguous && candidate)
+          maybeAddClockInput(entryBlock.getArgument(*candidate));
       }
     }
 
