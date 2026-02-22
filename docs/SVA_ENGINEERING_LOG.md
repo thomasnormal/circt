@@ -1725,3 +1725,32 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv` (`real=0.007s`)
+
+- Iteration update (SVA `case` property with string selectors):
+  - realization:
+    - after switching `case` property matching to `case_eq`, selector
+      normalization still forced all selectors through bit-vector conversion,
+      causing string selectors to use string-to-int fallback instead of direct
+      string compare semantics.
+  - TDD proof:
+    - added `test/Conversion/ImportVerilog/sva-case-property-string.sv`.
+    - before fix:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property-string.sv`
+      - failed with missing `moore.string_cmp eq` and emitted remark:
+        `converting string to 32-bit integer in bit-vector context`.
+  - implemented:
+    - updated `CaseAssertionExpr` lowering to branch by selector type:
+      - string / format-string selectors:
+        - normalize both selector and case item to `!moore.string`
+        - compare with `moore.string_cmp eq`.
+      - non-string selectors:
+        - preserve existing simple-bit-vector normalization + `moore.case_eq`.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property-string.sv`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property-string.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv` (`real=0.007s`)
