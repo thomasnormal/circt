@@ -77135,3 +77135,39 @@ See CHANGELOG.md on recent progress.
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv` (`real=0.007s`, `user=0.002s`, `sys=0.004s`)
+126. ImportVerilog SVA: preserve match-item format arguments for display families
+     (February 22, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - sequence match-item subroutine lowering now reuses
+        `convertFormatString` for:
+        - `$display/$write` (+ `b/o/h` variants)
+        - `$strobe` (+ `b/o/h` variants)
+        - `$monitor` (+ `b/o/h` variants)
+        - `$fdisplay/$fwrite` (+ `b/o/h` variants)
+        - `$fstrobe` (+ `b/o/h` variants)
+        - `$fmonitor` (+ `b/o/h` variants)
+      - this preserves real format payloads and argument formatting in
+        match-item side effects (instead of emitting marker literals like
+        `"$display\\n"`).
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-sequence-match-item-format-args-subroutine.sv`
+      - failing-first behavior reproduced prior to fix:
+        - marker-literal lowering (`moore.fmt.literal "$display\\n"`,
+          `moore.fmt.literal "$fdisplay\\n"`) with no formatted argument ops.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+        - `ninja -C build-test circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-format-args-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-format-args-subroutine.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-format-args-subroutine.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-format-args-subroutine.sv --check-prefix=DIAG`
+        - compatibility:
+          - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv`
+          - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv`
+          - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-writemem-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-writemem-subroutine.sv`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - profiling sample:
+        - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-format-args-subroutine.sv` (`real=0.007s`, `user=0.004s`, `sys=0.003s`)

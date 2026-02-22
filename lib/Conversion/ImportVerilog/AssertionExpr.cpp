@@ -2084,11 +2084,24 @@ struct AssertionExprVisitor {
             Value fd = getFd();
             if (!fd)
               return failure();
-            std::string marker = name.str();
-            if (appendNewlineFWrite)
-              marker.push_back('\n');
-            auto msg = moore::FormatLiteralOp::create(builder, loc, marker);
-            moore::FWriteBIOp::create(builder, loc, fd, msg);
+            using moore::IntFormat;
+            IntFormat defaultFormatFWrite = IntFormat::Decimal;
+            if (!fwriteSuffix.empty()) {
+              if (fwriteSuffix == "b")
+                defaultFormatFWrite = IntFormat::Binary;
+              else if (fwriteSuffix == "o")
+                defaultFormatFWrite = IntFormat::Octal;
+              else if (fwriteSuffix == "h")
+                defaultFormatFWrite = IntFormat::HexLower;
+            }
+            auto fmtArgs = call.arguments().subspan(1);
+            auto msg = context.convertFormatString(
+                fmtArgs, loc, defaultFormatFWrite, appendNewlineFWrite);
+            if (failed(msg))
+              return failure();
+            if (*msg == Value{})
+              break;
+            moore::FWriteBIOp::create(builder, loc, fd, *msg);
             break;
           }
           bool isFStrobeLike = false;
@@ -2104,8 +2117,23 @@ struct AssertionExprVisitor {
             Value fd = getFd();
             if (!fd)
               return failure();
-            auto msg = moore::FormatLiteralOp::create(builder, loc, name.str());
-            moore::FStrobeBIOp::create(builder, loc, fd, msg);
+            using moore::IntFormat;
+            IntFormat fmtFS = IntFormat::Decimal;
+            if (!fstrobeSuffix.empty()) {
+              if (fstrobeSuffix == "b")
+                fmtFS = IntFormat::Binary;
+              else if (fstrobeSuffix == "o")
+                fmtFS = IntFormat::Octal;
+              else if (fstrobeSuffix == "h")
+                fmtFS = IntFormat::HexLower;
+            }
+            auto msg = context.convertFormatString(call.arguments().subspan(1),
+                                                   loc, fmtFS, true);
+            if (failed(msg))
+              return failure();
+            if (*msg == Value{})
+              break;
+            moore::FStrobeBIOp::create(builder, loc, fd, *msg);
             break;
           }
           bool isFMonitorLike = false;
@@ -2121,8 +2149,23 @@ struct AssertionExprVisitor {
             Value fd = getFd();
             if (!fd)
               return failure();
-            auto msg = moore::FormatLiteralOp::create(builder, loc, name.str());
-            moore::FMonitorBIOp::create(builder, loc, fd, msg);
+            using moore::IntFormat;
+            IntFormat fmtFM = IntFormat::Decimal;
+            if (!fmonitorSuffix.empty()) {
+              if (fmonitorSuffix == "b")
+                fmtFM = IntFormat::Binary;
+              else if (fmonitorSuffix == "o")
+                fmtFM = IntFormat::Octal;
+              else if (fmonitorSuffix == "h")
+                fmtFM = IntFormat::HexLower;
+            }
+            auto msg = context.convertFormatString(call.arguments().subspan(1),
+                                                   loc, fmtFM, true);
+            if (failed(msg))
+              return failure();
+            if (*msg == Value{})
+              break;
+            moore::FMonitorBIOp::create(builder, loc, fd, *msg);
             break;
           }
           bool isMonitorLike = false;
@@ -2132,8 +2175,21 @@ struct AssertionExprVisitor {
           if (isMonitorLike) {
             if (monitorSuffix.empty() || monitorSuffix == "b" ||
                 monitorSuffix == "o" || monitorSuffix == "h") {
-              auto msg = moore::FormatLiteralOp::create(builder, loc, name.str());
-              moore::MonitorBIOp::create(builder, loc, msg);
+              using moore::IntFormat;
+              IntFormat fmtM = IntFormat::Decimal;
+              if (monitorSuffix == "b")
+                fmtM = IntFormat::Binary;
+              else if (monitorSuffix == "o")
+                fmtM = IntFormat::Octal;
+              else if (monitorSuffix == "h")
+                fmtM = IntFormat::HexLower;
+              auto msg =
+                  context.convertFormatString(call.arguments(), loc, fmtM, true);
+              if (failed(msg))
+                return failure();
+              if (*msg == Value{})
+                break;
+              moore::MonitorBIOp::create(builder, loc, *msg);
               break;
             }
           }
@@ -2144,10 +2200,21 @@ struct AssertionExprVisitor {
           if (isStrobeLike) {
             if (strobeSuffix.empty() || strobeSuffix == "b" ||
                 strobeSuffix == "o" || strobeSuffix == "h") {
-              std::string marker = name.str();
-              marker.push_back('\n');
-              auto msg = moore::FormatLiteralOp::create(builder, loc, marker);
-              moore::DisplayBIOp::create(builder, loc, msg);
+              using moore::IntFormat;
+              IntFormat fmtStrobe = IntFormat::Decimal;
+              if (strobeSuffix == "b")
+                fmtStrobe = IntFormat::Binary;
+              else if (strobeSuffix == "o")
+                fmtStrobe = IntFormat::Octal;
+              else if (strobeSuffix == "h")
+                fmtStrobe = IntFormat::HexLower;
+              auto msg = context.convertFormatString(call.arguments(), loc,
+                                                     fmtStrobe, true);
+              if (failed(msg))
+                return failure();
+              if (*msg == Value{})
+                break;
+              moore::DisplayBIOp::create(builder, loc, *msg);
               break;
             }
           }
@@ -2166,11 +2233,23 @@ struct AssertionExprVisitor {
               isDisplayLike = false;
           }
           if (isDisplayLike) {
-            std::string marker = name.str();
-            if (appendNewline)
-              marker.push_back('\n');
-            auto msg = moore::FormatLiteralOp::create(builder, loc, marker);
-            moore::DisplayBIOp::create(builder, loc, msg);
+            using moore::IntFormat;
+            IntFormat defaultFormat = IntFormat::Decimal;
+            if (!suffix.empty()) {
+              if (suffix == "b")
+                defaultFormat = IntFormat::Binary;
+              else if (suffix == "o")
+                defaultFormat = IntFormat::Octal;
+              else if (suffix == "h")
+                defaultFormat = IntFormat::HexLower;
+            }
+            auto msg = context.convertFormatString(call.arguments(), loc,
+                                                   defaultFormat, appendNewline);
+            if (failed(msg))
+              return failure();
+            if (*msg == Value{})
+              break;
+            moore::DisplayBIOp::create(builder, loc, *msg);
             break;
           }
           auto callLoc = context.convertLocation(call.sourceRange);

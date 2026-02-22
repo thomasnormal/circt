@@ -292,6 +292,9 @@ Additional compile-only or XFAIL expectations live in
     - `$sreadmemb/$sreadmemh` recognized as no-op extensions
   - value-returning `$stacktrace` now lowers in assertion-expression contexts
     (including match-item assignment RHS to local `string` variables)
+  - match-item display/file-display and strobe/monitor families now preserve
+    real format arguments (including value reads and numeric formatting), rather
+    than emitting task-name marker literals
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
