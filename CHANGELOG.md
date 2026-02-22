@@ -77073,3 +77073,36 @@ See CHANGELOG.md on recent progress.
           workspace run; failed with 45 unrelated tests)
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv` (`real=0.007s`, `user=0.003s`, `sys=0.004s`)
+124. ImportVerilog SVA: support match-item `$writememb/$writememh` tasks
+     (February 22, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - sequence match-item system-call lowering now handles:
+        - `$writememb(filename, memory)`
+        - `$writememh(filename, memory)`
+        - `$sreadmemb/$sreadmemh` (recognized no-op extension)
+      - lowering now mirrors statement-level behavior:
+        - filename coercion to string (including int-to-string conversion)
+        - lvalue memory reference conversion + capture
+        - emission of `moore.builtin.writememb` / `moore.builtin.writememh`
+      - removes ignored-subroutine remarks for write-memory tasks in
+        match-item context.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-sequence-match-item-writemem-subroutine.sv`
+      - failing-first behavior reproduced prior to fix:
+        - ignored-subroutine remarks for `$writememb/$writememh` and missing
+          write-memory builtin ops in imported IR.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+        - `ninja -C build-test circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-writemem-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-writemem-subroutine.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-writemem-subroutine.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-writemem-subroutine.sv --check-prefix=DIAG`
+        - compatibility:
+          - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - profiling sample:
+        - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-writemem-subroutine.sv` (`real=0.007s`, `user=0.002s`, `sys=0.005s`)

@@ -1978,6 +1978,46 @@ struct AssertionExprVisitor {
           if (name == "$static_assert") {
             break;
           }
+          bool isWriteMemB = name.ends_with("writememb");
+          bool isWriteMemH = name.ends_with("writememh");
+          if (isWriteMemB || isWriteMemH) {
+            auto args = call.arguments();
+            if (args.size() < 2) {
+              mlir::emitError(loc)
+                  << name << " expects at least two arguments";
+              return failure();
+            }
+            auto filename = context.convertRvalueExpression(*args[0]);
+            if (!filename)
+              return failure();
+            if (!isa<moore::StringType>(filename.getType())) {
+              if (isa<moore::IntType>(filename.getType()))
+                filename =
+                    moore::IntToStringOp::create(builder, loc, filename)
+                        .getResult();
+              else {
+                mlir::emitError(loc) << name << " filename must be a string";
+                return failure();
+              }
+            }
+            Value mem;
+            if (auto *assignExpr =
+                    args[1]->as_if<slang::ast::AssignmentExpression>())
+              mem = context.convertLvalueExpression(assignExpr->left());
+            else
+              mem = context.convertLvalueExpression(*args[1]);
+            if (!mem)
+              return failure();
+            context.captureRef(mem);
+            if (isWriteMemB)
+              moore::WriteMemBBIOp::create(builder, loc, filename, mem);
+            else
+              moore::WriteMemHBIOp::create(builder, loc, filename, mem);
+            break;
+          }
+          if (name.ends_with("sreadmemb") || name.ends_with("sreadmemh")) {
+            break;
+          }
           if (name == "$stop") {
             moore::StopBIOp::create(builder, loc);
             break;

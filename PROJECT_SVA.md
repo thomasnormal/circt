@@ -286,6 +286,10 @@ Additional compile-only or XFAIL expectations live in
     match-item assignment RHS calls now default-initialize based on type
     (integer `0`, string `""`) instead of emitting a referenced-before-
     assignment diagnostic
+  - match-item memory dump tasks now preserve file I/O side effects:
+    - `$writememb`
+    - `$writememh`
+    - `$sreadmemb/$sreadmemh` recognized as no-op extensions
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
