@@ -1,3 +1,33 @@
+## Iteration 1601 - February 22, 2026
+
+### [ImportVerilog][SVA] Fix procedural `disable iff` multi-bit guards
+
+1. **Implemented robust procedural `disable iff` guard lowering**
+   (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   - normalize `disable iff` condition via `convertToBool` before guard negation.
+   - preserve verifier dominance by hoisting the computed enable guard when
+     emitting clocked assert/assume ops outside procedural regions.
+
+2. **Behavioral fix**
+   - removes prior `expected a 1-bit integer` failure for legal multi-bit
+     `disable iff` conditions in procedural concurrent assertion contexts.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv >/dev/null`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`: PASS.
+     - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv >/dev/null` (`real=0.052s`, `user=0.003s`, `sys=0.004s`).
+
 ## Iteration 1600 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support multi-bit event expressions in SVA clock controls

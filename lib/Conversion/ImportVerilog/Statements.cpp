@@ -2541,8 +2541,13 @@ struct StmtVisitor {
     if (auto *disableIff =
             stmt.propertySpec.as_if<slang::ast::DisableIffAssertionExpr>()) {
       auto disableCond = context.convertRvalueExpression(disableIff->condition);
+      disableCond = context.convertToBool(disableCond);
+      if (!disableCond)
+        return failure();
       auto enableCond = moore::NotOp::create(builder, loc, disableCond);
       disableIffEnable = context.convertToI1(enableCond);
+      if (!disableIffEnable)
+        return failure();
       innerPropertySpec = &disableIff->expr;
     }
 
@@ -2575,10 +2580,10 @@ struct StmtVisitor {
       if (!assertionClock)
         assertionClock = context.currentAssertionClock;
       Value enable = disableIffEnable;
+      auto *moduleBlock = builder.getInsertionBlock();
       if (context.currentAssertionGuard) {
         IRMapping mapping;
         llvm::DenseSet<Operation *> active;
-        auto *moduleBlock = builder.getInsertionBlock();
         enable = cloneAssertionValueIntoBlock(context.currentAssertionGuard,
                                               builder, moduleBlock, mapping,
                                               active);
@@ -2587,6 +2592,13 @@ struct StmtVisitor {
         else
           mlir::emitWarning(loc)
               << "unable to hoist assertion guard; emitting unguarded assert";
+      } else if (enable) {
+        IRMapping mapping;
+        llvm::DenseSet<Operation *> active;
+        enable = cloneAssertionValueIntoBlock(enable, builder, moduleBlock,
+                                              mapping, active);
+        if (!enable)
+          return failure();
       }
       auto clockVal = context.convertRvalueExpression(assertionClock->expr);
       clockVal = context.convertToI1(clockVal);

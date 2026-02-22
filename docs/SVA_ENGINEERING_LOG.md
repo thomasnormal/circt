@@ -1811,3 +1811,36 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv` (`real=0.005s`)
+
+- Iteration update (procedural concurrent `disable iff` with multibit guards):
+  - realization:
+    - procedural concurrent assertions under explicit process clocks still
+      failed on legal integral `disable iff` guards, e.g.:
+      - `always @(posedge clk) assert property (disable iff (rst) a);`
+      with `rst` as multi-bit.
+    - failure mode:
+      - `error: expected a 1-bit integer`.
+    - initial fix attempt exposed a verifier dominance issue when reuse of
+      guard values crossed procedure/module insertion boundaries.
+  - TDD proof:
+    - added `test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`.
+    - before fix:
+      - failed with `expected a 1-bit integer`.
+  - implemented:
+    - in `Statements.cpp` disable-iff extraction:
+      - normalize disable condition via `convertToBool` before negation.
+      - validate conversion/enable materialization early.
+    - in clocked concurrent assertion emission path:
+      - hoist/clone computed disable-iff enable values to the destination
+        module block to satisfy dominance when emitting `verif.clocked_*` ops.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+    - compatibility checks:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
+      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv` (`real=0.052s`)
