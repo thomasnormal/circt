@@ -202,6 +202,8 @@ Additional compile-only or XFAIL expectations live in
     value streams (including string-key associative arrays)
   - sequence match-item unary `++/--` now supports real local assertion
     variables in addition to integer locals
+  - sequence match-item unary `++/--` now also supports `time` local assertion
+    variables with timescale-aware increment/decrement semantics
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:

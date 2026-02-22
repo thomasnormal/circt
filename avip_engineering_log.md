@@ -4844,3 +4844,36 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 5. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-real-incdec.sv`: `real=0.038s`
+
+## 2026-02-22 Session: Sequence match-item time increment/decrement parity
+
+### Problem
+1. Sequence match-item unary operations still rejected `time` local assertion
+   variables, despite regular unary lowering supporting time increments.
+2. Failure was:
+   - `match item unary operator requires int or real local assertion variable`
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp`:
+   - added timescale helper `getTimeScaleInFemtoseconds` (same scaling model as
+     expression lowering).
+   - extended match-item unary lowering to support `moore::TimeType` locals:
+     - cast `time` to `f64 real`
+     - add/subtract one local-timescale tick (`constant_real(timescale_fs)`)
+     - cast back to `time`
+   - diagnostic now states supported local types are `int`, `real`, or `time`.
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-sequence-match-item-time-incdec.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-time-incdec.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-time-incdec.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-real-incdec.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-real-incdec.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv`: PASS
+3. Lit subset:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-time-incdec.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-real-incdec.sv build-test/test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-time-incdec.sv`: `real=0.008s`
