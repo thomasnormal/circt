@@ -2012,6 +2012,8 @@ struct LTLClockControlVisitor {
     auto expr = context.convertRvalueExpression(ctrl.expr);
     if (!expr)
       return Value{};
+    if (isa<moore::EventType>(expr.getType()))
+      expr = moore::EventTriggeredOp::create(builder, loc, expr);
     Value condition;
     if (ctrl.iffCondition) {
       condition = context.convertRvalueExpression(*ctrl.iffCondition);

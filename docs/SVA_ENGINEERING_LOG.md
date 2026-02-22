@@ -698,3 +698,29 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv` (`real=0.036s`)
+
+- Iteration update (named events in assertion clock controls):
+  - realization:
+    - assertion clock-event lowering expected signal-like expressions and forced
+      `convertToI1`; named events in assertion clocks failed with
+      `expected a 1-bit integer`.
+    - reproducer:
+      - `assert property (@(e) c);`
+      - `assert property (@(s or e) d);`
+  - implemented:
+    - in `LTLClockControlVisitor::visit(SignalEventControl)`, event-typed
+      expressions are now lowered through `moore.event_triggered` before
+      building `ltl.clock`.
+    - this integrates with existing event-list clock composition and sequence
+      event handling (`ltl.matched`) without changing established paths.
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv` (`real=0.034s`)
