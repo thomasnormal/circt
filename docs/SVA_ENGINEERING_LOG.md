@@ -2,6 +2,49 @@
 
 ## 2026-02-22
 
+- Iteration update (OVL semantic harness expansion: odd_parity/increment/decrement/delta/unchange):
+  - realization:
+    - arithmetic and window-stability checkers were still missing from
+      semantic OVL coverage, leaving a parity gap versus common commercial
+      checker subsets.
+    - initial `ovl_unchange` wrapper was sensitive to first-sample `$stable`
+      behavior and required non-vacuous trigger timing adjustments.
+  - TDD proof:
+    - added wrappers and manifest entries first:
+      - `utils/ovl_semantic/wrappers/ovl_sem_odd_parity.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_increment.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_decrement.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_delta.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_unchange.sv`
+      - `utils/ovl_semantic/manifest.tsv` entries:
+        - `ovl_sem_odd_parity`
+        - `ovl_sem_increment`
+        - `ovl_sem_decrement`
+        - `ovl_sem_delta`
+        - `ovl_sem_unchange`
+    - targeted red/green run:
+      - first run: `ovl_sem_unchange` pass-mode `SAT` (unexpected).
+      - after shifting `start_event` away from first-sample ambiguity and
+        tightening fail-mode change timing: all targeted cases pass.
+  - implemented:
+    - expanded semantic harness by +5 checkers (from 13 to 18 wrappers).
+    - total pass/fail obligations increased from 26 to 36.
+  - validation:
+    - targeted:
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(odd_parity|increment|decrement|delta|unchange)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `10 tests, failures=0, xfail=0, xpass=0`
+    - full semantic lane:
+      - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `36 tests, failures=0, xfail=0, xpass=0`
+    - full OVL matrix:
+      - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-new5`
+      - result:
+        - `std_ovl/BMC PASS 110/110`
+        - `std_ovl/BMC_SEMANTIC PASS 36/36`
+    - profiling sample:
+      - `time OUT=/tmp/ovl-sem-profile-new5.log utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - `real=6.056s`
+
 - Iteration update (OVL semantic harness expansion: change/one_cold/mutex/next_state):
   - realization:
     - semantic OVL coverage was still skewed toward simpler one-cycle checkers.

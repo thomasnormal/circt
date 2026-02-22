@@ -12,3 +12,8 @@ ovl_sem_change	utils/ovl_semantic/wrappers/ovl_sem_change.sv	ovl_change.v	ovl_se
 ovl_sem_one_cold	utils/ovl_semantic/wrappers/ovl_sem_one_cold.sv	ovl_one_cold.v	ovl_sem_one_cold	8	0
 ovl_sem_mutex	utils/ovl_semantic/wrappers/ovl_sem_mutex.sv	ovl_mutex.v	ovl_sem_mutex	8	0
 ovl_sem_next_state	utils/ovl_semantic/wrappers/ovl_sem_next_state.sv	ovl_next_state.v	ovl_sem_next_state	8	0
+ovl_sem_odd_parity	utils/ovl_semantic/wrappers/ovl_sem_odd_parity.sv	ovl_odd_parity.v	ovl_sem_odd_parity	8	0
+ovl_sem_increment	utils/ovl_semantic/wrappers/ovl_sem_increment.sv	ovl_increment.v	ovl_sem_increment	8	0
+ovl_sem_decrement	utils/ovl_semantic/wrappers/ovl_sem_decrement.sv	ovl_decrement.v	ovl_sem_decrement	8	0
+ovl_sem_delta	utils/ovl_semantic/wrappers/ovl_sem_delta.sv	ovl_delta.v	ovl_sem_delta	8	0
+ovl_sem_unchange	utils/ovl_semantic/wrappers/ovl_sem_unchange.sv	ovl_unchange.v	ovl_sem_unchange	8	0

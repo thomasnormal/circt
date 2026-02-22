@@ -1,3 +1,46 @@
+## Iteration 1626 - February 22, 2026
+
+### [Formal][OVL] Expand semantic harness coverage for arithmetic and unchange checkers
+
+1. **Added five new semantic OVL wrappers**
+   - new wrappers:
+     - `utils/ovl_semantic/wrappers/ovl_sem_odd_parity.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_increment.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_decrement.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_delta.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_unchange.sv`
+   - new manifest entries in `utils/ovl_semantic/manifest.tsv`:
+     - `ovl_sem_odd_parity`
+     - `ovl_sem_increment`
+     - `ovl_sem_decrement`
+     - `ovl_sem_delta`
+     - `ovl_sem_unchange`
+
+2. **TDD-first stabilization for `ovl_sem_unchange`**
+   - initial targeted red run showed pass-mode violation (`expected UNSAT, got SAT`)
+     due first-sample `$stable` trigger ambiguity.
+   - wrapper was adjusted to trigger `start_event` after one history cycle and
+     to force fail-mode change timing inside the active window.
+   - final targeted run reaches deterministic pass/fail polarity.
+
+3. **Validation**
+   - targeted new cases:
+     - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(odd_parity|increment|decrement|delta|unchange)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - result:
+       - `ovl semantic BMC summary: 10 tests, failures=0, xfail=0, xpass=0, skipped=0`
+   - full semantic lane:
+     - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - result:
+       - `ovl semantic BMC summary: 36 tests, failures=0, xfail=0, xpass=0, skipped=0`
+   - full OVL matrix:
+     - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-new5`
+     - result:
+       - `std_ovl/BMC PASS 110/110`
+       - `std_ovl/BMC_SEMANTIC PASS 36/36`
+   - profiling sample:
+     - `time OUT=/tmp/ovl-sem-profile-new5.log utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - `real=6.056s`
+
 ## Iteration 1625 - February 22, 2026
 
 ### [Formal][OVL] Expand semantic OVL checker coverage to 26 pass/fail obligations
