@@ -180,6 +180,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers unpacked-array case equality/inequality directly
    via `moore.uarray_cmp` predicates (`eq`/`ne`), enabling procedural and SVA
    case-comparison assertions on fixed-size unpacked arrays.
+25. **Unpacked-union sampled + explicit-clock `$past` support** (Feb 22, 2026):
+   ImportVerilog now lowers `$stable/$changed` on unpacked union operands and
+   supports explicit-clock `$past` for unpacked unions in assertions, closing
+   previous bit-vector-cast and helper type-rejection gaps.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to

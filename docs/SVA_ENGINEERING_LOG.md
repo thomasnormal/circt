@@ -1448,3 +1448,31 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv` (`real=0.007s`)
+
+- Iteration update (unpacked-union sampled + explicit-clock `$past`):
+  - realization:
+    - sampled-value functions on unpacked unions still failed:
+      - `$changed(u)` / `$stable(u)` emitted
+        `cannot be cast to a simple bit vector`.
+    - explicit-clock `$past` on unpacked unions was also rejected with
+      `unsupported $past value type with explicit clocking`.
+  - implemented:
+    - extended sampled stable-comparison helper to support unpacked unions via
+      recursive fieldwise `moore.union_extract` comparisons reduced with
+      logical and.
+    - enabled unpacked-union aggregate handling in sampled helper and explicit
+      clock `$past` helper type checks.
+    - enabled assertion-call sampled aggregate detection for unpacked unions.
+    - new regressions:
+      - `test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
+      - `test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv build-test/test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build-test/test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv` (`real=0.007s`)
