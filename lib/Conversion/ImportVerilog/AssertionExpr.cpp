@@ -1842,6 +1842,15 @@ Value Context::convertAssertionCallExpression(
         }
       }
     }
+    if (!inAssertionExpr && !clockingCtrl && isGlobalClockVariant &&
+        currentScope) {
+      if (auto *clocking =
+              compilation.getGlobalClockingAndNoteUse(*currentScope)) {
+        if (auto *clockBlock =
+                clocking->as_if<slang::ast::ClockingBlockSymbol>())
+          clockingCtrl = &clockBlock->getEvent();
+      }
+    }
 
     if (!clockingCtrl)
       disableExprs.clear();
@@ -1886,7 +1895,8 @@ Value Context::convertAssertionCallExpression(
       return sampled;
     }
 
-    if (hasClockingArg && !inAssertionExpr) {
+    if (!inAssertionExpr && clockingCtrl &&
+        (hasClockingArg || isGlobalClockVariant)) {
       if (clockingCtrl) {
         return lowerSampledValueFunctionWithClocking(
             *this, *args[0], *clockingCtrl, funcName, nullptr,
