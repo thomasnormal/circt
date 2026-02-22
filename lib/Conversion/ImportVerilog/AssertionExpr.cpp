@@ -1756,6 +1756,201 @@ struct AssertionExprVisitor {
             }
             break;
           }
+          auto getOrCreateProceduralAssertionsEnabledGlobal =
+              [&]() -> moore::GlobalVariableOp {
+            if (context.proceduralAssertionsEnabledGlobal)
+              return context.proceduralAssertionsEnabledGlobal;
+
+            OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPointToStart(context.intoModuleOp.getBody());
+
+            std::string baseName = "__circt_proc_assertions_enabled";
+            std::string symName = baseName;
+            unsigned suffix = 0;
+            while (context.symbolTable.lookup(symName))
+              symName = baseName + "_" + std::to_string(++suffix);
+
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto globalOp = moore::GlobalVariableOp::create(
+                builder, loc, builder.getStringAttr(symName), i1Ty);
+
+            auto &initBlock = globalOp.getInitRegion().emplaceBlock();
+            builder.setInsertionPointToEnd(&initBlock);
+            auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+            moore::YieldOp::create(builder, loc, enabled);
+
+            context.proceduralAssertionsEnabledGlobal = globalOp;
+            return globalOp;
+          };
+          auto readProceduralAssertionsEnabled = [&]() -> Value {
+            auto globalOp = getOrCreateProceduralAssertionsEnabledGlobal();
+            auto globalRef =
+                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+            return moore::ReadOp::create(builder, loc, globalRef);
+          };
+          auto writeProceduralAssertionsEnabled =
+              [&](Value enabled) -> LogicalResult {
+            auto globalOp = getOrCreateProceduralAssertionsEnabledGlobal();
+            auto targetType = globalOp.getType();
+            if (enabled.getType() != targetType)
+              enabled =
+                  moore::ConversionOp::create(builder, loc, targetType, enabled);
+            auto globalRef =
+                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+            moore::BlockingAssignOp::create(builder, loc, globalRef, enabled);
+            return success();
+          };
+
+          auto getOrCreateAssertionFailMessagesEnabledGlobal =
+              [&]() -> moore::GlobalVariableOp {
+            if (context.assertionFailMessagesEnabledGlobal)
+              return context.assertionFailMessagesEnabledGlobal;
+
+            OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPointToStart(context.intoModuleOp.getBody());
+
+            std::string baseName = "__circt_assert_fail_msgs_enabled";
+            std::string symName = baseName;
+            unsigned suffix = 0;
+            while (context.symbolTable.lookup(symName))
+              symName = baseName + "_" + std::to_string(++suffix);
+
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto globalOp = moore::GlobalVariableOp::create(
+                builder, loc, builder.getStringAttr(symName), i1Ty);
+
+            auto &initBlock = globalOp.getInitRegion().emplaceBlock();
+            builder.setInsertionPointToEnd(&initBlock);
+            auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+            moore::YieldOp::create(builder, loc, enabled);
+
+            context.assertionFailMessagesEnabledGlobal = globalOp;
+            return globalOp;
+          };
+          auto readAssertionFailMessagesEnabled = [&]() -> Value {
+            auto globalOp = getOrCreateAssertionFailMessagesEnabledGlobal();
+            auto globalRef =
+                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+            return moore::ReadOp::create(builder, loc, globalRef);
+          };
+          auto writeAssertionFailMessagesEnabled =
+              [&](Value enabled) -> LogicalResult {
+            auto globalOp = getOrCreateAssertionFailMessagesEnabledGlobal();
+            auto targetType = globalOp.getType();
+            if (enabled.getType() != targetType)
+              enabled =
+                  moore::ConversionOp::create(builder, loc, targetType, enabled);
+            auto globalRef =
+                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+            moore::BlockingAssignOp::create(builder, loc, globalRef, enabled);
+            return success();
+          };
+          auto selectBool = [&](Value cond, Value ifTrue, Value ifFalse) -> Value {
+            if (ifTrue.getType() != ifFalse.getType())
+              ifFalse = moore::ConversionOp::create(builder, loc, ifTrue.getType(),
+                                                    ifFalse);
+            cond = context.convertToBool(cond);
+            if (!cond)
+              return {};
+            auto conditional =
+                moore::ConditionalOp::create(builder, loc, ifTrue.getType(), cond);
+            auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
+            auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
+
+            OpBuilder::InsertionGuard g(builder);
+            builder.setInsertionPointToStart(&trueBlock);
+            moore::YieldOp::create(builder, loc, ifTrue);
+            builder.setInsertionPointToStart(&falseBlock);
+            moore::YieldOp::create(builder, loc, ifFalse);
+            return conditional.getResult();
+          };
+          if (name == "$assertoff" || name == "$assertkill") {
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+            if (failed(writeProceduralAssertionsEnabled(disabled)))
+              return failure();
+            break;
+          }
+          if (name == "$asserton") {
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+            if (failed(writeProceduralAssertionsEnabled(enabled)))
+              return failure();
+            break;
+          }
+          if (name == "$assertcontrol") {
+            auto args = call.arguments();
+            if (!args.empty()) {
+              auto controlType = context.convertRvalueExpression(*args[0]);
+              if (!controlType)
+                return failure();
+              auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+              if (controlType.getType() != i32Ty)
+                controlType = moore::ConversionOp::create(builder, loc, i32Ty,
+                                                          controlType);
+
+              auto currentEnabled = readProceduralAssertionsEnabled();
+              if (!currentEnabled)
+                return failure();
+              auto c3 = moore::ConstantOp::create(builder, loc, i32Ty, 3);
+              auto c4 = moore::ConstantOp::create(builder, loc, i32Ty, 4);
+              auto c5 = moore::ConstantOp::create(builder, loc, i32Ty, 5);
+              auto isOff = moore::EqOp::create(builder, loc, controlType, c3);
+              auto isOn = moore::EqOp::create(builder, loc, controlType, c4);
+              auto isKill = moore::EqOp::create(builder, loc, controlType, c5);
+              auto offOrKill = moore::OrOp::create(builder, loc, isOff, isKill);
+
+              auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+              auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+              auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+              auto afterOff = selectBool(offOrKill, disabled, currentEnabled);
+              if (!afterOff)
+                return failure();
+              auto nextState = selectBool(isOn, enabled, afterOff);
+              if (!nextState)
+                return failure();
+              if (failed(writeProceduralAssertionsEnabled(nextState)))
+                return failure();
+
+              auto currentFailMsgsEnabled = readAssertionFailMessagesEnabled();
+              if (!currentFailMsgsEnabled)
+                return failure();
+              auto c8 = moore::ConstantOp::create(builder, loc, i32Ty, 8);
+              auto c9 = moore::ConstantOp::create(builder, loc, i32Ty, 9);
+              auto isFailOn =
+                  moore::EqOp::create(builder, loc, controlType, c8);
+              auto isFailOff =
+                  moore::EqOp::create(builder, loc, controlType, c9);
+              auto nextFailAfterOff =
+                  selectBool(isFailOff, disabled, currentFailMsgsEnabled);
+              if (!nextFailAfterOff)
+                return failure();
+              auto nextFailState = selectBool(isFailOn, enabled, nextFailAfterOff);
+              if (!nextFailState)
+                return failure();
+              if (failed(writeAssertionFailMessagesEnabled(nextFailState)))
+                return failure();
+            }
+            break;
+          }
+          if (name == "$assertfailoff") {
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+            if (failed(writeAssertionFailMessagesEnabled(disabled)))
+              return failure();
+            break;
+          }
+          if (name == "$assertfailon") {
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+            if (failed(writeAssertionFailMessagesEnabled(enabled)))
+              return failure();
+            break;
+          }
+          if (name == "$assertpasson" || name == "$assertpassoff" ||
+              name == "$assertnonvacuouson" || name == "$assertvacuousoff") {
+            break;
+          }
           if (name == "$stop") {
             moore::StopBIOp::create(builder, loc);
             break;
