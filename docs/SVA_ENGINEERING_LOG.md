@@ -31,6 +31,33 @@
     - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
+- Iteration update (bounded property `always` / `s_always`):
+  - realization:
+    - after unblocking bounded `eventually` and property `nexttime`, bounded
+      `always` wrappers on property operands remained rejected even though they
+      can be lowered compositionally as shifted-property conjunctions.
+  - implemented:
+    - added bounded lowering for property-typed:
+      - `always [m:n] p`
+      - `s_always [m:n] p`
+    - lowering strategy:
+      - shift property by each delay in `[m:n]` using delayed-true implication
+      - combine shifted properties with `ltl.and`.
+    - unbounded property forms still emit diagnostics:
+      - `always p`
+      - `s_always p`
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-bounded-always-property.sv`
+    - retained negative guard:
+      - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+        (`always p` unsupported diagnostic).
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-always-property.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-bounded-always-property.sv`
+    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 - Iteration update (bounded property `eventually` / `s_eventually`):
   - realization:
     - bounded unary temporal operators on property operands were being treated

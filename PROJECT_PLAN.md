@@ -126,6 +126,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers property-typed `nexttime` and `s_nexttime`
    (including explicit single-cycle counts like `[N]`) via delayed-true
    implication, instead of erroring out.
+12. **SVA bounded property always support** (Feb 22, 2026):
+   ImportVerilog now lowers bounded property wrappers `always [m:n]` and
+   `s_always [m:n]` by constructing conjunctions over delay-shifted property
+   instances.
 10. **SVA `$future_gclk` temporal semantics fix** (Feb 21, 2026):
    Importer now lowers `$future_gclk(expr)` through forward temporal
    `ltl.delay(expr, 1, 0)` semantics instead of approximating with

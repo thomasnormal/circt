@@ -1043,6 +1043,18 @@ struct AssertionExprVisitor {
     }
     case UnaryAssertionOperator::Always: {
       if (isa<ltl::PropertyType>(value.getType())) {
+        if (expr.range.has_value()) {
+          auto minDelay = expr.range.value().min;
+          auto maxDelay = expr.range.value().max.value_or(minDelay);
+          SmallVector<Value, 4> shifted;
+          shifted.reserve(maxDelay - minDelay + 1);
+          for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
+               ++delayCycles)
+            shifted.push_back(shiftPropertyBy(value, delayCycles));
+          if (shifted.size() == 1)
+            return shifted.front();
+          return ltl::AndOp::create(builder, loc, shifted);
+        }
         mlir::emitError(loc)
             << "always on property expressions is not yet supported";
         return {};
@@ -1118,6 +1130,18 @@ struct AssertionExprVisitor {
     }
     case UnaryAssertionOperator::SAlways: {
       if (isa<ltl::PropertyType>(value.getType())) {
+        if (expr.range.has_value()) {
+          auto minDelay = expr.range.value().min;
+          auto maxDelay = expr.range.value().max.value_or(minDelay);
+          SmallVector<Value, 4> shifted;
+          shifted.reserve(maxDelay - minDelay + 1);
+          for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
+               ++delayCycles)
+            shifted.push_back(shiftPropertyBy(value, delayCycles));
+          if (shifted.size() == 1)
+            return shifted.front();
+          return ltl::AndOp::create(builder, loc, shifted);
+        }
         mlir::emitError(loc)
             << "s_always on property expressions is not yet supported";
         return {};
