@@ -335,6 +335,72 @@ static Value buildSampledBoolean(Context &context, Location loc, Value value,
     return anySet;
   }
 
+  if (auto assocTy = dyn_cast<moore::AssocArrayType>(value.getType())) {
+    auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+    auto matchQueueTy = moore::QueueType::get(assocTy.getElementType(), 0);
+    auto locator = moore::ArrayLocatorOp::create(
+        builder, loc, matchQueueTy, moore::LocatorMode::All,
+        /*indexed=*/false, value);
+
+    Block *bodyBlock = &locator.getBody().emplaceBlock();
+    bodyBlock->addArgument(assocTy.getElementType(), loc);
+    bodyBlock->addArgument(i32Ty, loc);
+
+    {
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(bodyBlock);
+      Value elem = bodyBlock->getArgument(0);
+      Value elemBool = buildSampledBoolean(context, loc, elem, funcName);
+      if (!elemBool)
+        return {};
+      if (elemBool.getType() != i1Ty)
+        elemBool = context.materializeConversion(i1Ty, elemBool, false, loc);
+      if (!elemBool)
+        return {};
+      moore::ArrayLocatorYieldOp::create(builder, loc, elemBool);
+    }
+
+    Value count = moore::ArraySizeOp::create(builder, loc, locator);
+    Value zero = moore::ConstantOp::create(builder, loc, i32Ty, 0);
+    Value anySet = moore::NeOp::create(builder, loc, count, zero);
+    if (anySet.getType() != i1Ty)
+      anySet = context.materializeConversion(i1Ty, anySet, false, loc);
+    return anySet;
+  }
+
+  if (auto assocTy = dyn_cast<moore::WildcardAssocArrayType>(value.getType())) {
+    auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+    auto matchQueueTy = moore::QueueType::get(assocTy.getElementType(), 0);
+    auto locator = moore::ArrayLocatorOp::create(
+        builder, loc, matchQueueTy, moore::LocatorMode::All,
+        /*indexed=*/false, value);
+
+    Block *bodyBlock = &locator.getBody().emplaceBlock();
+    bodyBlock->addArgument(assocTy.getElementType(), loc);
+    bodyBlock->addArgument(i32Ty, loc);
+
+    {
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(bodyBlock);
+      Value elem = bodyBlock->getArgument(0);
+      Value elemBool = buildSampledBoolean(context, loc, elem, funcName);
+      if (!elemBool)
+        return {};
+      if (elemBool.getType() != i1Ty)
+        elemBool = context.materializeConversion(i1Ty, elemBool, false, loc);
+      if (!elemBool)
+        return {};
+      moore::ArrayLocatorYieldOp::create(builder, loc, elemBool);
+    }
+
+    Value count = moore::ArraySizeOp::create(builder, loc, locator);
+    Value zero = moore::ConstantOp::create(builder, loc, i32Ty, 0);
+    Value anySet = moore::NeOp::create(builder, loc, count, zero);
+    if (anySet.getType() != i1Ty)
+      anySet = context.materializeConversion(i1Ty, anySet, false, loc);
+    return anySet;
+  }
+
   if (auto structTy = dyn_cast<moore::UnpackedStructType>(value.getType())) {
     Value anySet = moore::ConstantOp::create(builder, loc, i1Ty, 0);
     for (auto member : structTy.getMembers()) {
@@ -640,14 +706,19 @@ static Value lowerSampledValueFunctionWithSamplingControl(
   Type loweredType = context.convertType(*valueExpr.type);
   if (auto refType = dyn_cast<moore::RefType>(loweredType))
     loweredType = refType.getNestedType();
-  bool isUnpackedAggregateType =
+  bool isUnpackedAggregateStableType =
       isa<moore::UnpackedArrayType, moore::OpenUnpackedArrayType,
           moore::QueueType, moore::UnpackedStructType,
           moore::UnpackedUnionType>(loweredType);
+  bool isUnpackedAggregateEdgeType =
+      isa<moore::UnpackedArrayType, moore::OpenUnpackedArrayType,
+          moore::QueueType, moore::AssocArrayType,
+          moore::WildcardAssocArrayType, moore::UnpackedStructType,
+          moore::UnpackedUnionType>(loweredType);
   bool isUnpackedAggregateStableSample =
-      (isStable || isChanged) && isUnpackedAggregateType;
+      (isStable || isChanged) && isUnpackedAggregateStableType;
   bool isUnpackedAggregateEdgeSample =
-      (isRose || isFell) && isUnpackedAggregateType;
+      (isRose || isFell) && isUnpackedAggregateEdgeType;
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
   if (!isUnpackedAggregateStableSample && !isUnpackedAggregateEdgeSample &&
       !intType) {
@@ -2180,12 +2251,16 @@ Value Context::convertAssertionCallExpression(
         (isa<moore::UnpackedArrayType>(value.getType()) ||
          isa<moore::OpenUnpackedArrayType>(value.getType()) ||
          isa<moore::QueueType>(value.getType()) ||
+         isa<moore::AssocArrayType>(value.getType()) ||
+         isa<moore::WildcardAssocArrayType>(value.getType()) ||
          isa<moore::UnpackedStructType>(value.getType()) ||
          isa<moore::UnpackedUnionType>(value.getType()));
     if (!isAggregateSample && !isAggregateEdgeSample &&
         (isa<moore::UnpackedArrayType>(value.getType()) ||
          isa<moore::OpenUnpackedArrayType>(value.getType()) ||
          isa<moore::QueueType>(value.getType()) ||
+         isa<moore::AssocArrayType>(value.getType()) ||
+         isa<moore::WildcardAssocArrayType>(value.getType()) ||
          isa<moore::UnpackedStructType>(value.getType()) ||
          isa<moore::UnpackedUnionType>(value.getType()))) {
       mlir::emitError(loc) << "unsupported sampled value type for " << funcName;

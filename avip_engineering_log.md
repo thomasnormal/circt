@@ -4377,3 +4377,40 @@ Based on these findings, the circt-sim compiled process architecture:
 3. Note on full `check-circt-arcilator`:
    - no longer blocked by slang API symbols, but full target currently hits host-resource `cc1plus` terminations during broad rebuild under this workspace state.
 
+## 2026-02-22 Session: Assoc-array sampled edge SVA closure
+
+### Problem
+1. ImportVerilog still rejected explicit-clock sampled edge calls on
+   associative arrays, e.g.:
+   - `assert property ($rose(aa, @(posedge clk)));`
+2. Existing regression `sva-sampled-unpacked-explicit-clock-error.sv`
+   intentionally expected this failure with:
+   - `cannot be cast to a simple bit vector`
+
+### Realizations / Surprises
+1. The sampled-edge aggregate support previously covered unpacked
+   array/open-array/queue/struct/union paths, but not associative arrays.
+2. The same aggregate-edge classification logic needs to be aligned in both:
+   - direct assertion-clock sampled lowering, and
+   - helper-procedure lowering for explicit timing controls.
+3. `moore.array.locator all, elements` gives a clean aggregate-to-boolean
+   reduction pattern for associative arrays with no ad-hoc special casing.
+
+### Fix
+1. Extended `buildSampledBoolean` in
+   `lib/Conversion/ImportVerilog/AssertionExpr.cpp` for:
+   - `moore::AssocArrayType`
+   - `moore::WildcardAssocArrayType`
+2. Added associative arrays to sampled-edge aggregate classification in:
+   - `convertAssertionCallExpression` for `$rose/$fell`
+   - `lowerSampledValueFunctionWithSamplingControl`
+3. Converted
+   `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+   to a positive regression check.
+
+### Validation
+1. `ninja -C build-test circt-translate circt-verilog`: PASS
+2. `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`: PASS
+3. Compatibility checks:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
