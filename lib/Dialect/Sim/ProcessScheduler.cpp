@@ -1467,7 +1467,20 @@ bool ProcessScheduler::advanceTime() {
     (void)earliestMinnowWake;
 
     if (!timeWheelAdvanced) {
-      // No TimeWheel events — check if minnow/clock wake can drive time.
+      // advanceToNextTime() returned false. This can mean:
+      // (a) EventScheduler is complete (no events).
+      // (b) Events exist at the same real time at a higher delta step —
+      //     advanceToNextEvent() advanced currentTime.deltaStep to them.
+      //     We must NOT skip these by jumping to a future minnow time.
+      //     Instead, continue so that stepDelta() processes them.
+      if (!eventScheduler->isComplete() &&
+          eventScheduler->getCurrentTime().realTime == currentTimeFs) {
+        // Eps/delta-delay events remain at the current real time.
+        // Let stepDelta() drain them before advancing real time.
+        continue;
+      }
+
+      // No events at current time. Check if minnow/clock wake can drive time.
       if (earliestBypass < UINT64_MAX) {
         // Advance sim time directly to the earliest bypass wake.
         eventScheduler->advanceTimeTo(earliestBypass);

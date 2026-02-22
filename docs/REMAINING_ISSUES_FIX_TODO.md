@@ -1,0 +1,349 @@
+# Remaining Issues Fix Tracker
+
+Date: 2026-02-20
+
+Scope: medium-priority follow-ups after `docs/CRITICAL_HIGH_FIX_TODO.md`.
+
+- [ ] OpenTitan `prim_fifo_sync` sim regression triage: circt-sim quiesces at 25ns (`advanceTime() returned false`) before `TEST PASSED`; unified `opentitan_sim_smoke` temporarily uses `prim_count` as stable smoke target.
+
+- [x] Unified regression runner: treat a known option token as missing value for the previous option.
+- [x] Unified regression runner: sanitize `suite_id` for log file paths to prevent path-separator breakage.
+- [x] Add focused lit coverage for the two fixes.
+- [x] Run focused validation and record outcomes.
+- [x] JIT block hot-block safety: require self-loop wait terminator and use that wait for re-entry.
+- [x] JIT activation guard: only activate compiled block after first resume token.
+- [x] JIT lifecycle cleanup: erase per-process `jitBlockSpecs` during finalize paths.
+- [x] JIT scheduler parity: deferred real-time drives schedule in NBA (interpreter-aligned).
+- [x] circt-sim CMake: gate JIT compile definitions/deps on `MLIR_ENABLE_EXECUTION_ENGINE`.
+- [x] Add focused unit coverage for JIT scheduler/selection/cleanup behavior.
+- [x] Run focused validation and record outcomes.
+- [x] JIT deopt cleanup: drop cached `jitBlockSpecs` when JIT fast path deopts.
+- [x] circt-sim unittest CMake: gate JIT-only deps on `MLIR_ENABLE_EXECUTION_ENGINE`.
+- [x] Header cleanup: remove stale `CIRCT_SIM_BLOCK_JIT` wording in block-JIT member comments.
+- [x] Add focused unit coverage for JIT deopt-spec cleanup.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner: in `--no-keep-going` mode, terminate in-flight lanes immediately after first failure.
+- [x] Unified regression runner: append per-lane artifacts from cleanup path before clearing running lane state.
+- [x] Add focused lit coverage for parallel `--no-keep-going` stop behavior.
+- [x] Run focused validation and record outcomes.
+- [x] JIT block-compat safety: reject stores whose addresses are probe-derived through cast/GEP/load chains (not just direct probe/store forms).
+- [x] Add focused unit coverage for probe-derived store-address rejection.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner: in `--no-keep-going` mode, stop in-flight lanes when the first failure is discovered during final lane-drain (large `--jobs` case).
+- [x] Add focused lit coverage for final-drain stop behavior.
+- [x] Run focused validation and record outcomes.
+- [x] JIT block eligibility: reject non-integer signal payload types to avoid mis-lowering non-scalar layouts through raw-pointer runtime bridge.
+- [x] Add focused unit coverage for non-integer signal payload rejection.
+- [x] Run focused validation and record outcomes.
+- [x] JIT runtime bridge: mask APInt unused high bits after raw-byte drive payload copy to prevent narrow-signal corruption.
+- [x] Add focused unit coverage for narrow-signal high-bit masking in `__arc_sched_drive_signal`.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner resume semantics: do not treat `UNCONFIGURED` as completed; only skip `PASS` lanes under `--resume`.
+- [x] Add focused lit coverage for rerunning previously `UNCONFIGURED` lanes after configuration is fixed.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner log safety: disambiguate per-engine log basenames when distinct `suite_id`s sanitize to the same token.
+- [x] Add focused lit coverage for suite-id log basename collision handling.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner resume safety: evaluate completion by the last observed status per lane (not any historical pass).
+- [x] Add focused lit coverage for same-lane PASS→FAIL history under `--resume` (last status wins).
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner resume log safety: seed log-basename ownership from existing summary rows to avoid overwriting skipped-lane logs on sanitize collisions.
+- [x] Add focused lit coverage for resume log-owner seeding with skipped-pass lane and colliding runnable lane.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner non-resume hygiene: clear stale `out/logs` artifacts when `--resume` is not set.
+- [x] Add focused lit coverage for stale-log cleanup on fresh runs.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner resume-without-summary hygiene: clear stale `out/logs` artifacts when `--resume` is set but no prior summary exists.
+- [x] Add focused lit coverage for stale-log cleanup in resume mode without summary.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner resume parser: normalize CRLF summary fields before status/engine checks.
+- [x] Add focused lit coverage for `--resume` against CRLF `summary.tsv`.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner resume correctness: rerun previously passing lanes when the resolved lane command changes vs prior plan entry.
+- [x] Add focused lit coverage for command-change rerun behavior under `--resume`.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner CLI robustness: validate `--suite-regex` syntax eagerly and emit a clear error for invalid patterns.
+- [x] Add focused lit coverage for invalid `--suite-regex`.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner manifest safety: reject duplicate `suite_id` rows to prevent resume/log/parity key collisions.
+- [x] Add focused lit coverage for duplicate `suite_id` manifest rows.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner adapter safety: reject duplicate adapter-catalog entries for the same `(adapter_id, engine)` key.
+- [x] Add focused lit coverage for duplicate adapter-catalog entries.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner output-path robustness: create parent directories for custom `--retry-summary-file` and `--engine-parity-file` paths.
+- [x] Add focused lit coverage for custom output paths under nested directories.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner manifest validation: reject malformed rows with fewer than required base columns.
+- [x] Add focused lit coverage for malformed manifest row diagnostics.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner manifest validation: reject rows with empty `suite_id` instead of silently skipping to generic selection errors.
+- [x] Add focused lit coverage for empty `suite_id` row diagnostics.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner engine isolation: resolve only active-engine commands (`circt` or `xcelium`) instead of requiring both sides in single-engine mode.
+- [x] Add focused lit coverage for `--engine circt` and `--engine xcelium` with one-sided adapter catalogs.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner manifest validation: reject empty/unsupported profile tokens with row-level diagnostics.
+- [x] Add focused lit coverage for invalid and empty profile columns.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner dry-run semantics: do not fail lanes marked unconfigured when `--dry-run` is enabled (planning mode).
+- [x] Add focused lit coverage for `--dry-run --engine both` with one unconfigured side.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner resume safety: require prior `plan.tsv` for PASS-lane skipping so command-change checks cannot be bypassed when plan state is missing.
+- [x] Add focused lit coverage for `--resume` with PASS summary but missing plan artifact (lane reruns).
+- [x] Run focused validation and record outcomes.
+- [x] Unified orchestrator docs consistency: align `--resume` semantics with implemented PASS-only + command-match behavior.
+- [x] Unified regression runner resume validation: reject malformed `summary.tsv`/`plan.tsv` headers instead of silently parsing incorrect schema.
+- [x] Add focused lit coverage for invalid resume summary/plan headers.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner resume validation: reject malformed `retry-summary.tsv` header before appending resume artifacts.
+- [x] Add focused lit coverage for invalid retry-summary header under `--resume`.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner resume-without-summary hygiene: reset stale `plan.tsv` and `retry-summary.tsv` when `--resume` is set but no prior summary exists.
+- [x] Add focused lit coverage for stale plan/retry reset in resume-without-summary mode.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner manifest validation: reject trailing-comma/empty-token profile lists (e.g. `smoke,`) that bash split would otherwise accept.
+- [x] Add focused lit coverage for trailing-comma profiles tokenization edge case.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner manifest parsing: treat leading-whitespace comment rows as comments instead of malformed data rows.
+- [x] Add focused lit coverage for manifest comments with leading spaces.
+- [x] Run focused validation and record outcomes.
+- [x] Unified regression runner lit maintenance: align stale resume tests with PASS+matching-plan skip contract (seed `plan.tsv` in pre-existing-summary fixtures).
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: require full 6-column summary header schema (not just first 3 columns) before trusting resume state.
+- [x] Add focused lit coverage for truncated `summary.tsv` headers under `--resume`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: reject malformed summary data rows with fewer than 6 TSV columns (not just malformed header row).
+- [x] Add focused lit coverage for malformed resume summary data rows under `--resume`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner manifest profile parsing: reject malformed tokens with internal whitespace (e.g. `s moke`) instead of silently normalizing to valid profile names.
+- [x] Add focused lit coverage for malformed internal-whitespace profile tokens.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner CLI robustness: treat any long option token (`--*`) as missing value when consumed as an argument to value-taking options (instead of misclassifying it as a file/path/value).
+- [x] Add focused lit coverage for missing-arg detection with unknown following long option.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: reject malformed `plan.tsv` data rows with fewer than 3 TSV columns.
+- [x] Add focused lit coverage for malformed resume plan data rows under `--resume`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: reject malformed `retry-summary.tsv` data rows with fewer than 6 TSV columns.
+- [x] Add focused lit coverage for malformed resume retry-summary data rows under `--resume`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: reject summary/plan data rows with missing key fields (`suite_id` or `engine`) instead of silently skipping malformed rows.
+- [x] Add focused lit coverage for missing-key summary/plan rows under `--resume`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: reject retry-summary data rows with missing key fields (`suite_id` or `engine`) instead of accepting structurally malformed history.
+- [x] Add focused lit coverage for missing-key retry-summary rows under `--resume`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: reject `plan.tsv` data rows with missing `command` field instead of silently accepting corrupted command history.
+- [x] Add focused lit coverage for missing-command plan rows under `--resume`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: enforce retry-summary field integrity (`attempts`/`retries_used` numeric constraints, status enum, and numeric `exit_code`) before trusting resume artifacts.
+- [x] Add focused lit coverage for invalid retry-summary attempts/status fields under `--resume`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: enforce strict retry-summary row invariants (`retries_used < attempts`, status enum, numeric exit code) to reject semantically corrupt rows that previously passed schema checks.
+- [x] Add focused lit coverage for invalid retry-summary attempts/status rows under `--resume`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: reject non-canonical `engine` values in summary/plan/retry artifacts (must be `circt|xcelium`) instead of silently accepting malformed lane keys.
+- [x] Add focused lit coverage for invalid engine values across summary/plan/retry resume rows.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: require semantic status/exit consistency in summary/retry artifacts (`PASS|DRYRUN` must have `exit_code=0`) so malformed rows cannot be trusted for resume decisions.
+- [x] Add focused lit coverage for non-zero `exit_code` on `PASS` resume summary/retry rows.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: enforce complementary status/exit consistency in summary/retry artifacts (`FAIL|UNCONFIGURED` must have non-zero `exit_code`) to reject semantically corrupt failure rows.
+- [x] Add focused lit coverage for zero `exit_code` on `FAIL` resume summary/retry rows.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: enforce non-executed status invariants so `UNCONFIGURED|DRYRUN` rows keep execution-neutral counters (`elapsed_sec=0`, `attempts=1`, `retries_used=0`).
+- [x] Add focused lit coverage for malformed `UNCONFIGURED` elapsed/attempt counters in resume summary/retry artifacts.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: enforce executed retry invariants so `PASS|FAIL` rows maintain `retries_used=attempts-1`, rejecting impossible retry histories.
+- [x] Add focused lit coverage for `PASS`/`FAIL` retry rows with mismatched attempts vs retries_used counters.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: require strict header column counts for `summary.tsv` and `plan.tsv` so extra schema columns cannot bypass resume parser expectations.
+- [x] Add focused lit coverage for extra-column summary/plan resume headers.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: require strict data-row column counts for `summary.tsv`, `plan.tsv`, and `retry-summary.tsv` so extra columns cannot be silently ignored by the resume parser.
+- [x] Add focused lit coverage for extra-column resume data rows across summary/plan/retry artifacts.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner manifest validation: enforce maximum schema width (8 columns) so extra manifest columns are rejected instead of silently ignored.
+- [x] Add focused lit coverage for extra-column manifest rows.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner adapter-catalog validation: reject malformed matching rows that do not have exactly 3 columns (`adapter_id`, `engine`, `command_prefix`) instead of silently consuming partial fields.
+- [x] Add focused lit coverage for malformed adapter-catalog row width on a selected `(adapter_id, engine)` key.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner adapter-catalog validation: reject matching rows with empty `command_prefix` and emit a row-level diagnostic instead of surfacing a generic missing-entry error.
+- [x] Add focused lit coverage for empty `command_prefix` in selected adapter-catalog rows.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner adapter-catalog validation: reject matching rows with unsupported engine tokens and emit row-level diagnostics (`expected circt|xcelium`) instead of falling through to missing-entry behavior.
+- [x] Add focused lit coverage for invalid adapter-catalog engine values on selected adapter keys.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner adapter-catalog validation: reject non-canonical engine tokens with leading/trailing whitespace for selected adapters instead of silently treating them as missing entries.
+- [x] Add focused lit coverage for adapter-catalog engine tokens with trailing whitespace.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner adapter-catalog validation: reject non-canonical `adapter_id` tokens with leading/trailing whitespace when they would otherwise match selected adapters after trimming.
+- [x] Add focused lit coverage for adapter-catalog rows with whitespace-padded `adapter_id`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner adapter-catalog validation: reject non-canonical `command_prefix` tokens with leading/trailing whitespace for selected `(adapter_id, engine)` rows instead of silently trimming command text.
+- [x] Add focused lit coverage for adapter-catalog rows with whitespace-padded `command_prefix`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner manifest validation: reject non-canonical `suite_id` tokens with leading/trailing whitespace instead of silently trimming lane keys.
+- [x] Add focused lit coverage for manifest rows with whitespace-padded `suite_id`.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner resume validation: reject non-canonical `suite_id` tokens with leading/trailing whitespace in `summary.tsv`, `plan.tsv`, and `retry-summary.tsv` rows instead of silently accepting drifted lane keys.
+- [x] Add focused lit coverage for whitespace-padded `suite_id` in resume summary/plan/retry rows.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+- [x] Unified regression runner manifest validation: reject non-canonical `circt_adapter` and `xcelium_adapter` tokens with leading/trailing whitespace instead of silently trimming adapter lane selectors.
+- [x] Add focused lit coverage for whitespace-padded manifest adapter IDs on both CIRCT and Xcelium lanes.
+- [x] Run focused and full `run-regression-unified-*` validation and record outcomes.
+
+Validation log:
+
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(missing-arg|missing-arg-next-option|suite-id-path-separators|dry-run-both|jobs-pass|resume-pass-only)'` (PASS)
+- `ninja -C build-test CIRCTSimToolTests` (PASS)
+- `build-test/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter='LLHDProcessInterpreterToolTest.JITDelayEncodeDecodeRoundTrip:LLHDProcessInterpreterToolTest.JITDelayEncodeSaturatesOversizedFields:LLHDProcessInterpreterToolTest.JITDriveFutureDelayDefersToNBA:LLHDProcessInterpreterToolTest.JITHotBlockUsesResumeBlockWait:LLHDProcessInterpreterToolTest.JITRejectsHotBlockWithBranchTerminator:LLHDProcessInterpreterToolTest.FinalizeProcessClearsJITBlockSpecs'` (PASS)
+- `ninja -C build-test circt-sim` (PASS; no work needed)
+- `ninja -C build-test CIRCTSimToolTests` (PASS, after CMake reconfigure)
+- `build-test/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter='LLHDProcessInterpreterToolTest.JITDelayEncodeDecodeRoundTrip:LLHDProcessInterpreterToolTest.JITDelayEncodeSaturatesOversizedFields:LLHDProcessInterpreterToolTest.JITDriveFutureDelayDefersToNBA:LLHDProcessInterpreterToolTest.JITHotBlockUsesResumeBlockWait:LLHDProcessInterpreterToolTest.JITRejectsHotBlockWithBranchTerminator:LLHDProcessInterpreterToolTest.FinalizeProcessClearsJITBlockSpecs:LLHDProcessInterpreterToolTest.JITDeoptClearsCachedBlockSpec'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(no-keep-going-stop|jobs-pass|missing-arg-next-option|suite-id-path-separators)'` (PASS)
+- `ninja -C build-test CIRCTSimToolTests` (PASS)
+- `build-test/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter='LLHDProcessInterpreterToolTest.JITRejectsStoreAddressDerivedFromProbe:LLHDProcessInterpreterToolTest.JITRejectsHotBlockWithBranchTerminator:LLHDProcessInterpreterToolTest.JITHotBlockUsesResumeBlockWait'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(no-keep-going-stop|no-keep-going-drain-stop|jobs-pass|missing-arg-next-option|suite-id-path-separators)'` (PASS)
+- `ninja -C build-test CIRCTSimToolTests` (PASS)
+- `build-test/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter='LLHDProcessInterpreterToolTest.JITRejectsNonIntegerSignalPayloadType:LLHDProcessInterpreterToolTest.JITRejectsStoreAddressDerivedFromProbe:LLHDProcessInterpreterToolTest.JITHotBlockUsesResumeBlockWait:LLHDProcessInterpreterToolTest.JITRejectsHotBlockWithBranchTerminator'` (PASS)
+- `ninja -C build-test CIRCTSimToolTests` (PASS)
+- `build-test/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter='LLHDProcessInterpreterToolTest.JITDriveClearsUnusedHighBits:LLHDProcessInterpreterToolTest.JITDriveFutureDelayDefersToNBA:LLHDProcessInterpreterToolTest.JITRejectsNonIntegerSignalPayloadType'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-unconfigured-rerun|resume-pass-only|xcelium-unconfigured|jobs-pass|missing-arg-next-option)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(suite-id-path-separators|suite-id-log-collision|jobs-pass|missing-arg-next-option)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-last-status-wins|resume-unconfigured-rerun|resume-pass-only|jobs-pass|missing-arg-next-option)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-log-owner-seeding|suite-id-log-collision|resume-last-status-wins|resume-pass-only|jobs-pass)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(non-resume-clears-stale-logs|resume-log-owner-seeding|suite-id-log-collision|resume-last-status-wins|jobs-pass)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-no-summary-clears-stale-logs|non-resume-clears-stale-logs|resume-log-owner-seeding|resume-last-status-wins|jobs-pass)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-crlf-summary|resume-no-summary-clears-stale-logs|resume-log-owner-seeding|resume-last-status-wins|resume-pass-only)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-command-change-rerun|resume-pass-only|resume-last-status-wins|resume-log-owner-seeding|resume-crlf-summary)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(suite-regex-invalid|shard-selection|jobs-invalid|missing-arg-next-option|resume-command-change-rerun)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(duplicate-suite-id|suite-regex-invalid|shard-selection|jobs-invalid|missing-arg-next-option)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(adapter-catalog-duplicate-entry|adapter-catalog-pass|adapter-catalog-missing-entry|duplicate-suite-id|suite-regex-invalid)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(custom-retry-summary-parent|custom-parity-parent|adapter-catalog-duplicate-entry|duplicate-suite-id|suite-regex-invalid)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(manifest-malformed-columns|custom-retry-summary-parent|custom-parity-parent|adapter-catalog-duplicate-entry|duplicate-suite-id)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(manifest-empty-suite-id|manifest-malformed-columns|custom-retry-summary-parent|adapter-catalog-duplicate-entry|duplicate-suite-id)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(engine-circt-ignores-xcelium-resolution|engine-xcelium-ignores-circt-resolution|manifest-empty-suite-id|adapter-catalog-pass|adapter-catalog-missing-entry)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(manifest-profile-invalid|manifest-profile-empty|engine-circt-ignores-xcelium-resolution|manifest-empty-suite-id|manifest-malformed-columns)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(dry-run-unconfigured-pass|dry-run-both|xcelium-unconfigured|manifest-profile-invalid|engine-circt-ignores-xcelium-resolution)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-no-plan-rerun|resume-command-change-rerun|resume-pass-only|resume-no-summary-clears-stale-logs|manifest-profile-invalid)'` (PASS)
+- `rg -n "PASS or UNCONFIGURED|matching prior planned command" docs/UNIFIED_REGRESSION_ORCHESTRATOR.md` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-invalid-summary-header|resume-invalid-plan-header|resume-no-plan-rerun|resume-command-change-rerun|resume-pass-only)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-invalid-retry-header|resume-invalid-summary-header|resume-invalid-plan-header|resume-no-plan-rerun|resume-pass-only)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-no-summary-resets-plan-retry|resume-no-summary-clears-stale-logs|resume-invalid-retry-header|resume-no-plan-rerun|resume-pass-only)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(manifest-profile-trailing-comma|manifest-profile-invalid|manifest-profile-empty|manifest-malformed-columns|manifest-empty-suite-id)'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(manifest-comment-leading-space|manifest-profile-trailing-comma|manifest-profile-invalid|manifest-empty-suite-id|manifest-malformed-columns)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-crlf-summary|resume-log-owner-seeding|resume-pass-only|resume-no-plan-rerun)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-invalid-summary-header|resume-short-summary-header|resume-invalid-plan-header|resume-no-plan-rerun|resume-pass-only)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-malformed-summary-row|resume-invalid-summary-header|resume-short-summary-header|resume-pass-only|resume-no-plan-rerun)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(manifest-profile-internal-space|manifest-profile-invalid|manifest-profile-empty|manifest-profile-trailing-comma|manifest-empty-suite-id|manifest-malformed-columns)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(missing-arg|missing-arg-next-option|missing-arg-next-unknown-option|jobs-invalid|suite-regex-invalid)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-malformed-plan-row|resume-invalid-plan-header|resume-no-plan-rerun|resume-pass-only|resume-command-change-rerun)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-malformed-retry-row|resume-invalid-retry-header|resume-malformed-plan-row|resume-malformed-summary-row|resume-pass-only)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-summary-row-missing-key|resume-plan-row-missing-key|resume-malformed-summary-row|resume-malformed-plan-row|resume-pass-only)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-retry-row-missing-key|resume-malformed-retry-row|resume-invalid-retry-header|resume-pass-only|resume-summary-row-missing-key)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-plan-row-missing-command|resume-plan-row-missing-key|resume-malformed-plan-row|resume-invalid-plan-header|resume-pass-only)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-retry-row-invalid-attempts|resume-retry-row-invalid-status|resume-retry-row-missing-key|resume-malformed-retry-row|resume-invalid-retry-header)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(manifest-circt-adapter-whitespace|manifest-xcelium-adapter-whitespace|manifest-suite-id-whitespace|adapter-catalog-pass|engine-circt-ignores-xcelium-resolution|engine-xcelium-ignores-circt-resolution)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-summary-row-suite-id-whitespace|resume-plan-row-suite-id-whitespace|resume-retry-row-suite-id-whitespace|resume-summary-row-missing-key|resume-plan-row-missing-key|resume-retry-row-missing-key)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(adapter-catalog-command-prefix-whitespace|adapter-catalog-adapter-id-whitespace|adapter-catalog-engine-whitespace|adapter-catalog-invalid-engine|adapter-catalog-empty-command-prefix|adapter-catalog-malformed-row|adapter-catalog-pass)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(manifest-suite-id-whitespace|manifest-empty-suite-id|manifest-malformed-columns|manifest-extra-columns|manifest-profile-invalid|manifest-comment-leading-space)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-summary-row-pass-nonzero-exit|resume-retry-row-pass-nonzero-exit|resume-summary-row-invalid-exit-code|resume-retry-row-invalid-status|resume-retry-row-invalid-attempts)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-summary-row-fail-zero-exit|resume-retry-row-fail-zero-exit|resume-summary-row-pass-nonzero-exit|resume-retry-row-pass-nonzero-exit|resume-summary-row-invalid-status|resume-retry-row-invalid-status)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-summary-row-unconfigured-nonzero-elapsed|resume-retry-row-unconfigured-invalid-attempts|resume-summary-row-fail-zero-exit|resume-retry-row-fail-zero-exit|resume-summary-row-pass-nonzero-exit|resume-retry-row-pass-nonzero-exit)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-retry-row-pass-retries-mismatch|resume-retry-row-fail-retries-mismatch|resume-retry-row-unconfigured-invalid-attempts|resume-summary-row-unconfigured-nonzero-elapsed|resume-summary-row-pass-nonzero-exit|resume-retry-row-pass-nonzero-exit)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-summary-header-extra-column|resume-plan-header-extra-column|resume-short-summary-header|resume-invalid-summary-header|resume-invalid-plan-header|resume-pass-only)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-summary-row-extra-column|resume-plan-row-extra-column|resume-retry-row-extra-column|resume-summary-row-missing-key|resume-plan-row-missing-key|resume-retry-row-missing-key)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(manifest-extra-columns|manifest-malformed-columns|manifest-empty-suite-id|manifest-profile-invalid|manifest-comment-leading-space)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(adapter-catalog-malformed-row|adapter-catalog-pass|adapter-catalog-missing-entry|adapter-catalog-duplicate-entry|manifest-extra-columns)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(adapter-catalog-empty-command-prefix|adapter-catalog-malformed-row|adapter-catalog-pass|adapter-catalog-missing-entry|adapter-catalog-duplicate-entry)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(adapter-catalog-invalid-engine|adapter-catalog-empty-command-prefix|adapter-catalog-malformed-row|adapter-catalog-pass|adapter-catalog-missing-entry|adapter-catalog-duplicate-entry)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(adapter-catalog-engine-whitespace|adapter-catalog-invalid-engine|adapter-catalog-empty-command-prefix|adapter-catalog-malformed-row|adapter-catalog-pass|adapter-catalog-missing-entry)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(adapter-catalog-adapter-id-whitespace|adapter-catalog-engine-whitespace|adapter-catalog-invalid-engine|adapter-catalog-empty-command-prefix|adapter-catalog-malformed-row|adapter-catalog-pass)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-summary-row-invalid-engine|resume-plan-row-invalid-engine|resume-retry-row-invalid-engine|resume-summary-row-missing-key|resume-plan-row-missing-key|resume-retry-row-missing-key)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)
+- `bash -n utils/run_regression_unified.sh` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-(resume-retry-row-invalid-attempts|resume-retry-row-invalid-status|resume-retry-row-missing-key|resume-malformed-retry-row|resume-invalid-retry-header)'` (PASS)
+- `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-'` (PASS)

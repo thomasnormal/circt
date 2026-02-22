@@ -1,0 +1,4 @@
+suite_id	default_root	bmc_runner	bmc_args	lec_runner	lec_args	profiles	notes
+opentitan-top	~/opentitan	utils/run_opentitan_circt_bmc.py	-	utils/run_opentitan_circt_lec.py	-	nightly,full	Top-level OpenTitan formal harness lane
+opentitan-fpv	~/opentitan	utils/run_opentitan_fpv_circt_bmc.py	-	utils/run_opentitan_fpv_circt_lec.py	-	nightly,full	FPV-focused OpenTitan formal lane
+opentitan-connectivity	~/opentitan	utils/run_opentitan_connectivity_circt_bmc.py	-	utils/run_opentitan_connectivity_circt_lec.py	-	nightly,full	Connectivity-focused OpenTitan formal lane

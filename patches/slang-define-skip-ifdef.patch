@@ -1,0 +1,71 @@
+diff --git a/source/parsing/Preprocessor.cpp b/source/parsing/Preprocessor.cpp
+--- a/source/parsing/Preprocessor.cpp
++++ b/source/parsing/Preprocessor.cpp
+@@ -833,6 +833,59 @@ Trivia Preprocessor::parseBranchDirective(Token directive,
+                     case SyntaxKind::EndIfDirective:
+                         done = true;
+                         break;
++                    case SyntaxKind::DefineDirective: {
++                        // When skipping a not-taken branch and we encounter a
++                        // `define directive, we must consume the entire macro
++                        // body (which may span multiple lines via line
++                        // continuations).  Without this, directives inside
++                        // the macro body (e.g. `ifdef) would be incorrectly
++                        // treated as real conditional directives.
++                        scratchTokenBuffer.push_back(token);
++                        bool lastWasContinuation = false;
++                        while (true) {
++                            auto t = nextRaw();
++                            if (t.kind == TokenKind::EndOfFile) {
++                                currentToken = t;
++                                goto outerBreak;
++                            }
++                            if (t.kind == TokenKind::LineContinuation) {
++                                lastWasContinuation = false;
++                                scratchTokenBuffer.push_back(t);
++                                continue;
++                            }
++                            // Check trivia for end-of-line not preceded by
++                            // line continuation -- that marks the end of the
++                            // macro definition.
++                            bool endOfDefine = false;
++                            for (const auto& trivia : t.trivia()) {
++                                switch (trivia.kind) {
++                                    case TriviaKind::EndOfLine:
++                                        if (lastWasContinuation)
++                                            lastWasContinuation = false;
++                                        else
++                                            endOfDefine = true;
++                                        break;
++                                    case TriviaKind::LineComment:
++                                        lastWasContinuation =
++                                            (!trivia.getRawText().empty() &&
++                                             trivia.getRawText().back() == '\\');
++                                        break;
++                                    default:
++                                        lastWasContinuation = false;
++                                        break;
++                                }
++                                if (endOfDefine)
++                                    break;
++                            }
++                            if (endOfDefine) {
++                                // Put back the token that follows the define
++                                currentToken = t;
++                                break;
++                            }
++                            scratchTokenBuffer.push_back(t);
++                        }
++                        continue; // continue the outer skip loop
++                    }
+                     default:
+                         break;
+                 }
+@@ -845,6 +898,7 @@ Trivia Preprocessor::parseBranchDirective(Token directive,
+             }
+             scratchTokenBuffer.push_back(token);
+         }
++        outerBreak:;
+     }
+
+     SyntaxNode* syntax;

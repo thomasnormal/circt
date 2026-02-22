@@ -1,1 +1,0 @@
-PASS	16.12--property	/home/thomas-ahle/sv-tests/tests/chapter-16/16.12--property.sv

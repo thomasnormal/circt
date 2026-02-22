@@ -32,3 +32,6 @@ formal-results-*
 
 # External software
 /ext
+
+.claude
+.codex

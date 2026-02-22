@@ -1,0 +1,2 @@
+suite_id	default_root	bmc_runner	bmc_args	lec_runner	lec_args	profiles	notes
+sv-tests	~/sv-tests	utils/run_sv_tests_circt_bmc.sh	-	utils/run_sv_tests_circt_lec.sh	-	nightly,full	Primary sv-tests formal regression lane
