@@ -2321,6 +2321,9 @@ Value Context::convertLTLTimingControl(const slang::ast::TimingControl &ctrl,
   auto &builder = this->builder;
   auto loc = this->convertLocation(ctrl.sourceRange);
   LTLClockControlVisitor visitor{*this, loc, builder, seqOrPro};
-  return ctrl.visit(visitor);
+  Value result = ctrl.visit(visitor);
+  if (auto *op = result ? result.getDefiningOp() : nullptr)
+    op->setAttr("sva.explicit_clocking", builder.getUnitAttr());
+  return result;
 }
 // NOLINTEND(misc-no-recursion)

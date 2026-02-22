@@ -724,3 +724,30 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv` (`real=0.034s`)
+
+- Iteration update (avoid default re-clock of composed explicit clocks):
+  - realization:
+    - explicit assertion clock lists that lower to composed roots (e.g.
+      `ltl.or` of `ltl.clock`s) were treated as "unclocked" by defaulting logic
+      because only direct `ltl.clock` roots were recognized.
+    - this incorrectly reapplied default clocking to explicit mixed clocks,
+      changing assertion timing semantics.
+  - implemented:
+    - explicit timing-control conversion now tags root ops with
+      `sva.explicit_clocking`.
+    - assertion default clock application now skips values tagged explicit,
+      and still skips values that contain explicit clocks through graph scan.
+    - strengthened regression:
+      - `test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+        now checks the mixed explicit clock result is asserted directly and
+        not rewrapped by an extra `ltl.clock`.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv` (`real=0.008s`)
