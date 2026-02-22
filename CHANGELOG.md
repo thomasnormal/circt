@@ -1,3 +1,43 @@
+## Iteration 1625 - February 22, 2026
+
+### [Formal][OVL] Expand semantic OVL checker coverage to 26 pass/fail obligations
+
+1. **Added four new semantic checker wrappers**
+   - new wrapper modules:
+     - `utils/ovl_semantic/wrappers/ovl_sem_change.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_one_cold.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_mutex.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_next_state.sv`
+   - new manifest entries in `utils/ovl_semantic/manifest.tsv`:
+     - `ovl_sem_change`
+     - `ovl_sem_one_cold`
+     - `ovl_sem_mutex`
+     - `ovl_sem_next_state`
+
+2. **Hardened wrapper stimuli for stable SAT/UNSAT polarity**
+   - tightened `ovl_change` and `ovl_next_state` stimuli after first red runs
+     exposed fragile trigger timing and bound-end over-triggering.
+   - ensured each new case now contributes deterministic pass/fail behavior in
+     the semantic lane.
+
+3. **Validation**
+   - targeted new cases:
+     - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(change|one_cold|mutex|next_state)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - result:
+       - `ovl semantic BMC summary: 8 tests, failures=0, xfail=0, xpass=0, skipped=0`
+   - full semantic lane:
+     - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - result:
+       - `ovl semantic BMC summary: 26 tests, failures=0, xfail=0, xpass=0, skipped=0`
+   - full OVL matrix:
+     - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-add4`
+     - result:
+       - `std_ovl/BMC PASS 110/110`
+       - `std_ovl/BMC_SEMANTIC PASS 26/26`
+   - profiling sample:
+     - `time OUT=/tmp/ovl-sem-profile2.log utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - `real=2.866s`
+
 ## Iteration 1624 - February 22, 2026
 
 ### [Formal][OVL][BMC] Fix `ovl_next` semantic fail-mode vacuity under `--assume-known-inputs`
