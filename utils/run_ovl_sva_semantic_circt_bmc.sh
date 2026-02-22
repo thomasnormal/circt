@@ -77,19 +77,23 @@ run_case_mode() {
   local bound="$6"
   local known_gap="$7"
   local is_fail_result_gap=0
+  local is_pass_result_gap=0
   local is_tool_gap=0
-  local is_any_gap=0
+  local is_result_gap=0
   case "$known_gap" in
     1|fail)
       is_fail_result_gap=1
+      ;;
+    pass)
+      is_pass_result_gap=1
       ;;
     tool)
       is_tool_gap=1
       ;;
     any)
       is_fail_result_gap=1
+      is_pass_result_gap=1
       is_tool_gap=1
-      is_any_gap=1
       ;;
   esac
 
@@ -174,13 +178,15 @@ run_case_mode() {
     got_result="UNSAT"
   fi
 
-  local is_fail_gap=0
   if [[ "$mode" == "fail" && "$is_fail_result_gap" == "1" ]]; then
-    is_fail_gap=1
+    is_result_gap=1
+  fi
+  if [[ "$mode" == "pass" && "$is_pass_result_gap" == "1" ]]; then
+    is_result_gap=1
   fi
 
   if [[ "$got_result" != "$expect_result" ]]; then
-    if [[ "$is_fail_gap" == "1" || "$is_any_gap" == "1" ]]; then
+    if [[ "$is_result_gap" == "1" ]]; then
       xfail=$((xfail + 1))
       if [[ -n "$OUT" ]]; then
         printf 'XFAIL(%s): %s [%s expected=%s got=%s]\n' "$mode" "$case_id" "KNOWN_GAP" "$expect_result" "${got_result:-NONE}" >> "$OUT"
@@ -194,7 +200,7 @@ run_case_mode() {
     return 0
   fi
 
-  if [[ "$is_fail_gap" == "1" || "$is_tool_gap" == "1" || "$is_any_gap" == "1" ]]; then
+  if [[ "$is_result_gap" == "1" || "$is_tool_gap" == "1" ]]; then
     xpass=$((xpass + 1))
     if [[ -n "$OUT" ]]; then
       printf 'XPASS(%s): %s\n' "$mode" "$case_id" >> "$OUT"
