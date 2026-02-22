@@ -1,3 +1,42 @@
+## Iteration 1614 - February 22, 2026
+
+### [ImportVerilog][SVA] Support associative-array equality operators in assertions
+
+1. **Implemented associative-array dynamic equality lowering**
+   (`lib/Conversion/ImportVerilog/Expressions.cpp`):
+   - extended dynamic unpacked equality/case-equality helpers to include:
+     - `moore::AssocArrayType`
+     - `moore::WildcardAssocArrayType`
+   - integrated these types into recursive aggregate comparison for:
+     - unpacked struct/union fields,
+     - dynamic aggregate element recursion,
+     - top-level binary operator lowering for `==`, `!=`, `===`, `!==`.
+
+2. **Behavioral fix**
+   - assertions like:
+     - `assert property (@(posedge clk) aa == bb);`
+     - `assert property (@(posedge clk) aa === bb);`
+     where `aa/bb` are associative arrays, now lower through aggregate compare
+     logic instead of failing with:
+     - `expression of type '!moore.assoc_array<...>' cannot be cast to a simple bit vector`.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-assoc-array-equality.sv`
+   - covers `==`, `!=`, `===`, `!==` on associative arrays in clocked
+     assertions.
+
+4. **Validation**
+   - `ninja -C build-test circt-translate`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality.sv`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS.
+   - formal regression smoke:
+     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality.sv >/dev/null` (`real=0.026s`, `user=0.003s`, `sys=0.005s`).
+
 ## Iteration 1613 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support associative-array `$stable/$changed` sampled lowering

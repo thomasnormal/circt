@@ -178,6 +178,9 @@ Additional compile-only or XFAIL expectations live in
   - `assert property` - Immediate and concurrent
   - `assume property` - Assumptions
   - `cover property` - Coverage
+- **SVA expression parity hardening**:
+  - associative-array equality/case-equality (`==`, `!=`, `===`, `!==`) in
+    assertion expressions now lower via aggregate element comparison
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:

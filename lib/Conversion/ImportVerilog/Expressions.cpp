@@ -171,7 +171,8 @@ static Value buildUnpackedAggregateLogicalEq(Context &context, Location loc,
               moore::UnpackedUnionType>(member.type)) {
         fieldEq =
             buildUnpackedAggregateLogicalEq(context, loc, lhsField, rhsField);
-      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                     moore::AssocArrayType, moore::WildcardAssocArrayType>(
                      member.type)) {
         fieldEq = buildDynamicArrayLogicalEq(context, loc, lhsField, rhsField);
       } else if (isa<moore::StringType>(member.type) ||
@@ -234,7 +235,8 @@ static Value buildUnpackedAggregateLogicalEq(Context &context, Location loc,
               moore::UnpackedUnionType>(member.type)) {
         fieldEq =
             buildUnpackedAggregateLogicalEq(context, loc, lhsField, rhsField);
-      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                     moore::AssocArrayType, moore::WildcardAssocArrayType>(
                      member.type)) {
         fieldEq = buildDynamicArrayLogicalEq(context, loc, lhsField, rhsField);
       } else if (isa<moore::StringType>(member.type) ||
@@ -288,7 +290,8 @@ static Value buildUnpackedAggregateLogicalEq(Context &context, Location loc,
   return {};
 }
 
-/// Build logical equality for dynamic unpacked aggregates (open arrays/queues).
+/// Build logical equality for dynamic unpacked aggregates
+/// (open arrays/queues/assoc arrays).
 static Value buildDynamicArrayLogicalEq(Context &context, Location loc, Value lhs,
                                         Value rhs) {
   auto &builder = context.builder;
@@ -303,6 +306,11 @@ static Value buildDynamicArrayLogicalEq(Context &context, Location loc, Value lh
     elemTy = openTy.getElementType();
   else if (auto queueTy = dyn_cast<moore::QueueType>(lhs.getType()))
     elemTy = queueTy.getElementType();
+  else if (auto assocTy = dyn_cast<moore::AssocArrayType>(lhs.getType()))
+    elemTy = assocTy.getElementType();
+  else if (auto assocTy =
+               dyn_cast<moore::WildcardAssocArrayType>(lhs.getType()))
+    elemTy = assocTy.getElementType();
   else
     return {};
 
@@ -334,7 +342,9 @@ static Value buildDynamicArrayLogicalEq(Context &context, Location loc, Value lh
     if (isa<moore::UnpackedStructType, moore::UnpackedArrayType,
             moore::UnpackedUnionType>(elemTy)) {
       elemEq = buildUnpackedAggregateLogicalEq(context, loc, lhsElem, rhsElem);
-    } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(elemTy)) {
+    } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                   moore::AssocArrayType, moore::WildcardAssocArrayType>(
+                   elemTy)) {
       elemEq = buildDynamicArrayLogicalEq(context, loc, lhsElem, rhsElem);
     } else if (isa<moore::StringType>(elemTy) || isa<moore::FormatStringType>(elemTy)) {
       auto strTy = moore::StringType::get(context.getContext());
@@ -418,7 +428,8 @@ static Value buildUnpackedAggregateCaseEq(Context &context, Location loc,
       if (isa<moore::UnpackedStructType, moore::UnpackedArrayType,
               moore::UnpackedUnionType>(member.type)) {
         fieldEq = buildUnpackedAggregateCaseEq(context, loc, lhsField, rhsField);
-      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                     moore::AssocArrayType, moore::WildcardAssocArrayType>(
                      member.type)) {
         fieldEq = buildDynamicArrayCaseEq(context, loc, lhsField, rhsField);
       } else if (isa<moore::StringType>(member.type) ||
@@ -480,7 +491,8 @@ static Value buildUnpackedAggregateCaseEq(Context &context, Location loc,
       if (isa<moore::UnpackedStructType, moore::UnpackedArrayType,
               moore::UnpackedUnionType>(member.type)) {
         fieldEq = buildUnpackedAggregateCaseEq(context, loc, lhsField, rhsField);
-      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                     moore::AssocArrayType, moore::WildcardAssocArrayType>(
                      member.type)) {
         fieldEq = buildDynamicArrayCaseEq(context, loc, lhsField, rhsField);
       } else if (isa<moore::StringType>(member.type) ||
@@ -534,7 +546,8 @@ static Value buildUnpackedAggregateCaseEq(Context &context, Location loc,
   return {};
 }
 
-/// Build case equality for dynamic unpacked aggregates (open arrays/queues).
+/// Build case equality for dynamic unpacked aggregates
+/// (open arrays/queues/assoc arrays).
 static Value buildDynamicArrayCaseEq(Context &context, Location loc, Value lhs,
                                      Value rhs) {
   auto &builder = context.builder;
@@ -549,6 +562,11 @@ static Value buildDynamicArrayCaseEq(Context &context, Location loc, Value lhs,
     elemTy = openTy.getElementType();
   else if (auto queueTy = dyn_cast<moore::QueueType>(lhs.getType()))
     elemTy = queueTy.getElementType();
+  else if (auto assocTy = dyn_cast<moore::AssocArrayType>(lhs.getType()))
+    elemTy = assocTy.getElementType();
+  else if (auto assocTy =
+               dyn_cast<moore::WildcardAssocArrayType>(lhs.getType()))
+    elemTy = assocTy.getElementType();
   else
     return {};
 
@@ -580,7 +598,9 @@ static Value buildDynamicArrayCaseEq(Context &context, Location loc, Value lhs,
     if (isa<moore::UnpackedStructType, moore::UnpackedArrayType,
             moore::UnpackedUnionType>(elemTy)) {
       elemEq = buildUnpackedAggregateCaseEq(context, loc, lhsElem, rhsElem);
-    } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(elemTy)) {
+    } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                   moore::AssocArrayType, moore::WildcardAssocArrayType>(
+                   elemTy)) {
       elemEq = buildDynamicArrayCaseEq(context, loc, lhsElem, rhsElem);
     } else if (isa<moore::StringType>(elemTy) || isa<moore::FormatStringType>(elemTy)) {
       auto strTy = moore::StringType::get(context.getContext());
@@ -3142,9 +3162,11 @@ struct RvalueExprVisitor : public ExprVisitor {
         }
         return eq;
       }
-      else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+      else if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                   moore::AssocArrayType, moore::WildcardAssocArrayType>(
                    lhs.getType()) ||
-               isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+               isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                   moore::AssocArrayType, moore::WildcardAssocArrayType>(
                    rhs.getType())) {
         auto eq = buildDynamicArrayLogicalEq(context, loc, lhs, rhs);
         if (!eq) {
@@ -3301,9 +3323,11 @@ struct RvalueExprVisitor : public ExprVisitor {
         }
         return moore::NotOp::create(builder, loc, eq);
       }
-      else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+      else if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                   moore::AssocArrayType, moore::WildcardAssocArrayType>(
                    lhs.getType()) ||
-               isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+               isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                   moore::AssocArrayType, moore::WildcardAssocArrayType>(
                    rhs.getType())) {
         auto eq = buildDynamicArrayLogicalEq(context, loc, lhs, rhs);
         if (!eq) {
@@ -3440,7 +3464,9 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
         return moore::UArrayCmpOp::create(
             builder, loc, moore::UArrayCmpPredicate::eq, lhs, rhs);
-      if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(lhs.getType())) {
+      if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+              moore::AssocArrayType, moore::WildcardAssocArrayType>(
+              lhs.getType())) {
         auto eq = buildDynamicArrayCaseEq(context, loc, lhs, rhs);
         if (!eq) {
           mlir::emitError(loc)
@@ -3477,7 +3503,9 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
         return moore::UArrayCmpOp::create(
             builder, loc, moore::UArrayCmpPredicate::ne, lhs, rhs);
-      if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(lhs.getType())) {
+      if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+              moore::AssocArrayType, moore::WildcardAssocArrayType>(
+              lhs.getType())) {
         auto eq = buildDynamicArrayCaseEq(context, loc, lhs, rhs);
         if (!eq) {
           mlir::emitError(loc)

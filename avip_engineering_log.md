@@ -4489,3 +4489,38 @@ Based on these findings, the circt-sim compiled process architecture:
    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS
 4. Formal smoke:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS
+
+## 2026-02-22 Session: Assoc-array equality operator closure in assertions
+
+### Problem
+1. Direct associative-array equality in assertions still failed:
+   - `error: expression of type '!moore.assoc_array<i32, i32>' cannot be cast to a simple bit vector`
+2. This blocked `==`, `!=`, `===`, `!==` parity for associative arrays in SVA
+   boolean contexts.
+
+### Realizations / Surprises
+1. Dynamic aggregate equality helpers already existed for open arrays and
+   queues, but assoc-array types were not included in helper type dispatch or
+   operator entry-point checks.
+2. A single implementation pass was needed across:
+   - top-level binary operator dispatch,
+   - recursive struct/union field comparisons,
+   - dynamic element recursion helpers.
+
+### Fix
+1. Extended dynamic equality/case-equality helpers in
+   `lib/Conversion/ImportVerilog/Expressions.cpp` to include:
+   - `moore::AssocArrayType`
+   - `moore::WildcardAssocArrayType`
+2. Added new regression:
+   - `test/Conversion/ImportVerilog/sva-assoc-array-equality.sv`
+   covering `==`, `!=`, `===`, `!==` in clocked assertions.
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality.sv`: PASS
+3. Compatibility checks:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS
