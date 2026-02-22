@@ -244,6 +244,10 @@ Additional compile-only or XFAIL expectations live in
     effects:
     - `$fflush` lowers to `moore.builtin.fflush`
     - `$fclose` lowers to `moore.builtin.fclose`
+  - sequence match-item control tasks now preserve side effects:
+    - `$finish` lowers to `moore.builtin.finish`
+    - `$stop` lowers to `moore.builtin.stop`
+    - `$dumpvars` lowers to display marker with `circt.dumpvars` attribute
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
