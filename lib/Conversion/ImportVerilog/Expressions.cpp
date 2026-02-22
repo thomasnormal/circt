@@ -8858,16 +8858,44 @@ struct LvalueExprVisitor : public ExprVisitor {
           return pending;
 
         auto *binding = context.lookupAssertionLocalVarBinding(local);
-        if (!binding) {
-          mlir::emitError(loc, "local assertion variable referenced before "
-                               "assignment");
+        auto createDefaultLocalInit = [&]() -> Value {
+          auto loweredTy = context.convertType(*expr.type);
+          if (!loweredTy)
+            return {};
+          if (auto refTy = dyn_cast<moore::RefType>(loweredTy))
+            loweredTy = refTy.getNestedType();
+          if (auto intTy = dyn_cast<moore::IntType>(loweredTy))
+            return moore::ConstantOp::create(builder, loc, intTy, 0);
+          if (isa<moore::StringType>(loweredTy)) {
+            auto intTy = moore::IntType::getInt(context.getContext(), 8);
+            auto immInt =
+                moore::ConstantStringOp::create(builder, loc, intTy, "")
+                    .getResult();
+            return moore::IntToStringOp::create(builder, loc, immInt)
+                .getResult();
+          }
+          mlir::emitError(loc, "unsupported local assertion variable type")
+              << loweredTy;
           return {};
-        }
+        };
         auto offset = context.getAssertionSequenceOffset();
+        if (!binding) {
+          auto init = createDefaultLocalInit();
+          if (!init)
+            return {};
+          context.setAssertionLocalVarBinding(local, init, offset);
+          binding = context.lookupAssertionLocalVarBinding(local);
+          if (!binding)
+            return {};
+        }
         if (offset < binding->offset) {
-          mlir::emitError(loc, "local assertion variable referenced before "
-                               "assignment time");
-          return {};
+          auto init = createDefaultLocalInit();
+          if (!init)
+            return {};
+          context.setAssertionLocalVarBinding(local, init, offset);
+          binding = context.lookupAssertionLocalVarBinding(local);
+          if (!binding)
+            return {};
         }
         Value currentValue = binding->value;
         if (offset > binding->offset) {

@@ -77042,3 +77042,34 @@ See CHANGELOG.md on recent progress.
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv` (`real=0.007s`, `user=0.004s`, `sys=0.003s`)
+123. ImportVerilog SVA: default-init uninitialized local output-arg lvalues
+     (February 22, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/Expressions.cpp`
+      - local assertion vars referenced as lvalues in assertion expressions now
+        auto-initialize at current sequence offset when no sampled binding is
+        available (or when referenced earlier than previous binding).
+      - default values are type-directed:
+        - integer-like locals: `0`
+        - string locals: empty string `""`
+      - this makes value-returning match-item output-arg calls robust when a
+        local output variable is first written by the call itself.
+    - regression coverage:
+      - updated:
+        - `test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv`
+      - failing-first behavior reproduced prior to fix:
+        - `local assertion variable referenced before assignment`.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+        - `ninja -C build-test circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv --check-prefix=DIAG`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - import-verilog regression cadence:
+        - `ninja -C build-test check-circt-conversion-importverilog` (baseline
+          workspace run; failed with 45 unrelated tests)
+      - profiling sample:
+        - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv` (`real=0.007s`, `user=0.003s`, `sys=0.004s`)
