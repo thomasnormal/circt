@@ -1,3 +1,37 @@
+## Iteration 1570 - February 22, 2026
+
+### [ImportVerilog][SVA] Lower open-range property `s_eventually` / `always`
+
+1. **Implemented lowering for parser-accepted open-range property forms**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - added support for:
+     - `s_eventually [m:$] p` where `p` is property-typed
+     - `always [m:$] p` where `p` is property-typed
+   - lowering:
+     - `s_eventually [m:$] p` -> `eventually(shiftPropertyBy(p, m))`
+     - `always [m:$] p` -> `not(eventually(not(shiftPropertyBy(p, m))))`
+   - this removes importer hard errors on open-range unary property forms that
+     are accepted by Slang.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-open-range-property.sv`
+   - nearby guard coverage revalidated:
+     - `test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+     - `test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+     - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-open-range-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-open-range-property.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-open-range-property.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unbounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-open-range-property.sv >/dev/null` (`real=0.007s`, `user=0.002s`, `sys=0.005s`).
+
 ## Iteration 1569 - February 22, 2026
 
 ### [ImportVerilog][SVA] Lower unbounded property `always` and harden unary range handling

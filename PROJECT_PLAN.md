@@ -134,6 +134,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers unbounded `always p` on property operands via
    duality (`not(eventually(not p))`) and adds explicit diagnostics to block
    unsound open upper-bound property-range lowering in unary wrappers.
+14. **SVA open-range property unary support** (Feb 22, 2026):
+   ImportVerilog now lowers parser-accepted open-range property forms
+   `s_eventually [m:$]` and `always [m:$]` using shifted-property unbounded
+   eventual/always encodings.
 10. **SVA `$future_gclk` temporal semantics fix** (Feb 21, 2026):
    Importer now lowers `$future_gclk(expr)` through forward temporal
    `ltl.delay(expr, 1, 0)` semantics instead of approximating with

@@ -89,6 +89,35 @@
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
+- Iteration update (open-range property `s_eventually` and `always`):
+  - realization:
+    - Slang accepts open-range property wrappers for:
+      - `s_eventually [m:$] p`
+      - `always [m:$] p`
+    - importer still diagnosed these as unsupported, despite a direct lowering
+      path being available from existing shifted-property and unbounded unary
+      machinery.
+  - implemented:
+    - `s_eventually [m:$] p` now lowers as:
+      - `eventually(shiftPropertyBy(p, m))`
+    - `always [m:$] p` now lowers as:
+      - `always(shiftPropertyBy(p, m))`
+      - encoded via duality:
+        `not(eventually(not(shiftPropertyBy(p, m))))`
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-open-range-property.sv`
+    - retained nearby guard regressions:
+      - `test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+      - `test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-open-range-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-open-range-property.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-open-range-property.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unbounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 - Iteration update (bounded property `eventually` / `s_eventually`):
   - realization:
     - bounded unary temporal operators on property operands were being treated
