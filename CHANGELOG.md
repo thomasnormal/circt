@@ -76378,3 +76378,31 @@ See CHANGELOG.md on recent progress.
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-time-incdec.sv` (`real=0.008s`, `user=0.004s`, `sys=0.004s`)
+101. ImportVerilog SVA: preserve string semantics for `$past` sampled controls
+     (February 22, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - `$past(expr, delay, enable, @clock)` helper lowering now treats
+        string/formatted-string operands as native sampled storage types.
+      - removes lossy helper-path round-trip:
+        - `string_to_int` / `int_to_string`
+      - keeps string history/state in `string`-typed helper variables.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv`
+      - reproduces prior behavior:
+        - emitted `moore.string_to_int` and `moore.int_to_string` for
+          `$past(string, ..., controls)` lowering.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-time-incdec.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-time-incdec.sv`
+      - lit subset: PASS
+        - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv build-test/test/Conversion/ImportVerilog/sva-past-real-sampled-controls.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-time-incdec.sv`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - profiling sample:
+        - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv` (`real=0.007s`, `user=0.003s`, `sys=0.004s`)

@@ -166,6 +166,8 @@ Additional compile-only or XFAIL expectations live in
       lowering paths
   - `$past` sampled-value controls now support real operands in explicit
     clocking / enable-control lowering paths
+  - `$past` sampled-value controls now preserve string operands natively
+    (no lossy string/int round-trip in helper lowering)
 
 - **LTL operators**:
   - `|->` - Overlapping implication
