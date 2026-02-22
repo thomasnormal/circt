@@ -1,3 +1,38 @@
+## Iteration 1591 - February 22, 2026
+
+### [ImportVerilog][SVA] Support unpacked aggregate `$rose/$fell`
+
+1. **Implemented unpacked aggregate sampled-edge lowering**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - added recursive sampled-boolean construction for unpacked aggregates:
+     - unpacked arrays via `moore.dyn_extract` + OR reduction
+     - unpacked structs via `moore.struct_extract` + OR reduction
+     - unpacked unions via `moore.union_extract` + OR reduction
+   - `$rose/$fell` now accept fixed unpacked arrays/structs/unions.
+   - applies in both:
+     - direct assertion-clocked sampled path (`moore.past`)
+     - explicit sampled clock helper path (`moore.procedure always` state)
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`
+     - `test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv`
+   - updated negative:
+     - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+       now checks dynamic-array `$rose` importer failure via
+       `not ... | FileCheck`.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv >/dev/null`: PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv >/dev/null` (`real=0.007s`, `user=0.003s`, `sys=0.005s`).
+
 ## Iteration 1590 - February 22, 2026
 
 ### [ImportVerilog][SVA] Harden nested aggregate case-equality regression coverage
