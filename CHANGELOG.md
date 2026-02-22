@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1559 - February 22, 2026
+
+### [ImportVerilog][SVA] Support named-event assertion clock controls
+
+1. **Added named-event support in assertion clocking controls**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - assertion clock event lowering now handles event-typed expressions by
+     converting them with `moore.event_triggered` before clock construction.
+   - enables forms such as:
+     - `assert property (@(e) c);`
+     - `assert property (@(s or e) d);`
+   - keeps existing sequence-event clocking behavior (`ltl.matched`) and mixed
+     event-list composition intact.
+
+2. **Added regression coverage**
+   - `test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+     - checks named event assertion clocking and mixed sequence+named-event
+       assertion clock event lists.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv` (`real=0.034s`, `user=0.005s`, `sys=0.003s`).
+
 ## Iteration 1558 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support named events in mixed sequence event lists
