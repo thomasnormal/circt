@@ -159,6 +159,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    Fixed null-deref crash paths when unsupported sampled operands fail
    bit-vector normalization under explicit clocking; importer now emits
    diagnostics reliably and is covered by verify-diagnostics regression.
+21. **SVA unpacked-array sampled support (assertion clocking)** (Feb 22, 2026):
+   ImportVerilog now lowers regular assertion-clocked `$changed/$stable` on
+   fixed-size unpacked arrays using `moore.uarray_cmp` sampled comparisons.
 10. **SVA `$future_gclk` temporal semantics fix** (Feb 21, 2026):
    Importer now lowers `$future_gclk(expr)` through forward temporal
    `ltl.delay(expr, 1, 0)` semantics instead of approximating with

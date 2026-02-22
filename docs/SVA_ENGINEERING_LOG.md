@@ -241,6 +241,29 @@
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
+- Iteration update (unpacked-array sampled values under assertion clocking):
+  - realization:
+    - regular assertion-clocked `$changed/$stable` on fixed-size unpacked
+      arrays were still rejected by forced simple-bit-vector conversion.
+  - implemented:
+    - sampled-value conversion now preserves fixed-size unpacked arrays for
+      `$changed/$stable` (instead of forcing bit-vector cast).
+    - lowering compares sampled/current array values via `moore.uarray_cmp`
+      and applies `moore.not` for `$changed`.
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv`
+    - updated:
+      - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+        (diagnostic text after crash-hardening path changes).
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv`
+    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 - Iteration update (bounded property `eventually` / `s_eventually`):
   - realization:
     - bounded unary temporal operators on property operands were being treated
