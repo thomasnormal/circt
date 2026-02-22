@@ -132,6 +132,57 @@ static Value buildSampledStableComparison(Context &context, Location loc,
     return moore::AndOp::create(builder, loc, sizeEq, noMismatch).getResult();
   }
 
+  if (auto queueTy = dyn_cast<moore::QueueType>(lhs.getType())) {
+    auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+    auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+
+    Value lhsSize = moore::ArraySizeOp::create(builder, loc, lhs);
+    Value rhsSize = moore::ArraySizeOp::create(builder, loc, rhs);
+    Value sizeEq = moore::EqOp::create(builder, loc, lhsSize, rhsSize);
+    if (sizeEq.getType() != i1Ty)
+      sizeEq = context.materializeConversion(i1Ty, sizeEq, false, loc);
+    if (!sizeEq)
+      return {};
+
+    auto mismatchQueueTy = moore::QueueType::get(queueTy.getElementType(), 0);
+    auto locator = moore::ArrayLocatorOp::create(
+        builder, loc, mismatchQueueTy, moore::LocatorMode::All,
+        /*indexed=*/false, lhs);
+
+    Block *bodyBlock = &locator.getBody().emplaceBlock();
+    bodyBlock->addArgument(queueTy.getElementType(), loc);
+    bodyBlock->addArgument(i32Ty, loc);
+
+    {
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(bodyBlock);
+      Value lhsElem = bodyBlock->getArgument(0);
+      Value idx = bodyBlock->getArgument(1);
+      Value rhsElem = moore::DynExtractOp::create(builder, loc,
+                                                  queueTy.getElementType(),
+                                                  rhs, idx);
+      Value elemEq =
+          buildSampledStableComparison(context, loc, lhsElem, rhsElem, funcName);
+      if (!elemEq)
+        return {};
+      if (elemEq.getType() != i1Ty)
+        elemEq = context.materializeConversion(i1Ty, elemEq, false, loc);
+      if (!elemEq)
+        return {};
+      Value mismatch = moore::NotOp::create(builder, loc, elemEq).getResult();
+      moore::ArrayLocatorYieldOp::create(builder, loc, mismatch);
+    }
+
+    Value mismatchCount = moore::ArraySizeOp::create(builder, loc, locator);
+    Value zero = moore::ConstantOp::create(builder, loc, i32Ty, 0);
+    Value noMismatch = moore::EqOp::create(builder, loc, mismatchCount, zero);
+    if (noMismatch.getType() != i1Ty)
+      noMismatch = context.materializeConversion(i1Ty, noMismatch, false, loc);
+    if (!noMismatch)
+      return {};
+    return moore::AndOp::create(builder, loc, sizeEq, noMismatch).getResult();
+  }
+
   if (auto structTy = dyn_cast<moore::UnpackedStructType>(lhs.getType())) {
     auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
     Value allEqual = moore::ConstantOp::create(builder, loc, i1Ty, 1);
@@ -227,6 +278,39 @@ static Value buildSampledBoolean(Context &context, Location loc, Value value,
 
     Block *bodyBlock = &locator.getBody().emplaceBlock();
     bodyBlock->addArgument(arrayTy.getElementType(), loc);
+    bodyBlock->addArgument(i32Ty, loc);
+
+    {
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(bodyBlock);
+      Value elem = bodyBlock->getArgument(0);
+      Value elemBool = buildSampledBoolean(context, loc, elem, funcName);
+      if (!elemBool)
+        return {};
+      if (elemBool.getType() != i1Ty)
+        elemBool = context.materializeConversion(i1Ty, elemBool, false, loc);
+      if (!elemBool)
+        return {};
+      moore::ArrayLocatorYieldOp::create(builder, loc, elemBool);
+    }
+
+    Value count = moore::ArraySizeOp::create(builder, loc, locator);
+    Value zero = moore::ConstantOp::create(builder, loc, i32Ty, 0);
+    Value anySet = moore::NeOp::create(builder, loc, count, zero);
+    if (anySet.getType() != i1Ty)
+      anySet = context.materializeConversion(i1Ty, anySet, false, loc);
+    return anySet;
+  }
+
+  if (auto queueTy = dyn_cast<moore::QueueType>(value.getType())) {
+    auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+    auto matchQueueTy = moore::QueueType::get(queueTy.getElementType(), 0);
+    auto locator = moore::ArrayLocatorOp::create(
+        builder, loc, matchQueueTy, moore::LocatorMode::All,
+        /*indexed=*/false, value);
+
+    Block *bodyBlock = &locator.getBody().emplaceBlock();
+    bodyBlock->addArgument(queueTy.getElementType(), loc);
     bodyBlock->addArgument(i32Ty, loc);
 
     {
@@ -558,7 +642,7 @@ static Value lowerSampledValueFunctionWithClocking(
     loweredType = refType.getNestedType();
   bool isUnpackedAggregateType =
       isa<moore::UnpackedArrayType, moore::OpenUnpackedArrayType,
-          moore::UnpackedStructType,
+          moore::QueueType, moore::UnpackedStructType,
           moore::UnpackedUnionType>(loweredType);
   bool isUnpackedAggregateStableSample =
       (isStable || isChanged) && isUnpackedAggregateType;
@@ -2044,17 +2128,20 @@ Value Context::convertAssertionCallExpression(
         (funcName == "$stable" || funcName == "$changed") &&
         (isa<moore::UnpackedArrayType>(value.getType()) ||
          isa<moore::OpenUnpackedArrayType>(value.getType()) ||
+         isa<moore::QueueType>(value.getType()) ||
          isa<moore::UnpackedStructType>(value.getType()) ||
          isa<moore::UnpackedUnionType>(value.getType()));
     bool isAggregateEdgeSample =
         (funcName == "$rose" || funcName == "$fell") &&
         (isa<moore::UnpackedArrayType>(value.getType()) ||
          isa<moore::OpenUnpackedArrayType>(value.getType()) ||
+         isa<moore::QueueType>(value.getType()) ||
          isa<moore::UnpackedStructType>(value.getType()) ||
          isa<moore::UnpackedUnionType>(value.getType()));
     if (!isAggregateSample && !isAggregateEdgeSample &&
         (isa<moore::UnpackedArrayType>(value.getType()) ||
          isa<moore::OpenUnpackedArrayType>(value.getType()) ||
+         isa<moore::QueueType>(value.getType()) ||
          isa<moore::UnpackedStructType>(value.getType()) ||
          isa<moore::UnpackedUnionType>(value.getType()))) {
       mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
