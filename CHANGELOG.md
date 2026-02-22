@@ -2,30 +2,38 @@
 
 ## Iteration 1561 - February 22, 2026
 
-### [ImportVerilog][SVA] Support clocking-block entries in mixed sequence event lists
+### [ImportVerilog][SVA] Support clocking-block and $global_clock entries in mixed sequence event lists
 
-1. **Added clocking-block expansion in mixed sequence event-list lowering**
+1. **Added clocking-event expansion in mixed sequence event-list lowering**
    (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
-   - mixed sequence event lists now resolve clocking-block symbols to their
-     canonical signal event before lowering.
+   - mixed sequence event lists now resolve:
+     - clocking-block symbols, and
+     - `$global_clock`
+     to canonical signal events before lowering.
    - this fixes forms like:
      - `clocking cb @(posedge clk); ... always @(s or cb) ...`
+     - `global clocking @(posedge clk); ... always @(s or $global_clock) ...`
    - implemented with forced multiclock lowering for expanded clocking-block
      entries to preserve mixed sequence/signal wakeup semantics.
 
 2. **Added regression coverage**
    - `test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
      - checks mixed list import and wait-event lowering for `@(s or cb)`.
+   - `test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
+     - checks mixed list import and wait-event lowering for
+       `@(s or $global_clock)`.
 
 3. **Validation**
    - `ninja -C build-test circt-translate circt-verilog`: PASS.
    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`: PASS.
    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`: PASS.
    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`: PASS.
    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`: PASS.
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
    - profiling sample:
-     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv` (`real=0.007s`, `user=0.003s`, `sys=0.004s`).
 
 ## Iteration 1560 - February 22, 2026
 
