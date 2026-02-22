@@ -77,7 +77,14 @@ struct EventControlVisitor {
   LogicalResult visit(const slang::ast::SignalEventControl &ctrl) {
     // Check if the expression references a clocking block.
     // In that case, we need to convert the clocking block's clock event instead.
-    auto symRef = ctrl.expr.getSymbolReference();
+    const slang::ast::Symbol *symRef = ctrl.expr.getSymbolReference();
+    if (!symRef) {
+      if (auto *named = ctrl.expr.as_if<slang::ast::NamedValueExpression>())
+        symRef = &named->symbol;
+      else if (auto *arb =
+                   ctrl.expr.as_if<slang::ast::ArbitrarySymbolExpression>())
+        symRef = arb->symbol;
+    }
     if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
       auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
       auto &clockEvent = clockingBlock.getEvent();
@@ -1626,6 +1633,9 @@ lowerSequenceEventListControl(Context &context, Location loc,
     if (!signalSymRef) {
       if (auto *named = signalCtrl->expr.as_if<slang::ast::NamedValueExpression>())
         signalSymRef = &named->symbol;
+      else if (auto *arb =
+                   signalCtrl->expr.as_if<slang::ast::ArbitrarySymbolExpression>())
+        signalSymRef = arb->symbol;
     }
     if (signalSymRef &&
         signalSymRef->kind == slang::ast::SymbolKind::ClockingBlock) {
@@ -1955,6 +1965,8 @@ struct LTLClockControlVisitor {
   Location loc;
   OpBuilder &builder;
   Value seqOrPro;
+  std::optional<ltl::ClockEdge> inferredSequenceEdge;
+  Value inferredSequenceClock;
 
   Value visit(const slang::ast::SignalEventControl &ctrl) {
     // If the event expression is a timing-control assertion port, substitute
@@ -1981,6 +1993,13 @@ struct LTLClockControlVisitor {
     // Check if the expression references a clocking block.
     // In that case, we need to convert the clocking block's clock event instead.
     auto symRef = ctrl.expr.getSymbolReference();
+    if (!symRef) {
+      if (auto *named = ctrl.expr.as_if<slang::ast::NamedValueExpression>())
+        symRef = &named->symbol;
+      else if (auto *arb =
+                   ctrl.expr.as_if<slang::ast::ArbitrarySymbolExpression>())
+        symRef = arb->symbol;
+    }
     if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
       auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
       auto &clockEvent = clockingBlock.getEvent();
@@ -2060,6 +2079,11 @@ struct LTLClockControlVisitor {
 
       if (!eventValue.getDefiningOp<ltl::ClockOp>())
         eventValue = applyDefaultOrGlobalClocking(context, eventValue);
+      if (!eventValue.getDefiningOp<ltl::ClockOp>() && inferredSequenceClock &&
+          inferredSequenceEdge)
+        eventValue = ltl::ClockOp::create(builder, loc, eventValue,
+                                          *inferredSequenceEdge,
+                                          inferredSequenceClock);
 
       if (!eventValue.getDefiningOp<ltl::ClockOp>()) {
         mlir::emitError(loc)
@@ -2113,6 +2137,76 @@ struct LTLClockControlVisitor {
   }
 
   Value visit(const slang::ast::EventListControl &ctrl) {
+    bool canInferSequenceClock = true;
+    for (const auto *event : ctrl.events) {
+      auto *signalCtrl = event ? event->as_if<slang::ast::SignalEventControl>()
+                               : nullptr;
+      if (!signalCtrl || isAssertionEventControl(signalCtrl->expr))
+        continue;
+
+      const slang::ast::SignalEventControl *effectiveCtrl = signalCtrl;
+      const slang::ast::Symbol *symRef = signalCtrl->expr.getSymbolReference();
+      if (!symRef) {
+        if (auto *named =
+                signalCtrl->expr.as_if<slang::ast::NamedValueExpression>())
+          symRef = &named->symbol;
+        else if (auto *arb =
+                     signalCtrl->expr.as_if<
+                         slang::ast::ArbitrarySymbolExpression>())
+          symRef = arb->symbol;
+      }
+      if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
+        auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
+        effectiveCtrl = getCanonicalSignalEventControlForAssertions(
+            clockingBlock.getEvent());
+      } else if (auto *callExpr =
+                     signalCtrl->expr.as_if<slang::ast::CallExpression>()) {
+        if (callExpr->isSystemCall() &&
+            callExpr->getKnownSystemName() ==
+                slang::parsing::KnownSystemName::GlobalClock) {
+          if (!context.currentScope) {
+            mlir::emitError(loc)
+                << "$global_clock requires an enclosing scope";
+            return Value{};
+          }
+          auto *globalClocking = context.compilation.getGlobalClockingAndNoteUse(
+              *context.currentScope);
+          if (!globalClocking) {
+            mlir::emitError(loc)
+                << "no global clocking is available in this scope";
+            return Value{};
+          }
+          if (auto *clockBlock =
+                  globalClocking->as_if<slang::ast::ClockingBlockSymbol>())
+            effectiveCtrl = getCanonicalSignalEventControlForAssertions(
+                clockBlock->getEvent());
+        }
+      }
+      if (!effectiveCtrl) {
+        canInferSequenceClock = false;
+        continue;
+      }
+
+      Value signalClock = context.convertRvalueExpression(effectiveCtrl->expr);
+      if (isa<moore::EventType>(signalClock.getType()))
+        signalClock = moore::EventTriggeredOp::create(builder, loc, signalClock);
+      signalClock = context.convertToI1(signalClock);
+      if (!signalClock)
+        return Value{};
+      auto signalEdge = convertEdgeKindLTL(effectiveCtrl->edge);
+      if (!inferredSequenceEdge) {
+        inferredSequenceEdge = signalEdge;
+        inferredSequenceClock = signalClock;
+      } else if (*inferredSequenceEdge != signalEdge ||
+                 !equivalentClockSignals(inferredSequenceClock, signalClock)) {
+        canInferSequenceClock = false;
+      }
+    }
+    if (!canInferSequenceClock) {
+      inferredSequenceEdge.reset();
+      inferredSequenceClock = Value{};
+    }
+
     SmallVector<Value, 4> clockedValues;
     for (const auto *event : ctrl.events) {
       if (!event)
