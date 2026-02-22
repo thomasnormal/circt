@@ -1951,6 +1951,18 @@ struct AssertionExprVisitor {
               name == "$assertnonvacuouson" || name == "$assertvacuousoff") {
             break;
           }
+          if (name == "$showscopes" || name == "$input" || name == "$key" ||
+              name == "$nokey" || name == "$log" || name == "$nolog") {
+            break;
+          }
+          if (name == "$save" || name == "$restart" || name == "$incsave" ||
+              name == "$reset") {
+            auto callLoc = context.convertLocation(call.sourceRange);
+            mlir::emitWarning(callLoc)
+                << name << " is not supported in circt-sim"
+                << " (checkpoint/restart not implemented)";
+            break;
+          }
           if (name == "$stop") {
             moore::StopBIOp::create(builder, loc);
             break;
