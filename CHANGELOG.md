@@ -1,3 +1,30 @@
+## Iteration 1564 - February 22, 2026
+
+### [ImportVerilog][SVA] Map `$assertcontrol(8/9)` to fail-message state
+
+1. **Extended `$assertcontrol` lowering for fail-message control types**
+   (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   - existing lowering already handled control types `3/4/5`
+     (procedural assertion off/on/kill).
+   - added support for fail-message controls:
+     - `8`: fail-message on
+     - `9`: fail-message off
+   - these now drive the same global fail-message gate used by immediate
+     assertion action-block lowering (`@__circt_assert_fail_msgs_enabled`).
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`: PASS.
+   - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/system-calls-complete.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/system-calls-complete.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv` (`real=0.008s`, `user=0.002s`, `sys=0.007s`).
+
 ## Iteration 1563 - February 22, 2026
 
 ### [ImportVerilog][SVA] Add sequence `.matched` method lowering

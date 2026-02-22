@@ -851,3 +851,26 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv` (`real=0.007s`)
+
+- Iteration update (`$assertcontrol` fail-message parity):
+  - realization:
+    - `$assertcontrol` lowering only mapped control types 3/4/5
+      (off/on/kill for procedural assertion enable).
+    - control types 8/9 (fail-message on/off) were ignored, even though
+      `$assertfailon/$assertfailoff` already had dedicated lowering.
+  - implemented:
+    - extended `$assertcontrol` handling to also map:
+      - `8` -> fail messages enabled
+      - `9` -> fail messages disabled
+    - wired through existing global state used by immediate-assert action-block
+      fail-message gating (`__circt_assert_fail_msgs_enabled`).
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/system-calls-complete.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/system-calls-complete.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv` (`real=0.008s`)
