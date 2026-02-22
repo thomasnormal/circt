@@ -168,6 +168,8 @@ Additional compile-only or XFAIL expectations live in
     clocking / enable-control lowering paths
   - `$past` sampled-value controls now preserve string operands natively
     (no lossy string/int round-trip in helper lowering)
+  - `$past` sampled-value controls now preserve `time` operands in native
+    helper storage (no helper-side bitvector history state)
 
 - **LTL operators**:
   - `|->` - Overlapping implication

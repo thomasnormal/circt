@@ -1153,8 +1153,10 @@ static Value lowerPastWithSamplingControl(
   bool isStringSample =
       isa<moore::StringType>(originalType) ||
       isa<moore::FormatStringType>(originalType);
+  bool isTimeSample = isa<moore::TimeType>(originalType);
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
   if (!isUnpackedAggregateSample && !isRealSample && !isStringSample &&
+      !isTimeSample &&
       !intType) {
     mlir::emitError(loc)
         << "unsupported $past value type with sampled-value controls (input "
@@ -1163,7 +1165,8 @@ static Value lowerPastWithSamplingControl(
     return {};
   }
   moore::UnpackedType storageType =
-      (isUnpackedAggregateSample || isRealSample || isStringSample)
+      (isUnpackedAggregateSample || isRealSample || isStringSample ||
+       isTimeSample)
           ? cast<moore::UnpackedType>(originalType)
           : cast<moore::UnpackedType>(intType);
 
@@ -1184,7 +1187,8 @@ static Value lowerPastWithSamplingControl(
     }
 
     Value init;
-    if (!isUnpackedAggregateSample && !isRealSample && !isStringSample) {
+    if (!isUnpackedAggregateSample && !isRealSample && !isStringSample &&
+        !isTimeSample) {
       init = createUnknownOrZeroConstant(context, loc, intType);
       if (!init)
         return {};
@@ -1207,11 +1211,13 @@ static Value lowerPastWithSamplingControl(
     if (!current)
       return {};
     if (!isUnpackedAggregateSample && !isRealSample && !isStringSample &&
+        !isTimeSample &&
         !isa<moore::IntType>(current.getType()))
       current = context.convertToSimpleBitVector(current);
     if (!current)
       return {};
-    if (isUnpackedAggregateSample || isRealSample || isStringSample) {
+    if (isUnpackedAggregateSample || isRealSample || isStringSample ||
+        isTimeSample) {
       if (!isa<moore::UnpackedType>(current.getType()) ||
           current.getType() != storageType) {
         mlir::emitError(loc)
@@ -1315,7 +1321,8 @@ static Value lowerPastWithSamplingControl(
     if (delay > 0)
       pastValue = moore::ReadOp::create(builder, loc, historyVars.back());
     Value disabledValue = pastValue;
-    if (!isUnpackedAggregateSample && !isRealSample && !isStringSample) {
+    if (!isUnpackedAggregateSample && !isRealSample && !isStringSample &&
+        !isTimeSample) {
       disabledValue = createUnknownOrZeroConstant(context, loc, intType);
       if (!disabledValue)
         return {};
