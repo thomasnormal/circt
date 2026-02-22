@@ -687,7 +687,7 @@ void LowerToBMCPass::runOnOperation() {
         auto dict = dyn_cast<DictionaryAttr>(attr);
         if (!dict)
           continue;
-        auto argIndexAttr = dyn_cast<IntegerAttr>(dict.get("arg_index"));
+        auto argIndexAttr = dict.getAs<IntegerAttr>("arg_index");
         if (!argIndexAttr)
           continue;
         maybeAddExplicitClockArg(argIndexAttr.getInt());
@@ -1699,12 +1699,33 @@ void LowerToBMCPass::runOnOperation() {
           !actualClockNames.empty()) {
         auto defaultClockName = actualClockNames.front();
         if (defaultClockName && !defaultClockName.getValue().empty()) {
+          StringAttr defaultClockKey;
+          DenseSet<StringRef> validClockKeys;
+          for (Attribute attr : clockKeyAttrs)
+            if (auto keyAttr = dyn_cast<StringAttr>(attr);
+                keyAttr && !keyAttr.getValue().empty()) {
+              validClockKeys.insert(keyAttr.getValue());
+              if (!defaultClockKey)
+                defaultClockKey = keyAttr;
+            }
           auto remapIfUnknown = [&](StringAttr nameAttr) -> StringAttr {
+            // Empty register clock names mean externalize-registers could not
+            // resolve a named source clock. In the single-derived-clock case
+            // we can safely map them to that inserted BMC clock.
             if (!nameAttr || nameAttr.getValue().empty())
-              return nameAttr;
+              return defaultClockName;
             if (validClockNames.contains(nameAttr.getValue()))
               return nameAttr;
             return defaultClockName;
+          };
+          auto remapKeyIfUnknown = [&](StringAttr keyAttr) -> StringAttr {
+            if (!defaultClockKey || defaultClockKey.getValue().empty())
+              return keyAttr;
+            if (!keyAttr || keyAttr.getValue().empty())
+              return defaultClockKey;
+            if (validClockKeys.contains(keyAttr.getValue()))
+              return keyAttr;
+            return defaultClockKey;
           };
           if (auto regClocks =
                   hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks")) {
@@ -1720,6 +1741,41 @@ void LowerToBMCPass::runOnOperation() {
               remapped.push_back(updated ? updated : nameAttr);
             }
             hwModule->setAttr("bmc_reg_clocks",
+                              ArrayAttr::get(ctx, remapped));
+          }
+          if (auto regClockSources =
+                  hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
+            SmallVector<Attribute> remapped;
+            remapped.reserve(regClockSources.size());
+            for (auto attr : regClockSources) {
+              auto dict = dyn_cast<DictionaryAttr>(attr);
+              if (!dict) {
+                remapped.push_back(attr);
+                continue;
+              }
+              auto keyAttr = dict.getAs<StringAttr>("clock_key");
+              auto updated = remapKeyIfUnknown(keyAttr);
+              if (updated == keyAttr) {
+                remapped.push_back(attr);
+                continue;
+              }
+              SmallVector<NamedAttribute> fields;
+              fields.reserve(dict.size() + (keyAttr ? 0 : 1));
+              bool replaced = false;
+              for (auto named : dict) {
+                if (named.getName().strref() == "clock_key") {
+                  fields.push_back(
+                      builder.getNamedAttr("clock_key", updated));
+                  replaced = true;
+                } else {
+                  fields.push_back(named);
+                }
+              }
+              if (!replaced)
+                fields.push_back(builder.getNamedAttr("clock_key", updated));
+              remapped.push_back(builder.getDictionaryAttr(fields));
+            }
+            hwModule->setAttr("bmc_reg_clock_sources",
                               ArrayAttr::get(ctx, remapped));
           }
           hwModule.walk([&](Operation *op) {
