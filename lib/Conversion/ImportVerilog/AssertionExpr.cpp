@@ -976,16 +976,33 @@ struct AssertionExprVisitor {
     if (!value)
       return {};
     using slang::ast::UnaryAssertionOperator;
+    auto shiftPropertyBy = [&](Value property, uint64_t delayCycles) -> Value {
+      if (delayCycles == 0)
+        return property;
+      auto trueVal =
+          hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+      auto delayedTrue =
+          ltl::DelayOp::create(builder, loc, trueVal,
+                               builder.getI64IntegerAttr(delayCycles),
+                               builder.getI64IntegerAttr(0));
+      return ltl::ImplicationOp::create(builder, loc, delayedTrue, property);
+    };
     switch (expr.op) {
     case UnaryAssertionOperator::Not:
       return ltl::NotOp::create(builder, loc, value);
     case UnaryAssertionOperator::SEventually:
       if (expr.range.has_value()) {
         if (isa<ltl::PropertyType>(value.getType())) {
-          mlir::emitError(loc)
-              << "bounded s_eventually on property expressions is not yet "
-                 "supported";
-          return {};
+          auto minDelay = expr.range.value().min;
+          auto maxDelay = expr.range.value().max.value_or(minDelay);
+          SmallVector<Value, 4> shifted;
+          shifted.reserve(maxDelay - minDelay + 1);
+          for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
+               ++delayCycles)
+            shifted.push_back(shiftPropertyBy(value, delayCycles));
+          if (shifted.size() == 1)
+            return shifted.front();
+          return ltl::OrOp::create(builder, loc, shifted);
         }
         auto minDelay = builder.getI64IntegerAttr(expr.range.value().min);
         auto lengthAttr = mlir::IntegerAttr{};
@@ -1000,10 +1017,16 @@ struct AssertionExprVisitor {
     case UnaryAssertionOperator::Eventually: {
       if (expr.range.has_value()) {
         if (isa<ltl::PropertyType>(value.getType())) {
-          mlir::emitError(loc)
-              << "bounded eventually on property expressions is not yet "
-                 "supported";
-          return {};
+          auto minDelay = expr.range.value().min;
+          auto maxDelay = expr.range.value().max.value_or(minDelay);
+          SmallVector<Value, 4> shifted;
+          shifted.reserve(maxDelay - minDelay + 1);
+          for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
+               ++delayCycles)
+            shifted.push_back(shiftPropertyBy(value, delayCycles));
+          if (shifted.size() == 1)
+            return shifted.front();
+          return ltl::OrOp::create(builder, loc, shifted);
         }
         auto minDelay = builder.getI64IntegerAttr(expr.range.value().min);
         auto lengthAttr = mlir::IntegerAttr{};

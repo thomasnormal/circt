@@ -118,6 +118,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    Importer now lowers compound sequence match-item assignments for local
    assertion variables (e.g. `z += 1`, `s <<= 1`) instead of rejecting them
    as unsupported assignment kinds.
+10. **SVA bounded property eventually support** (Feb 22, 2026):
+   ImportVerilog now lowers bounded `eventually [m:n]` and
+   `s_eventually [m:n]` when their operand is property-typed by constructing
+   a delay-shifted property disjunction, rather than rejecting the form.
 10. **SVA `$future_gclk` temporal semantics fix** (Feb 21, 2026):
    Importer now lowers `$future_gclk(expr)` through forward temporal
    `ltl.delay(expr, 1, 0)` semantics instead of approximating with
