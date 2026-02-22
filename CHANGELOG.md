@@ -77011,3 +77011,34 @@ See CHANGELOG.md on recent progress.
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-rewind-function.sv` (`real=0.007s`, `user=0.005s`, `sys=0.002s`)
+122. ImportVerilog SVA: support local assertion vars as output-arg lvalues
+     (February 22, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`
+      - `lib/Conversion/ImportVerilog/Expressions.cpp`
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - added local-assertion-var lvalue materialization and per-match-item
+        writeback support for assertion-expression lowering.
+      - local assertion vars can now participate in output-arg function calls
+        within match-item expressions (when initialized), instead of failing
+        with missing-lvalue diagnostics.
+      - this enables patterns like:
+        - `ferr = "", rc = $ferror(fd, ferr)` inside sequence match-items.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv`
+      - failing-first behavior reproduced prior to fix:
+        - `unknown name 'ferr'` with note `no lvalue generated for LocalAssertionVar`.
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+        - `ninja -C build-test circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv --check-prefix=DIAG`
+      - lit subset: PASS
+        - `cd build-test && ../llvm/build/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv test/Conversion/ImportVerilog/sva-sequence-match-item-rewind-function.sv test/Conversion/ImportVerilog/sva-sequence-match-item-coverage-sdf-static-subroutine.sv`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - profiling sample:
+        - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-ferror-local-output.sv` (`real=0.007s`, `user=0.004s`, `sys=0.003s`)
