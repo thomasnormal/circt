@@ -14,6 +14,7 @@ module SvaPastUnpackedStructExplicitClock(input logic clk_a, input logic clk_b);
   // CHECK: moore.blocking_assign
   // CHECK: moore.struct_extract
   // CHECK: moore.eq
+  // CHECK: moore.and
   // CHECK: verif.assert
-  assert property (@(posedge clk_a) ($past(s, 1, @(posedge clk_b)).a == s.a));
+  assert property (@(posedge clk_a) ($past(s, 1, @(posedge clk_b)) == s));
 endmodule

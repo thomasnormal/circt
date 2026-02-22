@@ -1371,3 +1371,30 @@
     - profiling samples:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv` (`real=0.007s`)
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv` (`real=0.007s`)
+
+- Iteration update (unpacked-struct equality/inequality lowering):
+  - realization:
+    - after adding unpacked-struct sampled support, direct full-struct equality
+      in expressions still failed (`expression ... cannot be cast to a simple
+      bit vector`), blocking natural SVA forms like
+      `$past(struct_expr) == struct_expr`.
+  - implemented:
+    - added recursive unpacked-aggregate logical equality helper in
+      `Expressions.cpp`.
+    - wired `BinaryOperator::Equality` / `BinaryOperator::Inequality` for
+      unpacked structs to fieldwise comparison + reduction, including nested
+      unpacked struct/array members.
+    - regression coverage:
+      - `test/Conversion/ImportVerilog/unpacked-struct-equality.sv`
+      - upgraded `test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
+        to direct full-struct compare (`$past(s,...) == s`).
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-equality.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-struct-equality.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv > /dev/null`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv > /dev/null`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv` (`real=0.007s`)
