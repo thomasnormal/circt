@@ -1648,3 +1648,32 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv` (`real=0.007s`)
+
+- Iteration update (dynamic-array/queue case-equality semantics):
+  - realization:
+    - after fixing dynamic aggregate `==/!=`, case equality/inequality
+      (`===/!==`) on open arrays and queues still lacked equivalent
+      element-wise lowering, leaving a parity gap for SVA and procedural
+      compares.
+  - implemented:
+    - added dynamic aggregate case-equality helper in `Expressions.cpp`:
+      - size equality via `moore.array.size`
+      - mismatch detection via `moore.array.locator` + indexed extraction
+      - per-element compare via `moore.case_eq`
+      - case equality iff sizes match and mismatch set is empty.
+    - integrated helper into binary operator lowering for `===` / `!==`.
+    - extended unpacked aggregate case-equality recursion so nested
+      struct/union fields that are dynamic arrays/queues lower through the
+      same helper.
+    - new regressions:
+      - `test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv`
+      - `test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv` (`real=0.007s`)

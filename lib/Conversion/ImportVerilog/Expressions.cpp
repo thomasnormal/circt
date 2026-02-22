@@ -144,6 +144,8 @@ static Type getLvalueNestedType(Type lvalueType) {
 /// for unpacked structs and unions.
 static Value buildDynamicArrayLogicalEq(Context &context, Location loc,
                                         Value lhs, Value rhs);
+static Value buildDynamicArrayCaseEq(Context &context, Location loc, Value lhs,
+                                     Value rhs);
 
 static Value buildUnpackedAggregateLogicalEq(Context &context, Location loc,
                                              Value lhs, Value rhs) {
@@ -416,6 +418,9 @@ static Value buildUnpackedAggregateCaseEq(Context &context, Location loc,
       if (isa<moore::UnpackedStructType, moore::UnpackedArrayType,
               moore::UnpackedUnionType>(member.type)) {
         fieldEq = buildUnpackedAggregateCaseEq(context, loc, lhsField, rhsField);
+      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+                     member.type)) {
+        fieldEq = buildDynamicArrayCaseEq(context, loc, lhsField, rhsField);
       } else if (isa<moore::StringType>(member.type) ||
                  isa<moore::FormatStringType>(member.type)) {
         auto strTy = moore::StringType::get(context.getContext());
@@ -475,6 +480,9 @@ static Value buildUnpackedAggregateCaseEq(Context &context, Location loc,
       if (isa<moore::UnpackedStructType, moore::UnpackedArrayType,
               moore::UnpackedUnionType>(member.type)) {
         fieldEq = buildUnpackedAggregateCaseEq(context, loc, lhsField, rhsField);
+      } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+                     member.type)) {
+        fieldEq = buildDynamicArrayCaseEq(context, loc, lhsField, rhsField);
       } else if (isa<moore::StringType>(member.type) ||
                  isa<moore::FormatStringType>(member.type)) {
         auto strTy = moore::StringType::get(context.getContext());
@@ -524,6 +532,111 @@ static Value buildUnpackedAggregateCaseEq(Context &context, Location loc,
   }
 
   return {};
+}
+
+/// Build case equality for dynamic unpacked aggregates (open arrays/queues).
+static Value buildDynamicArrayCaseEq(Context &context, Location loc, Value lhs,
+                                     Value rhs) {
+  auto &builder = context.builder;
+  if (!lhs || !rhs || lhs.getType() != rhs.getType())
+    return {};
+
+  auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+  auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+
+  moore::UnpackedType elemTy;
+  if (auto openTy = dyn_cast<moore::OpenUnpackedArrayType>(lhs.getType()))
+    elemTy = openTy.getElementType();
+  else if (auto queueTy = dyn_cast<moore::QueueType>(lhs.getType()))
+    elemTy = queueTy.getElementType();
+  else
+    return {};
+
+  Value lhsSize = moore::ArraySizeOp::create(builder, loc, lhs);
+  Value rhsSize = moore::ArraySizeOp::create(builder, loc, rhs);
+  Value sizeEq = moore::EqOp::create(builder, loc, lhsSize, rhsSize);
+  if (sizeEq.getType() != i1Ty)
+    sizeEq = context.materializeConversion(i1Ty, sizeEq, false, loc);
+  if (!sizeEq)
+    return {};
+
+  auto mismatchQueueTy = moore::QueueType::get(elemTy, 0);
+  auto locator = moore::ArrayLocatorOp::create(
+      builder, loc, mismatchQueueTy, moore::LocatorMode::All,
+      /*indexed=*/false, lhs);
+
+  Block *bodyBlock = &locator.getBody().emplaceBlock();
+  bodyBlock->addArgument(elemTy, loc);
+  bodyBlock->addArgument(i32Ty, loc);
+
+  {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(bodyBlock);
+    Value lhsElem = bodyBlock->getArgument(0);
+    Value idx = bodyBlock->getArgument(1);
+    Value rhsElem = moore::DynExtractOp::create(builder, loc, elemTy, rhs, idx);
+
+    Value elemEq;
+    if (isa<moore::UnpackedStructType, moore::UnpackedArrayType,
+            moore::UnpackedUnionType>(elemTy)) {
+      elemEq = buildUnpackedAggregateCaseEq(context, loc, lhsElem, rhsElem);
+    } else if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(elemTy)) {
+      elemEq = buildDynamicArrayCaseEq(context, loc, lhsElem, rhsElem);
+    } else if (isa<moore::StringType>(elemTy) || isa<moore::FormatStringType>(elemTy)) {
+      auto strTy = moore::StringType::get(context.getContext());
+      lhsElem =
+          context.materializeConversion(strTy, lhsElem, false, lhsElem.getLoc());
+      rhsElem =
+          context.materializeConversion(strTy, rhsElem, false, rhsElem.getLoc());
+      if (!lhsElem || !rhsElem)
+        return {};
+      elemEq = moore::StringCmpOp::create(builder, loc,
+                                          moore::StringCmpPredicate::eq,
+                                          lhsElem, rhsElem);
+    } else if (isa<moore::ChandleType>(elemTy)) {
+      auto intTy =
+          moore::IntType::get(context.getContext(), 64, Domain::TwoValued);
+      lhsElem = context.materializeConversion(intTy, lhsElem, false,
+                                              lhsElem.getLoc());
+      rhsElem = context.materializeConversion(intTy, rhsElem, false,
+                                              rhsElem.getLoc());
+      if (!lhsElem || !rhsElem)
+        return {};
+      elemEq = moore::CaseEqOp::create(builder, loc, lhsElem, rhsElem);
+    } else {
+      if (!isa<moore::IntType>(lhsElem.getType()))
+        lhsElem = context.convertToSimpleBitVector(lhsElem);
+      if (!isa<moore::IntType>(rhsElem.getType()))
+        rhsElem = context.convertToSimpleBitVector(rhsElem);
+      if (!lhsElem || !rhsElem)
+        return {};
+      if (lhsElem.getType() != rhsElem.getType()) {
+        rhsElem = context.materializeConversion(lhsElem.getType(), rhsElem,
+                                                /*isSigned=*/false, loc);
+        if (!rhsElem)
+          return {};
+      }
+      elemEq = moore::CaseEqOp::create(builder, loc, lhsElem, rhsElem);
+    }
+    if (!elemEq)
+      return {};
+    if (elemEq.getType() != i1Ty)
+      elemEq = context.materializeConversion(i1Ty, elemEq, false, loc);
+    if (!elemEq)
+      return {};
+    Value mismatch = moore::NotOp::create(builder, loc, elemEq);
+    moore::ArrayLocatorYieldOp::create(builder, loc, mismatch);
+  }
+
+  Value mismatchCount = moore::ArraySizeOp::create(builder, loc, locator);
+  Value zero = moore::ConstantOp::create(builder, loc, i32Ty, 0);
+  Value noMismatch = moore::EqOp::create(builder, loc, mismatchCount, zero);
+  if (noMismatch.getType() != i1Ty)
+    noMismatch = context.materializeConversion(i1Ty, noMismatch, false, loc);
+  if (!noMismatch)
+    return {};
+
+  return moore::AndOp::create(builder, loc, sizeEq, noMismatch);
 }
 
 static Value visitClassProperty(Context &context,
@@ -3327,6 +3440,15 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
         return moore::UArrayCmpOp::create(
             builder, loc, moore::UArrayCmpPredicate::eq, lhs, rhs);
+      if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(lhs.getType())) {
+        auto eq = buildDynamicArrayCaseEq(context, loc, lhs, rhs);
+        if (!eq) {
+          mlir::emitError(loc)
+              << "unsupported dynamic unpacked case equality operands";
+          return {};
+        }
+        return eq;
+      }
       if (isa<moore::UnpackedStructType, moore::UnpackedUnionType>(
               lhs.getType())) {
         auto eq = buildUnpackedAggregateCaseEq(context, loc, lhs, rhs);
@@ -3355,6 +3477,15 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
         return moore::UArrayCmpOp::create(
             builder, loc, moore::UArrayCmpPredicate::ne, lhs, rhs);
+      if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(lhs.getType())) {
+        auto eq = buildDynamicArrayCaseEq(context, loc, lhs, rhs);
+        if (!eq) {
+          mlir::emitError(loc)
+              << "unsupported dynamic unpacked case inequality operands";
+          return {};
+        }
+        return moore::NotOp::create(builder, loc, eq);
+      }
       if (isa<moore::UnpackedStructType, moore::UnpackedUnionType>(
               lhs.getType())) {
         auto eq = buildUnpackedAggregateCaseEq(context, loc, lhs, rhs);
