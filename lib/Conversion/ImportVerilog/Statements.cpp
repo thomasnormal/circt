@@ -21,6 +21,7 @@
 #include <string>
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -2567,7 +2568,15 @@ struct StmtVisitor {
 
     if (context.currentAssertionClock && enclosingProc) {
       OpBuilder::InsertionGuard guard(builder);
-      builder.setInsertionPointAfter(enclosingProc);
+      auto *moduleBlock = enclosingProc->getBlock();
+      if (moduleBlock->mightHaveTerminator()) {
+        if (auto *terminator = moduleBlock->getTerminator())
+          builder.setInsertionPoint(terminator);
+        else
+          builder.setInsertionPointToEnd(moduleBlock);
+      } else {
+        builder.setInsertionPointToEnd(moduleBlock);
+      }
       auto property = context.convertAssertionExpression(*innerPropertySpec, loc);
       if (!property) {
         // Slang uses InvalidAssertionExpr for dead generate branches.
@@ -2579,24 +2588,37 @@ struct StmtVisitor {
           *context.currentAssertionClock);
       if (!assertionClock)
         assertionClock = context.currentAssertionClock;
-      Value enable = disableIffEnable;
-      auto *moduleBlock = builder.getInsertionBlock();
+      Value enable;
+      IRMapping mapping;
+      llvm::DenseSet<Operation *> active;
       if (context.currentAssertionGuard) {
-        IRMapping mapping;
-        llvm::DenseSet<Operation *> active;
-        enable = cloneAssertionValueIntoBlock(context.currentAssertionGuard,
-                                              builder, moduleBlock, mapping,
-                                              active);
-        if (enable)
-          enable = moore::ToBuiltinBoolOp::create(builder, loc, enable);
-        else
+        auto guardEnable = cloneAssertionValueIntoBlock(
+            context.currentAssertionGuard, builder, moduleBlock, mapping, active);
+        if (!guardEnable)
           mlir::emitWarning(loc)
               << "unable to hoist assertion guard; emitting unguarded assert";
-      } else if (enable) {
-        IRMapping mapping;
-        llvm::DenseSet<Operation *> active;
-        enable = cloneAssertionValueIntoBlock(enable, builder, moduleBlock,
-                                              mapping, active);
+        else {
+          guardEnable = context.convertToBool(guardEnable);
+          enable = context.convertToI1(guardEnable);
+        }
+      }
+      if (disableIffEnable) {
+        auto disableEnable = cloneAssertionValueIntoBlock(
+            disableIffEnable, builder, moduleBlock, mapping, active);
+        if (!disableEnable)
+          return failure();
+        disableEnable = context.convertToBool(disableEnable);
+        if (!disableEnable)
+          return failure();
+        disableEnable = context.convertToI1(disableEnable);
+        if (!disableEnable)
+          return failure();
+        enable = enable ? arith::AndIOp::create(builder, loc, enable,
+                                                disableEnable)
+                        : disableEnable;
+      }
+      if (enable && !enable.getType().isInteger(1)) {
+        enable = context.convertToI1(enable);
         if (!enable)
           return failure();
       }
@@ -2674,15 +2696,37 @@ struct StmtVisitor {
             // Handle assertion guard if present.
             Value enable;
             if (context.currentAssertionGuard) {
-              enable = cloneAssertionValueIntoBlock(
+              auto guardEnable = cloneAssertionValueIntoBlock(
                   context.currentAssertionGuard, builder, moduleBlock,
                   mapping, active);
-              if (enable)
-                enable = moore::ToBuiltinBoolOp::create(builder, loc, enable);
-              else
+              if (guardEnable) {
+                guardEnable = context.convertToBool(guardEnable);
+                enable = context.convertToI1(guardEnable);
+              } else {
                 mlir::emitWarning(loc)
                     << "unable to hoist assertion guard; emitting unguarded "
                        "assert";
+              }
+            }
+            if (disableIffEnable) {
+              auto disableEnable = cloneAssertionValueIntoBlock(
+                  disableIffEnable, builder, moduleBlock, mapping, active);
+              if (!disableEnable)
+                return failure();
+              disableEnable = context.convertToBool(disableEnable);
+              if (!disableEnable)
+                return failure();
+              disableEnable = context.convertToI1(disableEnable);
+              if (!disableEnable)
+                return failure();
+              enable = enable ? arith::AndIOp::create(builder, loc, enable,
+                                                      disableEnable)
+                              : disableEnable;
+            }
+            if (enable && !enable.getType().isInteger(1)) {
+              enable = context.convertToI1(enable);
+              if (!enable)
+                return failure();
             }
 
             switch (stmt.assertionKind) {
