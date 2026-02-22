@@ -1777,3 +1777,37 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv` (`real=0.007s`)
+
+- Iteration update (multi-bit event expressions in SVA event controls):
+  - realization:
+    - SVA timing controls still rejected legal multi-bit event expressions in
+      clock positions (for example `assert property (@(e) a);` and
+      `assert property (@(s or e) a);`) with:
+      `error: expected a 1-bit integer`.
+    - root cause was direct `convertToI1` on event expressions in timing
+      control lowering paths without prior truthy conversion.
+  - TDD proof:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-clock-event-multibit.sv`
+      - `test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv`
+    - before fix:
+      - both failed import with `expected a 1-bit integer`.
+  - implemented:
+    - updated `TimingControls.cpp` event-expression lowering to call
+      `convertToBool` before `convertToI1` in SVA event-control paths,
+      including mixed sequence-event list inference and direct clock control
+      conversion.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-multibit.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-multibit.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv`
+    - compatibility checks:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv` (`real=0.005s`)
