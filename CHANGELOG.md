@@ -63,6 +63,35 @@
      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv`: PASS.
      - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`: PASS.
 
+6. **Implemented `$assertcontrol(1/2)` lock/unlock semantics**
+   (`lib/Conversion/ImportVerilog/Statements.cpp`,
+   `lib/Conversion/ImportVerilog/AssertionExpr.cpp`,
+   `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`):
+   - added synthetic lock global:
+     - `@__circt_assert_control_locked`
+   - implemented `$assertcontrol(1)` (lock) and `$assertcontrol(2)` (unlock)
+     state updates.
+   - gated assertion-control side effects while locked for both procedural
+     statements and sequence match-items:
+     - `$asserton/$assertoff/$assertkill`
+     - `$assertfailon/$assertfailoff`
+     - `$assertpasson/$assertpassoff`
+     - `$assertnonvacuouson/$assertvacuousoff/$assertvacuouson`
+     - `$assertcontrol(3..11)` state effects
+   - added regressions:
+     - `test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv`
+     - `test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv`
+   - compatibility updates:
+     - adjusted FileCheck robustness in:
+       - `test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
+       - `test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`
+   - validation:
+     - failing-first (pre-fix): both new lock tests failed due missing
+       `@__circt_assert_control_locked`.
+     - focused checks: PASS.
+     - compatibility checks: PASS.
+     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`: PASS.
+
 ## Iteration 1620 - February 22, 2026
 
 ### [SVA][Parity] Add explicit Yosys `counter/extnets` parity-lock regressions

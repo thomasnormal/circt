@@ -6114,3 +6114,56 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`: PASS
 4. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`: `real=0.007s`
+
+## 2026-02-22 Session: `$assertcontrol(1/2)` lock/unlock semantics
+
+### Problem
+1. `$assertcontrol(1)` / `$assertcontrol(2)` were accepted but had no stateful
+   effect in ImportVerilog lowering.
+2. Assertion-control updates were always applied, so lock semantics did not
+   exist in either procedural statements or sequence match-item lowering.
+
+### Fix
+1. Updated:
+   - `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`
+   - `lib/Conversion/ImportVerilog/Statements.cpp`
+   - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+2. Added synthetic global lock state:
+   - `@__circt_assert_control_locked` (init `0`, unlocked)
+3. Implemented lock/unlock mapping:
+   - `$assertcontrol(1)` => lock (`1`)
+   - `$assertcontrol(2)` => unlock (`0`)
+4. Gated control updates while locked for both procedural and match-item paths:
+   - `$asserton/$assertoff/$assertkill`
+   - `$assertfailon/$assertfailoff`
+   - `$assertpasson/$assertpassoff`
+   - `$assertnonvacuouson/$assertvacuousoff/$assertvacuouson`
+   - `$assertcontrol(3..11)` side effects
+
+### Regression coverage
+1. New:
+   - `test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv`
+   - `test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv`
+2. Compatibility updates:
+   - `test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
+   - `test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`
+
+### Validation
+1. Failing-first proof (pre-fix):
+   - both new lock tests failed with missing
+     `moore.global_variable @__circt_assert_control_locked`.
+2. Build:
+   - `ninja -C build-test circt-translate`: PASS
+3. Focused checks:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv --check-prefix=DIAG`: PASS
+4. Compatibility checks:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-subroutine.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv`: PASS
+5. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`: PASS
+6. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv`: `real=0.007s`

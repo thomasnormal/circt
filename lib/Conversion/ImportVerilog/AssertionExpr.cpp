@@ -1952,6 +1952,49 @@ struct AssertionExprVisitor {
                 moore::GetGlobalVariableOp::create(builder, loc, globalOp);
             return moore::ReadOp::create(builder, loc, globalRef);
           };
+          auto getOrCreateAssertionControlLockedGlobal =
+              [&]() -> moore::GlobalVariableOp {
+            if (context.assertionControlLockedGlobal)
+              return context.assertionControlLockedGlobal;
+
+            OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPointToStart(context.intoModuleOp.getBody());
+
+            std::string baseName = "__circt_assert_control_locked";
+            std::string symName = baseName;
+            unsigned suffix = 0;
+            while (context.symbolTable.lookup(symName))
+              symName = baseName + "_" + std::to_string(++suffix);
+
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto globalOp = moore::GlobalVariableOp::create(
+                builder, loc, builder.getStringAttr(symName), i1Ty);
+
+            auto &initBlock = globalOp.getInitRegion().emplaceBlock();
+            builder.setInsertionPointToEnd(&initBlock);
+            auto unlocked = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+            moore::YieldOp::create(builder, loc, unlocked);
+
+            context.assertionControlLockedGlobal = globalOp;
+            return globalOp;
+          };
+          auto readAssertionControlLocked = [&]() -> Value {
+            auto globalOp = getOrCreateAssertionControlLockedGlobal();
+            auto globalRef =
+                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+            return moore::ReadOp::create(builder, loc, globalRef);
+          };
+          auto writeAssertionControlLocked = [&](Value locked) -> LogicalResult {
+            auto globalOp = getOrCreateAssertionControlLockedGlobal();
+            auto targetType = globalOp.getType();
+            if (locked.getType() != targetType)
+              locked =
+                  moore::ConversionOp::create(builder, loc, targetType, locked);
+            auto globalRef =
+                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+            moore::BlockingAssignOp::create(builder, loc, globalRef, locked);
+            return success();
+          };
           auto selectBool = [&](Value cond, Value ifTrue, Value ifFalse) -> Value {
             if (ifTrue.getType() != ifFalse.getType())
               ifFalse = moore::ConversionOp::create(builder, loc, ifTrue.getType(),
@@ -1973,15 +2016,33 @@ struct AssertionExprVisitor {
           };
           if (name == "$assertoff" || name == "$assertkill") {
             auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto lockState = readAssertionControlLocked();
+            if (!lockState)
+              return failure();
+            auto currentEnabled = readProceduralAssertionsEnabled();
+            if (!currentEnabled)
+              return failure();
             auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
-            if (failed(writeProceduralAssertionsEnabled(disabled)))
+            auto nextState = selectBool(lockState, currentEnabled, disabled);
+            if (!nextState)
+              return failure();
+            if (failed(writeProceduralAssertionsEnabled(nextState)))
               return failure();
             break;
           }
           if (name == "$asserton") {
             auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto lockState = readAssertionControlLocked();
+            if (!lockState)
+              return failure();
+            auto currentEnabled = readProceduralAssertionsEnabled();
+            if (!currentEnabled)
+              return failure();
             auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
-            if (failed(writeProceduralAssertionsEnabled(enabled)))
+            auto nextState = selectBool(lockState, currentEnabled, enabled);
+            if (!nextState)
+              return failure();
+            if (failed(writeProceduralAssertionsEnabled(nextState)))
               return failure();
             break;
           }
@@ -1996,14 +2057,22 @@ struct AssertionExprVisitor {
                 controlType = moore::ConversionOp::create(builder, loc, i32Ty,
                                                           controlType);
 
+              auto currentLocked = readAssertionControlLocked();
+              if (!currentLocked)
+                return failure();
               auto currentEnabled = readProceduralAssertionsEnabled();
               if (!currentEnabled)
                 return failure();
+              auto c1 = moore::ConstantOp::create(builder, loc, i32Ty, 1);
+              auto c2 = moore::ConstantOp::create(builder, loc, i32Ty, 2);
               auto c3 = moore::ConstantOp::create(builder, loc, i32Ty, 3);
               auto c4 = moore::ConstantOp::create(builder, loc, i32Ty, 4);
               auto c5 = moore::ConstantOp::create(builder, loc, i32Ty, 5);
               auto c6 = moore::ConstantOp::create(builder, loc, i32Ty, 6);
               auto c7 = moore::ConstantOp::create(builder, loc, i32Ty, 7);
+              auto isLock = moore::EqOp::create(builder, loc, controlType, c1);
+              auto isUnlock =
+                  moore::EqOp::create(builder, loc, controlType, c2);
               auto isOff = moore::EqOp::create(builder, loc, controlType, c3);
               auto isOn = moore::EqOp::create(builder, loc, controlType, c4);
               auto isKill = moore::EqOp::create(builder, loc, controlType, c5);
@@ -2016,10 +2085,25 @@ struct AssertionExprVisitor {
               auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
               auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
               auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+              auto nextLockedAfterLock =
+                  selectBool(isLock, enabled, currentLocked);
+              if (!nextLockedAfterLock)
+                return failure();
+              auto nextLocked =
+                  selectBool(isUnlock, disabled, nextLockedAfterLock);
+              if (!nextLocked)
+                return failure();
+              if (failed(writeAssertionControlLocked(nextLocked)))
+                return failure();
+
               auto afterOff = selectBool(offOrKill, disabled, currentEnabled);
               if (!afterOff)
                 return failure();
-              auto nextState = selectBool(isOn, enabled, afterOff);
+              auto unlockedState = selectBool(isOn, enabled, afterOff);
+              if (!unlockedState)
+                return failure();
+              auto nextState =
+                  selectBool(currentLocked, currentEnabled, unlockedState);
               if (!nextState)
                 return failure();
               if (failed(writeProceduralAssertionsEnabled(nextState)))
@@ -2038,7 +2122,13 @@ struct AssertionExprVisitor {
                   selectBool(isFailOff, disabled, currentFailMsgsEnabled);
               if (!nextFailAfterOff)
                 return failure();
-              auto nextFailState = selectBool(isFailOn, enabled, nextFailAfterOff);
+              auto unlockedFailState =
+                  selectBool(isFailOn, enabled, nextFailAfterOff);
+              if (!unlockedFailState)
+                return failure();
+              auto nextFailState = selectBool(currentLocked,
+                                              currentFailMsgsEnabled,
+                                              unlockedFailState);
               if (!nextFailState)
                 return failure();
               if (failed(writeAssertionFailMessagesEnabled(nextFailState)))
@@ -2051,7 +2141,13 @@ struct AssertionExprVisitor {
                   selectBool(isPassOff, disabled, currentPassMsgsEnabled);
               if (!nextPassAfterOff)
                 return failure();
-              auto nextPassState = selectBool(isPassOn, enabled, nextPassAfterOff);
+              auto unlockedPassState =
+                  selectBool(isPassOn, enabled, nextPassAfterOff);
+              if (!unlockedPassState)
+                return failure();
+              auto nextPassState = selectBool(currentLocked,
+                                              currentPassMsgsEnabled,
+                                              unlockedPassState);
               if (!nextPassState)
                 return failure();
               if (failed(writeAssertionPassMessagesEnabled(nextPassState)))
@@ -2070,8 +2166,13 @@ struct AssertionExprVisitor {
                   selectBool(isVacuousOff, disabled, currentVacuousEnabled);
               if (!nextVacuousAfterOff)
                 return failure();
-              auto nextVacuousState =
+              auto unlockedVacuousState =
                   selectBool(isNonVacuousOn, disabled, nextVacuousAfterOff);
+              if (!unlockedVacuousState)
+                return failure();
+              auto nextVacuousState = selectBool(currentLocked,
+                                                 currentVacuousEnabled,
+                                                 unlockedVacuousState);
               if (!nextVacuousState)
                 return failure();
               if (failed(writeAssertionVacuousPassEnabled(nextVacuousState)))
@@ -2081,43 +2182,97 @@ struct AssertionExprVisitor {
           }
           if (name == "$assertfailoff") {
             auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto lockState = readAssertionControlLocked();
+            if (!lockState)
+              return failure();
+            auto current = readAssertionFailMessagesEnabled();
+            if (!current)
+              return failure();
             auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
-            if (failed(writeAssertionFailMessagesEnabled(disabled)))
+            auto next = selectBool(lockState, current, disabled);
+            if (!next)
+              return failure();
+            if (failed(writeAssertionFailMessagesEnabled(next)))
               return failure();
             break;
           }
           if (name == "$assertfailon") {
             auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto lockState = readAssertionControlLocked();
+            if (!lockState)
+              return failure();
+            auto current = readAssertionFailMessagesEnabled();
+            if (!current)
+              return failure();
             auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
-            if (failed(writeAssertionFailMessagesEnabled(enabled)))
+            auto next = selectBool(lockState, current, enabled);
+            if (!next)
+              return failure();
+            if (failed(writeAssertionFailMessagesEnabled(next)))
               return failure();
             break;
           }
           if (name == "$assertpasson") {
             auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto lockState = readAssertionControlLocked();
+            if (!lockState)
+              return failure();
+            auto current = readAssertionPassMessagesEnabled();
+            if (!current)
+              return failure();
             auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
-            if (failed(writeAssertionPassMessagesEnabled(enabled)))
+            auto next = selectBool(lockState, current, enabled);
+            if (!next)
+              return failure();
+            if (failed(writeAssertionPassMessagesEnabled(next)))
               return failure();
             break;
           }
           if (name == "$assertpassoff") {
             auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto lockState = readAssertionControlLocked();
+            if (!lockState)
+              return failure();
+            auto current = readAssertionPassMessagesEnabled();
+            if (!current)
+              return failure();
             auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
-            if (failed(writeAssertionPassMessagesEnabled(disabled)))
+            auto next = selectBool(lockState, current, disabled);
+            if (!next)
+              return failure();
+            if (failed(writeAssertionPassMessagesEnabled(next)))
               return failure();
             break;
           }
           if (name == "$assertnonvacuouson" || name == "$assertvacuousoff") {
             auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto lockState = readAssertionControlLocked();
+            if (!lockState)
+              return failure();
+            auto current = readAssertionVacuousPassEnabled();
+            if (!current)
+              return failure();
             auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
-            if (failed(writeAssertionVacuousPassEnabled(disabled)))
+            auto next = selectBool(lockState, current, disabled);
+            if (!next)
+              return failure();
+            if (failed(writeAssertionVacuousPassEnabled(next)))
               return failure();
             break;
           }
           if (name == "$assertvacuouson") {
             auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto lockState = readAssertionControlLocked();
+            if (!lockState)
+              return failure();
+            auto current = readAssertionVacuousPassEnabled();
+            if (!current)
+              return failure();
             auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
-            if (failed(writeAssertionVacuousPassEnabled(enabled)))
+            auto next = selectBool(lockState, current, enabled);
+            if (!next)
+              return failure();
+            if (failed(writeAssertionVacuousPassEnabled(next)))
               return failure();
             break;
           }

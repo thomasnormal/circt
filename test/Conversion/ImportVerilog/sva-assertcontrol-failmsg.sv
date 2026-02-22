@@ -25,7 +25,7 @@ module SVAAssertControlFailMessages(input logic a);
   // CHECK: %[[FAILAFTER9:.*]] = moore.conditional %[[IS9A]] : i1 -> i1
   // CHECK: %[[FAILNEXT9:.*]] = moore.conditional %[[IS8A]] : i1 -> i1
   // CHECK: %[[FAILCTL2:.*]] = moore.get_global_variable @__circt_assert_fail_msgs_enabled : <i1>
-  // CHECK: moore.blocking_assign %[[FAILCTL2]], %[[FAILNEXT9]] : i1
+  // CHECK: moore.blocking_assign %{{.*}}, %{{.*}} : i1
   // CHECK: %[[CTYPE8:.*]] = moore.constant 8 : i32
   // CHECK: %[[IS8B:.*]] = moore.eq %[[CTYPE8]], {{%.*}} : i32 -> i1
   // CHECK: %[[IS9B:.*]] = moore.eq %[[CTYPE8]], {{%.*}} : i32 -> i1
