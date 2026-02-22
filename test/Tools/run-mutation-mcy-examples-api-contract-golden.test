@@ -1,0 +1,48 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt %t/bin
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf 'module tb; initial begin $display("OK"); end endmodule\n' > %t/examples/bitcnt/bitcnt_tb.v
+// RUN: cp %S/Inputs/mutation-fake-circt-mut.sh %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+
+// RUN: %S/../../utils/run_mutation_mcy_examples_api.sh --help | FileCheck %s --check-prefix=HELP
+
+// RUN: env MUT_FAKE_DETECTED=3 MUT_FAKE_RELEVANT=4 MUT_FAKE_ERRORS=0 \
+// RUN:   %S/../../utils/run_mutation_mcy_examples_api.sh default \
+// RUN:   --smoke \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --out-dir %t/out-default
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out-default/summary.tsv
+// RUN: FileCheck %s --check-prefix=RETRY-SUMMARY < %t/out-default/retry-summary.tsv
+// RUN: FileCheck %s --check-prefix=RETRY-REASON < %t/out-default/retry-reason-summary.tsv
+// RUN: FileCheck %s --check-prefix=SUMMARY-SCHEMA < %t/out-default/summary.schema-version
+// RUN: FileCheck %s --check-prefix=RETRY-SCHEMA < %t/out-default/retry-reason-summary.schema-version
+// RUN: test -s %t/out-default/summary.schema-contract
+// RUN: test -s %t/out-default/retry-reason-summary.schema-contract
+
+// RUN: env MUT_FAKE_FAIL_IF_YOSYS=1 MUT_FAKE_REQUIRE_FLAGS_CSV=--mutations-file,--create-mutated-script MUT_FAKE_DETECTED=1 MUT_FAKE_RELEVANT=2 MUT_FAKE_ERRORS=0 \
+// RUN:   %S/../../utils/run_mutation_mcy_examples_api.sh native-real \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --out-dir %t/out-native
+// RUN: FileCheck %s --check-prefix=NATIVE-SUMMARY < %t/out-native/summary.tsv
+
+// HELP: usage: run_mutation_mcy_examples_api.sh <profile> [options]
+// HELP-DAG: default
+// HELP-DAG: native-real
+
+// SUMMARY: {{^example[[:space:]]status[[:space:]]exit_code[[:space:]]detected[[:space:]]relevant[[:space:]]coverage_percent[[:space:]]errors[[:space:]]policy_fingerprint$}}
+// SUMMARY: {{^bitcnt[[:space:]]PASS[[:space:]]0[[:space:]]3[[:space:]]4[[:space:]]75.00[[:space:]]0[[:space:]][0-9a-f]+$}}
+
+// RETRY-SUMMARY: {{^example[[:space:]]retry_attempts[[:space:]]retries_used$}}
+// RETRY-SUMMARY: {{^bitcnt[[:space:]]1[[:space:]]0$}}
+
+// RETRY-REASON: {{^retry_reason[[:space:]]retries$}}
+
+// SUMMARY-SCHEMA: {{^v2$}}
+// RETRY-SCHEMA: {{^v1$}}
+
+// NATIVE-SUMMARY: {{^example[[:space:]]status[[:space:]]exit_code[[:space:]]detected[[:space:]]relevant[[:space:]]coverage_percent[[:space:]]errors[[:space:]]policy_fingerprint$}}
+// NATIVE-SUMMARY: {{^bitcnt[[:space:]]PASS[[:space:]]0[[:space:]]1[[:space:]]2[[:space:]]50.00[[:space:]]0[[:space:]][0-9a-f]+$}}

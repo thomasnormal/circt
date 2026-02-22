@@ -1,0 +1,10 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/out
+// RUN: printf 'suite1\tsmoke\t-\t-\n' > %t/manifest.tsv
+// RUN: printf 'suite_id\tengine\tstatus\texit_code\telapsed_sec\tlog\n' > %t/out/summary.tsv
+// RUN: printf 'suite_id\tengine\tattempts\tretries_used\tstatus\texit_code\n' > %t/out/retry-summary.tsv
+// RUN: printf 'suite1\tcirct\t2\t1\tUNCONFIGURED\t125\n' >> %t/out/retry-summary.tsv
+
+// RUN: not %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --resume --out-dir %t/out 2>&1 | FileCheck %s
+
+// CHECK: invalid retry summary row 2 in {{.*}}/retry-summary.tsv: status 'UNCONFIGURED' requires attempts=1 and retries_used=0

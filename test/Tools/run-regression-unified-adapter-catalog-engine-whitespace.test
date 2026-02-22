@@ -1,0 +1,8 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'bad_adapter\tcirct \t/tmp/fake-circt\n' > %t/catalog.tsv
+// RUN: printf 'suite_a\tsmoke\t-\t-\t%t/suite-root\tbad_adapter\t-\t-\n' > %t/manifest.tsv
+
+// RUN: not %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --adapter-catalog %t/catalog.tsv --profile smoke --engine circt --out-dir %t/out 2>&1 | FileCheck %s
+
+// CHECK: invalid adapter catalog row 1 in {{.*}}/catalog.tsv: invalid engine 'circt ' (expected circt|xcelium)

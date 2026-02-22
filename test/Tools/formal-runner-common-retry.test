@@ -1,0 +1,3 @@
+// RUN: python3 %S/Inputs/formal_runner_common_retry.py %S/../../utils/formal/lib %t | FileCheck %s
+
+// CHECK: PASS: shared formal runner retry helper

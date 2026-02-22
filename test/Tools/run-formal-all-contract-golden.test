@@ -1,0 +1,40 @@
+// RUN: mkdir -p %t
+// RUN: printf "| Date | Suite | Mode | Result | Notes |\n|------|-------|------|--------|-------|\n" > %t/plan.md
+
+// RUN: %S/../../utils/run_formal_all.sh --help | FileCheck %s --check-prefix=HELP
+// RUN: python3 %S/../../utils/run_opentitan_circt_bmc.py --help | FileCheck %s --check-prefix=BMC-HELP
+// RUN: python3 %S/../../utils/run_opentitan_circt_lec.py --help | FileCheck %s --check-prefix=LEC-HELP
+
+// RUN: rm -rf %t/out
+// RUN: %S/../../utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/missing --verilator %t/missing2 --yosys %t/missing3 --yosys-lec-test-filter ".*" --yosys-bmc-test-filter ".*" --verilator-lec-test-filter ".*" --verilator-bmc-test-filter ".*" --sv-tests-uvm-bmc-semantics-test-filter ".*" --sv-tests-lec-test-filter ".*" --sv-tests-bmc-test-filter ".*" --update-baselines --baseline-file %t/baselines.tsv --plan-file %t/plan.md
+
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=SUMMARY-JSON < %t/out/summary.json
+// RUN: FileCheck %s --check-prefix=BASELINE < %t/baselines.tsv
+
+// HELP: run_formal_all.sh [options]
+// HELP-DAG: --out-dir
+// HELP-DAG: --update-baselines
+// HELP-DAG: --fail-on-diff
+
+// BMC-HELP: usage: run_opentitan_circt_bmc.py
+// BMC-HELP-DAG: --opentitan-root
+// BMC-HELP-DAG: --workdir
+// BMC-HELP-DAG: --results-file
+// BMC-HELP-DAG: --case-policy-file
+
+// LEC-HELP: usage: run_opentitan_circt_lec.py
+// LEC-HELP-DAG: --opentitan-root
+// LEC-HELP-DAG: --workdir
+// LEC-HELP-DAG: --results-file
+// LEC-HELP-DAG: --resolved-contracts-file
+
+// SUMMARY: {{^suite[[:space:]]mode[[:space:]]total[[:space:]]pass[[:space:]]fail[[:space:]]xfail[[:space:]]xpass[[:space:]]error[[:space:]]skip[[:space:]]summary$}}
+
+// SUMMARY-JSON: {{^\{$}}
+// SUMMARY-JSON: {{^  "date": "[0-9]{4}-[0-9]{2}-[0-9]{2}",$}}
+// SUMMARY-JSON: {{^  "git_sha": "[0-9a-f]+",$}}
+// SUMMARY-JSON: {{^  "rows": \[\]$}}
+// SUMMARY-JSON: {{^\}$}}
+
+// BASELINE: {{^date[[:space:]]suite[[:space:]]mode[[:space:]]total[[:space:]]pass[[:space:]]fail[[:space:]]xfail[[:space:]]xpass[[:space:]]error[[:space:]]skip[[:space:]]pass_rate[[:space:]]result.*$}}

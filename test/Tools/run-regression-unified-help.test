@@ -1,0 +1,7 @@
+// RUN: %S/../../utils/run_regression_unified.sh --help | FileCheck %s
+
+// CHECK: usage: run_regression_unified.sh [options]
+// CHECK-DAG: --manifest
+// CHECK-DAG: --profile MODE
+// CHECK-DAG: --engine MODE
+// CHECK-DAG: --dry-run

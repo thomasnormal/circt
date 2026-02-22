@@ -1,0 +1,15 @@
+// RUN: rm -rf %t && mkdir -p %t/examples/bitcnt %t/bin
+// RUN: printf 'module bitcnt(input logic a, output logic y); assign y = a; endmodule\n' > %t/examples/bitcnt/bitcnt.v
+// RUN: printf 'module tb; initial begin $display("OK"); end endmodule\n' > %t/examples/bitcnt/bitcnt_tb.v
+// RUN: cp %S/Inputs/mutation-fake-circt-mut.sh %t/bin/circt-mut
+// RUN: chmod +x %t/bin/circt-mut
+
+// RUN: env MUT_FAKE_FAIL_IF_YOSYS=1 MUT_FAKE_REQUIRE_FLAGS_CSV=--mutations-file,--create-mutated-script MUT_FAKE_DETECTED=1 MUT_FAKE_RELEVANT=2 MUT_FAKE_ERRORS=0 %S/../../utils/run_mutation_mcy_examples_api.sh native-real \
+// RUN:   --examples-root %t/examples \
+// RUN:   --example bitcnt \
+// RUN:   --circt-mut %t/bin/circt-mut \
+// RUN:   --out-dir %t/out
+
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+
+// SUMMARY: bitcnt{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}50.00{{[[:space:]]}}0

@@ -1,0 +1,8 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'bad_adapter\txcelium\t/tmp/fake-xcelium\n' > %t/catalog.tsv
+// RUN: printf 'suite_a\tsmoke\t-\t-\t%t/suite-root\t-\tbad_adapter \t-\n' > %t/manifest.tsv
+
+// RUN: not %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --adapter-catalog %t/catalog.tsv --profile smoke --engine xcelium --out-dir %t/out 2>&1 | FileCheck %s
+
+// CHECK: invalid manifest row 1: xcelium_adapter has leading/trailing whitespace

@@ -1,0 +1,7 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'suite_bad\tsmoke\n' > %t/manifest.tsv
+
+// RUN: not %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --out-dir %t/out 2>&1 | FileCheck %s
+
+// CHECK: invalid manifest row 1: expected at least 4 tab-separated columns (suite_id, profiles, circt_cmd, xcelium_cmd)

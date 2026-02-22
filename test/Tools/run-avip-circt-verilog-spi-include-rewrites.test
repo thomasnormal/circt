@@ -1,0 +1,10 @@
+// RUN: env CIRCT_VERILOG=%S/Inputs/avip-mini-axi4lite/print_args.sh \
+// RUN:   OUT=%t.log %S/../../utils/run_avip_circt_verilog.sh \
+// RUN:   %S/Inputs/avip-mini-spi %S/Inputs/avip-mini-spi/sim/SpiCompile.f
+// RUN: cat %t.log | FileCheck %s --check-prefix=ARGS
+// RUN: tmp_inc=$(grep -F '/.avip_tmp' %t.log | head -n1) && test -n "$tmp_inc" && cat "$tmp_inc/SpiMasterSeqItemConverter.sv" | FileCheck %s --check-prefix=PATCH
+
+// ARGS: .avip_tmp
+
+// PATCH: masterInSlaveOut[%0d]",i)
+// PATCH-NOT: masterInSlaveOut[%0d]",i,)

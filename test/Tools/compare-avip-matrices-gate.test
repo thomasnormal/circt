@@ -1,0 +1,34 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: cat > %t/circt.tsv <<'EOF'
+// RUN: avip	seed	compile_status	compile_sec	sim_status	sim_exit	sim_sec	sim_time_fs	uvm_fatal	uvm_error	cov_1_pct	cov_2_pct	peak_rss_kb	compile_log	sim_log
+// RUN: apb	1	OK	1	OK	0	2	100	0	0	30.00	40.00	111	/tmp/c	/tmp/s
+// RUN: i3c	1	OK	1	OK	0	2	100	0	0	20.00	20.00	111	/tmp/c	/tmp/s
+// RUN: EOF
+// RUN: cat > %t/xcelium.tsv <<'EOF'
+// RUN: avip	seed	compile_status	compile_sec	sim_status	sim_exit	sim_sec	sim_time_raw	sim_time_fs	uvm_fatal	uvm_error	cov_1_pct	cov_2_pct	peak_rss_kb	compile_log	sim_log
+// RUN: apb	1	OK	1	OK	0	2	10 ns	100	0	0	21.18	29.67	222	/tmp/c	/tmp/s
+// RUN: i3c	1	OK	1	OK	0	2	10 ns	100	0	0	35.19	35.19	222	/tmp/c	/tmp/s
+// RUN: EOF
+// RUN: cat > %t/xcelium_missing.tsv <<'EOF'
+// RUN: avip	seed	compile_status	compile_sec	sim_status	sim_exit	sim_sec	sim_time_raw	sim_time_fs	uvm_fatal	uvm_error	cov_1_pct	cov_2_pct	peak_rss_kb	compile_log	sim_log
+// RUN: apb	1	OK	1	OK	0	2	10 ns	100	0	0	21.18	29.67	222	/tmp/c	/tmp/s
+// RUN: EOF
+// RUN: python3 %S/../../utils/compare_avip_matrices.py %t/circt.tsv %t/xcelium.tsv --out-tsv %t/summary.tsv > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/summary.tsv
+// RUN: not python3 %S/../../utils/compare_avip_matrices.py %t/circt.tsv %t/xcelium.tsv --fail-on-coverage 2>&1 | FileCheck %s --check-prefix=FAILCOV
+// RUN: not python3 %S/../../utils/compare_avip_matrices.py %t/circt.tsv %t/xcelium_missing.tsv --fail-on-functional --require-row-match 2>&1 | FileCheck %s --check-prefix=FAILFUNC
+//
+// LOG: rows_total=2
+// LOG: functional_fail_rows=0
+// LOG: coverage_fail_rows=1
+// LOG: avip_summary avip=apb rows=1 functional_fail_rows=0 coverage_fail_rows=0
+// LOG: avip_summary avip=i3c rows=1 functional_fail_rows=0 coverage_fail_rows=1
+//
+// SUMMARY: avip{{[[:space:]]+}}rows_total{{[[:space:]]+}}rows_missing_circt
+// SUMMARY: apb{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}8.8200
+// SUMMARY: i3c{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}-15.1900
+//
+// FAILCOV: coverage parity gate failed: coverage_fail_rows=1
+// FAILFUNC: functional parity gate failed:

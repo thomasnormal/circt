@@ -1,0 +1,12 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/pass.sh
+// RUN: chmod +x %t/pass.sh
+// RUN: printf 'suite_a\tsmoke\t%t/pass.sh\t-\n' > %t/manifest.tsv
+
+// RUN: %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --out-dir %t/out --retry-summary-file %t/custom/retry/retry.tsv > %t/log.txt
+// RUN: test -f %t/custom/retry/retry.tsv
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+
+// LOG: retry_summary={{.*}}/custom/retry/retry.tsv
+// LOG: selected=1 failures=0

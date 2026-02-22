@@ -1,0 +1,22 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsleep 0.05\nexit 0\n' > %t/pass-slow.sh
+// RUN: chmod +x %t/pass-slow.sh
+// RUN: printf 'suite_a\tsmoke\t%t/pass-slow.sh\t-\n' > %t/manifest.tsv
+// RUN: printf 'suite_b\tsmoke\t%t/pass-slow.sh\t-\n' >> %t/manifest.tsv
+
+// RUN: %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --jobs 2 --out-dir %t/out > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=RETRY < %t/out/retry-summary.tsv
+
+// LOG: selected=2 failures=0
+// LOG: jobs=2
+
+// SUMMARY: {{^suite_id[[:space:]]+engine[[:space:]]+status[[:space:]]+exit_code[[:space:]]+elapsed_sec[[:space:]]+log$}}
+// SUMMARY-DAG: {{^suite_a[[:space:]]+circt[[:space:]]+PASS[[:space:]]+0[[:space:]]+[0-9]+[[:space:]]+.*suite_a\.circt\.log$}}
+// SUMMARY-DAG: {{^suite_b[[:space:]]+circt[[:space:]]+PASS[[:space:]]+0[[:space:]]+[0-9]+[[:space:]]+.*suite_b\.circt\.log$}}
+
+// RETRY: {{^suite_id[[:space:]]+engine[[:space:]]+attempts[[:space:]]+retries_used[[:space:]]+status[[:space:]]+exit_code$}}
+// RETRY-DAG: {{^suite_a[[:space:]]+circt[[:space:]]+1[[:space:]]+0[[:space:]]+PASS[[:space:]]+0$}}
+// RETRY-DAG: {{^suite_b[[:space:]]+circt[[:space:]]+1[[:space:]]+0[[:space:]]+PASS[[:space:]]+0$}}

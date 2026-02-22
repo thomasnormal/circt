@@ -1,0 +1,5 @@
+// RUN: rm -rf %t
+// RUN: printf 'suite1\ts moke\techo OK\t-\n' > %t_manifest.tsv
+// RUN: not %S/../../utils/run_regression_unified.sh --manifest %t_manifest.tsv --profile smoke --engine circt --out-dir %t_out 2>&1 | FileCheck %s
+
+// CHECK: invalid manifest row 1: unsupported profile token 's moke' (expected smoke|nightly|full|all)

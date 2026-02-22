@@ -1,0 +1,13 @@
+// RUN: python3 %S/../../utils/validate_formal_manifests.py \
+// RUN:   docs/formal_manifests/sv-tests.tsv \
+// RUN:   docs/formal_manifests/verilator-verification.tsv \
+// RUN:   docs/formal_manifests/yosys-tests.tsv \
+// RUN:   docs/formal_manifests/opentitan-formal-targets.tsv \
+// RUN:   > %t.out
+// RUN: FileCheck %s < %t.out
+
+// CHECK: ok: {{.*}}docs/formal_manifests/sv-tests.tsv rows=1
+// CHECK: ok: {{.*}}docs/formal_manifests/verilator-verification.tsv rows=1
+// CHECK: ok: {{.*}}docs/formal_manifests/yosys-tests.tsv rows=1
+// CHECK: ok: {{.*}}docs/formal_manifests/opentitan-formal-targets.tsv rows=3
+// CHECK: validated_manifests=4 total_rows=6

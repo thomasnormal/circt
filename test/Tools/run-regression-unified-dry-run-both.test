@@ -1,0 +1,24 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt.sh
+// RUN: chmod +x %t/fake-circt.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-xcelium.sh
+// RUN: chmod +x %t/fake-xcelium.sh
+// RUN: printf 'suite_a\tsmoke,nightly\t%t/fake-circt.sh --seed 1\t%t/fake-xcelium.sh --seed 1\n' > %t/manifest.tsv
+// RUN: printf 'suite_b\tfull\t%t/fake-circt.sh --seed 2\t%t/fake-xcelium.sh --seed 2\n' >> %t/manifest.tsv
+
+// RUN: %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine both --dry-run --out-dir %t/out > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=PLAN < %t/out/plan.tsv
+
+// LOG: [run-regression-unified] manifest={{.*}}/manifest.tsv profile=smoke engine=both dry_run=1
+// LOG: selected=1 failures=0
+
+// SUMMARY: {{^suite_id[[:space:]]+engine[[:space:]]+status[[:space:]]+exit_code[[:space:]]+elapsed_sec[[:space:]]+log$}}
+// SUMMARY-DAG: {{^suite_a[[:space:]]+circt[[:space:]]+DRYRUN[[:space:]]+0[[:space:]]+0[[:space:]]+.*suite_a\.circt\.log$}}
+// SUMMARY-DAG: {{^suite_a[[:space:]]+xcelium[[:space:]]+DRYRUN[[:space:]]+0[[:space:]]+0[[:space:]]+.*suite_a\.xcelium\.log$}}
+
+// PLAN: {{^suite_id[[:space:]]+engine[[:space:]]+command$}}
+// PLAN-DAG: {{^suite_a[[:space:]]+circt[[:space:]]+.*fake-circt\.sh --seed 1$}}
+// PLAN-DAG: {{^suite_a[[:space:]]+xcelium[[:space:]]+.*fake-xcelium\.sh --seed 1$}}

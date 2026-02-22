@@ -1,0 +1,3 @@
+// RUN: not %S/../../utils/run_regression_unified.sh --manifest --profile smoke 2>&1 | FileCheck %s
+
+// CHECK: missing value for --manifest

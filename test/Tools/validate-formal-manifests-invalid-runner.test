@@ -1,0 +1,6 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'suite_id\tdefault_root\tbmc_runner\tbmc_args\tlec_runner\tlec_args\tprofiles\tnotes\n' > %t/bad.tsv
+// RUN: printf 'bad\t~/x\tutils/does_not_exist.sh\t-\t-\t-\tnightly\tnote\n' >> %t/bad.tsv
+// RUN: not python3 %S/../../utils/validate_formal_manifests.py %t/bad.tsv 2>&1 | FileCheck %s
+
+// CHECK: error: runner path not found for suite 'bad' field 'bmc_runner'

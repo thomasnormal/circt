@@ -1,0 +1,4 @@
+// RUN: printf 'exact:cfp_x\n' > %t.allow
+// RUN: not %S/../../utils/run_formal_all.sh --mutation-bmc-contract-fingerprint-parity-allowlist-file %t.allow 2>&1 | FileCheck %s
+
+// CHECK: --mutation-bmc-contract-fingerprint-parity-allowlist-file requires --fail-on-mutation-bmc-contract-fingerprint-parity, --fail-on-new-mutation-bmc-contract-fingerprint-parity, or --strict-gate

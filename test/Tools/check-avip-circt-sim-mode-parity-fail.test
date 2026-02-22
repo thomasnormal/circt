@@ -1,0 +1,11 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'avip\tseed\tcompile_status\tcompile_sec\tsim_status\tsim_exit\tsim_sec\tsim_time_fs\tuvm_fatal\tuvm_error\tcov_1_pct\tcov_2_pct\tpeak_rss_kb\tcompile_log\tsim_log\napb\t1\tOK\t3\tOK\t0\t7\t2000\t0\t0\t100\t95\t1234\t/tmp/c.log\t/tmp/i.log\n' > %t/interpret.tsv
+// RUN: printf 'avip\tseed\tcompile_status\tcompile_sec\tsim_status\tsim_exit\tsim_sec\tsim_time_fs\tuvm_fatal\tuvm_error\tcov_1_pct\tcov_2_pct\tpeak_rss_kb\tcompile_log\tsim_log\napb\t1\tOK\t3\tOK\t1\t8\t2000\t0\t0\t100\t95\t1200\t/tmp/c.log\t/tmp/c.log\n' > %t/compile.tsv
+// RUN: not python3 %S/../../utils/check_avip_circt_sim_mode_parity.py --interpret-matrix %t/interpret.tsv --compile-matrix %t/compile.tsv --out-parity-tsv %t/parity.tsv --fail-on-mismatch 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=PARITY < %t/parity.tsv
+//
+// LOG: mode parity mismatches detected
+// LOG: apb/1:sim_exit
+// PARITY: avip{{[[:space:]]+}}seed{{[[:space:]]+}}kind{{[[:space:]]+}}interpret{{[[:space:]]+}}compile{{[[:space:]]+}}allowlisted
+// PARITY: apb{{[[:space:]]+}}1{{[[:space:]]+}}sim_exit{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0

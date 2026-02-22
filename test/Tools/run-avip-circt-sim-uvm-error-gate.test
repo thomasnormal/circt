@@ -1,0 +1,16 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/mbit/apb_avip/sim
+// RUN: : > %t/mbit/apb_avip/sim/apb_compile.f
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: > "${OUT:?OUT is required}"\n' > %t/fake-run-avip.sh
+// RUN: chmod +x %t/fake-run-avip.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "[circt-sim] Simulation completed at time 42 fs"\necho "UVM_ERROR fake_scoreboard.sv(1) @ 10 ns: sb [CMP] mismatch"\necho "Coverage = 100 %%%%"\necho "Coverage = 100 %%%%"\n' > %t/fake-circt-sim
+// RUN: chmod +x %t/fake-circt-sim
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/fake-circt-verilog
+// RUN: chmod +x %t/fake-circt-verilog
+// RUN: env MBIT_DIR=%t/mbit AVIPS=apb SEEDS=1 CIRCT_VERILOG=%t/fake-circt-verilog CIRCT_SIM=%t/fake-circt-sim CIRCT_ALLOW_NONCANONICAL_TOOLS=1 RUN_AVIP=%t/fake-run-avip.sh COMPILE_TIMEOUT=10 SIM_TIMEOUT=10 MAX_WALL_MS=1000 %S/../../utils/run_avip_circt_sim.sh %t/out > %t/log.txt 2>&1
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=MATRIX < %t/out/matrix.tsv
+//
+// LOG: [avip-circt-sim] apb seed=1 sim_status=FAIL sim_exit=0
+// MATRIX: avip{{[[:space:]]+}}seed{{[[:space:]]+}}compile_status
+// MATRIX: apb{{[[:space:]]+}}1{{[[:space:]]+}}OK{{[[:space:]]+}}[[COMPILE_SEC:[0-9]+]]{{[[:space:]]+}}FAIL{{[[:space:]]+}}0{{[[:space:]]+}}[[SIM_SEC:[0-9]+]]{{[[:space:]]+}}42{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}100{{[[:space:]]+}}100

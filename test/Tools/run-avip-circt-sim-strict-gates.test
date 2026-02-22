@@ -1,0 +1,19 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/mbit/apb_avip/sim
+// RUN: : > %t/mbit/apb_avip/sim/apb_compile.f
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: > "${OUT:?OUT is required}"\n' > %t/fake-run-avip.sh
+// RUN: chmod +x %t/fake-run-avip.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "[circt-sim] Simulation completed at time 42 fs"\nif [[ "${LOW_COV:-0}" == "1" ]]; then\n  echo "UVM_FATAL : 0"\n  echo "UVM_ERROR : 0"\n  echo "Coverage = 1 %%%%"\n  echo "Coverage = 1 %%%%"\nelse\n  echo "UVM_ERROR fake_scoreboard.sv(1) @ 10 ns: sb [CMP] mismatch"\n  echo "Coverage = 100 %%%%"\n  echo "Coverage = 100 %%%%"\nfi\n' > %t/fake-circt-sim
+// RUN: chmod +x %t/fake-circt-sim
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/fake-circt-verilog
+// RUN: chmod +x %t/fake-circt-verilog
+// RUN: not env MBIT_DIR=%t/mbit AVIPS=apb SEEDS=1 CIRCT_VERILOG=%t/fake-circt-verilog CIRCT_SIM=%t/fake-circt-sim CIRCT_ALLOW_NONCANONICAL_TOOLS=1 RUN_AVIP=%t/fake-run-avip.sh FAIL_ON_FUNCTIONAL_GATE=1 COMPILE_TIMEOUT=10 SIM_TIMEOUT=10 MAX_WALL_MS=1000 %S/../../utils/run_avip_circt_sim.sh %t/out-functional > %t/log-functional.txt 2>&1
+// RUN: FileCheck %s --check-prefix=FUNC < %t/log-functional.txt
+// RUN: not env MBIT_DIR=%t/mbit AVIPS=apb SEEDS=1 CIRCT_VERILOG=%t/fake-circt-verilog CIRCT_SIM=%t/fake-circt-sim CIRCT_ALLOW_NONCANONICAL_TOOLS=1 RUN_AVIP=%t/fake-run-avip.sh FAIL_ON_COVERAGE_BASELINE=1 LOW_COV=1 COMPILE_TIMEOUT=10 SIM_TIMEOUT=10 MAX_WALL_MS=1000 %S/../../utils/run_avip_circt_sim.sh %t/out-coverage > %t/log-coverage.txt 2>&1
+// RUN: FileCheck %s --check-prefix=COV < %t/log-coverage.txt
+//
+// FUNC: [avip-circt-sim] gate-summary functional_fail_rows=1
+// FUNC: error: functional gate failed: 1 row(s)
+//
+// COV: [avip-circt-sim] gate-summary functional_fail_rows=0 coverage_fail_rows=1
+// COV: error: coverage baseline gate failed: 1 row(s)

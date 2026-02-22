@@ -1,0 +1,15 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt.sh
+// RUN: chmod +x %t/fake-circt.sh
+// RUN: printf 'only_circt\tcirct\t%t/fake-circt.sh\n' > %t/catalog.tsv
+// RUN: printf 'suite_a\tsmoke\t-\t-\t%t/suite-root\tonly_circt\tonly_circt\t-\n' > %t/manifest.tsv
+
+// RUN: %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --adapter-catalog %t/catalog.tsv --profile smoke --engine circt --dry-run --out-dir %t/out > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=PLAN < %t/out/plan.tsv
+
+// LOG: selected=1 failures=0
+
+// PLAN: {{^suite_id[[:space:]]+engine[[:space:]]+command$}}
+// PLAN: {{^suite_a[[:space:]]+circt[[:space:]]+.*fake-circt\.sh .*suite-root$}}
