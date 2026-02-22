@@ -143,6 +143,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    unpacked arrays via helper-procedure sampled state and `moore.uarray_cmp`.
    Added dedicated positive/negative regressions for explicit clocking and
    canonical diagnostics on unsupported `$rose/$fell` unpacked-array operands.
+16. **SVA explicit-clock unpacked-array `$past` support** (Feb 22, 2026):
+   ImportVerilog now lowers explicit-clocked `$past` on fixed-size unpacked
+   arrays using typed helper history storage, closing the previous
+   `unsupported $past value type with explicit clocking` gap.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to

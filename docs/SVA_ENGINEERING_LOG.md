@@ -1227,3 +1227,25 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv` (`real=0.007s`)
+
+- Iteration update (explicit-clocked `$past` on unpacked arrays):
+  - realization:
+    - explicit-clock sampled helpers were extended for unpacked arrays, but
+      explicit-clock `$past` still hard-required bit-vector conversion and
+      emitted `unsupported $past value type with explicit clocking` for legal
+      fixed-size unpacked array operands.
+  - implemented:
+    - extended `lowerPastWithClocking` to support fixed-size unpacked arrays by
+      using typed unpacked-array helper state for history/result storage.
+    - retained existing behavior for scalar/packed/string via bit-vector path.
+    - new regression:
+      - `test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv > /dev/null`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv > /dev/null`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv` (`real=0.007s`)
