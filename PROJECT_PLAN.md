@@ -213,6 +213,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    size-aware elementwise case-equality semantics (including nested aggregate
    members), replacing unsupported/incorrect dynamic case-compare behavior in
    procedural and SVA expression contexts.
+33. **Explicit-clock `$past` for dynamic arrays/queues** (Feb 22, 2026):
+   ImportVerilog now supports explicit sampled-clock `$past(..., @(event))` for
+   open unpacked arrays and queues in assertions, using typed helper history
+   state instead of rejecting those operand types.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to

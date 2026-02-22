@@ -1677,3 +1677,29 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv` (`real=0.007s`)
+
+- Iteration update (explicit-clock `$past` for dynamic arrays/queues):
+  - realization:
+    - explicit sampled-clock `$past(..., @(event))` still rejected dynamic
+      arrays and queues with `unsupported $past value type with explicit
+      clocking`, even after sampled/equality parity work for those types.
+  - TDD proof:
+    - added `test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`.
+    - before fix:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`
+      - failed at first assertion with
+        `error: unsupported $past value type with explicit clocking`.
+  - implemented:
+    - extended explicit-clock `$past` aggregate classification in
+      `AssertionExpr.cpp` to treat `open_uarray` and `queue` like other typed
+      unpacked aggregates for helper history storage and update semantics.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv` (`real=0.007s`)

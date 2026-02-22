@@ -1,3 +1,34 @@
+## Iteration 1596 - February 22, 2026
+
+### [ImportVerilog][SVA] Support explicit-clock `$past` for dynamic arrays/queues
+
+1. **Implemented explicit-clock typed `$past` lowering for dynamic aggregates**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - extended explicit-clock `$past` aggregate classification to include:
+     - `moore::OpenUnpackedArrayType`
+     - `moore::QueueType`
+   - these operands now use typed helper history storage in the generated
+     always-procedure flow, matching existing unpacked aggregate treatment.
+
+2. **Behavioral fix**
+   - removes prior `unsupported $past value type with explicit clocking`
+     rejection for dynamic arrays/queues.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1595 - February 22, 2026
 
 ### [ImportVerilog][SVA] Add dynamic-array/queue case equality (`===` / `!==`)
