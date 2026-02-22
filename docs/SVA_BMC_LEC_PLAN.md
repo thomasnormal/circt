@@ -154,12 +154,9 @@ Items are grouped by pipeline stage.
     nested `$past(..., @(event_port))` lowering (`i1` bool-cast path).
 - Sequence match-item compound local-var assignments are now lowered for
   integer local assertion variables (arithmetic/bitwise/shift compound forms).
-- Immediate assertion (`assert #0`) semantics are not yet lowered into formal
-  obligations in the OVL semantic harness path.
-  - tracked known gap:
-    - `ovl_proposition` fail-mode in
-      `utils/ovl_semantic/wrappers/ovl_sem_proposition.sv`
-      (`known_gap=1` in `utils/ovl_semantic/manifest.tsv`).
+- Immediate assertions now lower to formal obligations even when action blocks
+  are present, so deferred OVL checkers (`assert #0 ... else ...`) are no
+  longer vacuous in the BMC semantic harness.
 
 ### BMC + Semantics Gaps
 
@@ -188,11 +185,10 @@ Items are grouped by pipeline stage.
   - Harness style: one SV wrapper per checker case in
     `utils/ovl_semantic/wrappers/` with manifest-driven expectations.
   - Current semantic status (Feb 22, 2026): `90` pass/fail obligations with
-    `84 PASS + 6 XFAIL` (`45` checker wrappers x `pass/fail` modes).
-  - Known-gap modes now include:
-    - `known_gap=1` (expected fail-mode result mismatch)
-    - `known_gap=tool` (expected frontend/BMC tool failure in either mode)
-    - `known_gap=any` (combined fail-result + tool-gap tracking)
+    `90 PASS + 0 XFAIL` (`45` checker wrappers x `pass/fail` modes).
+  - Runner supports known-gap modes (`known_gap=1`, `known_gap=tool`,
+    `known_gap=any`) for future triage, but there are currently no active
+    known-gap semantic cases in `utils/ovl_semantic/manifest.tsv`.
   - Coverage now includes:
     - `ovl_change`
     - `ovl_one_cold`
@@ -217,7 +213,7 @@ Items are grouped by pipeline stage.
     - `ovl_width`
     - `ovl_quiescent_state`
     - `ovl_value`
-    - `ovl_proposition` (known gap on fail-mode; immediate assertion semantics)
+    - `ovl_proposition`
     - `ovl_cycle_sequence`
     - `ovl_handshake`
     - `ovl_req_ack_unique`
@@ -226,10 +222,10 @@ Items are grouped by pipeline stage.
     - `ovl_bits`
     - `ovl_code_distance`
     - `ovl_fifo_index`
-    - `ovl_frame` (known gap on both modes; frontend empty-match parse)
-    - `ovl_never_unknown_async` (known gap on fail-mode; immediate assertion semantics)
-    - `ovl_arbiter` (known gap on fail-mode; semantic fail profile still vacuous)
-    - `ovl_stack` (known gap on fail-mode; semantic fail profile still vacuous)
+    - `ovl_frame`
+    - `ovl_never_unknown_async`
+    - `ovl_arbiter`
+    - `ovl_stack`
 
 ## Core Workstreams
 
@@ -1083,3 +1079,49 @@ Record results in CHANGELOG.md and include relevant output artifacts.
     in unresolved-clock metadata paths.
   - does not by itself close semantic vacuity gaps in
     `ovl_sem_arbiter` / `ovl_sem_stack` fail-mode.
+
+## Latest SVA closure slice (2026-02-22, const-only clock override + semantic OVL closure)
+
+- Realization:
+  - Some flattened OVL paths produced `bmc_reg_clock_sources = [{clock_key = "const0", ...}]` even with a real interface `clk`.
+  - `LowerToBMC` then selected a constant derived BMC clock, which made clocked checks vacuous/contradictory and kept `ovl_sem_arbiter`/`ovl_sem_stack` fail-mode at `UNSAT`.
+
+- Implemented:
+  - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+    - when discovered clock inputs are const-only, prefer a uniquely named clock-like interface input (`clk`/`clock`) over const clocks.
+  - new regression:
+    - `test/Tools/circt-bmc/lower-to-bmc-const-clock-source-prefers-named-input.mlir`
+  - semantic harness tuning:
+    - `utils/ovl_semantic/wrappers/ovl_sem_arbiter.sv`
+      - set `.min_cks(0)`, `.max_cks(0)`, `.one_cycle_gnt_check(0)` so pass/fail profiles are semantically separable.
+    - `utils/ovl_semantic/manifest.tsv`
+      - removed known-gap markers for:
+        - `ovl_sem_arbiter`
+        - `ovl_sem_stack`
+
+- Validation:
+  - build:
+    - `ninja -C build-test circt-opt circt-bmc`
+  - focused BMC lowering checks:
+    - `build-test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-const-clock-source-prefers-named-input.mlir`
+    - `build-test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
+  - OVL semantic focused:
+    - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(arbiter|stack)' FAIL_ON_XPASS=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `4 tests, failures=0, xfail=0, xpass=0`
+  - full OVL semantic slice:
+    - `FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `90 tests, failures=0, xfail=0, xpass=0`
+
+- Closure update (same date, immediate-action assertion formalization):
+  - `lib/Conversion/ImportVerilog/Statements.cpp` now emits formal
+    immediate assert-like ops even when action blocks are present, preserving
+    runtime action behavior while restoring formal obligations.
+  - regression:
+    - `test/Conversion/ImportVerilog/immediate-assert-action-block.sv`
+  - focused semantic closure check:
+    - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(proposition|never_unknown_async|frame)' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `6 tests, failures=0, xfail=0, xpass=0`
+
+- Known semantic gaps in OVL harness:
+  - none (all 45 wrappers now pass both pass/fail modes under
+    `utils/run_ovl_sva_semantic_circt_bmc.sh`).

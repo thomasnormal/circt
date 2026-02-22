@@ -1397,6 +1397,65 @@ void LowerToBMCPass::runOnOperation() {
       }
     }
 
+    // If clock discovery only found constant clocks, but there is a single
+    // clock-like interface input with a clock-ish name, prefer that input.
+    // This avoids vacuous BMC setups where unresolved metadata points to
+    // const0/const1 despite a real top-level clock port being present.
+    if (!clockInputs.empty()) {
+      auto isConstClockInput = [&](const ClockInputInfo &input) {
+        return getConstI1Value(input.canonical).has_value() ||
+               getConstI1Value(input.value).has_value();
+      };
+      if (llvm::all_of(clockInputs, isConstClockInput)) {
+        auto isClockLikeInput = [&](Type type) -> bool {
+          if (isa<seq::ClockType>(type))
+            return true;
+          if (auto intTy = dyn_cast<IntegerType>(type))
+            return intTy.getWidth() == 1;
+          auto structTy = dyn_cast<hw::StructType>(type);
+          if (!structTy)
+            return false;
+          auto valueField = structTy.getFieldType("value");
+          auto unknownField = structTy.getFieldType("unknown");
+          if (!valueField || !unknownField)
+            return false;
+          auto valueIntTy = dyn_cast<IntegerType>(valueField);
+          auto unknownIntTy = dyn_cast<IntegerType>(unknownField);
+          return valueIntTy && unknownIntTy && valueIntTy.getWidth() == 1 &&
+                 unknownIntTy.getWidth() == 1;
+        };
+
+        auto inputTypes = hwModule.getInputTypes();
+        auto inputNames = hwModule.getInputNames();
+        unsigned interfaceInputs = inputTypes.size();
+        if (numRegs) {
+          auto regCount = cast<IntegerAttr>(numRegs).getValue().getZExtValue();
+          if (regCount <= interfaceInputs)
+            interfaceInputs -= regCount;
+        }
+
+        SmallVector<unsigned> namedClockCandidates;
+        for (unsigned idx = 0; idx < interfaceInputs; ++idx) {
+          if (!isClockLikeInput(inputTypes[idx]))
+            continue;
+          if (idx >= inputNames.size())
+            continue;
+          auto nameAttr = dyn_cast<StringAttr>(inputNames[idx]);
+          if (!nameAttr)
+            continue;
+          StringRef name = nameAttr.getValue();
+          if (name.contains("clock") || name.contains("clk"))
+            namedClockCandidates.push_back(idx);
+        }
+
+        if (namedClockCandidates.size() == 1) {
+          clockInputs.clear();
+          maybeAddClockInput(
+              hwModule.getBody().front().getArgument(namedClockCandidates[0]));
+        }
+      }
+    }
+
     if (!clockInputs.empty()) {
       auto traceRoot = [&](Value value, BlockArgument &root) -> bool {
         return traceI1ValueRoot(value, root);

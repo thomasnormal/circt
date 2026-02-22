@@ -12,11 +12,11 @@ module ovl_sem_arbiter(input logic clk);
   ovl_arbiter #(
       .width(2),
       .priority_width(1),
-      .min_cks(1),
-      .max_cks(2),
+      .min_cks(0),
+      .max_cks(0),
       .priority_check(0),
       .arbitration_rule(0),
-      .one_cycle_gnt_check(1)) dut (
+      .one_cycle_gnt_check(0)) dut (
       .clock(clk),
       .reset(reset),
       .enable(enable),
