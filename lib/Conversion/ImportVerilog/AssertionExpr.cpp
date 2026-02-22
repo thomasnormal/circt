@@ -920,6 +920,8 @@ static Value lowerPastWithClocking(Context &context,
   auto originalUnpacked = dyn_cast<moore::UnpackedType>(originalType);
   bool isUnpackedAggregateSample =
       isa<moore::UnpackedArrayType>(originalType) ||
+      isa<moore::OpenUnpackedArrayType>(originalType) ||
+      isa<moore::QueueType>(originalType) ||
       isa<moore::UnpackedStructType>(originalType) ||
       isa<moore::UnpackedUnionType>(originalType);
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
