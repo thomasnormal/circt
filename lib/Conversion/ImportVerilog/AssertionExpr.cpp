@@ -1850,6 +1850,96 @@ struct AssertionExprVisitor {
             moore::BlockingAssignOp::create(builder, loc, globalRef, enabled);
             return success();
           };
+          auto getOrCreateAssertionPassMessagesEnabledGlobal =
+              [&]() -> moore::GlobalVariableOp {
+            if (context.assertionPassMessagesEnabledGlobal)
+              return context.assertionPassMessagesEnabledGlobal;
+
+            auto *insertionBlock = builder.getInsertionBlock();
+            auto *parentOp =
+                insertionBlock ? insertionBlock->getParentOp() : nullptr;
+            auto module = parentOp ? parentOp->getParentOfType<mlir::ModuleOp>()
+                                   : mlir::ModuleOp{};
+            if (!module) {
+              mlir::emitError(loc)
+                  << "failed to create assertion-pass control global outside "
+                     "module scope";
+              return {};
+            }
+
+            OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPointToStart(module.getBody());
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto globalOp = moore::GlobalVariableOp::create(
+                builder, loc, "__circt_assert_pass_msgs_enabled", i1Ty);
+
+            auto &initBlock = globalOp.getInitRegion().emplaceBlock();
+            builder.setInsertionPointToEnd(&initBlock);
+            auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+            moore::YieldOp::create(builder, loc, enabled);
+
+            context.assertionPassMessagesEnabledGlobal = globalOp;
+            return globalOp;
+          };
+          auto writeAssertionPassMessagesEnabled =
+              [&](Value enabled) -> LogicalResult {
+            auto globalOp = getOrCreateAssertionPassMessagesEnabledGlobal();
+            if (!globalOp)
+              return failure();
+            auto targetType = globalOp.getType();
+            if (enabled.getType() != targetType)
+              enabled =
+                  moore::ConversionOp::create(builder, loc, targetType, enabled);
+            auto globalRef =
+                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+            moore::BlockingAssignOp::create(builder, loc, globalRef, enabled);
+            return success();
+          };
+          auto getOrCreateAssertionVacuousPassEnabledGlobal =
+              [&]() -> moore::GlobalVariableOp {
+            if (context.assertionVacuousPassEnabledGlobal)
+              return context.assertionVacuousPassEnabledGlobal;
+
+            auto *insertionBlock = builder.getInsertionBlock();
+            auto *parentOp =
+                insertionBlock ? insertionBlock->getParentOp() : nullptr;
+            auto module = parentOp ? parentOp->getParentOfType<mlir::ModuleOp>()
+                                   : mlir::ModuleOp{};
+            if (!module) {
+              mlir::emitError(loc)
+                  << "failed to create assertion-vacuous control global outside "
+                     "module scope";
+              return {};
+            }
+
+            OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPointToStart(module.getBody());
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto globalOp = moore::GlobalVariableOp::create(
+                builder, loc, "__circt_assert_vacuous_pass_enabled", i1Ty);
+
+            auto &initBlock = globalOp.getInitRegion().emplaceBlock();
+            builder.setInsertionPointToEnd(&initBlock);
+            auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+            moore::YieldOp::create(builder, loc, enabled);
+
+            context.assertionVacuousPassEnabledGlobal = globalOp;
+            return globalOp;
+          };
+          auto writeAssertionVacuousPassEnabled =
+              [&](Value enabled) -> LogicalResult {
+            auto globalOp = getOrCreateAssertionVacuousPassEnabledGlobal();
+            if (!globalOp)
+              return failure();
+            auto targetType = globalOp.getType();
+            if (enabled.getType() != targetType)
+              enabled =
+                  moore::ConversionOp::create(builder, loc, targetType, enabled);
+            auto globalRef =
+                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+            moore::BlockingAssignOp::create(builder, loc, globalRef, enabled);
+            return success();
+          };
           auto selectBool = [&](Value cond, Value ifTrue, Value ifFalse) -> Value {
             if (ifTrue.getType() != ifFalse.getType())
               ifFalse = moore::ConversionOp::create(builder, loc, ifTrue.getType(),
@@ -1952,8 +2042,32 @@ struct AssertionExprVisitor {
               return failure();
             break;
           }
-          if (name == "$assertpasson" || name == "$assertpassoff" ||
-              name == "$assertnonvacuouson" || name == "$assertvacuousoff") {
+          if (name == "$assertpasson") {
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+            if (failed(writeAssertionPassMessagesEnabled(enabled)))
+              return failure();
+            break;
+          }
+          if (name == "$assertpassoff") {
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+            if (failed(writeAssertionPassMessagesEnabled(disabled)))
+              return failure();
+            break;
+          }
+          if (name == "$assertnonvacuouson" || name == "$assertvacuousoff") {
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+            if (failed(writeAssertionVacuousPassEnabled(disabled)))
+              return failure();
+            break;
+          }
+          if (name == "$assertvacuouson") {
+            auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+            auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+            if (failed(writeAssertionVacuousPassEnabled(enabled)))
+              return failure();
             break;
           }
           if (name == "$set_coverage_db_name" || name == "$load_coverage_db") {

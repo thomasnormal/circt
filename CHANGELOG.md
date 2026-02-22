@@ -1,3 +1,37 @@
+## Iteration 1621 - February 22, 2026
+
+### [ImportVerilog][SVA] Add stateful pass/vacuous assertion-control match-items
+
+1. **Implemented additional assertion-control side effects in sequence match-items**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`,
+   `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`):
+   - added synthetic globals:
+     - `@__circt_assert_pass_msgs_enabled`
+     - `@__circt_assert_vacuous_pass_enabled`
+   - added match-item lowering with stateful writes for:
+     - `$assertpasson`
+     - `$assertpassoff`
+     - `$assertnonvacuouson`
+     - `$assertvacuousoff`
+     - `$assertvacuouson`
+   - globals are now explicitly created at top-level `builtin.module` scope to
+     satisfy symbol table constraints under assertion-expression lowering.
+
+2. **Regression hardening**
+   - strengthened existing test:
+     - `test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-subroutine.sv`
+   - now requires new globals in imported IR in addition to prior
+     assertion-control side-effect checks.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate`: PASS.
+   - focused checks:
+     - `sva-sequence-match-item-assertcontrol-subroutine.sv`: PASS.
+     - `sva-sequence-match-item-severity-subroutine.sv`: PASS.
+     - `sva-sequence-match-item-system-subroutine.sv`: PASS.
+   - focused lit:
+     - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-severity-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv`: PASS.
+
 ## Iteration 1620 - February 22, 2026
 
 ### [SVA][Parity] Add explicit Yosys `counter/extnets` parity-lock regressions

@@ -25,6 +25,8 @@ module SVASequenceMatchItemAssertControlSubroutine(input logic clk, a);
   // Assertion-control match-item tasks should preserve control side effects.
   // CHECK-DAG: moore.global_variable @__circt_proc_assertions_enabled
   // CHECK-DAG: moore.global_variable @__circt_assert_fail_msgs_enabled
+  // CHECK-DAG: moore.global_variable @__circt_assert_pass_msgs_enabled
+  // CHECK-DAG: moore.global_variable @__circt_assert_vacuous_pass_enabled
   // CHECK-LABEL: moore.module @SVASequenceMatchItemAssertControlSubroutine
   // CHECK: moore.blocking_assign
   // CHECK: verif.assert
