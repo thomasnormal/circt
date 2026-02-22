@@ -233,6 +233,12 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now accepts integral truthy expressions in SVA event controls
    (for example `@(e)` and mixed `@(s or e)` with multi-bit `e`) by
    normalizing event expressions through boolean conversion before `i1`.
+38. **Procedural concurrent `disable iff` multi-bit guard support**
+   (Feb 22, 2026):
+   ImportVerilog now accepts integral truthy `disable iff` conditions for
+   concurrent assertions inside procedural clocked contexts (for example
+   `always @(posedge clk) assert property (disable iff (rst) ...)` with
+   multi-bit `rst`) and safely hoists the computed enable guard.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
