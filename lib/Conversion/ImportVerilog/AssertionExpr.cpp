@@ -372,6 +372,8 @@ static Value lowerSampledValueFunctionWithClocking(
       return {};
     if (!isa<moore::IntType>(current.getType()))
       current = context.convertToSimpleBitVector(current);
+    if (!current)
+      return {};
     auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
     if (!currentType) {
       mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
@@ -1716,6 +1718,8 @@ Value Context::convertAssertionCallExpression(
 
     if (!isa<moore::IntType>(value.getType()))
       value = convertToSimpleBitVector(value);
+    if (!value)
+      return {};
     if (!isa<moore::IntType>(value.getType())) {
       mlir::emitError(loc) << "unsupported sampled value type for "
                            << funcName;

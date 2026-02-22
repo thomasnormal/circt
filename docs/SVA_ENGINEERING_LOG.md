@@ -221,6 +221,26 @@
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
+- Iteration update (sampled explicit-clocking crash hardening):
+  - realization:
+    - sampled explicit-clocking lowering had a null-deref crash path when
+      unsupported operands (e.g. unpacked arrays) hit `convertToSimpleBitVector`
+      and returned failure; follow-up type checks dereferenced null values.
+  - implemented:
+    - added explicit null guards after sampled-value bit-vector conversion in:
+      - sampled-value call lowering (`$changed/$stable/$rose/$fell`)
+      - explicit-clocked `$past` helper lowering.
+    - behavior now emits diagnostics instead of crashing.
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 - Iteration update (bounded property `eventually` / `s_eventually`):
   - realization:
     - bounded unary temporal operators on property operands were being treated

@@ -1,3 +1,35 @@
+## Iteration 1576 - February 22, 2026
+
+### [ImportVerilog][SVA] Harden sampled explicit-clocking failure paths
+
+1. **Fixed sampled explicit-clocking null-deref crash path**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - added missing null checks after `convertToSimpleBitVector` in:
+     - sampled-value call lowering (`$changed/$stable/$rose/$fell`)
+     - explicit-clocked `$past` helper sampling path
+   - unsupported sampled operand types now produce diagnostics instead of
+     crashing the importer.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+       (`--verify-diagnostics`; validates no crash + expected diagnostic on
+       unpacked-array operand).
+   - nearby sampled-value paths revalidated:
+     - `test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
+     - `test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
+     - `test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv >/dev/null` (`real=0.007s`, `user=0.003s`, `sys=0.004s`).
+
 ## Iteration 1575 - February 22, 2026
 
 ### [ImportVerilog][SVA] Add string `$past` explicit-clocking regression coverage

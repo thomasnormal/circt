@@ -155,6 +155,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 19. **SVA string `$past` explicit-clocking regression hardening** (Feb 22, 2026):
    Added dedicated importer regression coverage for explicit-clocked `$past` on
    string operands (string-to-int sampled state plus int-to-string reification).
+20. **SVA sampled explicit-clocking crash hardening** (Feb 22, 2026):
+   Fixed null-deref crash paths when unsupported sampled operands fail
+   bit-vector normalization under explicit clocking; importer now emits
+   diagnostics reliably and is covered by verify-diagnostics regression.
 10. **SVA `$future_gclk` temporal semantics fix** (Feb 21, 2026):
    Importer now lowers `$future_gclk(expr)` through forward temporal
    `ltl.delay(expr, 1, 0)` semantics instead of approximating with
