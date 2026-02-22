@@ -1,3 +1,44 @@
+## Iteration 1589 - February 22, 2026
+
+### [ImportVerilog][SVA] Support unpacked-union equality operators (`==/!=/===/!==`)
+
+1. **Implemented unpacked-union logical and case equality lowering**
+   (`lib/Conversion/ImportVerilog/Expressions.cpp`):
+   - aggregate logical equality helper now supports unpacked unions via
+     member-wise `moore.union_extract` comparisons and `moore.and` reduction.
+   - aggregate case equality helper now supports unpacked unions similarly.
+   - binary operator lowering now routes unpacked unions through aggregate
+     helper paths for:
+     - `==` / `!=`
+     - `===` / `!==`
+
+2. **Additional aggregate hardening**
+   - recursive case-equality helper now handles nested unpacked arrays through
+     `moore.uarray_cmp eq` (closing a nested aggregate gap).
+
+3. **SVA impact**
+   - direct union comparison assertions now lower:
+     - `assert property (@(posedge clk) (x == y));`
+     - `assert property (@(posedge clk) (x != y));`
+     - `assert property (@(posedge clk) (x === y));`
+     - `assert property (@(posedge clk) (x !== y));`
+
+4. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/unpacked-union-equality.sv`
+     - `test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
+
+5. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-union-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-union-equality.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-union-equality.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv >/dev/null`: PASS.
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/unpacked-union-equality.sv build-test/test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv build-test/test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv build-test/test/Conversion/ImportVerilog/unpacked-struct-equality.sv build-test/test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv build-test/test/Conversion/ImportVerilog/unpacked-array-case-equality.sv build-test/test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1588 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support unpacked-union sampled funcs and explicit-clock `$past`
