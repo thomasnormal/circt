@@ -229,6 +229,8 @@ Additional compile-only or XFAIL expectations live in
     side-effecting Moore display builtins (no longer dropped with a remark)
   - sequence match-item severity system subroutines (`$info/$warning/$error`)
     now lower to side-effecting Moore severity builtins
+  - sequence match-item `$fatal` system subroutine now lowers to fatal
+    severity + finish side effects
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
