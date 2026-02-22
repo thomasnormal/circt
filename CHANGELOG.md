@@ -1,3 +1,29 @@
+## Iteration 1581 - February 22, 2026
+
+### [ImportVerilog][SVA] Lower procedural `_gclk` sampled funcs on global clock
+
+1. **Added non-assertion `_gclk` clock inference for sampled value functions**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - procedural `$rose_gclk/$fell_gclk/$stable_gclk/$changed_gclk` now resolve
+     the enclosing scope global clocking event.
+   - when a global clock is available, lowering now uses helper-procedure
+     sampled-state semantics on that clock (instead of plain unclocked
+     `moore.past` in procedural logic).
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv`
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv >/dev/null`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv >/dev/null` (`real=0.007s`, `user=0.003s`, `sys=0.004s`).
+
 ## Iteration 1580 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support `$past` enable with implicit default clocking
