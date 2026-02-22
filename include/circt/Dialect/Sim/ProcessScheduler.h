@@ -1450,6 +1450,14 @@ private:
   llvm::DenseMap<SignalId, llvm::SmallVector<Process *, 8>>
       signalToProcesses;
 
+  // E4: Edge-specific fanout tables for batch clock-edge wake-up.
+  struct EdgeFanout {
+    llvm::SmallVector<Process *, 4> posedge;
+    llvm::SmallVector<Process *, 4> negedge;
+    llvm::SmallVector<Process *, 4> anyedge;
+  };
+  llvm::DenseMap<SignalId, EdgeFanout> signalEdgeFanout;
+
   // Ready queues per scheduling region (intrusive linked lists).
   // O(1) enqueue/dequeue with zero heap allocation per schedule call.
   IntrusiveProcessQueue

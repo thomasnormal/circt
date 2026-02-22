@@ -102,6 +102,47 @@ need dedicated semantic alignment work in formal lowering/checking.
 
 ---
 
+## 2026-02-22 Session: SVA Yosys Parity Locks for `counter` / `extnets`
+
+### Why this pass
+`counter` and `extnets` remain the two highest-value Yosys SVA parity gaps in
+formal. We need in-tree tests that encode the intended end-state behavior so
+future fixes can be validated directly.
+
+### Reproduced baseline
+1. Command:
+   - `RISING_CLOCKS_ONLY=1 TEST_FILTER='counter|extnets' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+2. Result:
+   - `PASS(pass): counter`
+   - `FAIL(fail): counter`
+   - `FAIL(pass): extnets`
+   - `PASS(fail): extnets`
+
+### Changes
+1. Added expected-fail parity-lock tests:
+   - `test/Tools/circt-bmc/sva-yosys-counter-known-inputs-parity.sv`
+   - `test/Tools/circt-bmc/sva-yosys-extnets-parity.sv`
+2. Both tests encode target behavior:
+   - pass profile must be `BMC_RESULT=UNSAT`
+   - fail profile must be `BMC_RESULT=SAT`
+3. Both are marked `XFAIL` until semantics are aligned.
+4. Updated `PROJECT_SVA.md` status:
+   - Yosys SVA now tracked as `12/14 passing, 2 known parity gaps`.
+
+### Validation notes
+1. Focused lit run:
+   - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/sva-yosys-counter-known-inputs-parity.sv build-test/test/Tools/circt-bmc/sva-yosys-extnets-parity.sv`
+2. In this local build configuration the two tests report `Unsupported`
+   (feature availability), but the files are now locked in-tree for parity
+   closure work.
+
+### Next target
+Use these parity locks to drive semantic fixes in:
+1. `counter` known-input clocked encoding path (`--assume-known-inputs`).
+2. `extnets` pass/fail polarity alignment across LLHD/BMC lowering.
+
+---
+
 ## 2026-02-20 Session: Whole-Project Refactor Progress (Phase 2 Mutation Stack)
 
 ### Why this pass

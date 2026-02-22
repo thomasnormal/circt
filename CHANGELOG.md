@@ -1,3 +1,36 @@
+## Iteration 1620 - February 22, 2026
+
+### [SVA][Parity] Add explicit Yosys `counter/extnets` parity-lock regressions
+
+1. **Added expected-fail parity-lock tests for currently open Yosys gaps**
+   - `test/Tools/circt-bmc/sva-yosys-counter-known-inputs-parity.sv`
+     - locks intended behavior:
+       - pass profile (`default`) must be `BMC_RESULT=UNSAT`
+       - fail profile (`-DFAIL`) must be `BMC_RESULT=SAT`
+   - `test/Tools/circt-bmc/sva-yosys-extnets-parity.sv`
+     - locks intended behavior:
+       - pass profile (`default`) must be `BMC_RESULT=UNSAT`
+       - fail profile (`-DFAIL`) must be `BMC_RESULT=SAT`
+   - both tests are marked `XFAIL` for now to keep the suite green while
+     preserving the intended end-state behavior in-tree.
+
+2. **Updated SVA status tracking**
+   - `PROJECT_SVA.md` now records:
+     - Yosys SVA status as `12/14 passing, 2 known parity gaps`
+     - concrete mismatch signatures for `counter` and `extnets`
+     - links to the new parity-lock tests.
+
+3. **Validation**
+   - Reproduced mismatches:
+     - `RISING_CLOCKS_ONLY=1 TEST_FILTER='counter|extnets' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+       - `PASS(pass): counter`
+       - `FAIL(fail): counter`
+       - `FAIL(pass): extnets`
+       - `PASS(fail): extnets`
+   - Focused lit invocation (environment-dependent feature availability):
+     - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/sva-yosys-counter-known-inputs-parity.sv build-test/test/Tools/circt-bmc/sva-yosys-extnets-parity.sv`
+       - reported `Unsupported` in this local build configuration.
+
 ## Iteration 1619 - February 22, 2026
 
 ### [ImportVerilog][SVA] Preserve formatted severity arguments in match-items
