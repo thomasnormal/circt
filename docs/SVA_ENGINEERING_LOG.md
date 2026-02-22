@@ -2,6 +2,58 @@
 
 ## 2026-02-22
 
+- Iteration update (OVL semantic harness expansion: cycle_sequence/handshake/req_ack_unique/reg_loaded/time):
+  - realization:
+    - key protocol/timing assertion checkers were still uncovered in semantic
+      OVL harness: `cycle_sequence`, `handshake`, `req_ack_unique`,
+      `reg_loaded`, and `time`.
+    - surprise:
+      - `ovl_handshake` with default `min_ack_cycle=0` hits frontend parse
+        limitation for empty-match repetition (`[*min_ack_cycle]`).
+      - switching wrapper parameters to `min_ack_cycle=1` avoids this parser
+        blocker while preserving semantic obligations.
+  - TDD proof:
+    - added wrappers + manifest entries first:
+      - `utils/ovl_semantic/wrappers/ovl_sem_cycle_sequence.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_handshake.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_req_ack_unique.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_reg_loaded.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_time.sv`
+      - `utils/ovl_semantic/manifest.tsv` entries:
+        - `ovl_sem_cycle_sequence`
+        - `ovl_sem_handshake`
+        - `ovl_sem_req_ack_unique`
+        - `ovl_sem_reg_loaded`
+        - `ovl_sem_time`
+    - first targeted run failures:
+      - `ovl_sem_cycle_sequence` fail-mode `UNSAT`.
+      - `ovl_sem_handshake` compile error (`sequence must not admit an empty
+        match`).
+    - stabilization:
+      - `ovl_sem_cycle_sequence` fail profile switched to deterministic xcheck
+        failure (`event_sequence[1]=X`) for non-vacuous fail polarity.
+      - `ovl_sem_handshake` wrapper now sets `.min_ack_cycle(1)`.
+  - implemented:
+    - expanded semantic harness by +5 more checkers (33 -> 38 wrappers).
+    - total pass/fail obligations increased from 66 to 76.
+    - semantic status now: `75 PASS + 1 XFAIL` (known gap remains
+      `ovl_sem_proposition` fail-mode).
+  - validation:
+    - targeted:
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(cycle_sequence|handshake|req_ack_unique|reg_loaded|time)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `10 tests, failures=0, xfail=0, xpass=0`
+    - full semantic lane:
+      - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `76 tests, failures=0, xfail=1, xpass=0`
+    - full OVL matrix:
+      - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-next5`
+      - result:
+        - `std_ovl/BMC PASS 110/110`
+        - `std_ovl/BMC_SEMANTIC PASS 75/76 (xfail=1)`
+    - profiling sample:
+      - `time OUT=/tmp/ovl-sem-profile-next5.log utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - `real=13.180s`
+
 - Iteration update (OVL semantic harness expansion: always_on_edge/width/quiescent_state/value/proposition):
   - realization:
     - assertion-oriented OVL checkers outside the initial arithmetic/window set

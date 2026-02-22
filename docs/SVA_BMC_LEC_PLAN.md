@@ -187,8 +187,8 @@ Items are grouped by pipeline stage.
   `utils/run_ovl_sva_semantic_circt_bmc.sh`.
   - Harness style: one SV wrapper per checker case in
     `utils/ovl_semantic/wrappers/` with manifest-driven expectations.
-  - Current semantic status (Feb 22, 2026): `66` pass/fail obligations with
-    `65 PASS + 1 XFAIL` (`33` checker wrappers x `pass/fail` modes).
+  - Current semantic status (Feb 22, 2026): `76` pass/fail obligations with
+    `75 PASS + 1 XFAIL` (`38` checker wrappers x `pass/fail` modes).
   - Coverage now includes:
     - `ovl_change`
     - `ovl_one_cold`
@@ -214,6 +214,11 @@ Items are grouped by pipeline stage.
     - `ovl_quiescent_state`
     - `ovl_value`
     - `ovl_proposition` (known gap on fail-mode; immediate assertion semantics)
+    - `ovl_cycle_sequence`
+    - `ovl_handshake`
+    - `ovl_req_ack_unique`
+    - `ovl_reg_loaded`
+    - `ovl_time`
 
 ## Core Workstreams
 
@@ -724,6 +729,32 @@ Run these at least once per iteration (or per change if relevant):
 - ~/mbit/*avip* (appropriate BMC/sim flow)
 
 Record results in CHANGELOG.md and include relevant output artifacts.
+
+## Latest SVA closure slice (2026-02-22, OVL semantic expansion V)
+
+- Closed gap:
+  - OVL semantic lane now includes additional protocol/timing assertion
+    checkers:
+    - `ovl_cycle_sequence`
+    - `ovl_handshake`
+    - `ovl_req_ack_unique`
+    - `ovl_reg_loaded`
+    - `ovl_time`
+  - semantic lane breadth increased from `33` to `38` checker wrappers.
+  - semantic obligation coverage increased from `66` to `76`.
+  - note: semantic wrapper for `ovl_handshake` uses `min_ack_cycle=1` to avoid
+    empty-match parser limitations for `[*0]` in current frontend lowering.
+- New regressions:
+  - `utils/ovl_semantic/wrappers/ovl_sem_cycle_sequence.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_handshake.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_req_ack_unique.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_reg_loaded.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_time.sv`
+  - manifest entries in `utils/ovl_semantic/manifest.tsv`
+- Validation:
+  - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(cycle_sequence|handshake|req_ack_unique|reg_loaded|time)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-next5`
 
 ## Latest SVA closure slice (2026-02-22, OVL semantic expansion IV)
 
