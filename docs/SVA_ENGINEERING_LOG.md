@@ -1476,3 +1476,30 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv` (`real=0.007s`)
+
+- Iteration update (unpacked-union equality and case-equality lowering):
+  - realization:
+    - unpacked-union comparisons still failed for all equality operators:
+      `==`, `!=`, `===`, and `!==` emitted simple-bit-vector cast failures.
+    - this blocked direct SVA union-compare forms in assertion expressions.
+  - implemented:
+    - extended unpacked-aggregate logical/case equality helpers in
+      `Expressions.cpp` to support unpacked unions via member-wise
+      `moore.union_extract` comparison and boolean reduction.
+    - wired binary operator lowering to route unpacked unions through aggregate
+      helper paths for `==/!=/===/!==`.
+    - hardened recursive case-equality helper to handle nested unpacked arrays
+      through `moore.uarray_cmp eq`.
+    - new regressions:
+      - `test/Conversion/ImportVerilog/unpacked-union-equality.sv`
+      - `test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-union-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-union-equality.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-union-equality.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/unpacked-union-equality.sv build-test/test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv build-test/test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv build-test/test/Conversion/ImportVerilog/unpacked-struct-equality.sv build-test/test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv build-test/test/Conversion/ImportVerilog/unpacked-array-case-equality.sv build-test/test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv` (`real=0.007s`)
