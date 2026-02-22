@@ -2466,8 +2466,6 @@ Value Context::convertAssertionCallExpression(
       }
       for (auto *expr : getAssertionDisableExprs())
         disableExprs.push_back(expr);
-      if (!clockingCtrl)
-        disableExprs.clear();
     }
     if (clockingCtrl) {
       if (!inAssertionExpr)
@@ -2506,10 +2504,10 @@ Value Context::convertAssertionCallExpression(
         return sampled;
       }
     }
-    if (enableExpr) {
+    if (enableExpr || !disableExprs.empty()) {
       auto sampled = lowerPastWithSamplingControl(
           *this, *args[0], /*timingCtrl=*/nullptr, delay, enableExpr,
-          std::span<const slang::ast::Expression *const>{}, loc);
+          disableExprs, loc);
       if (!sampled)
         return {};
       return sampled;

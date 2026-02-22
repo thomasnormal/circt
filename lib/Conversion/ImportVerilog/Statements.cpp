@@ -2539,6 +2539,7 @@ struct StmtVisitor {
     // the `enable` parameter of AssertOp/AssumeOp.
     Value disableIffEnable;
     const slang::ast::AssertionExpr *innerPropertySpec = &stmt.propertySpec;
+    const slang::ast::Expression *topLevelDisableIffExpr = nullptr;
     if (auto *disableIff =
             stmt.propertySpec.as_if<slang::ast::DisableIffAssertionExpr>()) {
       auto disableCond = context.convertRvalueExpression(disableIff->condition);
@@ -2550,7 +2551,16 @@ struct StmtVisitor {
       if (!disableIffEnable)
         return failure();
       innerPropertySpec = &disableIff->expr;
+      topLevelDisableIffExpr = &disableIff->condition;
     }
+    auto convertInnerProperty = [&]() -> Value {
+      if (!topLevelDisableIffExpr)
+        return context.convertAssertionExpression(*innerPropertySpec, loc);
+      context.pushAssertionDisableExpr(topLevelDisableIffExpr);
+      auto popDisable = llvm::make_scope_exit(
+          [&] { context.popAssertionDisableExpr(); });
+      return context.convertAssertionExpression(*innerPropertySpec, loc);
+    };
 
     StringAttr actionLabel;
     if (stmt.ifFalse && !stmt.ifFalse->as_if<slang::ast::EmptyStatement>())
@@ -2577,7 +2587,7 @@ struct StmtVisitor {
       } else {
         builder.setInsertionPointToEnd(moduleBlock);
       }
-      auto property = context.convertAssertionExpression(*innerPropertySpec, loc);
+      auto property = convertInnerProperty();
       if (!property) {
         // Slang uses InvalidAssertionExpr for dead generate branches.
         if (innerPropertySpec->as_if<slang::ast::InvalidAssertionExpr>())
@@ -2670,7 +2680,7 @@ struct StmtVisitor {
       }
     }
 
-    auto property = context.convertAssertionExpression(*innerPropertySpec, loc);
+    auto property = convertInnerProperty();
     if (!property) {
       // Slang uses InvalidAssertionExpr for dead generate branches.
       if (innerPropertySpec->as_if<slang::ast::InvalidAssertionExpr>())
