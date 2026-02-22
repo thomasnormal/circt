@@ -1563,6 +1563,15 @@ lowerSequenceEventListControl(Context &context, Location loc,
            << "sequence event-list lowering requires at least one "
               "sequence/property event";
 
+  struct ParsedSignalEventInfo {
+    const slang::ast::Expression *expr = nullptr;
+    ltl::ClockEdge ltlEdge = ltl::ClockEdge::Both;
+    moore::Edge mooreEdge = moore::Edge::AnyChange;
+    const slang::ast::Expression *iffCondition = nullptr;
+    const slang::ast::SignalEventControl *source = nullptr;
+    bool expandedFromClockingBlock = false;
+  };
+
   std::optional<ltl::ClockEdge> commonEdge;
   Value commonClock;
   bool sameClockAndEdge = true;
@@ -1574,29 +1583,61 @@ lowerSequenceEventListControl(Context &context, Location loc,
   SmallVector<DictionaryAttr, 4> sequenceSourceDetailAttrs;
   SmallVector<const slang::ast::SignalEventControl *, 4> equivalentSignals;
   SmallVector<const slang::ast::SignalEventControl *, 4> parsedSignalEvents;
+  SmallVector<ParsedSignalEventInfo, 4> parsedSignalEventInfos;
   SmallVector<MultiClockSignalEventInfo, 4> multiClockSignals;
   bool hasDirectSignalEvents = false;
+  bool forceMultiClockLowering = false;
   bool requiresMultiClockLowering = false;
   std::optional<ltl::ClockEdge> inferredSequenceEdge;
   Value inferredSequenceClock;
   bool canInferSequenceClock = !signalEvents.empty();
   for (auto *signalCtrl : signalEvents) {
-    auto signalEdge = convertEdgeKindLTL(signalCtrl->edge);
-    Value signalExpr = context.convertRvalueExpression(signalCtrl->expr);
+    const slang::ast::SignalEventControl *effectiveCtrl = signalCtrl;
+    bool expandedFromClockingBlock = false;
+    const slang::ast::Symbol *signalSymRef = signalCtrl->expr.getSymbolReference();
+    if (!signalSymRef) {
+      if (auto *named = signalCtrl->expr.as_if<slang::ast::NamedValueExpression>())
+        signalSymRef = &named->symbol;
+    }
+    if (signalSymRef &&
+        signalSymRef->kind == slang::ast::SymbolKind::ClockingBlock) {
+      auto &clockingBlock = signalSymRef->as<slang::ast::ClockingBlockSymbol>();
+      effectiveCtrl =
+          getCanonicalSignalEventControlForAssertions(clockingBlock.getEvent());
+      if (!effectiveCtrl)
+        return mlir::emitError(loc)
+               << "unsupported clocking block event kind in sequence event "
+                  "list";
+      expandedFromClockingBlock = true;
+    }
+
+    auto signalEdge = convertEdgeKindLTL(effectiveCtrl->edge);
+    auto signalMooreEdge = convertEdgeKind(effectiveCtrl->edge);
+    auto *signalExprAst = &effectiveCtrl->expr;
+    const slang::ast::Expression *signalIff =
+        signalCtrl->iffCondition ? signalCtrl->iffCondition
+                                 : effectiveCtrl->iffCondition;
+    parsedSignalEventInfos.push_back(ParsedSignalEventInfo{
+        signalExprAst, signalEdge, signalMooreEdge, signalIff, signalCtrl,
+        expandedFromClockingBlock});
+
+    Value signalExpr = context.convertRvalueExpression(*signalExprAst);
     if (!signalExpr)
       return failure();
     if (isa<moore::EventType>(signalExpr.getType())) {
       hasDirectSignalEvents = true;
       parsedSignalEvents.push_back(signalCtrl);
       canInferSequenceClock = false;
+      if (expandedFromClockingBlock)
+        forceMultiClockLowering = true;
       continue;
     }
     Value signalClock = context.convertToI1(signalExpr);
     if (!signalClock)
       return failure();
     parsedSignalEvents.push_back(signalCtrl);
-    multiClockSignals.push_back(MultiClockSignalEventInfo{
-        signalClock, signalEdge, signalCtrl->iffCondition, &signalCtrl->expr});
+    multiClockSignals.push_back(
+        MultiClockSignalEventInfo{signalClock, signalEdge, signalIff, signalExprAst});
     if (!inferredSequenceEdge) {
       inferredSequenceEdge = signalEdge;
       inferredSequenceClock = signalClock;
@@ -1604,6 +1645,8 @@ lowerSequenceEventListControl(Context &context, Location loc,
                !equivalentClockSignals(inferredSequenceClock, signalClock)) {
       canInferSequenceClock = false;
     }
+    if (expandedFromClockingBlock)
+      forceMultiClockLowering = true;
   }
   bool useGenericSequenceLabel =
       !signalEvents.empty() && sequenceEvents.size() == 1;
@@ -1778,22 +1821,29 @@ lowerSequenceEventListControl(Context &context, Location loc,
                                    eventMatch, Value{});
     }
 
-    for (auto *signalCtrl : signalEvents) {
-      Value exprValue = context.convertRvalueExpression(signalCtrl->expr);
+    for (const auto &signalInfo : parsedSignalEventInfos) {
+      if (!signalInfo.expr)
+        continue;
+      Value exprValue = context.convertRvalueExpression(*signalInfo.expr);
       if (!exprValue)
         return failure();
       Value condition;
-      if (signalCtrl->iffCondition) {
-        condition = context.convertRvalueExpression(*signalCtrl->iffCondition);
+      if (signalInfo.iffCondition) {
+        condition = context.convertRvalueExpression(*signalInfo.iffCondition);
         condition = context.convertToBool(condition, Domain::TwoValued);
         if (!condition)
           return failure();
       }
-      moore::DetectEventOp::create(builder, loc, convertEdgeKind(signalCtrl->edge),
-                                   exprValue, condition);
+      moore::DetectEventOp::create(builder, loc, signalInfo.mooreEdge, exprValue,
+                                   condition);
     }
 
     return success();
+  }
+
+  if (forceMultiClockLowering) {
+    sameClockAndEdge = false;
+    requiresMultiClockLowering = true;
   }
 
   for (const auto &signalEvent : multiClockSignals) {
