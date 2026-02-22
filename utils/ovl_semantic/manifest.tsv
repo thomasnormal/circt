@@ -37,3 +37,10 @@ ovl_sem_handshake	utils/ovl_semantic/wrappers/ovl_sem_handshake.sv	ovl_handshake
 ovl_sem_req_ack_unique	utils/ovl_semantic/wrappers/ovl_sem_req_ack_unique.sv	ovl_req_ack_unique.v	ovl_sem_req_ack_unique	10	0
 ovl_sem_reg_loaded	utils/ovl_semantic/wrappers/ovl_sem_reg_loaded.sv	ovl_reg_loaded.v	ovl_sem_reg_loaded	12	0
 ovl_sem_time	utils/ovl_semantic/wrappers/ovl_sem_time.sv	ovl_time.v	ovl_sem_time	10	0
+ovl_sem_bits	utils/ovl_semantic/wrappers/ovl_sem_bits.sv	ovl_bits.v	ovl_sem_bits	8	0
+ovl_sem_code_distance	utils/ovl_semantic/wrappers/ovl_sem_code_distance.sv	ovl_code_distance.v	ovl_sem_code_distance	8	0
+ovl_sem_never_unknown_async	utils/ovl_semantic/wrappers/ovl_sem_never_unknown_async.sv	ovl_never_unknown_async.v	ovl_sem_never_unknown_async	8	1
+ovl_sem_fifo_index	utils/ovl_semantic/wrappers/ovl_sem_fifo_index.sv	ovl_fifo_index.v	ovl_sem_fifo_index	8	0
+ovl_sem_frame	utils/ovl_semantic/wrappers/ovl_sem_frame.sv	ovl_frame.v	ovl_sem_frame	8	tool
+ovl_sem_arbiter	utils/ovl_semantic/wrappers/ovl_sem_arbiter.sv	ovl_arbiter.v	ovl_sem_arbiter	8	1
+ovl_sem_stack	utils/ovl_semantic/wrappers/ovl_sem_stack.sv	ovl_stack.v	ovl_sem_stack	8	1
