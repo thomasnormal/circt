@@ -1609,6 +1609,21 @@ struct AssertionExprVisitor {
                 std::get_if<slang::ast::CallExpression::SystemCallInfo>(
                     &call.subroutine)) {
           StringRef name = sysInfo->subroutine->name;
+          auto getFd = [&]() -> Value {
+            auto args = call.arguments();
+            if (args.empty()) {
+              mlir::emitError(loc) << name << " requires a file descriptor";
+              return {};
+            }
+            Value fd = context.convertRvalueExpression(*args[0]);
+            if (!fd)
+              return {};
+            auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+            if (fd.getType() != intTy)
+              fd = context.materializeConversion(intTy, fd, /*isSigned=*/false,
+                                                 loc);
+            return fd;
+          };
           auto emitSeverity = [&](moore::Severity severity) {
             auto msg = moore::FormatLiteralOp::create(builder, loc, name.str());
             moore::SeverityBIOp::create(builder, loc, severity, msg);
@@ -1640,6 +1655,65 @@ struct AssertionExprVisitor {
           }
           if (name == "$printtimescale") {
             moore::PrintTimescaleBIOp::create(builder, loc);
+            break;
+          }
+          bool isFWriteLike = false;
+          bool appendNewlineFWrite = false;
+          StringRef fwriteSuffix = name;
+          if (fwriteSuffix.consume_front("$fdisplay")) {
+            isFWriteLike = true;
+            appendNewlineFWrite = true;
+          } else if (fwriteSuffix.consume_front("$fwrite")) {
+            isFWriteLike = true;
+          }
+          if (isFWriteLike) {
+            if (!fwriteSuffix.empty() && fwriteSuffix != "b" &&
+                fwriteSuffix != "o" && fwriteSuffix != "h")
+              isFWriteLike = false;
+          }
+          if (isFWriteLike) {
+            Value fd = getFd();
+            if (!fd)
+              return failure();
+            std::string marker = name.str();
+            if (appendNewlineFWrite)
+              marker.push_back('\n');
+            auto msg = moore::FormatLiteralOp::create(builder, loc, marker);
+            moore::FWriteBIOp::create(builder, loc, fd, msg);
+            break;
+          }
+          bool isFStrobeLike = false;
+          StringRef fstrobeSuffix = name;
+          if (fstrobeSuffix.consume_front("$fstrobe"))
+            isFStrobeLike = true;
+          if (isFStrobeLike) {
+            if (!fstrobeSuffix.empty() && fstrobeSuffix != "b" &&
+                fstrobeSuffix != "o" && fstrobeSuffix != "h")
+              isFStrobeLike = false;
+          }
+          if (isFStrobeLike) {
+            Value fd = getFd();
+            if (!fd)
+              return failure();
+            auto msg = moore::FormatLiteralOp::create(builder, loc, name.str());
+            moore::FStrobeBIOp::create(builder, loc, fd, msg);
+            break;
+          }
+          bool isFMonitorLike = false;
+          StringRef fmonitorSuffix = name;
+          if (fmonitorSuffix.consume_front("$fmonitor"))
+            isFMonitorLike = true;
+          if (isFMonitorLike) {
+            if (!fmonitorSuffix.empty() && fmonitorSuffix != "b" &&
+                fmonitorSuffix != "o" && fmonitorSuffix != "h")
+              isFMonitorLike = false;
+          }
+          if (isFMonitorLike) {
+            Value fd = getFd();
+            if (!fd)
+              return failure();
+            auto msg = moore::FormatLiteralOp::create(builder, loc, name.str());
+            moore::FMonitorBIOp::create(builder, loc, fd, msg);
             break;
           }
           bool isMonitorLike = false;

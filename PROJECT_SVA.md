@@ -235,6 +235,11 @@ Additional compile-only or XFAIL expectations live in
     - `$strobe*` lowers to display-side effect marker
     - `$monitor*` lowers to monitor-side effect marker
     - `$monitoron/$monitoroff` lower to monitor control builtins
+  - sequence match-item file-oriented subroutine calls now preserve side
+    effects:
+    - `$fdisplay*` / `$fwrite*` lower to `moore.builtin.fwrite`
+    - `$fstrobe*` lowers to `moore.builtin.fstrobe`
+    - `$fmonitor*` lowers to `moore.builtin.fmonitor`
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
