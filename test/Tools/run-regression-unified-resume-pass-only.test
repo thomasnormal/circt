@@ -1,0 +1,28 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/pass.sh
+// RUN: chmod +x %t/pass.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 7\n' > %t/flaky.sh
+// RUN: chmod +x %t/flaky.sh
+// RUN: printf 'suite_pass\tsmoke\t%t/pass.sh\t-\n' > %t/manifest.tsv
+// RUN: printf 'suite_flaky\tsmoke\t%t/flaky.sh\t-\n' >> %t/manifest.tsv
+
+// RUN: not %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --keep-going --out-dir %t/out > %t/log1.txt 2>&1
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/flaky.sh
+// RUN: chmod +x %t/flaky.sh
+// RUN: %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --resume --keep-going --out-dir %t/out > %t/log2.txt
+
+// RUN: FileCheck %s --check-prefix=LOG2 < %t/log2.txt
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=PLAN < %t/out/plan.tsv
+
+// LOG2: selected=2 failures=0 skipped_resume=1
+
+// SUMMARY: {{^suite_id[[:space:]]+engine[[:space:]]+status[[:space:]]+exit_code[[:space:]]+elapsed_sec[[:space:]]+log$}}
+// SUMMARY: {{^suite_pass[[:space:]]+circt[[:space:]]+PASS[[:space:]]+0[[:space:]]+[0-9]+[[:space:]]+.*suite_pass\.circt\.log$}}
+// SUMMARY: {{^suite_flaky[[:space:]]+circt[[:space:]]+FAIL[[:space:]]+7[[:space:]]+[0-9]+[[:space:]]+.*suite_flaky\.circt\.log$}}
+// SUMMARY: {{^suite_flaky[[:space:]]+circt[[:space:]]+PASS[[:space:]]+0[[:space:]]+[0-9]+[[:space:]]+.*suite_flaky\.circt\.log$}}
+
+// PLAN: {{^suite_id[[:space:]]+engine[[:space:]]+command$}}
+// PLAN-COUNT-1: {{^suite_pass[[:space:]]+circt[[:space:]]+.*pass\.sh$}}
+// PLAN-COUNT-2: {{^suite_flaky[[:space:]]+circt[[:space:]]+.*flaky\.sh$}}

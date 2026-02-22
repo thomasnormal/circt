@@ -1,0 +1,12 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/out
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/pass.sh
+// RUN: chmod +x %t/pass.sh
+// RUN: printf 'suite1\tsmoke\t%t/pass.sh\t-\n' > %t/manifest.tsv
+// RUN: printf 'suite_id\tengine\tstatus\texit_code\telapsed_sec\tlog\n' > %t/out/summary.tsv
+// RUN: printf 'suite_id\tengine\tcommand\n' > %t/out/plan.tsv
+// RUN: printf 'suite1 \tcirct\t%t/pass.sh\n' >> %t/out/plan.tsv
+
+// RUN: not %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --resume --out-dir %t/out 2>&1 | FileCheck %s
+
+// CHECK: invalid resume plan row 2 in {{.*}}/plan.tsv: suite_id has leading/trailing whitespace

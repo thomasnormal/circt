@@ -1,0 +1,20 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/out/logs
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho NEW > %t/ran.txt\nexit 0\n' > %t/new.sh
+// RUN: chmod +x %t/new.sh
+// RUN: printf 'suite1\tsmoke\t%t/new.sh\t-\n' > %t/manifest.tsv
+// RUN: printf 'suite_id\tengine\tstatus\texit_code\telapsed_sec\tlog\n' > %t/out/summary.tsv
+// RUN: printf 'suite1\tcirct\tPASS\t0\t0\t%t/out/logs/suite1.circt.log\n' >> %t/out/summary.tsv
+// RUN: printf 'suite_id\tengine\tcommand\n' > %t/out/plan.tsv
+// RUN: printf 'suite1\tcirct\t%t/old.sh\n' >> %t/out/plan.tsv
+
+// RUN: %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --resume --out-dir %t/out > %t/log.txt
+// RUN: grep -q '^NEW$' %t/ran.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+
+// LOG: selected=1 failures=0 skipped_resume=0
+
+// SUMMARY: {{^suite_id[[:space:]]+engine[[:space:]]+status[[:space:]]+exit_code[[:space:]]+elapsed_sec[[:space:]]+log$}}
+// SUMMARY: {{^suite1[[:space:]]+circt[[:space:]]+PASS[[:space:]]+0[[:space:]]+0[[:space:]]+.*suite1\.circt\.log$}}
+// SUMMARY: {{^suite1[[:space:]]+circt[[:space:]]+PASS[[:space:]]+0[[:space:]]+[0-9]+[[:space:]]+.*suite1\.circt\.log$}}

@@ -1,0 +1,13 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/mbit/apb_avip/sim
+// RUN: : > %t/mbit/apb_avip/sim/apb_compile.f
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: > "${OUT:?OUT is required}"\n' > %t/fake-run-avip.sh
+// RUN: chmod +x %t/fake-run-avip.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "Simulation terminated at time 10 fs"\necho "UVM_FATAL : 0"\necho "UVM_ERROR : 0"\necho "Coverage = 100 %%%%"\necho "Coverage = 100 %%%%"\n' > %t/fake-circt-sim
+// RUN: chmod +x %t/fake-circt-sim
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/fake-circt-verilog
+// RUN: chmod +x %t/fake-circt-verilog
+// RUN: not env MBIT_DIR=%t/mbit AVIPS=apb SEEDS=1 CIRCT_VERILOG=%t/fake-circt-verilog CIRCT_SIM=%t/fake-circt-sim RUN_AVIP=%t/fake-run-avip.sh COMPILE_TIMEOUT=10 SIM_TIMEOUT=10 MAX_WALL_MS=1000 %S/../../utils/run_avip_circt_sim.sh %t/out > %t/log.txt 2>&1
+// RUN: FileCheck %s < %t/log.txt
+//
+// CHECK: error: CIRCT_VERILOG must use canonical build-test path:

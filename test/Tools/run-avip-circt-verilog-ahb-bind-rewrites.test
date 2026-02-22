@@ -1,0 +1,20 @@
+// RUN: env CIRCT_VERILOG=%S/Inputs/avip-mini-axi4lite/print_args.sh \
+// RUN:   OUT=%t.log %S/../../utils/run_avip_circt_verilog.sh \
+// RUN:   %S/Inputs/avip-mini-ahb %S/Inputs/avip-mini-ahb/sim/ahb_compile.f
+// RUN: cat %t.log | FileCheck %s --check-prefix=ARGS
+// RUN: ahb_master_tmp=$(grep -F '/.avip_tmp/AhbMasterAgentBFM.sv' %t.log | head -n1) && test -n "$ahb_master_tmp" && cat "$ahb_master_tmp" | FileCheck %s --check-prefix=PATCH-MASTER
+// RUN: ahb_slave_tmp=$(grep -F '/.avip_tmp/AhbSlaveAgentBFM.sv' %t.log | head -n1) && test -n "$ahb_slave_tmp" && cat "$ahb_slave_tmp" | FileCheck %s --check-prefix=PATCH-SLAVE
+
+// ARGS: .avip_tmp/AhbMasterAgentBFM.sv
+// ARGS: .avip_tmp/AhbSlaveAgentBFM.sv
+
+// PATCH-MASTER: module AhbMasterAgentBFM(AhbInterface ahbInterface);
+// PATCH-MASTER: bind AhbMasterMonitorBFM AhbMasterAssertion ahb_assert (.hclk(hclk),
+// PATCH-MASTER: .hready(hready)
+// PATCH-MASTER: bind AhbMasterMonitorBFM AhbMasterCoverProperty ahb_cover (.hclk(hclk),
+// PATCH-MASTER: .hready(hready)
+// PATCH-SLAVE: module AhbSlaveAgentBFM(AhbInterface ahbInterface);
+// PATCH-SLAVE: bind AhbSlaveMonitorBFM AhbSlaveAssertion ahb_assert (.hclk(hclk),
+// PATCH-SLAVE: .hready(hready)
+// PATCH-SLAVE: bind AhbSlaveMonitorBFM AhbSlaveCoverProperty ahb_cover (.hclk(hclk),
+// PATCH-SLAVE: .hready(hready)

@@ -1,0 +1,24 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/out
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/pass.sh
+// RUN: chmod +x %t/pass.sh
+// RUN: printf 'suite1\tsmoke\t%t/pass.sh\t-\n' > %t/manifest.tsv
+// RUN: printf 'suite_id\tengine\tcommand\n' > %t/out/plan.tsv
+// RUN: printf 'stale_suite\tcirct\tstale-cmd\n' >> %t/out/plan.tsv
+// RUN: printf 'suite_id\tengine\tattempts\tretries_used\tstatus\texit_code\n' > %t/out/retry-summary.tsv
+// RUN: printf 'stale_suite\tcirct\t1\t0\tPASS\t0\n' >> %t/out/retry-summary.tsv
+
+// RUN: %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --resume --out-dir %t/out > %t/log.txt
+// RUN: not grep -q '^stale_suite' %t/out/plan.tsv
+// RUN: not grep -q '^stale_suite' %t/out/retry-summary.tsv
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=PLAN < %t/out/plan.tsv
+// RUN: FileCheck %s --check-prefix=RETRY < %t/out/retry-summary.tsv
+
+// LOG: selected=1 failures=0
+
+// PLAN: {{^suite_id[[:space:]]+engine[[:space:]]+command$}}
+// PLAN: {{^suite1[[:space:]]+circt[[:space:]]+.*pass\.sh$}}
+
+// RETRY: {{^suite_id[[:space:]]+engine[[:space:]]+attempts[[:space:]]+retries_used[[:space:]]+status[[:space:]]+exit_code$}}
+// RETRY: {{^suite1[[:space:]]+circt[[:space:]]+1[[:space:]]+0[[:space:]]+PASS[[:space:]]+0$}}

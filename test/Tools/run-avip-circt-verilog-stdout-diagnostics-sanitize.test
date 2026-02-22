@@ -1,0 +1,16 @@
+// RUN: rm -rf %t && mkdir -p %t/avip/sim %t/uvm
+// RUN: bash -eu -c $'cat > %t/avip/dummy.sv <<\"EOF\"\nmodule dummy;\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/avip/sim/compile.f <<\"EOF\"\n../dummy.sv\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/uvm/uvm_pkg.sv <<\"EOF\"\npackage uvm_pkg;\nendpackage\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/fake-circt-verilog.sh <<\"EOF\"\n#!/usr/bin/env bash\ncat <<\"OUT\"\n../uvm-core/src/base/uvm_config_db_implementation.svh:375:26: warning: unknown character escape sequence\n^\nmodule {\n  hw.module @top() {\n    hw.output\n  }\n}\nOUT\nEOF\nchmod +x %t/fake-circt-verilog.sh\n'
+// RUN: env CIRCT_VERILOG=%t/fake-circt-verilog.sh UVM_DIR=%t/uvm OUT=%t/out.mlir DISABLE_UVM_AUTO_INCLUDE=1 %S/../../utils/run_avip_circt_verilog.sh %t/avip %t/avip/sim/compile.f > %t/run.log
+// RUN: cat %t/out.mlir | FileCheck %s --check-prefix=IR
+// RUN: cat %t/out.warnings.log | FileCheck %s --check-prefix=WARN
+
+// IR-NOT: warning:
+// IR: module {
+// IR: hw.module @top() {
+// IR: hw.output
+
+// WARN: stdout diagnostics moved from IR output
+// WARN: warning: unknown character escape sequence

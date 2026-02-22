@@ -1,0 +1,16 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/out/logs
+// RUN: printf 'stale\n' > %t/out/logs/stale.log
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/pass.sh
+// RUN: chmod +x %t/pass.sh
+// RUN: printf 'suite1\tsmoke\t%t/pass.sh\t-\n' > %t/manifest.tsv
+
+// RUN: %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --out-dir %t/out > %t/log.txt
+// RUN: test ! -f %t/out/logs/stale.log
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+
+// LOG: selected=1 failures=0
+
+// SUMMARY: {{^suite_id[[:space:]]+engine[[:space:]]+status[[:space:]]+exit_code[[:space:]]+elapsed_sec[[:space:]]+log$}}
+// SUMMARY: {{^suite1[[:space:]]+circt[[:space:]]+PASS[[:space:]]+0[[:space:]]+[0-9]+[[:space:]]+.*suite1\.circt\.log$}}

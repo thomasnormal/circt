@@ -1,0 +1,24 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/out/logs
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho NEW\nexit 0\n' > %t/pass.sh
+// RUN: chmod +x %t/pass.sh
+// RUN: printf 'group_sub\tsmoke\t%t/pass.sh\t-\n' > %t/manifest.tsv
+// RUN: printf 'group/sub\tsmoke\t%t/pass.sh\t-\n' >> %t/manifest.tsv
+// RUN: printf 'ORIG\n' > %t/out/logs/group_sub.circt.log
+// RUN: printf 'suite_id\tengine\tstatus\texit_code\telapsed_sec\tlog\n' > %t/out/summary.tsv
+// RUN: printf 'group_sub\tcirct\tPASS\t0\t0\t%t/out/logs/group_sub.circt.log\n' >> %t/out/summary.tsv
+// RUN: printf 'suite_id\tengine\tcommand\n' > %t/out/plan.tsv
+// RUN: printf 'group_sub\tcirct\t%t/pass.sh\n' >> %t/out/plan.tsv
+
+// RUN: %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --resume --out-dir %t/out > %t/log.txt
+// RUN: grep -q '^ORIG$' %t/out/logs/group_sub.circt.log
+// RUN: ls %t/out/logs/group_sub.[0-9]*.circt.log >/dev/null
+// RUN: grep -q '^NEW$' %t/out/logs/group_sub.[0-9]*.circt.log
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+
+// LOG: selected=2 failures=0 skipped_resume=1
+
+// SUMMARY: {{^suite_id[[:space:]]+engine[[:space:]]+status[[:space:]]+exit_code[[:space:]]+elapsed_sec[[:space:]]+log$}}
+// SUMMARY: {{^group_sub[[:space:]]+circt[[:space:]]+PASS[[:space:]]+0[[:space:]]+0[[:space:]]+.*group_sub\.circt\.log$}}
+// SUMMARY: {{^group/sub[[:space:]]+circt[[:space:]]+PASS[[:space:]]+0[[:space:]]+[0-9]+[[:space:]]+.*group_sub\.[0-9]+\.circt\.log$}}

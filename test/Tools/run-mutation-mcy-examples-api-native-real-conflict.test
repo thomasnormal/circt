@@ -1,0 +1,3 @@
+// RUN: not %S/../../utils/run_mutation_mcy_examples_api.sh native-real --smoke 2>&1 | FileCheck %s
+
+// CHECK: native-real profile rejects conflicting option: --smoke

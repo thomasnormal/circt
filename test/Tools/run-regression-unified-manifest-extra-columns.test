@@ -1,0 +1,7 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'suite1\tsmoke\t-\t-\troot\tca\txa\targs\textra\n' > %t/manifest.tsv
+
+// RUN: not %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --out-dir %t/out 2>&1 | FileCheck %s
+
+// CHECK: invalid manifest row 1: expected at most 8 tab-separated columns

@@ -1,0 +1,9 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/pass.sh
+// RUN: chmod +x %t/pass.sh
+// RUN: printf 'suite_a\tsmoke\t%t/pass.sh\t-\n' > %t/manifest.tsv
+
+// RUN: not %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine circt --jobs 0 --out-dir %t/out 2>&1 | FileCheck %s
+
+// CHECK: --jobs must be a positive integer: 0

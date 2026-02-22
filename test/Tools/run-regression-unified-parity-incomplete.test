@@ -1,0 +1,15 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/pass.sh
+// RUN: chmod +x %t/pass.sh
+// RUN: printf 'suite_incomplete\tsmoke\t%t/pass.sh\t-\n' > %t/manifest.tsv
+
+// RUN: not %S/../../utils/run_regression_unified.sh --manifest %t/manifest.tsv --profile smoke --engine both --keep-going --engine-parity-file %t/custom-parity.tsv --out-dir %t/out > %t/log.txt 2>&1
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=PARITY < %t/custom-parity.tsv
+
+// LOG: [run-regression-unified] engine_parity={{.*}}/custom-parity.tsv
+// LOG: selected=1 failures=1
+
+// PARITY: {{^suite_id[[:space:]]+circt_status[[:space:]]+circt_exit_code[[:space:]]+xcelium_status[[:space:]]+xcelium_exit_code[[:space:]]+parity[[:space:]]+reason$}}
+// PARITY: {{^suite_incomplete[[:space:]]+PASS[[:space:]]+0[[:space:]]+UNCONFIGURED[[:space:]]+125[[:space:]]+INCOMPLETE[[:space:]]+missing_engine_lane$}}
