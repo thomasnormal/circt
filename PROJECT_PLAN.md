@@ -262,6 +262,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    (`assert property (@(edge clk_prop) ...)`) when lowering inside procedural
    clocked contexts, instead of incorrectly forcing the enclosing procedural
    clock (`always @(edge clk_proc)`).
+43. **Enabled `$past` without explicit clocking** (Feb 22, 2026):
+   ImportVerilog now lowers `$past(expr, delay, enable)` in assertion
+   expressions even when no explicit clocking argument is provided and no
+   implicit assertion clock can be inferred, by synthesizing module-local
+   sampled history state instead of rejecting the construct.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to

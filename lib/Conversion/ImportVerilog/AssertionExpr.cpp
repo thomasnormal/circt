@@ -881,14 +881,11 @@ static Value lowerSampledValueFunctionWithClocking(
   return moore::ReadOp::create(builder, loc, resultVar);
 }
 
-static Value lowerPastWithClocking(Context &context,
-                                   const slang::ast::Expression &valueExpr,
-                                   const slang::ast::TimingControl &timingCtrl,
-                                   int64_t delay,
-                                   const slang::ast::Expression *enableExpr,
-                                   std::span<const slang::ast::Expression *const>
-                                       disableExprs,
-                                   Location loc) {
+static Value lowerPastWithSamplingControl(
+    Context &context, const slang::ast::Expression &valueExpr,
+    const slang::ast::TimingControl *timingCtrl, int64_t delay,
+    const slang::ast::Expression *enableExpr,
+    std::span<const slang::ast::Expression *const> disableExprs, Location loc) {
   auto &builder = context.builder;
   auto *insertionBlock = builder.getInsertionBlock();
   if (!insertionBlock)
@@ -903,7 +900,7 @@ static Value lowerPastWithClocking(Context &context,
   }
   if (!module) {
     mlir::emitWarning(loc)
-        << "$past with explicit clocking is only supported within a module; "
+        << "$past sampled-value controls are only supported within a module; "
            "returning 0 as a placeholder";
     auto resultType =
         moore::IntType::get(builder.getContext(), 1, moore::Domain::FourValued);
@@ -927,7 +924,7 @@ static Value lowerPastWithClocking(Context &context,
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
   if (!isUnpackedAggregateSample && !intType) {
     mlir::emitError(loc)
-        << "unsupported $past value type with explicit clocking";
+        << "unsupported $past value type with sampled-value controls";
     return {};
   }
   moore::UnpackedType storageType =
@@ -967,7 +964,7 @@ static Value lowerPastWithClocking(Context &context,
     auto proc =
         moore::ProcedureOp::create(builder, loc, moore::ProcedureKind::Always);
     builder.setInsertionPointToEnd(&proc.getBody().emplaceBlock());
-    if (failed(context.convertTimingControl(timingCtrl)))
+    if (timingCtrl && failed(context.convertTimingControl(*timingCtrl)))
       return {};
 
     Value current = context.convertRvalueExpression(valueExpr);
@@ -981,14 +978,14 @@ static Value lowerPastWithClocking(Context &context,
       if (!isa<moore::UnpackedType>(current.getType()) ||
           current.getType() != storageType) {
         mlir::emitError(loc)
-            << "unsupported $past value type with explicit clocking";
+            << "unsupported $past value type with sampled-value controls";
         return {};
       }
     } else {
       auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
       if (!currentType) {
         mlir::emitError(loc)
-            << "unsupported $past value type with explicit clocking";
+            << "unsupported $past value type with sampled-value controls";
         return {};
       }
       if (current.getType() != intType)
@@ -1108,6 +1105,18 @@ static Value lowerPastWithClocking(Context &context,
     result = context.materializeConversion(originalUnpacked, result,
                                            /*isSigned=*/false, loc);
   return result;
+}
+
+static Value lowerPastWithClocking(Context &context,
+                                   const slang::ast::Expression &valueExpr,
+                                   const slang::ast::TimingControl &timingCtrl,
+                                   int64_t delay,
+                                   const slang::ast::Expression *enableExpr,
+                                   std::span<const slang::ast::Expression *const>
+                                       disableExprs,
+                                   Location loc) {
+  return lowerPastWithSamplingControl(context, valueExpr, &timingCtrl, delay,
+                                      enableExpr, disableExprs, loc);
 }
 
 struct AssertionExprVisitor {
@@ -2498,9 +2507,12 @@ Value Context::convertAssertionCallExpression(
       }
     }
     if (enableExpr) {
-      mlir::emitError(loc)
-          << "unsupported $past enable expression without explicit clocking";
-      return {};
+      auto sampled = lowerPastWithSamplingControl(
+          *this, *args[0], /*timingCtrl=*/nullptr, delay, enableExpr,
+          std::span<const slang::ast::Expression *const>{}, loc);
+      if (!sampled)
+        return {};
+      return sampled;
     }
 
     value = this->convertRvalueExpression(*args[0]);

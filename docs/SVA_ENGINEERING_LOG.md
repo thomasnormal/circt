@@ -2,6 +2,38 @@
 
 ## 2026-02-22
 
+- Iteration update (enabled `$past` without explicit clocking):
+  - realization:
+    - one of the last importer-level hard failures in SVA tests was
+      `$past(value, delay, enable)` when no explicit/implicit clocking control
+      could be inferred.
+    - this was previously guarded by a hard diagnostic:
+      `unsupported $past enable expression without explicit clocking`.
+  - TDD proof:
+    - converted
+      `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+      from expected-error to a positive lowering check.
+    - before fix:
+      - the new positive regression failed with the unsupported diagnostic.
+  - implemented:
+    - generalized `$past` helper lowering so sampled-value controls can be
+      lowered with either:
+      - explicit timing control (`@(edge clk)`), or
+      - implicit sampled-step updates (no explicit timing control).
+    - updated `$past` call conversion to route enable-without-clocking through
+      the sampled-state helper path instead of emitting an error.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - compatibility checks:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv >/dev/null` (`real=0.008s`)
+
 - Iteration update (explicit property clock precedence in procedural contexts):
   - realization:
     - procedural concurrent assertion lowering had a mixed-clock semantic bug:
