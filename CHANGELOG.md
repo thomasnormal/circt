@@ -1,3 +1,22 @@
+## Iteration 1575 - February 22, 2026
+
+### [ImportVerilog][SVA] Add string `$past` explicit-clocking regression coverage
+
+1. **Added regression for explicit-clocked `$past` on string operands**
+   (`test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`):
+   - locks behavior enabled by recent sampled-value helper work:
+     - string sampled state lowered via `moore.string_to_int`
+     - result re-materialized via `moore.int_to_string`
+   - verifies assertion lowering emits valid `verif.assert` path.
+
+2. **Validation**
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1574 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support string sampled values with explicit clocking

@@ -204,6 +204,23 @@
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
+- Iteration update (string `$past` explicit-clocking regression hardening):
+  - realization:
+    - recent sampled/`$past` helper improvements also enabled explicit-clocked
+      `$past` on string operands, but this behavior lacked dedicated coverage.
+  - implemented:
+    - added focused importer regression to lock string explicit-clocked `$past`
+      lowering (`string_to_int` sampled state + `int_to_string` re-materialize
+      at result use).
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 - Iteration update (bounded property `eventually` / `s_eventually`):
   - realization:
     - bounded unary temporal operators on property operands were being treated
