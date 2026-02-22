@@ -1657,6 +1657,20 @@ struct AssertionExprVisitor {
             moore::PrintTimescaleBIOp::create(builder, loc);
             break;
           }
+          if (name == "$fflush") {
+            Value fd = getFd();
+            if (!fd)
+              return failure();
+            moore::FFlushBIOp::create(builder, loc, fd);
+            break;
+          }
+          if (name == "$fclose") {
+            Value fd = getFd();
+            if (!fd)
+              return failure();
+            moore::FCloseBIOp::create(builder, loc, fd);
+            break;
+          }
           bool isFWriteLike = false;
           bool appendNewlineFWrite = false;
           StringRef fwriteSuffix = name;
