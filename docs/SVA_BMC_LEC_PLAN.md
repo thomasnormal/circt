@@ -682,6 +682,24 @@ Run these at least once per iteration (or per change if relevant):
 
 Record results in CHANGELOG.md and include relevant output artifacts.
 
+## Latest SVA closure slice (2026-02-22)
+
+- Closed gap:
+  - ImportVerilog statement-level assertion-control lowering now includes
+    pass/vacuous controls and legacy subroutine forms:
+    - `$assertcontrol(6/7/10/11)`
+    - `$assertpasson/$assertpassoff`
+    - `$assertnonvacuouson/$assertvacuousoff`
+  - this aligns procedural behavior with sequence match-item lowering.
+- New regression:
+  - `test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`
+- Validation:
+  - `ninja -C build-test circt-translate`
+  - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`
+  - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
+  - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv`
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`
+
 ## Latest SVA closure slice (2026-02-21)
 
 - Closed gap:
