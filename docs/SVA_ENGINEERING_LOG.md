@@ -143,6 +143,29 @@
     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
+- Iteration update (`$past` packed values with explicit clocking):
+  - realization:
+    - explicit-clocked `$past` helper lowering still required direct integer
+      operands, rejecting packed values with:
+      `unsupported $past value type with explicit clocking`.
+  - implemented:
+    - extended `$past` helper lowering to accept packed operands by:
+      - normalizing sampled values to simple-bit-vector form for history state
+      - converting sampled result back to the original packed type at use sites
+        via materialized conversion.
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
+    - revalidated:
+      - `test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv`
+      - `test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 - Iteration update (bounded property `eventually` / `s_eventually`):
   - realization:
     - bounded unary temporal operators on property operands were being treated
