@@ -2,6 +2,40 @@
 
 ## 2026-02-22
 
+- Iteration update (procedural guard + `disable iff` enable composition):
+  - realization:
+    - in procedural concurrent assertion hoisting, when both an enclosing
+      assertion guard (`if (...)`) and top-level `disable iff (...)` were
+      present, lowering only kept the procedural guard and silently dropped the
+      `disable iff` enable.
+    - this affected both procedural clock-context hoisting and explicit
+      property-clocking hoist paths.
+  - TDD proof:
+    - strengthened
+      `test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+      to include guarded procedural `assert` + `assume` under `if (en)`.
+    - before fix:
+      - importer output only used `if en` on `verif.clocked_*`, missing
+        `disable iff` composition.
+  - implemented:
+    - updated `Statements.cpp` hoist enable construction to:
+      - clone hoisted procedural guard and `disable iff` enable in a shared map,
+      - normalize each to builtin `i1`,
+      - compose both via `arith.andi` when both exist.
+    - retained warning path when guard hoisting fails, while preserving
+      `disable iff` hoisting independently.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+    - compatibility checks:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
+      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv` (`real=0.007s`)
+
 - Iteration update (property `nexttime` / `s_nexttime`):
   - realization:
     - legal `nexttime`/`s_nexttime` forms on property operands were still
