@@ -32,6 +32,19 @@
    - focused lit:
      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-severity-subroutine.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-system-subroutine.sv`: PASS.
 
+4. **Extended `$assertcontrol(...)` mapping for pass/vacuous controls**
+   - added control-code handling in match-item lowering for:
+     - pass message toggles:
+       - `6` => pass-on
+       - `7` => pass-off
+     - vacuous pass toggles:
+       - `10` => nonvacuous-on (maps to vacuous-pass disable)
+       - `11` => vacuous-off
+   - added regression:
+     - `test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv`
+   - validates `$assertcontrol(6/7/10/11)` now drives pass/vacuous assertion
+     control globals in match-item lowering.
+
 ## Iteration 1620 - February 22, 2026
 
 ### [SVA][Parity] Add explicit Yosys `counter/extnets` parity-lock regressions

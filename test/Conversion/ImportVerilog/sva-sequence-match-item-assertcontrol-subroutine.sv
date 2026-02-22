@@ -12,7 +12,8 @@ module SVASequenceMatchItemAssertControlSubroutine(input logic clk, a);
   endsequence
   sequence s_control;
     (1, $assertcontrol(3), $assertcontrol(4), $assertcontrol(5),
-     $assertcontrol(8), $assertcontrol(9)) ##1 a;
+     $assertcontrol(6), $assertcontrol(7), $assertcontrol(8),
+     $assertcontrol(9), $assertcontrol(10), $assertcontrol(11)) ##1 a;
   endsequence
   sequence s_fail;
     (1, $assertfailoff(), $assertfailon()) ##1 a;
@@ -28,6 +29,8 @@ module SVASequenceMatchItemAssertControlSubroutine(input logic clk, a);
   // CHECK-DAG: moore.global_variable @__circt_assert_pass_msgs_enabled
   // CHECK-DAG: moore.global_variable @__circt_assert_vacuous_pass_enabled
   // CHECK-LABEL: moore.module @SVASequenceMatchItemAssertControlSubroutine
+  // CHECK: moore.constant 10 : i32
+  // CHECK: moore.constant 11 : i32
   // CHECK: moore.blocking_assign
   // CHECK: verif.assert
   assert property (@(posedge clk) s_off);
