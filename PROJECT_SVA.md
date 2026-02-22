@@ -258,6 +258,11 @@ Additional compile-only or XFAIL expectations live in
   - sequence match-item debug subroutine `$showvars` now preserves side
     effects and lowers to `moore.builtin.display` with formatted per-variable
     output
+  - sequence match-item assertion-control subroutine family now preserves
+    control effects:
+    - `$asserton/$assertoff/$assertkill/$assertcontrol`
+    - `$assertfailon/$assertfailoff`
+    - `$assertpasson/$assertpassoff/$assertnonvacuouson/$assertvacuousoff`
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
