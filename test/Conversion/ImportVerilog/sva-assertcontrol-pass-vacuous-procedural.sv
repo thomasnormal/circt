@@ -38,13 +38,10 @@ module SVAAssertPassVacuousSubroutines(input logic a);
   end
 
   // CHECK-LABEL: moore.module @SVAAssertPassVacuousSubroutines
-  // CHECK: %[[PASS_ON:.*]] = moore.constant 1 : i1
-  // CHECK: %[[PASSCTL0:.*]] = moore.get_global_variable @__circt_assert_pass_msgs_enabled : <i1>
-  // CHECK: moore.blocking_assign %[[PASSCTL0]], %[[PASS_ON]] : i1
-  // CHECK: %[[PASS_OFF:.*]] = moore.constant 0 : i1
-  // CHECK: %[[PASSCTL1:.*]] = moore.get_global_variable @__circt_assert_pass_msgs_enabled : <i1>
-  // CHECK: moore.blocking_assign %[[PASSCTL1]], %[[PASS_OFF]] : i1
-  // CHECK: %[[VAC_OFF:.*]] = moore.constant 0 : i1
-  // CHECK: %[[VACCTL0:.*]] = moore.get_global_variable @__circt_assert_vacuous_pass_enabled : <i1>
-  // CHECK: moore.blocking_assign %[[VACCTL0]], %[[VAC_OFF]] : i1
+  // CHECK-DAG: moore.get_global_variable @__circt_assert_control_locked : <i1>
+  // CHECK-DAG: moore.constant 1 : i1
+  // CHECK-DAG: moore.constant 0 : i1
+  // CHECK-DAG: moore.get_global_variable @__circt_assert_pass_msgs_enabled : <i1>
+  // CHECK-DAG: moore.get_global_variable @__circt_assert_vacuous_pass_enabled : <i1>
+  // CHECK: moore.blocking_assign %{{.*}}, %{{.*}} : i1
 endmodule

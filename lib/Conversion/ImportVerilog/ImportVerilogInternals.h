@@ -602,6 +602,9 @@ struct Context {
   /// Synthetic global that tracks whether vacuous assertion passes are enabled.
   /// Controlled by $assertvacuousoff/$assertnonvacuouson.
   moore::GlobalVariableOp assertionVacuousPassEnabledGlobal;
+  /// Synthetic global that tracks whether assertion control updates are locked.
+  /// Controlled by $assertcontrol(1)/$assertcontrol(2).
+  moore::GlobalVariableOp assertionControlLockedGlobal;
   /// A set of static class properties that are currently being converted.
   /// This is used to detect and handle recursive conversions when a property's
   /// type conversion triggers conversion of classes whose methods reference
