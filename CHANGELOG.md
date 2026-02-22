@@ -1,3 +1,44 @@
+## Iteration 1611 - February 22, 2026
+
+### [ImportVerilog][SVA] Support associative-array `$rose/$fell` sampled lowering
+
+1. **Implemented associative-array sampled-edge lowering**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - extended sampled-boolean lowering for edge functions (`$rose/$fell`) to
+     include:
+     - `moore::AssocArrayType`
+     - `moore::WildcardAssocArrayType`
+   - lowering uses `moore.array.locator all, elements` + size/nonzero reduction
+     to derive sampled boolean activity from aggregate elements.
+   - integrated associative-array types into sampled-edge aggregate
+     classification for both:
+     - assertion-clocked direct sampled lowering
+     - explicit-clock helper-procedure sampled lowering.
+
+2. **Behavioral fix**
+   - assertions like:
+     - `assert property ($rose(aa, @(posedge clk)));`
+     where `aa` is an associative array, now lower successfully instead of
+     failing with a simple-bit-vector cast error.
+
+3. **Regression coverage**
+   - updated:
+     - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+   - converted from expected-error to positive FileCheck regression validating:
+     - helper `moore.procedure always` emission
+     - retained assertion emission (`verif.assert`).
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS.
+   - formal regression smoke:
+     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv >/dev/null` (`real=0.008s`, `user=0.006s`, `sys=0.002s`).
+
 ## Iteration 1610 - February 22, 2026
 
 ### [ImportVerilog][SVA] Preserve task identity labels for dynamic action-block payloads

@@ -2,7 +2,7 @@
 
 This document tracks the status of SVA support in CIRCT, including bugs, missing features, and test coverage.
 
-**Last Updated**: February 6, 2026
+**Last Updated**: February 22, 2026
 
 ## Overview
 
@@ -153,6 +153,9 @@ Additional compile-only or XFAIL expectations live in
   - `$stable` - Value stability check
   - `$rose` - Rising edge detection
   - `$fell` - Falling edge detection
+  - sampled edge support over unpacked aggregates now includes associative arrays
+    (`assoc_array` / wildcard associative arrays) in both assertion-clocked and
+    explicit-clock helper lowering paths
 
 - **LTL operators**:
   - `|->` - Overlapping implication
