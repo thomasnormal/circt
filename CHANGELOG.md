@@ -1,3 +1,37 @@
+## Iteration 1566 - February 22, 2026
+
+### [ImportVerilog][SVA] Lower bounded `eventually` on property operands
+
+1. **Implemented bounded property lowering for unary eventually forms**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - added support for:
+     - `eventually [m:n] p` where `p` is property-typed
+     - `s_eventually [m:n] p` where `p` is property-typed
+   - lowering now constructs a disjunction over delay-shifted property
+     instances for each delay in `[m:n]`:
+     - shift by `k`: `ltl.implication(ltl.delay(true, k), p)`
+     - combine with `ltl.or`.
+   - this upgrades a previously diagnosed unsupported case to real lowering.
+   - remaining unsupported property-typed unary temporal wrappers
+     (`nexttime`, `s_nexttime`, `always`, `s_always`) continue to produce
+     explicit frontend diagnostics.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+   - updated:
+     - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+       (now verifies `nexttime p` diagnostic path).
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv` (`real=0.008s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1565 - February 22, 2026
 
 ### [ImportVerilog][SVA] Guard bounded unary property forms from invalid IR

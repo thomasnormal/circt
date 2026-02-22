@@ -6,8 +6,7 @@ module SvaBoundedUnaryPropertyError(input logic clk, a, b);
     @(posedge clk) a |-> b;
   endproperty
 
-  // Previously this could reach MLIR verifier failure due to illegal
-  // `ltl.delay` on `!ltl.property`. Emit a frontend diagnostic instead.
-  // expected-error @below {{bounded eventually on property expressions is not yet supported}}
-  assert property (eventually [1:2] p);
+  // Property-valued nexttime forms still require dedicated lowering.
+  // expected-error @below {{nexttime on property expressions is not yet supported}}
+  assert property (nexttime p);
 endmodule

@@ -1,5 +1,35 @@
 # SVA Engineering Log
 
+## 2026-02-22
+
+- Iteration update (bounded property `eventually` / `s_eventually`):
+  - realization:
+    - bounded unary temporal operators on property operands were being treated
+      as sequence-only forms. We previously guarded this with diagnostics to
+      avoid invalid IR, but that left legal bounded property forms unsupported.
+  - implemented:
+    - added bounded lowering for property-typed:
+      - `eventually [m:n] p`
+      - `s_eventually [m:n] p`
+    - lowering strategy:
+      - shift property by each delay in `[m:n]` using:
+        - `ltl.delay true, k`
+        - `ltl.implication delayed_true, property`
+      - OR the shifted properties with `ltl.or`.
+    - kept explicit diagnostics for still-missing property-typed unary forms:
+      - `nexttime`, `s_nexttime`, `always`, `s_always`.
+  - tests:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+    - updated:
+      - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+        (now checks `nexttime p` diagnostic).
+  - validation:
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
 ## 2026-02-21
 
 - Goal for this iteration:
