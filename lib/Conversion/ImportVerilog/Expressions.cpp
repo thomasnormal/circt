@@ -215,6 +215,80 @@ static Value buildUnpackedAggregateLogicalEq(Context &context, Location loc,
   return {};
 }
 
+/// Build case equality for unpacked aggregate values, with recursive support
+/// for unpacked structs.
+static Value buildUnpackedAggregateCaseEq(Context &context, Location loc,
+                                          Value lhs, Value rhs) {
+  auto &builder = context.builder;
+  if (!lhs || !rhs || lhs.getType() != rhs.getType())
+    return {};
+
+  auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+
+  if (isa<moore::UnpackedArrayType>(lhs.getType()))
+    return {};
+
+  if (auto structTy = dyn_cast<moore::UnpackedStructType>(lhs.getType())) {
+    Value allEqual = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+    for (auto member : structTy.getMembers()) {
+      Value lhsField = moore::StructExtractOp::create(builder, loc, member.type,
+                                                      member.name, lhs);
+      Value rhsField = moore::StructExtractOp::create(builder, loc, member.type,
+                                                      member.name, rhs);
+      Value fieldEq;
+      if (isa<moore::UnpackedStructType, moore::UnpackedArrayType>(member.type)) {
+        fieldEq = buildUnpackedAggregateCaseEq(context, loc, lhsField, rhsField);
+      } else if (isa<moore::StringType>(member.type) ||
+                 isa<moore::FormatStringType>(member.type)) {
+        auto strTy = moore::StringType::get(context.getContext());
+        lhsField =
+            context.materializeConversion(strTy, lhsField, false, lhsField.getLoc());
+        rhsField =
+            context.materializeConversion(strTy, rhsField, false, rhsField.getLoc());
+        if (!lhsField || !rhsField)
+          return {};
+        fieldEq = moore::StringCmpOp::create(builder, loc,
+                                             moore::StringCmpPredicate::eq,
+                                             lhsField, rhsField);
+      } else if (isa<moore::ChandleType>(member.type)) {
+        auto intTy =
+            moore::IntType::get(context.getContext(), 64, Domain::TwoValued);
+        lhsField = context.materializeConversion(intTy, lhsField, false,
+                                                 lhsField.getLoc());
+        rhsField = context.materializeConversion(intTy, rhsField, false,
+                                                 rhsField.getLoc());
+        if (!lhsField || !rhsField)
+          return {};
+        fieldEq = moore::CaseEqOp::create(builder, loc, lhsField, rhsField);
+      } else {
+        if (!isa<moore::IntType>(lhsField.getType()))
+          lhsField = context.convertToSimpleBitVector(lhsField);
+        if (!isa<moore::IntType>(rhsField.getType()))
+          rhsField = context.convertToSimpleBitVector(rhsField);
+        if (!lhsField || !rhsField)
+          return {};
+        if (lhsField.getType() != rhsField.getType()) {
+          rhsField = context.materializeConversion(lhsField.getType(), rhsField,
+                                                   /*isSigned=*/false, loc);
+          if (!rhsField)
+            return {};
+        }
+        fieldEq = moore::CaseEqOp::create(builder, loc, lhsField, rhsField);
+      }
+      if (!fieldEq)
+        return {};
+      if (fieldEq.getType() != i1Ty)
+        fieldEq = context.materializeConversion(i1Ty, fieldEq, false, loc);
+      if (!fieldEq)
+        return {};
+      allEqual = moore::AndOp::create(builder, loc, allEqual, fieldEq);
+    }
+    return allEqual;
+  }
+
+  return {};
+}
+
 static Value visitClassProperty(Context &context,
                                 const slang::ast::ClassPropertySymbol &expr) {
   auto loc = context.convertLocation(expr.location);
@@ -3010,6 +3084,15 @@ struct RvalueExprVisitor : public ExprVisitor {
         return moore::StringCmpOp::create(
             builder, loc, moore::StringCmpPredicate::eq, lhs, rhs);
       }
+      if (isa<moore::UnpackedStructType>(lhs.getType())) {
+        auto eq = buildUnpackedAggregateCaseEq(context, loc, lhs, rhs);
+        if (!eq) {
+          mlir::emitError(loc)
+              << "unsupported unpacked struct case equality operands";
+          return {};
+        }
+        return eq;
+      }
       return createBinary<moore::CaseEqOp>(lhs, rhs);
     case BinaryOperator::CaseInequality:
       // Handle string comparisons with CaseInequality (!==)
@@ -3024,6 +3107,15 @@ struct RvalueExprVisitor : public ExprVisitor {
           return {};
         return moore::StringCmpOp::create(
             builder, loc, moore::StringCmpPredicate::ne, lhs, rhs);
+      }
+      if (isa<moore::UnpackedStructType>(lhs.getType())) {
+        auto eq = buildUnpackedAggregateCaseEq(context, loc, lhs, rhs);
+        if (!eq) {
+          mlir::emitError(loc)
+              << "unsupported unpacked struct case inequality operands";
+          return {};
+        }
+        return moore::NotOp::create(builder, loc, eq);
       }
       return createBinary<moore::CaseNeOp>(lhs, rhs);
     case BinaryOperator::WildcardEquality:

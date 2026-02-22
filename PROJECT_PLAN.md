@@ -172,6 +172,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers unpacked-struct equality/inequality expressions via
    recursive fieldwise comparisons, enabling direct full-struct SVA forms like
    `($past(s, ...) == s)` instead of requiring field-by-field workarounds.
+23. **Unpacked-struct case equality lowering (`===` / `!==`)** (Feb 22, 2026):
+   ImportVerilog now lowers unpacked-struct case equality/inequality via
+   recursive fieldwise `case_eq` reduction, enabling SVA case-comparison
+   assertions on unpacked structs.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
