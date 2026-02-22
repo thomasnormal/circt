@@ -1,3 +1,53 @@
+## Iteration 1628 - February 22, 2026
+
+### [Formal][OVL] Add semantic wrappers for window and contention checker families
+
+1. **Added five new semantic OVL wrappers**
+   - new wrappers:
+     - `utils/ovl_semantic/wrappers/ovl_sem_window.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_win_change.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_win_unchange.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_hold_value.sv`
+     - `utils/ovl_semantic/wrappers/ovl_sem_no_contention.sv`
+   - new manifest entries in `utils/ovl_semantic/manifest.tsv`:
+     - `ovl_sem_window`
+     - `ovl_sem_win_change`
+     - `ovl_sem_win_unchange`
+     - `ovl_sem_hold_value`
+     - `ovl_sem_no_contention`
+
+2. **TDD stabilization for window timing and contention constraints**
+   - initial targeted run produced four failures:
+     - `ovl_sem_win_change` pass mode unexpectedly `SAT`
+     - `ovl_sem_win_unchange` pass mode unexpectedly `SAT`
+     - `ovl_sem_no_contention` compile failure due empty-match sequence form
+       (`[*min_quiet]` with zero quiet window).
+   - wrapper profiles were tightened to deterministic non-vacuous settings:
+     - `ovl_sem_win_change` pass/fail profiles stabilized with fixed
+       `start_event`/`end_event` values.
+     - `ovl_sem_win_unchange` pass/fail profiles stabilized with fixed
+       `start_event` and controlled `test_expr` transition timing.
+     - `ovl_sem_no_contention` moved to `min_quiet=1,max_quiet=1` to avoid
+       current empty-match parse limitation while retaining semantic checks.
+
+3. **Validation**
+   - targeted new cases:
+     - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(window|win_change|win_unchange|hold_value|no_contention)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - result:
+       - `ovl semantic BMC summary: 10 tests, failures=0, xfail=0, xpass=0, skipped=0`
+   - full semantic lane:
+     - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - result:
+       - `ovl semantic BMC summary: 56 tests, failures=0, xfail=0, xpass=0, skipped=0`
+   - full OVL matrix:
+     - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-window-batch`
+     - result:
+       - `std_ovl/BMC PASS 110/110`
+       - `std_ovl/BMC_SEMANTIC PASS 56/56`
+   - profiling sample:
+     - `time OUT=/tmp/ovl-sem-profile-window-batch.log utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+     - `real=8.471s`
+
 ## Iteration 1627 - February 22, 2026
 
 ### [Formal][OVL] Add semantic wrappers for transition/overflow and req_requires checkers
