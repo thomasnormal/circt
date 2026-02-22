@@ -76525,3 +76525,32 @@ See CHANGELOG.md on recent progress.
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv` (`real=0.007s`, `user=0.004s`, `sys=0.003s`)
+106. ImportVerilog SVA: support `event` operands in sampled-value functions
+     (February 22, 2026):
+    - feature:
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - sampled-value lowering now supports `event` operands for:
+        - `$stable`, `$changed`, `$rose`, `$fell`
+      - applies to both direct assertion-clock lowering and explicit sampled-
+        clock helper lowering.
+      - event sampled semantics are lowered via native event booleanization
+        (`moore.bool_cast` on `event`) before sampled comparisons/edges.
+    - regression coverage:
+      - new:
+        - `test/Conversion/ImportVerilog/sva-sampled-event.sv`
+      - failing-first behavior reproduced prior to fix:
+        - `error: expression of type '!moore.event' cannot be cast to a simple bit vector`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-translate`
+        - `ninja -C build-test circt-verilog`
+      - focused tests: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-event.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv`
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv`
+      - lit subset: PASS
+        - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-event.sv build-test/test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - profiling sample:
+        - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-event.sv` (`real=0.007s`, `user=0.005s`, `sys=0.002s`)
