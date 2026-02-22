@@ -1,3 +1,38 @@
+## Iteration 1609 - February 22, 2026
+
+### [ImportVerilog][SVA] Preserve generic labels for non-message concurrent action blocks
+
+1. **Implemented action-block fallback labeling**
+   (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   - concurrent assertion lowering now assigns a deterministic fallback
+     action label (`"action_block"`) when an action block exists but no
+     message/task-derived label can be extracted.
+   - keeps action-block identity in IR for non-message blocks (e.g. assignment
+     side-effect blocks), instead of dropping to unlabeled assertions.
+
+2. **Behavioral fix**
+   - assertions like:
+     - `assert property (@(posedge clk) a |-> b) else begin shadow = a; end`
+     now lower with a stable label:
+     - `verif.assert ... label "action_block"`
+   - this removes ambiguity between “no action block” and “non-message action
+     block present but not representable”.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-action-block-generic-label.sv`
+   - checks that non-message action blocks preserve fallback label emission.
+
+4. **Validation**
+   - `ninja -C build-test circt-translate`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-generic-label.sv`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1608 - February 22, 2026
 
 ### [ImportVerilog][SVA] Honor `disable iff` for no-clock sampled-value helpers

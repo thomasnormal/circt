@@ -2,6 +2,33 @@
 
 ## 2026-02-22
 
+- Iteration update (concurrent action-block fallback labeling):
+  - realization:
+    - concurrent assertion action-block extraction handled message/task forms,
+      but non-message blocks (e.g. side-effect assignments) degraded to
+      unlabeled assertions with an “ignoring action blocks” warning.
+    - this lost a useful IR-level signal that an action block was present.
+  - TDD proof:
+    - added
+      `test/Conversion/ImportVerilog/sva-action-block-generic-label.sv`.
+    - before fix:
+      - regression failed (no action label), and importer emitted action-block
+        ignore warning.
+  - implemented:
+    - in concurrent assertion lowering, when action statements exist but
+      message-label extraction returns empty, emit fallback label
+      `"action_block"`.
+    - retain existing extracted labels for message/severity/display cases.
+  - validation:
+    - `ninja -C build-test circt-translate`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-generic-label.sv`
+    - compatibility checks:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv >/dev/null` (`real=0.007s`)
+
 - Iteration update (no-clock sampled-value disable-iff closure):
   - realization:
     - after no-clock `$past` disable-iff fixes, sampled-value functions
