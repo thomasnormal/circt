@@ -3084,6 +3084,9 @@ struct RvalueExprVisitor : public ExprVisitor {
         return moore::StringCmpOp::create(
             builder, loc, moore::StringCmpPredicate::eq, lhs, rhs);
       }
+      if (isa<moore::UnpackedArrayType>(lhs.getType()))
+        return moore::UArrayCmpOp::create(
+            builder, loc, moore::UArrayCmpPredicate::eq, lhs, rhs);
       if (isa<moore::UnpackedStructType>(lhs.getType())) {
         auto eq = buildUnpackedAggregateCaseEq(context, loc, lhs, rhs);
         if (!eq) {
@@ -3108,6 +3111,9 @@ struct RvalueExprVisitor : public ExprVisitor {
         return moore::StringCmpOp::create(
             builder, loc, moore::StringCmpPredicate::ne, lhs, rhs);
       }
+      if (isa<moore::UnpackedArrayType>(lhs.getType()))
+        return moore::UArrayCmpOp::create(
+            builder, loc, moore::UArrayCmpPredicate::ne, lhs, rhs);
       if (isa<moore::UnpackedStructType>(lhs.getType())) {
         auto eq = buildUnpackedAggregateCaseEq(context, loc, lhs, rhs);
         if (!eq) {

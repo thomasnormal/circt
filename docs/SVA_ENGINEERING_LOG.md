@@ -1422,3 +1422,29 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv` (`real=0.007s`)
+
+- Iteration update (unpacked-array case equality/inequality lowering):
+  - realization:
+    - unpacked-struct case equality was fixed, but direct unpacked-array
+      `===` / `!==` still failed in expression lowering with a
+      simple-bit-vector cast diagnostic.
+    - this blocked legal SVA forms such as
+      `assert property (@(posedge clk) (x === y));` where `x`/`y` are fixed
+      unpacked arrays.
+  - implemented:
+    - wired `BinaryOperator::CaseEquality` / `CaseInequality` for unpacked
+      arrays to `moore.uarray_cmp` (`eq` / `ne`) in `Expressions.cpp`.
+    - new regressions:
+      - `test/Conversion/ImportVerilog/unpacked-array-case-equality.sv`
+      - `test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-array-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-array-case-equality.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-array-case-equality.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv` (`real=0.007s`)

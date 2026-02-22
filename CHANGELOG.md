@@ -1,3 +1,35 @@
+## Iteration 1587 - February 22, 2026
+
+### [ImportVerilog][SVA] Support unpacked-array case equality (`===` / `!==`)
+
+1. **Implemented unpacked-array case equality/inequality lowering**
+   (`lib/Conversion/ImportVerilog/Expressions.cpp`):
+   - added direct lowering for unpacked-array `===` to `moore.uarray_cmp eq`.
+   - added direct lowering for unpacked-array `!==` to `moore.uarray_cmp ne`.
+   - avoids invalid simple-bit-vector casts for unpacked-array operands.
+
+2. **SVA impact**
+   - assertion expressions with unpacked-array case comparisons now lower:
+     - `assert property (@(posedge clk) (x === y));`
+     - `assert property (@(posedge clk) (x !== y));`
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/unpacked-array-case-equality.sv`
+     - `test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-array-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-array-case-equality.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-array-case-equality.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv >/dev/null`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv >/dev/null` (`real=0.007s`, `user=0.005s`, `sys=0.002s`).
+
 ## Iteration 1586 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support unpacked-struct case equality (`===` / `!==`)
