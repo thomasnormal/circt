@@ -999,6 +999,8 @@ static Value lowerPastWithSamplingControl(
       isa<moore::UnpackedArrayType>(originalType) ||
       isa<moore::OpenUnpackedArrayType>(originalType) ||
       isa<moore::QueueType>(originalType) ||
+      isa<moore::AssocArrayType>(originalType) ||
+      isa<moore::WildcardAssocArrayType>(originalType) ||
       isa<moore::UnpackedStructType>(originalType) ||
       isa<moore::UnpackedUnionType>(originalType);
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
