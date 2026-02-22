@@ -208,6 +208,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now lowers `==`/`!=` on open unpacked arrays and queues with
    size-aware elementwise semantics (including SVA expression contexts), rather
    than constant fallback results.
+32. **Dynamic-array/queue case-equality parity** (Feb 22, 2026):
+   ImportVerilog now lowers `===`/`!==` on open unpacked arrays and queues with
+   size-aware elementwise case-equality semantics (including nested aggregate
+   members), replacing unsupported/incorrect dynamic case-compare behavior in
+   procedural and SVA expression contexts.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to

@@ -1,3 +1,37 @@
+## Iteration 1595 - February 22, 2026
+
+### [ImportVerilog][SVA] Add dynamic-array/queue case equality (`===` / `!==`)
+
+1. **Implemented dynamic aggregate case equality lowering**
+   (`lib/Conversion/ImportVerilog/Expressions.cpp`):
+   - added helper for open unpacked arrays and queues:
+     - compare sizes (`moore.array.size`)
+     - find element case-inequality mismatches (`moore.array.locator` +
+       indexed extraction + `moore.case_eq`)
+     - case equality is true iff sizes match and mismatch set is empty.
+   - integrated this helper into binary `===` / `!==` lowering paths.
+   - nested unpacked aggregate case-equality recursion now routes dynamic
+     array/queue fields through the same helper.
+
+2. **Behavioral fix**
+   - dynamic array/queue case equality now lowers with element-wise semantics
+     instead of unsupported/incorrect fallback behavior.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv`
+     - `test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv >/dev/null`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv >/dev/null` (`real=0.007s`, `user=0.003s`, `sys=0.003s`).
+
 ## Iteration 1594 - February 22, 2026
 
 ### [ImportVerilog][SVA] Fix dynamic-array/queue logical equality (`==` / `!=`)
