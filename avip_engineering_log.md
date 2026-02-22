@@ -4593,3 +4593,41 @@ Based on these findings, the circt-sim compiled process architecture:
    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`: PASS
 4. Formal smoke:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS
+
+## 2026-02-22 Session: Key-aware typed assoc sampled stability
+
+### Problem
+1. Typed associative-array sampled stability (`$stable/$changed`) still used
+   value-only positional comparison in the sampled stable helper.
+2. New string-key sampled regression initially failed with:
+   - `unsupported sampled value type for $stable`
+   because sampled stable comparison lacked scalar string leaf support.
+
+### Realizations / Surprises
+1. Key-aware parity for sampled stability requires the same key/value split used
+   in typed assoc equality:
+   - key queue (`indices`)
+   - value queue (`elements`)
+2. Recursive sampled compare needs leaf handlers for non-int unpacked scalars
+   reached through assoc key/value queues (string/chandle).
+
+### Fix
+1. Updated typed assoc branch in
+   `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+   (`buildSampledStableComparison`) to compare projected key and value queues.
+2. Added sampled stable scalar support for:
+   - string / format-string (`moore.string_cmp eq`)
+   - chandle (64-bit cast + `moore.eq`)
+3. Added regression:
+   - `test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-string-key-explicit-clock.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-string-key-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-string-key-explicit-clock.sv`: PASS
+3. Compatibility checks:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-wildcard-assoc-array-equality-stable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-wildcard-assoc-array-equality-stable.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS
