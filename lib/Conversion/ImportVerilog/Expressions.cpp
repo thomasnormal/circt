@@ -10681,6 +10681,17 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                     return {};
                   return moore::FTellBIOp::create(builder, loc, fd);
                 })
+          .Case("$rewind",
+                [&]() -> Value {
+                  // $rewind(fd) - reset file position to beginning.
+                  // Lower side effect and return a success code in value context.
+                  auto fd = toI32(value);
+                  if (!fd)
+                    return {};
+                  moore::RewindBIOp::create(builder, loc, fd);
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
           .Case("index",
                 [&]() -> FailureOr<Value> {
                   // Handle item.index for array locator methods.

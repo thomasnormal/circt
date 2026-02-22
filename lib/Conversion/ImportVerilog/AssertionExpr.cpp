@@ -3430,6 +3430,22 @@ Value Context::convertAssertionCallExpression(
     return moore::PastOp::create(builder, loc, value, delay).getResult();
   }
 
+  if (funcName == "$rewind") {
+    if (args.size() != 1) {
+      mlir::emitError(loc) << "$rewind expects exactly one argument";
+      return {};
+    }
+    auto fd = this->convertRvalueExpression(*args[0]);
+    if (!fd)
+      return {};
+    auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+    if (fd.getType() != i32Ty)
+      fd = moore::ConversionOp::create(builder, loc, i32Ty, fd);
+    moore::RewindBIOp::create(builder, loc, fd);
+    // `$rewind` is side-effecting; in value context return a success default.
+    return moore::ConstantOp::create(builder, loc, i32Ty, 0);
+  }
+
   switch (args.size()) {
   case (1):
     value = this->convertRvalueExpression(*args[0]);
