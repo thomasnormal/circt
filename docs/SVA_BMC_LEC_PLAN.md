@@ -181,12 +181,13 @@ Items are grouped by pipeline stage.
   `utils/run_ovl_sva_semantic_circt_bmc.sh`.
   - Harness style: one SV wrapper per checker case in
     `utils/ovl_semantic/wrappers/` with manifest-driven expectations.
-  - Current semantic status (Feb 22, 2026): `14` checks
-    (`13` pass, `1` known xfail).
-  - Known gap:
-    - `ovl_next` fail-mode remains `UNSAT` due `!ltl.property`-typed
-      `verif.clocked_assert` lowering path not yet producing a violatable
-      SAT witness in BMC.
+  - Current semantic status (Feb 22, 2026): `26/26` pass/fail obligations
+    passing (`13` checker wrappers x `pass/fail` modes).
+  - Coverage now includes:
+    - `ovl_change`
+    - `ovl_one_cold`
+    - `ovl_mutex`
+    - `ovl_next_state`
 
 ## Core Workstreams
 

@@ -2,6 +2,49 @@
 
 ## 2026-02-22
 
+- Iteration update (OVL semantic harness expansion: change/one_cold/mutex/next_state):
+  - realization:
+    - semantic OVL coverage was still skewed toward simpler one-cycle checkers.
+    - `ovl_change`, `ovl_one_cold`, `ovl_mutex`, and `ovl_next_state` were
+      missing from the manifest and therefore absent from the regression lane.
+    - surprise:
+      - `ovl_next_state` needed stimulus shaping to avoid bound-end
+        over-triggering in pass mode while still producing a concrete fail-mode
+        SAT witness.
+  - TDD proof:
+    - added wrappers first, then ran targeted red/green:
+      - `utils/ovl_semantic/wrappers/ovl_sem_change.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_one_cold.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_mutex.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_next_state.sv`
+      - `utils/ovl_semantic/manifest.tsv` entries:
+        - `ovl_sem_change`
+        - `ovl_sem_one_cold`
+        - `ovl_sem_mutex`
+        - `ovl_sem_next_state`
+    - first targeted run exposed wrapper-level semantic mismatches, then
+      wrapper stimuli were tightened until pass/fail polarity was stable.
+  - implemented:
+    - expanded manifest-driven semantic harness from 9 to 13 checker wrappers
+      (26 pass/fail obligations).
+    - improved `ovl_change` and `ovl_next_state` wrappers to avoid fragile
+      initialization-dependent traces and keep deterministic BMC polarity.
+  - validation:
+    - targeted:
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(change|one_cold|mutex|next_state)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `8 tests, failures=0, xfail=0, xpass=0`
+    - full semantic lane:
+      - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `26 tests, failures=0, xfail=0, xpass=0`
+    - full OVL matrix:
+      - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-add4`
+      - result:
+        - `std_ovl/BMC PASS 110/110`
+        - `std_ovl/BMC_SEMANTIC PASS 26/26`
+    - profiling sample:
+      - `time OUT=/tmp/ovl-sem-profile2.log utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - `real=2.866s`
+
 - Iteration update (dynamic action-payload task labels):
   - realization:
     - after adding generic action-block fallback labels, dynamic payload task
