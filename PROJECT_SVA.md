@@ -156,6 +156,9 @@ Additional compile-only or XFAIL expectations live in
   - sampled edge support over unpacked aggregates now includes associative arrays
     (`assoc_array` / wildcard associative arrays) in both assertion-clocked and
     explicit-clock helper lowering paths
+  - sampled stability/change support over unpacked aggregates now includes
+    associative arrays (`assoc_array` / wildcard associative arrays) in both
+    assertion-clocked and explicit-clock helper lowering paths
 
 - **LTL operators**:
   - `|->` - Overlapping implication

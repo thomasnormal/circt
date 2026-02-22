@@ -1,3 +1,44 @@
+## Iteration 1613 - February 22, 2026
+
+### [ImportVerilog][SVA] Support associative-array `$stable/$changed` sampled lowering
+
+1. **Implemented associative-array sampled stability lowering**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - extended sampled stable-comparison helper to support:
+     - `moore::AssocArrayType`
+     - `moore::WildcardAssocArrayType`
+   - added assoc-array element-wise mismatch detection via
+     `moore.array.locator` + `moore.array.size` reduction, with recursive
+     per-element sampled comparison.
+   - integrated assoc-array types into sampled stability aggregate
+     classification for both:
+     - direct assertion-clocked lowering (`moore.past` path),
+     - explicit-clock helper-procedure sampled lowering.
+
+2. **Behavioral fix**
+   - constructs like:
+     - `assert property ($stable(aa, @(posedge clk)) |-> en);`
+     now import successfully for associative arrays instead of failing with:
+     - `unsupported sampled value type for $stable`.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`
+   - validates helper emission (`moore.procedure always`, `moore.wait_event`)
+     and assertion emission (`verif.assert`).
+
+4. **Validation**
+   - `ninja -C build-test circt-translate`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS.
+   - formal regression smoke:
+     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv >/dev/null` (`real=0.006s`, `user=0.003s`, `sys=0.003s`).
+
 ## Iteration 1612 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support associative-array `$past` with sampled controls
