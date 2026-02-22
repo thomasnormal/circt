@@ -1295,3 +1295,23 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv` (`real=0.007s`)
+
+- Iteration update (procedural sampled default-clocking inference):
+  - realization:
+    - procedural sampled-value calls without explicit clocking still ignored
+      in-scope `default clocking` and lowered to unclocked `moore.past`.
+  - implemented:
+    - for non-assertion `$rose/$fell/$stable/$changed`, importer now infers
+      `default clocking` when available and uses helper-based clocked sampled
+      state lowering.
+    - new regression:
+      - `test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv > /dev/null`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv > /dev/null`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv` (`real=0.007s`)
