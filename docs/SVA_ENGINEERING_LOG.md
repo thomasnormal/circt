@@ -1315,3 +1315,27 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv` (`real=0.007s`)
+
+- Iteration update (interface concurrent assertions at instance sites):
+  - realization:
+    - interface instance elaboration only instantiated interface continuous
+      assignments and ignored assertion-generated procedural members in
+      interface bodies.
+    - result: interface-contained concurrent assertions were silently dropped
+      from module IR (no diagnostic and no `verif.assert`).
+  - implemented:
+    - extended interface per-instance elaboration to also visit/lower
+      assertion-origin procedural blocks (`ProceduralBlockSymbol` with
+      `isFromAssertion`) in the same instance-context path used for interface
+      signal resolution.
+    - new regression:
+      - `test/Conversion/ImportVerilog/sva-interface-assert-instance.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-interface-assert-instance.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-interface-assert-instance.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-property.sv > /dev/null`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv > /dev/null`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv` (`real=0.006s`)

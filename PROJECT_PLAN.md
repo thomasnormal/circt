@@ -160,6 +160,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now infers in-scope `default clocking` for non-assertion
    `$rose/$fell/$stable/$changed` (without explicit clock argument) and lowers
    them with helper-based sampled clocked state.
+20. **SVA interface-contained concurrent assertion lowering** (Feb 22, 2026):
+   Interface instance elaboration now lowers assertion-generated procedural
+   members from interface bodies at instance sites, closing a silent-drop gap
+   where interface assertions were previously omitted from imported IR.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
