@@ -713,8 +713,8 @@ void ExternalizeRegistersPass::runOnOperation() {
                   UnitAttr::get(module.getContext()));
               continue;
             }
-            auto argAttr = dyn_cast<IntegerAttr>(dict.get("arg_index"));
-            auto invertAttr = dyn_cast<BoolAttr>(dict.get("invert"));
+            auto argAttr = dict.getAs<IntegerAttr>("arg_index");
+            auto invertAttr = dict.getAs<BoolAttr>("invert");
             if (!argAttr || !invertAttr) {
               mappedClockSources.push_back(
                   UnitAttr::get(module.getContext()));

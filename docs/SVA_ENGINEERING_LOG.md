@@ -2126,3 +2126,35 @@
       - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
       - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+
+- Iteration update (`ovl_next` semantic closure + assume-known state scoping):
+  - realization:
+    - `ovl_sem_next` fail-mode stayed `UNSAT` even though lowered assertions were
+      present and correctly clock-gated.
+    - root cause was not missing assertion lowering; it was vacuity from
+      contradictory knownness constraints.
+  - surprise:
+    - `--assume-known-inputs` was constraining BMC state/register arguments
+      (including initialized register state), not just non-state inputs.
+    - with 4-state register init values like `1 : i2`, this generated immediate
+      contradictions (`unknown == 0` against X-initialized state), masking real
+      assertion behavior.
+  - implemented:
+    - in `VerifToSMT`, limited knownness assumptions to non-state circuit
+      inputs for both:
+      - initialization-time constraints
+      - per-iteration constraints
+    - kept register/delay/NFA state unconstrained by assume-known policy.
+  - TDD proof:
+    - added `test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir`
+      to lock this behavior.
+  - validation:
+    - `build-test/bin/circt-opt test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir --convert-verif-to-smt="assume-known-inputs=true" --reconcile-unrealized-casts -allow-unregistered-dialect | llvm/build/bin/FileCheck test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir`
+    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_next$' FAIL_ON_XPASS=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result flipped from `XFAIL(fail)` to `XPASS(fail)`; known-gap marker then removed.
+  - follow-up hardening in same slice:
+    - fixed null-attr crash paths (`dict.get(...)` + `dyn_cast`) by switching to
+      `dict.getAs<...>` in:
+      - `LowerToBMC.cpp`
+      - `ExternalizeRegisters.cpp`
+      - `VerifToSMT.cpp`

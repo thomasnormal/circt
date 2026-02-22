@@ -5248,7 +5248,6 @@ struct VerifBoundedModelCheckingOpConversion
         if (!useInitValues) {
           auto decl = declareInput(newTy, curIndex);
           inputDecls.push_back(decl);
-          maybeAssertKnown(curIndex, oldTy, decl, rewriter);
           continue;
         }
         auto initVal =
@@ -5260,14 +5259,12 @@ struct VerifBoundedModelCheckingOpConversion
                    "Width mismatch between initial value and target type");
             auto initVal = smt::BVConstantOp::create(rewriter, loc, cstInt);
             inputDecls.push_back(initVal);
-            maybeAssertKnown(curIndex, oldTy, initVal, rewriter);
             continue;
           }
           if (isa<smt::BoolType>(newTy)) {
             auto initVal =
                 smt::BoolConstantOp::create(rewriter, loc, !cstInt.isZero());
             inputDecls.push_back(initVal);
-            maybeAssertKnown(curIndex, oldTy, initVal, rewriter);
             continue;
           }
           op.emitError("unsupported integer initial value in BMC conversion");
@@ -5279,14 +5276,12 @@ struct VerifBoundedModelCheckingOpConversion
                 rewriter, loc, initBoolAttr.getValue() ? 1 : 0,
                 bvTy.getWidth());
             inputDecls.push_back(initVal);
-            maybeAssertKnown(curIndex, oldTy, initVal, rewriter);
             continue;
           }
           if (isa<smt::BoolType>(newTy)) {
             auto initVal = smt::BoolConstantOp::create(
                 rewriter, loc, initBoolAttr.getValue());
             inputDecls.push_back(initVal);
-            maybeAssertKnown(curIndex, oldTy, initVal, rewriter);
             continue;
           }
           op.emitError("unsupported bool initial value in BMC conversion");
@@ -5328,9 +5323,9 @@ struct VerifBoundedModelCheckingOpConversion
           op.emitError("invalid bmc_clock_sources attribute");
           return failure();
         }
-        auto argAttr = dyn_cast<IntegerAttr>(dict.get("arg_index"));
-        auto posAttr = dyn_cast<IntegerAttr>(dict.get("clock_pos"));
-        auto invertAttr = dyn_cast<BoolAttr>(dict.get("invert"));
+        auto argAttr = dict.getAs<IntegerAttr>("arg_index");
+        auto posAttr = dict.getAs<IntegerAttr>("clock_pos");
+        auto invertAttr = dict.getAs<BoolAttr>("invert");
         if (!argAttr || !posAttr || !invertAttr) {
           op.emitError("invalid bmc_clock_sources entry");
           return failure();
@@ -6854,10 +6849,13 @@ struct VerifBoundedModelCheckingOpConversion
       for (uint64_t iter = 0; iter < boundValue; ++iter) {
         ValueRange iterRange(iterArgs);
 
-        // Assert 2-state constraints on the current iteration inputs.
+        // Assert 2-state constraints on non-state iteration inputs.
+        // Register/delay/NFA state may intentionally contain unknowns.
+        size_t numKnownInputArgs = oldCircuitInputTy.size() - numRegs -
+                                   totalDelaySlots - totalNFAStateSlots;
         for (auto [index, pair] : llvm::enumerate(llvm::zip(
-                 TypeRange(oldCircuitInputTy).take_front(numCircuitArgs),
-                 iterRange.take_front(numCircuitArgs)))) {
+                 TypeRange(oldCircuitInputTy).take_front(numKnownInputArgs),
+                 iterRange.take_front(numKnownInputArgs)))) {
           auto [oldTy, arg] = pair;
           maybeAssertKnown(index, oldTy, arg, rewriter);
         }
@@ -7666,11 +7664,14 @@ struct VerifBoundedModelCheckingOpConversion
     auto forOp = scf::ForOp::create(
         rewriter, loc, lowerBound, upperBound, step, inputDecls,
         [&](OpBuilder &builder, Location loc, Value i, ValueRange iterArgs) {
-          // Assert 2-state constraints on the current iteration inputs.
+          // Assert 2-state constraints on non-state iteration inputs.
+          // Register/delay/NFA state may intentionally contain unknowns.
           size_t numCircuitArgs = circuitInputTy.size();
+          size_t numKnownInputArgs = oldCircuitInputTy.size() - numRegs -
+                                     totalDelaySlots - totalNFAStateSlots;
           for (auto [index, pair] : llvm::enumerate(llvm::zip(
-                   TypeRange(oldCircuitInputTy).take_front(numCircuitArgs),
-                   iterArgs.take_front(numCircuitArgs)))) {
+                   TypeRange(oldCircuitInputTy).take_front(numKnownInputArgs),
+                   iterArgs.take_front(numKnownInputArgs)))) {
             auto [oldTy, arg] = pair;
             maybeAssertKnown(index, oldTy, arg, builder);
           }

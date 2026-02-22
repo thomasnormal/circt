@@ -1,3 +1,39 @@
+## Iteration 1624 - February 22, 2026
+
+### [Formal][OVL][BMC] Fix `ovl_next` semantic fail-mode vacuity under `--assume-known-inputs`
+
+1. **Fixed a `VerifToSMT` modeling bug in `--assume-known-inputs`**
+   (`lib/Conversion/VerifToSMT/VerifToSMT.cpp`):
+   - `assume-known-inputs` was incorrectly applied to BMC state/register
+     arguments (including initialized register state), not just non-state
+     inputs.
+   - this could inject contradictory `unknown == 0` constraints for legal
+     X-initialized 4-state register state (e.g. `initial_values = [1 : i2]` for
+     `!hw.struct<value:i1,unknown:i1>`), forcing vacuous `UNSAT`.
+   - updated conversion so knownness assumptions apply only to non-state
+     circuit inputs at initialization and per-iteration checks.
+
+2. **Closed OVL semantic gap for `ovl_next`**
+   - `utils/ovl_semantic/manifest.tsv`:
+     - `ovl_sem_next` moved from `known_gap=1` to `known_gap=0`.
+   - semantic runner now reports `PASS(pass)` and `PASS(fail)` for
+     `ovl_sem_next` (previously `XFAIL(fail)`).
+
+3. **Added regression for state-knownness scoping**
+   - new test:
+     - `test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir`
+   - validates that register state is not constrained by
+     `--assume-known-inputs`.
+
+4. **Crash hardening follow-up**
+   - replaced unsafe null `dyn_cast` attr lookups in clock-source metadata with
+     safe `getAs<...>` handling in:
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+     - `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - added:
+     - `test/Tools/circt-bmc/lower-to-bmc-reg-clock-source-no-arg-index.mlir`
+
 ## Iteration 1623 - February 22, 2026
 
 ### [Formal][OVL] Add semantic OVL harness lane with per-wrapper checker modules
