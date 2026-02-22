@@ -600,3 +600,28 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` (`real=0.053s`)
+
+- Iteration update (non-uniform mixed event-list sequence inference):
+  - realization:
+    - unclocked sequence events in mixed lists were inferable only for uniform
+      signal clocks. Non-uniform signal lists (for example
+      `@(s or posedge clk or negedge rst)`) still failed despite enough timing
+      context to synthesize a multi-clock sequence check.
+  - implemented:
+    - extended `lowerSequenceEventListControl` to infer per-signal clocked
+      sequence variants when clocks are non-uniform.
+    - generated variants are deduplicated by clocked-value structural
+      equivalence before combining.
+    - when this path is used, lowering routes through existing multi-clock
+      sequence event-control machinery.
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv` (`real=0.045s`)
