@@ -757,18 +757,24 @@ struct ModuleVisitor : public BaseVisitor {
         context.pendingInterfacePortConnections.push_back(
             {&instNode, instOp.getResult(), loc});
 
-      // Instantiate interface continuous assignments at each interface
-      // instance site. Interface body conversion currently declares interface
-      // signals and methods, but continuous assigns need concrete instance
+      // Instantiate interface members that require concrete instance context.
+      // Interface body conversion declares signals/methods, but continuous
+      // assignments and assertion-generated procedural blocks need instance
       // context to produce virtual interface signal refs.
-      bool hasInterfaceContAssign = false;
+      bool hasInstanceContextMembers = false;
       for (auto &member : instNode.body.members()) {
         if (member.kind == slang::ast::SymbolKind::ContinuousAssign) {
-          hasInterfaceContAssign = true;
+          hasInstanceContextMembers = true;
           break;
         }
+        if (auto *proc = member.as_if<slang::ast::ProceduralBlockSymbol>()) {
+          if (proc->isFromAssertion) {
+            hasInstanceContextMembers = true;
+            break;
+          }
+        }
       }
-      if (hasInterfaceContAssign) {
+      if (hasInstanceContextMembers) {
         Value interfaceValue = instOp.getResult();
         if (isa<moore::RefType>(interfaceValue.getType()))
           interfaceValue = moore::ReadOp::create(builder, loc, interfaceValue);
@@ -829,11 +835,17 @@ struct ModuleVisitor : public BaseVisitor {
         }
 
         for (auto &member : instNode.body.members()) {
-          if (member.kind != slang::ast::SymbolKind::ContinuousAssign)
+          bool lowerInInstanceContext =
+              member.kind == slang::ast::SymbolKind::ContinuousAssign;
+          if (!lowerInInstanceContext) {
+            if (auto *proc = member.as_if<slang::ast::ProceduralBlockSymbol>())
+              lowerInInstanceContext = proc->isFromAssertion;
+          }
+          if (!lowerInInstanceContext)
             continue;
           auto memberLoc = context.convertLocation(member.location);
-          if (failed(member.visit(ModuleVisitor(context, memberLoc,
-                                                blockNamePrefix))))
+          if (failed(
+                  member.visit(ModuleVisitor(context, memberLoc, blockNamePrefix))))
             return failure();
         }
       }

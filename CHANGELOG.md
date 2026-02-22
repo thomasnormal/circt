@@ -1,3 +1,32 @@
+## Iteration 1583 - February 22, 2026
+
+### [ImportVerilog][SVA] Lower interface concurrent assertions at instance sites
+
+1. **Closed interface assertion drop-on-import gap**
+   (`lib/Conversion/ImportVerilog/Structure.cpp`):
+   - interface instance elaboration previously instantiated only interface
+     continuous assignments, silently dropping assertion-generated procedural
+     blocks in interface bodies.
+   - elaboration now also instantiates assertion-origin procedural members
+     (`ProceduralBlockSymbol` with `isFromAssertion`) at each interface
+     instance site, with the correct interface signal-resolution context.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-interface-assert-instance.sv`
+   - this locks that interface-contained concurrent assertions now lower into
+     the consuming module IR (`verif.assert`) instead of being omitted.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-interface-assert-instance.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-interface-assert-instance.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-property.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv >/dev/null`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv >/dev/null` (`real=0.006s`, `user=0.002s`, `sys=0.004s`).
+
 ## Iteration 1582 - February 22, 2026
 
 ### [ImportVerilog][SVA] Infer default clocking for procedural sampled calls
