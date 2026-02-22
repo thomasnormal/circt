@@ -673,3 +673,28 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv` (`real=0.048s`)
+
+- Iteration update (mixed sequence event lists with named events):
+  - realization:
+    - mixed sequence event-list lowering assumed all non-sequence entries could
+      be converted to 1-bit clock-like signals.
+    - named event entries (`event e; always @(s or e) ...`) are event-typed and
+      caused a hard failure (`expected a 1-bit integer`).
+  - implemented:
+    - added a direct-event fallback path in `lowerSequenceEventListControl` for
+      mixed lists containing event-typed entries.
+    - fallback emits:
+      - `ltl.matched`-driven `moore.detect_event posedge` wakeups for sequence
+        entries,
+      - direct `moore.detect_event` wakeups for all explicit signal/named-event
+        entries (including `iff` conditions).
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv` (`real=0.036s`)

@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 1558 - February 22, 2026
+
+### [ImportVerilog][SVA] Support named events in mixed sequence event lists
+
+1. **Added mixed sequence + named-event lowering fallback**
+   (`lib/Conversion/ImportVerilog/TimingControls.cpp`):
+   - fixed failures for mixed event lists like `always @(s or e)` where `s`
+     is a sequence and `e` is a named event.
+   - when mixed sequence lists contain direct event-typed entries, lowering now:
+     - uses `ltl.matched` for sequence entries and emits `posedge` detect events,
+     - emits direct `moore.detect_event` for each signal / named-event entry,
+     - avoids forcing event-typed entries through 1-bit clock conversion.
+
+2. **Added regression coverage**
+   - `test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+     - checks import and IR generation for `always @(s or e)`.
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv` (`real=0.036s`, `user=0.003s`, `sys=0.005s`).
+
 ## Iteration 1557 - February 21, 2026
 
 ### [ImportVerilog][SVA] Fallback to global clocking for unclocked sequence event controls
