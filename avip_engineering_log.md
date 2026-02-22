@@ -4558,3 +4558,38 @@ Based on these findings, the circt-sim compiled process architecture:
    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-assoc-array-explicit-clock.sv`: PASS
 4. Formal smoke:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS
+
+## 2026-02-22 Session: Wildcard assoc-array equality/stability verifier fix
+
+### Problem
+1. Wildcard-index associative arrays (`[*]`) failed import verification in
+   equality and sampled-stability lowering with:
+   - `'moore.array.size' op operand #0 must be dynamic array, associative array, or queue type, but got '!moore.wildcard_assoc_array<...>'`
+2. This blocked otherwise-valid SVA forms such as:
+   - `assert property (@(posedge clk) aa == bb);`
+   - `assert property ($stable(aa, @(posedge clk)) |-> en);`
+
+### Realizations / Surprises
+1. `moore.array.size` verifier currently rejects direct wildcard-assoc operands.
+2. The robust workaround is to project wildcard-assoc values to queues via
+   `moore.array.locator` and derive size/comparison from those projected queues.
+
+### Fix
+1. `lib/Conversion/ImportVerilog/Expressions.cpp`:
+   - wildcard-assoc equality/case-equality now projects value queues and uses
+     queue-size + queue-comparison logic (no direct wildcard size op).
+2. `lib/Conversion/ImportVerilog/AssertionExpr.cpp`:
+   - wildcard-assoc sampled stable comparison now projects value queues and
+     reuses queue sampled-stability comparison.
+3. Added regression:
+   - `test/Conversion/ImportVerilog/sva-wildcard-assoc-array-equality-stable.sv`
+
+### Validation
+1. `ninja -C build-test circt-translate`: PASS
+2. `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-wildcard-assoc-array-equality-stable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-wildcard-assoc-array-equality-stable.sv`: PASS
+3. Compatibility checks:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS

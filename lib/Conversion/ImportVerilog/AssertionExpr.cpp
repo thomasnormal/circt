@@ -235,54 +235,29 @@ static Value buildSampledStableComparison(Context &context, Location loc,
   }
 
   if (auto assocTy = dyn_cast<moore::WildcardAssocArrayType>(lhs.getType())) {
-    auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
     auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+    auto buildProjection = [&](Value array) -> Value {
+      auto queueTy = moore::QueueType::get(assocTy.getElementType(), 0);
+      auto locator = moore::ArrayLocatorOp::create(
+          builder, loc, queueTy, moore::LocatorMode::All, /*indexed=*/false,
+          array);
+      Block *bodyBlock = &locator.getBody().emplaceBlock();
+      bodyBlock->addArgument(assocTy.getElementType(), loc);
+      bodyBlock->addArgument(i32Ty, loc);
+      {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(bodyBlock);
+        Value one = moore::ConstantOp::create(builder, loc,
+                                              moore::IntType::getInt(builder.getContext(), 1), 1);
+        moore::ArrayLocatorYieldOp::create(builder, loc, one);
+      }
+      return locator.getResult();
+    };
 
-    Value lhsSize = moore::ArraySizeOp::create(builder, loc, lhs);
-    Value rhsSize = moore::ArraySizeOp::create(builder, loc, rhs);
-    Value sizeEq = moore::EqOp::create(builder, loc, lhsSize, rhsSize);
-    if (sizeEq.getType() != i1Ty)
-      sizeEq = context.materializeConversion(i1Ty, sizeEq, false, loc);
-    if (!sizeEq)
-      return {};
-
-    auto mismatchQueueTy = moore::QueueType::get(assocTy.getElementType(), 0);
-    auto locator = moore::ArrayLocatorOp::create(
-        builder, loc, mismatchQueueTy, moore::LocatorMode::All,
-        /*indexed=*/false, lhs);
-
-    Block *bodyBlock = &locator.getBody().emplaceBlock();
-    bodyBlock->addArgument(assocTy.getElementType(), loc);
-    bodyBlock->addArgument(i32Ty, loc);
-
-    {
-      OpBuilder::InsertionGuard guard(builder);
-      builder.setInsertionPointToStart(bodyBlock);
-      Value lhsElem = bodyBlock->getArgument(0);
-      Value idx = bodyBlock->getArgument(1);
-      Value rhsElem = moore::DynExtractOp::create(builder, loc,
-                                                  assocTy.getElementType(),
-                                                  rhs, idx);
-      Value elemEq =
-          buildSampledStableComparison(context, loc, lhsElem, rhsElem, funcName);
-      if (!elemEq)
-        return {};
-      if (elemEq.getType() != i1Ty)
-        elemEq = context.materializeConversion(i1Ty, elemEq, false, loc);
-      if (!elemEq)
-        return {};
-      Value mismatch = moore::NotOp::create(builder, loc, elemEq).getResult();
-      moore::ArrayLocatorYieldOp::create(builder, loc, mismatch);
-    }
-
-    Value mismatchCount = moore::ArraySizeOp::create(builder, loc, locator);
-    Value zero = moore::ConstantOp::create(builder, loc, i32Ty, 0);
-    Value noMismatch = moore::EqOp::create(builder, loc, mismatchCount, zero);
-    if (noMismatch.getType() != i1Ty)
-      noMismatch = context.materializeConversion(i1Ty, noMismatch, false, loc);
-    if (!noMismatch)
-      return {};
-    return moore::AndOp::create(builder, loc, sizeEq, noMismatch).getResult();
+    Value lhsValues = buildProjection(lhs);
+    Value rhsValues = buildProjection(rhs);
+    return buildSampledStableComparison(context, loc, lhsValues, rhsValues,
+                                        funcName);
   }
 
   if (auto structTy = dyn_cast<moore::UnpackedStructType>(lhs.getType())) {

@@ -1,3 +1,44 @@
+## Iteration 1616 - February 22, 2026
+
+### [ImportVerilog][SVA] Fix wildcard assoc-array equality/stability verifier failure
+
+1. **Implemented wildcard-assoc safe size handling**
+   (`lib/Conversion/ImportVerilog/Expressions.cpp`,
+   `lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - replaced direct `moore.array.size` usage on
+     `moore::WildcardAssocArrayType` with queue-size derivation from
+     `moore.array.locator` projections.
+   - wildcard associative-array equality/case-equality now compares projected
+     value queues and their sizes (instead of emitting invalid direct size ops).
+   - wildcard associative-array sampled stability (`$stable/$changed`) now
+     projects value queues and delegates comparison to queue sampled-stability
+     logic.
+
+2. **Behavioral fix**
+   - removed IR verification failures like:
+     - `'moore.array.size' op operand #0 must be dynamic array, associative array, or queue type, but got '!moore.wildcard_assoc_array<...>'`
+   - wildcard associative arrays now import correctly for:
+     - assertion equality (`==`/`===`)
+     - sampled stability in assertions.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-wildcard-assoc-array-equality-stable.sv`
+   - validates wildcard-assoc equality + `$stable` import succeeds and emits
+     assertion IR.
+
+4. **Validation**
+   - `ninja -C build-test circt-translate`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-wildcard-assoc-array-equality-stable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-wildcard-assoc-array-equality-stable.sv`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality-string-key.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assoc-array-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assoc-array-equality.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-assoc-array-stable-explicit-clock.sv`: PASS.
+   - formal regression smoke:
+     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-wildcard-assoc-array-equality-stable.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1615 - February 22, 2026
 
 ### [ImportVerilog][SVA] Make typed associative-array equality key-aware

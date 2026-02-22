@@ -183,6 +183,8 @@ Additional compile-only or XFAIL expectations live in
     assertion expressions now lower via aggregate element comparison
   - typed associative-array equality now compares key streams (`indices`) and
     value streams (including string-key associative arrays)
+  - wildcard associative-array equality/stability lowering no longer emits
+    illegal direct size ops on `wildcard_assoc_array` values
 - **Deferred assertions**:
   - `assert/assume/cover final` - Deferred final checks flagged for BMC
 - **Sequence event controls (`@seq`)**:
