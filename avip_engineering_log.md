@@ -6073,3 +6073,44 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 5. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-format-args-subroutine.sv`: `real=0.007s`
+
+## 2026-02-22 Session: Procedural assert-control pass/vacuous parity
+
+### Problem
+1. Procedural assertion-control lowering handled enable/disable and fail-message
+   knobs, but did not lower pass/vacuous control forms with stateful behavior.
+2. This left a parity gap versus sequence match-item handling for:
+   - `$assertcontrol(6/7/10/11)`
+   - `$assertpasson/$assertpassoff`
+   - `$assertnonvacuouson/$assertvacuousoff`
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/Statements.cpp`:
+   - added statement-level synthetic global helpers for:
+     - `@__circt_assert_pass_msgs_enabled`
+     - `@__circt_assert_vacuous_pass_enabled`
+   - extended procedural `$assertcontrol(type)` mapping with:
+     - `6` => pass-on
+     - `7` => pass-off
+     - `10` => nonvacuous-on (disable vacuous pass)
+     - `11` => vacuous-off (disable vacuous pass)
+   - lowered procedural subroutine spellings to stateful writes:
+     - `$assertpasson`, `$assertpassoff`
+     - `$assertnonvacuouson`, `$assertvacuousoff`
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`
+3. Updated docs/changelog:
+   - `docs/SVA_BMC_LEC_PLAN.md`
+   - `CHANGELOG.md`
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-translate`: PASS
+2. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv`: PASS
+3. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`: PASS
+4. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`: `real=0.007s`

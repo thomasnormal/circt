@@ -45,6 +45,24 @@
    - validates `$assertcontrol(6/7/10/11)` now drives pass/vacuous assertion
      control globals in match-item lowering.
 
+5. **Added procedural parity for pass/vacuous assertion controls**
+   (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   - statement-level `$assertcontrol(...)` now also maps:
+     - `6` => pass-on
+     - `7` => pass-off
+     - `10` => nonvacuous-on (disable vacuous pass)
+     - `11` => vacuous-off
+   - statement-level subroutines now perform stateful writes (not no-op):
+     - `$assertpasson`, `$assertpassoff`
+     - `$assertnonvacuouson`, `$assertvacuousoff`
+   - added focused regression:
+     - `test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`
+   - validation:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv`: PASS.
+     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`: PASS.
+
 ## Iteration 1620 - February 22, 2026
 
 ### [SVA][Parity] Add explicit Yosys `counter/extnets` parity-lock regressions

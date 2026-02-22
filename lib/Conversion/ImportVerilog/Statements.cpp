@@ -301,6 +301,90 @@ struct StmtVisitor {
     return success();
   }
 
+  moore::GlobalVariableOp getOrCreateAssertionPassMessagesEnabledGlobal() {
+    if (context.assertionPassMessagesEnabledGlobal)
+      return context.assertionPassMessagesEnabledGlobal;
+
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(context.intoModuleOp.getBody());
+
+    std::string baseName = "__circt_assert_pass_msgs_enabled";
+    std::string symName = baseName;
+    unsigned suffix = 0;
+    while (context.symbolTable.lookup(symName))
+      symName = baseName + "_" + std::to_string(++suffix);
+
+    auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+    auto globalOp = moore::GlobalVariableOp::create(
+        builder, loc, builder.getStringAttr(symName), i1Ty);
+
+    auto &initBlock = globalOp.getInitRegion().emplaceBlock();
+    builder.setInsertionPointToEnd(&initBlock);
+    auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+    moore::YieldOp::create(builder, loc, enabled);
+
+    context.assertionPassMessagesEnabledGlobal = globalOp;
+    return globalOp;
+  }
+
+  Value readAssertionPassMessagesEnabled() {
+    auto globalOp = getOrCreateAssertionPassMessagesEnabledGlobal();
+    auto globalRef = moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+    return moore::ReadOp::create(builder, loc, globalRef);
+  }
+
+  LogicalResult writeAssertionPassMessagesEnabled(Value enabled) {
+    auto globalOp = getOrCreateAssertionPassMessagesEnabledGlobal();
+    auto targetType = globalOp.getType();
+    if (enabled.getType() != targetType)
+      enabled = moore::ConversionOp::create(builder, loc, targetType, enabled);
+    auto globalRef = moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+    moore::BlockingAssignOp::create(builder, loc, globalRef, enabled);
+    return success();
+  }
+
+  moore::GlobalVariableOp getOrCreateAssertionVacuousPassEnabledGlobal() {
+    if (context.assertionVacuousPassEnabledGlobal)
+      return context.assertionVacuousPassEnabledGlobal;
+
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(context.intoModuleOp.getBody());
+
+    std::string baseName = "__circt_assert_vacuous_pass_enabled";
+    std::string symName = baseName;
+    unsigned suffix = 0;
+    while (context.symbolTable.lookup(symName))
+      symName = baseName + "_" + std::to_string(++suffix);
+
+    auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+    auto globalOp = moore::GlobalVariableOp::create(
+        builder, loc, builder.getStringAttr(symName), i1Ty);
+
+    auto &initBlock = globalOp.getInitRegion().emplaceBlock();
+    builder.setInsertionPointToEnd(&initBlock);
+    auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+    moore::YieldOp::create(builder, loc, enabled);
+
+    context.assertionVacuousPassEnabledGlobal = globalOp;
+    return globalOp;
+  }
+
+  Value readAssertionVacuousPassEnabled() {
+    auto globalOp = getOrCreateAssertionVacuousPassEnabledGlobal();
+    auto globalRef = moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+    return moore::ReadOp::create(builder, loc, globalRef);
+  }
+
+  LogicalResult writeAssertionVacuousPassEnabled(Value enabled) {
+    auto globalOp = getOrCreateAssertionVacuousPassEnabledGlobal();
+    auto targetType = globalOp.getType();
+    if (enabled.getType() != targetType)
+      enabled = moore::ConversionOp::create(builder, loc, targetType, enabled);
+    auto globalRef = moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+    moore::BlockingAssignOp::create(builder, loc, globalRef, enabled);
+    return success();
+  }
+
   Value selectBool(Value cond, Value ifTrue, Value ifFalse) {
     if (ifTrue.getType() != ifFalse.getType())
       ifFalse = moore::ConversionOp::create(builder, loc, ifTrue.getType(), ifFalse);
@@ -3028,9 +3112,13 @@ struct StmtVisitor {
         auto c3 = moore::ConstantOp::create(builder, loc, i32Ty, 3);
         auto c4 = moore::ConstantOp::create(builder, loc, i32Ty, 4);
         auto c5 = moore::ConstantOp::create(builder, loc, i32Ty, 5);
+        auto c6 = moore::ConstantOp::create(builder, loc, i32Ty, 6);
+        auto c7 = moore::ConstantOp::create(builder, loc, i32Ty, 7);
         auto isOff = moore::EqOp::create(builder, loc, controlType, c3);
         auto isOn = moore::EqOp::create(builder, loc, controlType, c4);
         auto isKill = moore::EqOp::create(builder, loc, controlType, c5);
+        auto isPassOn = moore::EqOp::create(builder, loc, controlType, c6);
+        auto isPassOff = moore::EqOp::create(builder, loc, controlType, c7);
         auto offOrKill = createUnifiedOrOp(builder, loc, isOff, isKill);
 
         auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
@@ -3054,6 +3142,33 @@ struct StmtVisitor {
         auto nextFailState = selectBool(isFailOn, enabled, nextFailAfterOff);
         if (failed(writeAssertionFailMessagesEnabled(nextFailState)))
           return failure();
+
+        // Also honor pass-message controls that map to $assertpasson/off.
+        auto currentPassMsgsEnabled = readAssertionPassMessagesEnabled();
+        if (!currentPassMsgsEnabled)
+          return failure();
+        auto nextPassAfterOff =
+            selectBool(isPassOff, disabled, currentPassMsgsEnabled);
+        auto nextPassState = selectBool(isPassOn, enabled, nextPassAfterOff);
+        if (failed(writeAssertionPassMessagesEnabled(nextPassState)))
+          return failure();
+
+        // Also honor vacuous-pass controls.
+        auto currentVacuousEnabled = readAssertionVacuousPassEnabled();
+        if (!currentVacuousEnabled)
+          return failure();
+        auto c10 = moore::ConstantOp::create(builder, loc, i32Ty, 10);
+        auto c11 = moore::ConstantOp::create(builder, loc, i32Ty, 11);
+        auto isNonVacuousOn =
+            moore::EqOp::create(builder, loc, controlType, c10);
+        auto isVacuousOff =
+            moore::EqOp::create(builder, loc, controlType, c11);
+        auto nextVacuousAfterOff =
+            selectBool(isVacuousOff, disabled, currentVacuousEnabled);
+        auto nextVacuousState =
+            selectBool(isNonVacuousOn, disabled, nextVacuousAfterOff);
+        if (failed(writeAssertionVacuousPassEnabled(nextVacuousState)))
+          return failure();
       }
       return true;
     }
@@ -3072,11 +3187,33 @@ struct StmtVisitor {
         return failure();
       return true;
     }
-    // Keep other non-core assertion-control forms as no-ops for now.
-    if (subroutine.name == "$assertpasson" ||
-        subroutine.name == "$assertpassoff" ||
-        subroutine.name == "$assertnonvacuouson" ||
+    if (subroutine.name == "$assertpassoff") {
+      auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+      auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+      if (failed(writeAssertionPassMessagesEnabled(disabled)))
+        return failure();
+      return true;
+    }
+    if (subroutine.name == "$assertpasson") {
+      auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+      auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+      if (failed(writeAssertionPassMessagesEnabled(enabled)))
+        return failure();
+      return true;
+    }
+    if (subroutine.name == "$assertnonvacuouson" ||
         subroutine.name == "$assertvacuousoff") {
+      auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+      auto disabled = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+      if (failed(writeAssertionVacuousPassEnabled(disabled)))
+        return failure();
+      return true;
+    }
+    if (subroutine.name == "$assertvacuouson") {
+      auto i1Ty = moore::IntType::getInt(builder.getContext(), 1);
+      auto enabled = moore::ConstantOp::create(builder, loc, i1Ty, 1);
+      if (failed(writeAssertionVacuousPassEnabled(enabled)))
+        return failure();
       return true;
     }
 
