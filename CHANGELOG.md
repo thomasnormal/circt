@@ -76214,3 +76214,18 @@ See CHANGELOG.md on recent progress.
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv` (`real=0.007s`, `user=0.004s`, `sys=0.003s`)
+95. ImportVerilog SVA: refresh open-range regression expectations for strong
+    unary parity updates
+    (February 22, 2026):
+    - regression coverage:
+      - updated:
+        - `test/Conversion/ImportVerilog/sva-open-range-property.sv`
+      - now checks:
+        - `s_eventually [n:$]` path includes finite-progress conjunction before
+          `ltl.eventually`
+        - `always [n:$]` weak form lowers through `ltl.eventually {ltl.weak}`
+    - validation:
+      - focused test: PASS
+        - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-open-range-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-open-range-property.sv`
+      - formal smoke: PASS
+        - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`

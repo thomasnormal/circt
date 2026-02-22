@@ -4674,3 +4674,22 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS
 6. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv`: `real=0.007s`
+
+## 2026-02-22 Session: Open-range SVA regression parity refresh
+
+### Problem
+1. Existing open-range regression expectations were stale after strong finite-
+   progress lowering changes.
+2. `s_eventually [n:$]` and `always [n:$]` checks no longer matched current
+   intended IR.
+
+### Fix
+1. Updated `test/Conversion/ImportVerilog/sva-open-range-property.sv` checks:
+   - `s_eventually [1:$]` now expects explicit finite-progress conjunction:
+     `ltl.and(delay_true, implication(...))` before `ltl.eventually`.
+   - `always [1:$]` now expects weak eventually marker:
+     `{ltl.weak}`.
+
+### Validation
+1. `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-open-range-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-open-range-property.sv`: PASS
+2. `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
