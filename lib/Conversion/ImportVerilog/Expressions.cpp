@@ -8851,6 +8851,48 @@ struct LvalueExprVisitor : public ExprVisitor {
 
   // Handle named values, such as references to declared variables.
   Value visit(const slang::ast::NamedValueExpression &expr) {
+    if (context.inAssertionExpr) {
+      if (auto *local =
+              expr.symbol.as_if<slang::ast::LocalAssertionVarSymbol>()) {
+        if (auto pending = context.getPendingAssertionLocalVarLvalue(local))
+          return pending;
+
+        auto *binding = context.lookupAssertionLocalVarBinding(local);
+        if (!binding) {
+          mlir::emitError(loc, "local assertion variable referenced before "
+                               "assignment");
+          return {};
+        }
+        auto offset = context.getAssertionSequenceOffset();
+        if (offset < binding->offset) {
+          mlir::emitError(loc, "local assertion variable referenced before "
+                               "assignment time");
+          return {};
+        }
+        Value currentValue = binding->value;
+        if (offset > binding->offset) {
+          if (!isa<moore::UnpackedType>(binding->value.getType())) {
+            mlir::emitError(loc, "unsupported local assertion variable type");
+            return {};
+          }
+          currentValue = moore::PastOp::create(
+              builder, loc, binding->value,
+              static_cast<int64_t>(offset - binding->offset));
+        }
+        auto unpacked = dyn_cast<moore::UnpackedType>(currentValue.getType());
+        if (!unpacked) {
+          mlir::emitError(loc, "unsupported local assertion variable type")
+              << currentValue.getType();
+          return {};
+        }
+        auto ref = moore::VariableOp::create(
+            builder, loc, moore::RefType::get(unpacked), StringAttr{},
+            currentValue);
+        context.setPendingAssertionLocalVarLvalue(local, ref);
+        return ref;
+      }
+    }
+
     // Handle inline constraint receivers and compiler-generated 'this' symbols.
     if (auto inlineRef = context.getInlineConstraintThisRef()) {
       if (auto inlineSym = context.getInlineConstraintThisSymbol();

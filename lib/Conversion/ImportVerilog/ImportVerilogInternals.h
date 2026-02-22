@@ -297,6 +297,34 @@ struct Context {
       return;
     assertionLocalVarScopes.back()[sym] = {value, offset};
   }
+  Value getPendingAssertionLocalVarLvalue(
+      const slang::ast::LocalAssertionVarSymbol *sym) const {
+    auto it = pendingAssertionLocalVarLvalues.find(sym);
+    if (it == pendingAssertionLocalVarLvalues.end())
+      return {};
+    return it->second;
+  }
+  void setPendingAssertionLocalVarLvalue(
+      const slang::ast::LocalAssertionVarSymbol *sym, Value ref) {
+    pendingAssertionLocalVarLvalues[sym] = ref;
+  }
+  void clearPendingAssertionLocalVarLvalues() {
+    pendingAssertionLocalVarLvalues.clear();
+  }
+  LogicalResult flushPendingAssertionLocalVarLvalues(Location loc) {
+    for (auto &[sym, ref] : pendingAssertionLocalVarLvalues) {
+      auto refTy = dyn_cast<moore::RefType>(ref.getType());
+      if (!refTy) {
+        mlir::emitError(loc, "invalid local assertion variable lvalue type")
+            << ref.getType();
+        return failure();
+      }
+      auto value = moore::ReadOp::create(builder, loc, ref).getResult();
+      setAssertionLocalVarBinding(sym, value, getAssertionSequenceOffset());
+    }
+    pendingAssertionLocalVarLvalues.clear();
+    return success();
+  }
   void pushAssertionPortScope() { assertionPortScopes.emplace_back(); }
   void popAssertionPortScope() { assertionPortScopes.pop_back(); }
   const AssertionPortBinding *lookupAssertionPortBinding(
@@ -581,6 +609,8 @@ struct Context {
                        AssertionPortBinding>,
               2>
       assertionPortScopes;
+  DenseMap<const slang::ast::LocalAssertionVarSymbol *, Value>
+      pendingAssertionLocalVarLvalues;
   SmallVector<uint64_t, 4> assertionSequenceOffsetStack;
   SmallVector<const slang::ast::Expression *, 2> assertionDisableExprStack;
   /// A list of global variables that still need their initializers to be

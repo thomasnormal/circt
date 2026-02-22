@@ -1456,6 +1456,7 @@ struct AssertionExprVisitor {
     for (auto *item : matchItems) {
       if (!item)
         continue;
+      context.clearPendingAssertionLocalVarLvalues();
       switch (item->kind) {
       case slang::ast::ExpressionKind::Assignment: {
         auto &assign = item->as<slang::ast::AssignmentExpression>();
@@ -2146,6 +2147,8 @@ struct AssertionExprVisitor {
         mlir::emitError(loc, "unsupported match item expression");
         return failure();
       }
+      if (failed(context.flushPendingAssertionLocalVarLvalues(loc)))
+        return failure();
     }
     return success();
   }
