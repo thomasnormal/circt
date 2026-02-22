@@ -5021,3 +5021,45 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
 5. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv`: `real=0.007s`
+
+## 2026-02-22 Session: Sampled string `$rose/$fell` parity
+
+### Problem
+1. Sampled edge lowering for string operands still routed through
+   `moore.string_to_int` in both:
+   - direct assertion-clock path (`$rose(s)`, `$fell(s)`),
+   - explicit sampled-clock helper path (`$rose(s, @clk2)`,
+     `$fell(s, @clk2)`).
+2. This emitted avoidable conversion remarks and did not use native string
+   bool semantics.
+
+### Fix
+1. Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp`:
+   - `buildSampledBoolean` now has explicit
+     `string` / `format_string` handling using `moore.bool_cast`.
+   - helper sampled-value lowering (`lowerSampledValueFunctionWithSamplingControl`):
+     - added `isStringEdgeSample` classification for `$rose/$fell`.
+     - bypassed bitvector conversion path for string edge samples.
+     - routed string edge samples through existing edge boolean path
+       (`buildSampledBoolean` + past compare).
+   - direct sampled call lowering (`convertAssertionCallExpression`):
+     - added string-edge classification for `$rose/$fell`.
+     - bypassed `convertToSimpleBitVector` for string edge samples.
+2. Added regression:
+   - `test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv`
+   - fail-first before fix: test observed `moore.string_to_int` for all four
+     assertions and no `moore.bool_cast ... : string -> i1`.
+
+### Validation
+1. Build:
+   - `ninja -C build-test circt-translate`: PASS
+2. Focused:
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv`: PASS
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv`: PASS
+3. Lit subset:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-string-stable-changed.sv build-test/test/Conversion/ImportVerilog/sva-past-string-sampled-controls.sv`: PASS
+4. Formal smoke:
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`: PASS
+5. Profiling sample:
+   - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-rose-fell.sv`: `real=0.007s`
