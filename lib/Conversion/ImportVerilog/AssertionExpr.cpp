@@ -1653,6 +1653,72 @@ struct AssertionExprVisitor {
             moore::MonitorOffBIOp::create(builder, loc);
             break;
           }
+          if (name == "$dumplimit" || name == "$dumpoff" ||
+              name == "$dumpon" || name == "$dumpflush" ||
+              name == "$dumpall" || name == "$dumpports" ||
+              name == "$dumpportslimit" || name == "$dumpportsoff" ||
+              name == "$dumpportson" || name == "$dumpportsflush" ||
+              name == "$dumpportsall") {
+            break;
+          }
+          if (name == "$timeformat") {
+            auto args = call.arguments();
+            auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+            Value units;
+            Value precision;
+            Value minWidth;
+            std::string suffixStr;
+            if (args.size() >= 1) {
+              units = context.convertRvalueExpression(*args[0]);
+              if (!units)
+                return failure();
+            }
+            if (!units)
+              units = moore::ConstantOp::create(
+                  builder, loc, intTy,
+                  APInt(32, static_cast<uint64_t>(-9), /*isSigned=*/true));
+            if (args.size() >= 2) {
+              precision = context.convertRvalueExpression(*args[1]);
+              if (!precision)
+                return failure();
+            }
+            if (!precision)
+              precision = moore::ConstantOp::create(builder, loc, intTy, 0);
+            if (args.size() >= 3) {
+              const auto *suffArg = args[2];
+              while (auto *conv =
+                         suffArg->as_if<slang::ast::ConversionExpression>())
+                suffArg = &conv->operand();
+              if (auto *lit = suffArg->as_if<slang::ast::StringLiteral>())
+                suffixStr = lit->getValue();
+              else {
+                auto cv = context.evaluateConstant(*args[2]);
+                if (cv && cv.isString())
+                  suffixStr = cv.str();
+              }
+            }
+            if (args.size() >= 4) {
+              minWidth = context.convertRvalueExpression(*args[3]);
+              if (!minWidth)
+                return failure();
+            }
+            if (!minWidth)
+              minWidth = moore::ConstantOp::create(builder, loc, intTy, 20);
+            if (units.getType() != intTy)
+              units = context.materializeConversion(intTy, units,
+                                                    /*isSigned=*/true, loc);
+            if (precision.getType() != intTy)
+              precision = context.materializeConversion(intTy, precision,
+                                                        /*isSigned=*/true, loc);
+            if (minWidth.getType() != intTy)
+              minWidth = context.materializeConversion(intTy, minWidth,
+                                                       /*isSigned=*/true, loc);
+            if (!units || !precision || !minWidth)
+              return failure();
+            moore::TimeFormatBIOp::create(builder, loc, units, precision,
+                                          suffixStr, minWidth);
+            break;
+          }
           if (name == "$printtimescale") {
             moore::PrintTimescaleBIOp::create(builder, loc);
             break;
