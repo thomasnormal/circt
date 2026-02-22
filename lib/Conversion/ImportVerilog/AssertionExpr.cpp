@@ -1127,15 +1127,19 @@ static Value lowerPastWithSamplingControl(
       isa<moore::WildcardAssocArrayType>(originalType) ||
       isa<moore::UnpackedStructType>(originalType) ||
       isa<moore::UnpackedUnionType>(originalType);
+  bool isRealSample = isa<moore::RealType>(originalType);
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
-  if (!isUnpackedAggregateSample && !intType) {
+  if (!isUnpackedAggregateSample && !isRealSample && !intType) {
     mlir::emitError(loc)
-        << "unsupported $past value type with sampled-value controls";
+        << "unsupported $past value type with sampled-value controls (input "
+           "type: "
+        << originalType << ")";
     return {};
   }
   moore::UnpackedType storageType =
-      isUnpackedAggregateSample ? cast<moore::UnpackedType>(originalType)
-                                : cast<moore::UnpackedType>(intType);
+      (isUnpackedAggregateSample || isRealSample)
+          ? cast<moore::UnpackedType>(originalType)
+          : cast<moore::UnpackedType>(intType);
 
   int64_t historyDepth = std::max<int64_t>(delay, 1);
 
@@ -1154,7 +1158,7 @@ static Value lowerPastWithSamplingControl(
     }
 
     Value init;
-    if (!isUnpackedAggregateSample) {
+    if (!isUnpackedAggregateSample && !isRealSample) {
       init = createUnknownOrZeroConstant(context, loc, intType);
       if (!init)
         return {};
@@ -1176,22 +1180,27 @@ static Value lowerPastWithSamplingControl(
     Value current = context.convertRvalueExpression(valueExpr);
     if (!current)
       return {};
-    if (!isUnpackedAggregateSample && !isa<moore::IntType>(current.getType()))
+    if (!isUnpackedAggregateSample && !isRealSample &&
+        !isa<moore::IntType>(current.getType()))
       current = context.convertToSimpleBitVector(current);
     if (!current)
       return {};
-    if (isUnpackedAggregateSample) {
+    if (isUnpackedAggregateSample || isRealSample) {
       if (!isa<moore::UnpackedType>(current.getType()) ||
           current.getType() != storageType) {
         mlir::emitError(loc)
-            << "unsupported $past value type with sampled-value controls";
+            << "unsupported $past value type with sampled-value controls "
+               "(current type: "
+            << current.getType() << ", storage type: " << storageType << ")";
         return {};
       }
     } else {
       auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
       if (!currentType) {
         mlir::emitError(loc)
-            << "unsupported $past value type with sampled-value controls";
+            << "unsupported $past value type with sampled-value controls "
+               "(current type: "
+            << current.getType() << ")";
         return {};
       }
       if (current.getType() != intType)
@@ -1280,7 +1289,7 @@ static Value lowerPastWithSamplingControl(
     if (delay > 0)
       pastValue = moore::ReadOp::create(builder, loc, historyVars.back());
     Value disabledValue = pastValue;
-    if (!isUnpackedAggregateSample) {
+    if (!isUnpackedAggregateSample && !isRealSample) {
       disabledValue = createUnknownOrZeroConstant(context, loc, intType);
       if (!disabledValue)
         return {};
