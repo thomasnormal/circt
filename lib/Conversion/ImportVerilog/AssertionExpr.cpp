@@ -1792,6 +1792,7 @@ Value Context::convertAssertionCallExpression(
       return {};
     }
     const slang::ast::TimingControl *clockingCtrl = nullptr;
+    bool inferredImplicitClocking = false;
     bool hasClockingArg =
         args.size() > 1 &&
         args[1]->kind == slang::ast::ExpressionKind::ClockingEvent;
@@ -1851,6 +1852,15 @@ Value Context::convertAssertionCallExpression(
           clockingCtrl = &clockBlock->getEvent();
       }
     }
+    if (!inAssertionExpr && !clockingCtrl && currentScope) {
+      if (auto *clocking = compilation.getDefaultClocking(*currentScope)) {
+        if (auto *clockBlock =
+                clocking->as_if<slang::ast::ClockingBlockSymbol>()) {
+          clockingCtrl = &clockBlock->getEvent();
+          inferredImplicitClocking = true;
+        }
+      }
+    }
 
     if (!clockingCtrl)
       disableExprs.clear();
@@ -1896,7 +1906,7 @@ Value Context::convertAssertionCallExpression(
     }
 
     if (!inAssertionExpr && clockingCtrl &&
-        (hasClockingArg || isGlobalClockVariant)) {
+        (hasClockingArg || inferredImplicitClocking || isGlobalClockVariant)) {
       if (clockingCtrl) {
         return lowerSampledValueFunctionWithClocking(
             *this, *args[0], *clockingCtrl, funcName, nullptr,

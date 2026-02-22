@@ -1,3 +1,29 @@
+## Iteration 1582 - February 22, 2026
+
+### [ImportVerilog][SVA] Infer default clocking for procedural sampled calls
+
+1. **Added implicit default-clocking inference in non-assertion sampled lowering**
+   (`lib/Conversion/ImportVerilog/AssertionExpr.cpp`):
+   - procedural `$rose/$fell/$stable/$changed` now infer in-scope
+     `default clocking` when no explicit clocking argument is provided.
+   - inferred default clocking routes lowering through helper-based sampled
+     state on the inferred clock event, rather than plain unclocked
+     `moore.past`.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv`
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv >/dev/null`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv >/dev/null` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1581 - February 22, 2026
 
 ### [ImportVerilog][SVA] Lower procedural `_gclk` sampled funcs on global clock

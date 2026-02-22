@@ -156,6 +156,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now resolves global clocking for non-assertion sampled
    `_gclk` variants (`$changed_gclk/$stable_gclk/$rose_gclk/$fell_gclk`) and
    lowers them with helper-based clocked sampled state.
+19. **SVA procedural default-clocking sampled-value support** (Feb 22, 2026):
+   ImportVerilog now infers in-scope `default clocking` for non-assertion
+   `$rose/$fell/$stable/$changed` (without explicit clock argument) and lowers
+   them with helper-based sampled clocked state.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to
