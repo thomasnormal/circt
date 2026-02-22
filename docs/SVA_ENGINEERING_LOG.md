@@ -2,6 +2,32 @@
 
 ## 2026-02-22
 
+- Iteration update (dynamic action-payload task labels):
+  - realization:
+    - after adding generic action-block fallback labels, dynamic payload task
+      forms like `else $display(x)` still lost task identity, collapsing to
+      `"action_block"`.
+    - this reduced diagnostic specificity compared to constant-message forms.
+  - TDD proof:
+    - added
+      `test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv`.
+    - before fix:
+      - regression failed, showing `label "action_block"` instead of
+        `label "$display"`.
+  - implemented:
+    - in action label extraction for recognized system tasks, when message
+      extraction fails, return task name as fallback label.
+    - keep generic `"action_block"` fallback for non-message action blocks.
+  - validation:
+    - `ninja -C build-test circt-translate`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv`
+    - compatibility checks:
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-generic-label.sv`
+      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv >/dev/null` (`real=0.024s`)
+
 - Iteration update (concurrent action-block fallback labeling):
   - realization:
     - concurrent assertion action-block extraction handled message/task forms,

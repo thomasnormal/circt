@@ -281,6 +281,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    ImportVerilog now emits deterministic fallback label `"action_block"` for
    concurrent assertion action blocks where no message/system-task label can be
    extracted, preserving action-block presence in verification IR.
+47. **Dynamic action payload task-identity labeling** (Feb 22, 2026):
+   ImportVerilog now preserves task identity labels for dynamic payload
+   action blocks (`$display/$warning/$error/...`) by falling back to the task
+   name when no constant message string can be extracted.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to

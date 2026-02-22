@@ -1,3 +1,37 @@
+## Iteration 1610 - February 22, 2026
+
+### [ImportVerilog][SVA] Preserve task identity labels for dynamic action-block payloads
+
+1. **Implemented task-name fallback in action-label extraction**
+   (`lib/Conversion/ImportVerilog/Statements.cpp`):
+   - when concurrent assertion action-block calls use recognized severity/output
+     tasks (`$display/$write/$info/$warning/$error/$fatal`) but the message
+     argument is dynamic/non-constant, importer now falls back to the task name
+     as label instead of returning empty.
+
+2. **Behavioral fix**
+   - for patterns like:
+     - `assert property (...) else $display(x);`
+   - lowering now emits:
+     - `verif.assert ... label "$display"`
+   - instead of generic fallback:
+     - `label "action_block"`.
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv`
+   - verifies dynamic payload display action blocks retain `"$display"` label.
+
+4. **Validation**
+   - `ninja -C build-test circt-translate`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv`: PASS.
+   - compatibility checks:
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-generic-label.sv`: PASS.
+     - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv >/dev/null` (`real=0.024s`, `user=0.002s`, `sys=0.005s`).
+
 ## Iteration 1609 - February 22, 2026
 
 ### [ImportVerilog][SVA] Preserve generic labels for non-message concurrent action blocks
