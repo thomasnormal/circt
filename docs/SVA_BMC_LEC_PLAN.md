@@ -1064,3 +1064,22 @@ Record results in CHANGELOG.md and include relevant output artifacts.
     a conversion error.
   - regression:
     - `test/Conversion/LTLToCore/first-match-empty.mlir`
+
+## Latest BMC clocking hardening (2026-02-22)
+
+- Closed robustness gap in `LowerToBMC` when register clock metadata is present
+  but unresolved (`bmc_reg_clock_sources = [unit, ...]`) and no traceable
+  `seq.to_clock` / `ltl.clock` source exists at top level.
+- Added fallback clock discovery:
+  - if there is exactly one clock-like original interface input (excluding
+    appended register-state inputs), use it as derived BMC clock input.
+  - clock-like now includes 4-state clock structs
+    (`!hw.struct<value: i1, unknown: i1>`) in addition to `i1` and
+    `!seq.clock`.
+- New regression:
+  - `test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
+- Expected impact:
+  - prevents malformed `verif.bmc` init/loop regions with missing clock yields
+    in unresolved-clock metadata paths.
+  - does not by itself close semantic vacuity gaps in
+    `ovl_sem_arbiter` / `ovl_sem_stack` fail-mode.

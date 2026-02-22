@@ -77941,3 +77941,29 @@ See CHANGELOG.md on recent progress.
         - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
       - profiling sample:
         - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-format-args-subroutine.sv` (`real=0.007s`, `user=0.004s`, `sys=0.003s`)
+127. Formal BMC: recover clocking when reg-clock metadata is unresolved unit on
+     struct clock inputs (February 22, 2026):
+    - feature:
+      - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+      - hardened derived clock discovery when `bmc_reg_clock_sources` exists
+        but carries unresolved `unit` entries:
+        - add fallback to pick exactly one clock-like original interface input
+          (excluding appended register-state ports).
+        - extend i1 clock materialization to support 4-state struct clocks by
+          lowering `!hw.struct<value: i1, unknown: i1>` to `value & ~unknown`.
+      - prevents malformed `verif.bmc` init/loop regions with missing clock
+        yields in this path.
+    - regression coverage:
+      - new:
+        - `test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
+      - failing-first behavior reproduced prior to fix:
+        - `verif.bmc` verifier error:
+          `init and loop regions must yield at least as many clock values as there are clock arguments to the circuit region`
+    - validation:
+      - build: PASS
+        - `ninja -C build-test circt-opt circt-bmc`
+      - focused tests: PASS
+        - `build-test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir | llvm/build/bin/FileCheck test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
+      - OVL semantic spot checks (expected known gaps unchanged): PASS
+        - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(arbiter|stack)' ...` => `xfail=2`
+        - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(frame|proposition|never_unknown_async)' ...` => `xfail=4`

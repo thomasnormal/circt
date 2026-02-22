@@ -2570,3 +2570,43 @@
       - `LowerToBMC.cpp`
       - `ExternalizeRegisters.cpp`
       - `VerifToSMT.cpp`
+
+- Iteration update (`LowerToBMC` unresolved struct-clock fallback):
+  - realization:
+    - modules with `bmc_reg_clock_sources = [unit, ...]` and a single 4-state
+      struct clock input could lower into malformed `verif.bmc` regions:
+      - verifier error:
+        - `init and loop regions must yield at least as many clock values as there are clock arguments to the circuit region`
+    - this reproduced both on a minimal MLIR reproducer and on OVL-generated
+      wrappers after externalization/inlining metadata loss.
+  - TDD proof:
+    - added reproducer test:
+      - `test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
+    - failing-first behavior (before fix):
+      - `circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' ...`
+      - emitted verifier error above.
+  - implemented:
+    - `lib/Tools/circt-bmc/LowerToBMC.cpp`:
+      - extended `materializeClockInputI1` to accept 4-state struct clock
+        inputs by materializing `value & ~unknown`.
+      - added fallback clock discovery when explicit/traceable clocks are
+        absent but register clock metadata exists:
+        - infer from exactly one clock-like original interface input
+          (excluding appended register-state inputs).
+  - validation:
+    - build:
+      - `ninja -C build-test circt-opt circt-bmc`
+    - focused regression:
+      - `build-test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir | llvm/build/bin/FileCheck test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
+    - reproducer no longer errors:
+      - `/tmp/l2bmc_unit_struct_clock.mlir` lowers to valid `verif.bmc` with
+        clock yields and derived clock metadata.
+    - OVL semantic spot checks (unchanged known gaps):
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(arbiter|stack)' ...`:
+        - `4 tests, failures=0, xfail=2, xpass=0`
+      - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(frame|proposition|never_unknown_async)' ...`:
+        - `6 tests, failures=0, xfail=4, xpass=0`
+  - surprise:
+    - fixing malformed clock-region lowering did not by itself flip
+      `ovl_sem_arbiter`/`ovl_sem_stack` fail-mode polarity; those remain
+      semantic harness gaps, not structural pass validity bugs.
