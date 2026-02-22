@@ -1609,6 +1609,22 @@ struct AssertionExprVisitor {
                 std::get_if<slang::ast::CallExpression::SystemCallInfo>(
                     &call.subroutine)) {
           StringRef name = sysInfo->subroutine->name;
+          auto emitSeverity = [&](moore::Severity severity) {
+            auto msg = moore::FormatLiteralOp::create(builder, loc, name.str());
+            moore::SeverityBIOp::create(builder, loc, severity, msg);
+          };
+          if (name == "$info") {
+            emitSeverity(moore::Severity::Info);
+            break;
+          }
+          if (name == "$warning") {
+            emitSeverity(moore::Severity::Warning);
+            break;
+          }
+          if (name == "$error") {
+            emitSeverity(moore::Severity::Error);
+            break;
+          }
           bool isDisplayLike = false;
           bool appendNewline = false;
           StringRef suffix = name;
