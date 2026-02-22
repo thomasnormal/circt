@@ -272,6 +272,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    helper lowering and threads peeled top-level disable conditions into
    assertion-expression conversion, preventing stale sampled history from
    leaking across disable windows.
+45. **No-clock sampled-value disable-iff state reset closure** (Feb 22, 2026):
+   ImportVerilog now applies the same sampled-control helper strategy to
+   `$rose/$fell/$stable/$changed` in assertion expressions, so no-clock
+   sampled-value calls honor `disable iff` by reset-gating helper state
+   updates instead of relying on ungated raw history.
 15. **SVA packed sampled-value explicit-clocking support** (Feb 22, 2026):
    ImportVerilog now lowers explicit-clocking sampled-value calls on packed
    operands (`$changed/$stable/$rose/$fell`), by normalizing packed types to

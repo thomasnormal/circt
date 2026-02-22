@@ -606,9 +606,9 @@ getSequenceLengthBounds(Value seq) {
   return std::nullopt;
 }
 
-static Value lowerSampledValueFunctionWithClocking(
+static Value lowerSampledValueFunctionWithSamplingControl(
     Context &context, const slang::ast::Expression &valueExpr,
-    const slang::ast::TimingControl &timingCtrl, StringRef funcName,
+    const slang::ast::TimingControl *timingCtrl, StringRef funcName,
     const slang::ast::Expression *enableExpr,
     std::span<const slang::ast::Expression *const> disableExprs, Location loc) {
   auto &builder = context.builder;
@@ -626,7 +626,7 @@ static Value lowerSampledValueFunctionWithClocking(
   if (!module) {
     mlir::emitWarning(loc)
         << funcName
-        << " with explicit clocking is only supported within a module; "
+        << " sampled-value controls are only supported within a module; "
            "returning 0 as a placeholder";
     auto resultType =
         moore::IntType::get(builder.getContext(), 1, moore::Domain::FourValued);
@@ -708,7 +708,7 @@ static Value lowerSampledValueFunctionWithClocking(
     auto proc =
         moore::ProcedureOp::create(builder, loc, moore::ProcedureKind::Always);
     builder.setInsertionPointToEnd(&proc.getBody().emplaceBlock());
-    if (failed(context.convertTimingControl(timingCtrl)))
+    if (timingCtrl && failed(context.convertTimingControl(*timingCtrl)))
       return {};
 
     Value current = context.convertRvalueExpression(valueExpr);
@@ -879,6 +879,15 @@ static Value lowerSampledValueFunctionWithClocking(
   }
 
   return moore::ReadOp::create(builder, loc, resultVar);
+}
+
+static Value lowerSampledValueFunctionWithClocking(
+    Context &context, const slang::ast::Expression &valueExpr,
+    const slang::ast::TimingControl &timingCtrl, StringRef funcName,
+    const slang::ast::Expression *enableExpr,
+    std::span<const slang::ast::Expression *const> disableExprs, Location loc) {
+  return lowerSampledValueFunctionWithSamplingControl(
+      context, valueExpr, &timingCtrl, funcName, enableExpr, disableExprs, loc);
 }
 
 static Value lowerPastWithSamplingControl(
@@ -2265,8 +2274,6 @@ Value Context::convertAssertionCallExpression(
       }
     }
 
-    if (!clockingCtrl)
-      disableExprs.clear();
     // The helper-procedure lowering introduces explicit sampled state. For
     // implicit assertion clocks without disable/enable controls, prefer direct
     // past-based lowering to avoid extra-cycle skew in temporal combinations
@@ -2292,10 +2299,10 @@ Value Context::convertAssertionCallExpression(
         enableExpr || !disableExprs.empty() ||
         (hasClockingArg && !explicitClockMatchesAssertionClock) ||
         forceClockedHelperForUnclockedGclk;
-    if (clockingCtrl && inAssertionExpr && needsClockedHelper) {
-      auto sampled = lowerSampledValueFunctionWithClocking(
-          *this, *args[0], *clockingCtrl, funcName, enableExpr,
-          disableExprs, loc);
+    if (inAssertionExpr && needsClockedHelper) {
+      auto sampled = lowerSampledValueFunctionWithSamplingControl(
+          *this, *args[0], clockingCtrl, funcName, enableExpr, disableExprs,
+          loc);
       if (!sampled)
         return {};
       if (forceClockedHelperForUnclockedGclk) {
