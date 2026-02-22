@@ -6,7 +6,7 @@ module SvaBoundedUnaryPropertyError(input logic clk, a, b);
     @(posedge clk) a |-> b;
   endproperty
 
-  // Property-valued nexttime forms still require dedicated lowering.
-  // expected-error @below {{nexttime on property expressions is not yet supported}}
-  assert property (nexttime p);
+  // Property-valued always forms still require dedicated lowering.
+  // expected-error @below {{always on property expressions is not yet supported}}
+  assert property (always p);
 endmodule
