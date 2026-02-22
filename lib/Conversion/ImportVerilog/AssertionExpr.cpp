@@ -585,6 +585,28 @@ getCanonicalSignalEventControl(const slang::ast::TimingControl &ctrl) {
   return nullptr;
 }
 
+/// Get the currently active timescale as an integer number of femtoseconds.
+static uint64_t getTimeScaleInFemtoseconds(Context &context) {
+  static_assert(int(slang::TimeUnit::Seconds) == 0);
+  static_assert(int(slang::TimeUnit::Milliseconds) == 1);
+  static_assert(int(slang::TimeUnit::Microseconds) == 2);
+  static_assert(int(slang::TimeUnit::Nanoseconds) == 3);
+  static_assert(int(slang::TimeUnit::Picoseconds) == 4);
+  static_assert(int(slang::TimeUnit::Femtoseconds) == 5);
+
+  static_assert(int(slang::TimeScaleMagnitude::One) == 1);
+  static_assert(int(slang::TimeScaleMagnitude::Ten) == 10);
+  static_assert(int(slang::TimeScaleMagnitude::Hundred) == 100);
+
+  auto exp = static_cast<unsigned>(context.timeScale.base.unit);
+  assert(exp <= 5);
+  exp = 5 - exp;
+  auto scale = static_cast<uint64_t>(context.timeScale.base.magnitude);
+  while (exp-- > 0)
+    scale *= 1000;
+  return scale;
+}
+
 static bool isEquivalentTimingControl(const slang::ast::TimingControl &lhs,
                                       const slang::ast::TimingControl &rhs) {
   if (lhs.isEquivalentTo(rhs))
@@ -1461,6 +1483,29 @@ struct AssertionExprVisitor {
           updated =
               isInc ? moore::AddOp::create(builder, loc, base, one).getResult()
                     : moore::SubOp::create(builder, loc, base, one).getResult();
+        } else if (isa<moore::TimeType>(base.getType())) {
+          auto realTy =
+              moore::RealType::get(context.getContext(), moore::RealWidth::f64);
+          auto realBase =
+              context.materializeConversion(realTy, base, /*isSigned=*/false,
+                                            loc);
+          if (!realBase)
+            return failure();
+          auto oneAttr = builder.getFloatAttr(
+              builder.getF64Type(), getTimeScaleInFemtoseconds(context));
+          auto one = moore::ConstantRealOp::create(builder, loc, oneAttr);
+          auto realUpdated = isInc
+                                 ? moore::AddRealOp::create(builder, loc, realBase,
+                                                            one)
+                                       .getResult()
+                                 : moore::SubRealOp::create(builder, loc, realBase,
+                                                            one)
+                                       .getResult();
+          updated = context.materializeConversion(
+              moore::TimeType::get(context.getContext()), realUpdated,
+              /*isSigned=*/false, loc);
+          if (!updated)
+            return failure();
         } else if (auto realType = dyn_cast<moore::RealType>(base.getType())) {
           FloatAttr oneAttr;
           if (realType.getWidth() == moore::RealWidth::f32)
@@ -1475,7 +1520,7 @@ struct AssertionExprVisitor {
                               .getResult();
         } else {
           mlir::emitError(loc,
-                          "match item unary operator requires int or real "
+                          "match item unary operator requires int, real, or time "
                           "local assertion variable");
           return failure();
         }
