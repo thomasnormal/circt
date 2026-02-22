@@ -1398,3 +1398,27 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv` (`real=0.007s`)
+
+- Iteration update (unpacked-struct case equality/inequality lowering):
+  - realization:
+    - unpacked-struct logical equality (`==`/`!=`) was fixed, but case
+      equality (`===`/`!==`) still failed with simple-bit-vector cast errors.
+    - this blocked legal SVA case-comparison assertions over unpacked structs.
+  - implemented:
+    - added recursive unpacked-aggregate case-equality helper in
+      `Expressions.cpp`.
+    - wired `BinaryOperator::CaseEquality` / `CaseInequality` for unpacked
+      structs to fieldwise `moore.case_eq` reductions and negation for `!==`.
+    - new regressions:
+      - `test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv`
+      - `test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv > /dev/null`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv > /dev/null`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv` (`real=0.007s`)

@@ -1,3 +1,35 @@
+## Iteration 1586 - February 22, 2026
+
+### [ImportVerilog][SVA] Support unpacked-struct case equality (`===` / `!==`)
+
+1. **Implemented unpacked-struct case equality/inequality lowering**
+   (`lib/Conversion/ImportVerilog/Expressions.cpp`):
+   - added recursive unpacked-aggregate case-equality helper.
+   - unpacked struct `===` now lowers as fieldwise `moore.case_eq` + reduction.
+   - unpacked struct `!==` now lowers as `not` over the computed case equality.
+   - nested unpacked structs are handled recursively.
+
+2. **SVA impact**
+   - assertion expressions with unpacked struct case comparisons now lower:
+     - `assert property (@(posedge clk) (x === y));`
+     - `assert property (@(posedge clk) (x !== y));`
+
+3. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv`
+     - `test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
+
+4. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv >/dev/null`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv >/dev/null`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv >/dev/null` (`real=0.007s`, `user=0.003s`, `sys=0.003s`).
+
 ## Iteration 1585 - February 22, 2026
 
 ### [ImportVerilog][SVA] Add unpacked-struct `==` / `!=` lowering (enables full-struct `$past` compares)
