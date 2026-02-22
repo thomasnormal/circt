@@ -1,3 +1,30 @@
+## Iteration 1563 - February 22, 2026
+
+### [ImportVerilog][SVA] Add sequence `.matched` method lowering
+
+1. **Implemented sequence `.matched` in expression lowering**
+   (`lib/Conversion/ImportVerilog/Expressions.cpp`):
+   - added support for method/system-call name `matched` on sequence-typed
+     values.
+   - lowering now emits:
+     - `ltl.matched %seq : !ltl.sequence -> i1`
+   - this closes a frontend gap where legal SVA sequence-method usage failed
+     with:
+     - `unsupported system call 'matched'`.
+
+2. **Regression coverage**
+   - new:
+     - `test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
+
+3. **Validation**
+   - `ninja -C build-test circt-translate circt-verilog`: PASS.
+   - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`: PASS.
+   - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`: PASS.
+   - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS.
+   - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`: PASS.
+   - profiling sample:
+     - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv` (`real=0.007s`, `user=0.004s`, `sys=0.003s`).
+
 ## Iteration 1562 - February 22, 2026
 
 ### [ImportVerilog][SVA] Support clocking-block entries in mixed assertion clock event lists

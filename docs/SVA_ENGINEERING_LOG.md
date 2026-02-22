@@ -827,3 +827,27 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-list-clocking-block.sv` (`real=0.007s`)
+
+- Iteration update (sequence `.matched` method support):
+  - realization:
+    - sequence method `.matched` parsed successfully in assertion expressions but
+      import failed with `unsupported system call 'matched'`.
+    - `.triggered` was already supported; `.matched` should lower similarly for
+      sequence-typed operands.
+  - implemented:
+    - added expression lowering support for method/system call `matched` on
+      `!ltl.sequence` values via `ltl.matched`.
+    - added regression:
+      - `test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
+  - surprise:
+    - slang rejects procedural use `always @(posedge s.matched)` with
+      `'matched' method can only be called from a sequence expression`; kept
+      coverage in assertion context only.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
+    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv` (`real=0.007s`)

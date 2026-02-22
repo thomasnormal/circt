@@ -9586,6 +9586,12 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                     return ltl::TriggeredOp::create(builder, loc, value);
                   return {};
                 })
+          .Case("matched",
+                [&]() -> Value {
+                  if (isa<ltl::SequenceType>(value.getType()))
+                    return ltl::MatchedOp::create(builder, loc, value);
+                  return {};
+                })
           .Case("len",
                 [&]() -> Value {
                   if (isa<moore::StringType>(value.getType()))
