@@ -1906,10 +1906,12 @@ Value Context::convertAssertionExpression(const slang::ast::AssertionExpr &expr,
       }
     }
 
-    if (auto *clocking = compilation.getDefaultClocking(*currentScope)) {
-      if (auto *clockBlock =
-              clocking->as_if<slang::ast::ClockingBlockSymbol>()) {
-        value = convertLTLTimingControl(clockBlock->getEvent(), value);
+    if (!value.getDefiningOp<ltl::ClockOp>()) {
+      if (auto *clocking = compilation.getDefaultClocking(*currentScope)) {
+        if (auto *clockBlock =
+                clocking->as_if<slang::ast::ClockingBlockSymbol>()) {
+          value = convertLTLTimingControl(clockBlock->getEvent(), value);
+        }
       }
     }
   }

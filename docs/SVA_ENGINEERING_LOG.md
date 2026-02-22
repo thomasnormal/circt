@@ -576,3 +576,27 @@
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` (`real=0.050s`)
+
+- Iteration update (default clocking interaction with explicit `@seq`):
+  - realization:
+    - after landing `@seq` support, explicit assertion clocking was still
+      receiving default clocking at the outer conversion layer, yielding an
+      extra `ltl.clock(ltl.clock(...))` wrapper.
+    - this is semantically incorrect for explicit-clock-overrides-default and
+      caused unnecessary IR nesting.
+  - implemented:
+    - in `convertAssertionExpression`, default clocking application now checks
+      whether the result is already rooted at `ltl.clock`; if so, default
+      clocking is skipped.
+    - tightened regression expectations in
+      `test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` to
+      assert no re-clocked `ltl.clock [[CLOCKED]]` before the assert.
+  - validation:
+    - `ninja -C build-test circt-translate circt-verilog`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-defaults-property.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-defaults-property.sv`
+    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-defaults.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-defaults.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
+    - profiling sample:
+      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` (`real=0.053s`)
