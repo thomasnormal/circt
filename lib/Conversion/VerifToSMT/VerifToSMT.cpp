@@ -8707,8 +8707,6 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
       [&](LLVM::GlobalOp global, ArrayRef<int64_t> elementIndices,
           Type loadType) -> std::optional<TypedAttr> {
     Attribute globalValue = global.getValueOrNull();
-    if (!globalValue)
-      return std::nullopt;
 
     Type leafType = global.getGlobalType();
     SmallVector<int64_t> arrayShape;
@@ -8734,39 +8732,56 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     if (leafType != loadType || !isSupportedSMTLIBScalarType(leafType))
       return std::nullopt;
 
-    if (elementIndices.empty())
-      return coerceToTypedScalarAttr(globalValue, loadType);
+    if (globalValue) {
+      if (elementIndices.empty())
+        return coerceToTypedScalarAttr(globalValue, loadType);
 
-    if (allArrayPath)
-      if (auto dense = dyn_cast<DenseElementsAttr>(globalValue)) {
-        int64_t linearIndex = 0;
-        for (auto [idx, dim] : llvm::zip_equal(elementIndices, arrayShape))
-          linearIndex = linearIndex * dim + idx;
-        auto rankedTy = dyn_cast<RankedTensorType>(dense.getType());
-        if (!rankedTy ||
-            rankedTy.getRank() != static_cast<int64_t>(arrayShape.size()))
-          return std::nullopt;
-        for (auto [shapeDim, denseDim] :
-             llvm::zip_equal(arrayShape, rankedTy.getShape()))
-          if (shapeDim != denseDim)
+      if (allArrayPath)
+        if (auto dense = dyn_cast<DenseElementsAttr>(globalValue)) {
+          int64_t linearIndex = 0;
+          for (auto [idx, dim] : llvm::zip_equal(elementIndices, arrayShape))
+            linearIndex = linearIndex * dim + idx;
+          auto rankedTy = dyn_cast<RankedTensorType>(dense.getType());
+          if (!rankedTy ||
+              rankedTy.getRank() != static_cast<int64_t>(arrayShape.size()))
             return std::nullopt;
-        if (linearIndex < 0 || linearIndex >= dense.getNumElements())
+          for (auto [shapeDim, denseDim] :
+               llvm::zip_equal(arrayShape, rankedTy.getShape()))
+            if (shapeDim != denseDim)
+              return std::nullopt;
+          if (linearIndex < 0 || linearIndex >= dense.getNumElements())
+            return std::nullopt;
+          if (auto intTy = dyn_cast<IntegerType>(leafType)) {
+            auto values = dense.getValues<APInt>();
+            return IntegerAttr::get(intTy, values[linearIndex]);
+          }
+          if (auto floatTy = dyn_cast<FloatType>(leafType)) {
+            auto values = dense.getValues<APFloat>();
+            return FloatAttr::get(floatTy, values[linearIndex]);
+          }
           return std::nullopt;
-        if (auto intTy = dyn_cast<IntegerType>(leafType)) {
-          auto values = dense.getValues<APInt>();
-          return IntegerAttr::get(intTy, values[linearIndex]);
         }
-        if (auto floatTy = dyn_cast<FloatType>(leafType)) {
-          auto values = dense.getValues<APFloat>();
-          return FloatAttr::get(floatTy, values[linearIndex]);
-        }
-        return std::nullopt;
-      }
 
-    Type currentType = global.getGlobalType();
-    Attribute currentAttr = globalValue;
-    for (int64_t idx : elementIndices) {
-      if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
+      Type currentType = global.getGlobalType();
+      Attribute currentAttr = globalValue;
+      for (int64_t idx : elementIndices) {
+        if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
+          if (!isa<LLVM::ZeroAttr>(currentAttr)) {
+            auto arrayAttr = dyn_cast<ArrayAttr>(currentAttr);
+            if (!arrayAttr || idx < 0 ||
+                idx >= static_cast<int64_t>(arrayAttr.size()))
+              return std::nullopt;
+            currentAttr = arrayAttr[idx];
+          }
+          currentType = arrayTy.getElementType();
+          continue;
+        }
+        auto structTy = dyn_cast<LLVM::LLVMStructType>(currentType);
+        if (!structTy || structTy.isOpaque())
+          return std::nullopt;
+        ArrayRef<Type> body = structTy.getBody();
+        if (idx < 0 || idx >= static_cast<int64_t>(body.size()))
+          return std::nullopt;
         if (!isa<LLVM::ZeroAttr>(currentAttr)) {
           auto arrayAttr = dyn_cast<ArrayAttr>(currentAttr);
           if (!arrayAttr || idx < 0 ||
@@ -8774,39 +8789,103 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
             return std::nullopt;
           currentAttr = arrayAttr[idx];
         }
-        currentType = arrayTy.getElementType();
-        continue;
+        currentType = body[idx];
       }
-      auto structTy = dyn_cast<LLVM::LLVMStructType>(currentType);
-      if (!structTy || structTy.isOpaque())
-        return std::nullopt;
-      ArrayRef<Type> body = structTy.getBody();
-      if (idx < 0 || idx >= static_cast<int64_t>(body.size()))
-        return std::nullopt;
-      if (!isa<LLVM::ZeroAttr>(currentAttr)) {
-        auto arrayAttr = dyn_cast<ArrayAttr>(currentAttr);
-        if (!arrayAttr || idx < 0 || idx >= static_cast<int64_t>(arrayAttr.size()))
+
+      if (auto typedLeaf = coerceToTypedScalarAttr(currentAttr, loadType))
+        return typedLeaf;
+      if (auto dense = dyn_cast<DenseElementsAttr>(currentAttr)) {
+        if (dense.getNumElements() != 1)
           return std::nullopt;
-        currentAttr = arrayAttr[idx];
+        if (auto intTy = dyn_cast<IntegerType>(leafType)) {
+          auto values = dense.getValues<APInt>();
+          return IntegerAttr::get(intTy, *values.begin());
+        }
+        if (auto floatTy = dyn_cast<FloatType>(leafType)) {
+          auto values = dense.getValues<APFloat>();
+          return FloatAttr::get(floatTy, *values.begin());
+        }
       }
-      currentType = body[idx];
     }
 
-    if (auto typedLeaf = coerceToTypedScalarAttr(currentAttr, loadType))
-      return typedLeaf;
-    if (auto dense = dyn_cast<DenseElementsAttr>(currentAttr)) {
-      if (dense.getNumElements() != 1)
+    auto *initializerBlock = global.getInitializerBlock();
+    if (!initializerBlock)
+      return std::nullopt;
+    auto initRet = dyn_cast<LLVM::ReturnOp>(initializerBlock->getTerminator());
+    if (!initRet || initRet.getNumOperands() != 1)
+      return std::nullopt;
+
+    auto getSubelementType = [](Type baseType, int64_t index) -> Type {
+      if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(baseType)) {
+        int64_t dim = arrayTy.getNumElements();
+        if (index < 0 || index >= dim)
+          return {};
+        return arrayTy.getElementType();
+      }
+      auto structTy = dyn_cast<LLVM::LLVMStructType>(baseType);
+      if (!structTy || structTy.isOpaque())
+        return {};
+      ArrayRef<Type> body = structTy.getBody();
+      if (index < 0 || index >= static_cast<int64_t>(body.size()))
+        return {};
+      return body[index];
+    };
+
+    std::function<std::optional<TypedAttr>(Value, Type, ArrayRef<int64_t>)>
+        extractFromInitValue = [&](Value value, Type currentType,
+                                   ArrayRef<int64_t> remainingPath)
+        -> std::optional<TypedAttr> {
+      if (remainingPath.empty()) {
+        if (auto cst = value.getDefiningOp<LLVM::ConstantOp>())
+          return coerceToTypedScalarAttr(cst.getValue(), loadType);
+        if (value.getDefiningOp<LLVM::ZeroOp>()) {
+          if (auto intTy = dyn_cast<IntegerType>(loadType))
+            return IntegerAttr::get(intTy, 0);
+          if (auto floatTy = dyn_cast<FloatType>(loadType))
+            return FloatAttr::get(floatTy, 0.0);
+        }
         return std::nullopt;
-      if (auto intTy = dyn_cast<IntegerType>(leafType)) {
-        auto values = dense.getValues<APInt>();
-        return IntegerAttr::get(intTy, *values.begin());
       }
-      if (auto floatTy = dyn_cast<FloatType>(leafType)) {
-        auto values = dense.getValues<APFloat>();
-        return FloatAttr::get(floatTy, *values.begin());
+
+      if (auto insert = value.getDefiningOp<LLVM::InsertValueOp>()) {
+        ArrayRef<int64_t> pos = insert.getPosition();
+        if (remainingPath.size() >= pos.size() &&
+            llvm::equal(pos, remainingPath.take_front(pos.size()))) {
+          Type insertedType = currentType;
+          for (int64_t idx : pos) {
+            insertedType = getSubelementType(insertedType, idx);
+            if (!insertedType)
+              return std::nullopt;
+          }
+          if (auto fromInserted =
+                  extractFromInitValue(insert.getValue(), insertedType,
+                                       remainingPath.drop_front(pos.size())))
+            return fromInserted;
+        }
+        return extractFromInitValue(insert.getContainer(), currentType,
+                                    remainingPath);
       }
-    }
-    return std::nullopt;
+
+      if (value.getDefiningOp<LLVM::ZeroOp>()) {
+        Type zeroLeafType = currentType;
+        for (int64_t idx : remainingPath) {
+          zeroLeafType = getSubelementType(zeroLeafType, idx);
+          if (!zeroLeafType)
+            return std::nullopt;
+        }
+        if (zeroLeafType != loadType)
+          return std::nullopt;
+        if (auto intTy = dyn_cast<IntegerType>(zeroLeafType))
+          return IntegerAttr::get(intTy, 0);
+        if (auto floatTy = dyn_cast<FloatType>(zeroLeafType))
+          return FloatAttr::get(floatTy, 0.0);
+      }
+
+      return std::nullopt;
+    };
+
+    return extractFromInitValue(initRet.getOperand(0), global.getGlobalType(),
+                                elementIndices);
   };
 
   SmallVector<LLVM::ConstantOp> llvmConstants;
