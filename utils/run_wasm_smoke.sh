@@ -7,6 +7,7 @@ NODE_BIN="${NODE_BIN:-node}"
 VCD_PATH="${VCD_PATH:-/tmp/circt-wasm-smoke.vcd}"
 WASM_REQUIRE_VERILOG="${WASM_REQUIRE_VERILOG:-0}"
 WASM_SKIP_BUILD="${WASM_SKIP_BUILD:-0}"
+WASM_REQUIRE_CLEAN_CROSSCOMPILE="${WASM_REQUIRE_CLEAN_CROSSCOMPILE:-0}"
 
 BMC_JS="$BUILD_DIR/bin/circt-bmc.js"
 SIM_JS="$BUILD_DIR/bin/circt-sim.js"
@@ -235,6 +236,10 @@ BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" utils/wasm_resource_guard_default_ch
 if git diff --quiet -- llvm/llvm/cmake/modules/CrossCompile.cmake; then
   echo "[wasm-smoke] CrossCompile.cmake local edits: none"
 else
+  if [[ "$WASM_REQUIRE_CLEAN_CROSSCOMPILE" == "1" ]]; then
+    echo "[wasm-smoke] CrossCompile.cmake local edits: present (failing because WASM_REQUIRE_CLEAN_CROSSCOMPILE=1)" >&2
+    exit 1
+  fi
   echo "[wasm-smoke] CrossCompile.cmake local edits: present (remaining work)"
 fi
 

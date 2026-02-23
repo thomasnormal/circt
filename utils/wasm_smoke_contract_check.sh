@@ -10,6 +10,7 @@ fi
 
 required_tokens=(
   "WASM_SKIP_BUILD"
+  "WASM_REQUIRE_CLEAN_CROSSCOMPILE"
   "circt-bmc.wasm"
   "circt-sim.wasm"
   "Functional: circt-verilog stdin (.sv) -> IR"

@@ -355,3 +355,22 @@
   - `utils/wasm_smoke_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 utils/run_wasm_smoke.sh` passes
     end-to-end.
+
+## 2026-02-23 (follow-up: enforce clean CrossCompile.cmake when required)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require
+    `WASM_REQUIRE_CLEAN_CROSSCOMPILE` handling in `utils/run_wasm_smoke.sh`.
+  - Pre-fix failure:
+    - smoke script only reported CrossCompile edits as informational and could
+      not enforce a hard failure mode.
+- Fix:
+  - added `WASM_REQUIRE_CLEAN_CROSSCOMPILE` (default `0`) to
+    `utils/run_wasm_smoke.sh`.
+  - behavior:
+    - when `0` (default): keep current informational reporting.
+    - when `1`: fail the smoke run if
+      `llvm/llvm/cmake/modules/CrossCompile.cmake` has local edits.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes in this workspace (no local CrossCompile edits detected).
