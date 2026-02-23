@@ -2789,3 +2789,50 @@
     - abstraction quality improved (`ovl_multiport_fifo` dropped from 12
       process-result abstractions to 4 signal-level abstractions), but the
       pass-mode SAT remains and stays tracked as `known_gap=pass`.
+
+- Iteration update (`StripLLHDProcesses` observable init-default propagation):
+  - realization:
+    - the remaining `ovl_sem_multiport_fifo` pass-mode `SAT` was caused by
+      hierarchy propagation of `observable_signal_use_resolution_unknown`
+      abstraction ports as fresh top-level inputs each cycle.
+    - this introduced unconstrained state at the harness boundary even when the
+      abstracted signal had a deterministic constant init in the child module.
+  - surprise:
+    - the failure was not in SVA lowering or LTL/BMC encoding; it was a
+      cross-instance abstraction-wiring policy issue in `StripLLHDProcesses`.
+  - implemented:
+    - `lib/Tools/circt-bmc/StripLLHDProcesses.cpp`
+      - record `default_bits` (when derivable from signal init) in
+        `circt.bmc_abstracted_llhd_interface_input_details`.
+      - during instance propagation, for
+        `observable_signal_use_resolution_unknown` ports with `default_bits`,
+        wire child operands from local constants/bitcasts instead of always
+        lifting to new parent inputs.
+    - regression updates:
+      - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
+        - added hierarchy check (`observable_child`/`observable_parent`) that
+          fails if observable abstraction is re-exposed as a parent input.
+      - `utils/ovl_semantic/manifest.tsv`
+        - removed `known_gap=pass` for `ovl_sem_multiport_fifo`.
+  - validation:
+    - build:
+      - `ninja -C build-test circt-opt circt-bmc`
+    - focused regressions:
+      - `lit -sv build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir`
+      - `lit -sv build-test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir build-test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
+    - targeted semantic closure:
+      - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_multiport_fifo$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `2 tests, failures=0, xfail=0, xpass=0`
+    - full OVL semantic matrix:
+      - `FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `102 tests, failures=0, xfail=0, xpass=0`
+    - formal smoke:
+      - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - result: pass/pass
+    - profiling sample:
+      - `time FAIL_ON_XPASS=1 OVL_SEMANTIC_TEST_FILTER='ovl_sem_(multiport_fifo|fifo|stack|arbiter)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `10 tests, failures=0, xfail=0, xpass=0`, `real 0m8.814s`
+  - outcome:
+    - `ovl_sem_multiport_fifo` pass-mode gap is closed.
+    - OVL semantic harness is now fully green (`102/102`) with no tracked
+      known gaps.

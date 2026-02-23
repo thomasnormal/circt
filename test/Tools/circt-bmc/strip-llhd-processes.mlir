@@ -138,6 +138,37 @@ module {
     hw.output
   }
 
+  // CHECK-LABEL: hw.module @observable_child
+  // CHECK-SAME: in %sig
+  // CHECK-DAG: circt.bmc_abstracted_llhd_interface_input_details =
+  // CHECK-DAG: observable_signal_use_resolution_unknown
+  // CHECK-DAG: signal = "sig"
+  // CHECK-DAG: default_bits = 0 : i2
+  // CHECK-LABEL: hw.module @observable_parent()
+  // CHECK: hw.constant 0 : i2
+  // CHECK: hw.bitcast
+  // CHECK: hw.instance "u" @observable_child(sig: %{{.*}}: !hw.struct<value: i1, unknown: i1>) -> ()
+  hw.module @observable_child() {
+    %t0 = llhd.constant_time <0ns, 0d, 1e>
+    %sig_init = hw.aggregate_constant [false, false] : !hw.struct<value: i1, unknown: i1>
+    %sig = llhd.sig %sig_init : !hw.struct<value: i1, unknown: i1>
+    %prb = llhd.prb %sig : !hw.struct<value: i1, unknown: i1>
+    %p:1 = llhd.process -> !hw.struct<value: i1, unknown: i1> {
+      cf.br ^bb1(%prb : !hw.struct<value: i1, unknown: i1>)
+    ^bb1(%cur: !hw.struct<value: i1, unknown: i1>):
+      %value = hw.struct_extract %cur["value"] : !hw.struct<value: i1, unknown: i1>
+      verif.assert %value : i1
+      llhd.wait yield (%cur : !hw.struct<value: i1, unknown: i1>), delay %t0, ^bb1
+    }
+    llhd.drv %sig, %p#0 after %t0 : !hw.struct<value: i1, unknown: i1>
+    hw.output
+  }
+
+  hw.module @observable_parent() {
+    hw.instance "u" @observable_child() -> ()
+    hw.output
+  }
+
   // CHECK-LABEL: hw.module @dead_result_drive
   // CHECK-NOT: llhd_process_result
   // CHECK-NOT: circt.bmc_abstracted_llhd_process_results
