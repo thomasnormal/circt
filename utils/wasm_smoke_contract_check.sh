@@ -10,6 +10,8 @@ fi
 
 required_tokens=(
   "WASM_SKIP_BUILD"
+  "circt-bmc.wasm"
+  "circt-sim.wasm"
   "Functional: circt-verilog stdin (.sv) -> IR"
   "Functional: circt-verilog (.sv) -> circt-sim"
   "Re-entry: circt-verilog callMain help -> run"

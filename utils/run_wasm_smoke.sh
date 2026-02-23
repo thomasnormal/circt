@@ -11,6 +11,9 @@ WASM_SKIP_BUILD="${WASM_SKIP_BUILD:-0}"
 BMC_JS="$BUILD_DIR/bin/circt-bmc.js"
 SIM_JS="$BUILD_DIR/bin/circt-sim.js"
 VERILOG_JS="$BUILD_DIR/bin/circt-verilog.js"
+BMC_WASM="$BUILD_DIR/bin/circt-bmc.wasm"
+SIM_WASM="$BUILD_DIR/bin/circt-sim.wasm"
+VERILOG_WASM="$BUILD_DIR/bin/circt-verilog.wasm"
 
 BMC_TEST_INPUT="test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir"
 SIM_TEST_INPUT="test/Tools/circt-sim/llhd-combinational.mlir"
@@ -40,9 +43,9 @@ else
   ninja -C "$BUILD_DIR" -j "$NINJA_JOBS" circt-bmc circt-sim
 fi
 
-if [[ ! -f "$BMC_JS" || ! -f "$SIM_JS" ]]; then
-  echo "[wasm-smoke] expected wasm JS outputs are missing" >&2
-  echo "  missing: $BMC_JS and/or $SIM_JS" >&2
+if [[ ! -s "$BMC_JS" || ! -s "$SIM_JS" || ! -s "$BMC_WASM" || ! -s "$SIM_WASM" ]]; then
+  echo "[wasm-smoke] expected wasm tool outputs are missing or empty" >&2
+  echo "  missing: $BMC_JS and/or $SIM_JS and/or $BMC_WASM and/or $SIM_WASM" >&2
   exit 1
 fi
 
@@ -63,8 +66,9 @@ if [[ "$has_verilog_target" -eq 1 ]]; then
     echo "[wasm-smoke] Building optional wasm frontend: circt-verilog"
     ninja -C "$BUILD_DIR" -j "$NINJA_JOBS" circt-verilog
   fi
-  if [[ ! -f "$VERILOG_JS" ]]; then
-    echo "[wasm-smoke] circt-verilog target exists but $VERILOG_JS is missing" >&2
+  if [[ ! -s "$VERILOG_JS" || ! -s "$VERILOG_WASM" ]]; then
+    echo "[wasm-smoke] circt-verilog target exists but expected outputs are missing or empty" >&2
+    echo "  missing: $VERILOG_JS and/or $VERILOG_WASM" >&2
     exit 1
   fi
 elif [[ "$WASM_REQUIRE_VERILOG" == "1" ]]; then
@@ -75,8 +79,8 @@ else
   echo "[wasm-smoke] circt-verilog target not configured; skipping SV frontend checks"
 fi
 
-if [[ "$has_verilog_target" -eq 0 && -f "$VERILOG_JS" ]]; then
-  echo "[wasm-smoke] found $VERILOG_JS from prior build; frontend functional checks will still run via default-guard regression"
+if [[ "$has_verilog_target" -eq 0 && ( -f "$VERILOG_JS" || -f "$VERILOG_WASM" ) ]]; then
+  echo "[wasm-smoke] found prior circt-verilog artifacts ($VERILOG_JS and/or $VERILOG_WASM); frontend functional checks will still run via default-guard regression"
 fi
 
 echo "[wasm-smoke] Smoke: circt-bmc.js --help"

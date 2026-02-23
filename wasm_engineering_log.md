@@ -313,3 +313,24 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - `utils/wasm_configure_contract_check.sh` passes.
   - `utils/wasm_smoke_contract_check.sh` passes.
+
+## 2026-02-23 (follow-up: verify wasm payload artifacts, not only JS wrappers)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require explicit
+    `circt-bmc.wasm` and `circt-sim.wasm` checks in smoke coverage.
+  - Pre-fix failure:
+    - `utils/run_wasm_smoke.sh` only validated `.js` wrappers and could pass
+      despite missing/empty `.wasm` payloads.
+- Fix:
+  - updated `utils/run_wasm_smoke.sh` to assert non-empty artifacts for:
+    - `circt-bmc.js` + `circt-bmc.wasm`
+    - `circt-sim.js` + `circt-sim.wasm`
+  - when `circt-verilog` target is configured, also assert non-empty:
+    - `circt-verilog.js` + `circt-verilog.wasm`
+  - kept optional-target behavior intact for configurations without frontend
+    target support.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 utils/run_wasm_smoke.sh` passes end-to-end.
+  - `utils/wasm_configure_contract_check.sh` and
+    `utils/wasm_ci_contract_check.sh` still pass.
