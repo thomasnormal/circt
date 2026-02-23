@@ -5,6 +5,7 @@
 // CHECK-DAG: --rising-clocks-only
 // CHECK-DAG: --print-counterexample
 // CHECK-DAG: --assume-known-inputs
+// CHECK-DAG: --x-optimistic
 // CHECK-DAG: --fail-on-violation
 // CHECK-DAG: --flatten-modules
 // CHECK-DAG: --induction
