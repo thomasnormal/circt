@@ -14,6 +14,9 @@ required_tokens=(
   "c++20-extensions"
   "-std=c++20"
   'grep -Eiq -- "(^|[^[:alpha:]])warning:" "$log"'
+  "FIRRTLAnnotationsGen.cpp"
+  "circt-tblgen.cpp"
+  'grep -F -- "$src" "$cmd_dump" | grep -Fq -- "-std=c++20"'
 )
 
 for token in "${required_tokens[@]}"; do
