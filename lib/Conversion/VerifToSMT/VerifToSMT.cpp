@@ -3236,14 +3236,13 @@ struct VerifBoundedModelCheckingOpConversion
       TypeConverter &converter, MLIRContext *context, Namespace &names,
       bool risingClocksOnly, bool assumeKnownInputs, bool forSMTLIBExport,
       BMCCheckMode bmcMode,
-      SmallVectorImpl<Operation *> &propertylessBMCOps,
-      SmallVectorImpl<Operation *> &coverBMCOps)
+      SmallVectorImpl<Operation *> &propertylessBMCOps)
       : OpConversionPattern(converter, context), names(names),
         risingClocksOnly(risingClocksOnly),
         assumeKnownInputs(assumeKnownInputs),
         forSMTLIBExport(forSMTLIBExport),
         bmcMode(bmcMode),
-        propertylessBMCOps(propertylessBMCOps), coverBMCOps(coverBMCOps) {}
+        propertylessBMCOps(propertylessBMCOps) {}
   LogicalResult
   matchAndRewrite(verif::BoundedModelCheckingOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -3264,10 +3263,6 @@ struct VerifBoundedModelCheckingOpConversion
                    "(use --emit-smtlib or --run-smtlib)");
       return failure();
     }
-
-    bool hasAnyCovers =
-        std::find(coverBMCOps.begin(), coverBMCOps.end(), op) !=
-        coverBMCOps.end();
 
     if (std::find(propertylessBMCOps.begin(), propertylessBMCOps.end(), op) !=
         propertylessBMCOps.end()) {
@@ -4091,12 +4086,9 @@ struct VerifBoundedModelCheckingOpConversion
     uint64_t boundValue = op.getBound();
 
     if (inductionStep) {
-      if (hasAnyCovers) {
-        op.emitError("k-induction does not support cover properties yet");
-        return failure();
-      }
       if (numNonFinalChecks == 0 && numFinalChecks == 0) {
-        op.emitError("k-induction requires at least one assertion");
+        op.emitError("k-induction requires at least one assertion or cover "
+                     "property");
         return failure();
       }
     }
@@ -8407,7 +8399,6 @@ struct VerifBoundedModelCheckingOpConversion
   bool forSMTLIBExport;
   BMCCheckMode bmcMode;
   SmallVectorImpl<Operation *> &propertylessBMCOps;
-  SmallVectorImpl<Operation *> &coverBMCOps;
 };
 
 } // namespace
@@ -8526,8 +8517,7 @@ void circt::populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
     bool risingClocksOnly, bool assumeKnownInputs, bool xOptimisticOutputs,
     bool forSMTLIBExport, BMCCheckMode bmcMode, bool approxTemporalOps,
-    SmallVectorImpl<Operation *> &propertylessBMCOps,
-    SmallVectorImpl<Operation *> &coverBMCOps) {
+    SmallVectorImpl<Operation *> &propertylessBMCOps) {
   // Add LTL operation conversion patterns
   populateLTLToSMTConversionPatterns(converter, patterns, approxTemporalOps);
 
@@ -8541,7 +8531,7 @@ void circt::populateVerifToSMTConversionPatterns(
       converter, patterns.getContext(), names, risingClocksOnly,
       assumeKnownInputs,
       forSMTLIBExport, bmcMode,
-      propertylessBMCOps, coverBMCOps);
+      propertylessBMCOps);
 }
 
 void ConvertVerifToSMTPass::runOnOperation() {
@@ -8557,7 +8547,6 @@ void ConvertVerifToSMTPass::runOnOperation() {
   // issues with whether assertions are/aren't lowered yet)
   SymbolTable symbolTable(getOperation());
   SmallVector<Operation *> propertylessBMCOps;
-  SmallVector<Operation *> coverBMCOps;
   auto bmcModeOr = parseBMCMode(bmcMode);
   if (failed(bmcModeOr)) {
     getOperation().emitError()
@@ -8711,8 +8700,6 @@ void ConvertVerifToSMTPass::runOnOperation() {
                             "trivially find no violations.");
             propertylessBMCOps.push_back(bmcOp);
           }
-          if (numCovers > 0)
-            coverBMCOps.push_back(bmcOp);
         }
         return WalkResult::advance();
       });
@@ -8760,7 +8747,7 @@ void ConvertVerifToSMTPass::runOnOperation() {
       converter, patterns.getContext(), names, (bool)risingClocksOnly,
       (bool)this->assumeKnownInputs,
       (bool)this->forSMTLIBExport, *bmcModeOr,
-      propertylessBMCOps, coverBMCOps);
+      propertylessBMCOps);
 
   if (failed(mlir::applyPartialConversion(getOperation(), verifTarget,
                                           std::move(patterns))))

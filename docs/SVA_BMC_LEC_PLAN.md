@@ -1611,3 +1611,29 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - mixed assert+cover BMC support is now landed.
   - liveness/final-property semantics remain intact under
     `combine-assert-like` for `bmc.*`-annotated checks.
+
+## Latest k-induction cover enablement (2026-02-23)
+
+- Implemented:
+  - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - removed induction-step cover hard rejection
+      (`k-induction does not support cover properties yet`).
+    - induction-step now accepts cover-only and mixed property sets.
+    - updated empty-induction-check diagnostic to mention both assertions and
+      covers.
+    - removed stale `coverBMCOps` pattern/plumbing that became dead after this
+      change.
+  - test coverage:
+    - added `test/Tools/circt-bmc/bmc-k-induction-cover.mlir`.
+
+- Validation:
+  - `ninja -C build-test circt-bmc circt-opt`
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/bmc-k-induction-cover.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-unsat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-sat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-final-unsat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-final-sat.mlir build-test/test/Tools/circt-bmc/bmc-induction-alias-unsat.mlir build-test/test/Tools/circt-bmc/bmc-induction-ignore-asserts-until.mlir`
+    - result: `7/7` pass.
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT --filter='induction'`
+    - result: `2/2` pass.
+
+- Current state:
+  - k-induction no longer rejects cover properties.
+  - induction mode now supports cover-only checks in line with broader
+    assert/cover mixed-property support.

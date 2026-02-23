@@ -3562,3 +3562,38 @@
     - mixed assert+cover BMC checks are now supported in one query.
     - `bmc.final` semantics survive `combine-assert-like` for liveness/final
       checks.
+
+- Iteration update (k-induction cover support):
+  - realization:
+    - `VerifToSMT` still hard-rejected cover properties in induction-step mode
+      (`k-induction does not support cover properties yet`), which blocked
+      induction-mode runs on legal cover-only designs.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+      - removed the induction-step cover rejection.
+      - updated empty-check diagnostic to:
+        - `k-induction requires at least one assertion or cover property`.
+      - removed stale `coverBMCOps` plumbing that was only feeding the removed
+        guard.
+    - regression coverage:
+      - added `test/Tools/circt-bmc/bmc-k-induction-cover.mlir`
+        - exercises both fake-unsat and fake-sat induction runs on a cover-only
+          module.
+  - TDD signal:
+    - before implementation, new test failed with:
+      - `k-induction does not support cover properties yet`.
+  - validation:
+    - build:
+      - `ninja -C build-test circt-bmc circt-opt`
+    - targeted induction lit:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/bmc-k-induction-cover.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-unsat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-sat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-final-unsat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-final-sat.mlir build-test/test/Tools/circt-bmc/bmc-induction-alias-unsat.mlir build-test/test/Tools/circt-bmc/bmc-induction-ignore-asserts-until.mlir`
+      - result: `7/7` pass.
+    - induction conversion slice:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT --filter='induction'`
+      - result: `2/2` pass.
+    - broader bmc slice:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='induction|cover'`
+      - result: `13 pass, 5 unsupported`.
+    - regular formal sanity:
+      - `TEST_FILTER='^basic00$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `2/2` mode checks pass.

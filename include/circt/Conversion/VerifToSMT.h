@@ -37,8 +37,7 @@ void populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
     bool risingClocksOnly, bool assumeKnownInputs, bool xOptimisticOutputs,
     bool forSMTLIBExport, BMCCheckMode bmcMode, bool approxTemporalOps,
-    SmallVectorImpl<Operation *> &propertylessBMCOps,
-    SmallVectorImpl<Operation *> &coverBMCOps);
+    SmallVectorImpl<Operation *> &propertylessBMCOps);
 
 /// Create a pass to lower clocked assertions with i1 properties to unclocked
 /// assertions.
