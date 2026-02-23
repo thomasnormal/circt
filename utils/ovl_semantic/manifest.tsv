@@ -43,7 +43,7 @@ ovl_sem_crc	utils/ovl_semantic/wrappers/ovl_sem_crc.sv	ovl_crc.v	ovl_sem_crc	8	0
 ovl_sem_fifo	utils/ovl_semantic/wrappers/ovl_sem_fifo.sv	ovl_fifo.v	ovl_sem_fifo	8	0
 ovl_sem_memory_async	utils/ovl_semantic/wrappers/ovl_sem_memory_async.sv	ovl_memory_async.v	ovl_sem_memory_async	8	0
 ovl_sem_memory_sync	utils/ovl_semantic/wrappers/ovl_sem_memory_sync.sv	ovl_memory_sync.v	ovl_sem_memory_sync	8	0
-ovl_sem_multiport_fifo	utils/ovl_semantic/wrappers/ovl_sem_multiport_fifo.sv	ovl_multiport_fifo.v	ovl_sem_multiport_fifo	8	pass
+ovl_sem_multiport_fifo	utils/ovl_semantic/wrappers/ovl_sem_multiport_fifo.sv	ovl_multiport_fifo.v	ovl_sem_multiport_fifo	8	0
 ovl_sem_never_unknown_async	utils/ovl_semantic/wrappers/ovl_sem_never_unknown_async.sv	ovl_never_unknown_async.v	ovl_sem_never_unknown_async	8	0
 ovl_sem_fifo_index	utils/ovl_semantic/wrappers/ovl_sem_fifo_index.sv	ovl_fifo_index.v	ovl_sem_fifo_index	8	0
 ovl_sem_valid_id	utils/ovl_semantic/wrappers/ovl_sem_valid_id.sv	ovl_valid_id.v	ovl_sem_valid_id	8	0

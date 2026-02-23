@@ -17,6 +17,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -296,7 +297,7 @@ struct StripLLHDProcessesPass
         auto recordAbstractedInterfaceInput =
             [&](StringAttr name, StringAttr base, Type type, StringRef reason,
                 StringRef signalName, std::optional<unsigned> fieldIndex,
-                Location loc) {
+                Location loc, std::optional<llvm::APInt> defaultBits) {
               Builder builder(hwModule.getContext());
               ++abstractedInterfaceInputCount;
               SmallVector<NamedAttribute> attrs{
@@ -319,6 +320,13 @@ struct StripLLHDProcessesPass
               if (!locStr.empty())
                 attrs.push_back(builder.getNamedAttr(
                     "loc", StringAttr::get(hwModule.getContext(), locStr)));
+              if (defaultBits)
+                attrs.push_back(builder.getNamedAttr(
+                    "default_bits",
+                    IntegerAttr::get(
+                        IntegerType::get(hwModule.getContext(),
+                                         defaultBits->getBitWidth()),
+                        *defaultBits)));
               abstractedInterfaceInputDetails.push_back(
                   DictionaryAttr::get(hwModule.getContext(), attrs));
             };
@@ -741,9 +749,12 @@ struct StripLLHDProcessesPass
                                             ns.newName(getSignalName(signal)));
             auto newInput = addInputPort(baseName, signalType);
             signalInputs[signal] = newInput.second;
+            std::optional<llvm::APInt> defaultBits;
+            if (auto sigOp = signal.getDefiningOp<SignalOp>())
+              defaultBits = getConstantBits(sigOp.getInit());
             recordAbstractedInterfaceInput(newInput.first, baseName, signalType,
                                            reason, getSignalName(signal),
-                                           std::nullopt, loc);
+                                           std::nullopt, loc, defaultBits);
             OpBuilder builder(hwModule.getContext());
             builder.setInsertionPoint(hwModule.getBodyBlock()->getTerminator());
             DriveOp::create(builder, loc, signal, newInput.second,
@@ -813,7 +824,7 @@ struct StripLLHDProcessesPass
             recordAbstractedInterfaceInput(
                 newInput.first, baseName, typeIt->second,
                 "dynamic_drive_resolution_unknown", getSignalName(signal),
-                std::nullopt, driveLoc);
+                std::nullopt, driveLoc, std::nullopt);
             OpBuilder builder(hwModule.getContext());
             builder.setInsertionPoint(
                 hwModule.getBodyBlock()->getTerminator());
@@ -968,6 +979,22 @@ struct StripLLHDProcessesPass
           if (childInputs.empty())
             continue;
           auto &childInputNames = addedInputNames[moduleNameAttr];
+          DenseMap<StringAttr, DictionaryAttr> childInputDetailByName;
+          if (auto childModule = SymbolTable::lookupNearestSymbolFrom<HWModuleOp>(
+                  instance, instance.getModuleNameAttr())) {
+            if (auto detailsAttr = childModule->getAttrOfType<ArrayAttr>(
+                    kBMCAbstractedLLHDInterfaceInputDetailsAttr)) {
+              for (Attribute detailAttr : detailsAttr) {
+                auto detail = dyn_cast<DictionaryAttr>(detailAttr);
+                if (!detail)
+                  continue;
+                auto name = detail.getAs<StringAttr>("name");
+                if (!name)
+                  continue;
+                childInputDetailByName[name] = detail;
+              }
+            }
+          }
 
           OpBuilder builder(instance);
           SmallVector<Value> operands(instance.getInputs().begin(),
@@ -975,6 +1002,36 @@ struct StripLLHDProcessesPass
           SmallVector<Attribute> argNames(
               instance.getInputNames().getValue());
           for (auto [type, name] : llvm::zip(childInputs, childInputNames)) {
+            if (auto detailIt = childInputDetailByName.find(name);
+                detailIt != childInputDetailByName.end()) {
+              auto detail = detailIt->second;
+              auto reason = detail.getAs<StringAttr>("reason");
+              auto defaultBits = detail.getAs<IntegerAttr>("default_bits");
+              if (reason && defaultBits &&
+                  reason.getValue() ==
+                      "observable_signal_use_resolution_unknown") {
+                auto defaultBitsTy = dyn_cast<IntegerType>(defaultBits.getType());
+                if (!defaultBitsTy)
+                  continue;
+                auto bitWidth = hw::getBitWidth(type);
+                if (bitWidth > 0 &&
+                    static_cast<unsigned>(bitWidth) ==
+                        defaultBitsTy.getWidth()) {
+                  auto bitsTy = IntegerType::get(
+                      hwModule.getContext(), defaultBitsTy.getWidth());
+                  Value bitsConst = hw::ConstantOp::create(
+                      builder, instance.getLoc(),
+                      IntegerAttr::get(bitsTy, defaultBits.getValue()));
+                  Value defaultValue = bitsConst;
+                  if (type != bitsTy)
+                    defaultValue = hw::BitcastOp::create(
+                        builder, instance.getLoc(), type, bitsConst);
+                  operands.push_back(defaultValue);
+                  argNames.push_back(name);
+                  continue;
+                }
+              }
+            }
             auto newInput = addInputPort(name, type);
             operands.push_back(newInput.second);
             argNames.push_back(name);

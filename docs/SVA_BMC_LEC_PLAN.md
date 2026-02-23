@@ -1182,3 +1182,44 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - `ovl_sem_multiport_fifo` pass-mode remains the only tracked semantic gap
     (`known_gap=pass`), but the abstraction footprint is reduced (from
     process-result fanout to 4 signal-level abstraction inputs).
+
+## Latest LLHD process abstraction closure (2026-02-23, observable init defaults)
+
+- Implemented:
+  - `lib/Tools/circt-bmc/StripLLHDProcesses.cpp`
+    - abstraction details now record `default_bits` when an observable
+      signal-level abstraction has a constant signal init.
+    - instance propagation now wires
+      `observable_signal_use_resolution_unknown` ports from constant defaults
+      when `default_bits` are available, instead of always introducing a new
+      parent input.
+  - regression update:
+    - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
+      - added `observable_child`/`observable_parent` hierarchy check proving
+        this no longer leaks to top-level nondeterministic inputs.
+  - semantic harness:
+    - `utils/ovl_semantic/manifest.tsv`
+      - removed `known_gap=pass` from `ovl_sem_multiport_fifo`.
+
+- Validation:
+  - build:
+    - `ninja -C build-test circt-opt circt-bmc`
+  - focused tests:
+    - `lit -sv build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir`
+    - `lit -sv build-test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir build-test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
+  - targeted semantic:
+    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_multiport_fifo$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `2 tests, failures=0, xfail=0, xpass=0`
+  - full semantic matrix:
+    - `FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `102 tests, failures=0, xfail=0, xpass=0`
+  - formal smoke:
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+    - result: pass/pass
+  - profiling sample:
+    - `time FAIL_ON_XPASS=1 OVL_SEMANTIC_TEST_FILTER='ovl_sem_(multiport_fifo|fifo|stack|arbiter)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - `real 0m8.814s`
+
+- Current semantic-gap status:
+  - OVL semantic harness has no tracked known gaps (`102/102` pass/fail modes
+    passing).
