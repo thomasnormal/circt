@@ -176,3 +176,36 @@
     - `help -> run` checks;
     - `run -> run` checks;
     - plusargs isolation regression.
+
+## 2026-02-23 (follow-up: default resource-guard aborts in wasm)
+- Gap identified (regression-test first):
+  - Added `utils/wasm_resource_guard_default_check.sh` to verify wasm tools do
+    not require `--resource-guard=false` just to avoid runtime aborts.
+  - Pre-fix behavior:
+    - `circt-bmc.js`, `circt-sim.js`, and `circt-verilog.js` aborted with
+      default settings (`Aborted()`), typically after:
+      `warning: resource guard: failed to set RLIMIT_AS ...`.
+- Root cause:
+  - `installResourceGuard()` unconditionally attempted to use process-level
+    limits and started a detached watchdog thread.
+  - In this emscripten runtime configuration, that path is not safe and caused
+    runtime aborts.
+- Fix:
+  - In `lib/Support/ResourceGuard.cpp`, disable resource guard installation on
+    `__EMSCRIPTEN__` (keep the option parseable, avoid unsupported runtime
+    behavior).
+- Smoke/coverage improvements:
+  - Updated `utils/run_wasm_smoke.sh` to:
+    - include `utils/wasm_resource_guard_default_check.sh`;
+    - detect and build optional `circt-verilog` wasm target when configured;
+    - run `circt-verilog.js --help` + minimal `.sv` stdin lowering smoke when
+      the target exists.
+  - Added `WASM_REQUIRE_VERILOG=1` support to fail fast when the frontend wasm
+    target is expected but not configured.
+- Validation:
+  - `utils/wasm_resource_guard_default_check.sh` passes.
+  - `utils/run_wasm_smoke.sh` passes end-to-end with:
+    - `circt-bmc`, `circt-sim` smoke + functional + re-entry checks;
+    - plusargs isolation regression;
+    - default resource-guard no-abort checks;
+    - optional `circt-verilog` frontend checks when target is enabled.

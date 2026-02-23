@@ -423,6 +423,16 @@ void circt::installResourceGuard() {
     return;
   }
 
+#if defined(__EMSCRIPTEN__)
+  // The current wasm runtime configuration is single-threaded; spawning the
+  // watchdog thread causes runtime aborts. Also, process-level rlimit APIs are
+  // not reliably available in wasm environments.
+  if (verbose)
+    llvm::errs()
+        << "note: resource guard: disabled on emscripten runtime.\n";
+  return;
+#endif
+
   auto readMB = [](unsigned optValue, unsigned occurrences,
                    llvm::StringRef env) -> uint64_t {
     if (occurrences > 0)
