@@ -34,3 +34,37 @@
   - Built `CIRCTUnitTests` in wasm mode.
   - Ran all generated CIRCT unittest JS binaries under Node (excluding Arc).
   - Result: 16/16 pass.
+
+## 2026-02-23 (follow-up: bmc/sim wasm CLI validation)
+- Goal: validate `circt-bmc.js` and `circt-sim.js` end-to-end in Node and ensure
+  waveform files are retrievable on the host filesystem.
+- Built both wasm tools successfully:
+  - `build-wasm/bin/circt-bmc.js`
+  - `build-wasm/bin/circt-sim.js`
+- Smoke checks passed:
+  - `node build-wasm/bin/circt-bmc.js --help`
+  - `node build-wasm/bin/circt-sim.js --help`
+- Functional checks passed:
+  - BMC stdin flow on `test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir`
+    exits 0 and emits SMT-LIB text.
+  - Sim stdin flow on `test/Tools/circt-sim/llhd-combinational.mlir` exits 0 and
+    prints expected `b=1`, `b=0`, and completion lines.
+- Surprise: waveform path behavior under wasm/node was inconsistent:
+  - `circt-sim.js --vcd /tmp/test.vcd` reported "Wrote waveform" but `/tmp/test.vcd`
+    did not exist.
+  - Root cause: Emscripten default virtual filesystem semantics (no host path bridge).
+- Fix:
+  - Enabled Node raw filesystem mode for `circt-sim` wasm builds by adding
+    `-sNODERAWFS=1` in `tools/circt-sim/CMakeLists.txt`.
+  - Tried the same for `circt-bmc`, but reverted it because it regressed
+    `--emit-smtlib -o -` stdout behavior under Node.
+  - Rebuilt `circt-bmc` and `circt-sim`.
+- Post-fix validation:
+  - `circt-sim.js --vcd /tmp/test.vcd` now exits 0, reports waveform written,
+    and `/tmp/test.vcd` exists with non-zero size.
+- Unresolved/remaining checks:
+  - `sv-tutorial` app wiring (`npm run sync:circt`, `npm run build`) could not be
+    validated here because no `sv-tutorial` checkout is present in this environment.
+  - LLVM submodule check: `llvm/llvm/cmake/modules/CrossCompile.cmake` has no local
+    edits in this workspace; no local patch is currently required for these bmc/sim
+    wasm builds.
