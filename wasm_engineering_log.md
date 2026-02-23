@@ -1,6 +1,42 @@
 # WASM Engineering Log
 
 ## 2026-02-23
+- Iteration update (browser-target wasm configurability + circt-sim finalize const-unblock):
+  - realization:
+    - `tools/circt-sim/CMakeLists.txt` still hard-forced
+      `-sNODERAWFS=1` for all emscripten builds, which blocks browser-oriented
+      packaging where host raw-fs passthrough is undesirable.
+    - current tip also hit a compile-time const-qualification mismatch path in
+      `tools/circt-sim/circt-sim.cpp` around
+      `finalizeClockedAssertionsAtEnd()` call sites.
+  - implemented:
+    - `tools/circt-sim/CMakeLists.txt`
+      - added option:
+        - `CIRCT_SIM_WASM_ENABLE_NODERAWFS` (default `ON`)
+      - gated `target_link_options(... -sNODERAWFS=1)` behind
+        `EMSCRIPTEN AND CIRCT_SIM_WASM_ENABLE_NODERAWFS`.
+    - `utils/configure_wasm_build.sh`
+      - surfaced env-configurable passthrough:
+        - `CIRCT_SIM_WASM_ENABLE_NODERAWFS` (default `ON`)
+      - emits `-DCIRCT_SIM_WASM_ENABLE_NODERAWFS=<ON|OFF>` in configure command.
+    - `tools/circt-sim/circt-sim.cpp`
+      - added non-const `SimulationContext::getInterpreter()` overload.
+      - removed `const_cast` call pattern for:
+        - `finalizeClockedAssertionsAtEnd()`
+        - `printCompileReport()`
+    - `utils/wasm_configure_contract_check.sh`
+      - added contract token for
+        `-DCIRCT_SIM_WASM_ENABLE_NODERAWFS=`.
+  - validation:
+    - `ninja -C build-test circt-verilog circt-sim`:
+      - result: `PASS` (including `circt-sim.cpp` recompile + link).
+    - `utils/configure_wasm_build.sh --print-cmake-command`:
+      - includes `-DCIRCT_SIM_WASM_ENABLE_NODERAWFS=ON` by default.
+    - `CIRCT_SIM_WASM_ENABLE_NODERAWFS=OFF utils/configure_wasm_build.sh --print-cmake-command`:
+      - includes `-DCIRCT_SIM_WASM_ENABLE_NODERAWFS=OFF`.
+    - `utils/wasm_configure_contract_check.sh`:
+      - result: `PASS`.
+
 - Goal: build CIRCT for WebAssembly with a simple (non-JIT) execution path suitable for browser use.
 - Confirmed `MLIR_ENABLE_EXECUTION_ENGINE=OFF` is required to avoid JIT-specific complexity and dependencies.
 - Cross-compiling CIRCT to wasm32 exposed several latent 64-bit assumptions (`~0ULL` sentinels, fixed-size struct assertions, and narrowing conversions).
@@ -806,3 +842,34 @@
     passes end-to-end.
   - `utils/wasm_ci_contract_check.sh` passes.
   - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+
+## 2026-02-23 (follow-up: align warning triage with CMAKE_CXX_STANDARD>=20)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_warning_contract_check.sh` to require:
+    - cache standard parsing from `CMAKE_CXX_STANDARD:STRING=...`;
+    - explicit diagnostics for:
+      - non-numeric cache standard;
+      - cache standard below 20;
+    - per-TU standard-flag validation via
+      `std_flag_is_cpp20_or_newer` instead of exact `-std=c++20`.
+  - Pre-fix failure:
+    - `utils/wasm_cxx20_warning_contract_check.sh` failed with:
+      - `missing token in warning check script: cache C++ standard is non-numeric`
+    - warning triage previously required exact
+      `CMAKE_CXX_STANDARD:STRING=20`, conflicting with
+      `utils/configure_wasm_build.sh` which allows numeric values `>=20`.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh` to:
+    - parse and validate `CMAKE_CXX_STANDARD:STRING=...` as numeric;
+    - reject cache standards below 20 with explicit diagnostic;
+    - add `std_flag_is_cpp20_or_newer` and verify each triaged TU compile
+      command has a `-std=` flag that is C++20-or-newer.
+  - updated `utils/wasm_cxx20_warning_contract_check.sh` to enforce the new
+    contract tokens.
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
+  - `utils/wasm_smoke_contract_check.sh`, `utils/wasm_ci_contract_check.sh`,
+    and `utils/wasm_cxx20_contract_check.sh` pass.
