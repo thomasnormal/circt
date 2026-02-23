@@ -27,6 +27,18 @@ if [[ ! -d "$BUILD_DIR" ]]; then
   exit 1
 fi
 
+if ! command -v "$NODE_BIN" >/dev/null 2>&1; then
+  echo "[wasm-smoke] missing Node.js runtime: $NODE_BIN" >&2
+  exit 1
+fi
+
+if ! command -v ninja >/dev/null 2>&1; then
+  if [[ "$WASM_SKIP_BUILD" != "1" ]]; then
+    echo "[wasm-smoke] missing ninja (required unless WASM_SKIP_BUILD=1)" >&2
+    exit 1
+  fi
+fi
+
 if [[ ! -f "$BMC_TEST_INPUT" || ! -f "$SIM_TEST_INPUT" ]]; then
   echo "[wasm-smoke] required test input file missing" >&2
   exit 1
