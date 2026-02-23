@@ -21,6 +21,7 @@ RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
 ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-1}"
 BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-1}"
 BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-1}"
+BMC_ALLOW_RUN_FALLBACK="${BMC_ALLOW_RUN_FALLBACK:-1}"
 FAIL_ON_XPASS="${FAIL_ON_XPASS:-1}"
 
 # Memory guardrails.
@@ -52,6 +53,10 @@ filter_ec=$?
 set -e
 if [[ "$filter_ec" == "2" ]]; then
   echo "invalid OVL_SEMANTIC_TEST_FILTER regex: $OVL_SEMANTIC_TEST_FILTER" >&2
+  exit 1
+fi
+if [[ "$BMC_ALLOW_RUN_FALLBACK" != "0" && "$BMC_ALLOW_RUN_FALLBACK" != "1" ]]; then
+  echo "invalid BMC_ALLOW_RUN_FALLBACK: $BMC_ALLOW_RUN_FALLBACK" >&2
   exit 1
 fi
 
@@ -179,29 +184,36 @@ run_case_mode() {
   else
     if [[ "$BMC_RUN_SMTLIB" == "1" ]] && \
         grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
-      echo "BMC_RUN_SMTLIB fallback($case_id/$mode): retrying with --run due unsupported SMT-LIB export op(s)" >&2
-      {
-        echo "[run_ovl_sva_semantic_circt_bmc] BMC_RUN_SMTLIB fallback($case_id/$mode): unsupported SMT-LIB export op(s), retrying with --run"
-      } >> "$bmc_log"
-      bmc_args=(-b "$bound" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
-        --module "$top_module" "--shared-libs=$Z3_LIB")
-      if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
-        bmc_args+=(--rising-clocks-only)
-      fi
-      if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
-        bmc_args+=(--allow-multi-clock)
-      fi
-      if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
-        bmc_args+=(--assume-known-inputs)
-      fi
-      if [[ -n "$CIRCT_BMC_ARGS" ]]; then
-        read -r -a extra_bmc_args <<< "$CIRCT_BMC_ARGS"
-        bmc_args+=("${extra_bmc_args[@]}")
-      fi
-      if bmc_out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>>"$bmc_log")"; then
-        :
+      if [[ "$BMC_ALLOW_RUN_FALLBACK" == "1" ]]; then
+        echo "BMC_RUN_SMTLIB fallback($case_id/$mode): retrying with --run due unsupported SMT-LIB export op(s)" >&2
+        {
+          echo "[run_ovl_sva_semantic_circt_bmc] BMC_RUN_SMTLIB fallback($case_id/$mode): unsupported SMT-LIB export op(s), retrying with --run"
+        } >> "$bmc_log"
+        bmc_args=(-b "$bound" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
+          --module "$top_module" "--shared-libs=$Z3_LIB")
+        if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
+          bmc_args+=(--rising-clocks-only)
+        fi
+        if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
+          bmc_args+=(--allow-multi-clock)
+        fi
+        if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+          bmc_args+=(--assume-known-inputs)
+        fi
+        if [[ -n "$CIRCT_BMC_ARGS" ]]; then
+          read -r -a extra_bmc_args <<< "$CIRCT_BMC_ARGS"
+          bmc_args+=("${extra_bmc_args[@]}")
+        fi
+        if bmc_out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>>"$bmc_log")"; then
+          :
+        else
+          bmc_out=""
+        fi
       else
-        bmc_out=""
+        echo "BMC_RUN_SMTLIB fallback($case_id/$mode): disabled by BMC_ALLOW_RUN_FALLBACK=0" >&2
+        {
+          echo "[run_ovl_sva_semantic_circt_bmc] BMC_RUN_SMTLIB fallback($case_id/$mode): disabled by BMC_ALLOW_RUN_FALLBACK=0"
+        } >> "$bmc_log"
       fi
     fi
   fi

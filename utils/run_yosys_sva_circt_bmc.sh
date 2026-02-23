@@ -101,6 +101,7 @@ BMC_LAUNCH_COPY_FALLBACK="${BMC_LAUNCH_COPY_FALLBACK:-1}"
 BMC_LAUNCH_EVENTS_OUT="${BMC_LAUNCH_EVENTS_OUT:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
 BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-1}"
+BMC_ALLOW_RUN_FALLBACK="${BMC_ALLOW_RUN_FALLBACK:-1}"
 # Yosys SVA tests are 2-state; default to known inputs to avoid X-driven
 # counterexamples. Set BMC_ASSUME_KNOWN_INPUTS=0 to exercise 4-state behavior.
 BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-1}"
@@ -239,6 +240,10 @@ if ! [[ "$BMC_LAUNCH_RETRY_BACKOFF_SECS" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
 fi
 if [[ "$BMC_LAUNCH_COPY_FALLBACK" != "0" && "$BMC_LAUNCH_COPY_FALLBACK" != "1" ]]; then
   echo "invalid BMC_LAUNCH_COPY_FALLBACK: $BMC_LAUNCH_COPY_FALLBACK" >&2
+  exit 1
+fi
+if [[ "$BMC_ALLOW_RUN_FALLBACK" != "0" && "$BMC_ALLOW_RUN_FALLBACK" != "1" ]]; then
+  echo "invalid BMC_ALLOW_RUN_FALLBACK: $BMC_ALLOW_RUN_FALLBACK" >&2
   exit 1
 fi
 if [[ "$BMC_RUN_SMTLIB" == "1" && "$BMC_SMOKE_ONLY" != "1" ]]; then
@@ -8561,29 +8566,36 @@ run_case() {
   fi
   if [[ "$bmc_status" -ne 0 && "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]] && \
       grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
-    echo "BMC_RUN_SMTLIB fallback($base/$mode): retrying with --run due unsupported SMT-LIB export op(s)" >&2
-    {
-      echo "[run_yosys_sva_circt_bmc] BMC_RUN_SMTLIB fallback($base/$mode): unsupported SMT-LIB export op(s), retrying with --run"
-    } >> "$bmc_log"
-    bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
-      "--module" "$TOP" "--shared-libs=$Z3_LIB")
-    if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
-      bmc_args+=("--rising-clocks-only")
-    fi
-    if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
-      bmc_args+=("--allow-multi-clock")
-    fi
-    if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
-      bmc_args+=("--assume-known-inputs")
-    fi
-    if [[ -n "$CIRCT_BMC_ARGS" ]]; then
-      read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"
-      bmc_args+=("${extra_bmc_args[@]}")
-    fi
-    if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>> "$bmc_log")"; then
-      bmc_status=0
+    if [[ "$BMC_ALLOW_RUN_FALLBACK" == "1" ]]; then
+      echo "BMC_RUN_SMTLIB fallback($base/$mode): retrying with --run due unsupported SMT-LIB export op(s)" >&2
+      {
+        echo "[run_yosys_sva_circt_bmc] BMC_RUN_SMTLIB fallback($base/$mode): unsupported SMT-LIB export op(s), retrying with --run"
+      } >> "$bmc_log"
+      bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
+        "--module" "$TOP" "--shared-libs=$Z3_LIB")
+      if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
+        bmc_args+=("--rising-clocks-only")
+      fi
+      if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
+        bmc_args+=("--allow-multi-clock")
+      fi
+      if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+        bmc_args+=("--assume-known-inputs")
+      fi
+      if [[ -n "$CIRCT_BMC_ARGS" ]]; then
+        read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"
+        bmc_args+=("${extra_bmc_args[@]}")
+      fi
+      if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>> "$bmc_log")"; then
+        bmc_status=0
+      else
+        bmc_status=$?
+      fi
     else
-      bmc_status=$?
+      echo "BMC_RUN_SMTLIB fallback($base/$mode): disabled by BMC_ALLOW_RUN_FALLBACK=0" >&2
+      {
+        echo "[run_yosys_sva_circt_bmc] BMC_RUN_SMTLIB fallback($base/$mode): disabled by BMC_ALLOW_RUN_FALLBACK=0"
+      } >> "$bmc_log"
     fi
   fi
   append_bmc_abstraction_provenance "$base" "$mode" "$sv" "$bmc_log"

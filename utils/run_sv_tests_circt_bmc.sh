@@ -130,6 +130,7 @@ CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
 BMC_MLIR_CACHE_DIR="${BMC_MLIR_CACHE_DIR:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
 BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-1}"
+BMC_ALLOW_RUN_FALLBACK="${BMC_ALLOW_RUN_FALLBACK:-1}"
 Z3_BIN="${Z3_BIN:-}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 FAIL_ON_DROP_REMARKS="${FAIL_ON_DROP_REMARKS:-0}"
@@ -295,6 +296,10 @@ if ! is_bool_01 "$BMC_LAUNCH_COPY_FALLBACK"; then
 fi
 if ! is_bool_01 "$AUTO_ALLOW_MULTI_CLOCK"; then
   echo "invalid AUTO_ALLOW_MULTI_CLOCK: $AUTO_ALLOW_MULTI_CLOCK" >&2
+  exit 1
+fi
+if ! is_bool_01 "$BMC_ALLOW_RUN_FALLBACK"; then
+  echo "invalid BMC_ALLOW_RUN_FALLBACK: $BMC_ALLOW_RUN_FALLBACK" >&2
   exit 1
 fi
 if ! is_positive_int "$CIRCT_MEMORY_LIMIT_GB"; then
@@ -1005,15 +1010,22 @@ top_module=${top_module}
   fi
   if [[ "$bmc_status" -ne 0 && "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]] && \
       grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
-    echo "BMC_RUN_SMTLIB fallback($base): retrying with --run due unsupported SMT-LIB export op(s)" >&2
-    {
-      echo "[run_sv_tests_circt_bmc] BMC_RUN_SMTLIB fallback($base): unsupported SMT-LIB export op(s), retrying with --run"
-    } >> "$bmc_log"
-    bmc_args=("${bmc_base_args[@]}" "--shared-libs=$Z3_LIB")
-    if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>> "$bmc_log")"; then
-      bmc_status=0
+    if [[ "$BMC_ALLOW_RUN_FALLBACK" == "1" ]]; then
+      echo "BMC_RUN_SMTLIB fallback($base): retrying with --run due unsupported SMT-LIB export op(s)" >&2
+      {
+        echo "[run_sv_tests_circt_bmc] BMC_RUN_SMTLIB fallback($base): unsupported SMT-LIB export op(s), retrying with --run"
+      } >> "$bmc_log"
+      bmc_args=("${bmc_base_args[@]}" "--shared-libs=$Z3_LIB")
+      if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>> "$bmc_log")"; then
+        bmc_status=0
+      else
+        bmc_status=$?
+      fi
     else
-      bmc_status=$?
+      echo "BMC_RUN_SMTLIB fallback($base): disabled by BMC_ALLOW_RUN_FALLBACK=0" >&2
+      {
+        echo "[run_sv_tests_circt_bmc] BMC_RUN_SMTLIB fallback($base): disabled by BMC_ALLOW_RUN_FALLBACK=0"
+      } >> "$bmc_log"
     fi
   fi
   append_bmc_abstraction_provenance "$base" "$sv" "$bmc_log"
