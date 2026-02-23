@@ -41,6 +41,33 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
+## Latest SVA Closure Slice (February 23, 2026, stage-1 `circt-bmc` JIT deprecation)
+
+- changed `circt-bmc` default run mode to SMT-LIB:
+  - `tools/circt-bmc/circt-bmc.cpp`
+  - default now resolves to `--run-smtlib` in both JIT-enabled and non-JIT
+    builds.
+- added strict fallback control to BMC harnesses:
+  - new env knob: `BMC_ALLOW_RUN_FALLBACK` (default `1`).
+  - when set to `0`, harnesses do not retry exporter failures with `--run`.
+  - updated harnesses:
+    - `utils/run_sv_tests_circt_bmc.sh`
+    - `utils/run_verilator_verification_circt_bmc.sh`
+    - `utils/run_yosys_sva_circt_bmc.sh`
+    - `utils/run_ovl_sva_circt_bmc.sh`
+    - `utils/run_ovl_sva_semantic_circt_bmc.sh`
+- added TDD lock for strict mode:
+  - `test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test`
+- validation snapshot:
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+    - result: `2/2` pass.
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir build-test/test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`
+    - result: `2/2` pass.
+  - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `110 tests, failures=0`.
+  - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - result: `14 tests, failures=0`.
+
 ## Latest SVA Closure Slice (February 23, 2026, ImportVerilog SVA harness refresh for `OnlyParse` drift)
 
 - fixed stale ImportVerilog SVA regression harness assumptions where tests

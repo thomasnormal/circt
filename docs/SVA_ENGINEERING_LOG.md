@@ -3740,3 +3740,44 @@
       - result: `14 tests, failures=0`.
     - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
       - result: `total=6 pass=6 fail=0`.
+
+- Iteration update (stage 1 JIT-path deprecation: default SMT-LIB + strict no-fallback mode):
+  - realization:
+    - even after making harnesses prefer SMT-LIB, `circt-bmc` still defaulted
+      to JIT `--run` in JIT-enabled builds, and harnesses still had implicit
+      exporter-error fallback to `--run`.
+    - this kept hidden coupling to the JIT path and blocked clean retirement.
+  - TDD signal:
+    - added `test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test` first.
+    - pre-fix failure proved strict mode was ignored:
+      - harness retried with `--shared-libs` and produced
+        `total=1 pass=0 fail=1 error=0` instead of an SMT-LIB error outcome.
+  - implemented:
+    - `tools/circt-bmc/circt-bmc.cpp`
+      - changed default output mode to `OutputRunSMTLIB` in both
+        `CIRCT_BMC_ENABLE_JIT` and non-JIT builds.
+    - added `BMC_ALLOW_RUN_FALLBACK` (`0|1`, default `1`) to:
+      - `utils/run_sv_tests_circt_bmc.sh`
+      - `utils/run_verilator_verification_circt_bmc.sh`
+      - `utils/run_yosys_sva_circt_bmc.sh`
+      - `utils/run_ovl_sva_circt_bmc.sh`
+      - `utils/run_ovl_sva_semantic_circt_bmc.sh`
+    - fallback behavior:
+      - `BMC_ALLOW_RUN_FALLBACK=1`: preserve exporter-error retry to `--run`.
+      - `BMC_ALLOW_RUN_FALLBACK=0`: disable retry and keep SMT-LIB failure.
+  - validation:
+    - regression tests:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+      - result: `2/2` pass.
+    - default-mode `circt-bmc` sanity:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir build-test/test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`
+      - result: `2/2` pass.
+    - strict no-fallback harness slices:
+      - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 OVL_SEMANTIC_TEST_FILTER='ovl_sem_(proposition|never_unknown_async|next)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `8 tests, failures=0`.
+      - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `110 tests, failures=0`.
+      - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0`.
+      - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
+      - result: `total=6 pass=6 fail=0 error=0`.

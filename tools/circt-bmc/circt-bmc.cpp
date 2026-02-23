@@ -256,7 +256,7 @@ static cl::opt<OutputFormat> outputFormat(
                           "Run SMT-LIB via z3"),
                clEnumValN(OutputRunJIT, "run",
                           "Perform BMC and output result")),
-    cl::init(OutputRunJIT), cl::cat(mainCategory));
+    cl::init(OutputRunSMTLIB), cl::cat(mainCategory));
 
 static cl::list<std::string> sharedLibs{
     "shared-libs", llvm::cl::desc("Libraries to link dynamically"),
@@ -272,7 +272,7 @@ static cl::opt<OutputFormat> outputFormat(
                clEnumValN(OutputSMTLIB, "emit-smtlib", "Emit SMT-LIB file"),
                clEnumValN(OutputRunSMTLIB, "run-smtlib",
                           "Run SMT-LIB via z3")),
-    cl::init(OutputLLVM), cl::cat(mainCategory));
+    cl::init(OutputRunSMTLIB), cl::cat(mainCategory));
 
 #endif
 

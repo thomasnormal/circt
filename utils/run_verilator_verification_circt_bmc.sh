@@ -122,6 +122,7 @@ BMC_LAUNCH_EVENTS_OUT="${BMC_LAUNCH_EVENTS_OUT:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
 BMC_FAIL_ON_VIOLATION="${BMC_FAIL_ON_VIOLATION:-1}"
 BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-1}"
+BMC_ALLOW_RUN_FALLBACK="${BMC_ALLOW_RUN_FALLBACK:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
@@ -193,6 +194,10 @@ if ! is_nonneg_decimal "$BMC_LAUNCH_RETRY_BACKOFF_SECS"; then
 fi
 if ! is_bool_01 "$BMC_LAUNCH_COPY_FALLBACK"; then
   echo "invalid BMC_LAUNCH_COPY_FALLBACK: $BMC_LAUNCH_COPY_FALLBACK" >&2
+  exit 1
+fi
+if ! is_bool_01 "$BMC_ALLOW_RUN_FALLBACK"; then
+  echo "invalid BMC_ALLOW_RUN_FALLBACK: $BMC_ALLOW_RUN_FALLBACK" >&2
   exit 1
 fi
 
@@ -584,32 +589,39 @@ for suite in "${suites[@]}"; do
     fi
     if [[ "$bmc_status" -ne 0 && "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]] && \
         grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
-      echo "BMC_RUN_SMTLIB fallback($base): retrying with --run due unsupported SMT-LIB export op(s)" >&2
-      {
-        echo "[run_verilator_verification_circt_bmc] BMC_RUN_SMTLIB fallback($base): unsupported SMT-LIB export op(s), retrying with --run"
-      } >> "$bmc_log"
-      bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
-        "--module" "$top_for_file" "--shared-libs=$Z3_LIB")
-      if [[ "$BMC_FAIL_ON_VIOLATION" == "1" ]]; then
-        bmc_args+=("--fail-on-violation")
-      fi
-      if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
-        bmc_args+=("--rising-clocks-only")
-      fi
-      if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
-        bmc_args+=("--assume-known-inputs")
-      fi
-      if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
-        bmc_args+=("--allow-multi-clock")
-      fi
-      if [[ -n "$CIRCT_BMC_ARGS" ]]; then
-        read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"
-        bmc_args+=("${extra_bmc_args[@]}")
-      fi
-      if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>> "$bmc_log")"; then
-        bmc_status=0
+      if [[ "$BMC_ALLOW_RUN_FALLBACK" == "1" ]]; then
+        echo "BMC_RUN_SMTLIB fallback($base): retrying with --run due unsupported SMT-LIB export op(s)" >&2
+        {
+          echo "[run_verilator_verification_circt_bmc] BMC_RUN_SMTLIB fallback($base): unsupported SMT-LIB export op(s), retrying with --run"
+        } >> "$bmc_log"
+        bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
+          "--module" "$top_for_file" "--shared-libs=$Z3_LIB")
+        if [[ "$BMC_FAIL_ON_VIOLATION" == "1" ]]; then
+          bmc_args+=("--fail-on-violation")
+        fi
+        if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
+          bmc_args+=("--rising-clocks-only")
+        fi
+        if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+          bmc_args+=("--assume-known-inputs")
+        fi
+        if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
+          bmc_args+=("--allow-multi-clock")
+        fi
+        if [[ -n "$CIRCT_BMC_ARGS" ]]; then
+          read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"
+          bmc_args+=("${extra_bmc_args[@]}")
+        fi
+        if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>> "$bmc_log")"; then
+          bmc_status=0
+        else
+          bmc_status=$?
+        fi
       else
-        bmc_status=$?
+        echo "BMC_RUN_SMTLIB fallback($base): disabled by BMC_ALLOW_RUN_FALLBACK=0" >&2
+        {
+          echo "[run_verilator_verification_circt_bmc] BMC_RUN_SMTLIB fallback($base): disabled by BMC_ALLOW_RUN_FALLBACK=0"
+        } >> "$bmc_log"
       fi
     fi
     append_bmc_abstraction_provenance "$base" "$sv" "$bmc_log"

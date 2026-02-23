@@ -21,6 +21,7 @@ TOP="${TOP:-}"
 BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-1}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
 BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-1}"
+BMC_ALLOW_RUN_FALLBACK="${BMC_ALLOW_RUN_FALLBACK:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
 ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-0}"
 
@@ -53,6 +54,10 @@ ovl_filter_ec=$?
 set -e
 if [[ "$ovl_filter_ec" == "2" ]]; then
   echo "invalid OVL_BMC_TEST_FILTER regex: $OVL_BMC_TEST_FILTER" >&2
+  exit 1
+fi
+if [[ "$BMC_ALLOW_RUN_FALLBACK" != "0" && "$BMC_ALLOW_RUN_FALLBACK" != "1" ]]; then
+  echo "invalid BMC_ALLOW_RUN_FALLBACK: $BMC_ALLOW_RUN_FALLBACK" >&2
   exit 1
 fi
 
@@ -182,30 +187,37 @@ for sv in "${ovl_files[@]}"; do
     else
       if [[ "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]] && \
           grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
-        echo "BMC_RUN_SMTLIB fallback($base/$profile): retrying with --run due unsupported SMT-LIB export op(s)" >&2
-        {
-          echo "[run_ovl_sva_circt_bmc] BMC_RUN_SMTLIB fallback($base/$profile): unsupported SMT-LIB export op(s), retrying with --run"
-        } >> "$bmc_log"
-        bmc_args=(-b "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
-          --module "$top_module" "--shared-libs=$Z3_LIB")
-        if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
-          bmc_args+=(--rising-clocks-only)
-        fi
-        if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
-          bmc_args+=(--allow-multi-clock)
-        fi
-        if [[ "$assume_known" == "1" ]]; then
-          bmc_args+=(--assume-known-inputs)
-        fi
-        if [[ -n "$CIRCT_BMC_ARGS" ]]; then
-          read -r -a extra_bmc_args <<< "$CIRCT_BMC_ARGS"
-          bmc_args+=("${extra_bmc_args[@]}")
-        fi
-        if run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" > /dev/null 2>>"$bmc_log"; then
-          if [[ -n "$OUT" ]]; then
-            printf 'PASS(%s): %s\n' "$profile" "$base" >> "$OUT"
+        if [[ "$BMC_ALLOW_RUN_FALLBACK" == "1" ]]; then
+          echo "BMC_RUN_SMTLIB fallback($base/$profile): retrying with --run due unsupported SMT-LIB export op(s)" >&2
+          {
+            echo "[run_ovl_sva_circt_bmc] BMC_RUN_SMTLIB fallback($base/$profile): unsupported SMT-LIB export op(s), retrying with --run"
+          } >> "$bmc_log"
+          bmc_args=(-b "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
+            --module "$top_module" "--shared-libs=$Z3_LIB")
+          if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
+            bmc_args+=(--rising-clocks-only)
           fi
-          continue
+          if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
+            bmc_args+=(--allow-multi-clock)
+          fi
+          if [[ "$assume_known" == "1" ]]; then
+            bmc_args+=(--assume-known-inputs)
+          fi
+          if [[ -n "$CIRCT_BMC_ARGS" ]]; then
+            read -r -a extra_bmc_args <<< "$CIRCT_BMC_ARGS"
+            bmc_args+=("${extra_bmc_args[@]}")
+          fi
+          if run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" > /dev/null 2>>"$bmc_log"; then
+            if [[ -n "$OUT" ]]; then
+              printf 'PASS(%s): %s\n' "$profile" "$base" >> "$OUT"
+            fi
+            continue
+          fi
+        else
+          echo "BMC_RUN_SMTLIB fallback($base/$profile): disabled by BMC_ALLOW_RUN_FALLBACK=0" >&2
+          {
+            echo "[run_ovl_sva_circt_bmc] BMC_RUN_SMTLIB fallback($base/$profile): disabled by BMC_ALLOW_RUN_FALLBACK=0"
+          } >> "$bmc_log"
         fi
       fi
       failures=$((failures + 1))
