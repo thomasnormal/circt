@@ -41,7 +41,23 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
-## Latest SVA Closure Slice (February 23, 2026, `disable iff` constant-property fix + multiclock e2e optioning)
+## Latest SVA Closure Slice (February 23, 2026, Yosys parity de-XFAIL for `counter`/`extnets`)
+
+- removed stale `XFAIL` markers from the known-input Yosys parity lock tests:
+  - `test/Tools/circt-bmc/sva-yosys-counter-known-inputs-parity.sv`
+  - `test/Tools/circt-bmc/sva-yosys-extnets-parity.sv`
+- expected lock behavior is now reflected directly in lit metadata:
+  - pass profile: `BMC_RESULT=UNSAT`
+  - fail profile: `BMC_RESULT=SAT`
+- validation snapshot:
+  - Yosys BMC sanity:
+    - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - result: `4/4` mode checks pass.
+  - OVL semantic sanity:
+    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `6 tests, failures=0`.
+
+## Previous SVA Closure Slice (February 23, 2026, `disable iff` constant-property fix + multiclock e2e optioning)
 
 - fixed `LTLToCore` constant-i1 detection for `disable iff` lowering:
   - `lib/Conversion/LTLToCore/LTLToCore.cpp`
