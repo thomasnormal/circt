@@ -23,6 +23,7 @@
 #include <map>
 #include <queue>
 #include <thread>
+#include <utility>
 
 #define DEBUG_TYPE "sim-incremental-compiler"
 
@@ -512,12 +513,18 @@ ContentHash ChangeDetector::computeContentHash(llvm::StringRef content) {
 //===----------------------------------------------------------------------===//
 
 IncrementalCompiler::IncrementalCompiler(Config config)
-    : config(config), changeDetector(config.changeConfig),
-      cache(config.cacheConfig) {
-  if (config.parallelThreads == 0) {
-    config.parallelThreads = std::thread::hardware_concurrency();
-    if (config.parallelThreads == 0)
-      config.parallelThreads = 4;
+    : config(std::move(config)), changeDetector(this->config.changeConfig),
+      cache(this->config.cacheConfig) {
+#if defined(__EMSCRIPTEN__)
+  // The default wasm/node build is single-threaded; keep compilation
+  // deterministic and avoid spawning worker threads.
+  this->config.parallelCompilation = false;
+  this->config.parallelThreads = 1;
+#endif
+  if (this->config.parallelThreads == 0) {
+    this->config.parallelThreads = std::thread::hardware_concurrency();
+    if (this->config.parallelThreads == 0)
+      this->config.parallelThreads = 4;
   }
 }
 
@@ -587,7 +594,8 @@ bool IncrementalCompiler::compileAll(CompileCallback compile) {
   auto startTime = std::chrono::high_resolution_clock::now();
 
   bool success;
-  if (config.parallelCompilation && dirtyUnits.size() > 1) {
+  if (config.parallelCompilation && config.parallelThreads > 1 &&
+      dirtyUnits.size() > 1) {
     success = compileParallel(dirtyUnits, compile);
   } else {
     success = compileSequential(dirtyUnits, compile);

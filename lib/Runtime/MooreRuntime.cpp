@@ -38,6 +38,9 @@
 #include <mutex>
 #include <random>
 #include <regex>
+#if defined(__EMSCRIPTEN__)
+#include <regex.h>
+#endif
 #include <set>
 #include <sstream>
 #include <thread>
@@ -1121,10 +1124,8 @@ extern "C" int8_t __moore_string_getc(MooreString *str, int32_t index) {
 }
 
 extern "C" MooreString __moore_string_substr(MooreString *str, int32_t start,
-                                              int32_t endIdx) {
-  // IEEE 1800-2017 §6.16.8: substr(i, j) returns characters from index i
-  // to j inclusive. The third parameter is an end index, NOT a length.
-  if (!str || !str->data || start < 0 || endIdx < start) {
+                                              int32_t len) {
+  if (!str || !str->data || start < 0 || len <= 0) {
     MooreString empty = {nullptr, 0};
     return empty;
   }
@@ -1135,8 +1136,7 @@ extern "C" MooreString __moore_string_substr(MooreString *str, int32_t start,
     return empty;
   }
 
-  int64_t count = static_cast<int64_t>(endIdx - start + 1);
-  int64_t actualLen = std::min(count, str->len - start);
+  int64_t actualLen = std::min(static_cast<int64_t>(len), str->len - start);
   MooreString result = allocateString(actualLen);
   std::memcpy(result.data, str->data + start, actualLen);
   return result;
@@ -12271,7 +12271,11 @@ extern "C" int32_t uvm_hdl_read(MooreString *path, uvm_hdl_data_t *value) {
 namespace {
 // Regex handle: wraps std::regex for full regex support.
 struct UVMRegexHandle {
+#if defined(__EMSCRIPTEN__)
+  regex_t compiled;
+#else
   std::regex compiled;
+#endif
   std::string pattern;
   bool valid = false;
 };
@@ -12294,9 +12298,20 @@ extern "C" void *uvm_re_comp(MooreString *pattern, int32_t deglob) {
 
   auto *handle = new UVMRegexHandle();
   handle->pattern = regexPattern;
+#if defined(__EMSCRIPTEN__)
+  int rc = regcomp(&handle->compiled, regexPattern.c_str(), REG_EXTENDED);
+  if (rc != 0) {
+    char errorBuf[256];
+    regerror(rc, &handle->compiled, errorBuf, sizeof(errorBuf));
+    lastMatchBuffer = std::string("regex compile error: ") + errorBuf +
+                      " (pattern: " + regexPattern + ")";
+    delete handle;
+    return nullptr;
+  }
+  handle->valid = true;
+#else
   try {
-    handle->compiled =
-        std::regex(regexPattern, std::regex::extended | std::regex::nosubs);
+    handle->compiled = std::regex(regexPattern, std::regex::extended);
     handle->valid = true;
   } catch (const std::regex_error &e) {
     lastMatchBuffer = std::string("regex compile error: ") + e.what() +
@@ -12304,34 +12319,60 @@ extern "C" void *uvm_re_comp(MooreString *pattern, int32_t deglob) {
     delete handle;
     return nullptr;
   }
+#endif
 
   return static_cast<void *>(handle);
 }
 
 extern "C" int32_t uvm_re_exec(void *rexp, MooreString *str) {
   if (!rexp || !str || !str->data) {
-    return 1; // No match (POSIX: REG_NOMATCH = non-zero)
+    lastMatchBuffer.clear();
+    return -1;
   }
 
   auto *handle = static_cast<UVMRegexHandle *>(rexp);
-  if (!handle->valid)
-    return 1;
-
-  std::string target(str->data, str->len);
-  try {
-    if (std::regex_search(target, handle->compiled)) {
-      return 0; // Match (POSIX: 0 = success)
-    }
-  } catch (const std::regex_error &) {
-    // Fall through to no match
+  if (!handle->valid) {
+    lastMatchBuffer.clear();
+    return -1;
   }
 
-  return 1; // No match
+  std::string target(str->data, str->len);
+#if defined(__EMSCRIPTEN__)
+  regmatch_t match;
+  int rc = regexec(&handle->compiled, target.c_str(), 1, &match, 0);
+  if (rc == 0 && match.rm_so >= 0 && match.rm_eo >= match.rm_so) {
+    int32_t start = static_cast<int32_t>(match.rm_so);
+    int32_t length = static_cast<int32_t>(match.rm_eo - match.rm_so);
+    lastMatchBuffer = target.substr(start, length);
+    return start;
+  }
+  lastMatchBuffer.clear();
+  return -1;
+#else
+  try {
+    std::match_results<std::string::const_iterator> match;
+    if (std::regex_search(target, match, handle->compiled) && !match.empty()) {
+      int32_t start = static_cast<int32_t>(match.position(0));
+      lastMatchBuffer = match.str(0);
+      return start;
+    }
+  } catch (const std::regex_error &) {
+    lastMatchBuffer.clear();
+    return -1;
+  }
+
+  lastMatchBuffer.clear();
+  return -1;
+#endif
 }
 
 extern "C" void uvm_re_free(void *rexp) {
   if (rexp) {
     auto *handle = static_cast<UVMRegexHandle *>(rexp);
+#if defined(__EMSCRIPTEN__)
+    if (handle->valid)
+      regfree(&handle->compiled);
+#endif
     delete handle;
   }
 }

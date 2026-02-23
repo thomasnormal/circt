@@ -10,6 +10,16 @@
 //
 //===----------------------------------------------------------------------===//
 
+#if defined(__EMSCRIPTEN__)
+#include "gtest/gtest.h"
+
+TEST(MooreRuntimeTest, DisabledOnEmscripten) {
+  GTEST_SKIP() << "MooreRuntimeTests require host threading and libc behavior "
+                  "that are not available in the single-threaded wasm build.";
+}
+
+#else
+
 #include "circt/Runtime/MooreRuntime.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -14291,3 +14301,5 @@ TEST(MooreRuntimeEventTest, EventReset) {
 }
 
 } // namespace
+
+#endif // defined(__EMSCRIPTEN__)

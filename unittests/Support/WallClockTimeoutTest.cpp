@@ -15,6 +15,10 @@
 using namespace circt;
 
 TEST(WallClockTimeoutTest, FiresAfterTimeout) {
+#if defined(__EMSCRIPTEN__)
+  GTEST_SKIP() << "WallClockTimeout uses std::thread, unavailable in "
+                  "single-threaded wasm builds.";
+#else
   std::atomic<bool> fired{false};
   WallClockTimeout timeout(std::chrono::milliseconds(50),
                            [&]() { fired.store(true); });
@@ -29,9 +33,14 @@ TEST(WallClockTimeoutTest, FiresAfterTimeout) {
 
   EXPECT_TRUE(fired.load());
   EXPECT_TRUE(timeout.hasFired());
+#endif
 }
 
 TEST(WallClockTimeoutTest, CancelPreventsFire) {
+#if defined(__EMSCRIPTEN__)
+  GTEST_SKIP() << "WallClockTimeout uses std::thread, unavailable in "
+                  "single-threaded wasm builds.";
+#else
   std::atomic<bool> fired{false};
   {
     WallClockTimeout timeout(std::chrono::milliseconds(200),
@@ -41,4 +50,5 @@ TEST(WallClockTimeoutTest, CancelPreventsFire) {
 
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   EXPECT_FALSE(fired.load());
+#endif
 }
