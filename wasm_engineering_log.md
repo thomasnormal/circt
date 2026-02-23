@@ -159,3 +159,20 @@
 - Validation:
   - `utils/wasm_plusargs_reentry_check.sh` now passes.
   - `utils/run_wasm_smoke.sh` passes end-to-end after the fix.
+
+## 2026-02-23 (follow-up: strengthen re-entry smoke coverage)
+- Gap identified:
+  - wasm smoke re-entry checks only covered `help -> run`.
+  - This left a coverage hole for repeated real executions (`run -> run`) in the
+    same loaded module instance.
+- Test improvements:
+  - extended `utils/run_wasm_smoke.sh` to include:
+    - `circt-sim` same-instance `run -> run` with two VCD outputs in `/tmp`;
+    - `circt-bmc` same-instance `run -> run` writing two SMT-LIB outputs in
+      wasm FS (`/out1.smt2`, `/out2.smt2`) and validating both contain
+      `(check-sat)`.
+- Validation:
+  - `utils/run_wasm_smoke.sh` passes with all of:
+    - `help -> run` checks;
+    - `run -> run` checks;
+    - plusargs isolation regression.
