@@ -84,7 +84,11 @@ target_link_libraries(circt-sim
 
 # For wasm/node builds, map POSIX paths directly to the host filesystem.
 # This keeps CLI behavior (e.g. --vcd /tmp/test.vcd) consistent with native.
-if(EMSCRIPTEN)
+option(CIRCT_SIM_WASM_ENABLE_NODERAWFS
+  "Enable Emscripten Node.js raw filesystem bridge (-sNODERAWFS=1) for circt-sim"
+  ON
+)
+if(EMSCRIPTEN AND CIRCT_SIM_WASM_ENABLE_NODERAWFS)
   target_link_options(circt-sim PRIVATE "SHELL:-sNODERAWFS=1")
 endif()
 

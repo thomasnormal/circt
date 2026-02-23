@@ -18,6 +18,7 @@ required_cmd_tokens=(
   "-DMLIR_ENABLE_EXECUTION_ENGINE=OFF"
   "-DLLVM_ENABLE_THREADS=OFF"
   "-DCIRCT_SLANG_FRONTEND_ENABLED=ON"
+  "-DCIRCT_SIM_WASM_ENABLE_NODERAWFS="
 )
 
 for token in "${required_cmd_tokens[@]}"; do
