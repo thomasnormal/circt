@@ -858,6 +858,10 @@ public:
     return clockedAssertionFailures;
   }
 
+  /// Finalize outstanding temporal obligations at simulation end.
+  /// Returns the number of additional failures reported during finalization.
+  size_t finalizeClockedAssertionsAtEnd();
+
   /// Print bytecode compilation statistics.
   void printBytecodeStats() const;
 
@@ -2227,6 +2231,12 @@ private:
     /// Keys are temporal ops that need sampled history (e.g. implication,
     /// delay); values are oldest-to-newest truth samples.
     llvm::DenseMap<mlir::Operation *, std::deque<LTLTruth>> temporalHistory;
+    /// End-of-run tracker for strong eventually obligations.
+    struct EventuallyTracker {
+      uint64_t trailingUnsatisfiedSamples = 0;
+      bool trailingHasUnknown = false;
+    };
+    llvm::DenseMap<mlir::Operation *, EventuallyTracker> eventuallyTrackers;
   };
 
   /// Evaluate an LTL property tree recursively, handling temporal operators.

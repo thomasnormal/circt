@@ -175,6 +175,18 @@ ProcessId ProcessScheduler::registerProcess(const std::string &name,
     processVec.resize(id + 1, nullptr);
   processVec[id] = rawPtr;
 
+  size_t needed = static_cast<size_t>(id) + 1;
+  if (pendingTriggerSignalVec.size() < needed) {
+    pendingTriggerSignalVec.resize(needed, kNoTriggerSignal);
+    triggerSignalVec.resize(needed, kNoTriggerSignal);
+    lastTriggerSignalVec.resize(needed, kNoTriggerSignal);
+  }
+  if (pendingTriggerTimeBits.size() < needed) {
+    pendingTriggerTimeBits.resize(needed, false);
+    triggerTimeBits.resize(needed, false);
+    lastTriggerTimeBits.resize(needed, false);
+  }
+
   ++stats.processesRegistered;
   LLVM_DEBUG(llvm::dbgs() << "Registered process '" << name << "' with ID "
                           << id << "\n");
@@ -204,6 +216,18 @@ void ProcessScheduler::unregisterProcess(ProcessId id) {
   // Clear flat vector entry before erasing ownership.
   if (id < processVec.size())
     processVec[id] = nullptr;
+  if (id < pendingTriggerSignalVec.size())
+    pendingTriggerSignalVec[id] = kNoTriggerSignal;
+  if (id < triggerSignalVec.size())
+    triggerSignalVec[id] = kNoTriggerSignal;
+  if (id < lastTriggerSignalVec.size())
+    lastTriggerSignalVec[id] = kNoTriggerSignal;
+  if (id < pendingTriggerTimeBits.size())
+    pendingTriggerTimeBits.reset(id);
+  if (id < triggerTimeBits.size())
+    triggerTimeBits.reset(id);
+  if (id < lastTriggerTimeBits.size())
+    lastTriggerTimeBits.reset(id);
 
   processes.erase(it);
   LLVM_DEBUG(llvm::dbgs() << "Unregistered process ID " << id << "\n");
@@ -673,11 +697,23 @@ void ProcessScheduler::recordSignalChange(SignalId signalId) {
 }
 
 void ProcessScheduler::recordTriggerSignal(ProcessId id, SignalId signalId) {
-  pendingTriggerSignals[id] = signalId;
+  if (id >= pendingTriggerSignalVec.size()) {
+    size_t needed = static_cast<size_t>(id) + 1;
+    pendingTriggerSignalVec.resize(needed, kNoTriggerSignal);
+    triggerSignalVec.resize(needed, kNoTriggerSignal);
+    lastTriggerSignalVec.resize(needed, kNoTriggerSignal);
+  }
+  pendingTriggerSignalVec[id] = signalId;
 }
 
 void ProcessScheduler::recordTriggerTime(ProcessId id) {
-  pendingTriggerTimes.insert(id);
+  if (id >= pendingTriggerTimeBits.size()) {
+    size_t needed = static_cast<size_t>(id) + 1;
+    pendingTriggerTimeBits.resize(needed, false);
+    triggerTimeBits.resize(needed, false);
+    lastTriggerTimeBits.resize(needed, false);
+  }
+  pendingTriggerTimeBits.set(id);
 }
 
 void ProcessScheduler::dumpLastDeltaSignals(llvm::raw_ostream &os) const {
@@ -730,15 +766,16 @@ void ProcessScheduler::dumpLastDeltaProcesses(llvm::raw_ostream &os) const {
     if (proc->isCombinational())
       os << " comb";
 
-    auto trigIt = lastDeltaTriggerSignals.find(procId);
-    if (trigIt != lastDeltaTriggerSignals.end()) {
-      SignalId signalId = trigIt->second;
+    if (procId < lastTriggerSignalVec.size() &&
+        lastTriggerSignalVec[procId] != kNoTriggerSignal) {
+      SignalId signalId = lastTriggerSignalVec[procId];
       os << " trigger=signal(" << signalId;
       auto sigIt = signalNames.find(signalId);
       if (sigIt != signalNames.end())
         os << ":" << sigIt->second;
       os << ")";
-    } else if (lastDeltaTriggerTimes.count(procId)) {
+    } else if (procId < lastTriggerTimeBits.size() &&
+               lastTriggerTimeBits.test(procId)) {
       os << " trigger=time";
     }
 
@@ -1173,6 +1210,14 @@ void ProcessScheduler::initialize() {
   processesExecutedThisDelta.reserve(numProcs);
   lastDeltaProcesses.reserve(numProcs);
   pendingFastUpdates.reserve(numProcs);
+  pendingTriggerSignalVec.assign(numProcs, kNoTriggerSignal);
+  triggerSignalVec.assign(numProcs, kNoTriggerSignal);
+  lastTriggerSignalVec.assign(numProcs, kNoTriggerSignal);
+  pendingTriggerTimeBits.resize(numProcs, false);
+  triggerTimeBits.resize(numProcs, false);
+  lastTriggerTimeBits.resize(numProcs, false);
+  triggerSignalTouched.clear();
+  triggerTimeTouched.clear();
 
   initialized = true;
 }
@@ -1193,8 +1238,16 @@ bool ProcessScheduler::executeDeltaCycle() {
   signalsChangedThisDelta.clear();
   signalTriggeredThisDelta.reset();
   processesExecutedThisDelta.clear();
-  triggerSignalsThisDelta.clear();
-  triggerTimesThisDelta.clear();
+  for (ProcessId pid : triggerSignalTouched) {
+    if (pid < triggerSignalVec.size())
+      triggerSignalVec[pid] = kNoTriggerSignal;
+  }
+  triggerSignalTouched.clear();
+  for (ProcessId pid : triggerTimeTouched) {
+    if (pid < triggerTimeBits.size())
+      triggerTimeBits.reset(pid);
+  }
+  triggerTimeTouched.clear();
 
   // IEEE 1800-2017 §4.4 region ordering with NBA flush.
   //
@@ -1226,8 +1279,8 @@ bool ProcessScheduler::executeDeltaCycle() {
     // Swap instead of copy to reuse buffer capacity.
     std::swap(lastDeltaSignals, signalsChangedThisDelta);
     std::swap(lastDeltaProcesses, processesExecutedThisDelta);
-    std::swap(lastDeltaTriggerSignals, triggerSignalsThisDelta);
-    std::swap(lastDeltaTriggerTimes, triggerTimesThisDelta);
+    lastTriggerSignalVec = triggerSignalVec;
+    lastTriggerTimeBits = triggerTimeBits;
 
     // Check for infinite loop
     if (currentDeltaCount >= config.maxDeltaCycles) {
@@ -1279,13 +1332,23 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
 
     ProcessId id = proc->getId();
 
-    auto pendingSignalIt = pendingTriggerSignals.find(id);
-    if (pendingSignalIt != pendingTriggerSignals.end()) {
-      triggerSignalsThisDelta[id] = pendingSignalIt->second;
-      pendingTriggerSignals.erase(pendingSignalIt);
+    if (id < pendingTriggerSignalVec.size() &&
+        pendingTriggerSignalVec[id] != kNoTriggerSignal) {
+      if (id >= triggerSignalVec.size())
+        triggerSignalVec.resize(static_cast<size_t>(id) + 1, kNoTriggerSignal);
+      if (triggerSignalVec[id] == kNoTriggerSignal)
+        triggerSignalTouched.push_back(id);
+      triggerSignalVec[id] = pendingTriggerSignalVec[id];
+      pendingTriggerSignalVec[id] = kNoTriggerSignal;
     }
-    if (pendingTriggerTimes.erase(id))
-      triggerTimesThisDelta.insert(id);
+    if (id < pendingTriggerTimeBits.size() && pendingTriggerTimeBits.test(id)) {
+      if (id >= triggerTimeBits.size())
+        triggerTimeBits.resize(static_cast<size_t>(id) + 1, false);
+      if (!triggerTimeBits.test(id))
+        triggerTimeTouched.push_back(id);
+      triggerTimeBits.set(id);
+      pendingTriggerTimeBits.reset(id);
+    }
 
     LLVM_DEBUG(llvm::dbgs() << "Executing process " << id << " ('"
                             << proc->getName() << "') in region "
@@ -1650,12 +1713,14 @@ void ProcessScheduler::reset() {
   lastDeltaSignals.clear();
   processesExecutedThisDelta.clear();
   lastDeltaProcesses.clear();
-  pendingTriggerSignals.clear();
-  pendingTriggerTimes.clear();
-  triggerSignalsThisDelta.clear();
-  lastDeltaTriggerSignals.clear();
-  triggerTimesThisDelta.clear();
-  lastDeltaTriggerTimes.clear();
+  pendingTriggerSignalVec.clear();
+  pendingTriggerTimeBits.clear();
+  triggerSignalVec.clear();
+  lastTriggerSignalVec.clear();
+  triggerTimeBits.clear();
+  lastTriggerTimeBits.clear();
+  triggerSignalTouched.clear();
+  triggerTimeTouched.clear();
 
   LLVM_DEBUG(llvm::dbgs() << "ProcessScheduler reset\n");
 }

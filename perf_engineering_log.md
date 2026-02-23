@@ -2117,7 +2117,39 @@ The bytecode path helps RTL-heavy designs, not UVM-heavy workloads.
 4. **Op dispatch** — Linear if-else chain with dyn_cast<> (not switch/computed goto)
 
 **Next Steps:**
-1. **E6 sensitivity caching** — #1 priority, 10.61% of total time
-2. Reduce per-op overhead in interpretFuncBody (remove unnecessary checks in release builds)
-3. Consider computed goto or typeID-based dispatch for interpretOperation
-4. Find RTL-heavy benchmark to measure bytecode speedup
+1. ~~**E6 sensitivity caching** — #1 priority, 10.61% of total time~~ DONE (`376239270`)
+2. ~~Reduce per-op overhead in interpretFuncBody~~ DONE (`75f0f869e`)
+3. ~~UVM func.call interception caching~~ DONE (`75f0f869e`)
+4. Replace processStates std::map → flat vector (est. -3% total)
+5. Replace remaining ProcessId/SignalId DenseMaps → flat vectors (est. -2.5%)
+6. Consider computed goto or typeID-based dispatch for interpretOperation
+7. AOT compilation for UVM Coroutine processes (the 1000x path)
+
+---
+
+## E6 Sensitivity Caching (Feb 23, 2026)
+- Committed: `376239270`
+- Eliminated #1 profiling hotspot (10.61% — memmove from SensitivityEntry copy)
+- Added `sensitivityCached` flag to Process, skip redundant SmallVector copies in resuspendProcessFast()
+- 531/537 tests pass, no regressions
+
+## Per-Op Overhead Gating + UVM Interception Caching (Feb 23, 2026)
+- Committed: `75f0f869e`
+- **Per-op overhead**: Gated step counting, memory sampling, step limiting behind
+  `LLVM_UNLIKELY(needsDetailedTracking)` in both interpretFuncBody and interpretLLVMFuncBody.
+  Hoisted `getEffectiveMaxProcessSteps()` above loop (called once instead of per-op).
+  Fast path has zero overhead — only periodic abort check every 16K ops.
+- **UVM interception cache**: Added `funcCallCache` (DenseMap<Operation*, FuncCallCacheEntry>)
+  to cache UVM interception decisions. After first call to each func.call site, subsequent
+  calls skip all ~80 string comparisons. Added `interpretFuncCallCachedPath()` fast-path
+  and `funcBodyNoFastPathSet` for handleUvmFuncBodyFastPath results.
+- Estimated combined savings: 5-10% on UVM simulation runtime
+
+### Profiling-Identified Remaining Targets
+| Target | % Time | Proposed Fix |
+|--------|--------|-------------|
+| processStates std::map | ~3% | Flat vector indexed by ProcessId |
+| ProcessId/SignalId DenseMaps | ~2.5% | Flat vectors |
+| std::function Event construction | ~2% | Function pointer + void* |
+| getProcess not inlined | ~1.5% | Inline or use getProcessDirect |
+| executeProcess redundant lookups | ~1.5% | Cache on Process object |

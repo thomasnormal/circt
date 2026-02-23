@@ -2474,6 +2474,19 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
        << " negative_hits=" << funcLookupCacheNegativeHits << "\n";
   }
 
+  // Interception caching stats.
+  if (profileSummaryAtExitEnabled &&
+      (funcCallCacheHits || funcCallCacheMisses)) {
+    os << "[circt-sim] func.call interception cache: entries="
+       << funcCallCache.size() << " hits=" << funcCallCacheHits
+       << " misses=" << funcCallCacheMisses << "\n";
+  }
+  if (profileSummaryAtExitEnabled && funcBodyFastPathCacheSkips) {
+    os << "[circt-sim] func body fast-path negative cache: entries="
+       << funcBodyNoFastPathSet.size()
+       << " skips=" << funcBodyFastPathCacheSkips << "\n";
+  }
+
   // Analysis port terminal cache stats.
   if (profileSummaryAtExitEnabled &&
       (analysisPortTerminalCacheHits || analysisPortTerminalCacheMisses ||

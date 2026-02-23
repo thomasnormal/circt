@@ -61,6 +61,7 @@ unsigned g_lastFuncProcId = 0;
 #include <cstring>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <sstream>
 
@@ -6034,6 +6035,60 @@ void LLHDProcessInterpreter::executeClockedAssertion(
   }
 }
 
+size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
+  size_t finalFailures = 0;
+  for (auto &entry : clockedAssertionStates) {
+    auto assertOp = cast<verif::ClockedAssertOp>(entry.first);
+    ClockedAssertionState &state = entry.second;
+    ScopedInstanceContext instScope(*this, state.instanceId);
+    ScopedInputValueMap inputScope(*this, state.inputMap);
+
+    bool unresolvedStrongEventually = false;
+    llvm::SmallVector<Value, 16> worklist{assertOp.getProperty()};
+    while (!worklist.empty() && !unresolvedStrongEventually) {
+      Value cur = worklist.pop_back_val();
+      if (!cur)
+        continue;
+      Operation *def = cur.getDefiningOp();
+      if (!def)
+        continue;
+      if (auto clockOp = dyn_cast<ltl::ClockOp>(def)) {
+        worklist.push_back(clockOp.getInput());
+        continue;
+      }
+      if (auto eventuallyOp = dyn_cast<ltl::EventuallyOp>(def)) {
+        if (eventuallyOp->hasAttr("ltl.weak"))
+          continue;
+        auto trackerIt = state.eventuallyTrackers.find(def);
+        if (trackerIt == state.eventuallyTrackers.end())
+          continue;
+        const auto &tracker = trackerIt->second;
+        if (tracker.trailingUnsatisfiedSamples > 0 &&
+            !tracker.trailingHasUnknown)
+          unresolvedStrongEventually = true;
+        continue;
+      }
+      for (Value operand : def->getOperands())
+        worklist.push_back(operand);
+    }
+
+    if (!unresolvedStrongEventually)
+      continue;
+
+    if (state.assertionSignalId != 0)
+      scheduler.updateSignal(state.assertionSignalId, SignalValue(0, 1));
+
+    ++clockedAssertionFailures;
+    ++finalFailures;
+    std::string label;
+    if (auto labelAttr = assertOp.getLabelAttr())
+      label = labelAttr.getValue().str();
+    maybeTraceSvaAssertionFailed(label, scheduler.getCurrentTime().realTime,
+                                 assertOp.getLoc());
+  }
+  return finalFailures;
+}
+
 LLHDProcessInterpreter::ClockedAssertionState::LTLTruth
 LLHDProcessInterpreter::evaluateLTLProperty(
     mlir::Value val, ClockedAssertionState &state) {
@@ -6067,6 +6122,73 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     if (lhs == LTLTruth::Unknown || rhs == LTLTruth::Unknown)
       return LTLTruth::Unknown;
     return LTLTruth::False;
+  };
+  std::function<LTLTruth(Value)> evaluateSequenceStart =
+      [&](Value seq) -> LTLTruth {
+    if (!seq)
+      return LTLTruth::Unknown;
+    auto *seqOp = seq.getDefiningOp();
+    if (!seqOp)
+      return evaluateLTLProperty(seq, state);
+
+    if (auto clockOp = dyn_cast<ltl::ClockOp>(seqOp))
+      return evaluateSequenceStart(clockOp.getInput());
+    if (auto firstMatchOp = dyn_cast<ltl::FirstMatchOp>(seqOp))
+      return evaluateSequenceStart(firstMatchOp.getInput());
+    if (auto concatOp = dyn_cast<ltl::ConcatOp>(seqOp)) {
+      if (concatOp.getInputs().empty())
+        return LTLTruth::True;
+      return evaluateSequenceStart(concatOp.getInputs().front());
+    }
+    if (auto delayOp = dyn_cast<ltl::DelayOp>(seqOp)) {
+      if (delayOp.getDelay() == 0)
+        return evaluateSequenceStart(delayOp.getInput());
+      return LTLTruth::Unknown;
+    }
+    if (auto orOp = dyn_cast<ltl::OrOp>(seqOp)) {
+      LTLTruth result = LTLTruth::False;
+      for (Value input : orOp.getInputs()) {
+        result = truthOr(result, evaluateSequenceStart(input));
+        if (result == LTLTruth::True)
+          return result;
+      }
+      return result;
+    }
+    if (auto andOp = dyn_cast<ltl::AndOp>(seqOp)) {
+      LTLTruth result = LTLTruth::True;
+      for (Value input : andOp.getInputs()) {
+        result = truthAnd(result, evaluateSequenceStart(input));
+        if (result == LTLTruth::False)
+          return result;
+      }
+      return result;
+    }
+    if (auto intersectOp = dyn_cast<ltl::IntersectOp>(seqOp)) {
+      LTLTruth result = LTLTruth::True;
+      for (Value input : intersectOp.getInputs()) {
+        result = truthAnd(result, evaluateSequenceStart(input));
+        if (result == LTLTruth::False)
+          return result;
+      }
+      return result;
+    }
+    if (auto repeatOp = dyn_cast<ltl::RepeatOp>(seqOp)) {
+      if (repeatOp.getBase() == 0)
+        return LTLTruth::True;
+      return evaluateSequenceStart(repeatOp.getInput());
+    }
+    if (auto gotoRepeatOp = dyn_cast<ltl::GoToRepeatOp>(seqOp)) {
+      if (gotoRepeatOp.getBase() == 0)
+        return LTLTruth::True;
+      return evaluateSequenceStart(gotoRepeatOp.getInput());
+    }
+    if (auto nonConsecutiveOp = dyn_cast<ltl::NonConsecutiveRepeatOp>(seqOp)) {
+      if (nonConsecutiveOp.getBase() == 0)
+        return LTLTruth::True;
+      return evaluateSequenceStart(nonConsecutiveOp.getInput());
+    }
+
+    return evaluateLTLProperty(seq, state);
   };
 
   auto *op = val.getDefiningOp();
@@ -6136,7 +6258,18 @@ LLHDProcessInterpreter::evaluateLTLProperty(
   // ltl.eventually — unresolved future obligations are unknown-pending.
   // If the operand matches now, eventually is true now.
   if (auto eventuallyOp = dyn_cast<ltl::EventuallyOp>(op)) {
+    if (eventuallyOp->hasAttr("ltl.weak"))
+      return LTLTruth::True;
     LTLTruth input = evaluateLTLProperty(eventuallyOp.getInput(), state);
+    auto &tracker = state.eventuallyTrackers[op];
+    if (input == LTLTruth::True) {
+      tracker.trailingUnsatisfiedSamples = 0;
+      tracker.trailingHasUnknown = false;
+    } else {
+      ++tracker.trailingUnsatisfiedSamples;
+      if (input == LTLTruth::Unknown)
+        tracker.trailingHasUnknown = true;
+    }
     if (input == LTLTruth::True)
       return LTLTruth::True;
     return LTLTruth::Unknown;
@@ -6193,11 +6326,11 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     return evaluateLTLProperty(matchedOp.getInput(), state);
 
   // ltl.triggered — true when the wrapped sequence started in the previous
-  // sampled cycle. Approximate using one-sample history of the wrapped truth.
+  // sampled cycle.
   if (auto triggeredOp = dyn_cast<ltl::TriggeredOp>(op)) {
-    LTLTruth current = evaluateLTLProperty(triggeredOp.getInput(), state);
+    LTLTruth startedNow = evaluateSequenceStart(triggeredOp.getInput());
     auto &history = state.temporalHistory[op];
-    history.push_back(current);
+    history.push_back(startedNow);
     while (history.size() > 3)
       history.pop_front();
     if (history.size() < 2)
@@ -6242,24 +6375,51 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     return truthOr(truthNot(anteDelayed), consqVal);
   }
 
-  // ltl.delay — for exact delays (length=0), monitor obligations using sampled
-  // history. Other delay ranges require future-match window tracking; keep
-  // those pending for now.
+  // ltl.delay — evaluate finite delay windows using sampled history.
+  // For unbounded windows, keep the result pending unless a matured sample
+  // has already satisfied the delayed input.
   if (auto delayOp = dyn_cast<ltl::DelayOp>(op)) {
     LTLTruth input = evaluateLTLProperty(delayOp.getInput(), state);
     auto length = delayOp.getLength();
     uint64_t delay = delayOp.getDelay();
-    if (!length || *length != 0)
-      return LTLTruth::Unknown;
 
     auto &history = state.temporalHistory[op];
     history.push_back(input);
-    while (history.size() > delay + 2)
+
+    uint64_t maxOffset = delay;
+    if (length) {
+      if (*length > std::numeric_limits<uint64_t>::max() - delay)
+        return LTLTruth::Unknown;
+      maxOffset = delay + *length;
+    }
+
+    size_t historyLimit = std::numeric_limits<size_t>::max();
+    if (maxOffset < static_cast<uint64_t>(std::numeric_limits<size_t>::max()) -
+                        static_cast<uint64_t>(2))
+      historyLimit = static_cast<size_t>(maxOffset + 2);
+    while (history.size() > historyLimit)
       history.pop_front();
 
-    if (history.size() <= delay)
+    auto getSample = [&](uint64_t offset) -> LTLTruth {
+      if (history.size() <= offset)
+        return LTLTruth::Unknown;
+      return history[history.size() - 1 - offset];
+    };
+
+    if (!length) {
+      LTLTruth matured = getSample(delay);
+      if (matured == LTLTruth::True)
+        return LTLTruth::True;
       return LTLTruth::Unknown;
-    return history[history.size() - 1 - delay];
+    }
+
+    LTLTruth result = LTLTruth::False;
+    for (uint64_t offset = delay; offset <= maxOffset; ++offset) {
+      result = truthOr(result, getSample(offset));
+      if (result == LTLTruth::True)
+        return result;
+    }
+    return result;
   }
 
   // ltl.concat — check all inputs hold (conservative approximation).
