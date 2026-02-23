@@ -2045,6 +2045,45 @@ Per-call-site cache for `call_indirect` dispatch. Skips 28+ UVM interceptor cont
 ### Key Insight: Path to 1000x
 - 29x per-operation interpreter overhead (3,755 vs 128 instructions per register update)
 - AOT callback compilation doesn't help UVM-heavy workloads (all Coroutine)
-- Bytecode compiler has 0% compile rate on real SV (missing hw.struct_extract/create)
-- Next step: Add FourState struct support to bytecode compiler to unlock real SV compilation
+- Bytecode compiler had 0% compile rate on real SV (missing hw.struct_extract/create)
 - Alternative: JIT-compile hot interpreter functions for Coroutine processes
+
+### Bytecode FourState Support (Feb 23, 2026)
+
+**Changes implemented:**
+- Added `hw.struct_extract` → `StructExtract` micro-op (shift + mask)
+- Added `hw.struct_create` → `StructCreate2` micro-op (2-field pack, FourState pattern)
+- Added compiler cases for `comb.sub`, `comb.mul`, `comb.shl`, `comb.shru`
+- Increased register limit from 128 to 255 (uint8_t max)
+- Wired `printBytecodeStats()` into `--sim-stats` output
+
+**Compile Rate Results (across .mlir test suite):**
+- Simple RTL: 1/1 (100%) for self-driven-sensitivity-filter, self-driven-transitive-filter
+- Mixed: 1/2 for llhd-wait-observed-sensitivity-cache, self-driven-module-drive-filter
+- Mixed: 1/3 for apb-clock-reset, hierarchical-instance, process-cache-skip
+- Pipeline-bench: 0/10 (register pressure + unsupported testbench ops)
+- Most tests: 0/N (testbench processes use sim.proc.print, llvm.alloca, func.call)
+
+**Top Blocking Ops (across all .mlir tests):**
+| Op | Fallbacks | Category |
+|----|-----------|----------|
+| (too-many-regs) | 39 | Register pressure (uint8_t limit = 255) |
+| llvm.alloca | 33 | Memory allocation |
+| sim.proc.print | 32 | Testbench I/O |
+| llvm.call | 32 | Function calls |
+| sim.fmt.dec | 29 | Display formatting |
+| sim.terminate | 25 | Simulation control |
+| func.call | 21 | Function calls |
+| llvm.inttoptr | 19 | Pointer ops |
+| llvm.getelementptr | 18 | Pointer ops |
+| moore.wait_event | 6 | Dynamic wait |
+
+**Key Insight:** Testbench processes inherently use ops the bytecode compiler can't
+support (print, malloc, function calls). RTL processes ARE compiling successfully.
+The bytecode path helps RTL-heavy designs, not UVM-heavy workloads.
+
+**Next Steps:**
+1. Fix cf.cond_br phi copies (register aliasing bug) for more complex RTL
+2. Consider uint16_t register widening for processes >255 SSA values
+3. Find RTL-heavy benchmark to measure actual bytecode speedup
+4. E6 sensitivity caching for Coroutine process speedup

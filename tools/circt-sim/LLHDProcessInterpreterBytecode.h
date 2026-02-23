@@ -56,6 +56,10 @@ enum class MicroOpKind : uint8_t {
   Zext,   // destReg = regs[srcReg1] (already zero-extended as uint64)
   Sext,   // destReg = sign-extend regs[srcReg1] from srcWidth to dstWidth
   Mux,    // destReg = regs[srcReg1] ? regs[srcReg2] : regs[srcReg3]
+
+  // Struct operations
+  StructExtract,  // destReg = (regs[srcReg1] >> immediate) & ((1<<width)-1)
+  StructCreate2,  // destReg = (regs[srcReg1] << width) | regs[srcReg2]
 };
 
 struct MicroOp {
