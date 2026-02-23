@@ -3695,8 +3695,20 @@ Value Context::convertAssertionCallExpression(
     bool forceClockedHelperForUnclockedGclk =
         isGlobalClockVariant && clockingCtrl && inAssertionExpr &&
         !currentAssertionClock && !currentAssertionTimingControl;
+    // In clocked assertion contexts, disable iff is already modeled on the
+    // enclosing property. Avoid forcing helper state for disable-only cases to
+    // prevent sampled-value skew relative to direct moore.past lowering.
+    bool hasScopeDefaultClock = false;
+    if (currentScope)
+      hasScopeDefaultClock = compilation.getDefaultClocking(*currentScope) != nullptr;
+    bool disableOnlyClockedAssertionContext =
+        inAssertionExpr && !enableExpr && !hasClockingArg &&
+        !forceClockedHelperForUnclockedGclk &&
+        (currentAssertionClock || currentAssertionTimingControl ||
+         hasScopeDefaultClock);
     bool needsClockedHelper =
-        enableExpr || !disableExprs.empty() ||
+        enableExpr ||
+        (!disableExprs.empty() && !disableOnlyClockedAssertionContext) ||
         (hasClockingArg && !explicitClockMatchesAssertionClock) ||
         forceClockedHelperForUnclockedGclk;
     if (inAssertionExpr && needsClockedHelper) {
@@ -3915,8 +3927,20 @@ Value Context::convertAssertionCallExpression(
       bool forceClockedHelperForUnclockedGclk =
           isGlobalClockVariant && clockingCtrl && !currentAssertionClock &&
           !currentAssertionTimingControl;
+      // In clocked assertion contexts, disable iff is handled by the enclosing
+      // property and should not by itself force sampled helper state.
+      bool hasScopeDefaultClock = false;
+      if (currentScope)
+        hasScopeDefaultClock =
+            compilation.getDefaultClocking(*currentScope) != nullptr;
+      bool disableOnlyClockedAssertionContext =
+          !enableExpr && !hasClockingArg &&
+          !forceClockedHelperForUnclockedGclk &&
+          (currentAssertionClock || currentAssertionTimingControl ||
+           hasScopeDefaultClock);
       bool needsClockedHelper =
-          enableExpr || !disableExprs.empty() ||
+          enableExpr ||
+          (!disableExprs.empty() && !disableOnlyClockedAssertionContext) ||
           (hasClockingArg && !explicitClockMatchesAssertionClock) ||
           forceClockedHelperForUnclockedGclk;
       if (needsClockedHelper) {
@@ -3935,7 +3959,16 @@ Value Context::convertAssertionCallExpression(
         return sampled;
       }
     }
-    if (enableExpr || !disableExprs.empty()) {
+    bool hasScopeDefaultClock = false;
+    if (currentScope)
+      hasScopeDefaultClock =
+          compilation.getDefaultClocking(*currentScope) != nullptr;
+    bool disableOnlyClockedAssertionContext =
+        inAssertionExpr && !enableExpr && !hasClockingArg &&
+        (currentAssertionClock || currentAssertionTimingControl ||
+         hasScopeDefaultClock);
+    if (enableExpr ||
+        (!disableExprs.empty() && !disableOnlyClockedAssertionContext)) {
       auto sampled = lowerPastWithSamplingControl(
           *this, *args[0], /*timingCtrl=*/nullptr, delay, enableExpr,
           disableExprs, loc);

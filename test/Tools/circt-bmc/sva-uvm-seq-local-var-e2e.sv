@@ -1,6 +1,6 @@
-// XFAIL: *
 // RUN: circt-verilog --uvm-path=%S/../../../lib/Runtime/uvm-core/src --ir-hw %s | \
-// RUN:   circt-bmc --emit-mlir -b 5 --module=sva_uvm_seq_local_var - | \
+// RUN:   circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers \
+// RUN:     --strip-llhd-processes --lower-to-bmc="top-module=sva_uvm_seq_local_var bound=5" | \
 // RUN:   FileCheck %s --check-prefix=CHECK-BMC
 // REQUIRES: slang
 

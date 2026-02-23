@@ -41,7 +41,56 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
-## Latest SVA Closure Slice (February 23, 2026, Yosys parity de-XFAIL for `counter`/`extnets`)
+## Latest SVA Closure Slice (February 23, 2026, sampled-value clocking + past clock recovery + formal stability)
+
+- importer sampled-value helper tightening in clocked assertion contexts:
+  - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+  - `disable iff`-only clocked contexts now avoid forcing helper-state sampled
+    lowering for sampled functions and `$past`; this prevents avoidable
+    sampled-value skew while keeping explicit-clock and enable-controlled helper
+    paths intact.
+- `MooreToCore` robustness for complex clocked sampled expressions:
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+  - `PastOpConversion` now traces through `moore.yield` / `scf.yield` and can
+    recover a unique module clock fallback when direct use-tracing is
+    insufficient.
+  - assertion-context display/strobe/monitor-family builtins are dropped
+    outside procedural regions to keep formal lowering structurally legal.
+  - 4-state variable init now uses written-ref-aware defaults:
+    - written refs initialize unknown bits to `0`
+    - unwritten refs preserve X-default unknown bits.
+- regression/test updates:
+  - added:
+    - `test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv`
+    - `test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv`
+    - `test/Tools/circt-bmc/sva-written-uninit-reg-known-inputs-parity.sv`
+  - refreshed UVM BMC e2e lanes (remove stale `XFAIL`, stable pre-solver
+    lowering pipeline):
+    - `test/Tools/circt-bmc/sva-uvm-assume-e2e.sv`
+    - `test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv`
+    - `test/Tools/circt-bmc/sva-uvm-expect-e2e.sv`
+    - `test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv`
+    - `test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv`
+    - `test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv`
+    - `test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
+- validation snapshot:
+  - build:
+    - `ninja -C build-test circt-verilog circt-opt circt-bmc`
+  - focused lit:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-assume-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-expect-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
+    - result: `8/8` pass.
+  - focused direct checks:
+    - `build-test/bin/circt-verilog --no-uvm-auto-include test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-written-uninit-reg-known-inputs-parity.sv | build-test/bin/circt-bmc -b 6 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
+    - result: `BMC_RESULT=UNSAT`.
+  - regular formal loops:
+    - `TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0`.
+    - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-matrix-20260223-024709`
+      - `std_ovl/BMC PASS 110/110`
+      - `std_ovl/BMC_SEMANTIC PASS 110/110`.
+
+## Previous SVA Closure Slice (February 23, 2026, Yosys parity de-XFAIL for `counter`/`extnets`)
 
 - removed stale `XFAIL` markers from the known-input Yosys parity lock tests:
   - `test/Tools/circt-bmc/sva-yosys-counter-known-inputs-parity.sv`

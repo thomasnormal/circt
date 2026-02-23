@@ -17,6 +17,7 @@
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Dialect/Sim/SimOps.h"
+#include "circt/Dialect/SV/SVOps.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/ConversionPatternSet.h"
 #include "circt/Support/FVInt.h"
@@ -6473,18 +6474,57 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
     if (!init) {
       auto elementType = refType.getNestedType();
       if (isFourStateStructType(elementType)) {
+        auto hasWriteUse = [&](Value ref) -> bool {
+          SmallVector<Value, 8> worklist{ref};
+          llvm::SmallDenseSet<Value, 16> visitedRefs;
+          llvm::SmallDenseSet<Operation *, 32> visitedOps;
+
+          while (!worklist.empty()) {
+            Value cur = worklist.pop_back_val();
+            if (!visitedRefs.insert(cur).second)
+              continue;
+            for (OpOperand &use : cur.getUses()) {
+              auto *user = use.getOwner();
+              if (!visitedOps.insert(user).second)
+                continue;
+
+              if (isa<BlockingAssignOp, NonBlockingAssignOp,
+                      DelayedNonBlockingAssignOp, ContinuousAssignOp,
+                      DelayedContinuousAssignOp, ForceAssignOp,
+                      ReleaseAssignOp>(user) &&
+                  use.getOperandNumber() == 0)
+                return true;
+
+              // Track ref-typed aliases to find indirect writes.
+              for (Value result : user->getResults())
+                if (isa<moore::RefType>(result.getType()))
+                  worklist.push_back(result);
+            }
+          }
+          return false;
+        };
+
         auto structTy = cast<hw::StructType>(elementType);
         auto valueTy = dyn_cast<IntegerType>(structTy.getFieldType("value"));
         auto unknownTy =
             dyn_cast<IntegerType>(structTy.getFieldType("unknown"));
         if (!valueTy || !unknownTy || valueTy.getWidth() != unknownTy.getWidth())
           return failure();
-        auto valueZero = hw::ConstantOp::create(
-            rewriter, loc, IntegerAttr::get(valueTy, 0));
-        auto unknownOnes = hw::ConstantOp::create(
-            rewriter, loc, IntegerAttr::get(unknownTy, APInt::getAllOnes(
-                                                           unknownTy.getWidth())));
-        init = createFourStateStruct(rewriter, loc, valueZero, unknownOnes);
+
+        auto valueZero =
+            hw::ConstantOp::create(rewriter, loc, IntegerAttr::get(valueTy, 0));
+        if (hasWriteUse(op.getResult())) {
+          // Written state should not default to permanent X. Keep prior behavior
+          // for stateful signals while preserving X defaults for unwritten locals.
+          auto unknownZero = hw::ConstantOp::create(
+              rewriter, loc, IntegerAttr::get(unknownTy, 0));
+          init = createFourStateStruct(rewriter, loc, valueZero, unknownZero);
+        } else {
+          auto unknownOnes = hw::ConstantOp::create(
+              rewriter, loc, IntegerAttr::get(unknownTy, APInt::getAllOnes(
+                                                             unknownTy.getWidth())));
+          init = createFourStateStruct(rewriter, loc, valueZero, unknownOnes);
+        }
       } else {
         init = createZeroValue(elementType, loc, rewriter);
       }
@@ -13730,6 +13770,51 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
   using OpConversionPattern::OpConversionPattern;
 
   static std::optional<std::pair<Value, verif::ClockEdge>>
+  findUniqueClockInModule(Operation *anchor) {
+    Operation *scope = anchor->getParentWithTrait<OpTrait::IsIsolatedFromAbove>();
+    if (!scope)
+      return std::nullopt;
+
+    SmallVector<std::pair<Value, verif::ClockEdge>, 4> candidates;
+    auto addCandidate = [&](Value clock, verif::ClockEdge edge) {
+      clock = stripUnrealizedCast(clock);
+      for (auto &candidate : candidates)
+        if (candidate.first == clock && candidate.second == edge)
+          return;
+      candidates.emplace_back(clock, edge);
+    };
+
+    scope->walk([&](ltl::ClockOp clocked) {
+      verif::ClockEdge edge = verif::ClockEdge::Both;
+      switch (clocked.getEdge()) {
+      case ltl::ClockEdge::Pos:
+        edge = verif::ClockEdge::Pos;
+        break;
+      case ltl::ClockEdge::Neg:
+        edge = verif::ClockEdge::Neg;
+        break;
+      case ltl::ClockEdge::Both:
+        edge = verif::ClockEdge::Both;
+        break;
+      }
+      addCandidate(clocked.getClock(), edge);
+    });
+    scope->walk([&](verif::ClockedAssertOp clocked) {
+      addCandidate(clocked.getClock(), clocked.getEdge());
+    });
+    scope->walk([&](verif::ClockedAssumeOp clocked) {
+      addCandidate(clocked.getClock(), clocked.getEdge());
+    });
+    scope->walk([&](verif::ClockedCoverOp clocked) {
+      addCandidate(clocked.getClock(), clocked.getEdge());
+    });
+
+    if (candidates.size() == 1)
+      return candidates.front();
+    return std::nullopt;
+  }
+
+  static std::optional<std::pair<Value, verif::ClockEdge>>
   findClockFromUsers(Value value) {
     SmallVector<Value, 8> worklist{value};
     llvm::DenseSet<Operation *> visited;
@@ -13740,6 +13825,16 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
         Operation *user = use.getOwner();
         if (!visited.insert(user).second)
           continue;
+        // Past values frequently flow through `moore.yield` in conditional
+        // branches before reaching a clocked assertion. Recover that parent
+        // expression result so clock discovery can continue.
+        if (isa<moore::YieldOp, scf::YieldOp>(user)) {
+          Operation *parentExpr = user->getParentOp();
+          unsigned operandIdx = use.getOperandNumber();
+          if (parentExpr && operandIdx < parentExpr->getNumResults())
+            worklist.push_back(parentExpr->getResult(operandIdx));
+          continue;
+        }
         if (auto clocked = dyn_cast<ltl::ClockOp>(user)) {
           verif::ClockEdge edge = verif::ClockEdge::Both;
           switch (clocked.getEdge()) {
@@ -13779,7 +13874,10 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
       rewriter.replaceOp(op, input);
       return success();
     }
-    if (auto clockInfo = findClockFromUsers(op.getResult())) {
+    auto clockInfo = findClockFromUsers(op.getResult());
+    if (!clockInfo)
+      clockInfo = findUniqueClockInModule(op);
+    if (clockInfo) {
       Value clockSignal = clockInfo->first;
       auto edge = clockInfo->second;
       if (edge == verif::ClockEdge::Neg) {
@@ -14074,9 +14172,26 @@ struct FormatTimeOpConversion : public OpConversionPattern<FormatTimeOp> {
 struct DisplayBIOpConversion : public OpConversionPattern<DisplayBIOp> {
   using OpConversionPattern::OpConversionPattern;
 
+  static bool canLowerToProceduralPrint(Operation *op) {
+    auto *parentOp = op->getParentOp();
+    if (!parentOp)
+      return false;
+    if (isa_and_nonnull<hw::HWDialect>(parentOp->getDialect()))
+      return isa<hw::TriggeredOp>(parentOp);
+    if (isa_and_nonnull<sv::SVDialect>(parentOp->getDialect()))
+      return parentOp->hasTrait<sv::ProceduralRegion>();
+    return true;
+  }
+
   LogicalResult
   matchAndRewrite(DisplayBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // Sequence match-item side effects may surface in non-procedural assertion
+    // contexts during formal lowering. Drop display side effects there.
+    if (!canLowerToProceduralPrint(op)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
     auto newOp = rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
         op, adaptor.getMessage());
     // Propagate VCD dump attributes for $dumpfile/$dumpvars support.
@@ -14100,6 +14215,10 @@ struct StrobeBIOpConversion : public OpConversionPattern<StrobeBIOp> {
   LogicalResult
   matchAndRewrite(StrobeBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!DisplayBIOpConversion::canLowerToProceduralPrint(op)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
     rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
         op, adaptor.getMessage());
     return success();
@@ -14114,6 +14233,10 @@ struct FStrobeBIOpConversion : public OpConversionPattern<FStrobeBIOp> {
   LogicalResult
   matchAndRewrite(FStrobeBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!DisplayBIOpConversion::canLowerToProceduralPrint(op)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
     // For now, just print the message (ignore file descriptor)
     rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
         op, adaptor.getMessage());
@@ -14129,6 +14252,10 @@ struct MonitorBIOpConversion : public OpConversionPattern<MonitorBIOp> {
   LogicalResult
   matchAndRewrite(MonitorBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!DisplayBIOpConversion::canLowerToProceduralPrint(op)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
     auto monitorPrint =
         sim::PrintFormattedProcOp::create(rewriter, op.getLoc(),
                                           adaptor.getMessage());
@@ -14147,6 +14274,10 @@ struct FMonitorBIOpConversion : public OpConversionPattern<FMonitorBIOp> {
   LogicalResult
   matchAndRewrite(FMonitorBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!DisplayBIOpConversion::canLowerToProceduralPrint(op)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
     // For now, just print the message (ignore file descriptor)
     rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
         op, adaptor.getMessage());
@@ -14162,6 +14293,10 @@ struct MonitorOnBIOpConversion : public OpConversionPattern<MonitorOnBIOp> {
   LogicalResult
   matchAndRewrite(MonitorOnBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!DisplayBIOpConversion::canLowerToProceduralPrint(op)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
     auto marker = sim::FormatLiteralOp::create(rewriter, op.getLoc(),
                                                "__circt_monitor_on__");
     auto monitorOn =
@@ -14180,6 +14315,10 @@ struct MonitorOffBIOpConversion : public OpConversionPattern<MonitorOffBIOp> {
   LogicalResult
   matchAndRewrite(MonitorOffBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!DisplayBIOpConversion::canLowerToProceduralPrint(op)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
     auto marker = sim::FormatLiteralOp::create(rewriter, op.getLoc(),
                                                "__circt_monitor_off__");
     auto monitorOff =

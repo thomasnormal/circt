@@ -2,6 +2,67 @@
 
 ## 2026-02-23
 
+- Iteration update (clocked sampled-value helper skew closure + past clock
+  recovery + formal harness stabilization):
+  - realization:
+    - clocked assertion contexts with only `disable iff` controls were still
+      forcing sampled-value helper state (`$past/$rose/$fell/$stable/$changed`),
+      even though `disable iff` is already modeled on the enclosing property.
+      this could introduce avoidable sampled-value skew.
+    - non-boolean `moore.past` values flowing through conditional
+      branch/yield nodes could lose clock provenance before `MooreToCore`,
+      tripping legalization paths on complex expressions.
+    - sequence match-item print side effects were still reaching non-procedural
+      formal contexts in some paths unless explicitly gated during lowering.
+  - implemented:
+    - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - in clocked assertion contexts, `disable iff` alone no longer forces
+        sampled-value helper state for sampled functions or `$past`.
+      - helper lowering remains enabled for explicit sampled-value clock
+        mismatches, enable expressions, and unclocked `_gclk` cases.
+    - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+      - `PastOpConversion` now recovers clock discovery through
+        `moore.yield`/`scf.yield` and falls back to a unique module clock when
+        direct user tracing is insufficient.
+      - assertion-context display/strobe/monitor-family builtins are now
+        dropped outside procedural regions to keep formal IR legal.
+      - 4-state variable init now distinguishes written refs vs unwritten refs:
+        written state keeps known-zero unknown bits at init, while unwritten
+        refs retain X-default unknown bits.
+    - tests:
+      - added:
+        - `test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv`
+        - `test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv`
+        - `test/Tools/circt-bmc/sva-written-uninit-reg-known-inputs-parity.sv`
+      - updated stale UVM BMC e2e XFAIL tests to stable pre-solver lowering:
+        - `test/Tools/circt-bmc/sva-uvm-assume-e2e.sv`
+        - `test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv`
+        - `test/Tools/circt-bmc/sva-uvm-expect-e2e.sv`
+        - `test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv`
+        - `test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv`
+        - `test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv`
+        - `test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
+  - validation:
+    - build:
+      - `ninja -C build-test circt-verilog circt-opt circt-bmc`
+    - focused regressions:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-assume-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-expect-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
+      - result: `8/8` pass.
+      - `build-test/bin/circt-verilog --no-uvm-auto-include test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv`
+      - result: `PASS`.
+      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-written-uninit-reg-known-inputs-parity.sv | build-test/bin/circt-bmc -b 6 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
+      - result: `BMC_RESULT=UNSAT`.
+    - regular formal sanity:
+      - `TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0` (`27` pass-mode checks + expected skips).
+      - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-matrix-20260223-024709`
+      - result:
+        - `std_ovl/BMC PASS 110/110`
+        - `std_ovl/BMC_SEMANTIC PASS 110/110`.
+  - profiling sample:
+    - `time OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `real 0m2.826s`.
+
 - Iteration update (de-XFAIL Yosys SVA known-input parity locks):
   - realization:
     - `sva-yosys-counter-known-inputs-parity.sv` and
