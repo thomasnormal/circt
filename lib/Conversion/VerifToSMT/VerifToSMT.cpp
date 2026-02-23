@@ -8890,6 +8890,7 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
 
   SmallVector<LLVM::ConstantOp> llvmConstants;
   SmallVector<Operation *> llvmIntOps;
+  SmallVector<LLVM::ExtractValueOp> llvmExtractValues;
   SmallVector<LLVM::LoadOp> llvmLoads;
   DenseMap<SymbolRefAttr, bool> globalHasDirectStoreCache;
   bmcOp->walk(
@@ -8902,6 +8903,7 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
             LLVM::SExtOp>(op))
       llvmIntOps.push_back(op);
   });
+  bmcOp->walk([&](LLVM::ExtractValueOp op) { llvmExtractValues.push_back(op); });
   bmcOp->walk([&](LLVM::LoadOp op) { llvmLoads.push_back(op); });
 
   for (auto llvmConstant : llvmConstants) {
@@ -9074,6 +9076,67 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
 
     op->getResult(0).replaceAllUsesWith(replacement);
     op->erase();
+  }
+
+  for (auto extractValue : llvmExtractValues) {
+    if (!isSupportedSMTLIBScalarType(extractValue.getType()))
+      continue;
+    auto load = extractValue.getContainer().getDefiningOp<LLVM::LoadOp>();
+    if (!load)
+      continue;
+    auto loadAccess = resolveGlobalLoadAccess(load.getAddr());
+    if (!loadAccess)
+      continue;
+    auto addr = loadAccess->addrOf;
+    auto module = extractValue->getParentOfType<ModuleOp>();
+    if (!module)
+      continue;
+    auto global =
+        module.lookupSymbol<LLVM::GlobalOp>(addr.getGlobalNameAttr().getValue());
+    if (!global)
+      continue;
+    bool allowGlobalConstFold = global->hasAttr("constant");
+    if (!allowGlobalConstFold) {
+      // Non-constant globals are currently only legalized for direct
+      // addressof loads when no direct stores exist.
+      if (!loadAccess->geps.empty())
+        continue;
+      SymbolRefAttr globalName = addr.getGlobalNameAttr();
+      auto cached = globalHasDirectStoreCache.find(globalName);
+      bool hasDirectStore = false;
+      if (cached != globalHasDirectStoreCache.end()) {
+        hasDirectStore = cached->second;
+      } else {
+        module.walk([&](LLVM::StoreOp store) -> WalkResult {
+          auto storeAddr = store.getAddr().getDefiningOp<LLVM::AddressOfOp>();
+          if (!storeAddr || storeAddr.getGlobalNameAttr() != globalName)
+            return WalkResult::advance();
+          hasDirectStore = true;
+          return WalkResult::interrupt();
+        });
+        globalHasDirectStoreCache.try_emplace(globalName, hasDirectStore);
+      }
+      if (hasDirectStore)
+        continue;
+    }
+
+    SmallVector<int64_t> elementIndices(loadAccess->elementIndices.begin(),
+                                        loadAccess->elementIndices.end());
+    llvm::append_range(elementIndices, extractValue.getPosition());
+    auto typedAttr =
+        extractGlobalLoadConstant(global, elementIndices, extractValue.getType());
+    if (!typedAttr)
+      continue;
+    if ((*typedAttr).getType() != extractValue.getType())
+      return extractValue.emitOpError(
+          "cannot legalize llvm.extractvalue of scalar constant global with "
+          "mismatched result type for SMT-LIB export");
+
+    OpBuilder builder(extractValue);
+    auto arithConstant =
+        arith::ConstantOp::create(builder, extractValue.getLoc(), *typedAttr);
+    extractValue.replaceAllUsesWith(arithConstant.getResult());
+    extractValue.erase();
   }
 
   for (auto llvmLoad : llvmLoads) {
