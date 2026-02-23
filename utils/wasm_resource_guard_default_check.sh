@@ -82,9 +82,10 @@ if [[ -f "$VERILOG_JS" ]]; then
     exit 1
   fi
   echo "[wasm-rg-default] circt-verilog default resource guard"
+  verilog_mlir="$tmpdir/verilog.mlir"
   set +e
   cat "$SV_TEST_INPUT" | \
-    "$NODE_BIN" "$VERILOG_JS" --ir-llhd --single-unit --format=sv - \
+    "$NODE_BIN" "$VERILOG_JS" --no-uvm-auto-include --ir-llhd --single-unit --format=sv -o "$verilog_mlir" - \
     >"$tmpdir/verilog.out" 2>"$tmpdir/verilog.err"
   verilog_rc=$?
   set -e
@@ -93,7 +94,11 @@ if [[ -f "$VERILOG_JS" ]]; then
     cat "$tmpdir/verilog.err" >&2
     exit 1
   fi
-  if ! grep -q "hw.module" "$tmpdir/verilog.out"; then
+  if [[ ! -s "$verilog_mlir" ]]; then
+    echo "[wasm-rg-default] circt-verilog missing IR output file" >&2
+    exit 1
+  fi
+  if ! grep -q "hw.module" "$verilog_mlir"; then
     echo "[wasm-rg-default] circt-verilog missing IR output" >&2
     exit 1
   fi

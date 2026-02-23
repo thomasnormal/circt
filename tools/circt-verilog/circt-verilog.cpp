@@ -951,7 +951,15 @@ static LogicalResult execute(MLIRContext *context) {
 }
 
 int main(int argc, char **argv) {
+#if !defined(__EMSCRIPTEN__)
   llvm::InitLLVM y(argc, argv);
+#endif
+
+#if defined(__EMSCRIPTEN__)
+  // Wasm/browser integrations may invoke this entrypoint repeatedly in one
+  // loaded module instance. Reset parser state to avoid cross-run leakage.
+  cl::ResetAllOptionOccurrences();
+#endif
 
   // Set the bug report message to indicate users should file issues on
   // llvm/circt and not llvm/llvm-project.
@@ -971,9 +979,40 @@ int main(int argc, char **argv) {
   registerDefaultTimingManagerCLOptions();
   registerAsmPrinterCLOptions();
 
+#if defined(__EMSCRIPTEN__)
+  auto hasArg = [&](llvm::StringRef needle) {
+    for (int i = 1; i < argc; ++i)
+      if (argv[i] && llvm::StringRef(argv[i]) == needle)
+        return true;
+    return false;
+  };
+  const bool wantVersion = hasArg("--version");
+  const bool wantHelp = hasArg("--help") || hasArg("-help") || hasArg("-h");
+  const bool wantHelpHidden = hasArg("--help-hidden");
+  const bool wantHelpList = hasArg("--help-list");
+  const bool wantHelpListHidden = hasArg("--help-list-hidden");
+
+  // Handle help/version locally in wasm mode so these one-shot paths do not
+  // trigger a process-style exit in LLVM's option handlers.
+  if (wantVersion) {
+    cl::PrintVersionMessage();
+    llvm::outs().flush();
+    llvm::errs().flush();
+    return 0;
+  }
+  if (wantHelp || wantHelpHidden || wantHelpList || wantHelpListHidden) {
+    cl::PrintHelpMessage(/*Hidden=*/wantHelpHidden || wantHelpListHidden,
+                         /*Categorized=*/wantHelp || wantHelpHidden);
+    llvm::outs().flush();
+    llvm::errs().flush();
+    return 0;
+  }
+#endif
+
   // Parse pass names in main to ensure static initialization completed.
-  cl::ParseCommandLineOptions(argc, argv,
-                              "Verilog and SystemVerilog frontend\n");
+  if (!cl::ParseCommandLineOptions(argc, argv,
+                                   "Verilog and SystemVerilog frontend\n"))
+    return 1;
 
   // Set a default wall-clock timeout for circt-verilog. Compilation of even
   // very large SystemVerilog designs should complete well within 10 minutes;
@@ -1009,5 +1048,11 @@ int main(int argc, char **argv) {
   mlir::LLVM::registerInlinerInterface(registry);
 
   MLIRContext context(registry);
-  exit(failed(execute(&context)));
+  int rc = failed(execute(&context));
+#if defined(__EMSCRIPTEN__)
+  return rc;
+#else
+  // Native mode keeps fast process exit to avoid slow MLIR context teardown.
+  exit(rc);
+#endif
 }
