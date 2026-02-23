@@ -1688,3 +1688,39 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 - Current state:
   - mixed assert+cover SAT outcomes in sv-tests are now interpreted with
     assert/cover-aware semantics rather than assert-only heuristics.
+
+## Latest sv-tests mixed negative-case classification closure (2026-02-23)
+
+- Implemented:
+  - `utils/run_sv_tests_circt_bmc.sh`
+    - extended mixed assert+cover SAT disambiguation to simulation-negative
+      (`expect_bmc_violation=1`) flows.
+    - mixed SAT now always performs assert-only rerun; result mapping uses
+      mode-aware semantics:
+      - expected-violation mode:
+        - assert-only SAT => `PASS`
+        - assert-only UNSAT => `FAIL`
+      - non-negative mode:
+        - assert-only SAT => `FAIL`
+        - assert-only UNSAT => `PASS`
+    - mixed UNSAT now maps to `FAIL` in expected-violation mode.
+  - regression coverage:
+    - added
+      `test/Tools/run-sv-tests-bmc-mixed-assert-cover-violation-classification.test`.
+
+- Validation:
+  - pre-fix repro:
+    - mixed simulation-negative synthetic case with cover-only SAT
+    - result: `total=1 pass=1 fail=0` (incorrect).
+  - post-fix repro:
+    - result: `total=1 pass=0 fail=1` (correct).
+  - lit:
+    - `build-ot/bin/llvm-lit -sv -j 1 --filter 'run-sv-tests-bmc-mixed-assert-cover-(classification|violation-classification)' build-test/test`
+    - result: `2/2` pass.
+    - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-' build-test/test`
+    - result: `22 pass, 1 unsupported`.
+
+- Current state:
+  - mixed assert+cover classification now correctly distinguishes
+    cover-only SAT from assertion-violation SAT in both normal and
+    simulation-negative modes.
