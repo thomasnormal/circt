@@ -8935,7 +8935,49 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
   SmallVector<Operation *> llvmIntOps;
   SmallVector<LLVM::ExtractValueOp> llvmExtractValues;
   SmallVector<LLVM::LoadOp> llvmLoads;
-  DenseMap<SymbolRefAttr, bool> globalHasDirectStoreCache;
+  DenseMap<SymbolRefAttr, bool> globalHasStoreCache;
+  auto getRootGlobalName = [](Value value) -> std::optional<SymbolRefAttr> {
+    while (true) {
+      if (auto addrOf = value.getDefiningOp<LLVM::AddressOfOp>())
+        return addrOf.getGlobalNameAttr();
+      if (auto gep = value.getDefiningOp<LLVM::GEPOp>()) {
+        value = gep.getBase();
+        continue;
+      }
+      if (auto bitcast = value.getDefiningOp<LLVM::BitcastOp>()) {
+        value = bitcast.getArg();
+        continue;
+      }
+      if (auto addrCast = value.getDefiningOp<LLVM::AddrSpaceCastOp>()) {
+        value = addrCast.getArg();
+        continue;
+      }
+      if (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast->getNumOperands() != 1 || cast->getNumResults() != 1)
+          return std::nullopt;
+        value = cast.getOperand(0);
+        continue;
+      }
+      return std::nullopt;
+    }
+  };
+  auto hasAnyStoreToGlobal = [&](ModuleOp module,
+                                 SymbolRefAttr globalName) -> bool {
+    auto cached = globalHasStoreCache.find(globalName);
+    if (cached != globalHasStoreCache.end())
+      return cached->second;
+
+    bool hasStore = false;
+    module.walk([&](LLVM::StoreOp store) -> WalkResult {
+      auto rootName = getRootGlobalName(store.getAddr());
+      if (!rootName || *rootName != globalName)
+        return WalkResult::advance();
+      hasStore = true;
+      return WalkResult::interrupt();
+    });
+    globalHasStoreCache.try_emplace(globalName, hasStore);
+    return hasStore;
+  };
   bmcOp->walk(
       [&](LLVM::ConstantOp op) { llvmConstants.push_back(op); });
   bmcOp->walk([&](Operation *op) {
@@ -9139,29 +9181,9 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     if (!global)
       continue;
     bool allowGlobalConstFold = global->hasAttr("constant");
-    if (!allowGlobalConstFold) {
-      // Non-constant globals are currently only legalized for direct
-      // addressof loads when no direct stores exist.
-      if (!loadAccess->geps.empty())
-        continue;
-      SymbolRefAttr globalName = addr.getGlobalNameAttr();
-      auto cached = globalHasDirectStoreCache.find(globalName);
-      bool hasDirectStore = false;
-      if (cached != globalHasDirectStoreCache.end()) {
-        hasDirectStore = cached->second;
-      } else {
-        module.walk([&](LLVM::StoreOp store) -> WalkResult {
-          auto storeAddr = store.getAddr().getDefiningOp<LLVM::AddressOfOp>();
-          if (!storeAddr || storeAddr.getGlobalNameAttr() != globalName)
-            return WalkResult::advance();
-          hasDirectStore = true;
-          return WalkResult::interrupt();
-        });
-        globalHasDirectStoreCache.try_emplace(globalName, hasDirectStore);
-      }
-      if (hasDirectStore)
-        continue;
-    }
+    if (!allowGlobalConstFold &&
+        hasAnyStoreToGlobal(module, addr.getGlobalNameAttr()))
+      continue;
 
     SmallVector<int64_t> elementIndices(loadAccess->elementIndices.begin(),
                                         loadAccess->elementIndices.end());
@@ -9195,29 +9217,9 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     if (!global)
       continue;
     bool allowGlobalConstFold = global->hasAttr("constant");
-    if (!allowGlobalConstFold) {
-      // Non-constant globals are currently only legalized for direct
-      // addressof loads when no direct stores exist.
-      if (!loadAccess->geps.empty())
-        continue;
-      SymbolRefAttr globalName = addr.getGlobalNameAttr();
-      auto cached = globalHasDirectStoreCache.find(globalName);
-      bool hasDirectStore = false;
-      if (cached != globalHasDirectStoreCache.end()) {
-        hasDirectStore = cached->second;
-      } else {
-        module.walk([&](LLVM::StoreOp store) -> WalkResult {
-          auto storeAddr = store.getAddr().getDefiningOp<LLVM::AddressOfOp>();
-          if (!storeAddr || storeAddr.getGlobalNameAttr() != globalName)
-            return WalkResult::advance();
-          hasDirectStore = true;
-          return WalkResult::interrupt();
-        });
-        globalHasDirectStoreCache.try_emplace(globalName, hasDirectStore);
-      }
-      if (hasDirectStore)
-        continue;
-    }
+    if (!allowGlobalConstFold &&
+        hasAnyStoreToGlobal(module, addr.getGlobalNameAttr()))
+      continue;
     auto typedAttr = extractGlobalLoadConstant(
         global, loadAccess->elementIndices, llvmLoad.getType());
     if (!typedAttr)

@@ -4329,3 +4329,50 @@
       - result: `150/150` pass.
     - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
       - result: `19/19` pass.
+
+- Iteration update (SMT-LIB export: legalize readonly non-constant global GEP
+  loads with full store-path safety checks):
+  - realization:
+    - non-`constant` globals were only fold-legalized for direct addressof
+      loads, leaving readonly GEP-based loads unsupported.
+    - existing safety check only detected direct stores to addressof roots, and
+      missed stores routed through GEP/cast chains.
+  - TDD signal:
+    - added
+      `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-gep-load-readonly.mlir`
+      first.
+    - pre-fix failure:
+      - `for-smtlib-export does not support LLVM dialect operations inside
+        verif.bmc regions; found 'llvm.mlir.addressof'`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - replaced direct-store-only cache with global store-path analysis that:
+      - traces store addresses through `llvm.getelementptr`,
+        `llvm.bitcast`/`llvm.addrspacecast`, and simple unrealized casts.
+      - maps stores to root global symbols and caches `hasAnyStoreToGlobal`.
+    - readonly non-constant global loads are now legalizable through GEP paths
+      when no stores target that global through any traced address path.
+  - safety hardening:
+    - added negative regression with store-through-GEP to ensure folding is
+      blocked when mutable behavior is present.
+  - regression coverage:
+    - added:
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-gep-load-readonly.mlir`
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-gep-load-readonly-store-error.mlir`
+    - revalidated:
+      - `bmc-for-smtlib-llvm-global-gep-dynamic-constant-index.mlir`
+      - `bmc-for-smtlib-llvm-global-load-extractvalue.mlir`
+      - `bmc-for-smtlib-llvm-global-load-region.mlir`
+      - `bmc-for-smtlib-llvm-global-struct-region-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-struct-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-load.mlir`
+      - `bmc-for-smtlib-llvm-global-load-readonly.mlir`
+      - `bmc-for-smtlib-llvm-int-ops.mlir`
+      - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
+      - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+      - result: `152/152` pass.
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+      - result: `19/19` pass.
