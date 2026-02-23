@@ -1060,3 +1060,34 @@
       - `invalid VCD_PATH value: empty path`.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: fallback when ninja target query fails in skip-build mode)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require explicit
+    fallback/error handling tokens in `utils/run_wasm_smoke.sh`:
+    - `ninja target query failed; inferring circt-verilog support from existing artifacts`
+    - `failed to query ninja targets`
+    - skip-build artifact fallback condition using
+      `-s "$VERILOG_JS"` and `-s "$VERILOG_WASM"`.
+  - Pre-fix failure:
+    - `utils/wasm_smoke_contract_check.sh` failed with:
+      - `missing token in smoke script: ninja target query failed; inferring circt-verilog support from existing artifacts`
+    - with `WASM_SKIP_BUILD=1`, a failing `ninja -t targets` query could make
+      smoke fail `WASM_REQUIRE_VERILOG=1` despite existing verilog wasm
+      artifacts.
+- Fix:
+  - updated `utils/run_wasm_smoke.sh`:
+    - capture `ninja -t targets` stderr to `$tmpdir/targets.err`;
+    - if query fails but `WASM_SKIP_BUILD=1` and verilog artifacts exist,
+      infer verilog support and continue with explicit fallback message;
+    - otherwise fail fast with explicit diagnostic and target-query stderr.
+  - updated `utils/wasm_smoke_contract_check.sh` to enforce this contract.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - regression simulation (fake `ninja` in `PATH`):
+    - `PATH="$tmpdir:$PATH" WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+      passes end-to-end and logs:
+      - `ninja target query failed; inferring circt-verilog support from existing artifacts`.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
