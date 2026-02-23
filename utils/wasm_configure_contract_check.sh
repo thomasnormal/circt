@@ -10,7 +10,7 @@ fi
 
 output="$(BUILD_DIR=/tmp/wasm-out LLVM_SRC_DIR=/tmp/llvm-src "$SCRIPT" --print-cmake-command)"
 
-required_tokens=(
+required_cmd_tokens=(
   "emcmake"
   "-S /tmp/llvm-src"
   "-B /tmp/wasm-out"
@@ -20,9 +20,21 @@ required_tokens=(
   "-DCIRCT_SLANG_FRONTEND_ENABLED=ON"
 )
 
-for token in "${required_tokens[@]}"; do
+for token in "${required_cmd_tokens[@]}"; do
   if ! grep -Fq -- "$token" <<<"$output"; then
     echo "[wasm-config-contract] missing token in configure command: $token" >&2
+    exit 1
+  fi
+done
+
+required_source_tokens=(
+  'command -v "$EMCMAKE_BIN"'
+  'command -v "$CMAKE_BIN"'
+)
+
+for token in "${required_source_tokens[@]}"; do
+  if ! grep -Fq -- "$token" "$SCRIPT"; then
+    echo "[wasm-config-contract] missing source check in configure script: $token" >&2
     exit 1
   fi
 done

@@ -414,3 +414,23 @@
   - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
     passes end-to-end and reports:
     `CrossCompile.cmake local edits (llvm submodule): none`.
+
+## 2026-02-23 (follow-up: configure script preflight diagnostics)
+- Gap identified (regression-test first):
+  - extended `utils/wasm_configure_contract_check.sh` to require explicit
+    configure-script preflight checks for:
+    - `command -v "$EMCMAKE_BIN"`
+    - `command -v "$CMAKE_BIN"`
+  - Pre-fix failure:
+    - configure script emitted only generic shell/tool errors when binaries
+      were missing.
+- Fix:
+  - updated `utils/configure_wasm_build.sh` with explicit preflight checks and
+    clear diagnostics before invoking emcmake/cmake.
+  - behavior now reports actionable errors for missing emsdk wrapper or cmake.
+- Validation:
+  - `utils/wasm_configure_contract_check.sh` passes.
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
