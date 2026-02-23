@@ -1,4 +1,4 @@
-// RUN: env CIRCT_SIM_TRACE_SEQ=1 circt-sim %s --max-time 7000000 2>&1 | FileCheck %s
+// RUN: env CIRCT_SIM_TRACE_SEQ=1 circt-sim %s --max-time 7000000000 2>&1 | FileCheck %s
 //
 // Empty get_next_item waiters must remain parked until sequencer push wakeup.
 // Unrelated signal events must not re-activate the blocked process.

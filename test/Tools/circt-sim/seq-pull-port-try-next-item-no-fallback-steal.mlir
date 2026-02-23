@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --max-time 100000000 2>&1 | FileCheck %s
+// RUN: circt-sim %s --max-time 100000000000 2>&1 | FileCheck %s
 //
 // Verify that try_next_item on an unresolved/unconnected pull port does not
 // dequeue from unrelated sequencer FIFOs.
