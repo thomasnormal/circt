@@ -129,7 +129,7 @@ CIRCT_BMC="${CIRCT_BMC:-$(resolve_default_circt_tool "circt-bmc" "$CIRCT_TOOL_DI
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
 BMC_MLIR_CACHE_DIR="${BMC_MLIR_CACHE_DIR:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
-BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-0}"
+BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-1}"
 Z3_BIN="${Z3_BIN:-}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 FAIL_ON_DROP_REMARKS="${FAIL_ON_DROP_REMARKS:-0}"
@@ -324,7 +324,7 @@ if [[ "$BMC_RUN_SMTLIB" == "1" && "$BMC_SMOKE_ONLY" != "1" ]]; then
   if [[ -z "$Z3_BIN" ]]; then
     if declare -F circt_common_resolve_tool >/dev/null 2>&1; then
       if circt_common_resolve_tool z3 >/dev/null 2>&1; then
-        Z3_BIN="z3"
+        Z3_BIN="$(command -v z3)"
       elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
         Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
       elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
@@ -332,7 +332,7 @@ if [[ "$BMC_RUN_SMTLIB" == "1" && "$BMC_SMOKE_ONLY" != "1" ]]; then
       fi
     else
       if command -v z3 >/dev/null 2>&1; then
-        Z3_BIN="z3"
+        Z3_BIN="$(command -v z3)"
       elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
         Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
       elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
